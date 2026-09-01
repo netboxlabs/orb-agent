@@ -348,6 +348,14 @@ GETBULK, so a v1 target always uses GETNEXT. The two walks that read
 `sysObjectID` and `sysDescr` come before a profile is known and use GETNEXT
 as well.
 
+An OID is walked once per collection however many declarations name it, and
+they all read that one answer. A column read as a metric and as a tag, a
+column two entries share, and two declarations of one column that differ only
+in their `condition:` are one request each. Declarations that agree on
+exported name, OID and poll period also share one poll window, so serving them
+from one walk is what keeps a window from being marked by a request the other
+declaration never got.
+
 The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the
 Apache 2.0 license. See [profiles/PROVENANCE.md](./profiles/PROVENANCE.md)

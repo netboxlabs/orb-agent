@@ -648,6 +648,9 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	// elapsed, per metric name.
 	fresh := newPointSink(c.logger)
 	throttled := make(throttledDecls)
+	// One walk per OID for the whole run, so declarations sharing a poll
+	// window share the walk that starts it.
+	walks := make(walkCache)
 
 	for _, entry := range profile.Metrics {
 		if err := ctx.Err(); err != nil {
@@ -655,14 +658,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		}
 		switch {
 		case entry.Symbol != nil:
-			c.collectScalar(ctx, walker, entry.Symbol, profiles.SymbolPrecedence(&entry, entry.Symbol), baseAttrs, key, fresh, throttled)
+			c.collectScalar(ctx, walker, walks, entry.Symbol, profiles.SymbolPrecedence(&entry, entry.Symbol), baseAttrs, key, fresh, throttled)
 		case entry.Table != nil:
-			c.collectTable(ctx, walker, &entry, baseAttrs, key, fresh, throttled)
+			c.collectTable(ctx, walker, walks, &entry, baseAttrs, key, fresh, throttled)
 		case len(entry.Symbols) > 0 && groupedSymbolsAreTableColumns(&entry):
 			// Columns of a table the profile names no `table:` root for. The
 			// rows still have to be joined by index, or the entry's row-scoped
 			// metadata is lost and the rows carry no identity.
-			c.collectTable(ctx, walker, &entry, baseAttrs, key, fresh, throttled)
+			c.collectTable(ctx, walker, walks, &entry, baseAttrs, key, fresh, throttled)
 		case len(entry.Symbols) > 0:
 			// Scalars grouped under `symbols:` with no `table:`. One entry can
 			// carry dozens, each a request of its own, so the deadline is
@@ -672,7 +675,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 					return err
 				}
 				sym := &entry.Symbols[i]
-				c.collectScalar(ctx, walker, sym, profiles.SymbolPrecedence(&entry, sym), baseAttrs, key, fresh, throttled)
+				c.collectScalar(ctx, walker, walks, sym, profiles.SymbolPrecedence(&entry, sym), baseAttrs, key, fresh, throttled)
 			}
 		}
 	}
@@ -1042,7 +1045,7 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // profile cannot always say which entries are columns; the OID the device
 // answers at can. Without the identity every row carries the same attribute
 // set and the export keeps one arbitrary value.
-func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, sym *profiles.Symbol, prec profiles.Precedence, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
+func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, walks walkCache, sym *profiles.Symbol, prec profiles.Precedence, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
 		// is what keeps an empty OID from being issued as a whole-tree walk, and
@@ -1057,7 +1060,7 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 		throttled.add(metricName, decl)
 		return
 	}
-	pdus, err := c.walk(walker, sym.OID, 0)
+	pdus, err := c.cachedWalk(walks, walker, sym.OID, 0)
 	if err != nil {
 		c.logger.Debug("Error walking scalar OID", "oid", sym.OID, "name", sym.Name, "error", err)
 		return
@@ -1377,7 +1380,7 @@ type joinedTag struct {
 }
 
 // collectTable collects all columns in an SNMP table, joining metric and tag columns by row index.
-func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
+func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, walks walkCache, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	// --- Phase 1: decide which symbols need polling this run ---
 	type symState struct {
 		sym       *profiles.Symbol
@@ -1413,7 +1416,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	// columnPDUs maps columnOID -> (fullOID -> PDU), used for both metric and condition columns.
 	var columnPDUs map[string]map[string]snmp.PDU
 	if entry.WalkFullTable && entry.Table != nil {
-		columnPDUs = c.walkFullTable(walker, entry)
+		columnPDUs = c.walkFullTable(walker, walks, entry)
 	}
 
 	// --- Phase 3: walk tag columns ---
@@ -1449,7 +1452,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			pdus = columnPDUs[col.OID]
 		} else {
 			var err error
-			pdus, err = c.walk(walker, col.OID, 1)
+			pdus, err = c.cachedWalk(walks, walker, col.OID, 1)
 			if err != nil {
 				c.logger.Debug("Error walking tag column", "oid", col.OID, "tag", mt.Tag, "error", err)
 				continue
@@ -1529,7 +1532,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			pdus = tagColumnPDUs[check.columnOID]
 		default:
 			var err error
-			pdus, err = c.walk(walker, check.columnOID, 1)
+			pdus, err = c.cachedWalk(walks, walker, check.columnOID, 1)
 			if err != nil {
 				c.logger.Debug("Error walking condition column", "oid", check.columnOID, "error", err)
 				conditionPDUs[check.columnOID] = nil
@@ -1560,7 +1563,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 			pdus = columnPDUs[sym.OID]
 		} else {
 			var err error
-			pdus, err = c.walk(walker, sym.OID, 1)
+			pdus, err = c.cachedWalk(walks, walker, sym.OID, 1)
 			if err != nil {
 				c.logger.Debug("Error walking table column", "oid", sym.OID, "name", sym.Name, "error", err)
 				continue
@@ -1644,8 +1647,8 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 // walkFullTable walks the table root OID once and distributes PDUs to per-column maps.
 // The returned maps are keyed by the profile's own column OID, which is how the
 // callers look them up.
-func (c *MetricsCollector) walkFullTable(walker snmp.Walker, entry *profiles.MetricEntry) map[string]map[string]snmp.PDU {
-	allPDUs, err := c.walk(walker, entry.Table.OID, 0)
+func (c *MetricsCollector) walkFullTable(walker snmp.Walker, walks walkCache, entry *profiles.MetricEntry) map[string]map[string]snmp.PDU {
+	allPDUs, err := c.cachedWalk(walks, walker, entry.Table.OID, 0)
 	if err != nil {
 		c.logger.Debug("Error walking full table", "oid", entry.Table.OID, "table", entry.Table.Name, "error", err)
 		return nil
@@ -1675,6 +1678,50 @@ func (c *MetricsCollector) walkFullTable(walker snmp.Walker, entry *profiles.Met
 		}
 	}
 	return result
+}
+
+// walkKey identifies one walk of an OID. The identifier size travels with it
+// because the Walker takes it: two calls differing in it are two requests as
+// far as that interface is concerned, whatever a given client makes of it.
+type walkKey struct {
+	oid            string
+	identifierSize int
+}
+
+// walkResult is what a walk returned, kept whether it answered or failed.
+type walkResult struct {
+	pdus map[string]snmp.PDU
+	err  error
+}
+
+// walkCache holds the walks of one collection run, so an OID is asked for once
+// however many declarations name it.
+//
+// Declarations agreeing on metric name, OID and poll period share one poll
+// window. Given a walk each they could disagree about it: the first to answer
+// starts the window for both, and a second that fails leaves its rows absent
+// for the whole poll_time_sec, because the next cycle finds the shared window
+// still open. One walk cannot disagree with itself.
+//
+// The error is cached with the PDUs for that reason, and it costs the run
+// nothing: gosnmp has already spent this policy's retries on the request, and
+// no window is started either way, so the retry belongs to the next cycle
+// rather than to this one.
+//
+// The maps handed back are the cache's own. Every caller reads them and builds
+// its own row maps from what it reads.
+type walkCache map[walkKey]walkResult
+
+// cachedWalk walks an OID once per run and hands every later caller what the
+// first one got.
+func (c *MetricsCollector) cachedWalk(cache walkCache, walker snmp.Walker, oid string, identifierSize int) (map[string]snmp.PDU, error) {
+	k := walkKey{oid: oid, identifierSize: identifierSize}
+	if res, ok := cache[k]; ok {
+		return res.pdus, res.err
+	}
+	pdus, err := c.walk(walker, oid, identifierSize)
+	cache[k] = walkResult{pdus: pdus, err: err}
+	return pdus, err
 }
 
 // walk walks an OID subtree and returns the PDUs keyed by normalized OID.

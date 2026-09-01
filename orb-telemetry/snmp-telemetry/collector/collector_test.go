@@ -5753,16 +5753,9 @@ func TestCollectTable_TwoConditionsOnOneColumnRenderIndependently(t *testing.T) 
 			require.Len(t, out, 1, "the enum condition selected the wrong number of rows")
 			assert.Equal(t, int64(33), out[0].value)
 
-			// The status column is walked twice: once in phase 3 as the tag
-			// column, once in phase 5 as its own metric. Neither condition
-			// adds a walk of its own.
-			walks := 0
-			for _, call := range w.walkCalls {
-				if call == statusOID {
-					walks++
-				}
-			}
-			assert.Equal(t, 2, walks, "a condition walked the column again")
+			// The status column is walked once for the run, whether it is
+			// read as the tag column, as its own metric or by a condition.
+			assert.Equal(t, 1, walkCount(w, statusOID), "a condition walked the column again")
 		})
 	}
 }
@@ -6094,4 +6087,211 @@ func TestTagNameSet_LeavesOutWhatCannotBeShadowed(t *testing.T) {
 		{Column: &profiles.TagColumn{OID: oid}},
 	})
 	assert.Equal(t, map[string]struct{}{"if_desc": {}}, names)
+}
+
+// ---------------------------------------------------------------------------
+// One walk for the declarations that share a poll window
+// ---------------------------------------------------------------------------
+
+// walkCount reports how many times a run asked for one OID.
+func walkCount(w *recordingWalker, oid string) int {
+	n := 0
+	for _, call := range w.walkCalls {
+		if call == oid {
+			n++
+		}
+	}
+	return n
+}
+
+// failWalksExcept makes the walker answer the numbered requests for an OID and
+// fail the rest of them, counting across runs. It is how a test says that one
+// declaration got an answer a sibling naming the same OID would not have got.
+func failWalksExcept(w *recordingWalker, oid string, answer ...int) {
+	answers := make(map[int]struct{}, len(answer))
+	for _, n := range answer {
+		answers[n] = struct{}{}
+	}
+	calls := 0
+	w.onWalk = func(called string) {
+		if called != oid {
+			return
+		}
+		calls++
+		if _, ok := answers[calls]; ok {
+			w.walkErrs = nil
+			return
+		}
+		w.walkErrs = map[string]error{oid: errors.New("request timeout")}
+	}
+}
+
+// Two declarations of one column differing only in their condition share a
+// poll window, so they have to share the walk that starts it. Given a walk
+// each, the first to answer marked the window polled and a second that failed
+// left its rows absent for the whole poll_time_sec, since the next cycle found
+// the shared window still open.
+func TestCollectTarget_ASharedWindowIsServedByOneWalk(t *testing.T) {
+	const host = "10.0.0.84"
+	p := twoNameConditionProfile(
+		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=1", PollTimeSec: 300},
+		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=2", AllowDup: true, PollTimeSec: 300},
+	)
+	w := twoNameWalker()
+	failWalksExcept(w, twoNameOctetCol, 1)
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, twoNameOctetCol), "one window is one walk")
+	assert.Equal(t, map[string]int64{"1": 10, "2": 20},
+		rowsOf(c.testDeviceStore("p", host)["snmp.linkoctets"]),
+		"both declarations of the shared window are served by the walk that started it")
+
+	// The window is now open for both, so the second run walks nothing and
+	// carries the first run's points forward, including the rows the second
+	// declaration selected.
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 0, walkCount(w, twoNameOctetCol), "a shared window throttles both declarations")
+	assert.Equal(t, map[string]int64{"1": 10, "2": 20},
+		rowsOf(c.testDeviceStore("p", host)["snmp.linkoctets"]),
+		"retention carries the throttled declaration's rows")
+}
+
+// The scalar path takes the same walk. A `tag:` renames the metric, so one
+// scalar OID declared twice is two windows, and each of them used to ask the
+// device for the reading separately. One answer serves both, and a second
+// request that fails no longer costs the second name its point.
+func TestCollectTarget_TwoScalarDeclarationsShareOneWalk(t *testing.T) {
+	const (
+		host        = "10.0.0.85"
+		sysObjValue = "1.3.6.1.4.1.99.21"
+		tempOID     = sysObjValue + ".1.1"
+	)
+	p := profileWithOID(sysObjValue, "shared-scalar.yml", []profiles.MetricEntry{
+		{Symbols: []profiles.Symbol{
+			{Name: "boardTemp", OID: tempOID},
+			{Name: "boardTemp", Tag: "chassisTemp", OID: tempOID, AllowDup: true},
+		}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		tempOID:        {tempOID + ".0": intPDU(tempOID+".0", 42)},
+	}}
+	failWalksExcept(w, tempOID, 1)
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, tempOID), "one OID is one walk")
+	store := c.testDeviceStore("p", host)
+	require.Len(t, store["snmp.boardtemp"], 1)
+	assert.Equal(t, int64(42), store["snmp.boardtemp"][0].value)
+	require.Len(t, store["snmp.chassistemp"], 1, "the second name reads the walk the first one took")
+	assert.Equal(t, int64(42), store["snmp.chassistemp"][0].value)
+}
+
+// Two entries reading one table each walk its root. The walk answers the whole
+// table, so the second entry is served by the first entry's request.
+func TestCollectTarget_TwoEntriesOnOneTableShareItsFullWalk(t *testing.T) {
+	const (
+		host        = "10.0.0.86"
+		sysObjValue = "1.3.6.1.4.1.99.22"
+		tableOID    = sysObjValue + ".1"
+		inColOID    = tableOID + ".1.10"
+		outColOID   = tableOID + ".1.16"
+	)
+	table := &profiles.Table{Name: "ifTable", OID: tableOID}
+	p := profileWithOID(sysObjValue, "shared-table.yml", []profiles.MetricEntry{
+		{Table: table, WalkFullTable: true, Symbols: []profiles.Symbol{{Name: "ifInOctets", OID: inColOID}}},
+		{Table: table, WalkFullTable: true, Symbols: []profiles.Symbol{{Name: "ifOutOctets", OID: outColOID}}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		tableOID: {
+			inColOID + ".1":  counter32PDU(inColOID+".1", 11),
+			outColOID + ".1": counter32PDU(outColOID+".1", 22),
+		},
+	}}
+	failWalksExcept(w, tableOID, 1)
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, tableOID), "one table root is one walk")
+	store := c.testDeviceStore("p", host)
+	assert.Equal(t, map[string]int64{"1": 11}, rowsOf(store["snmp.ifinoctets"]))
+	assert.Equal(t, map[string]int64{"1": 22}, rowsOf(store["snmp.ifoutoctets"]),
+		"the second entry reads the walk the first one took")
+}
+
+// The outcome is shared whichever way it went. A column the device failed to
+// answer is not asked again inside the run: gosnmp has already spent the
+// policy's retries on it, and no poll window was started, so the retry belongs
+// to the next cycle. Asked again here, the second declaration would have got
+// an answer the first one did not and the two would disagree about a window
+// they share.
+func TestCollectTarget_AFailedWalkIsSharedRatherThanRetried(t *testing.T) {
+	const host = "10.0.0.87"
+	p := twoNameConditionProfile(
+		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=1", PollTimeSec: 300},
+		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=2", AllowDup: true, PollTimeSec: 300},
+	)
+	w := twoNameWalker()
+	// The column fails the first request of the run and answers every later
+	// one, including the next cycle's.
+	failWalksExcept(w, twoNameOctetCol, 2, 3)
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, twoNameOctetCol), "the failed column is not walked again inside the run")
+	assert.Empty(t, c.testDeviceStore("p", host)["snmp.linkoctets"],
+		"neither declaration reports rows from a walk that failed")
+
+	// No window was started, so the next cycle asks again and both
+	// declarations are served by the answer.
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, twoNameOctetCol), "a failed walk throttles nothing")
+	assert.Equal(t, map[string]int64{"1": 10, "2": 20},
+		rowsOf(c.testDeviceStore("p", host)["snmp.linkoctets"]))
+}
+
+// A condition can name a sibling symbol, which is a column the entry also
+// exports as a metric. The condition resolves before the metric columns are
+// read, so its walk is the one the metric column is served by.
+func TestCollectTable_AConditionColumnIsAlsoAMetricColumn(t *testing.T) {
+	const (
+		host        = "10.0.0.88"
+		sysObjValue = "1.3.6.1.4.1.99.23"
+		tableOID    = sysObjValue + ".1"
+		statusOID   = tableOID + ".1.8"
+		inOID       = tableOID + ".1.10"
+	)
+	p := profileWithOID(sysObjValue, "condition-column.yml", []profiles.MetricEntry{{
+		Table: &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols: []profiles.Symbol{
+			{Name: "ifOperStatus", OID: statusOID},
+			{Name: "ifInOctets", OID: inOID, Condition: "ifOperStatus=1"},
+		},
+	}})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		statusOID: {
+			statusOID + ".1": intPDU(statusOID+".1", 1),
+			statusOID + ".2": intPDU(statusOID+".2", 2),
+		},
+		inOID: {
+			inOID + ".1": intPDU(inOID+".1", 11),
+			inOID + ".2": intPDU(inOID+".2", 22),
+		},
+	}}
+	failWalksExcept(w, statusOID, 1)
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 1, walkCount(w, statusOID), "the condition and the metric column are one walk")
+	store := c.testDeviceStore("p", host)
+	assert.Equal(t, map[string]int64{"1": 11}, rowsOf(store["snmp.ifinoctets"]),
+		"the condition selects the row its column passes")
+	assert.Equal(t, map[string]int64{"1": 1, "2": 2}, rowsOf(store["snmp.ifoperstatus"]),
+		"the column exports every row from the walk the condition took")
 }
