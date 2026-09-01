@@ -1647,6 +1647,52 @@ func TestCollectTarget_DeviceTagsStopAtTheDeadline(t *testing.T) {
 	assert.NotContains(t, w.walkCalls, cpuOID)
 }
 
+// cancelAfterCtx reads as live for its first few Err calls and cancelled from
+// then on, so a loop that checks the deadline per iteration can be told from
+// one that runs the response to the end. A context cancelled before the call
+// would not separate the two: both leave the same points behind once the
+// caller discards a cancelled run.
+type cancelAfterCtx struct {
+	context.Context
+	live atomic.Int64
+}
+
+func (c *cancelAfterCtx) Err() error {
+	if c.live.Add(-1) >= 0 {
+		return nil
+	}
+	return context.Canceled
+}
+
+// A scalar walk answers with as many rows as a table does, and each row costs a
+// conversion and an attribute set. Work done past the deadline is discarded by
+// the caller, so doing it only delays the runner's shutdown.
+func TestCollectScalar_StopsAtTheDeadlineWithinTheResponse(t *testing.T) {
+	const oid = "1.3.6.1.4.1.9999.60.1"
+	symbol := &profiles.Symbol{Name: "sensorLoad", OID: oid}
+	rows := make(map[string]snmp.PDU, 5)
+	for i := 1; i <= 5; i++ {
+		row := fmt.Sprintf("%s.%d", oid, i)
+		rows[row] = intPDU(row, i)
+	}
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{oid: rows}}
+	c := newCollector(walkerFactory(w), nil)
+	key := testKey("p", "10.0.0.60")
+
+	// Control: with nothing cancelled every row of the response is collected,
+	// so an empty result below is the deadline rather than an unrelated drop.
+	live := newPointSink(discardLogger)
+	c.collectScalar(context.Background(), w, walkCache{}, symbol, profiles.Precedence{}, nil, key, live, throttledDecls{})
+	require.Len(t, live.points["snmp.sensorload"], 5, "every row of a scalar response is collected")
+
+	ctx := &cancelAfterCtx{Context: context.Background()}
+	ctx.live.Store(2)
+	fresh := newPointSink(discardLogger)
+	c.collectScalar(ctx, w, walkCache{}, symbol, profiles.Precedence{}, nil, key, fresh, throttledDecls{})
+	assert.Len(t, fresh.points["snmp.sensorload"], 2,
+		"the scalar loop must stop at the deadline rather than converting the whole response")
+}
+
 // ---------------------------------------------------------------------------
 // Exported identity
 // ---------------------------------------------------------------------------

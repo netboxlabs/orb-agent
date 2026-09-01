@@ -1077,7 +1077,7 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // profile cannot always say which entries are columns; the OID the device
 // answers at can. Without the identity every row carries the same attribute
 // set and the export keeps one arbitrary value.
-func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, walks walkCache, sym *profiles.Symbol, prec profiles.Precedence, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
+func (c *MetricsCollector) collectScalar(ctx context.Context, walker snmp.Walker, walks walkCache, sym *profiles.Symbol, prec profiles.Precedence, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
 		// is what keeps an empty OID from being issued as a whole-tree walk, and
@@ -1099,6 +1099,12 @@ func (c *MetricsCollector) collectScalar(_ context.Context, walker snmp.Walker, 
 	}
 	c.markPolled(key, sym)
 	for fullOID, pdu := range pdus {
+		// A scalar walk answers with as many rows as a table does, and the
+		// caller discards the run once the deadline has expired, so converting
+		// the rest of the response only delays the runner's shutdown.
+		if err := ctx.Err(); err != nil {
+			return
+		}
 		val, strVal, err := pduToValue(pdu, sym.Conversion)
 		if err != nil {
 			c.logger.Debug("Skipping PDU this collector cannot turn into a value",
