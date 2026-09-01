@@ -178,3 +178,49 @@ def test_options_emit_prefix_vlan_boolean_true_disables_rather_than_raising(text
     assert any("names no mode" in r.getMessage() for r in caplog.records), (
         "a value that silently disables the feature must be discoverable in the log"
     )
+
+
+def _scope(hostname: str) -> dict:
+    return {"hostname": hostname, "username": "u", "password": "p"}
+
+
+def test_policy_rejects_targets_that_together_exceed_the_budget():
+    """
+    The budget spans the policy, not one entry.
+
+    This is the hole a per-entry ceiling leaves: each of these scopes is well
+    under the limit on its own, so an entry-by-entry check waves the whole
+    policy through while it expands to roughly a million addresses.
+    """
+    from device_discovery.policy.models import MAX_EXPANDED_HOSTS, Policy
+
+    scopes = [_scope(f"10.{octet}.0.0/16") for octet in range(16)]
+    assert all(
+        h < MAX_EXPANDED_HOSTS
+        for h in (65534,) * len(scopes)
+    ), "each scope must be individually legal for this test to mean anything"
+
+    with pytest.raises(ValidationError) as excinfo:
+        Policy(scope=scopes)
+
+    message = str(excinfo.value)
+    assert "expand" in message
+    assert str(MAX_EXPANDED_HOSTS) in message
+
+
+def test_policy_accepts_targets_within_the_budget():
+    """A policy under the budget is untouched by the guard."""
+    from device_discovery.policy.models import Policy
+
+    policy = Policy(scope=[_scope("10.0.0.0/24"), _scope("10.1.0.0/24")])
+
+    assert len(policy.scope) == 2
+
+
+def test_policy_budget_ignores_plain_hostnames():
+    """A hostname counts as the single address it expands to, not as a range."""
+    from device_discovery.policy.models import Policy
+
+    policy = Policy(scope=[_scope(f"router-{n}.example.com") for n in range(200)])
+
+    assert len(policy.scope) == 200
