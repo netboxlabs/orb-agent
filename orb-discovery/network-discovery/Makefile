@@ -1,3 +1,8 @@
+# Every target runs outside the repository workspace, which is what CI does and
+# what keeps this module buildable on its own. Without it a generated go.work
+# puts the build in workspace mode, where -mod=mod is rejected.
+export GOWORK = off
+
 CGO_ENABLED ?= 0
 BUILD_DIR ?= ./build
 GOARCH ?= $(shell go env GOARCH)
@@ -22,9 +27,17 @@ fix-lint:
 test:
 	@go test -race ./...
 
+# go test writes its events to a file so its exit status is kept: piping it
+# straight into the cmd filter let a failing cmd test leave the build green,
+# because the filter dropped the failure event and reported its own status.
+# Both filters are anchored to the package so a test name or a line of output
+# containing "cmd" is not dropped with it.
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage
-	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd" | tparse -format=markdown > .coverage/test-report.md
-	@cat .coverage/cover.out.tmp | grep -Ev "cmd" > .coverage/cover.out
+	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... > .coverage/test-events.json; \
+		status=$$?; \
+		grep -Ev '"Package":"[^"]*/cmd"' .coverage/test-events.json | tparse -format=markdown > .coverage/test-report.md || status=$$?; \
+		exit $$status
+	@grep -Ev '/cmd/' .coverage/cover.out.tmp > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep -E '^total:' | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
