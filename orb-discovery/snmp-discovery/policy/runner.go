@@ -299,6 +299,55 @@ func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
 	return &r.config.Defaults
 }
 
+// probeProbeUser is the USM user the v3 probe presents instead of the
+// operator's. gosnmp rejects an empty user name, so the probe needs some
+// value; this one is never a credential and is only ever seen by an agent that
+// has already answered engine discovery.
+const probeProbeUser = "orb-probe"
+
+// engineDiscoverer is answered by a client that learned a peer's SNMPv3
+// authoritative engine ID.
+//
+// Asserted rather than added to snmp.Walker so a walker that cannot report it
+// keeps the walk-error admission rule, which is the only one v1 and v2c have.
+type engineDiscoverer interface {
+	EngineDiscovered() bool
+}
+
+// probeAuthentication returns the credentials the reachability probe may send
+// to an address that has not yet proven anything is there.
+//
+// SNMPv3 carries a credential-free engine discovery exchange before any
+// authenticated request (RFC 3414 section 4), so the probe presents a
+// placeholder user at noAuthNoPriv: the operator's user never reaches a
+// scanned address, and without an authenticated request there is no HMAC to
+// capture and attack offline. Presence comes from the discovery answer, so
+// nothing is lost by not authenticating.
+//
+// v1 and v2c are returned unchanged, and this is the exposure the probe cannot
+// close: the community IS the credential and there is no discovery exchange to
+// stand in for it. A conformant agent silently discards a request bearing the
+// wrong community, so substituting one turns every device into a false
+// negative rather than protecting anything. Whether a v2c range may be scanned
+// at all is a policy question, not one the probe can answer.
+func probeAuthentication(auth *config.Authentication) *config.Authentication {
+	if auth == nil || auth.ProtocolVersion != snmp.ProtocolVersion3 {
+		return auth
+	}
+
+	// Copied rather than mutated: the caller's authentication is the policy's
+	// own and is reused for the real run.
+	probe := *auth
+	probe.Username = probeProbeUser
+	probe.SecurityLevel = "noAuthNoPriv"
+	probe.AuthProtocol = ""
+	probe.AuthPassphrase = ""
+	probe.PrivProtocol = ""
+	probe.PrivPassphrase = ""
+	probe.ContextName = ""
+	return &probe
+}
+
 func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	select {
 	case <-ctx.Done():
@@ -306,7 +355,7 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	default:
 	}
 
-	auth := r.resolveTargetAuthentication(target)
+	auth := probeAuthentication(r.resolveTargetAuthentication(target))
 
 	snmpClient, err := r.ClientFactory(target.Host, target.Port, 0, r.snmpProbeTimeout, auth, r.logger)
 	if err != nil {
@@ -321,7 +370,16 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	}
 
 	_, err = snmpClient.Walk(defaultSNMPProbeOID, 0)
-	return err == nil
+	if err == nil {
+		return true
+	}
+
+	// The v3 probe deliberately cannot authenticate, so its walk fails against
+	// a live agent too. Answering engine discovery is what proves one is there.
+	if discoverer, ok := snmpClient.(engineDiscoverer); ok {
+		return discoverer.EngineDiscovered()
+	}
+	return false
 }
 
 // run runs the policy for a single target (no parent)

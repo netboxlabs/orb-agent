@@ -1197,3 +1197,103 @@ func TestAssetTagClaimer_NilMapLazyInit(t *testing.T) {
 	assert.False(t, r.assetTagClaimer("10.0.0.2:161")("TAG-001"),
 		"ownership recorded in the lazily-created map must suppress cross-target claims")
 }
+
+// engineWalker answers Walk with an error but reports that the credential-free
+// v3 engine discovery exchange completed, which is what a real agent does when
+// the probe's placeholder user is not one it knows.
+type engineWalker struct {
+	testWalker
+	discovered bool
+}
+
+func (e *engineWalker) EngineDiscovered() bool { return e.discovered }
+
+func TestProbeAuthenticationStripsV3Credentials(t *testing.T) {
+	real := &config.Authentication{
+		ProtocolVersion: snmp.ProtocolVersion3,
+		SecurityLevel:   "authPriv",
+		Username:        "netbox-monitor",
+		AuthProtocol:    "SHA",
+		AuthPassphrase:  "auth-secret",
+		PrivProtocol:    "AES",
+		PrivPassphrase:  "priv-secret",
+		ContextName:     "vrf-mgmt",
+	}
+
+	probe := probeAuthentication(real)
+
+	assert.NotEqual(t, real.Username, probe.Username, "the operator's user must not reach a scanned address")
+	assert.NotEmpty(t, probe.Username, "gosnmp rejects an empty USM user")
+	assert.Empty(t, probe.AuthPassphrase)
+	assert.Empty(t, probe.PrivPassphrase)
+	assert.Equal(t, "noAuthNoPriv", probe.SecurityLevel, "no HMAC means no offline attack material")
+	assert.Equal(t, "netbox-monitor", real.Username, "the caller's authentication must not be mutated")
+}
+
+func TestProbeAuthenticationLeavesV2cUnchanged(t *testing.T) {
+	// Documents the gap rather than hiding it: v2c has no credential-free
+	// exchange, and a wrong community is silently discarded by a conformant
+	// agent, so substituting one would turn every device into a false negative.
+	real := &config.Authentication{
+		ProtocolVersion: snmp.ProtocolVersion2c,
+		Community:       "s3cret",
+	}
+
+	probe := probeAuthentication(real)
+
+	assert.Equal(t, "s3cret", probe.Community)
+}
+
+func TestProbeTargetV3AdmitsOnEngineDiscovery(t *testing.T) {
+	walker := &engineWalker{discovered: true}
+	walker.walkErr = errors.New("unknown user name")
+	var gotAuth *config.Authentication
+
+	runner := &Runner{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		scope: config.Scope{Authentication: config.Authentication{
+			ProtocolVersion: snmp.ProtocolVersion3,
+			SecurityLevel:   "authPriv",
+			Username:        "netbox-monitor",
+			AuthProtocol:    "SHA",
+			AuthPassphrase:  "auth-secret",
+			PrivProtocol:    "AES",
+			PrivPassphrase:  "priv-secret",
+		}},
+		snmpProbeTimeout: time.Second,
+		ClientFactory: func(_ string, _ uint16, _ int, _ time.Duration, auth *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+			gotAuth = auth
+			return walker, nil
+		},
+	}
+
+	ok := runner.probeTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+
+	require.True(t, ok, "an agent that answered engine discovery is present")
+	require.NotNil(t, gotAuth)
+	assert.NotEqual(t, "netbox-monitor", gotAuth.Username)
+	assert.Empty(t, gotAuth.AuthPassphrase)
+	assert.Empty(t, gotAuth.PrivPassphrase)
+}
+
+func TestProbeTargetV3RejectsWithoutEngineDiscovery(t *testing.T) {
+	walker := &engineWalker{discovered: false}
+	walker.walkErr = errors.New("request timeout")
+
+	runner := &Runner{
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		scope: config.Scope{Authentication: config.Authentication{
+			ProtocolVersion: snmp.ProtocolVersion3,
+			SecurityLevel:   "authPriv",
+			Username:        "netbox-monitor",
+			AuthProtocol:    "SHA",
+			AuthPassphrase:  "auth-secret",
+		}},
+		snmpProbeTimeout: time.Second,
+		ClientFactory: func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+			return walker, nil
+		},
+	}
+
+	assert.False(t, runner.probeTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161}))
+}

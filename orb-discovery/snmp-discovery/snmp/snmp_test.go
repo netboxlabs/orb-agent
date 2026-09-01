@@ -749,3 +749,31 @@ func TestMapPDU(t *testing.T) {
 		})
 	}
 }
+
+func TestClientEngineDiscoveredReflectsAuthoritativeEngineID(t *testing.T) {
+	// The v3 probe cannot authenticate, so a learned engine ID is the only
+	// thing that separates a live agent from an address holding nothing.
+	client := &snmp.Client{GoSNMP: &gosnmp.GoSNMP{
+		Version:       gosnmp.Version3,
+		SecurityModel: gosnmp.UserSecurityModel,
+		SecurityParameters: &gosnmp.UsmSecurityParameters{
+			UserName: "orb-probe",
+		},
+	}}
+
+	assert.False(t, client.EngineDiscovered(), "nothing answered yet")
+
+	client.SecurityParameters.(*gosnmp.UsmSecurityParameters).AuthoritativeEngineID = "\x80\x00\x1f\x88"
+	assert.True(t, client.EngineDiscovered(), "a learned engine ID means an agent answered")
+}
+
+func TestClientEngineDiscoveredIsFalseForV2c(t *testing.T) {
+	// v2c has no USM parameters at all, so the assertion must not panic and
+	// must not claim presence: v2c admission stays the walk result.
+	client := &snmp.Client{GoSNMP: &gosnmp.GoSNMP{
+		Version:   gosnmp.Version2c,
+		Community: "public",
+	}}
+
+	assert.False(t, client.EngineDiscovered())
+}
