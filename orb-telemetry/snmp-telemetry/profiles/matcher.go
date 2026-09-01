@@ -81,6 +81,13 @@ func (c keyClaims) pick(keep func(*Profile) bool) *Profile {
 // reportShadowed reports the ones an operator can act on. Pass profiles in a
 // stable order (Loader.AllResolved sorts them) so a tie between two profiles of
 // the same origin does not move between restarts.
+//
+// Each `matches` redirect is compiled and its destination looked up here, so a
+// pattern that cannot compile and one naming a file no profile carries are both
+// reported once rather than per poll. Neither fails the load: the bundled set
+// already ships an unresolvable one, and the operator-facing case is a typo in
+// an override, which should degrade rather than take the backend down at
+// startup.
 func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	byBase := make(map[string]keyClaims)
 	byExact := make(map[string]keyClaims)
@@ -145,7 +152,20 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 				}
 				continue
 			}
-			compiled = append(compiled, matchRedirect{re: re, file: p.Matches[pattern]})
+			target := p.Matches[pattern]
+			// A destination no loaded profile carries can never be reached, so
+			// a device the pattern describes silently keeps collecting this
+			// profile's symbols instead of the ones it was sent to. Reporting
+			// it here names it once, and names one no device has matched yet;
+			// reporting at match time would repeat the line every poll cycle.
+			// The redirect is left in place: upstream ktranslate also falls
+			// back to the declaring profile, and dropping the device instead
+			// would stop collecting from it altogether.
+			if _, found := m.profileByFile[target]; !found && logger != nil {
+				logger.Warn("SNMP profile matches redirect names a profile that is not loaded",
+					"profile", p.RelPath, "pattern", pattern, "target", target)
+			}
+			compiled = append(compiled, matchRedirect{re: re, file: target})
 		}
 		if len(compiled) > 0 {
 			m.redirects[p] = compiled

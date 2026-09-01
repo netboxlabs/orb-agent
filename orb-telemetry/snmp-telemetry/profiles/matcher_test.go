@@ -414,3 +414,134 @@ func TestNewMatcher_BundledSysObjectIDsAreAllIndexable(t *testing.T) {
 		}
 	}
 }
+
+// unresolvableRedirectMsg is the report an operator sees for a `matches` entry
+// whose destination file is not among the loaded profiles.
+const unresolvableRedirectMsg = "SNMP profile matches redirect names a profile that is not loaded"
+
+// warnLinesMentioning returns the captured log lines carrying msg.
+func warnLinesMentioning(out, msg string) []string {
+	var found []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, msg) {
+			found = append(found, line)
+		}
+	}
+	return found
+}
+
+// A `matches` entry naming a file no loaded profile carries can never redirect
+// anything. The device keeps collecting the original profile's symbols instead
+// of the ones it was sent to, so without a report at construction the policy
+// stays healthy while gathering the wrong metrics.
+func TestNewMatcher_UnresolvableRedirectReported(t *testing.T) {
+	base := &Profile{
+		FileName:    "base.yml",
+		RelPath:     "vendor/base.yml",
+		SysObjectID: StringOrSlice{"1.3.6.1.4.1.9.*"},
+		Matches:     map[string]string{"^single phase": "vendor-ups.yml"},
+	}
+
+	logger, buf := captureLogger()
+	m := NewMatcher([]*Profile{base}, logger)
+
+	lines := warnLinesMentioning(buf.String(), unresolvableRedirectMsg)
+	require.Len(t, lines, 1, "an unresolvable redirect must be reported exactly once")
+	assert.Contains(t, lines[0], "vendor/base.yml", "the report must name the profile that declares the redirect")
+	assert.Contains(t, lines[0], "^single phase", "the report must name the pattern")
+	assert.Contains(t, lines[0], "vendor-ups.yml", "the report must name the file it cannot find")
+
+	// Reporting must not change what a matching device collects: the original
+	// profile still serves it, which is what upstream does too.
+	got, ok := m.MatchWithDescr("1.3.6.1.4.1.9.1.46", "Single Phase 1Gb UPS")
+	require.True(t, ok)
+	assert.Equal(t, base, got, "an unresolvable redirect still returns the original profile")
+}
+
+// The report must fire on the destination being absent, not on every profile
+// that declares a `matches` section.
+func TestNewMatcher_ResolvableRedirectNotReported(t *testing.T) {
+	base := &Profile{
+		FileName:    "base.yml",
+		RelPath:     "vendor/base.yml",
+		SysObjectID: StringOrSlice{"1.3.6.1.4.1.9.*"},
+		Matches:     map[string]string{"^single phase": "vendor-ups.yml"},
+	}
+	target := &Profile{FileName: "vendor-ups.yml", RelPath: "vendor/vendor-ups.yml"}
+
+	logger, buf := captureLogger()
+	m := NewMatcher([]*Profile{base, target}, logger)
+
+	assert.Empty(t, warnLinesMentioning(buf.String(), unresolvableRedirectMsg),
+		"a redirect whose destination is loaded must not be reported")
+
+	got, ok := m.MatchWithDescr("1.3.6.1.4.1.9.1.46", "Single Phase 1Gb UPS")
+	require.True(t, ok)
+	assert.Equal(t, target, got, "a resolvable redirect still redirects")
+}
+
+// A profile can declare several redirects, and only the ones that cannot
+// resolve belong in the report.
+func TestNewMatcher_OnlyUnresolvableRedirectsOfAProfileReported(t *testing.T) {
+	base := &Profile{
+		FileName:    "base.yml",
+		RelPath:     "vendor/base.yml",
+		SysObjectID: StringOrSlice{"1.3.6.1.4.1.9.*"},
+		Matches: map[string]string{
+			"^single phase": "vendor-ups.yml",
+			"^switch":       "vendor-switch.yml",
+		},
+	}
+	target := &Profile{FileName: "vendor-switch.yml", RelPath: "vendor/vendor-switch.yml"}
+
+	logger, buf := captureLogger()
+	NewMatcher([]*Profile{base, target}, logger)
+
+	lines := warnLinesMentioning(buf.String(), unresolvableRedirectMsg)
+	require.Len(t, lines, 1, "only the redirect whose destination is missing is reported")
+	assert.Contains(t, lines[0], "vendor-ups.yml")
+	assert.NotContains(t, lines[0], "vendor-switch.yml")
+}
+
+// The bundled tree is vendored verbatim from upstream, and one of its profiles
+// names a destination that upstream never shipped. Every unresolvable redirect
+// it carries has to be reported. The expectation is computed from the tree
+// itself rather than hard-coded, so a later upstream sync that adds the missing
+// file leaves this passing; only our reporting going quiet fails it.
+func TestNewMatcher_BundledUnresolvableRedirectsAreReported(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	loaded := make(map[string]bool, len(all))
+	for _, p := range all {
+		loaded[p.FileName] = true
+	}
+	type redirect struct{ relPath, pattern, target string }
+	var unresolvable []redirect
+	for _, p := range all {
+		for pattern, target := range p.Matches {
+			if !loaded[target] {
+				unresolvable = append(unresolvable, redirect{p.RelPath, pattern, target})
+			}
+		}
+	}
+
+	logger, buf := captureLogger()
+	NewMatcher(all, logger)
+
+	lines := warnLinesMentioning(buf.String(), unresolvableRedirectMsg)
+	assert.Len(t, lines, len(unresolvable),
+		"every unresolvable bundled redirect is reported, and nothing else is")
+	for _, r := range unresolvable {
+		var matched bool
+		for _, line := range lines {
+			if strings.Contains(line, r.relPath) && strings.Contains(line, r.pattern) && strings.Contains(line, r.target) {
+				matched = true
+				break
+			}
+		}
+		assert.True(t, matched, "no report names %s -> %s in %s", r.pattern, r.target, r.relPath)
+	}
+}

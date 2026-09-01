@@ -28,6 +28,12 @@ const (
 	unrelatedBundledFile = "apc_ats.yml"
 )
 
+// shadowWarnMsg is the report a key with more than one claimant produces. The
+// tests below measure shadowing, so they filter on it rather than on the whole
+// buffer: NewMatcher also reports unresolvable `matches` redirects, and the
+// bundled tree carries one of those.
+const shadowWarnMsg = "SNMP profile shadows the one that would have served this key"
+
 func captureLogger() (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})), &buf
@@ -151,15 +157,18 @@ func TestMatcher_WarnNamesEveryClaimantOfOneSysObjectID(t *testing.T) {
 	logger, buf := captureLogger()
 	NewMatcher(all, logger)
 
-	out := buf.String()
-	assert.Len(t, strings.Split(strings.TrimSpace(out), "\n"), 1, "one key must produce one warning")
+	shadow := warnLinesMentioning(buf.String(), shadowWarnMsg)
+	require.Len(t, shadow, 1, "one key must produce one warning")
 	for _, want := range []string{bundledExactOID, "aa-collide.yml", "zz-collide.yml", bundledExactFile} {
-		assert.Contains(t, out, want, "the warning must name every claimant")
+		assert.Contains(t, shadow[0], want, "the warning must name every claimant")
 	}
 }
 
 // The bundled set carries several files that share a basename, which is not an
-// operator's mistake and must not warn on a correct install.
+// operator's mistake and must not warn on a correct install. The one warning it
+// does earn is upstream's own unresolvable `matches` redirect, which
+// TestNewMatcher_BundledUnresolvableRedirectsAreReported pins; nothing else may
+// appear.
 func TestMatcher_BundledSetLoadsWithoutWarnings(t *testing.T) {
 	l, err := LoadProfiles("", silentLogger)
 	require.NoError(t, err)
@@ -168,7 +177,13 @@ func TestMatcher_BundledSetLoadsWithoutWarnings(t *testing.T) {
 
 	logger, buf := captureLogger()
 	NewMatcher(all, logger)
-	assert.Empty(t, buf.String(), "the bundled profiles must load clean")
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		assert.Contains(t, line, unresolvableRedirectMsg,
+			"the bundled profiles must load clean apart from upstream's unresolvable redirect")
+	}
 }
 
 // An override only replaces a bundled profile when its relative path matches.
@@ -375,7 +390,8 @@ func TestMatcher_BroaderOverrideWildcardLosesToBundledPrefix(t *testing.T) {
 	got, ok := NewMatcher(all, logger).Match(wildcardProbeOID)
 	require.True(t, ok)
 	assert.Equal(t, bundledWildcardPath, got.RelPath, "the longer bundled prefix must still win")
-	assert.Empty(t, buf.String(), "the two never claim the same pattern, so there is nothing to warn about")
+	assert.Empty(t, warnLinesMentioning(buf.String(), shadowWarnMsg),
+		"the two never claim the same pattern, so there is nothing to warn about")
 }
 
 // Nine bundled files are named traps.yml. Overriding one of them at its own
@@ -395,12 +411,9 @@ func TestMatcher_CorrectOverrideOfSharedBasenameNamesOnlyAffectedFiles(t *testin
 	logger, buf := captureLogger()
 	NewMatcher(all, logger)
 
-	out := strings.TrimSpace(buf.String())
-	var lines []string
-	if out != "" {
-		lines = strings.Split(out, "\n")
-	}
-	assert.LessOrEqual(t, len(lines), 1, "overriding one bundled traps.yml must not warn once per sibling")
+	shadow := warnLinesMentioning(buf.String(), shadowWarnMsg)
+	assert.LessOrEqual(t, len(shadow), 1, "overriding one bundled traps.yml must not warn once per sibling")
+	out := strings.Join(shadow, "\n")
 	for _, untouched := range []string{"citrix", "eaton", "f5", "kemp", "nutanix", "purestorage", "sciencelogic", "vmware"} {
 		assert.NotContains(t, out, untouched+"/traps.yml",
 			"a warning must not name a file the operator's override did not affect")
