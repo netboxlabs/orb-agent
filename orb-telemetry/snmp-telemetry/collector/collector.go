@@ -701,6 +701,24 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		return err
 	}
 
+	// A run that matched a profile and then observed nothing has no partial
+	// data to protect, so its walk failures are reported rather than persisted
+	// as an empty device. Returning nil, the run replaced the store with an
+	// empty one and the runner cleared the target's error, so the policy
+	// reported the device healthy while it exported no telemetry at all.
+	//
+	// A run that observed something keeps returning nil and keeps what it
+	// collected. A profile legitimately declares OIDs a given device does not
+	// implement, and a run that failed discards the device, so failing on one
+	// walk would throw away every reading that worked and flap the target's
+	// status on every cycle.
+	if len(fresh.points) == 0 {
+		if failed, oid, walkErr := walks.failures(); failed > 0 {
+			return fmt.Errorf("collecting from %s observed no metric and failed %d of its SNMP walks, including %s: %w",
+				target.Host, failed, oid, walkErr)
+		}
+	}
+
 	// Rebuild the device store:
 	// - a declaration that polled is represented by this run's points alone, so
 	//   a table row that has gone stops being exported, and a device that no
@@ -1751,6 +1769,33 @@ type walkResult struct {
 // The maps handed back are the cache's own. Every caller reads them and builds
 // its own row maps from what it reads.
 type walkCache map[string]walkResult
+
+// failures reports how many of the run's walks failed, and names one of them
+// for a report: the lowest failing OID and the error it returned.
+//
+// The walk chosen is the lowest rather than whichever the range yielded. The
+// cache is a map, so an unordered pick would describe one standing outage with
+// a different OID on every cycle and an operator could not tell a failure that
+// is spreading from one that is not.
+//
+// Failures are counted per OID because that is what the cache holds: a subtree
+// asked for by several declarations is one request to the device, and counting
+// it once per declaration would report a number no packet capture would show.
+func (w walkCache) failures() (int, string, error) {
+	count := 0
+	lowest := ""
+	var lowestErr error
+	for oid, res := range w {
+		if res.err == nil {
+			continue
+		}
+		count++
+		if lowest == "" || oid < lowest {
+			lowest, lowestErr = oid, res.err
+		}
+	}
+	return count, lowest, lowestErr
+}
 
 // cachedWalk walks an OID once per run and hands every later caller what the
 // first one got.

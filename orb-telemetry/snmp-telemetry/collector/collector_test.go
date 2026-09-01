@@ -2883,15 +2883,22 @@ func TestCollectTarget_FailedScalarWalkDoesNotThrottle(t *testing.T) {
 	const (
 		host        = "10.0.0.110"
 		slowOID     = "1.3.6.1.4.1.9999.110.1.0"
+		steadyOID   = "1.3.6.1.4.1.9999.110.2.0"
 		sysObjValue = "1.3.6.1.4.1.9999.110"
 	)
+	// The second symbol answers throughout, which is what keeps the first run
+	// a partial one: a run that observed nothing and failed a walk reports the
+	// failure, and the device it then forgets would take the poll windows this
+	// test is about with it.
 	p := profileWithOID(sysObjValue, "throttle.yml", []profiles.MetricEntry{
 		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{Name: "slowMetric", OID: slowOID, PollTimeSec: 3600}},
+		{MIB: "TEST-MIB", Symbol: &profiles.Symbol{Name: "steadyMetric", OID: steadyOID}},
 	})
 	makeWalker := func(fail bool) *recordingWalker {
 		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
 			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
 			slowOID:        {slowOID: intPDU(slowOID, 42)},
+			steadyOID:      {steadyOID: intPDU(steadyOID, 1)},
 		}}
 		if fail {
 			w.walkErrs = map[string]error{slowOID: errors.New("request timeout")}
@@ -2951,6 +2958,130 @@ func TestCollectTarget_FailedTableColumnWalkDoesNotThrottle(t *testing.T) {
 	points := c.testDeviceStore("p", host)["snmp.slowcolumn"]
 	require.Len(t, points, 1, "the column was never collected, so nothing may throttle it")
 	assert.Equal(t, int64(7), points[0].value)
+}
+
+// errCPUWalk is the failure the report is expected to carry, named so a test
+// can assert it is wrapped and not only rendered into the message.
+var errCPUWalk = errors.New("request timeout")
+
+// TestCollectTarget_EveryWalkFailingIsAnError covers a run that matched a
+// profile and then observed nothing, because every walk it issued failed. The
+// run used to return nil, so the store was replaced with an empty one and the
+// runner cleared the target's error: the policy reported the device healthy
+// while it was exporting no telemetry at all. There is nothing to protect in
+// that run, so it is reported instead.
+func TestCollectTarget_EveryWalkFailingIsAnError(t *testing.T) {
+	const (
+		host        = "10.0.0.113"
+		sysObjValue = "1.3.6.1.4.1.9999.113"
+		cpuOID      = sysObjValue + ".1.0"
+		memOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "every-walk-fails.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+		{Symbol: &profiles.Symbol{Name: "memUtil", OID: memOID}},
+	})
+	makeWalker := func(fail bool) *recordingWalker {
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
+			memOID:         {memOID: intPDU(memOID, 40)},
+		}}
+		if fail {
+			w.walkErrs = map[string]error{cpuOID: errCPUWalk, memOID: errors.New("packet too big")}
+		}
+		return w
+	}
+
+	// A healthy run first, so the failing one has series to lose.
+	c := newCollector(walkerFactory(makeWalker(false)), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
+
+	c.clientFactory = walkerFactory(makeWalker(true))
+	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{})
+	require.Error(t, err, "a run that observed nothing and failed every walk is not a healthy run")
+	assert.Contains(t, err.Error(), host, "the report names the device")
+	assert.Contains(t, err.Error(), "failed 2 of its SNMP walks", "the report counts the failures")
+	assert.Contains(t, err.Error(), cpuOID, "the report names an OID the operator can act on")
+	assert.Contains(t, err.Error(), "request timeout", "the report carries the failure of the OID it names")
+	assert.ErrorIs(t, err, errCPUWalk, "the walk failure is wrapped rather than only described")
+	assert.Nil(t, c.testDeviceStore("p", host), "the failed run leaves nothing behind rather than the last run's readings")
+}
+
+// TestCollectTarget_TheReportedWalkFailureIsTheSameOneEveryRun pins the walk the
+// report names. The failures are held in a map, so naming whichever the range
+// yielded would describe one run's outage with a different OID each cycle and
+// the operator could not tell a spreading failure from a stable one.
+func TestCollectTarget_TheReportedWalkFailureIsTheSameOneEveryRun(t *testing.T) {
+	const (
+		host        = "10.0.0.114"
+		sysObjValue = "1.3.6.1.4.1.9999.114"
+	)
+	oids := []string{
+		sysObjValue + ".9.0",
+		sysObjValue + ".1.0",
+		sysObjValue + ".5.0",
+		sysObjValue + ".3.0",
+	}
+	entries := make([]profiles.MetricEntry, 0, len(oids))
+	walkErrs := make(map[string]error, len(oids))
+	for i, oid := range oids {
+		entries = append(entries, profiles.MetricEntry{
+			Symbol: &profiles.Symbol{Name: fmt.Sprintf("metric%d", i), OID: oid},
+		})
+		walkErrs[oid] = fmt.Errorf("request %d timed out", i)
+	}
+	p := profileWithOID(sysObjValue, "stable-report.yml", entries)
+
+	for run := range 8 {
+		w := &recordingWalker{
+			responses: map[string]map[string]snmp.PDU{
+				sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			},
+			walkErrs: walkErrs,
+		}
+		c := newCollector(walkerFactory(w), p)
+		err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), sysObjValue+".1.0",
+			"run %d names the lowest failing OID rather than whichever the map yielded", run)
+		assert.Contains(t, err.Error(), "request 1 timed out",
+			"run %d carries the error of the OID it names", run)
+	}
+}
+
+// TestCollectTarget_APartlyFailedRunKeepsWhatItCollected is the other half of
+// the rule. A profile may declare OIDs a device does not answer for, and a run
+// that observed something has data worth keeping: failing it would discard
+// every reading that worked and flap the policy status on every cycle.
+func TestCollectTarget_APartlyFailedRunKeepsWhatItCollected(t *testing.T) {
+	const (
+		host        = "10.0.0.115"
+		sysObjValue = "1.3.6.1.4.1.9999.115"
+		cpuOID      = sysObjValue + ".1.0"
+		memOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "partly-fails.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+		{Symbol: &profiles.Symbol{Name: "memUtil", OID: memOID}},
+	})
+	w := &recordingWalker{
+		responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
+			memOID:         {memOID: intPDU(memOID, 40)},
+		},
+		walkErrs: map[string]error{memOID: errors.New("request timeout")},
+	}
+	c := newCollector(walkerFactory(w), p)
+
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}),
+		"a run that observed something keeps its partial data")
+	points := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, points, 1, "the reading that worked is kept")
+	assert.Equal(t, int64(75), points[0].value)
+	assert.Empty(t, c.testDeviceStore("p", host)["snmp.memutil"], "the reading that failed is absent")
 }
 
 // TestCollectTarget_WalkThatAnswersWithNothingStillThrottles keeps the fix from
@@ -5625,6 +5756,9 @@ const (
 	twoNameTable    = "1.3.6.1.4.1.99.20.1"
 	twoNameOctetCol = "1.3.6.1.4.1.99.20.1.1.2"
 	twoNameStateCol = "1.3.6.1.4.1.99.20.1.1.3"
+	// twoNameCountOID is a scalar outside the table, for a test that needs the
+	// run to observe something while the table column it is about fails.
+	twoNameCountOID = "1.3.6.1.4.1.99.20.2.0"
 )
 
 // twoNameWalker answers the octet column with two rows and the state column
@@ -6362,7 +6496,15 @@ func TestCollectTarget_AFailedWalkIsSharedRatherThanRetried(t *testing.T) {
 		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=1", PollTimeSec: 300},
 		profiles.Symbol{Name: "linkOctets", OID: twoNameOctetCol, Condition: "linkState=2", AllowDup: true, PollTimeSec: 300},
 	)
+	// A scalar the device answers throughout keeps the first run a partial one.
+	// A run that observed nothing and failed a walk reports the failure, and
+	// the device it then forgets would take the poll windows this test reads
+	// with it.
+	p.Metrics = append(p.Metrics, profiles.MetricEntry{
+		Symbol: &profiles.Symbol{Name: "linkCount", OID: twoNameCountOID},
+	})
 	w := twoNameWalker()
+	w.responses[twoNameCountOID] = map[string]snmp.PDU{twoNameCountOID: intPDU(twoNameCountOID, 2)}
 	// The column fails the first request of the run and answers every later
 	// one, including the next cycle's.
 	failWalksExcept(w, twoNameOctetCol, 2, 3)
@@ -6469,15 +6611,22 @@ func TestCollectTarget_ADeviceTagFailureIsSharedWithItsMetric(t *testing.T) {
 		host        = "10.0.0.90"
 		sysObjValue = "1.3.6.1.4.1.99.25"
 		revOID      = sysObjValue + ".1.0"
+		serialOID   = sysObjValue + ".2.0"
 	)
+	// The second symbol answers throughout, so the first run stays a partial
+	// one. A run that observed nothing and failed a walk reports the failure,
+	// and the device it then forgets would take the poll window this test
+	// reads on the second cycle with it.
 	p := profileWithOID(sysObjValue, "tag-and-metric-fails.yml", []profiles.MetricEntry{
 		{Symbols: []profiles.Symbol{{Name: "boardRevision", OID: revOID}}},
+		{Symbols: []profiles.Symbol{{Name: "boardSerial", OID: serialOID}}},
 	})
 	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: revOID, Name: "BoardRevision"}}}
 
 	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
 		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
 		revOID:         {revOID: intPDU(revOID, 7)},
+		serialOID:      {serialOID: intPDU(serialOID, 3)},
 	}}
 	// The OID fails the first request of the first run and answers the rest.
 	failWalksExcept(w, revOID, 2)
