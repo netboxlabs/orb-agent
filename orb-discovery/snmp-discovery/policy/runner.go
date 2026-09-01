@@ -340,9 +340,14 @@ func probeAuthentication(auth *config.Authentication) *config.Authentication {
 	probe := *auth
 	probe.Username = probeProbeUser
 	probe.SecurityLevel = "noAuthNoPriv"
-	probe.AuthProtocol = ""
+	// The sentinels rather than empty strings: getAuthProtocol and
+	// getPrivProtocol accept "NoAuth" and "NoPriv" and reject everything else
+	// they do not recognise, the empty string included. Clearing these to ""
+	// makes the client factory fail before it connects, which rejects every
+	// address and quietly turns off v3 range scanning altogether.
+	probe.AuthProtocol = "NoAuth"
 	probe.AuthPassphrase = ""
-	probe.PrivProtocol = ""
+	probe.PrivProtocol = "NoPriv"
 	probe.PrivPassphrase = ""
 	probe.ContextName = ""
 	return &probe

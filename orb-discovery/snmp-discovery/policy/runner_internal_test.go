@@ -1297,3 +1297,29 @@ func TestProbeTargetV3RejectsWithoutEngineDiscovery(t *testing.T) {
 
 	assert.False(t, runner.probeTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161}))
 }
+
+func TestProbeAuthenticationBuildsARealClient(t *testing.T) {
+	// The other probe tests inject a fake ClientFactory, so none of them
+	// exercises snmp.NewClient. That is how an earlier revision shipped a
+	// probe authentication the real factory rejected outright: it cleared the
+	// protocol fields to "", and getAuthProtocol/getPrivProtocol accept
+	// "NoAuth"/"NoPriv" but not the empty string, so every v3 address was
+	// refused before a packet was sent and no v3 range scan found anything.
+	for _, level := range []string{"noAuthNoPriv", "authNoPriv", "authPriv"} {
+		t.Run(level, func(t *testing.T) {
+			probe := probeAuthentication(&config.Authentication{
+				ProtocolVersion: snmp.ProtocolVersion3,
+				SecurityLevel:   level,
+				Username:        "netbox-monitor",
+				AuthProtocol:    "SHA",
+				AuthPassphrase:  "auth-secret",
+				PrivProtocol:    "AES",
+				PrivPassphrase:  "priv-secret",
+			})
+
+			client, err := snmp.NewClient("127.0.0.1", 161, 0, time.Second, probe, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			require.NoError(t, err, "the real factory must accept the probe authentication")
+			require.NotNil(t, client)
+		})
+	}
+}
