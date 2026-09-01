@@ -62,7 +62,7 @@ func entries(hosts ...string) []config.Target {
 }
 
 // sixteenSixteens is sixteen /16 entries. Each sits under a per-target ceiling
-// of 65536 while the policy as a whole expands to 1048576 addresses, one
+// of 65536 while the policy as a whole expands to 1048544 addresses, one
 // permanent recurring job apiece, and the sixteen prefixes are a few hundred
 // bytes so the request body limit never sees them.
 func sixteenSixteens() []string {
@@ -97,17 +97,23 @@ func TestCheckPolicyExpansion_RejectsManyTargetsThatEachFit(t *testing.T) {
 
 	err := checkPolicyExpansion(entries(hosts...))
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "1048576")
+	assert.ErrorContains(t, err, "1048544")
 	assert.ErrorContains(t, err, "65536")
 }
 
 // The boundary: the budget is a ceiling the policy may reach, and one address
 // past it is refused.
+//
+// Two /17 prefixes hold 32766 hosts apiece rather than 32768, since a prefix
+// excludes its network and broadcast addresses, so a four address range makes
+// up the difference and the policy lands on the ceiling exactly. The mixed
+// notation is deliberate: it reaches the boundary through both arithmetics at
+// once.
 func TestCheckPolicyExpansion_BoundaryIsTheSum(t *testing.T) {
-	atLimit := entries("10.0.0.0/17", "10.1.0.0/17")
+	atLimit := entries("10.0.0.0/17", "10.1.0.0/17", "192.0.2.0-3")
 	require.NoError(t, checkPolicyExpansion(atLimit))
 
-	overByOne := append(atLimit, config.Target{Host: "192.0.2.1"})
+	overByOne := append(atLimit, config.Target{Host: "198.51.100.1"})
 	err := checkPolicyExpansion(overByOne)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "65537")
@@ -143,7 +149,7 @@ func TestValidate_RejectsPolicyOverTheBudget(t *testing.T) {
 	m := newTestManager()
 	err := m.validatePolicy(policyWithTargets(sixteenSixteens()...))
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "1048576")
+	assert.ErrorContains(t, err, "1048544")
 	assert.ErrorContains(t, err, "65536")
 }
 
@@ -160,7 +166,7 @@ func TestNewRunner_RejectsOversizedTarget(t *testing.T) {
 func TestNewRunner_RejectsPolicyOverTheBudget(t *testing.T) {
 	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets(sixteenSixteens()...), &spyCollector{})
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "1048576")
+	assert.ErrorContains(t, err, "1048544")
 	assert.ErrorContains(t, err, "65536")
 }
 
@@ -221,6 +227,6 @@ func TestParsePolicies_TrimsAnOversizedTargetIntoTheBudget(t *testing.T) {
 `, padded)
 	_, err = m.ParsePolicies([]byte(body))
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "16777216")
+	assert.ErrorContains(t, err, "16777214")
 	assert.ErrorContains(t, err, "65536")
 }

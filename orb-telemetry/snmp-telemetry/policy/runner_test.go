@@ -107,8 +107,8 @@ func TestExpandTargets_CollapsesPrefixAndMemberAddress(t *testing.T) {
 	r := &Runner{scope: policyWithTargets("10.0.0.0/30", "10.0.0.1").Scope}
 	expanded, collapsed, err := r.expandTargets()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"10.0.0.0:161", "10.0.0.1:161", "10.0.0.2:161", "10.0.0.3:161"},
-		identities(t, r, expanded), "the prefix's four addresses each keep one job and the repeat is dropped")
+	assert.Equal(t, []string{"10.0.0.1:161", "10.0.0.2:161"},
+		identities(t, r, expanded), "the prefix's two hosts each keep one job and the repeat is dropped")
 	assert.Equal(t, 1, collapsed)
 }
 
@@ -118,9 +118,9 @@ func TestExpandTargets_CollapsesOverlappingPrefixes(t *testing.T) {
 	r := &Runner{scope: policyWithTargets("10.0.0.0/30", "10.0.0.2/31").Scope}
 	expanded, collapsed, err := r.expandTargets()
 	require.NoError(t, err)
-	assert.Equal(t, []string{"10.0.0.0:161", "10.0.0.1:161", "10.0.0.2:161", "10.0.0.3:161"},
+	assert.Equal(t, []string{"10.0.0.1:161", "10.0.0.2:161", "10.0.0.3:161"},
 		identities(t, r, expanded))
-	assert.Equal(t, 2, collapsed)
+	assert.Equal(t, 1, collapsed)
 }
 
 // TestExpandTargets_CollapsesAfterThePortDefault guards the ordering: an entry
@@ -184,11 +184,11 @@ func TestNewRunner_SchedulesOneJobPerIdentity(t *testing.T) {
 		policyWithTargets("10.0.0.0/30", "10.0.0.1"), &spyCollector{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
-	assert.Len(t, r.scheduler.Jobs(), 4, "the repeated address must not get a second job")
+	assert.Len(t, r.scheduler.Jobs(), 2, "the repeated address must not get a second job")
 }
 
 // TestNewRunner_ChargesTheBudgetBeforeCollapsing pins the charging order. Two
-// overlapping prefixes collapse to 65536 addresses, inside the budget, but
+// overlapping prefixes collapse to 65534 addresses, inside the budget, but
 // expansion allocates both spans before a duplicate can be found, so the guard
 // counts the raw notation and refuses.
 func TestNewRunner_ChargesTheBudgetBeforeCollapsing(t *testing.T) {

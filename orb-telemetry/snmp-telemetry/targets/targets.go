@@ -42,24 +42,51 @@ func Expand(target string) ([]string, error) {
 	return []string{target}, nil
 }
 
-// expandCIDR expands a CIDR notation into individual IP addresses
-func expandCIDR(cidr string) ([]string, error) {
+// cidrBounds returns the inclusive host range of an IPv4 prefix.
+//
+// A prefix names a subnet, so its network and broadcast addresses are not hosts
+// and are excluded. For SNMP that is a credential boundary rather than a saved
+// probe: a request to a broadcast address is delivered to every host on the
+// segment, so a credentialed poll hands the community string to all of them at
+// once instead of to the one address being polled.
+//
+// A /31 is a point-to-point link under RFC 3021 and a /32 is a single host, so
+// neither has a pair to exclude, and excluding one would put the end below the
+// start.
+//
+// countCIDR reads the same bounds. Counting the prefix a second time is what
+// would let the budget guard charge two addresses no poll is ever sent to.
+func cidrBounds(cidr string) (start, end uint32, err error) {
 	prefix, err := netip.ParsePrefix(cidr)
 	if err != nil {
-		return nil, fmt.Errorf("invalid CIDR notation: %w", err)
+		return 0, 0, fmt.Errorf("invalid CIDR notation: %w", err)
 	}
 
 	if !prefix.Addr().Is4() {
-		return nil, fmt.Errorf("only IPv4 addresses are supported")
+		return 0, 0, fmt.Errorf("only IPv4 addresses are supported")
+	}
+
+	prefix = prefix.Masked()
+	start = addrToUint32(prefix.Addr())
+	count := uint64(1) << (32 - prefix.Bits())
+	end = uint32(uint64(start) + count - 1)
+
+	if prefix.Bits() <= 30 {
+		start++
+		end--
+	}
+
+	return start, end, nil
+}
+
+// expandCIDR expands a CIDR notation into individual host addresses
+func expandCIDR(cidr string) ([]string, error) {
+	startVal, endVal, err := cidrBounds(cidr)
+	if err != nil {
+		return nil, err
 	}
 
 	const maxPrealloc = 1_048_576 // avoid huge upfront allocations for very large networks
-
-	prefix = prefix.Masked()
-	startVal := addrToUint32(prefix.Addr())
-	hostBits := 32 - prefix.Bits()
-	count := uint64(1) << hostBits
-	endVal := uint32(uint64(startVal) + count - 1)
 
 	rangeLen := uint64(endVal-startVal) + 1
 	capacity := 0

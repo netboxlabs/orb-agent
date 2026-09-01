@@ -15,7 +15,7 @@ import (
 //
 // The budget spans the policy rather than one entry. A per-target ceiling
 // bounds a single target and nothing else: sixteen /16 entries each sit under
-// it while the policy expands to 1048576 addresses, and the request body limit
+// it while the policy expands to 1048544 addresses, and the request body limit
 // does not help because sixteen prefixes are a few hundred bytes. There is one
 // number rather than a per-target ceiling and a larger policy-wide one, so
 // there is one thing to reason about, and a policy needing more than 65536

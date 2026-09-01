@@ -67,16 +67,19 @@ func TestCountAgreesWithExpand(t *testing.T) {
 }
 
 // Targets too large to expand in a test, which are the ones the count exists
-// for. The expected values are derived by hand from the notation.
+// for. The expected values are derived by hand from the notation: a prefix
+// holds two fewer hosts than the addresses it spans, because the network and
+// broadcast addresses are not polled, while a range holds every address it
+// names.
 func TestCountLargeTargets(t *testing.T) {
 	cases := []struct {
 		target string
 		want   uint64
 	}{
-		{"10.0.0.0/16", 65536},
-		{"10.0.0.0/15", 131072},
-		{"10.0.0.0/8", 16777216},
-		{"0.0.0.0/0", 4294967296},
+		{"10.0.0.0/16", 65534},
+		{"10.0.0.0/15", 131070},
+		{"10.0.0.0/8", 16777214},
+		{"0.0.0.0/0", 4294967294},
 		{"10.0.0.0-10.255.255.255", 16777216},
 		{"10.0.0.0/8-10.1.0.0/8", 65537},
 		{"0.0.0.0-255.255.255.255", 4294967296},
@@ -85,5 +88,23 @@ func TestCountLargeTargets(t *testing.T) {
 		count, err := Count(tc.target)
 		require.NoError(t, err, "target %s", tc.target)
 		assert.Equal(t, tc.want, count, "target %s", tc.target)
+	}
+}
+
+// Count feeds the pre-allocation budget guard, which is only trustworthy while
+// it reports exactly what Expand returns. Narrowing the expander alone would
+// charge every CIDR two addresses it never polls, which is precisely the drift
+// this file exists to prevent, so the pinned table is held against both.
+func TestCountMatchesThePinnedTable(t *testing.T) {
+	for _, tc := range pinnedExpansions {
+		t.Run(tc.name, func(t *testing.T) {
+			count, err := Count(tc.target)
+			require.NoError(t, err)
+			assert.Equal(t, uint64(tc.count), count, "Count(%s)", tc.target)
+
+			addrs, err := Expand(tc.target)
+			require.NoError(t, err)
+			assert.Equal(t, uint64(len(addrs)), count, "Count and Expand disagree about %s", tc.target)
+		})
 	}
 }

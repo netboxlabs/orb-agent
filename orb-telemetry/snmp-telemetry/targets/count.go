@@ -37,17 +37,19 @@ func Count(target string) (uint64, error) {
 }
 
 // countCIDR counts what expandCIDR would produce for a CIDR notation.
+//
+// It reads the bounds through cidrBounds, the same helper expandCIDR
+// enumerates, rather than deriving the size from the prefix length a second
+// time. A prefix excludes its network and broadcast addresses, and a size
+// computed here from the notation alone would silently charge the budget guard
+// two addresses no poll is ever sent to.
 func countCIDR(cidr string) (uint64, error) {
-	prefix, err := netip.ParsePrefix(cidr)
+	start, end, err := cidrBounds(cidr)
 	if err != nil {
-		return 0, fmt.Errorf("invalid CIDR notation: %w", err)
+		return 0, err
 	}
 
-	if !prefix.Addr().Is4() {
-		return 0, fmt.Errorf("only IPv4 addresses are supported")
-	}
-
-	return uint64(1) << (32 - prefix.Bits()), nil
+	return uint64(end-start) + 1, nil
 }
 
 // countIPRange counts what expandIPRange would produce, using the same
