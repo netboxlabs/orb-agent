@@ -74,6 +74,46 @@ agent passes `--host localhost` explicitly to every backend it launches, so the
 wider default is what a standalone run gets, and there it is a listener nothing
 is guarding.
 
+### What a poll puts on the wire
+
+The section above is about who can reach this backend. This one is about what
+the backend sends outward, which is the part an operator has to reason about
+before pointing a policy at a subnet.
+
+`protocol_version` decides how the credential travels:
+
+- **SNMPv1 and SNMPv2c** put the community string in every request, in the
+  clear. It is a shared secret with no integrity protection, so anyone able to
+  observe or inject traffic on the path reads it from the first packet and can
+  replay it. There is no version of v1 or v2c that avoids this.
+- **SNMPv3** depends on `security_level`. `noAuthNoPriv` sends the username in
+  the clear and authenticates nothing, so it protects no better than v2c.
+  `authNoPriv` authenticates each message but sends the values in the clear.
+  `authPriv` authenticates and encrypts, and is the only configuration here
+  that keeps both the credential and the readings off the wire in the clear.
+
+A target's `host` may name more than one address, and every address it expands
+to is polled with the policy's credentials. A `/24` is 254 credentialed
+requests, one to each host address in the prefix, whether or not anything is
+listening there. With v1 or v2c that means the community string is delivered to
+every address the notation covers, not only to the devices you meant to poll.
+
+Two details of that expansion are worth knowing. A CIDR prefix excludes its
+network and broadcast addresses, for a `/30` and wider, so a poll is never
+addressed to the segment's broadcast address, where it would be delivered to
+every host at once. An address range such as `192.168.1.0-255` keeps every
+address written, including the `.0` and the `.255`, because an operator who
+enumerated them meant them. The two notations differ here on purpose.
+
+There is also no probe stage. This backend does not sweep for devices and then
+authenticate to what it found; the first request it sends to an address is a
+credentialed one. Narrowing a policy is therefore the only thing that narrows
+where the credential goes.
+
+On a segment you do not control, use SNMPv3 with `authPriv`, or name targets
+individually rather than by prefix, or both. A v2c policy over a wide prefix is
+the case that hands one shared secret to the largest number of hosts.
+
 ### Policy Configuration
 
 A policy names the targets to poll and the SNMP credentials to use. Each
