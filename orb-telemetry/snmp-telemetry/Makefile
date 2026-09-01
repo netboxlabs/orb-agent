@@ -1,3 +1,8 @@
+# Every target runs outside the repository workspace, which is what CI does and
+# what keeps this module buildable on its own. Without it a generated go.work
+# puts the build in workspace mode, where -mod=mod is rejected.
+export GOWORK = off
+
 CGO_ENABLED ?= 0
 BUILD_DIR ?= ./build
 GOARCH ?= $(shell go env GOARCH)
