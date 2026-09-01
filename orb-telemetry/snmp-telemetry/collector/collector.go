@@ -701,23 +701,9 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		return err
 	}
 
-	// A run that matched a profile and then observed nothing has no partial
-	// data to protect, so its walk failures are reported rather than persisted
-	// as an empty device. Returning nil, the run replaced the store with an
-	// empty one and the runner cleared the target's error, so the policy
-	// reported the device healthy while it exported no telemetry at all.
-	//
-	// A run that observed something keeps returning nil and keeps what it
-	// collected. A profile legitimately declares OIDs a given device does not
-	// implement, and a run that failed discards the device, so failing on one
-	// walk would throw away every reading that worked and flap the target's
-	// status on every cycle.
-	if len(fresh.points) == 0 {
-		if failed, oid, walkErr := walks.failures(); failed > 0 {
-			return fmt.Errorf("collecting from %s observed no metric and failed %d of its SNMP walks, including %s: %w",
-				target.Host, failed, oid, walkErr)
-		}
-	}
+	// Read before the store is built, because the run is judged on the store
+	// and the store is published only once the run has been judged.
+	failed, failedOID, walkErr := walks.failures()
 
 	// Rebuild the device store:
 	// - a declaration that polled is represented by this run's points alone, so
@@ -738,8 +724,40 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 			newStore[name] = retained
 		}
 	}
-	c.deviceStore[key] = newStore
+	// A run that matched a profile and holds nothing has no data to protect, so
+	// its walk failures are reported rather than persisted as an empty device.
+	// Returning nil, the run replaced the store with an empty one and the
+	// runner cleared the target's error, so the policy reported the device
+	// healthy while it exported no telemetry at all.
+	//
+	// What the run holds is the store it would write, not the points it polled
+	// this cycle. A declaration throttled by poll_time_sec polls nothing and
+	// keeps what it left last run, while top-level metric_tags are walked on
+	// every cycle whatever the poll windows say, so a fully throttled cycle
+	// polls no point and can still fail a walk. Judged on this cycle's points
+	// alone it looks like a total loss, and a policy collecting on a shorter
+	// period than its profile declares spends most of its cycles there: one
+	// transient failure would discard the device's every retained reading and
+	// every poll window with it.
+	//
+	// A run that holds something keeps returning nil and keeps what it holds,
+	// whether it polled those points or carried them forward. A profile
+	// legitimately declares OIDs a given device does not implement, and a run
+	// that failed discards the device, so failing on one walk would throw away
+	// every reading that worked and flap the target's status on every cycle. A
+	// carried reading is valid for the poll period its declaration asked for,
+	// and a declaration that has stopped answering empties its own series, so
+	// it is visible by absence rather than by the device disappearing.
+	emptyRun := len(newStore) == 0
+	if !emptyRun || failed == 0 {
+		c.deviceStore[key] = newStore
+	}
 	c.storeMu.Unlock()
+
+	if emptyRun && failed > 0 {
+		return fmt.Errorf("collecting from %s observed no metric and failed %d of its SNMP walks, including %s: %w",
+			target.Host, failed, failedOID, walkErr)
+	}
 
 	// Ensure an observable gauge callback is registered for each metric name.
 	for name := range newStore {

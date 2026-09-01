@@ -3084,6 +3084,143 @@ func TestCollectTarget_APartlyFailedRunKeepsWhatItCollected(t *testing.T) {
 	assert.Empty(t, c.testDeviceStore("p", host)["snmp.memutil"], "the reading that failed is absent")
 }
 
+// TestCollectTarget_AThrottledCycleWithAFailedTagWalkKeepsTheDevice covers the
+// cycle a policy spends waiting out its profile's poll periods. Nothing is due,
+// so the run polls no fresh point and carries the previous ones forward, while
+// the profile's top-level metric_tags are walked on every cycle whatever the
+// poll windows say. A run judged on its fresh points alone reads that as having
+// collected nothing, so a single transient tag walk failure discarded every
+// retained reading and every poll window the device had. A 10 second policy
+// collecting 60 second metrics spends five cycles in six exactly here.
+func TestCollectTarget_AThrottledCycleWithAFailedTagWalkKeepsTheDevice(t *testing.T) {
+	const (
+		host        = "10.0.0.116"
+		sysObjValue = "1.3.6.1.4.1.9999.116"
+		cpuOID      = sysObjValue + ".1.0"
+		tagOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "throttled-tag-fails.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 3600}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
+
+	makeWalker := func(cpu int, failTag bool) *recordingWalker {
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			cpuOID:         {cpuOID: intPDU(cpuOID, cpu)},
+			tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
+		}}
+		if failTag {
+			w.walkErrs = map[string]error{tagOID: errors.New("request timeout")}
+		}
+		return w
+	}
+
+	// A first cycle collects the hourly symbol and starts its poll window.
+	c := newCollector(walkerFactory(makeWalker(75, false)), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
+
+	// The next cycle is fully throttled, and its device tag walk fails.
+	c.clientFactory = walkerFactory(makeWalker(75, true))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}),
+		"a throttled cycle still holds the points it carries forward, so one failed tag walk is not a total loss")
+	points := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, points, 1, "the throttled declaration's previous reading is carried forward")
+	assert.Equal(t, int64(75), points[0].value)
+
+	// A third cycle reads the poll windows, which only survive if the device
+	// was not forgotten: the hourly symbol is still throttled rather than
+	// re-polled, so the walker offering a new value is never asked for it.
+	third := makeWalker(99, false)
+	c.clientFactory = walkerFactory(third)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.NotContains(t, third.walkCalls, cpuOID,
+		"the poll window survived the failed cycle, so the hourly symbol is not re-polled")
+	points = c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, points, 1, "the reading is still carried forward a cycle later")
+	assert.Equal(t, int64(75), points[0].value, "the carried reading is the one collected, not a re-poll")
+}
+
+// TestCollectTarget_AThrottledCycleWithNothingToCarryIsStillReported is the
+// limit of the rule above. A declaration can be throttled and still have left
+// no point behind, because a walk that answered with nothing starts the poll
+// window all the same. Such a cycle holds nothing, so its walk failures are
+// reported rather than persisted as a healthy device exporting no telemetry.
+func TestCollectTarget_AThrottledCycleWithNothingToCarryIsStillReported(t *testing.T) {
+	const (
+		host        = "10.0.0.117"
+		sysObjValue = "1.3.6.1.4.1.9999.117"
+		cpuOID      = sysObjValue + ".1.0"
+		tagOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "throttled-empty.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 3600}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
+
+	makeWalker := func(failTag bool) *recordingWalker {
+		// cpuOID is absent from the responses, so the walk succeeds and
+		// answers with nothing: the poll window starts and no point is left.
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
+		}}
+		if failTag {
+			w.walkErrs = map[string]error{tagOID: errCPUWalk}
+		}
+		return w
+	}
+
+	c := newCollector(walkerFactory(makeWalker(false)), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Empty(t, c.testDeviceStore("p", host)["snmp.cpuutil"], "the walk answered with nothing, so there is nothing to carry")
+
+	c.clientFactory = walkerFactory(makeWalker(true))
+	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{})
+	require.Error(t, err, "a throttled declaration with no point behind it holds nothing, so the failure is still a total one")
+	assert.Contains(t, err.Error(), "failed 1 of its SNMP walks", "the report counts the failures")
+	assert.Contains(t, err.Error(), tagOID, "the report names the OID that failed")
+}
+
+// TestCollect_AReportedRunLeavesThePreviousStoreAlone pins the order of the two
+// steps. The store a run would write is built first, because whether the run
+// holds anything is a question about that store rather than about this cycle's
+// points alone, and it is published only once the run has been judged. A run
+// that reports a total failure therefore never writes the empty store it built.
+// CollectTarget forgets the device on an error, so the difference is only
+// visible below it.
+func TestCollect_AReportedRunLeavesThePreviousStoreAlone(t *testing.T) {
+	const (
+		host        = "10.0.0.118"
+		sysObjValue = "1.3.6.1.4.1.9999.118"
+		cpuOID      = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "publish-order.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(fail bool) *recordingWalker {
+		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
+		}}
+		if fail {
+			w.walkErrs = map[string]error{cpuOID: errors.New("request timeout")}
+		}
+		return w
+	}
+	key := deviceKey{policy: "p", host: host, port: 161}
+
+	c := newCollector(walkerFactory(makeWalker(false)), p)
+	require.NoError(t, c.collect(context.Background(), key, mustTarget(host), mustAuth(), DialOptions{}))
+	require.Len(t, c.testDeviceStoreKeyed(key)["snmp.cpuutil"], 1)
+
+	c.clientFactory = walkerFactory(makeWalker(true))
+	require.Error(t, c.collect(context.Background(), key, mustTarget(host), mustAuth(), DialOptions{}))
+	assert.Len(t, c.testDeviceStoreKeyed(key)["snmp.cpuutil"], 1,
+		"the run that reports a failure publishes no store, so what to do with the previous one is left to the caller")
+}
+
 // TestCollectTarget_WalkThatAnswersWithNothingStillThrottles keeps the fix from
 // turning every unsupported OID into a request on every cycle. A walk that
 // returns without error collected the symbol, whatever the device chose to
