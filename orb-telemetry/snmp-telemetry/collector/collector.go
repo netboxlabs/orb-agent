@@ -1490,7 +1490,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 	// columnPDUs maps columnOID -> (fullOID -> PDU), used for both metric and condition columns.
 	var columnPDUs map[string]map[string]snmp.PDU
 	if entry.WalkFullTable && entry.Table != nil {
-		columnPDUs = c.walkFullTable(walker, walks, entry)
+		columnPDUs = c.walkFullTable(ctx, walker, walks, entry)
 	}
 
 	// --- Phase 3: walk tag columns ---
@@ -1721,7 +1721,13 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 // walkFullTable walks the table root OID once and distributes PDUs to per-column maps.
 // The returned maps are keyed by the profile's own column OID, which is how the
 // callers look them up.
-func (c *MetricsCollector) walkFullTable(walker snmp.Walker, walks walkCache, entry *profiles.MetricEntry) map[string]map[string]snmp.PDU {
+//
+// Nothing is returned when the deadline expires inside the distribution, which
+// is what a failed walk returns and what the caller already reads as no
+// columns. The phases that follow check the deadline before they would walk a
+// column themselves, so the caller returns rather than asking the device for
+// what the distribution was holding.
+func (c *MetricsCollector) walkFullTable(ctx context.Context, walker snmp.Walker, walks walkCache, entry *profiles.MetricEntry) map[string]map[string]snmp.PDU {
 	allPDUs, err := c.cachedWalk(walks, walker, entry.Table.OID)
 	if err != nil {
 		c.logger.Debug("Error walking full table", "oid", entry.Table.OID, "table", entry.Table.Name, "error", err)
@@ -1742,6 +1748,13 @@ func (c *MetricsCollector) walkFullTable(walker snmp.Walker, walks walkCache, en
 
 	result := make(map[string]map[string]snmp.PDU, len(colPrefixes))
 	for fullOID, pdu := range allPDUs {
+		// One prefix test per interesting column per PDU, and a table can
+		// answer with thousands of rows. The caller discards a cancelled run,
+		// so distributing the rest of the response only delays the runner's
+		// shutdown.
+		if ctx.Err() != nil {
+			return nil
+		}
 		for prefix, colOID := range colPrefixes {
 			if strings.HasPrefix(fullOID, prefix+".") || fullOID == prefix {
 				if result[colOID] == nil {

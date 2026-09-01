@@ -1693,6 +1693,94 @@ func TestCollectScalar_StopsAtTheDeadlineWithinTheResponse(t *testing.T) {
 		"the scalar loop must stop at the deadline rather than converting the whole response")
 }
 
+// walkFullTable walks the table root once and distributes what came back to a
+// map per column, which costs one prefix test per PDU per interesting column. A
+// wide table answering near the deadline paid for the whole distribution before
+// any later phase looked at the context, and the caller discards a cancelled
+// run anyway, so the work only delayed the runner's shutdown.
+func TestWalkFullTable_StopsAtTheDeadlineDuringDistribution(t *testing.T) {
+	const (
+		tableOID = "1.3.6.1.2.1.2.2"
+		errCol   = tableOID + ".1.20"
+		descrCol = tableOID + ".1.2"
+	)
+	entry := fullTableEntry(tableOID, errCol, descrCol)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{tableOID: fullTableRows(errCol, descrCol, 6)}}
+	c := newCollector(walkerFactory(w), nil)
+
+	// Control: with nothing cancelled every column of the response is
+	// distributed, so the empty result below is the deadline rather than a
+	// distribution that never matched anything.
+	full := c.walkFullTable(context.Background(), w, walkCache{}, entry)
+	require.Len(t, full[errCol], 6, "every row of the metric column is distributed")
+	require.Len(t, full[descrCol], 6, "every row of the tag column is distributed")
+
+	// Three of the twelve PDUs distributed, then the deadline.
+	ctx := &cancelAfterCtx{Context: context.Background()}
+	ctx.live.Store(3)
+	assert.Nil(t, c.walkFullTable(ctx, w, walkCache{}, entry),
+		"a distribution stopped at the deadline returns nothing, as a failed table walk does")
+}
+
+// The caller reads a stopped distribution the way it reads a failed one: as no
+// columns, which sends it back to a walk per column. Every phase that would
+// issue one checks the deadline first, so a cancelled distribution asks the
+// device for nothing more and leaves no row behind for a run that is discarded.
+func TestCollectTable_StopsWhenTheDistributionHitsTheDeadline(t *testing.T) {
+	const (
+		tableOID = "1.3.6.1.2.1.2.2"
+		errCol   = tableOID + ".1.20"
+		descrCol = tableOID + ".1.2"
+	)
+	entry := fullTableEntry(tableOID, errCol, descrCol)
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{tableOID: fullTableRows(errCol, descrCol, 6)}}
+	c := newCollector(walkerFactory(w), nil)
+	key := testKey("p", "10.0.0.61")
+
+	// Control: with nothing cancelled the entry collects every row of its
+	// metric column off the one table walk.
+	live := newPointSink(discardLogger)
+	c.collectTable(context.Background(), w, walkCache{}, entry, nil, key, live, throttledDecls{})
+	require.Len(t, live.points["snmp.ifouterrors"], 6, "every row of the table is collected")
+	require.Equal(t, []string{tableOID}, w.walkCalls, "the whole entry is served by the one table walk")
+
+	// Six of the twelve PDUs distributed, then the deadline. Spent instead on
+	// the phases that follow the distribution, the same budget reaches the row
+	// loop with enough left to collect rows the run then discards.
+	w.walkCalls = nil
+	ctx := &cancelAfterCtx{Context: context.Background()}
+	ctx.live.Store(6)
+	fresh := newPointSink(discardLogger)
+	c.collectTable(ctx, w, walkCache{}, entry, nil, key, fresh, throttledDecls{})
+	assert.Empty(t, fresh.points, "a run stopped inside the distribution collects no row")
+	assert.Equal(t, []string{tableOID}, w.walkCalls,
+		"a stopped distribution must not send the caller back to a walk per column")
+}
+
+// fullTableEntry is a walk_full_table entry over one metric column and one tag
+// column, the shape whose distribution the deadline has to reach.
+func fullTableEntry(tableOID, metricCol, tagCol string) *profiles.MetricEntry {
+	return &profiles.MetricEntry{
+		Table:         &profiles.Table{Name: "ifTable", OID: tableOID},
+		WalkFullTable: true,
+		Symbols:       []profiles.Symbol{{Name: "ifOutErrors", OID: metricCol}},
+		MetricTags:    []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: tagCol, Name: "ifDescr"}}},
+	}
+}
+
+// fullTableRows is what the table root walk answers with: rows of both columns
+// interleaved in one response, as a device returns them.
+func fullTableRows(metricCol, tagCol string, rows int) map[string]snmp.PDU {
+	pdus := make(map[string]snmp.PDU, rows*2)
+	for i := 1; i <= rows; i++ {
+		metricOID := fmt.Sprintf("%s.%d", metricCol, i)
+		tagOID := fmt.Sprintf("%s.%d", tagCol, i)
+		pdus[metricOID] = counter32PDU(metricOID, uint(i))
+		pdus[tagOID] = stringPDU(tagOID, fmt.Sprintf("eth%d", i))
+	}
+	return pdus
+}
+
 // ---------------------------------------------------------------------------
 // Exported identity
 // ---------------------------------------------------------------------------
