@@ -101,7 +101,7 @@ func TestFakeSNMPWalker_NamesCarryLeadingDot(t *testing.T) {
 	w, err := NewFakeSNMPWalker(t.Context(), "10.0.0.1", 161, 1, time.Second, nil, clientTestLogger)
 	require.NoError(t, err)
 
-	pdus, err := w.Walk("1.3.6.1.2.1.2.2.1.2", 1)
+	pdus, err := w.Walk("1.3.6.1.2.1.2.2.1.2")
 	require.NoError(t, err)
 	require.Len(t, pdus, 1)
 	for name, pdu := range pdus {
@@ -117,10 +117,10 @@ func TestFakeSNMPWalker_RecordsTheWalkModeItWasGiven(t *testing.T) {
 	w, err := NewFakeSNMPWalker(t.Context(), "10.0.0.1", 161, 1, time.Second, nil, clientTestLogger)
 	require.NoError(t, err)
 
-	_, err = w.Walk("1.3.6.1.2.1.2.2.1.2", 1)
+	_, err = w.Walk("1.3.6.1.2.1.2.2.1.2")
 	require.NoError(t, err)
 	w.SetBulkWalk(true)
-	_, err = w.Walk("1.3.6.1.2.1.2.2.1.5", 1)
+	_, err = w.Walk("1.3.6.1.2.1.2.2.1.5")
 	require.NoError(t, err)
 
 	fake, ok := w.(*FakeSNMPWalker)
@@ -199,7 +199,7 @@ func TestClient_WalkStopsWhenContextIsCancelled(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err = w.Walk("1.3.6.1.2.1.1.1", 0)
+	_, err = w.Walk("1.3.6.1.2.1.1.1")
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -415,13 +415,13 @@ func TestClient_BulkWalkReturnsTheSameValuesInFewerRoundTrips(t *testing.T) {
 	getNextAgent := newFakeAgent(t, table)
 	getNext := agentClient(t, getNextAgent, ProtocolVersion2c)
 	getNext.SetBulkWalk(false)
-	byGetNext, err := getNext.Walk(root, 0)
+	byGetNext, err := getNext.Walk(root)
 	require.NoError(t, err)
 
 	bulkAgent := newFakeAgent(t, table)
 	bulk := agentClient(t, bulkAgent, ProtocolVersion2c)
 	bulk.SetBulkWalk(true)
-	byBulk, err := bulk.Walk(root, 0)
+	byBulk, err := bulk.Walk(root)
 	require.NoError(t, err)
 
 	require.Len(t, byGetNext, values)
@@ -458,7 +458,7 @@ func TestClient_SNMPv1NeverBulkWalks(t *testing.T) {
 
 	c := agentClient(t, agent, ProtocolVersion1)
 	c.SetBulkWalk(true)
-	pdus, err := c.Walk(root, 0)
+	pdus, err := c.Walk(root)
 	require.NoError(t, err)
 	assert.Len(t, pdus, 6)
 
@@ -496,7 +496,7 @@ func TestClient_BulkWalkHonoursTheCollectionContext(t *testing.T) {
 	}()
 
 	start := time.Now()
-	_, err = w.Walk("1.3.6.1.2.1.2.2.1", 0)
+	_, err = w.Walk("1.3.6.1.2.1.2.2.1")
 	elapsed := time.Since(start)
 
 	require.Error(t, err)
@@ -565,7 +565,7 @@ func TestClient_CommunityNeverReachesTheDebugLog(t *testing.T) {
 	require.NoError(t, w.Connect())
 	t.Cleanup(func() { _ = w.Close() })
 
-	values, err := w.Walk(root, 0)
+	values, err := w.Walk(root)
 	require.NoError(t, err)
 	require.NotEmpty(t, values, "the walk has to reach the agent for the log to hold packets")
 
@@ -762,7 +762,7 @@ func walkAgainstCorruptAgent(t *testing.T, community string, corrupt func([]byte
 	require.NoError(t, err)
 	require.NoError(t, w.Connect())
 	t.Cleanup(func() { _ = w.Close() })
-	_, err = w.Walk(root, 0)
+	_, err = w.Walk(root)
 	require.Error(t, err, "the corrupt reply has to have failed the walk")
 	return err
 }

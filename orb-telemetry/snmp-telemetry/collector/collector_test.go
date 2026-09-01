@@ -59,7 +59,7 @@ func (r *recordingWalker) SetBulkWalk(enabled bool) {
 	r.bulkWalk = enabled
 }
 
-func (r *recordingWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
+func (r *recordingWalker) Walk(oid string) (map[string]snmp.PDU, error) {
 	r.walkCalls = append(r.walkCalls, oid)
 	if r.bulkByOID == nil {
 		r.bulkByOID = make(map[string]bool)
@@ -4698,7 +4698,7 @@ func (a *snmpAgent) Connect() error     { return nil }
 func (a *snmpAgent) Close() error       { return nil }
 func (a *snmpAgent) SetBulkWalk(_ bool) {}
 
-func (a *snmpAgent) Walk(root string, _ int) (map[string]snmp.PDU, error) {
+func (a *snmpAgent) Walk(root string) (map[string]snmp.PDU, error) {
 	out := make(map[string]snmp.PDU)
 	prefix := root + "."
 	for oid, pdu := range a.vars {
@@ -6404,14 +6404,56 @@ func TestCollectTarget_BundledOutletTagAgreesWithItsMetric(t *testing.T) {
 // answerEachWalk makes an OID answer a different reading on each request, the
 // last of them standing for every request after it. A repeated walk of that
 // OID is then visible in what a run exports rather than only in the recorded
-// calls.
+// calls. Each reading is filed under its own PDU name, so a walk of a column
+// root can answer a row rather than the root itself.
 func answerEachWalk(w *recordingWalker, oid string, pdus ...snmp.PDU) {
 	call := 0
 	w.onWalk = func(walked string) {
 		if walked != oid {
 			return
 		}
-		w.responses[oid] = map[string]snmp.PDU{oid: pdus[min(call, len(pdus)-1)]}
+		pdu := pdus[min(call, len(pdus)-1)]
+		w.responses[oid] = map[string]snmp.PDU{pdu.Name: pdu}
 		call++
 	}
+}
+
+// A device tag and a table column can name one OID. Nothing in the bundled set
+// does, but nothing stops a profile from it either, and the two paths used to
+// ask the Walker for the same subtree under different identifier sizes. That
+// made two cache entries for one wire request, so the tag was read from the
+// first response and the rows exported beside it from the second, which is the
+// mixed-moment point the device tags were brought into the cache to end.
+func TestCollectTarget_ADeviceTagOnATableColumnIsOneWalk(t *testing.T) {
+	const (
+		host        = "10.0.0.92"
+		sysObjValue = "1.3.6.1.4.1.99.26"
+		tableOID    = sysObjValue + ".1"
+		statusCol   = tableOID + ".1.8"
+	)
+	p := profileWithOID(sysObjValue, "tag-on-a-column.yml", []profiles.MetricEntry{{
+		Table:   &profiles.Table{Name: "ifTable", OID: tableOID},
+		Symbols: []profiles.Symbol{{Name: "ifOperStatus", OID: statusCol}},
+	}})
+	p.MetricTags = []profiles.MetricTag{{
+		Tag:    "link_state",
+		Column: &profiles.TagColumn{OID: statusCol, Name: "ifOperStatus"},
+	}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+	}}
+	answerEachWalk(w, statusCol,
+		intPDU(statusCol+".1", 1),
+		intPDU(statusCol+".1", 2))
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, walkCount(w, statusCol), "the device tag and the table column are one walk")
+	pts := c.testDeviceStore("p", host)["snmp.ifoperstatus"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(1), pts[0].value, "the row is the run's first reading")
+	assert.Equal(t, "1", attrValue(pts[0], "link_state"),
+		"the device tag and the row beside it are one reading")
 }

@@ -136,7 +136,7 @@ func (c *Client) Close() error {
 // A bulk walk fetches maxRepetitions values per request where a GETNEXT walk
 // costs one request per value, which is the difference between tens and
 // thousands of round trips on the multi-column tables the profiles carry.
-func (c *Client) Walk(objectID string, _ int) (map[string]PDU, error) {
+func (c *Client) Walk(objectID string) (map[string]PDU, error) {
 	walkAll := c.WalkAll
 	if c.bulkWalk {
 		walkAll = c.BulkWalkAll
@@ -365,7 +365,7 @@ func getPrivProtocol(privProtocol string) (gosnmp.SnmpV3PrivProtocol, error) {
 
 // Walker interface defines methods for walking SNMP trees
 type Walker interface {
-	Walk(objectID string, identifierSize int) (map[string]PDU, error)
+	Walk(objectID string) (map[string]PDU, error)
 	// SetBulkWalk selects the request type subsequent walks issue. It is a
 	// method rather than a dial option because the profile that decides it is
 	// only known once sysObjectID has been read from the device.

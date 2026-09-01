@@ -47,7 +47,7 @@ func (n *FakeSNMPWalker) Close() error {
 //
 // PDU names carry a leading dot because gosnmp emits them that way. Requested
 // OIDs do not, matching the profile OIDs callers pass in.
-func (n *FakeSNMPWalker) Walk(oid string, _ int) (map[string]PDU, error) {
+func (n *FakeSNMPWalker) Walk(oid string) (map[string]PDU, error) {
 	n.Walks = append(n.Walks, FakeWalk{OID: oid, BulkWalk: n.bulkWalk})
 
 	if oid == "1.3.6.1.2.1.4.20.1.1" {
