@@ -347,6 +347,41 @@ func TestMarkPolled_KeysThePollWindowOnTheRetentionKey(t *testing.T) {
 		"the poll window is keyed on the declaration retention carries points for")
 }
 
+// outOfRangePollSeconds is a poll_time_sec past config.MaxDurationSeconds. The
+// multiply into a time.Duration wraps it to roughly a microsecond, so the long
+// window the profile asked for would read as expired on every cycle: the exact
+// inverse of the interval stated, and sustained traffic at the device.
+const outOfRangePollSeconds = 40423014371506394
+
+// A period the collector cannot turn into a duration refuses the symbol rather
+// than inventing an interval for it. Both halves of the poll window have to
+// agree on that: a period pollDue reads as due every cycle is the defect, and a
+// refused symbol that still wrote a timestamp would throttle a window nothing
+// polls.
+func TestPollDue_OutOfRangePollPeriodIsRefusedRatherThanPolledEveryCycle(t *testing.T) {
+	c := newCollector(nil, nil)
+	k := testKey("p", "host1")
+	s := sym("load", "1.2.3", outOfRangePollSeconds)
+
+	assert.NotEmpty(t, unusableSymbolReason(s),
+		"an out-of-range period is refused through the once-per-profile review channel")
+	assert.False(t, c.pollDue(k, s), "an out-of-range period must not read as due on every cycle")
+
+	c.markPolled(k, s)
+	c.pollMu.Lock()
+	assert.Empty(t, c.pollState[k], "a refused symbol writes no poll timestamp")
+	c.pollMu.Unlock()
+	assert.False(t, c.pollDue(k, s), "a refused symbol stays refused once it has been asked for")
+
+	// The ceiling is the one config states for every value this backend turns
+	// into a duration, rather than a second one of the collector's own.
+	atBound := sym("load", "1.2.3", config.MaxDurationSeconds)
+	assert.Empty(t, unusableSymbolReason(atBound), "a period at the bound is still collected")
+	assert.True(t, c.pollDue(k, atBound), "a period at the bound keeps its ordinary window")
+	assert.NotEmpty(t, unusableSymbolReason(sym("load", "1.2.3", config.MaxDurationSeconds+1)),
+		"the first period past the bound is refused")
+}
+
 // ---------------------------------------------------------------------------
 // CollectTarget: no profile match
 // ---------------------------------------------------------------------------
@@ -2192,6 +2227,52 @@ func TestCollectTarget_UnsupportedConversionOnAScalarExportsNothing(t *testing.T
 	assert.NotContains(t, w.walkCalls, convertedOID, "the symbol is skipped before it is walked")
 
 	require.Len(t, store["snmp.plainload"], 1, "a symbol declaring no conversion is untouched")
+	assert.Equal(t, int64(7), store["snmp.plainload"][0].value)
+	assert.Contains(t, w.walkCalls, plainOID)
+}
+
+// A poll period past the bound leaves the collector no interval it can honour,
+// so the symbol is refused and the reason is stated once through the profile
+// review. Asserting only that the metric is absent would pass for any other
+// drop, so the report is asserted with it.
+func TestCollectTarget_OutOfRangePollTimeIsReportedAndNeverPolled(t *testing.T) {
+	const (
+		host        = "10.0.0.73"
+		plainOID    = "1.3.6.1.4.1.99.9.1.0"
+		unboundOID  = "1.3.6.1.4.1.99.9.2.0"
+		sysObjValue = "1.3.6.1.4.1.99.9"
+	)
+	p := profileWithOID(sysObjValue, "poll-period.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "plainLoad", OID: plainOID, PollTimeSec: 3600}},
+		{Symbol: &profiles.Symbol{Name: "slowLoad", OID: unboundOID, PollTimeSec: outOfRangePollSeconds}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID + ".0": oIDPDU(sysObjValue)},
+		plainOID:       {plainOID: intPDU(plainOID, 7)},
+		unboundOID:     {unboundOID: intPDU(unboundOID, 42)},
+	}}
+
+	var logs bytes.Buffer
+	c := newCollector(walkerFactory(w), p)
+	c.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	for range 3 {
+		require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	}
+
+	store := c.testDeviceStore("p", host)
+	assert.Empty(t, store["snmp.slowload"], "a period past the bound must export nothing")
+	assert.NotContains(t, w.walkCalls, unboundOID,
+		"the symbol is skipped before it is walked, and on every cycle rather than each of them")
+	assert.Equal(t, 1,
+		strings.Count(logs.String(), "Skipping metric: SNMP profile declares a symbol this collector cannot collect"),
+		"the reason is stated once per profile, logs: %s", logs.String())
+	assert.Contains(t, logs.String(), "symbol=slowLoad")
+	assert.Contains(t, logs.String(), fmt.Sprintf("%d", outOfRangePollSeconds),
+		"the report names the period the profile stated")
+	assert.Contains(t, logs.String(), "profile=poll-period.yml")
+
+	require.Len(t, store["snmp.plainload"], 1, "a sibling whose period is in range is untouched")
 	assert.Equal(t, int64(7), store["snmp.plainload"][0].value)
 	assert.Contains(t, w.walkCalls, plainOID)
 }

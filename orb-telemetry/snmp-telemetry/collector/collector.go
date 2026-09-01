@@ -338,6 +338,14 @@ func (c *MetricsCollector) pollDue(key deviceKey, sym *profiles.Symbol) bool {
 	if sym.PollTimeSec <= 0 {
 		return true
 	}
+	if pollPeriodPastBound(sym) {
+		// unusableSymbolReason refuses the symbol before the collection path
+		// reaches here, and this answers not due rather than due so the two
+		// cannot disagree about a period the collector will not honour. Reading
+		// it as due is what the multiply below would produce on its own, since
+		// an outsized period wraps to a tight duration every check accepts.
+		return false
+	}
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
 	last, ok := c.pollState[key][symbolDeclKey(sym)]
@@ -355,7 +363,9 @@ func (c *MetricsCollector) pollDue(key deviceKey, sym *profiles.Symbol) bool {
 // its state, so the two rules agree that nothing throttles what was not
 // collected.
 func (c *MetricsCollector) markPolled(key deviceKey, sym *profiles.Symbol) {
-	if sym.PollTimeSec <= 0 {
+	if sym.PollTimeSec <= 0 || pollPeriodPastBound(sym) {
+		// A refused period leaves no window to start, so writing a timestamp
+		// here would throttle a declaration pollDue never reports due anyway.
 		return
 	}
 	c.pollMu.Lock()
@@ -841,7 +851,26 @@ func unusableSymbolReason(sym *profiles.Symbol) string {
 	if conversionError(sym.Conversion) != nil {
 		return unusableConversionReason
 	}
+	if pollPeriodPastBound(sym) {
+		return fmt.Sprintf("declares a poll_time_sec of %d seconds, past the bound of %d",
+			sym.PollTimeSec, config.MaxDurationSeconds)
+	}
 	return ""
+}
+
+// pollPeriodPastBound reports whether a symbol states a poll period this
+// backend cannot turn into a duration. The bound is config.MaxDurationSeconds,
+// which every value stated in seconds shares, rather than a ceiling of the
+// collector's own.
+//
+// Past it the multiply by time.Second wraps: the reporter's 40423014371506394
+// seconds becomes roughly a microsecond, so the declaration is polled on every
+// cycle instead of the long interval it asked for, which is the inverse of the
+// request and sustained traffic at the device. The symbol is refused rather
+// than clamped, since a clamp would invent an interval the profile never
+// stated.
+func pollPeriodPastBound(sym *profiles.Symbol) bool {
+	return sym.PollTimeSec > config.MaxDurationSeconds
 }
 
 // unusableConversionReason is why a symbol declaring a conversion pduToValue
