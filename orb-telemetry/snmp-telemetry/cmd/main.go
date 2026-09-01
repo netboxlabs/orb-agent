@@ -40,36 +40,46 @@ type stopper interface {
 	Stop()
 }
 
-// shutdown unwinds the process in the order the runners need. Every runner
-// context derives from the root one, so cancelling it first is what lets
+// shutdown unwinds the process in the order the export and the runners need.
+//
+// The flush comes first, before anything has been cancelled. Every runner
+// context derives from the root one, so cancelling it makes an in-flight
+// collection return a context error, and a collection that returns an error has
+// its device forgotten: the observations it had stored are deleted. A flush
+// placed after that cancellation races the deletion for exactly the readings it
+// is there to export, and a deletion that wins empties the final export.
+// Exporting first settles the race, since the store the flush reads still holds
+// every device.
+//
+// The cancellation then comes before the server stop, which is what lets
 // srv.Stop return: stopping the server first would wait on collections that
 // have not been told to finish, a wait as long as the SNMP timeouts still
 // outstanding.
 //
-// The flush comes before the server stop, and on its own context so the
-// cancellation does not cost the last export. Every metric this backend
-// exports is an observable gauge reading the collector's observation store,
-// and stopping the server stops the runners, which forget their policies, then
-// releases their collectors, which unregisters the callbacks. A flush after
-// that carries no SNMP data at all, which with a long export period is
-// everything observed since the last periodic export.
-//
-// The root cancellation has already told the collections to stop, so the store
-// the flush reads is settled. A collection still unwinding can land one last
-// write after the export has read the store, which costs that one write rather
-// than the whole interval. Nothing is recorded during srv.Stop, so running it
-// after the meter provider has shut down drops no measurement, and
+// The server stop comes last because every metric this backend exports is an
+// observable gauge reading the collector's observation store, and stopping the
+// server stops the runners, which forget their policies, then releases their
+// collectors, which unregisters the callbacks. A flush after that carries no
+// SNMP data at all, which with a long export period is everything observed
+// since the last periodic export. Nothing is recorded during srv.Stop, so
+// running it after the meter provider has shut down drops no measurement, and
 // unregistering a callback on a provider that has shut down is a list removal
 // the SDK still honors.
+//
+// Exporting before the cancellation costs the readings of a collection that
+// completes between the two, and runs the flush's timeout while collections are
+// still going. That is one cycle of freshness against the whole interval the
+// race could cost.
 func shutdown(cancelRoot context.CancelFunc, srv stopper, flush func()) {
-	cancelRoot()
 	flush()
+	cancelRoot()
 	srv.Stop()
 }
 
 // flushMetrics exports whatever the meter provider still holds. It takes its
-// own context because the root one is already cancelled by the time it runs,
-// and an exporter handed a cancelled context drops the export.
+// own context rather than the root one because the shutdown sequence can be
+// entered on a root that is already cancelled, and an exporter handed a
+// cancelled context drops the export.
 func flushMetrics(logger *slog.Logger, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

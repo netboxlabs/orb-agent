@@ -33,9 +33,10 @@ func discardLogger() *slog.Logger {
 
 // The runner contexts derive from the root context, so stopping the server
 // first means waiting on work that has not been told to finish: a full series
-// of SNMP timeouts can outlast an orchestrator's termination grace period. The
-// flush then runs on a cancelled root, which is why it takes its own context.
-func TestShutdownCancelsRootBeforeStoppingTheServer(t *testing.T) {
+// of SNMP timeouts can outlast an orchestrator's termination grace period.
+// Cancelling that context is also what makes an in-flight collection forget its
+// device, so the flush is taken before it, on a root that is still live.
+func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 	rootCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -55,13 +56,13 @@ func TestShutdownCancelsRootBeforeStoppingTheServer(t *testing.T) {
 
 	require.Equal(t, []string{"flush", "stop"}, order)
 	require.ErrorIs(t, errAtStop, context.Canceled, "the root context must be cancelled before the server is stopped")
-	require.ErrorIs(t, errAtFlush, context.Canceled, "the root context must be cancelled before the final flush")
+	require.NoError(t, errAtFlush, "the root context must still be live during the final flush")
 }
 
-// The flush runs on its own context, so cancelling the root context first does
-// not cost the last export. Nothing speaks gRPC on the listener, so the export
-// fails; that it dials at all is the signal, and it is the part a cancelled
-// context would skip.
+// The flush runs on its own context, so a root context already cancelled when
+// the shutdown sequence is entered does not cost the last export. Nothing
+// speaks gRPC on the listener, so the export fails; that it dials at all is the
+// signal, and it is the part a cancelled context would skip.
 func TestFlushMetricsSurvivesRootCancellation(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -89,7 +90,10 @@ func TestFlushMetricsSurvivesRootCancellation(t *testing.T) {
 	require.NoError(t, err)
 	gauge.Record(context.Background(), 1)
 
-	shutdown(cancel, stopFunc(func() {}), func() { flushMetrics(logger, time.Second) })
+	// Cancelled directly rather than through the sequence, which now flushes
+	// before it cancels: what is under test is the flush's own context.
+	cancel()
+	flushMetrics(logger, time.Second)
 
 	select {
 	case <-dialed:
@@ -273,4 +277,66 @@ func TestWaitForShutdownRunsTheSequenceOnce(t *testing.T) {
 	assert.Never(t, func() bool { return runs.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
 		"the shutdown sequence ran more than once")
 	assert.Equal(t, int32(1), runs.Load())
+}
+
+// A scheduled collection can be in flight when the shutdown begins. Cancelling
+// the root context makes it return a context error, and a collection that
+// returns an error has its device forgotten, which deletes the observations the
+// final export is there to carry. The flush has to be taken before anything is
+// cancelled, or the deletion can win and the export it was moved forward for is
+// empty.
+func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T) {
+	receiver, endpoint := startMetricsReceiver(t)
+
+	rootCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	logger := discardLogger()
+	// An hour, so nothing exports on the periodic cadence and the only export
+	// is the one the shutdown sequence asks for.
+	require.NoError(t, metrics.SetupMetricsExport(rootCtx, logger, endpoint, 3600))
+	t.Cleanup(metrics.ResetMeter)
+
+	const metricName = "snmp.test.cancelled.collection"
+
+	var (
+		storeMu sync.Mutex
+		store   = map[string]int64{"device": 7}
+	)
+	gauge, err := metrics.GetMeter().Int64ObservableGauge(metricName)
+	require.NoError(t, err)
+	reg, err := metrics.GetMeter().RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		storeMu.Lock()
+		defer storeMu.Unlock()
+		for _, value := range store {
+			o.ObserveInt64(gauge, value)
+		}
+		return nil
+	}, gauge)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reg.Unregister() })
+
+	// The collection in flight. The cancellation makes it return a context
+	// error, and its caller forgets the device, deleting what it had stored.
+	forgotten := make(chan struct{})
+	go func() {
+		defer close(forgotten)
+		<-rootCtx.Done()
+		storeMu.Lock()
+		store = map[string]int64{}
+		storeMu.Unlock()
+	}()
+
+	// The deletion and the flush race in the real sequence. Waiting here for the
+	// collection to unwind pins the interleaving the flush loses, so the
+	// assertion below reads the ordering rather than the scheduler.
+	cancelRoot := func() {
+		cancel()
+		<-forgotten
+	}
+
+	shutdown(cancelRoot, stopFunc(func() {}), func() { flushMetrics(logger, metricsFlushTimeout) })
+
+	assert.Equal(t, []int64{7}, receiver.gaugeValues(metricName),
+		"the final export must carry the observations a cancelled collection forgets")
 }
