@@ -2,6 +2,18 @@ package config
 
 import "time"
 
+// MaxDurationSeconds bounds every value this backend states in seconds before
+// it is multiplied by time.Second. The multiply overflows an int64 above
+// roughly 9.2e9 and the wrapped value is small, so an outsized number becomes a
+// tight duration that every later check accepts for the wrong reason.
+//
+// The bound is a year rather than that representable ceiling of about 292
+// years: no collection interval or export period reaches it, and keeping a
+// duration this far inside the range also keeps snmp_timeout times the capped
+// attempt count from wrapping. It is stated here so the policy fields and the
+// export period flag share one number rather than each picking their own.
+const MaxDurationSeconds = 365 * 24 * 60 * 60
+
 // Status represents the status of the snmp-telemetry service
 type Status struct {
 	StartTime     time.Time `json:"start_time"`

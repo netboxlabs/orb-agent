@@ -69,7 +69,8 @@ func main() {
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10,
-		"period in seconds between OpenTelemetry exports, greater than 0")
+		fmt.Sprintf("period in seconds between OpenTelemetry exports, from 1 to %d (one year)",
+			config.MaxDurationSeconds))
 	snmpProfilesDir := flag.String("snmp-profiles-dir", "",
 		"directory of ktranslate-compatible SNMP profile YAML files to overlay on the "+
 			"profiles bundled into the binary. Files here replace bundled ones with the "+

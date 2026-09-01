@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"math"
 	"net"
 	"strconv"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 	otlpmetric "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
 // http2ClientPreface opens every plaintext gRPC connection.
@@ -234,5 +237,62 @@ func TestSetupMetricsExport_NonPositivePeriodIsInertWithNoEndpoint(t *testing.T)
 	t.Cleanup(ResetMeter)
 
 	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), "", 0))
+	assert.Nil(t, GetMeter())
+}
+
+// ---------------------------------------------------------------------------
+// A period that cannot be represented as a Duration
+// ---------------------------------------------------------------------------
+
+// Multiplying seconds by time.Second wraps above the representable range, and
+// the wrapped value is small: 40423014371506394 seconds becomes about a
+// microsecond. The non-positive check above passes on the number the operator
+// typed, so without a bound the reader is handed the wrapped duration and
+// exports continuously under a startup line reporting the huge period.
+func TestSetupMetricsExport_PeriodPastTheBoundIsRefused(t *testing.T) {
+	// A variable, not a constant: the compiler refuses the same multiply on an
+	// untyped constant, which is exactly the overflow under test.
+	wrapping := 40423014371506394
+	require.Positive(t, time.Duration(wrapping)*time.Second,
+		"the value under test must be one the old non-positive check accepts")
+	require.Less(t, time.Duration(wrapping)*time.Second, time.Second,
+		"the value under test must be one the multiply wraps to a tight period")
+
+	for _, period := range []int{config.MaxDurationSeconds + 1, wrapping, math.MaxInt} {
+		t.Run(strconv.Itoa(period), func(t *testing.T) {
+			ResetMeter()
+			t.Cleanup(ResetMeter)
+
+			err := SetupMetricsExport(context.Background(), testLogger(), "localhost:4317", period)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "at most")
+			assert.Contains(t, err.Error(), strconv.Itoa(config.MaxDurationSeconds),
+				"the error must name the bound it enforced")
+			assert.Contains(t, err.Error(), strconv.Itoa(period), "the error must name the value it refused")
+			assert.Nil(t, GetMeter(), "a refused period installs no meter")
+		})
+	}
+}
+
+// The bound is on the seconds, so what survives it converts faithfully rather
+// than to a wrapped remainder, and the largest accepted period still installs a
+// meter.
+func TestSetupMetricsExport_PeriodAtTheBoundIsAccepted(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(func() { shutdownIgnoreFlushError(t) })
+
+	require.Equal(t, 365*24*time.Hour, time.Duration(config.MaxDurationSeconds)*time.Second,
+		"the bound must convert to the year it names")
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), "localhost:4317", config.MaxDurationSeconds))
+	assert.NotNil(t, GetMeter())
+}
+
+// No endpoint disables metrics collection, so there is no reader to interval
+// and an outsized period is as inert as a non-positive one.
+func TestSetupMetricsExport_PeriodPastTheBoundIsInertWithNoEndpoint(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), "", config.MaxDurationSeconds+1))
 	assert.Nil(t, GetMeter())
 }

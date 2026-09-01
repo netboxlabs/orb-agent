@@ -39,7 +39,7 @@ Usage of snmp-telemetry:
   -otel-endpoint string
     	OpenTelemetry exporter endpoint (e.g. localhost:4317). Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})
   -otel-export-period int
-    	period in seconds between OpenTelemetry exports, greater than 0 (default 10)
+    	period in seconds between OpenTelemetry exports, from 1 to 31536000 (one year) (default 10)
   -policy-env-vars string
     	comma-separated environment variable names a policy may read through a ${NAME} reference in community, username, auth_passphrase or priv_passphrase. Empty, the default, rejects every reference.
   -port int

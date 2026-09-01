@@ -23,14 +23,12 @@ type contextKey string
 const (
 	policyKey          contextKey = "policy"
 	defaultSNMPTimeout            = 5 * time.Second
-	// maxPolicySeconds bounds every duration a policy states in seconds.
-	// Multiplying seconds by time.Second overflows an int64 above roughly
-	// 9.2e9, and the wrapped value is small, so an outsized interval becomes a
-	// tight one that every later comparison accepts. The bound is a year
-	// rather than that representable ceiling of about 292 years: no collection
-	// interval reaches it, and keeping both durations this far inside the
-	// range also keeps snmp_timeout times the attempt count from wrapping.
-	maxPolicySeconds = 365 * 24 * 60 * 60
+	// maxPolicySeconds bounds every duration a policy states in seconds. It is
+	// config.MaxDurationSeconds rather than a number of its own: the same
+	// multiply by time.Second wraps wherever this backend turns seconds into a
+	// duration, so one bound covers the policy fields and the export period
+	// flag alike, with the reasoning for the year stated once beside it.
+	maxPolicySeconds = config.MaxDurationSeconds
 )
 
 // Collector is the slice of the metrics collector a runner drives. Naming it

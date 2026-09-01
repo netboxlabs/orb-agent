@@ -13,6 +13,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc/credentials"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
 // Global variables for meter and cache
@@ -68,6 +70,15 @@ func endpointOptions(endpoint string) []otlpmetric.Option {
 // second default, so the period this flag documents never applies and the
 // startup line reports a cadence nothing exports at. Refusing it reports the
 // value while there is still a caller to report it to.
+//
+// A period past config.MaxDurationSeconds is refused for the mirror reason.
+// The seconds are multiplied by time.Second below, and above the representable
+// range that multiply wraps to a small value, so a huge period would pass the
+// check above and then configure a near-continuous export loop under a startup
+// line reporting the huge number. The bound is applied here rather than at the
+// flag because this is where the multiply happens, which is the same place the
+// policy fields are bounded, and it is the only caller-facing point a value
+// reaching this function has to pass.
 func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string, exportPeriodSeconds int) error {
 	if endpoint == "" {
 		logg.Info("No metrics endpoint provided, metrics collection is disabled")
@@ -75,6 +86,10 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	}
 	if exportPeriodSeconds <= 0 {
 		return fmt.Errorf("otel export period must be greater than 0 seconds, got %d", exportPeriodSeconds)
+	}
+	if exportPeriodSeconds > config.MaxDurationSeconds {
+		return fmt.Errorf("otel export period must be at most %d seconds, got %d",
+			config.MaxDurationSeconds, exportPeriodSeconds)
 	}
 
 	exporter, err := otlpmetric.New(ctx, endpointOptions(endpoint)...)
