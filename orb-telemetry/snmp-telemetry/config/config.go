@@ -59,11 +59,17 @@ type Authentication struct {
 
 // PolicyConfig represents the configuration of a metrics collection policy
 type PolicyConfig struct {
-	Schedule        *string `yaml:"schedule,omitempty"`
-	MetricsInterval *int    `yaml:"metrics_interval"`
-	ProfilesDir     string  `yaml:"profiles_dir,omitempty"`
-	SNMPTimeout     int     `yaml:"snmp_timeout"`
-	Retries         int     `yaml:"retries"`
+	// There is deliberately no Schedule field. The discovery backends accept a
+	// cron `schedule` because a discovery run is one-shot and the expression is
+	// what makes it recurring. Collection here is recurring by nature: every
+	// target is scheduled on metrics_interval, which also bounds the run's own
+	// context. Carrying the field without reading it made a policy asking to be
+	// polled at specific times poll continuously instead, and said nothing.
+	// Absent from this struct, it is reported as an unrecognised key.
+	MetricsInterval *int   `yaml:"metrics_interval"`
+	ProfilesDir     string `yaml:"profiles_dir,omitempty"`
+	SNMPTimeout     int    `yaml:"snmp_timeout"`
+	Retries         int    `yaml:"retries"`
 }
 
 // Policy represents a snmp-telemetry metrics collection policy

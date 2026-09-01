@@ -128,7 +128,6 @@ func TestValidPolicyIsSilent(t *testing.T) {
 policies:
   p1:
     config:
-      schedule: "* * * * *"
       metrics_interval: 60
       profiles_dir: /etc/snmp
       snmp_timeout: 5
@@ -152,6 +151,29 @@ policies:
             community: public
 `)
 	assert.Empty(t, out, "a valid policy must not warn")
+}
+
+// schedule is a policy field the discovery backends implement and this one does
+// not: every target is scheduled on metrics_interval, and nothing reads a cron
+// expression. Carrying the field made a policy asking to be polled at specific
+// times poll continuously instead, with nothing said about it. It is reported as
+// an unrecognised key rather than accepted, so an operator moving a policy from a
+// discovery backend is told the field does nothing here.
+func TestScheduleIsReportedAsUnsupported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      schedule: "* * * * *"
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets:
+        - host: 192.0.2.1
+`)
+	assert.Contains(t, out, "schedule", "a policy asking for a cron schedule must be told this backend does not honour one")
 }
 
 func TestMalformedYamlIsLeftToThePermissiveDecode(t *testing.T) {
