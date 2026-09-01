@@ -1209,7 +1209,7 @@ type engineWalker struct {
 func (e *engineWalker) EngineDiscovered() bool { return e.discovered }
 
 func TestProbeAuthenticationStripsV3Credentials(t *testing.T) {
-	real := &config.Authentication{
+	configured := &config.Authentication{
 		ProtocolVersion: snmp.ProtocolVersion3,
 		SecurityLevel:   "authPriv",
 		Username:        "netbox-monitor",
@@ -1220,26 +1220,26 @@ func TestProbeAuthenticationStripsV3Credentials(t *testing.T) {
 		ContextName:     "vrf-mgmt",
 	}
 
-	probe := probeAuthentication(real)
+	probe := probeAuthentication(configured)
 
-	assert.NotEqual(t, real.Username, probe.Username, "the operator's user must not reach a scanned address")
+	assert.NotEqual(t, configured.Username, probe.Username, "the operator's user must not reach a scanned address")
 	assert.NotEmpty(t, probe.Username, "gosnmp rejects an empty USM user")
 	assert.Empty(t, probe.AuthPassphrase)
 	assert.Empty(t, probe.PrivPassphrase)
 	assert.Equal(t, "noAuthNoPriv", probe.SecurityLevel, "no HMAC means no offline attack material")
-	assert.Equal(t, "netbox-monitor", real.Username, "the caller's authentication must not be mutated")
+	assert.Equal(t, "netbox-monitor", configured.Username, "the caller's authentication must not be mutated")
 }
 
 func TestProbeAuthenticationLeavesV2cUnchanged(t *testing.T) {
 	// Documents the gap rather than hiding it: v2c has no credential-free
 	// exchange, and a wrong community is silently discarded by a conformant
 	// agent, so substituting one would turn every device into a false negative.
-	real := &config.Authentication{
+	configured := &config.Authentication{
 		ProtocolVersion: snmp.ProtocolVersion2c,
 		Community:       "s3cret",
 	}
 
-	probe := probeAuthentication(real)
+	probe := probeAuthentication(configured)
 
 	assert.Equal(t, "s3cret", probe.Community)
 }
