@@ -187,6 +187,30 @@ func TestReceiver_RejectsV3WithANonUSMSecurityModel(t *testing.T) {
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3))
 }
 
+// F16: gosnmp blanks the authentication parameters in place with an unchecked
+// copy(packet[cursor+2:cursor+len(mac)], ...) (v3_usm.go:1059) as soon as the
+// auth bit is set and the named user has a real auth protocol. A datagram
+// that ends right after the USM parameter block leaves fewer bytes than the
+// digest is wide, and the slice expression panics. The receive goroutine is
+// the only reader of the socket, so one such datagram from anyone the
+// registry knows would take the process down with it.
+func TestReceiver_SurvivesAV3DatagramThatPanicsTheParser(t *testing.T) {
+	h := newHarness(t, false)
+	src := h.registerSender(t, "core", trapUser)
+	h.send(t, v3Packet(v3Options{
+		username:         "trapuser",
+		engineID:         "\x80\x00\x1f\x88\x80",
+		secModel:         3,
+		flags:            0x01,
+		truncateAfterUSM: true,
+	}))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
+
+	// The receiver is still reading, which is the whole point.
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
+}
+
 func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
 	h := newHarness(t, false)
 	src := h.registerSender(t, "core")

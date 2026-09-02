@@ -176,7 +176,7 @@ func (r *Receiver) loop() {
 		}
 
 		r.rebuildUsersIfChanged()
-		pkt, err := r.params.UnmarshalTrap(buf[:n], false)
+		pkt, err := r.parse(buf[:n])
 		if err != nil {
 			r.drop(DropMalformed, src, err.Error())
 			continue
@@ -209,6 +209,27 @@ func (r *Receiver) loop() {
 			r.acknowledge(pkt, from)
 		}
 	}
+}
+
+// parse hands the datagram to gosnmp and turns a panic in it into an error.
+//
+// The spec says the receive goroutine recovers nothing, and that stays true of
+// this package's own code: a panic there is a bug, and a process that carries
+// on with a dead receiver hides it. A panic inside a vendored ASN.1 parser fed
+// bytes a stranger chose is a different thing, and the two do not share a
+// policy. F16: gosnmp blanks the authentication parameters in place with an
+// unchecked copy(packet[cursor+2:cursor+len(mac)], ...) (v3_usm.go:1059) as
+// soon as the auth bit is set and the named user has a real auth protocol, so
+// a datagram that ends before the digest is wide enough panics. Without this
+// the socket is a remote kill switch. The recover is this narrow on purpose:
+// it wraps the third-party call and nothing else, so nothing here is caught.
+func (r *Receiver) parse(b []byte) (pkt *gosnmp.SnmpPacket, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			pkt, err = nil, fmt.Errorf("panic in the SNMP parser: %v", rec)
+		}
+	}()
+	return r.params.UnmarshalTrap(b, false)
 }
 
 func (r *Receiver) drop(reason DropReason, src netip.Addr, detail string) {
