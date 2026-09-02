@@ -59,11 +59,25 @@ func TestDecode_V2cWithNoTrapOIDVarbind(t *testing.T) {
 }
 
 // Present but the wrong type counts the same as absent: there is no OID to
-// name, and a string here is a sender that is confused or hostile.
+// name, and a value of the wrong type is a sender that is confused or
+// hostile. OctetString stores its value as []byte, so it fails the
+// vb.Value.(string) assertion on its own; IPAddress stores its value as a
+// string, so only the explicit Type check stops it, and a trap OID varbind
+// typed IPAddress with a value like "10.0.0.1" must not be accepted as if it
+// were an object identifier.
 func TestDecode_V2cTrapOIDOfWrongTypeIsNoTrapOID(t *testing.T) {
-	p := v2cPacket(gosnmp.SnmpPDU{Name: trapOIDInstanceDotted, Type: gosnmp.OctetString, Value: []byte("linkDown")})
-	_, reason := Decode(p)
-	assert.Equal(t, DropNoTrapOID, reason)
+	for _, tc := range []struct {
+		name  string
+		typ   gosnmp.Asn1BER
+		value any
+	}{
+		{"OctetString", gosnmp.OctetString, []byte("linkDown")},
+		{"IPAddress", gosnmp.IPAddress, "10.0.0.1"},
+	} {
+		p := v2cPacket(gosnmp.SnmpPDU{Name: trapOIDInstanceDotted, Type: tc.typ, Value: tc.value})
+		_, reason := Decode(p)
+		assert.Equal(t, DropNoTrapOID, reason, tc.name)
+	}
 }
 
 func TestDecode_FirstMatchingTrapOIDWins(t *testing.T) {
