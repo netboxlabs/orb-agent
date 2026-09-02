@@ -157,16 +157,16 @@ func main() {
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
 	trapRegistry := traps.NewRegistry()
+	trapTally := traps.NewTally(logger)
+	trapTally.Register()
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
 		AllowedEnvVars:     splitList(*policyEnvVars),
-		TrapRegistry:       trapRegistry,
+		TrapRegistry:       newTrapRegistration(trapRegistry, trapTally),
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 
-	trapTally := traps.NewTally(logger)
-	trapTally.Register()
 	trapReceiver, err := startTrapReceiver(*trapListen, profilesDir, *trapAcceptUnknown, trapRegistry, trapTally, logger)
 	if err != nil {
 		logger.Error("Failed to start the trap receiver", "error", err)
@@ -192,6 +192,42 @@ func main() {
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
 		shutdown(cancelFunc, shutdownStopper, shutdownMetrics)
 	})
+}
+
+// trapRegistration is what a policy's lifecycle reaches, and it is two things
+// rather than one because a policy leaves two marks. The registry decides
+// whose traps are attributed to which policy, and the tally holds the counts
+// already taken.
+//
+// The registry alone satisfies policy.TrapRegistry, so passing it in bare
+// compiles and runs, and a stopped policy would go on exporting every trap
+// series it ever recorded for the life of the process. That is F6, the finding
+// the observable counter design exists to answer, and it is the contract
+// Runner.Stop documents for every other metric here.
+//
+// It lives in cmd because traps never imports policy: the registry interface
+// belongs to traps, the caller belongs to policy, and the only place that
+// knows both is the process that wires them together.
+type trapRegistration struct {
+	registry *traps.Registry
+	tally    *traps.Tally
+}
+
+func newTrapRegistration(registry *traps.Registry, tally *traps.Tally) trapRegistration {
+	return trapRegistration{registry: registry, tally: tally}
+}
+
+// Register hands the policy's addresses and users to the registry. The tally
+// has nothing to record until a trap arrives.
+func (t trapRegistration) Register(policyName string, devices []traps.Device, users []traps.V3User) {
+	t.registry.Register(policyName, devices, users)
+}
+
+// Withdraw reaches both: the registry stops attributing the policy's
+// addresses, and the tally drops the series it already holds for them.
+func (t trapRegistration) Withdraw(policyName string) {
+	t.registry.Withdraw(policyName)
+	t.tally.Withdraw(policyName)
 }
 
 // startTrapReceiver binds the trap socket when an address was given. The name

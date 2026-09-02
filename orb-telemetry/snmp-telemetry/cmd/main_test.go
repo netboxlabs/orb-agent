@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -16,10 +17,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
@@ -387,4 +391,66 @@ func TestStopAllOrder(t *testing.T) {
 		assert.NotPanics(t, sa.Stop)
 		assert.Equal(t, []string{"tally", "server"}, order)
 	})
+}
+
+// trapSeries collects the trap counters and keys each data point by its
+// metric name and attributes, so a withdrawn policy's absence is observable.
+func trapSeries(t *testing.T, reader sdkmetric.Reader) map[string]int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				key := m.Name
+				for _, kv := range dp.Attributes.ToSlice() {
+					key += "|" + string(kv.Key) + "=" + kv.Value.String()
+				}
+				got[key] = dp.Value
+			}
+		}
+	}
+	return got
+}
+
+// F6: a stopped policy must stop exporting its trap series, and that only
+// happens if the withdrawal reaches the tally. The registry on its own
+// satisfies policy.TrapRegistry, so passing it in bare compiles and runs and
+// leaves every count a stopped policy ever recorded exporting for the life of
+// the process, which is exactly the contract Runner.Stop documents.
+func TestTrapRegistration_WithdrawReachesTheRegistryAndTheTally(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	metrics.SetMeterForTest(provider.Meter("test"))
+	t.Cleanup(metrics.ResetMeter)
+
+	registry := traps.NewRegistry()
+	tally := traps.NewTally(discardLogger())
+	tally.Register()
+	t.Cleanup(tally.Close)
+
+	// Through the interface the manager is given, so the test fails if the
+	// adapter stops satisfying it.
+	var reg policy.TrapRegistry = newTrapRegistration(registry, tally)
+	reg.Register("core", []traps.Device{{Policy: "core", Addr: netip.MustParseAddr("10.0.0.5")}}, nil)
+	reg.Register("edge", []traps.Device{{Policy: "edge", Addr: netip.MustParseAddr("10.0.0.6")}}, nil)
+	tally.Received("10.0.0.5", "core", "linkDown", traps.V2c)
+	tally.Received("10.0.0.6", "edge", "linkDown", traps.V2c)
+
+	const coreSeries = "snmp.traps_received|device_ip=10.0.0.5|policy=core|trap_name=linkDown|version=2c"
+	const edgeSeries = "snmp.traps_received|device_ip=10.0.0.6|policy=edge|trap_name=linkDown|version=2c"
+	require.Equal(t, 2, registry.Size())
+	require.Contains(t, trapSeries(t, reader), coreSeries)
+
+	reg.Withdraw("core")
+	assert.Equal(t, 1, registry.Size(), "the registry stops attributing the policy's addresses")
+	series := trapSeries(t, reader)
+	assert.NotContains(t, series, coreSeries, "the tally stops exporting the policy's counts")
+	assert.Contains(t, series, edgeSeries, "another policy's series is untouched")
 }
