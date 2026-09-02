@@ -40,6 +40,16 @@ var (
 // policy naming a whole /16 whose every host sends every kind is past this.
 const cardinalityLimit = 10000
 
+// providerOptions is everything the meter provider is configured with beside
+// its reader. It is a function rather than a literal in SetupMetricsExport so
+// a test can build a provider configured exactly the way this process
+// configures its own, over a manual reader, with no OTLP endpoint to export
+// to: the limit only matters for what it does to an instrument, and that is
+// only observable through a provider that has it.
+func providerOptions() []sdkmetric.Option {
+	return []sdkmetric.Option{sdkmetric.WithCardinalityLimit(cardinalityLimit)}
+}
+
 // endpointOptions returns the otlpmetricgrpc options for the configured
 // endpoint: where to connect, and whether that connection is plaintext.
 //
@@ -111,10 +121,7 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	reader := sdkmetric.NewPeriodicReader(exporter,
 		sdkmetric.WithInterval(time.Duration(exportPeriodSeconds)*time.Second),
 	)
-	meterProvider = sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(reader),
-		sdkmetric.WithCardinalityLimit(cardinalityLimit),
-	)
+	meterProvider = sdkmetric.NewMeterProvider(append(providerOptions(), sdkmetric.WithReader(reader))...)
 	otel.SetMeterProvider(meterProvider)
 	meter = otel.Meter("snmp-telemetry")
 	logger = logg
