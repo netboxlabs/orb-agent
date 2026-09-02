@@ -1533,6 +1533,197 @@ func TestForgetPolicyAndClose_DropTheMatchedProfiles(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Interrupted runs
+// ---------------------------------------------------------------------------
+
+// A run cut short by its own context is evidence about the collector rather
+// than about the device: nothing bounds a run below the metrics interval, since
+// snmp_timeout and the retry ceiling are per request, so a profile with enough
+// OIDs overruns on wall clock while every request stays inside its own timeout.
+// Forgetting the device there discards the poll windows that make the next
+// cycle cheap, so the cycle after an overrun is the most expensive one the
+// profile can produce and the device can settle into exporting nothing.
+const (
+	interruptHost    = "10.0.0.130"
+	interruptSysObj  = "1.3.6.1.4.1.9999.130"
+	interruptSlow    = "1.3.6.1.4.1.9999.130.1"
+	interruptFast    = "1.3.6.1.4.1.9999.130.2"
+	interruptSysObjB = "1.3.6.1.4.1.9999.131"
+)
+
+// interruptionProfile declares one throttled metric and one polled every cycle.
+// The throttled one is what shows whether an interrupted run kept the device's
+// poll windows: a window that survived leaves it unwalked on the next cycle.
+func interruptionProfile(sysObj, filename string) *profiles.Profile {
+	return profileWithOID(sysObj, filename, []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "slowMetric", OID: interruptSlow, PollTimeSec: 300}},
+		{Symbol: &profiles.Symbol{Name: "fastMetric", OID: interruptFast}},
+	})
+}
+
+func interruptionWalker(sysObj string) *recordingWalker {
+	return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObj)},
+		sysDescrOID:    {},
+		interruptSlow:  {interruptSlow: intPDU(interruptSlow, 7)},
+		interruptFast:  {interruptFast: intPDU(interruptFast, 1)},
+	}}
+}
+
+// runCollection performs one complete run and returns the walker it used, so a
+// caller can see which declarations were polled.
+func runCollection(t *testing.T, c *MetricsCollector, policy, sysObj string) *recordingWalker {
+	t.Helper()
+	w := interruptionWalker(sysObj)
+	c.clientFactory = walkerFactory(w)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(interruptHost), mustAuth(), policy, DialOptions{}))
+	return w
+}
+
+// runInterrupted performs one run cut short by its own context, the way a run
+// that overruns its metrics_interval is. The cancellation lands on the first
+// walk, which is late enough for the profile to be matched and early enough
+// that no metric is collected, so the run leaves the store untouched.
+func runInterrupted(t *testing.T, c *MetricsCollector, policy, sysObj string) {
+	t.Helper()
+	w := interruptionWalker(sysObj)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.onWalk = func(string) { cancel() }
+	c.clientFactory = walkerFactory(w)
+	require.ErrorIs(t, c.CollectTarget(ctx, mustTarget(interruptHost), mustAuth(), policy, DialOptions{}),
+		context.Canceled)
+}
+
+// interruptionCount reads a device's consecutive-interruption count and whether
+// it is recorded at all, which is what tells a cleared counter from a zero one.
+func interruptionCount(c *MetricsCollector, policy string) (int, bool) {
+	c.interruptMu.Lock()
+	defer c.interruptMu.Unlock()
+	n, ok := c.interruptedRuns[testKey(policy, interruptHost)]
+	return n, ok
+}
+
+func TestCollectTarget_AnInterruptedRunKeepsTheReadingsAndThePollWindows(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollection(t, c, "p", interruptSysObj)
+	require.Len(t, c.testDeviceStore("p", interruptHost)["snmp.slowmetric"], 1)
+
+	runInterrupted(t, c, "p", interruptSysObj)
+
+	assert.Len(t, c.testDeviceStore("p", interruptHost)["snmp.slowmetric"], 1,
+		"a run the collector cut short is not evidence the device stopped answering")
+
+	// The poll windows are the half that matters. A device that kept its
+	// readings but lost its windows finds every declaration due on the next
+	// cycle, which is the most expensive cycle the profile can produce and the
+	// one most likely to overrun again.
+	w := runCollection(t, c, "p", interruptSysObj)
+	assert.NotContains(t, w.walkCalls, interruptSlow,
+		"the throttled declaration was re-polled, so the interrupted run dropped its poll window")
+	assert.Contains(t, w.walkCalls, interruptFast,
+		"a declaration with no window is still polled")
+}
+
+func TestCollectTarget_ADeviceFailureForgetsEvenAfterAnInterruptedRun(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollection(t, c, "p", interruptSysObj)
+	runInterrupted(t, c, "p", interruptSysObj)
+	require.NotEmpty(t, c.testDeviceStore("p", interruptHost))
+
+	// The context stays live, so the failure is evidence about the device.
+	c.clientFactory = func(_ context.Context, _ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return nil, assert.AnError
+	}
+	require.Error(t, c.CollectTarget(context.Background(), mustTarget(interruptHost), mustAuth(), "p", DialOptions{}))
+
+	assert.Nil(t, c.testDeviceStore("p", interruptHost),
+		"a device that failed stops exporting immediately, whatever it was granted for being interrupted")
+	_, counted := interruptionCount(c, "p")
+	assert.False(t, counted, "the count is part of the device's state and goes with it")
+}
+
+func TestCollectTarget_ASuccessfulRunResetsTheInterruptionCount(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollection(t, c, "p", interruptSysObj)
+
+	// Four interruptions in all, but never three running: a transient overrun
+	// costs the device nothing.
+	runInterrupted(t, c, "p", interruptSysObj)
+	runInterrupted(t, c, "p", interruptSysObj)
+	runCollection(t, c, "p", interruptSysObj)
+	_, counted := interruptionCount(c, "p")
+	assert.False(t, counted, "a run that completed is not a run that was interrupted")
+
+	runInterrupted(t, c, "p", interruptSysObj)
+	runInterrupted(t, c, "p", interruptSysObj)
+	assert.NotEmpty(t, c.testDeviceStore("p", interruptHost),
+		"the bound counts consecutive interruptions, so the run in between clears what came before")
+}
+
+func TestCollectTarget_TheThirdConsecutiveInterruptionForgetsTheDevice(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollection(t, c, "p", interruptSysObj)
+
+	runInterrupted(t, c, "p", interruptSysObj)
+	require.NotEmpty(t, c.testDeviceStore("p", interruptHost), "one interruption is within the bound")
+	runInterrupted(t, c, "p", interruptSysObj)
+	require.NotEmpty(t, c.testDeviceStore("p", interruptHost), "two interruptions are within the bound")
+
+	runInterrupted(t, c, "p", interruptSysObj)
+	assert.Nil(t, c.testDeviceStore("p", interruptHost),
+		"the bound is what keeps staleness finite: three interrupted runs running and the device goes")
+
+	c.pollMu.Lock()
+	_, polls := c.pollState[testKey("p", interruptHost)]
+	c.pollMu.Unlock()
+	assert.False(t, polls, "the poll windows go with the readings, as they do on any other forgotten device")
+}
+
+func TestCollectTarget_AProfileChangeDropsTheInterruptionCount(t *testing.T) {
+	c := newCollectorWithProfiles(nil,
+		interruptionProfile(interruptSysObj, "a.yml"),
+		interruptionProfile(interruptSysObjB, "b.yml"))
+	runCollection(t, c, "p", interruptSysObj)
+	runInterrupted(t, c, "p", interruptSysObj)
+	n, counted := interruptionCount(c, "p")
+	require.True(t, counted)
+	require.Equal(t, 1, n)
+
+	// The address now answers as a device the other profile covers. Everything
+	// the old device left is dropped, so the new one starts from nothing rather
+	// than inheriting a grace the old one had spent.
+	runInterrupted(t, c, "p", interruptSysObjB)
+
+	assert.Nil(t, c.testDeviceStore("p", interruptHost))
+	n, counted = interruptionCount(c, "p")
+	assert.True(t, counted)
+	assert.Equal(t, 1, n, "the replaced device's count must not carry into the new one's")
+}
+
+// The count is per device, so the two paths that drop a device's state have to
+// drop it too or the map grows for the process's life.
+func TestForgetPolicyAndClose_DropTheInterruptionCounts(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollection(t, c, "doomed", interruptSysObj)
+	runInterrupted(t, c, "doomed", interruptSysObj)
+	runCollection(t, c, "keeper", interruptSysObj)
+	runInterrupted(t, c, "keeper", interruptSysObj)
+
+	c.ForgetPolicy("doomed")
+	_, doomed := interruptionCount(c, "doomed")
+	_, keeper := interruptionCount(c, "keeper")
+	assert.False(t, doomed, "a stopped policy must not leave a row per device behind")
+	assert.True(t, keeper, "another policy's devices must keep theirs")
+
+	c.Close()
+	c.interruptMu.Lock()
+	left := len(c.interruptedRuns)
+	c.interruptMu.Unlock()
+	assert.Zero(t, left, "Close must release the counts with the rest")
+}
+
+// ---------------------------------------------------------------------------
 // Per-dial settings
 // ---------------------------------------------------------------------------
 
