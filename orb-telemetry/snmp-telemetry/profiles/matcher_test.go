@@ -739,3 +739,46 @@ func TestNewMatcher_BundledMatchesListMovesNoVerdict(t *testing.T) {
 		assert.NotNil(t, p.MatchesList, "the empty list in %s must be read, not dropped", rel)
 	}
 }
+
+// A matched entry whose target is not loaded is passed over and the next entry
+// is tried, so the winner is the first declared redirect that matches and
+// resolves rather than simply the first that matches. This mirrors upstream
+// ktranslate, whose checkMatch logs the missing target and continues its loop.
+//
+// Verified against a real device: polling the orb-test-lab C2960X simulator
+// with a profile whose first list entry named an absent file served the second
+// entry's profile, and the absent target was reported once at load.
+func TestMatchWithDescr_AnUnresolvableListEntryDoesNotStopLaterEntries(t *testing.T) {
+	resolvable := &Profile{FileName: "resolvable.yml"}
+	declaring := &Profile{
+		FileName:    "declaring.yml",
+		SysObjectID: StringOrSlice{"1.3.6.1.4.1.9.*"},
+		MatchesList: []Match{
+			{Regex: "storage", Target: "absent.yml"},
+			{Regex: "array", Target: "resolvable.yml"},
+		},
+	}
+	m := NewMatcher([]*Profile{declaring, resolvable}, silentLogger)
+
+	got, ok := m.MatchWithDescr("1.3.6.1.4.1.9.1.46", "storage array controller")
+	require.True(t, ok)
+	assert.Equal(t, resolvable, got,
+		"an entry naming a target no profile carries is passed over, not treated as decisive")
+}
+
+// The same rule spans the two forms: a list entry that matches but cannot be
+// resolved does not stop the map from being tried.
+func TestMatchWithDescr_AnUnresolvableListEntryDoesNotStopTheMap(t *testing.T) {
+	viaMap := &Profile{FileName: "via-map.yml"}
+	declaring := &Profile{
+		FileName:    "declaring.yml",
+		SysObjectID: StringOrSlice{"1.3.6.1.4.1.9.*"},
+		MatchesList: []Match{{Regex: "storage", Target: "absent.yml"}},
+		Matches:     map[string]string{"array": "via-map.yml"},
+	}
+	m := NewMatcher([]*Profile{declaring, viaMap}, silentLogger)
+
+	got, ok := m.MatchWithDescr("1.3.6.1.4.1.9.1.46", "storage array controller")
+	require.True(t, ok)
+	assert.Equal(t, viaMap, got, "an unresolvable list entry does not consume the device's verdict")
+}

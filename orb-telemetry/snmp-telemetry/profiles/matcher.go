@@ -280,6 +280,18 @@ func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool)
 		return profile, true
 	}
 
+	// The winner is the first declared redirect whose pattern matches and whose
+	// target is loaded, not simply the first whose pattern matches. A matched
+	// entry naming a target no profile carries is passed over and the next
+	// entry is tried, which is what upstream ktranslate does: its checkMatch
+	// logs the missing target and continues the loop rather than returning.
+	//
+	// Passing over it is also the more useful of the two readings. The
+	// alternative, treating the first matched entry as decisive, would hand the
+	// device the declaring profile's generic symbols instead of a redirect the
+	// operator also declared and which resolves. The unresolved target is not
+	// lost either way: NewMatcher reports it once at load, naming the profile,
+	// the pattern and the file.
 	for _, r := range redirects {
 		if !r.re.MatchString(sysDescr) {
 			continue
@@ -289,7 +301,8 @@ func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool)
 		}
 	}
 
-	// No redirect matched; use original profile.
+	// No redirect matched, or every matched one named a target that is not
+	// loaded, so the declaring profile serves.
 	return profile, true
 }
 
