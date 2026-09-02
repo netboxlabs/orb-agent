@@ -29,6 +29,17 @@ var (
 	logger             *slog.Logger
 )
 
+// cardinalityLimit bounds the attribute sets one instrument may hold before
+// the SDK folds new ones into a single overflow bucket. The default is 2000
+// and, once reached, every later series including a genuine device's first
+// trap lands in that bucket for the life of the process. Ten thousand
+// accommodates a few hundred trapping devices each sending a dozen kinds,
+// five times the default, and stays well below where one OTLP export payload
+// becomes a problem. Trap series are bounded above by registered addresses
+// times the closed trap name set times three versions; the README says that a
+// policy naming a whole /16 whose every host sends every kind is past this.
+const cardinalityLimit = 10000
+
 // endpointOptions returns the otlpmetricgrpc options for the configured
 // endpoint: where to connect, and whether that connection is plaintext.
 //
@@ -100,7 +111,10 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	reader := sdkmetric.NewPeriodicReader(exporter,
 		sdkmetric.WithInterval(time.Duration(exportPeriodSeconds)*time.Second),
 	)
-	meterProvider = sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	meterProvider = sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(reader),
+		sdkmetric.WithCardinalityLimit(cardinalityLimit),
+	)
 	otel.SetMeterProvider(meterProvider)
 	meter = otel.Meter("snmp-telemetry")
 	logger = logg
@@ -196,6 +210,12 @@ func GetMeter() metric.Meter {
 // ResetMeter resets the meter to nil for testing purposes.
 func ResetMeter() {
 	meter = nil
+}
+
+// SetMeterForTest installs a meter without an exporter, for tests that read
+// instruments through a manual reader. ResetMeter undoes it.
+func SetMeterForTest(m metric.Meter) {
+	meter = m
 }
 
 // Shutdown gracefully shuts down the metrics exporter

@@ -296,3 +296,11 @@ func TestSetupMetricsExport_PeriodPastTheBoundIsInertWithNoEndpoint(t *testing.T
 	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), "", config.MaxDurationSeconds+1))
 	assert.Nil(t, GetMeter())
 }
+
+// F7: the SDK's default cardinality limit is 2000 per instrument, and past it
+// every new attribute set folds into one overflow bucket. The trap counters
+// are the first instruments here whose label values a sender influences, so
+// the limit is chosen rather than inherited.
+func TestSetupMetricsExport_SetsTheCardinalityLimit(t *testing.T) {
+	assert.Equal(t, 10000, cardinalityLimit, "the limit is a decision; the comment beside it says why")
+}
