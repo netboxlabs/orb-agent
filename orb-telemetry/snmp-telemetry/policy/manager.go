@@ -64,6 +64,10 @@ type Manager struct {
 	// allowedEnvVars is the set of environment variables a policy may read
 	// through a ${NAME} credential reference. Empty reads none.
 	allowedEnvVars map[string]struct{}
+	// trapRegistry receives each policy's expanded addresses and v3 users as
+	// its runner starts, and loses them as it stops. Nil disables trap
+	// registration entirely.
+	trapRegistry TrapRegistry
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*cachedCollector
@@ -103,6 +107,10 @@ type Options struct {
 	// inherits the agent's environment, so an unrestricted resolver hands any
 	// process secret to whatever host the policy targets.
 	AllowedEnvVars []string
+	// TrapRegistry receives each policy's expanded addresses and v3 users as
+	// its runner starts, and loses them as it stops. Nil disables trap
+	// registration entirely.
+	TrapRegistry TrapRegistry
 }
 
 // NewManager returns a new policy manager
@@ -123,6 +131,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		profilesRoot:       opts.ProfilesRoot,
 		allowedEnvVars:     allowed,
 		collectorsByDir:    make(map[string]*cachedCollector),
+		trapRegistry:       opts.TrapRegistry,
 	}
 }
 
@@ -439,7 +448,7 @@ func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, 
 	}
 	defer m.mu.Unlock()
 
-	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector)
+	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector, m.trapRegistry)
 	if err != nil {
 		return Handle{}, err
 	}

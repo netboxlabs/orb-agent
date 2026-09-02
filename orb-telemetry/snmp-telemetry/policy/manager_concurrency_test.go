@@ -107,7 +107,7 @@ func TestStopPolicy_HoldsTheNameUntilTheRunnerHasStopped(t *testing.T) {
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)
 
-	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate)
+	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate, nil)
 	require.NoError(t, err)
 	r.Start()
 	m.policies["p1"] = r
@@ -185,7 +185,7 @@ func TestStopPolicy_DoesNotBlockOtherNames(t *testing.T) {
 
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)
-	r, err := NewRunner(m.ctx, testLogger, "slow", minimalPolicy(v2cAuth()), gate)
+	r, err := NewRunner(m.ctx, testLogger, "slow", minimalPolicy(v2cAuth()), gate, nil)
 	require.NoError(t, err)
 	r.Start()
 	m.policies["slow"] = r

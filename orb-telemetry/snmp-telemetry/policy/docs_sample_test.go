@@ -40,20 +40,20 @@ func TestTheDocumentedRetryRuleMatchesTheRunner(t *testing.T) {
 	}
 
 	// A single attempt that fills the interval can never produce a sample.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	says("is rejected, because a single attempt filling the interval can never produce a sample")
 
 	// A retry sequence that reaches the interval starts anyway, and an
 	// unresponsive device gets a truncated sequence rather than a refusal.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, 10), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, 10), &spyCollector{}, nil)
 	require.NoError(t, err)
 	says("warned about rather than rejected")
 	says("the retry sequence is cut short when the interval runs out")
 
 	// A count past the ceiling is refused rather than warned about, because
 	// the client allocates on it.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, maxPolicyRetries+1), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(10, 9, maxPolicyRetries+1), &spyCollector{}, nil)
 	require.Error(t, err)
 	says(fmt.Sprintf("`retries` is capped at %d", maxPolicyRetries))
 }

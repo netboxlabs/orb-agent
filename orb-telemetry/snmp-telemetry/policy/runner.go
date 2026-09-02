@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/targets"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
 // Define a custom type for the context key
@@ -55,6 +57,15 @@ type Collector interface {
 	ForgetPolicy(policyName string)
 }
 
+// TrapRegistry is the trap receiver's view of a policy: the addresses it
+// polls and the v3 users it carries, claimed as the runner starts and
+// withdrawn as it stops. It is a second narrow interface rather than a
+// back-reference to the manager, for the same reason Collector is.
+type TrapRegistry interface {
+	Register(policy string, devices []traps.Device, users []traps.V3User)
+	Withdraw(policy string)
+}
+
 // Runner represents the policy runner for SNMP metrics collection
 type Runner struct {
 	scheduler gocron.Scheduler
@@ -66,6 +77,7 @@ type Runner struct {
 	cancel           context.CancelFunc
 	name             string
 	metricsCollector Collector
+	trapRegistry     TrapRegistry
 	metricsInterval  time.Duration
 	snmpTimeout      time.Duration
 	retries          int
@@ -81,7 +93,7 @@ type Runner struct {
 // NewRunner returns a new policy runner.
 // metricsCollector is the shared collector for this policy's profiles directory —
 // created once by the Manager and reused across all policies using the same dir.
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector, registry TrapRegistry) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -94,6 +106,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	built := false
 	defer func() {
 		if !built {
+			if registry != nil {
+				registry.Withdraw(name)
+			}
 			cancel()
 		}
 	}()
@@ -103,6 +118,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		logger:           logger,
 		name:             name,
 		metricsCollector: metricsCollector,
+		trapRegistry:     registry,
 		config:           policy.Config,
 		scope:            policy.Scope,
 		ctx:              runCtx,
@@ -178,6 +194,10 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if collapsed > 0 {
 		logger.Info("Policy names the same device more than once, collapsing the repeats",
 			"policy", config.SanitizeLogValue(name), "collapsed", collapsed, "devices", len(expanded))
+	}
+
+	if registry != nil {
+		registry.Register(name, trapDevices(name, expanded), trapUsers(runner, expanded))
 	}
 
 	// Schedule a metrics job for each expanded target
@@ -397,5 +417,50 @@ func (r *Runner) Stop() error {
 	if r.metricsCollector != nil {
 		r.metricsCollector.ForgetPolicy(r.name)
 	}
+	if r.trapRegistry != nil {
+		r.trapRegistry.Withdraw(r.name)
+	}
 	return err
+}
+
+// trapDevices is the address each expanded target names. A target that is a
+// hostname rather than an address has none and is skipped; the README says
+// such a target does not receive traps in this phase.
+func trapDevices(policy string, targets []config.Target) []traps.Device {
+	out := make([]traps.Device, 0, len(targets))
+	for _, t := range targets {
+		addr, err := netip.ParseAddr(t.Host)
+		if err != nil {
+			continue
+		}
+		out = append(out, traps.Device{Policy: policy, Addr: addr})
+	}
+	return out
+}
+
+// trapUsers is the v3 credential each expanded target polls with, deduplicated
+// on every field, so the receiver can authenticate a trap from that device
+// with the same user the poller uses.
+func trapUsers(r *Runner, targets []config.Target) []traps.V3User {
+	seen := make(map[traps.V3User]struct{})
+	var out []traps.V3User
+	for _, t := range targets {
+		auth := r.resolveTargetAuthentication(t)
+		if auth == nil || normalizeProtocolVersion(auth.ProtocolVersion) != "SNMPv3" {
+			continue
+		}
+		u := traps.V3User{
+			Username:       auth.Username,
+			AuthProtocol:   auth.AuthProtocol,
+			AuthPassphrase: auth.AuthPassphrase,
+			PrivProtocol:   auth.PrivProtocol,
+			PrivPassphrase: auth.PrivPassphrase,
+		}
+		if _, dup := seen[u]; dup {
+			continue
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	return out
 }

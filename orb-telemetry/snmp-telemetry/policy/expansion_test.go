@@ -155,7 +155,7 @@ func TestValidate_RejectsPolicyOverTheBudget(t *testing.T) {
 
 func TestNewRunner_RejectsOversizedTarget(t *testing.T) {
 	for _, host := range oversizedTargets {
-		_, err := NewRunner(t.Context(), testLogger, "p1", policyWithTarget(host), &spyCollector{})
+		_, err := NewRunner(t.Context(), testLogger, "p1", policyWithTarget(host), &spyCollector{}, nil)
 		require.Error(t, err, "target %s should be rejected", host)
 		assert.ErrorContains(t, err, "65536")
 	}
@@ -164,7 +164,7 @@ func TestNewRunner_RejectsOversizedTarget(t *testing.T) {
 // A direct NewRunner call does not pass through validatePolicy, so the budget
 // has to hold there too or the scheduler still gets the million jobs.
 func TestNewRunner_RejectsPolicyOverTheBudget(t *testing.T) {
-	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets(sixteenSixteens()...), &spyCollector{})
+	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets(sixteenSixteens()...), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "1048544")
 	assert.ErrorContains(t, err, "65536")
