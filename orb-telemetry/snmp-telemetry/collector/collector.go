@@ -795,12 +795,16 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	walker.SetBulkWalk(!profile.NoUseBulkWalkAll)
 
 	// One walk per OID for the whole run, so declarations sharing a poll
-	// window share the walk that starts it. It is created before the device
-	// tags because they are read first and name OIDs the profile also declares
-	// as metrics, so the two have to be served by one response.
+	// window share the walk that starts it. A tag column can name an OID the
+	// profile also declares as a metric, and the cache is what serves the two
+	// of them from one response whichever asks first.
 	walks := make(walkCache)
 
-	baseAttrs := c.appendDeviceTags(ctx, walker, walks, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
+	// The attributes every series of this run carries, rendered when the first
+	// point needs them rather than here.
+	base := &deviceAttrs{render: func() []attribute.KeyValue {
+		return c.appendDeviceTags(ctx, walker, walks, profile, appendIdentityAttrs(nil, key), sysDescr, sysOIDValue)
+	}}
 
 	// fresh accumulates this run's observations, one per metric name and row.
 	// throttled records the declarations skipped because poll_time_sec has not
@@ -814,14 +818,14 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		}
 		switch {
 		case entry.Symbol != nil:
-			c.collectScalar(ctx, walker, walks, entry.Symbol, profiles.SymbolPrecedence(&entry, entry.Symbol), baseAttrs, key, fresh, throttled)
+			c.collectScalar(ctx, walker, walks, entry.Symbol, profiles.SymbolPrecedence(&entry, entry.Symbol), base, key, fresh, throttled)
 		case entry.Table != nil:
-			c.collectTable(ctx, walker, walks, &entry, baseAttrs, key, fresh, throttled)
+			c.collectTable(ctx, walker, walks, &entry, base, key, fresh, throttled)
 		case len(entry.Symbols) > 0 && groupedSymbolsAreTableColumns(&entry):
 			// Columns of a table the profile names no `table:` root for. The
 			// rows still have to be joined by index, or the entry's row-scoped
 			// metadata is lost and the rows carry no identity.
-			c.collectTable(ctx, walker, walks, &entry, baseAttrs, key, fresh, throttled)
+			c.collectTable(ctx, walker, walks, &entry, base, key, fresh, throttled)
 		case len(entry.Symbols) > 0:
 			// Scalars grouped under `symbols:` with no `table:`. One entry can
 			// carry dozens, each a request of its own, so the deadline is
@@ -831,7 +835,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 					return err
 				}
 				sym := &entry.Symbols[i]
-				c.collectScalar(ctx, walker, walks, sym, profiles.SymbolPrecedence(&entry, sym), baseAttrs, key, fresh, throttled)
+				c.collectScalar(ctx, walker, walks, sym, profiles.SymbolPrecedence(&entry, sym), base, key, fresh, throttled)
 			}
 		}
 	}
@@ -875,13 +879,13 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	//
 	// What the run holds is the store it would write, not the points it polled
 	// this cycle. A declaration throttled by poll_time_sec polls nothing and
-	// keeps what it left last run, while top-level metric_tags are walked on
-	// every cycle whatever the poll windows say, so a fully throttled cycle
-	// polls no point and can still fail a walk. Judged on this cycle's points
-	// alone it looks like a total loss, and a policy collecting on a shorter
-	// period than its profile declares spends most of its cycles there: one
-	// transient failure would discard the device's every retained reading and
-	// every poll window with it.
+	// keeps what it left last run, so a cycle where next to nothing is due can
+	// fail the walk of the one declaration that is and come away with no fresh
+	// point at all. Judged on this cycle's points alone it looks like a total
+	// loss, and a policy collecting on a shorter period than its profile
+	// declares spends most of its cycles there: one transient failure would
+	// discard the device's every retained reading and every poll window with
+	// it.
 	//
 	// A run that holds something keeps returning nil and keeps what it holds,
 	// whether it polled those points or carried them forward. A profile
@@ -940,11 +944,46 @@ func groupedSymbolsAreTableColumns(entry *profiles.MetricEntry) bool {
 	return false
 }
 
+// deviceAttrs holds the attributes every series of one run carries: the device
+// identity, and the profile's top-level metric_tags rendered beside it. Each
+// tag column not already walked is a request of its own, and 181 of the 205
+// bundled profiles declare a block of them, almost all through the inherited
+// system MIB block.
+//
+// They are rendered on the first point that needs them rather than up front. A
+// declaration throttled by poll_time_sec walks nothing between its due times,
+// and the attributes are only ever carried by the points collected on the
+// cycle, so a cycle that collects none has nothing to attach them to and now
+// asks the device for nothing at all. A policy collecting on a shorter period
+// than its profile declares spends most of its cycles there.
+//
+// Building them on first use rather than giving them a poll window of their
+// own keeps one decision about what is due: the columns are read exactly when
+// a point exists to carry them, so an attribute is never older than the
+// reading it sits beside by more than the run that produced both.
+type deviceAttrs struct {
+	render   func() []attribute.KeyValue
+	attrs    []attribute.KeyValue
+	rendered bool
+}
+
+// get renders the attributes on the first call and returns the same slice from
+// then on, so a run with a thousand rows walks the tag columns once. A run
+// polls one device from one goroutine, so the memo needs no synchronisation.
+func (d *deviceAttrs) get() []attribute.KeyValue {
+	if !d.rendered {
+		d.attrs = d.render()
+		d.rendered = true
+	}
+	return d.attrs
+}
+
 // appendDeviceTags renders the profile's top-level metric_tags and appends them
 // to attrs. They describe the device rather than a row, so they belong on every
 // series the profile produces. Each column not already read is a request of its
-// own, so the walk stops once the deadline has expired and the caller returns
-// on the same check straight after.
+// own, so the walk stops once the deadline has expired; the point being built
+// keeps the columns read so far, and the run is discarded on the next deadline
+// check either way.
 func (c *MetricsCollector) appendDeviceTags(ctx context.Context, walker snmp.Walker, walks walkCache, profile *profiles.Profile, attrs []attribute.KeyValue, sysDescr, sysObjectID string) []attribute.KeyValue {
 	for _, mt := range profile.MetricTags {
 		if ctx.Err() != nil {
@@ -1257,7 +1296,7 @@ func (c *MetricsCollector) reportUnusableConditions(entry profiles.MetricEntry, 
 // profile cannot always say which entries are columns; the OID the device
 // answers at can. Without the identity every row carries the same attribute
 // set and the export keeps one arbitrary value.
-func (c *MetricsCollector) collectScalar(ctx context.Context, walker snmp.Walker, walks walkCache, sym *profiles.Symbol, prec profiles.Precedence, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
+func (c *MetricsCollector) collectScalar(ctx context.Context, walker snmp.Walker, walks walkCache, sym *profiles.Symbol, prec profiles.Precedence, base *deviceAttrs, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	if unusableSymbolReason(sym) != "" {
 		// Reported once per profile by reviewProfile. Skipping before the walk
 		// is what keeps an empty OID from being issued as a whole-tree walk, and
@@ -1292,6 +1331,7 @@ func (c *MetricsCollector) collectScalar(ctx context.Context, walker snmp.Walker
 			continue
 		}
 
+		baseAttrs := base.get()
 		attrs := make([]attribute.KeyValue, len(baseAttrs))
 		copy(attrs, baseAttrs)
 		if rowIdx, indexed := scalarRowIndex(fullOID, sym.OID); indexed {
@@ -1598,7 +1638,7 @@ type joinedTag struct {
 }
 
 // collectTable collects all columns in an SNMP table, joining metric and tag columns by row index.
-func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, walks walkCache, entry *profiles.MetricEntry, baseAttrs []attribute.KeyValue, key deviceKey, fresh *pointSink, throttled throttledDecls) {
+func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker, walks walkCache, entry *profiles.MetricEntry, base *deviceAttrs, key deviceKey, fresh *pointSink, throttled throttledDecls) {
 	// --- Phase 1: decide which symbols need polling this run ---
 	type symState struct {
 		sym       *profiles.Symbol
@@ -1839,6 +1879,7 @@ func (c *MetricsCollector) collectTable(ctx context.Context, walker snmp.Walker,
 				continue
 			}
 
+			baseAttrs := base.get()
 			rowAttrs := make([]attribute.KeyValue, len(baseAttrs))
 			copy(rowAttrs, baseAttrs)
 			if indexed {

@@ -971,6 +971,13 @@ func TestCollectTarget_GroupedScalarSymbolsCarryEnum(t *testing.T) {
 	assert.Equal(t, "ac", attrValue(pts[0], "internal-power_status"))
 }
 
+// noDeviceTags is the run-scoped attribute set of a profile declaring no
+// top-level metric_tags, for the tests that drive one collection path on its
+// own rather than through collect.
+func noDeviceTags() *deviceAttrs {
+	return &deviceAttrs{render: func() []attribute.KeyValue { return nil }}
+}
+
 // attrValue returns the string value of one attribute on an observation, or "".
 func attrValue(pt observedPoint, key string) string {
 	for _, kv := range pt.attrs {
@@ -1027,11 +1034,15 @@ func TestCollectTarget_ProfileMetricTagsReuseSystemWalks(t *testing.T) {
 		host        = "10.0.0.10"
 		sysObjValue = "1.3.6.1.4.1.20916"
 		nameOID     = "1.3.6.1.2.1.1.5.0"
+		tempFOID    = "1.3.6.1.4.1.20916.1.11.1.1.1.1.0"
 	)
+	// The device answers a metric of the profile, so the run collects a point
+	// for the device tags to be attached to and renders them.
 	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
 		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
 		sysDescrOID:    {sysDescrOID: stringPDU(sysDescrOID, "environment monitor")},
 		nameOID:        {nameOID: stringPDU(nameOID, "sensor-1")},
+		tempFOID:       {tempFOID: intPDU(tempFOID, 72)},
 	}}
 
 	c := newBundledCollector(t, walkerFactory(w))
@@ -1934,8 +1945,10 @@ func TestCollectTarget_GroupedScalarsStopAtTheDeadline(t *testing.T) {
 	}
 }
 
-// The profile-level metric_tags are walked one column at a time before any
-// metric is collected, and a profile declares up to a dozen of them.
+// The profile-level metric_tags are walked one column at a time, and a profile
+// declares up to a dozen of them. They are rendered by the first point that
+// needs them, so the walk that cancels the run here is a column read partway
+// through collecting a metric.
 func TestCollectTarget_DeviceTagsStopAtTheDeadline(t *testing.T) {
 	const (
 		host        = "10.0.0.51"
@@ -1976,7 +1989,7 @@ func TestCollectTarget_DeviceTagsStopAtTheDeadline(t *testing.T) {
 
 	assert.NotContains(t, w.walkCalls, nameOID, "a device tag walked after the deadline expired")
 	assert.NotContains(t, w.walkCalls, locationOID, "a device tag walked after the deadline expired")
-	assert.NotContains(t, w.walkCalls, cpuOID)
+	assert.Contains(t, w.walkCalls, cpuOID, "the metric whose point asked for the tags is what walked first")
 }
 
 // cancelAfterCtx reads as live for its first few Err calls and cancelled from
@@ -2014,13 +2027,13 @@ func TestCollectScalar_StopsAtTheDeadlineWithinTheResponse(t *testing.T) {
 	// Control: with nothing cancelled every row of the response is collected,
 	// so an empty result below is the deadline rather than an unrelated drop.
 	live := newPointSink(discardLogger)
-	c.collectScalar(context.Background(), w, walkCache{}, symbol, profiles.Precedence{}, nil, key, live, throttledDecls{})
+	c.collectScalar(context.Background(), w, walkCache{}, symbol, profiles.Precedence{}, noDeviceTags(), key, live, throttledDecls{})
 	require.Len(t, live.points["snmp.sensorload"], 5, "every row of a scalar response is collected")
 
 	ctx := &cancelAfterCtx{Context: context.Background()}
 	ctx.live.Store(2)
 	fresh := newPointSink(discardLogger)
-	c.collectScalar(ctx, w, walkCache{}, symbol, profiles.Precedence{}, nil, key, fresh, throttledDecls{})
+	c.collectScalar(ctx, w, walkCache{}, symbol, profiles.Precedence{}, noDeviceTags(), key, fresh, throttledDecls{})
 	assert.Len(t, fresh.points["snmp.sensorload"], 2,
 		"the scalar loop must stop at the deadline rather than converting the whole response")
 }
@@ -2072,7 +2085,7 @@ func TestCollectTable_StopsWhenTheDistributionHitsTheDeadline(t *testing.T) {
 	// Control: with nothing cancelled the entry collects every row of its
 	// metric column off the one table walk.
 	live := newPointSink(discardLogger)
-	c.collectTable(context.Background(), w, walkCache{}, entry, nil, key, live, throttledDecls{})
+	c.collectTable(context.Background(), w, walkCache{}, entry, noDeviceTags(), key, live, throttledDecls{})
 	require.Len(t, live.points["snmp.ifouterrors"], 6, "every row of the table is collected")
 	require.Equal(t, []string{tableOID}, w.walkCalls, "the whole entry is served by the one table walk")
 
@@ -2083,7 +2096,7 @@ func TestCollectTable_StopsWhenTheDistributionHitsTheDeadline(t *testing.T) {
 	ctx := &cancelAfterCtx{Context: context.Background()}
 	ctx.live.Store(6)
 	fresh := newPointSink(discardLogger)
-	c.collectTable(ctx, w, walkCache{}, entry, nil, key, fresh, throttledDecls{})
+	c.collectTable(ctx, w, walkCache{}, entry, noDeviceTags(), key, fresh, throttledDecls{})
 	assert.Empty(t, fresh.points, "a run stopped inside the distribution collects no row")
 	assert.Equal(t, []string{tableOID}, w.walkCalls,
 		"a stopped distribution must not send the caller back to a walk per column")
@@ -2175,7 +2188,7 @@ func TestCollectTable_StopsWhenTheTagDistributionHitsTheDeadline(t *testing.T) {
 	// tag, so the empty result below is the deadline rather than a tag column
 	// that matched no metric row.
 	live := newPointSink(discardLogger)
-	c.collectTable(context.Background(), w, walkCache{}, entry, nil, key, live, throttledDecls{})
+	c.collectTable(context.Background(), w, walkCache{}, entry, noDeviceTags(), key, live, throttledDecls{})
 	require.Len(t, live.points["snmp.ifouterrors"], 6, "every row of the table is collected")
 	for _, pt := range live.points["snmp.ifouterrors"] {
 		require.NotEmpty(t, attrValue(pt, "if_desc"), "every collected row carries the tag column")
@@ -2186,7 +2199,7 @@ func TestCollectTable_StopsWhenTheTagDistributionHitsTheDeadline(t *testing.T) {
 	// and collects rows the run then discards.
 	w.walkCalls = nil
 	fresh := newPointSink(discardLogger)
-	c.collectTable(cancelAfterWalk(w, descrCol, 3), w, walkCache{}, entry, nil, key, fresh, throttledDecls{})
+	c.collectTable(cancelAfterWalk(w, descrCol, 3), w, walkCache{}, entry, noDeviceTags(), key, fresh, throttledDecls{})
 	assert.Empty(t, fresh.points, "a run stopped inside the tag distribution collects no row")
 	assert.Equal(t, []string{descrCol}, w.walkCalls,
 		"the phases after a stopped tag distribution must not walk the metric column")
@@ -2218,7 +2231,7 @@ func TestCollectTable_StopsWhenTheJoinedTagDistributionHitsTheDeadline(t *testin
 
 	// Control: with nothing cancelled the join lands on every row.
 	live := newPointSink(discardLogger)
-	c.collectTable(context.Background(), w, walkCache{}, entry, nil, key, live, throttledDecls{})
+	c.collectTable(context.Background(), w, walkCache{}, entry, noDeviceTags(), key, live, throttledDecls{})
 	require.Len(t, live.points["snmp.ifouterrors"], 6, "every row of the table is collected")
 	for _, pt := range live.points["snmp.ifouterrors"] {
 		require.NotEmpty(t, attrValue(pt, "if_name"), "every collected row carries the joined column")
@@ -2226,7 +2239,7 @@ func TestCollectTable_StopsWhenTheJoinedTagDistributionHitsTheDeadline(t *testin
 
 	w.walkCalls = nil
 	fresh := newPointSink(discardLogger)
-	c.collectTable(cancelAfterWalk(w, nameCol, 3), w, walkCache{}, entry, nil, key, fresh, throttledDecls{})
+	c.collectTable(cancelAfterWalk(w, nameCol, 3), w, walkCache{}, entry, noDeviceTags(), key, fresh, throttledDecls{})
 	assert.Empty(t, fresh.points, "a run stopped inside the joined-tag distribution collects no row")
 	assert.Equal(t, []string{nameCol}, w.walkCalls,
 		"the phases after a stopped joined-tag distribution must not walk the metric column")
@@ -3659,34 +3672,40 @@ func TestCollectTarget_APartlyFailedRunKeepsWhatItCollected(t *testing.T) {
 	assert.Empty(t, c.testDeviceStore("p", host)["snmp.memutil"], "the reading that failed is absent")
 }
 
-// TestCollectTarget_AThrottledCycleWithAFailedTagWalkKeepsTheDevice covers the
-// cycle a policy spends waiting out its profile's poll periods. Nothing is due,
-// so the run polls no fresh point and carries the previous ones forward, while
-// the profile's top-level metric_tags are walked on every cycle whatever the
-// poll windows say. A run judged on its fresh points alone reads that as having
-// collected nothing, so a single transient tag walk failure discarded every
+// TestCollectTarget_AThrottledCycleWithAFailedWalkKeepsTheDevice covers the
+// cycle a policy spends waiting out its profile's poll periods. Almost nothing
+// is due, so the run polls next to no fresh point and carries the previous ones
+// forward. A run judged on its fresh points alone reads that as having
+// collected nothing, so a single transient walk failure discarded every
 // retained reading and every poll window the device had. A 10 second policy
 // collecting 60 second metrics spends five cycles in six exactly here.
-func TestCollectTarget_AThrottledCycleWithAFailedTagWalkKeepsTheDevice(t *testing.T) {
+//
+// The failure is a due declaration's, because that is what such a cycle can
+// still fail: the profile's top-level metric_tags are rendered by the first
+// point collected, so a cycle collecting none walks no column of them.
+func TestCollectTarget_AThrottledCycleWithAFailedWalkKeepsTheDevice(t *testing.T) {
 	const (
 		host        = "10.0.0.116"
 		sysObjValue = "1.3.6.1.4.1.9999.116"
 		cpuOID      = sysObjValue + ".1.0"
-		tagOID      = sysObjValue + ".2.0"
+		memOID      = sysObjValue + ".2.0"
+		tagOID      = sysObjValue + ".3.0"
 	)
-	p := profileWithOID(sysObjValue, "throttled-tag-fails.yml", []profiles.MetricEntry{
+	p := profileWithOID(sysObjValue, "throttled-walk-fails.yml", []profiles.MetricEntry{
 		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 3600}},
+		{Symbol: &profiles.Symbol{Name: "memUtil", OID: memOID}},
 	})
 	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
 
-	makeWalker := func(cpu int, failTag bool) *recordingWalker {
+	makeWalker := func(cpu int, failMem bool) *recordingWalker {
 		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
 			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
 			cpuOID:         {cpuOID: intPDU(cpuOID, cpu)},
+			memOID:         {memOID: intPDU(memOID, 40)},
 			tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
 		}}
-		if failTag {
-			w.walkErrs = map[string]error{tagOID: errors.New("request timeout")}
+		if failMem {
+			w.walkErrs = map[string]error{memOID: errors.New("request timeout")}
 		}
 		return w
 	}
@@ -3696,13 +3715,19 @@ func TestCollectTarget_AThrottledCycleWithAFailedTagWalkKeepsTheDevice(t *testin
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
 	require.Len(t, c.testDeviceStore("p", host)["snmp.cpuutil"], 1)
 
-	// The next cycle is fully throttled, and its device tag walk fails.
-	c.clientFactory = walkerFactory(makeWalker(75, true))
+	// The next cycle throttles the hourly symbol and fails the walk of the one
+	// that is due, so it collects nothing fresh at all.
+	second := makeWalker(75, true)
+	c.clientFactory = walkerFactory(second)
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}),
-		"a throttled cycle still holds the points it carries forward, so one failed tag walk is not a total loss")
+		"a throttled cycle still holds the points it carries forward, so one failed walk is not a total loss")
+	assert.NotContains(t, second.walkCalls, tagOID,
+		"the cycle collected no point, so it rendered no device tag")
 	points := c.testDeviceStore("p", host)["snmp.cpuutil"]
 	require.Len(t, points, 1, "the throttled declaration's previous reading is carried forward")
 	assert.Equal(t, int64(75), points[0].value)
+	assert.Equal(t, "rev-a", attrValue(points[0], "BoardRevision"),
+		"the carried reading keeps the attributes of the cycle that collected it")
 
 	// A third cycle reads the poll windows, which only survive if the device
 	// was not forgotten: the hourly symbol is still throttled rather than
@@ -3727,22 +3752,24 @@ func TestCollectTarget_AThrottledCycleWithNothingToCarryIsStillReported(t *testi
 		host        = "10.0.0.117"
 		sysObjValue = "1.3.6.1.4.1.9999.117"
 		cpuOID      = sysObjValue + ".1.0"
-		tagOID      = sysObjValue + ".2.0"
+		memOID      = sysObjValue + ".2.0"
+		tagOID      = sysObjValue + ".3.0"
 	)
 	p := profileWithOID(sysObjValue, "throttled-empty.yml", []profiles.MetricEntry{
 		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 3600}},
+		{Symbol: &profiles.Symbol{Name: "memUtil", OID: memOID}},
 	})
 	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
 
-	makeWalker := func(failTag bool) *recordingWalker {
-		// cpuOID is absent from the responses, so the walk succeeds and
-		// answers with nothing: the poll window starts and no point is left.
+	makeWalker := func(failMem bool) *recordingWalker {
+		// Neither metric OID is in the responses, so both walks succeed and
+		// answer with nothing: the poll windows start and no point is left.
 		w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
 			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
 			tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
 		}}
-		if failTag {
-			w.walkErrs = map[string]error{tagOID: errCPUWalk}
+		if failMem {
+			w.walkErrs = map[string]error{memOID: errCPUWalk}
 		}
 		return w
 	}
@@ -3755,7 +3782,7 @@ func TestCollectTarget_AThrottledCycleWithNothingToCarryIsStillReported(t *testi
 	err := c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{})
 	require.Error(t, err, "a throttled declaration with no point behind it holds nothing, so the failure is still a total one")
 	assert.Contains(t, err.Error(), "failed 1 of its SNMP walks", "the report counts the failures")
-	assert.Contains(t, err.Error(), tagOID, "the report names the OID that failed")
+	assert.Contains(t, err.Error(), memOID, "the report names the OID that failed")
 }
 
 // TestCollect_AReportedRunLeavesThePreviousStoreAlone pins the order of the two
@@ -7451,4 +7478,306 @@ func TestCollectTarget_ADeviceTagOnATableColumnIsOneWalk(t *testing.T) {
 	assert.Equal(t, int64(1), pts[0].value, "the row is the run's first reading")
 	assert.Equal(t, "1", attrValue(pts[0], "link_state"),
 		"the device tag and the row beside it are one reading")
+}
+
+// ---------------------------------------------------------------------------
+// The device tags are built on first use
+// ---------------------------------------------------------------------------
+
+// firstWalkIndex reports where a run first asked for one OID, or -1. It is how
+// a test says which of two declarations of an OID took the walk the other one
+// reads back.
+func firstWalkIndex(w *recordingWalker, oid string) int {
+	for i, call := range w.walkCalls {
+		if call == oid {
+			return i
+		}
+	}
+	return -1
+}
+
+// A declaration throttled by poll_time_sec is skipped between its due times. A
+// top-level metric_tags column was walked whatever the poll windows said, so a
+// policy collecting more often than its profile's declarations are due paid a
+// request per column on every cycle, and on the cycles where everything is
+// throttled it got nothing exportable out of them: the attributes are only
+// ever carried by the points collected on that cycle.
+func TestCollectTarget_AFullyThrottledCycleWalksNoDeviceTag(t *testing.T) {
+	const (
+		host        = "10.0.0.130"
+		sysObjValue = "1.3.6.1.4.1.9999.130"
+		cpuOID      = sysObjValue + ".1.0"
+		tagOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-scalar.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 3600}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
+		tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Equal(t, 1, walkCount(w, tagOID), "the first cycle collects a point, so it renders the tags")
+
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 0, walkCount(w, tagOID), "a cycle that collects no point walks no tag column")
+	pts := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, pts, 1, "the throttled declaration still carries its reading forward")
+	assert.Equal(t, int64(75), pts[0].value)
+	assert.Equal(t, "rev-a", attrValue(pts[0], "BoardRevision"),
+		"the carried point keeps the attributes it was collected with")
+}
+
+// The table path decides the same thing for a whole entry at once: every
+// column throttled and it walks nothing. The device tags are the run's, not
+// the entry's, so a cycle whose every entry is throttled has to reach the end
+// of collect without having rendered them.
+func TestCollectTable_AFullyThrottledTableWalksNoDeviceTag(t *testing.T) {
+	const (
+		host        = "10.0.0.131"
+		sysObjValue = "1.3.6.1.4.1.9999.131"
+		tableOID    = sysObjValue + ".1"
+		errColOID   = tableOID + ".1.20"
+		descrColOID = tableOID + ".1.2"
+		tagOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-table.yml", []profiles.MetricEntry{
+		{
+			Table:      &profiles.Table{Name: "ifTable", OID: tableOID},
+			Symbols:    []profiles.Symbol{{Name: "ifOutErrors", OID: errColOID, PollTimeSec: 3600}},
+			MetricTags: []profiles.MetricTag{{Tag: "if_desc", Column: &profiles.TagColumn{OID: descrColOID, Name: "ifDescr"}}},
+		},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
+		errColOID:      {errColOID + ".1": counter32PDU(errColOID+".1", 10)},
+		descrColOID:    {descrColOID + ".1": stringPDU(descrColOID+".1", "eth0")},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	require.Equal(t, 1, walkCount(w, tagOID), "the first cycle collects a row, so it renders the tags")
+
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 0, walkCount(w, tagOID), "a cycle whose every column is throttled walks no tag column")
+	assert.Equal(t, 0, walkCount(w, descrColOID), "and none of the entry's own tag columns either")
+	pts := c.testDeviceStore("p", host)["snmp.ifouterrors"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, "rev-a", attrValue(pts[0], "BoardRevision"))
+}
+
+// The cycle that does collect is unchanged: every point it exports carries the
+// device tags, and the columns are read once for the run however many points
+// they are attached to.
+func TestCollectTarget_ACollectingCycleCarriesTheDeviceTags(t *testing.T) {
+	const (
+		host        = "10.0.0.132"
+		sysObjValue = "1.3.6.1.4.1.9999.132"
+		fastOID     = sysObjValue + ".1"
+		slowOID     = sysObjValue + ".2.0"
+		tagOID      = sysObjValue + ".3.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-mixed.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "ifErrors", OID: fastOID}},
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: slowOID, PollTimeSec: 3600}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		slowOID:        {slowOID: intPDU(slowOID, 75)},
+		tagOID:         {tagOID: stringPDU(tagOID, "rev-a")},
+		fastOID: {
+			fastOID + ".1": counter32PDU(fastOID+".1", 10),
+			fastOID + ".2": counter32PDU(fastOID+".2", 20),
+		},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, walkCount(w, tagOID),
+		"the tag column is one request for the run, not one per point")
+	pts := c.testDeviceStore("p", host)["snmp.iferrors"]
+	require.Len(t, pts, 2)
+	for _, pt := range pts {
+		assert.Equal(t, "rev-a", attrValue(pt, "BoardRevision"), "every point of the cycle carries the device tags")
+	}
+}
+
+// The run holds the rendered attributes rather than rebuilding them per point.
+// The walk cache hides a repeated rendering from the wire, so the evidence is
+// the column that failed: each rendering of it reports the failure once.
+func TestCollectTarget_TheDeviceTagsAreRenderedOnceForTheRun(t *testing.T) {
+	const (
+		host        = "10.0.0.133"
+		sysObjValue = "1.3.6.1.4.1.9999.133"
+		errColOID   = sysObjValue + ".1"
+		tagOID      = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-once.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "ifErrors", OID: errColOID}},
+	})
+	p.MetricTags = []profiles.MetricTag{{Column: &profiles.TagColumn{OID: tagOID, Name: "BoardRevision"}}}
+
+	w := &recordingWalker{
+		responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			errColOID: {
+				errColOID + ".1": counter32PDU(errColOID+".1", 10),
+				errColOID + ".2": counter32PDU(errColOID+".2", 20),
+				errColOID + ".3": counter32PDU(errColOID+".3", 30),
+			},
+		},
+		walkErrs: map[string]error{tagOID: errors.New("request timeout")},
+	}
+
+	var logs bytes.Buffer
+	c := newCollector(walkerFactory(w), p)
+	c.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	require.Len(t, c.testDeviceStore("p", host)["snmp.iferrors"], 3, "three points share one rendering")
+	assert.Equal(t, 1, strings.Count(logs.String(), "Error walking device tag"),
+		"the device tags are rendered once for the run, not once per point")
+}
+
+// A device tag and a metric can name one OID, and the bundled system MIB block
+// pairs them deliberately. Read twice, the attribute comes from one response
+// and the value exported beside it from another, and a single point carries two
+// moments. The run's walk cache is what keeps them to one request; building the
+// attributes on first use only changes which side of the pair asks for it, so
+// the metric's walk is now the one the device tag reads back.
+func TestCollectTarget_TheMetricWalkIsTheOneTheDeviceTagShares(t *testing.T) {
+	const (
+		host        = "10.0.0.134"
+		sysObjValue = "1.3.6.1.4.1.9999.134"
+		revOID      = sysObjValue + ".1.0"
+		labelOID    = sysObjValue + ".2.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-shared-walk.yml", []profiles.MetricEntry{
+		{Symbols: []profiles.Symbol{{Name: "boardRevision", OID: revOID}}},
+	})
+	// The first tag names an OID no metric declares, so the order the two
+	// columns are walked in tells a rendering on first use from one up front.
+	p.MetricTags = []profiles.MetricTag{
+		{Column: &profiles.TagColumn{OID: labelOID, Name: "SiteLabel"}},
+		{Column: &profiles.TagColumn{OID: revOID, Name: "BoardRevision"}},
+	}
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		labelOID:       {labelOID: stringPDU(labelOID, "rack-4")},
+	}}
+	// The reading moves between requests, so a second walk shows up in what
+	// the run exports and not only in the call count.
+	answerEachWalk(w, revOID, intPDU(revOID, 7), intPDU(revOID, 8))
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+
+	assert.Equal(t, 1, walkCount(w, revOID), "the device tag and the metric are one walk")
+	assert.Less(t, firstWalkIndex(w, revOID), firstWalkIndex(w, labelOID),
+		"the metric took the shared walk, so the tag columns are read after it")
+	pts := c.testDeviceStore("p", host)["snmp.boardrevision"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(7), pts[0].value, "the value is the run's first reading")
+	assert.Equal(t, "7", attrValue(pts[0], "BoardRevision"),
+		"the attribute and the value beside it are one reading")
+	assert.Equal(t, "rack-4", attrValue(pts[0], "SiteLabel"))
+}
+
+// The outcome shared is the outcome either way. The metric's walk is now the
+// run's first request for the OID, so a device tag naming it inherits the
+// failure as it inherits an answer, and asks nothing of its own. The tag is
+// unchanged by it: a failure leaves the attribute off the point rather than
+// failing the run.
+func TestCollectTarget_TheMetricFailedWalkIsTheOneTheDeviceTagShares(t *testing.T) {
+	const (
+		host        = "10.0.0.135"
+		sysObjValue = "1.3.6.1.4.1.9999.135"
+		revOID      = sysObjValue + ".1.0"
+		cpuOID      = sysObjValue + ".2.0"
+		labelOID    = sysObjValue + ".3.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-shared-failure.yml", []profiles.MetricEntry{
+		{Symbols: []profiles.Symbol{{Name: "boardRevision", OID: revOID}}},
+		{Symbols: []profiles.Symbol{{Name: "cpuUtil", OID: cpuOID}}},
+	})
+	p.MetricTags = []profiles.MetricTag{
+		{Column: &profiles.TagColumn{OID: labelOID, Name: "SiteLabel"}},
+		{Column: &profiles.TagColumn{OID: revOID, Name: "BoardRevision"}},
+	}
+
+	w := &recordingWalker{
+		responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
+			labelOID:       {labelOID: stringPDU(labelOID, "rack-4")},
+		},
+		walkErrs: map[string]error{revOID: errors.New("request timeout")},
+	}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}),
+		"a run holding a reading is kept, whatever else it failed to walk")
+
+	assert.Equal(t, 1, walkCount(w, revOID), "the tag reads the metric's failure rather than asking again")
+	assert.Less(t, firstWalkIndex(w, cpuOID), firstWalkIndex(w, labelOID),
+		"the tag columns are read once a point needs them, after the metrics that answered")
+	pts := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, pts, 1)
+	assert.Empty(t, attrValue(pts[0], "BoardRevision"), "a failed walk leaves the attribute off")
+	assert.Equal(t, "rack-4", attrValue(pts[0], "SiteLabel"), "the columns that answered are still attached")
+	assert.Empty(t, c.testDeviceStore("p", host)["snmp.boardrevision"],
+		"the metric reports nothing from a walk that failed")
+}
+
+// Twenty four of the bundled profiles declare no top-level metric_tags at all.
+// Such a profile renders the device identity and nothing else, on the cycles
+// that collect and on the cycles that carry forward alike.
+func TestCollectTarget_AProfileWithNoDeviceTagsIsUnaffected(t *testing.T) {
+	const (
+		host        = "10.0.0.136"
+		sysObjValue = "1.3.6.1.4.1.9999.136"
+		cpuOID      = sysObjValue + ".1.0"
+	)
+	p := profileWithOID(sysObjValue, "lazy-no-tags.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID, PollTimeSec: 3600}},
+	})
+
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 75)},
+	}}
+
+	c := newCollector(walkerFactory(w), p)
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	pts := c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, host, attrValue(pts[0], "device_ip"))
+	assert.Equal(t, "p", attrValue(pts[0], "policy"))
+
+	w.walkCalls = nil
+	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
+	assert.Equal(t, 0, walkCount(w, cpuOID), "the throttled declaration is not re-polled")
+	pts = c.testDeviceStore("p", host)["snmp.cpuutil"]
+	require.Len(t, pts, 1)
+	assert.Equal(t, int64(75), pts[0].value)
+	assert.Equal(t, host, attrValue(pts[0], "device_ip"), "the carried point keeps its identity")
 }
