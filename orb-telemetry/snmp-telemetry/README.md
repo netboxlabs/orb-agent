@@ -74,6 +74,11 @@ agent passes `--host localhost` explicitly to every backend it launches, so the
 wider default is what a standalone run gets, and there it is a listener nothing
 is guarding.
 
+The trap receiver, when `--trap-listen` is set, is the one listener in this
+process that has to be reachable from the device network, since devices send
+traps to it. It is off by default and opens no socket until asked. What it
+accepts and what protects it are described under **Receiving traps** below.
+
 ### What a poll puts on the wire
 
 The section above is about who can reach this backend. This one is about what
@@ -113,6 +118,68 @@ where the credential goes.
 On a segment you do not control, use SNMPv3 with `authPriv`, or name targets
 individually rather than by prefix, or both. A v2c policy over a wide prefix is
 the case that hands one shared secret to the largest number of hosts.
+
+### Receiving traps
+
+`--trap-listen host:port` opens a UDP socket for SNMP traps and informs from
+the devices policies poll. It is empty by default, and empty means no socket
+is opened. Port 162 is privileged; run with `CAP_NET_BIND_SERVICE` or choose a
+higher port and redirect to it. Do not run the backend as root to bind it.
+
+A trap is counted, not stored. Three metrics describe what arrived:
+
+- `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps
+  from a device a running policy names, once per policy naming it, with the
+  same `device_ip` and `policy` labels every polled series carries.
+- `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
+  `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
+  `v3_unauthenticated` or `no_trap_oid`. Hostile v3 traffic lands under
+  `malformed` when it names a username no policy carries and under
+  `v3_unauthenticated` when it names a known one without asking to be
+  authenticated, and the second is the one worth alerting on, since it means
+  someone holds a valid username.
+- `snmp.traps_datagrams` counts every datagram read from the socket. Its gap
+  against the other two is loss you cannot otherwise see.
+
+`trap_name` is drawn from a closed set: the six standard traps of RFC 1215 and
+the trap definitions bundled with the profiles, about two hundred names. Any
+other trap is labelled `other`. A raw OID never appears as a label, because a
+sender chooses its own trap OID and a metric label a sender controls is
+unbounded.
+
+**What the source address list is, and is not.** A trap from an address no
+running policy names is dropped and counted as `unknown_source`. That is a
+noise filter and an attribution rule. It is not authentication and it is not
+access control. SNMP traps are one-way UDP with no handshake, so anyone able
+to emit a packet with a chosen source address, which on a network without
+egress filtering is anyone, can have a trap accepted and attributed to any
+device a policy names. The addresses are not secret; they are the ones this
+backend visibly polls.
+
+`--trap-accept-unknown` counts traps from unknown addresses too, labelled by
+the source address with an empty `policy`. Informs from such addresses are
+counted but never acknowledged, so the socket does not answer strangers.
+
+**Trap contents are unauthenticated unless the sender uses SNMPv3 with
+authentication**, in which case the backend authenticates it with the USM user
+the polling policy for that device carries. No trap-specific credentials are
+configured. v1 and v2c traps are never authenticated by any setting: the
+community they carry is not checked, because a check would be mistaken for
+authentication and would protect nothing against a sender who can read the
+community off the wire.
+
+The actual boundary is a network control on the trap port, a firewall rule
+or a management VRF, the same way the actual boundary for polling is the
+segment the credentials cross.
+
+Two limits in this release. A policy target written as a hostname rather than
+an address is not matched against trap sources, so its traps count as
+`unknown_source`. A policy whose targets are all hostnames but which polls
+with v3 still contributes its USM user to the set the receiver can
+authenticate against, even though it claims no address. And a device behind a
+trap relay or NAT arrives as the relay's address; a v1 trap whose agent-addr
+field names a polled device is attributed to that device, but v2c and v3
+traps are attributed to the address they arrive from.
 
 ### Policy Configuration
 
