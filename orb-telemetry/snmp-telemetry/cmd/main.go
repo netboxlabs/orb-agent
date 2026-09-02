@@ -16,7 +16,9 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/env"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/profiles"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/server"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/version"
 )
 
@@ -112,6 +114,13 @@ func main() {
 			"path under it, or one relative to it. Empty, the default, rejects every per-policy "+
 			"profiles_dir."+
 			" Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_ROOT})")
+	trapListen := flag.String("trap-listen", "",
+		"address to receive SNMP traps on, e.g. 0.0.0.0:162. Empty, the default, opens no socket."+
+			" Port 162 is privileged; use CAP_NET_BIND_SERVICE or a higher port. See the README's"+
+			" inbound exposure section before binding.")
+	trapAcceptUnknown := flag.Bool("trap-accept-unknown", false,
+		"count traps from addresses no policy names, labelled by source address with no policy."+
+			" Off by default; informs from such sources are never acknowledged.")
 	logLevel := flag.String("log-level", "INFO", "log level (DEBUG, INFO, WARN, ERROR)")
 	logFormat := flag.String("log-format", "TEXT", "log format (TEXT, JSON)")
 	help := flag.Bool("help", false, "show this help")
@@ -142,12 +151,22 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
+	trapRegistry := traps.NewRegistry()
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
 		AllowedEnvVars:     splitList(*policyEnvVars),
+		TrapRegistry:       trapRegistry,
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
+
+	trapTally := traps.NewTally(logger)
+	trapTally.Register()
+	trapReceiver, err := startTrapReceiver(*trapListen, profilesDir, *trapAcceptUnknown, trapRegistry, trapTally, logger)
+	if err != nil {
+		logger.Error("Failed to start the trap receiver", "error", err)
+		os.Exit(1)
+	}
 
 	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
 
@@ -157,8 +176,52 @@ func main() {
 	serverErrCh := srv.Start()
 
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
-		shutdown(cancelFunc, srv, shutdownMetrics)
+		shutdown(cancelFunc, stopAll{receiver: trapReceiver, tally: trapTally, server: srv}, shutdownMetrics)
 	})
+}
+
+// startTrapReceiver binds the trap socket when an address was given. The name
+// set is built from the bundled profile tree plus the operator's override
+// directory, loaded once here for the purpose; the manager loads the same
+// tree per profiles directory for its own collectors and there is no shared
+// handle to borrow.
+func startTrapReceiver(listen, profilesDir string, acceptUnknown bool, registry *traps.Registry, tally *traps.Tally, logger *slog.Logger) (*traps.Receiver, error) {
+	if listen == "" {
+		return nil, nil
+	}
+	loader, err := profiles.LoadProfiles(profilesDir, logger)
+	if err != nil {
+		return nil, fmt.Errorf("loading trap definitions: %w", err)
+	}
+	all, err := loader.AllResolved()
+	if err != nil {
+		return nil, fmt.Errorf("resolving trap definitions: %w", err)
+	}
+	names := traps.BuildNames(profiles.TrapNames(all))
+	rcv, err := traps.Listen(listen, registry, tally, names, acceptUnknown, logger)
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "accept_unknown", acceptUnknown, "trap_names", len(names))
+	return rcv, nil
+}
+
+// stopAll stops the trap receiver and then the server. Both run after the
+// final flush, so neither spends the flush's budget, and the tally is a map
+// the export callback reads, so the flush carried everything counted whether
+// or not the receiver was still running.
+type stopAll struct {
+	receiver *traps.Receiver
+	tally    *traps.Tally
+	server   stopper
+}
+
+func (s stopAll) Stop() {
+	if s.receiver != nil {
+		s.receiver.Stop()
+	}
+	s.tally.Close()
+	s.server.Stop()
 }
 
 // splitList reads a comma-separated flag value as its non-empty, trimmed

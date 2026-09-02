@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
 // stopFunc adapts a function to the stopper the shutdown sequence takes.
@@ -339,4 +340,28 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 
 	assert.Equal(t, []int64{7}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations a cancelled collection forgets")
+}
+
+// With no --trap-listen, no socket is opened and nothing else changes.
+func TestTrapListenEmptyOpensNoSocket(t *testing.T) {
+	rcv, err := startTrapReceiver("", "", false, nil, nil, discardLogger())
+	require.NoError(t, err)
+	assert.Nil(t, rcv)
+}
+
+func TestTrapListenBindFailureIsAnError(t *testing.T) {
+	blocker, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = blocker.Close() })
+	_, err = startTrapReceiver(blocker.LocalAddr().String(), "", false, traps.NewRegistry(), traps.NewTally(discardLogger()), discardLogger())
+	require.Error(t, err, "a bind failure is reported, not logged from a goroutine")
+}
+
+// The receiver stops with the server, after the flush, so the final export
+// still holds everything counted and the stop spends none of its budget.
+func TestShutdownStopsTheTrapReceiverAfterTheFlush(t *testing.T) {
+	var order []string
+	srv := stopFunc(func() { order = append(order, "stop") })
+	shutdown(func() { order = append(order, "cancel") }, srv, func() { order = append(order, "flush") })
+	assert.Equal(t, []string{"flush", "cancel", "stop"}, order)
 }
