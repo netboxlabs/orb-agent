@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"regexp"
@@ -370,8 +371,9 @@ func (c *MetricsCollector) pollDue(key deviceKey, sym *profiles.Symbol) bool {
 // answered with: a device that does not implement an OID has still been asked,
 // and re-asking it every cycle is what the poll window is there to prevent.
 // A device forgotten after a failed run loses these timestamps with the rest of
-// its state, so the two rules agree that nothing throttles what was not
-// collected.
+// its state, and a run that ends before publishing its store has the timestamps
+// it wrote put back as they were by restorePollWindows, so every rule agrees
+// that nothing throttles a reading no series carries.
 func (c *MetricsCollector) markPolled(key deviceKey, sym *profiles.Symbol) {
 	if sym.PollTimeSec <= 0 || pollPeriodPastBound(sym) {
 		// A refused period leaves no window to start, so writing a timestamp
@@ -384,6 +386,37 @@ func (c *MetricsCollector) markPolled(key deviceKey, sym *profiles.Symbol) {
 		c.pollState[key] = make(map[string]time.Time)
 	}
 	c.pollState[key][symbolDeclKey(sym)] = time.Now()
+}
+
+// snapshotPollWindows copies a device's poll windows as they stand. The copy is
+// what makes it a snapshot: markPolled writes into the device's own map, so
+// keeping the map itself would follow this run's writes rather than record what
+// preceded them.
+func (c *MetricsCollector) snapshotPollWindows(key deviceKey) map[string]time.Time {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	return maps.Clone(c.pollState[key])
+}
+
+// restorePollWindows puts a device's poll windows back the way
+// snapshotPollWindows found them, undoing every window the run since started.
+//
+// A run restores them when it returns without publishing its store, so a
+// declaration is never throttled against a reading nothing can read. Restoring
+// rather than deleting the entries the run wrote: a declaration this run marked
+// was reported due, so its previous timestamp had expired, and putting the
+// expired timestamp back throttles exactly as little as dropping the entry
+// would. It also needs nothing threaded through the collection paths.
+func (c *MetricsCollector) restorePollWindows(key deviceKey, windows map[string]time.Time) {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	if windows == nil {
+		// A device with no windows at all holds no entry rather than an empty
+		// one, which is the shape forgetDevice leaves too.
+		delete(c.pollState, key)
+		return
+	}
+	c.pollState[key] = windows
 }
 
 // ensureInstrument lazily registers an observable gauge callback for metricName.
@@ -718,6 +751,30 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	c.noteProfile(key, profileID(profile))
 	c.reviewProfile(profile)
 
+	// The poll windows as they stand before this run walks any of the profile's
+	// metrics, and a restore on every way out that does not publish the store.
+	//
+	// The two are written at different times: markPolled starts a declaration's
+	// window the moment its walk comes back, while the store is written once, at
+	// the end. A run that returns in between has therefore throttled
+	// declarations whose readings nothing published, and each one is skipped
+	// until poll_time_sec elapses while its series carries the run before it, or
+	// nothing at all. The windows that existed before the run are kept, since
+	// those belong to readings that were published: that is what makes the cycle
+	// after an interruption a cheap one.
+	//
+	// Taken here rather than at the top of collect: noteProfile drops the
+	// windows of a profile no longer matched, and a restore of a snapshot taken
+	// before it would put that dropped profile's windows back. Nothing past this
+	// point drops them, so a restore has no other decision to undo.
+	prevWindows := c.snapshotPollWindows(key)
+	storePublished := false
+	defer func() {
+		if !storePublished {
+			c.restorePollWindows(key, prevWindows)
+		}
+	}()
+
 	// Everything from here walks the profile's tables, which is where the round
 	// trips are. The two walks above chose the profile, so this is the first
 	// point at which the device's tolerance for GETBULK is known.
@@ -823,6 +880,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	emptyRun := len(newStore) == 0
 	if !emptyRun || failed == 0 {
 		c.deviceStore[key] = newStore
+		storePublished = true
 	}
 	c.storeMu.Unlock()
 

@@ -1561,11 +1561,21 @@ func interruptionProfile(sysObj, filename string) *profiles.Profile {
 	})
 }
 
+// interruptionSlowValue is what the throttled declaration answers unless a test
+// asks for another value.
+const interruptionSlowValue = 7
+
 func interruptionWalker(sysObj string) *recordingWalker {
+	return interruptionWalkerValued(sysObj, interruptionSlowValue)
+}
+
+// interruptionWalkerValued answers the throttled declaration with slowValue, so
+// a test that runs several cycles can tell which one a retained point came from.
+func interruptionWalkerValued(sysObj string, slowValue int) *recordingWalker {
 	return &recordingWalker{responses: map[string]map[string]snmp.PDU{
 		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObj)},
 		sysDescrOID:    {},
-		interruptSlow:  {interruptSlow: intPDU(interruptSlow, 7)},
+		interruptSlow:  {interruptSlow: intPDU(interruptSlow, slowValue)},
 		interruptFast:  {interruptFast: intPDU(interruptFast, 1)},
 	}}
 }
@@ -1574,7 +1584,14 @@ func interruptionWalker(sysObj string) *recordingWalker {
 // caller can see which declarations were polled.
 func runCollection(t *testing.T, c *MetricsCollector, policy, sysObj string) *recordingWalker {
 	t.Helper()
-	w := interruptionWalker(sysObj)
+	return runCollectionValued(t, c, policy, sysObj, interruptionSlowValue)
+}
+
+// runCollectionValued performs one complete run whose throttled declaration, if
+// this run polls it, answers with slowValue.
+func runCollectionValued(t *testing.T, c *MetricsCollector, policy, sysObj string, slowValue int) *recordingWalker {
+	t.Helper()
+	w := interruptionWalkerValued(sysObj, slowValue)
 	c.clientFactory = walkerFactory(w)
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(interruptHost), mustAuth(), policy, DialOptions{}))
 	return w
@@ -1593,6 +1610,39 @@ func runInterrupted(t *testing.T, c *MetricsCollector, policy, sysObj string) {
 	c.clientFactory = walkerFactory(w)
 	require.ErrorIs(t, c.CollectTarget(ctx, mustTarget(interruptHost), mustAuth(), policy, DialOptions{}),
 		context.Canceled)
+}
+
+// runInterruptedAt performs one run cut short by its own context once the given
+// OID has come back, which is where a run that overruns its metrics_interval
+// part way through a profile ends. runInterrupted cancels on the very first
+// walk, before any declaration has been polled; here declarations have been
+// polled and the run still publishes nothing.
+func runInterruptedAt(t *testing.T, c *MetricsCollector, policy, sysObj, at string, slowValue int) *recordingWalker {
+	t.Helper()
+	w := interruptionWalkerValued(sysObj, slowValue)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.onWalk = func(oid string) {
+		if oid == at {
+			cancel()
+		}
+	}
+	c.clientFactory = walkerFactory(w)
+	require.ErrorIs(t, c.CollectTarget(ctx, mustTarget(interruptHost), mustAuth(), policy, DialOptions{}),
+		context.Canceled)
+	return w
+}
+
+// expirePollWindows backdates every poll window a device holds, so a test can
+// reach the cycle on which its throttled declaration is due again without
+// waiting out poll_time_sec.
+func expirePollWindows(c *MetricsCollector, policy string) {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	windows := c.pollState[testKey(policy, interruptHost)]
+	for decl, at := range windows {
+		windows[decl] = at.Add(-time.Hour)
+	}
 }
 
 // interruptionCount reads a device's consecutive-interruption count and whether
@@ -1721,6 +1771,97 @@ func TestForgetPolicyAndClose_DropTheInterruptionCounts(t *testing.T) {
 	left := len(c.interruptedRuns)
 	c.interruptMu.Unlock()
 	assert.Zero(t, left, "Close must release the counts with the rest")
+}
+
+// A run cut short leaves the store it never published, so a declaration it
+// walked has a poll window open on a reading nothing can read. The window has
+// to go with the reading: this is the device's first run, so the series is
+// empty until the next cycle polls the declaration again.
+func TestCollectTarget_AnInterruptedRunDoesNotThrottleAReadingItNeverPublished(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+
+	w := runInterruptedAt(t, c, "p", interruptSysObj, interruptSlow, interruptionSlowValue)
+	require.Contains(t, w.walkCalls, interruptSlow,
+		"the run has to reach the throttled declaration for this to test anything")
+	require.Nil(t, c.testDeviceStore("p", interruptHost), "an interrupted run publishes no store")
+
+	w = runCollection(t, c, "p", interruptSysObj)
+
+	assert.Contains(t, w.walkCalls, interruptSlow,
+		"the interrupted run published no reading for the declaration it walked, so the next cycle must poll it again")
+	assert.Len(t, c.testDeviceStore("p", interruptHost)["snmp.slowmetric"], 1,
+		"a window kept for an unpublished reading leaves the series empty for the whole poll period")
+}
+
+// The same in steady state: the series already carries a reading, and a window
+// kept for the reading the interrupted run never published freezes it at the
+// value before, for as long as poll_time_sec says.
+func TestCollectTarget_AnInterruptedRunDoesNotHoldASeriesAtTheReadingBeforeIt(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollectionValued(t, c, "p", interruptSysObj, 7)
+	require.Equal(t, int64(7), c.testDeviceStore("p", interruptHost)["snmp.slowmetric"][0].value)
+
+	// The window this run opened has run out, so the declaration is due again.
+	expirePollWindows(c, "p")
+	w := runInterruptedAt(t, c, "p", interruptSysObj, interruptSlow, 8)
+	require.Contains(t, w.walkCalls, interruptSlow,
+		"the run has to reach the throttled declaration for this to test anything")
+
+	w = runCollectionValued(t, c, "p", interruptSysObj, 9)
+
+	assert.Contains(t, w.walkCalls, interruptSlow,
+		"a reading walked by an interrupted run never reached the store, so it cannot throttle the next cycle")
+	assert.Equal(t, int64(9), c.testDeviceStore("p", interruptHost)["snmp.slowmetric"][0].value,
+		"the series must carry this cycle's reading, not the one the interrupted run replaced nothing with")
+}
+
+// The other half of the same rule, and what tells this apart from clearing the
+// windows outright: an interrupted run keeps every window that existed before
+// it, so a declaration it was right to skip stays skipped. Without this the
+// cycle after an overrun re-polls the whole profile, which is the most
+// expensive cycle it can produce and the one most likely to overrun again.
+func TestCollectTarget_AnInterruptedRunKeepsAWindowItDidNotWalk(t *testing.T) {
+	c := newCollector(nil, interruptionProfile(interruptSysObj, "interrupted.yml"))
+	runCollectionValued(t, c, "p", interruptSysObj, 7)
+
+	// Cut short after the declaration polled every cycle, which is the last of
+	// the profile. The throttled one is not due, so this run never walks it.
+	w := runInterruptedAt(t, c, "p", interruptSysObj, interruptFast, 8)
+	require.NotContains(t, w.walkCalls, interruptSlow,
+		"the throttled declaration must not be due for this to test anything")
+
+	w = runCollection(t, c, "p", interruptSysObj)
+
+	assert.NotContains(t, w.walkCalls, interruptSlow,
+		"the window belongs to the run before the interrupted one, which published the reading it carries")
+	assert.Contains(t, w.walkCalls, interruptFast, "a declaration with no window is still polled")
+	assert.Equal(t, int64(7), c.testDeviceStore("p", interruptHost)["snmp.slowmetric"][0].value,
+		"the surviving window carries forward the reading that opened it")
+}
+
+// The windows a run keeps are the ones the device it is polling left. A device
+// replaced at the address matches another profile, and every declaration the
+// two profiles share has one declaration key, so windows carried across the
+// change would throttle the new device against the old one's readings, which
+// went with it.
+func TestCollectTarget_AnInterruptedRunKeepsNoWindowOfTheDeviceItReplaced(t *testing.T) {
+	c := newCollectorWithProfiles(nil,
+		interruptionProfile(interruptSysObj, "a.yml"),
+		interruptionProfile(interruptSysObjB, "b.yml"))
+	runCollectionValued(t, c, "p", interruptSysObj, 7)
+
+	// The address now answers as a device the other profile covers, and the run
+	// is cut short after both declarations have been walked.
+	w := runInterruptedAt(t, c, "p", interruptSysObjB, interruptFast, 8)
+	require.Contains(t, w.walkCalls, interruptSlow,
+		"the profile change drops the windows, so this run finds every declaration due")
+
+	w = runCollectionValued(t, c, "p", interruptSysObjB, 9)
+
+	assert.Contains(t, w.walkCalls, interruptSlow,
+		"the new device has no reading of its own yet, so nothing may throttle its first one")
+	assert.Equal(t, int64(9), c.testDeviceStore("p", interruptHost)["snmp.slowmetric"][0].value,
+		"the series must carry the new device's reading")
 }
 
 // ---------------------------------------------------------------------------
