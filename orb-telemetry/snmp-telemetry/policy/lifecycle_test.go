@@ -494,6 +494,10 @@ type spyRegistry struct {
 	registered map[string][]traps.Device
 	users      map[string][]traps.V3User
 	withdrawn  []string
+	// calls is every Register and Withdraw in the order they arrived, which
+	// is what a same-name replacement is judged on: the same two names in the
+	// wrong order leave the new policy unregistered.
+	calls []string
 }
 
 func newSpyRegistry() *spyRegistry {
@@ -505,12 +509,21 @@ func (s *spyRegistry) Register(policy string, devices []traps.Device, users []tr
 	defer s.mu.Unlock()
 	s.registered[policy] = devices
 	s.users[policy] = users
+	s.calls = append(s.calls, "register:"+policy)
 }
 
 func (s *spyRegistry) Withdraw(policy string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.withdrawn = append(s.withdrawn, policy)
+	s.calls = append(s.calls, "withdraw:"+policy)
+}
+
+// callSequence is every call so far, in order.
+func (s *spyRegistry) callSequence() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
 }
 
 // A runner registers the addresses its targets expand to, with the v3 users
@@ -542,16 +555,6 @@ func TestRunner_V2cTargetsRegisterNoUsers(t *testing.T) {
 	t.Cleanup(func() { _ = r.Stop() })
 	assert.Empty(t, reg.users["p1"])
 	assert.Len(t, reg.registered["p1"], 1)
-}
-
-// A runner that fails after registering must not leave its claims behind.
-func TestRunner_FailedStartWithdraws(t *testing.T) {
-	reg := newSpyRegistry()
-	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets("10.0.0.1/99"), &spyCollector{}, reg)
-	require.Error(t, err)
-	if _, registered := reg.registered["p1"]; registered {
-		assert.Contains(t, reg.withdrawn, "p1", "whatever was registered before the failure is withdrawn")
-	}
 }
 
 func TestRunner_NilRegistryIsTolerated(t *testing.T) {

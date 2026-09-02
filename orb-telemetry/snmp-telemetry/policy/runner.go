@@ -408,8 +408,16 @@ func (r *Runner) Start() {
 // not cut it short. StopJobs then has a wait it can finish, and it comes before
 // the state is dropped so a run is not still writing when the drop happens.
 // Shutdown runs whatever StopJobs reported, rather than leaving the scheduler
-// behind when a job overran. ForgetPolicy comes last and unconditionally, so
-// the policy stops exporting even if the scheduler did not unwind cleanly.
+// behind when a job overran. ForgetPolicy and the trap withdrawal come last
+// and unconditionally, so the policy stops exporting either kind of series
+// even if the scheduler did not unwind cleanly.
+//
+// The withdrawal lives here, at the end of Stop, rather than in the manager
+// after Stop returns, because the manager holds the stopping policy's name
+// reservation for exactly as long as Stop runs. A same-name replacement
+// therefore cannot start and register until the withdrawal has already
+// happened, so it cannot have its own registration erased by the outgoing
+// runner's.
 func (r *Runner) Stop() error {
 	r.cancel()
 	err := r.scheduler.StopJobs()

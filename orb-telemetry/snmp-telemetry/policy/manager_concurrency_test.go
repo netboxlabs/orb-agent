@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
@@ -261,4 +262,43 @@ func TestStopPolicyHandle_AHandleWithNoRunnerStopsNothing(t *testing.T) {
 		require.True(t, m.HasPolicy("p1"))
 		require.NoError(t, m.Stop())
 	}
+}
+
+// The sibling of the test above, on the mark a replacement leaves in the trap
+// registry rather than on the name it takes. The withdrawal is the last thing
+// Runner.Stop does and the manager holds the stopping reservation until Stop
+// returns, so the two calls can only arrive in one order: the replacement's
+// registration is the registry's last word for the name, not a withdrawal
+// arriving late and erasing it.
+func TestStopPolicy_SameNameReplacementEndsRegistered(t *testing.T) {
+	reg := newSpyRegistry()
+	m := NewManager(context.Background(), testLogger, Options{TrapRegistry: reg})
+	_, err := m.acquireCollector("")
+	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector("") })
+
+	gate := newGatedCollector()
+	t.Cleanup(gate.unblock)
+
+	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate, reg)
+	require.NoError(t, err)
+	r.Start()
+	m.policies["p1"] = r
+	require.Equal(t, []string{"register:p1"}, reg.callSequence())
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- m.StopPolicy("p1") }()
+	<-gate.entered
+
+	started := make(chan error, 1)
+	go func() { started <- m.StartPolicy("p1", minimalPolicy(v2cAuth())) }()
+
+	gate.unblock()
+	require.NoError(t, <-stopped)
+	require.NoError(t, <-started)
+	require.True(t, m.HasPolicy("p1"))
+
+	assert.Equal(t, []string{"register:p1", "withdraw:p1", "register:p1"}, reg.callSequence(),
+		"the replacement registers after the withdrawal, and exactly once")
+	require.NoError(t, m.Stop())
 }
