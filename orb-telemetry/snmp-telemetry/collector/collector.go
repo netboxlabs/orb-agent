@@ -656,19 +656,33 @@ func reservedTagName(name string) bool {
 }
 
 // maxInterruptedRuns bounds how many consecutive runs cut short by their own
-// context a device keeps its state through. Reaching it forgets the device, so
-// its readings are at most this many metrics_interval old.
+// context a device keeps its state through. Reaching it forgets the device.
 //
-// A constant rather than a policy field: it is a safety bound on staleness
-// rather than a knob, and three cycles is short enough that a device whose runs
-// keep overrunning still disappears within a few of them.
+// The bound counts attempts, not elapsed time, and the two are not
+// interchangeable here. A run's deadline is the whole metrics_interval, so an
+// interrupted run occupies its entire cycle, and the scheduler runs each target
+// under gocron.LimitModeReschedule, which drops a tick that arrives while the
+// previous run is still going rather than queueing it. Consecutive interrupted
+// attempts are therefore spaced further apart than one interval, and a reading
+// can outlive this many intervals of wall clock. Anything needing a real
+// maximum age would have to measure time rather than count attempts.
+//
+// Counting attempts is what this bound is for. The failure it exists to break
+// is a feedback loop, where forgetting a device clears its poll windows and
+// makes the next cycle the most expensive one the profile can produce, which
+// makes the next overrun likelier. That loop advances per attempt, so attempts
+// are the unit that matches it.
+//
+// A constant rather than a policy field: it is a safety bound rather than a
+// knob, and three attempts is few enough that a device whose runs keep
+// overrunning still disappears rather than exporting a stale reading forever.
 const maxInterruptedRuns = 3
 
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
 // A run that the device failed leaves nothing behind for the device it was
-// polling; a run the collector cut short keeps what the device left, up to
-// maxInterruptedRuns cycles running.
+// polling; a run the collector cut short keeps what the device left, for up to
+// maxInterruptedRuns consecutive such runs.
 func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial DialOptions) error {
 	key := deviceKey{policy: policyName, host: target.Host, port: target.Port, id: target.ID}
 	if auth != nil {
