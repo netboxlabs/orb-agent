@@ -175,6 +175,7 @@ func TestDecode_V3EmptyIdentityIsUnauthenticated(t *testing.T) {
 		// AuthPriv so the identity check is what rejects these, not the flags.
 		p := &gosnmp.SnmpPacket{
 			Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: gosnmp.AuthPriv,
+			SecurityModel:      gosnmp.UserSecurityModel,
 			SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: tc.user, AuthoritativeEngineID: tc.engine},
 			Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
 		}
@@ -186,6 +187,7 @@ func TestDecode_V3EmptyIdentityIsUnauthenticated(t *testing.T) {
 func TestDecode_V3WithIdentityDecodes(t *testing.T) {
 	p := &gosnmp.SnmpPacket{
 		Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: gosnmp.AuthPriv,
+		SecurityModel:      gosnmp.UserSecurityModel,
 		SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: "u", AuthoritativeEngineID: "\x80\x00\x00\x00\x01"},
 		Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
 	}
@@ -212,6 +214,7 @@ func TestDecode_V3NoAuthFlagIsUnauthenticated(t *testing.T) {
 	} {
 		p := &gosnmp.SnmpPacket{
 			Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: tc.flags,
+			SecurityModel:      gosnmp.UserSecurityModel,
 			SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: "u", AuthoritativeEngineID: "\x80\x00\x00\x00\x01"},
 			Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
 		}
@@ -224,4 +227,23 @@ func TestDecode_V3WithoutUSMParamsIsUnauthenticated(t *testing.T) {
 	p := &gosnmp.SnmpPacket{Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, Variables: []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)}}
 	_, reason := Decode(p)
 	assert.Equal(t, DropV3Unauthenticated, reason)
+}
+
+// F15: gosnmp runs testAuthentication only when the packet's msgSecurityModel
+// is the user security model (trap.go:529-535), and that field is read
+// straight off the wire (v3.go:423). A sender that names any other model has
+// its packet parsed with no authentication at all while its security
+// parameters still carry a wire username and engine ID, so every other guard
+// here passes. Only the USM is authenticated, so only the USM is counted.
+func TestDecode_V3NonUSMSecurityModelIsUnauthenticated(t *testing.T) {
+	for _, model := range []gosnmp.SnmpV3SecurityModel{1, 2, 4} {
+		p := &gosnmp.SnmpPacket{
+			Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: gosnmp.AuthPriv,
+			SecurityModel:      model,
+			SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: "u", AuthoritativeEngineID: "\x80\x00\x00\x00\x01"},
+			Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
+		}
+		_, reason := Decode(p)
+		assert.Equal(t, DropV3Unauthenticated, reason, "security model %d", model)
+	}
 }

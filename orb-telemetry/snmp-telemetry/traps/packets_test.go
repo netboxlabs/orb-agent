@@ -72,19 +72,48 @@ func v1Trap(community string, agentAddr [4]byte, generic, specific int) []byte {
 	return tlv(0x30, cat(berInt(0), berOctets(community), pdu))
 }
 
-// v3Unauthenticated builds a version 3 packet with noAuthNoPriv message
-// flags, no authentication parameters, and a plaintext scoped PDU carrying a
-// trap. The username is a parameter because gosnmp looks the datagram's
-// username up in its credential table before it parses anything else, so only
-// a name the registry knows reaches the parser at all; the engine ID is a
-// parameter because F1 has two shapes. Empty gives the RFC 3414 engine
-// discovery shape. Non-empty gives the residual: gosnmp verifies no digest
-// when the flags do not ask it to, so a sender naming a known user is not
-// authenticated either way.
+// v3Options describes a version 3 datagram to build. Every field is on the
+// wire rather than derived, because the receiver's v3 guards are all about
+// what a sender can choose to write there.
+type v3Options struct {
+	// username is a parameter because gosnmp looks the datagram's username up
+	// in its credential table before it parses anything else, so only a name
+	// the registry knows reaches the parser at all.
+	username string
+	// engineID is a parameter because F1 has two shapes. Empty gives the RFC
+	// 3414 engine discovery shape; non-empty gives its residual.
+	engineID string
+	// secModel is msgSecurityModel. 3 is the user security model, the only one
+	// gosnmp authenticates (F15).
+	secModel int
+	// flags is msgFlags. 0x01 is the auth bit, 0x03 authPriv.
+	flags byte
+	// authParamLen sizes msgAuthenticationParameters. SHA wants 12 bytes, and
+	// gosnmp writes that many back into the buffer when the auth bit is set.
+	authParamLen int
+	// truncateAfterUSM cuts the datagram off right after the USM parameter
+	// block, leaving no scoped PDU (F16).
+	truncateAfterUSM bool
+}
+
+// v3Packet builds a version 3 datagram with a plaintext scoped PDU carrying a
+// linkDown trap, unless it is truncated.
+func v3Packet(o v3Options) []byte {
+	authParams := make([]byte, o.authParamLen)
+	usm := tlv(0x30, cat(berOctets(o.engineID), berInt(0), berInt(0), berOctets(o.username), tlv(0x04, authParams), berOctets("")))
+	globalData := tlv(0x30, cat(berInt(1), tlv(0x02, []byte{0x7f}), tlv(0x04, []byte{o.flags}), berInt(o.secModel)))
+	body := cat(berInt(3), globalData, tlv(0x04, usm))
+	if !o.truncateAfterUSM {
+		pdu := tlv(0xa7, cat(berInt(1), berInt(0), berInt(0), linkDownVarbinds()))
+		body = cat(body, tlv(0x30, cat(berOctets(""), berOctets(""), pdu)))
+	}
+	return tlv(0x30, body)
+}
+
+// v3Unauthenticated is the noAuthNoPriv shape under the user security model:
+// no authentication parameters, and gosnmp verifies no digest when the flags
+// do not ask it to, so a sender naming a known user is not authenticated
+// either way.
 func v3Unauthenticated(username, engineID string) []byte {
-	usm := tlv(0x30, cat(berOctets(engineID), berInt(0), berInt(0), berOctets(username), berOctets(""), berOctets("")))
-	globalData := tlv(0x30, cat(berInt(1), tlv(0x02, []byte{0x7f}), tlv(0x04, []byte{0x00}), berInt(3)))
-	pdu := tlv(0xa7, cat(berInt(1), berInt(0), berInt(0), linkDownVarbinds()))
-	scoped := tlv(0x30, cat(berOctets(""), berOctets(""), pdu))
-	return tlv(0x30, cat(berInt(3), globalData, tlv(0x04, usm), scoped))
+	return v3Packet(v3Options{username: username, engineID: engineID, secModel: 3})
 }

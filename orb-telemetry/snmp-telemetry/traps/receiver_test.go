@@ -168,6 +168,25 @@ func TestReceiver_RejectsV3WithoutTheAuthFlag(t *testing.T) {
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3))
 }
 
+// F15, end to end: gosnmp authenticates only a packet whose msgSecurityModel
+// is the user security model, and that field is read straight off the wire.
+// A sender that names any other model gets the auth bit believed without a
+// digest ever being verified, while its security parameters still carry a
+// username and engine ID, so every other guard passes.
+func TestReceiver_RejectsV3WithANonUSMSecurityModel(t *testing.T) {
+	h := newHarness(t, false)
+	src := h.registerSender(t, "core", trapUser)
+	h.send(t, v3Packet(v3Options{
+		username:     "trapuser",
+		engineID:     "\x80\x00\x1f\x88\x80",
+		secModel:     1,
+		flags:        0x01,
+		authParamLen: 12,
+	}))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3Unauthenticated) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3))
+}
+
 func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
 	h := newHarness(t, false)
 	src := h.registerSender(t, "core")

@@ -76,6 +76,17 @@ func Decode(p *gosnmp.SnmpPacket) (Trap, DropReason) {
 		// authoritative engine ID are both empty, the RFC 3414 engine discovery
 		// shape. No legitimate trap has it, and a trap that reached here with
 		// it was not authenticated whatever gosnmp returned.
+		// F15: gosnmp runs testAuthentication only for a packet whose
+		// msgSecurityModel is the user security model (trap.go:529-535), and
+		// that field is read straight off the wire (v3.go:423). Under any
+		// other model the packet is parsed with no authentication at all,
+		// while its security parameters still carry the wire username and
+		// engine ID, so every guard below would pass. The USM is the only
+		// security model this backend has credentials for, so it is the only
+		// one a trap can be authenticated under.
+		if p.SecurityModel != gosnmp.UserSecurityModel {
+			return Trap{}, DropV3Unauthenticated
+		}
 		sp, ok := p.SecurityParameters.(*gosnmp.UsmSecurityParameters)
 		if !ok || sp.UserName == "" || sp.AuthoritativeEngineID == "" {
 			return Trap{}, DropV3Unauthenticated
