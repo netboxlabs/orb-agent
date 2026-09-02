@@ -42,6 +42,11 @@ type stopper interface {
 	Stop()
 }
 
+// closer is the part of the tally the shutdown sequence uses.
+type closer interface {
+	Close()
+}
+
 // shutdown unwinds the process in the order the export and the runners need.
 //
 // The flush comes first, before anything has been cancelled. Every runner
@@ -175,8 +180,17 @@ func main() {
 
 	serverErrCh := srv.Start()
 
+	// trapReceiver is a *traps.Receiver; assigning it to stopAll.receiver only
+	// when it is non-nil keeps a nil case out of the interface, since a typed
+	// nil pointer stored in an interface is itself non-nil and would defeat
+	// stopAll.Stop's "if s.receiver != nil" guard.
+	shutdownStopper := stopAll{tally: trapTally, server: srv}
+	if trapReceiver != nil {
+		shutdownStopper.receiver = trapReceiver
+	}
+
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
-		shutdown(cancelFunc, stopAll{receiver: trapReceiver, tally: trapTally, server: srv}, shutdownMetrics)
+		shutdown(cancelFunc, shutdownStopper, shutdownMetrics)
 	})
 }
 
@@ -211,8 +225,8 @@ func startTrapReceiver(listen, profilesDir string, acceptUnknown bool, registry 
 // the export callback reads, so the flush carried everything counted whether
 // or not the receiver was still running.
 type stopAll struct {
-	receiver *traps.Receiver
-	tally    *traps.Tally
+	receiver stopper
+	tally    closer
 	server   stopper
 }
 

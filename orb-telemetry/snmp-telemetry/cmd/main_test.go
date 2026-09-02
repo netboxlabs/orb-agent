@@ -357,11 +357,34 @@ func TestTrapListenBindFailureIsAnError(t *testing.T) {
 	require.Error(t, err, "a bind failure is reported, not logged from a goroutine")
 }
 
-// The receiver stops with the server, after the flush, so the final export
-// still holds everything counted and the stop spends none of its budget.
-func TestShutdownStopsTheTrapReceiverAfterTheFlush(t *testing.T) {
-	var order []string
-	srv := stopFunc(func() { order = append(order, "stop") })
-	shutdown(func() { order = append(order, "cancel") }, srv, func() { order = append(order, "flush") })
-	assert.Equal(t, []string{"flush", "cancel", "stop"}, order)
+// closeFunc adapts a function to the closer stopAll's tally field takes.
+type closeFunc func()
+
+func (f closeFunc) Close() { f() }
+
+// stopAll stops the receiver, then closes the tally, then stops the server.
+// shutdown's own flush, cancel, stop order is a separate concern, already
+// pinned by TestShutdownCancelsRootBetweenTheFlushAndTheServerStop; this test
+// is only about the sequence stopAll.Stop itself encodes.
+func TestStopAllOrder(t *testing.T) {
+	t.Run("with a receiver", func(t *testing.T) {
+		var order []string
+		sa := stopAll{
+			receiver: stopFunc(func() { order = append(order, "receiver") }),
+			tally:    closeFunc(func() { order = append(order, "tally") }),
+			server:   stopFunc(func() { order = append(order, "server") }),
+		}
+		sa.Stop()
+		assert.Equal(t, []string{"receiver", "tally", "server"}, order)
+	})
+
+	t.Run("without a receiver", func(t *testing.T) {
+		var order []string
+		sa := stopAll{
+			tally:  closeFunc(func() { order = append(order, "tally") }),
+			server: stopFunc(func() { order = append(order, "server") }),
+		}
+		assert.NotPanics(t, sa.Stop)
+		assert.Equal(t, []string{"tally", "server"}, order)
+	})
 }
