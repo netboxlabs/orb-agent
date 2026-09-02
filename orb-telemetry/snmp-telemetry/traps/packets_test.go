@@ -72,15 +72,17 @@ func v1Trap(community string, agentAddr [4]byte, generic, specific int) []byte {
 	return tlv(0x30, cat(berInt(0), berOctets(community), pdu))
 }
 
-// v3Unauthenticated is the engine discovery shape: version 3, an empty
-// authoritative engine ID, noAuthNoPriv flags, no authentication parameters,
-// and a plaintext scoped PDU carrying a trap. The username is a parameter
-// because gosnmp looks the datagram's username up in its credential table
-// before it parses anything else, so only a name the registry knows reaches
-// the parser at all. F1: gosnmp then accepts the packet without
-// authenticating it.
-func v3Unauthenticated(username string) []byte {
-	usm := tlv(0x30, cat(berOctets(""), berInt(0), berInt(0), berOctets(username), berOctets(""), berOctets("")))
+// v3Unauthenticated builds a version 3 packet with noAuthNoPriv message
+// flags, no authentication parameters, and a plaintext scoped PDU carrying a
+// trap. The username is a parameter because gosnmp looks the datagram's
+// username up in its credential table before it parses anything else, so only
+// a name the registry knows reaches the parser at all; the engine ID is a
+// parameter because F1 has two shapes. Empty gives the RFC 3414 engine
+// discovery shape. Non-empty gives the residual: gosnmp verifies no digest
+// when the flags do not ask it to, so a sender naming a known user is not
+// authenticated either way.
+func v3Unauthenticated(username, engineID string) []byte {
+	usm := tlv(0x30, cat(berOctets(engineID), berInt(0), berInt(0), berOctets(username), berOctets(""), berOctets("")))
 	globalData := tlv(0x30, cat(berInt(1), tlv(0x02, []byte{0x7f}), tlv(0x04, []byte{0x00}), berInt(3)))
 	pdu := tlv(0xa7, cat(berInt(1), berInt(0), berInt(0), linkDownVarbinds()))
 	scoped := tlv(0x30, cat(berOctets(""), berOctets(""), pdu))

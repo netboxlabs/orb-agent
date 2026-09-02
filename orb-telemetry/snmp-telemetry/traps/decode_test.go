@@ -172,8 +172,9 @@ func TestDecode_V1CarriesAgentAddrWhenSet(t *testing.T) {
 // shape, so it is rejected here regardless of what gosnmp did.
 func TestDecode_V3EmptyIdentityIsUnauthenticated(t *testing.T) {
 	for _, tc := range []struct{ user, engine string }{{"", ""}, {"", "engine"}, {"user", ""}} {
+		// AuthPriv so the identity check is what rejects these, not the flags.
 		p := &gosnmp.SnmpPacket{
-			Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap,
+			Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: gosnmp.AuthPriv,
 			SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: tc.user, AuthoritativeEngineID: tc.engine},
 			Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
 		}
@@ -184,7 +185,7 @@ func TestDecode_V3EmptyIdentityIsUnauthenticated(t *testing.T) {
 
 func TestDecode_V3WithIdentityDecodes(t *testing.T) {
 	p := &gosnmp.SnmpPacket{
-		Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap,
+		Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: gosnmp.AuthPriv,
 		SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: "u", AuthoritativeEngineID: "\x80\x00\x00\x00\x01"},
 		Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
 	}
@@ -192,6 +193,31 @@ func TestDecode_V3WithIdentityDecodes(t *testing.T) {
 	require.Empty(t, reason)
 	assert.Equal(t, V3, tr.Version)
 	assert.Equal(t, "1.3.6.1.6.3.1.1.5.3", tr.OID)
+}
+
+// F1's residual: gosnmp verifies a digest only when the wire message flags
+// carry the auth bit, and skips the check entirely when they do not. A
+// username is in the policy and in any captured traffic, so an identity check
+// alone lets a sender clear the bit and be believed. Both authenticated levels
+// are accepted; noAuthNoPriv is not.
+func TestDecode_V3NoAuthFlagIsUnauthenticated(t *testing.T) {
+	for _, tc := range []struct {
+		flags gosnmp.SnmpV3MsgFlags
+		want  DropReason
+	}{
+		{gosnmp.NoAuthNoPriv, DropV3Unauthenticated},
+		{gosnmp.NoAuthNoPriv | gosnmp.Reportable, DropV3Unauthenticated},
+		{gosnmp.AuthNoPriv, ""},
+		{gosnmp.AuthPriv, ""},
+	} {
+		p := &gosnmp.SnmpPacket{
+			Version: gosnmp.Version3, PDUType: gosnmp.SNMPv2Trap, MsgFlags: tc.flags,
+			SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: "u", AuthoritativeEngineID: "\x80\x00\x00\x00\x01"},
+			Variables:          []gosnmp.SnmpPDU{oidVar(trapOIDInstanceDotted, linkDownDotted)},
+		}
+		_, reason := Decode(p)
+		assert.Equal(t, tc.want, reason, "flags=%s", tc.flags)
+	}
 }
 
 func TestDecode_V3WithoutUSMParamsIsUnauthenticated(t *testing.T) {

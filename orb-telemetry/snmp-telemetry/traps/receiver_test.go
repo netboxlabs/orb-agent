@@ -130,18 +130,35 @@ func TestReceiver_RejectsANonTrapPDU(t *testing.T) {
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnsupportedPDU) })
 }
 
+// trapUser is the credential the v3 tests register. gosnmp selects security
+// parameters by username before it parses, so a v3 packet only reaches the
+// parser under a name the registry holds.
+var trapUser = V3User{
+	Username:       "trapuser",
+	AuthProtocol:   "SHA",
+	AuthPassphrase: "authpassphrase",
+	PrivProtocol:   "NoPriv",
+}
+
 // F1, end to end: the engine discovery shape reaches gosnmp's parser and is
 // accepted there, and is rejected here.
 func TestReceiver_RejectsUnauthenticatedV3(t *testing.T) {
 	h := newHarness(t, false)
-	h.registerSender(t, "core", V3User{
-		Username:       "trapuser",
-		AuthProtocol:   "SHA",
-		AuthPassphrase: "authpassphrase",
-		PrivProtocol:   "NoPriv",
-	})
-	h.send(t, v3Unauthenticated("trapuser"))
+	h.registerSender(t, "core", trapUser)
+	h.send(t, v3Unauthenticated("trapuser", ""))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3Unauthenticated) })
+}
+
+// F1's residual, end to end: a username is not a secret, so naming a known
+// user with any engine ID and noAuthNoPriv flags satisfies the identity check
+// while gosnmp verifies no digest at all. Nothing about that packet was
+// authenticated, so it must not be counted as a v3 trap.
+func TestReceiver_RejectsV3WithoutTheAuthFlag(t *testing.T) {
+	h := newHarness(t, false)
+	src := h.registerSender(t, "core", trapUser)
+	h.send(t, v3Unauthenticated("trapuser", "\x80\x00\x1f\x88\x80"))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3Unauthenticated) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3))
 }
 
 func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {

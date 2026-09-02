@@ -80,6 +80,17 @@ func Decode(p *gosnmp.SnmpPacket) (Trap, DropReason) {
 		if !ok || sp.UserName == "" || sp.AuthoritativeEngineID == "" {
 			return Trap{}, DropV3Unauthenticated
 		}
+		// The residual of the same finding: gosnmp authenticates only a packet
+		// that asks to be. It verifies the digest when the wire message flags
+		// carry the auth bit and skips the check entirely when they do not. A
+		// username is in the policy and in any captured traffic, so an identity
+		// check alone leaves a sender free to name a known user, clear the bit,
+		// and be believed. Such a trap is exactly as unauthenticated as a v2c
+		// one and must not be counted as v3. authNoPriv and authPriv both carry
+		// the bit; noAuthNoPriv does not.
+		if p.MsgFlags&gosnmp.AuthNoPriv == 0 {
+			return Trap{}, DropV3Unauthenticated
+		}
 		return decodeV2(p, V3)
 	default:
 		return decodeV2(p, V2c)
