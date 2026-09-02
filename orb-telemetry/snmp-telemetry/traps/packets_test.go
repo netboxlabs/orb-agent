@@ -1,5 +1,14 @@
 package traps
 
+import (
+	"testing"
+
+	"github.com/gosnmp/gosnmp"
+	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
+)
+
 // BER helpers for hand-built SNMP datagrams. Short-form lengths only, which
 // keeps every packet under 128 bytes and the encoder trivial.
 
@@ -116,4 +125,50 @@ func v3Packet(o v3Options) []byte {
 // either way.
 func v3Unauthenticated(username, engineID string) []byte {
 	return v3Packet(v3Options{username: username, engineID: engineID, secModel: 3})
+}
+
+// v3AuthPrivTrap marshals a genuinely authenticated and encrypted version 3
+// trap through gosnmp's own marshaller, so the acceptance path is exercised
+// against a packet built the way a device builds one, with a real digest over
+// the wire bytes and a real encrypted scoped PDU, rather than against a shape
+// assembled by hand here.
+func v3AuthPrivTrap(t *testing.T, u V3User, engineID string) []byte {
+	t.Helper()
+	authProto, err := snmp.AuthProtocol(u.AuthProtocol)
+	require.NoError(t, err)
+	privProto, err := snmp.PrivProtocol(u.PrivProtocol)
+	require.NoError(t, err)
+
+	logger := gosnmp.NewLogger(nil)
+	sp := &gosnmp.UsmSecurityParameters{
+		UserName:                 u.Username,
+		AuthenticationProtocol:   authProto,
+		AuthenticationPassphrase: u.AuthPassphrase,
+		PrivacyProtocol:          privProto,
+		PrivacyPassphrase:        u.PrivPassphrase,
+		AuthoritativeEngineID:    engineID,
+		AuthoritativeEngineBoots: 1,
+		AuthoritativeEngineTime:  1,
+		Logger:                   logger,
+	}
+	require.NoError(t, sp.InitSecurityKeys())
+
+	pkt := &gosnmp.SnmpPacket{
+		Version:            gosnmp.Version3,
+		MsgFlags:           gosnmp.AuthPriv,
+		SecurityModel:      gosnmp.UserSecurityModel,
+		SecurityParameters: sp,
+		MsgID:              1,
+		ContextEngineID:    engineID,
+		PDUType:            gosnmp.SNMPv2Trap,
+		RequestID:          1,
+		Logger:             logger,
+		Variables: []gosnmp.SnmpPDU{
+			{Name: ".1.3.6.1.2.1.1.3.0", Type: gosnmp.TimeTicks, Value: uint32(0)},
+			{Name: ".1.3.6.1.6.3.1.1.4.1.0", Type: gosnmp.ObjectIdentifier, Value: ".1.3.6.1.6.3.1.1.5.3"},
+		},
+	}
+	out, err := pkt.MarshalMsg()
+	require.NoError(t, err)
+	return out
 }

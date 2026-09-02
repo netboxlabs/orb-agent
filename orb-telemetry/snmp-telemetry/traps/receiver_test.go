@@ -211,6 +211,32 @@ func TestReceiver_SurvivesAV3DatagramThatPanicsTheParser(t *testing.T) {
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
 }
 
+// trapAuthPrivUser is the credential the acceptance test registers. SHA and
+// AES, the pair a real authPriv target is configured with.
+var trapAuthPrivUser = V3User{
+	Username:       "authprivuser",
+	AuthProtocol:   "SHA",
+	AuthPassphrase: "authpassphrase",
+	PrivProtocol:   "AES",
+	PrivPassphrase: "privpassphrase",
+}
+
+// The load-bearing acceptance path: a v3 trap a policy's own credentials
+// authenticate is counted. Every other v3 test here asserts a drop, so
+// without this one rebuildUsersIfChanged, the protocol name mapping, gosnmp's
+// credential table and the generation rebuild are all unverified against a
+// packet that is supposed to be accepted. The packet is marshalled by gosnmp
+// itself, digest and encrypted scoped PDU included.
+func TestReceiver_AcceptsAnAuthenticatedV3Trap(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	h := newHarness(t, false)
+	src := h.registerSender(t, "core", trapAuthPrivUser)
+	h.send(t, v3AuthPrivTrap(t, trapAuthPrivUser, engineID))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3Unauthenticated))
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
+}
+
 func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
 	h := newHarness(t, false)
 	src := h.registerSender(t, "core")
