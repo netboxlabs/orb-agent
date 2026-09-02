@@ -284,13 +284,18 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 	defer delete(l.resolving, key)
 
 	merged := &Profile{
-		FileName:         p.FileName,
-		RelPath:          p.RelPath,
-		Origin:           p.Origin,
-		ReplacesBundled:  p.ReplacesBundled,
-		Provider:         p.Provider,
-		SysObjectID:      p.SysObjectID,
+		FileName:        p.FileName,
+		RelPath:         p.RelPath,
+		Origin:          p.Origin,
+		ReplacesBundled: p.ReplacesBundled,
+		Provider:        p.Provider,
+		SysObjectID:     p.SysObjectID,
+		// Both redirect forms are the declaring file's own. The extends
+		// merge below carries metrics and tags and touches neither, which is
+		// what upstream does too, so a redirect never crosses an extends edge
+		// and there is no parent list for a child's to interleave with.
 		Matches:          p.Matches,
+		MatchesList:      p.MatchesList,
 		NoUseBulkWalkAll: p.NoUseBulkWalkAll,
 	}
 

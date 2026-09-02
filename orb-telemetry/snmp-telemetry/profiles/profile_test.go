@@ -665,3 +665,32 @@ func TestSymbol_MetricName(t *testing.T) {
 	assert.Equal(t, "snmp.cpu", (&Symbol{Name: "hostLoad", Tag: "cpu"}).MetricName(),
 		"two export names differing only in case are one metric name")
 }
+
+// `matches_list` is the ordered spelling of a sysDescr redirect. Its entries
+// carry the pattern under `regex` and the destination under `target`, and the
+// order the file writes them in has to survive the decode.
+func TestProfile_MatchesListDecodesInDeclaredOrder(t *testing.T) {
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte(`
+matches_list:
+  - regex: "^first"
+    target: first.yml
+  - regex: "^second"
+    target: second.yml
+`), &p))
+
+	assert.Equal(t, []Match{
+		{Regex: "^first", Target: "first.yml"},
+		{Regex: "^second", Target: "second.yml"},
+	}, p.MatchesList)
+}
+
+// Two bundled profiles write the key with an empty sequence. That has to
+// decode to a list carrying nothing rather than to an error or an entry.
+func TestProfile_EmptyMatchesListDecodesToNoEntries(t *testing.T) {
+	var p Profile
+	require.NoError(t, yaml.Unmarshal([]byte("matches_list: []\n"), &p))
+
+	assert.NotNil(t, p.MatchesList, "the key is present, so the list is read")
+	assert.Empty(t, p.MatchesList, "and it carries no entry")
+}

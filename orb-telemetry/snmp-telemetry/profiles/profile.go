@@ -43,6 +43,14 @@ const (
 	OriginOverride Origin = "override"
 )
 
+// Match is one entry of the ordered `matches_list` form of a sysDescr
+// redirect: the pattern to test a device's sysDescr against, and the basename
+// of the profile a device it describes is collected with instead.
+type Match struct {
+	Regex  string `yaml:"regex"`
+	Target string `yaml:"target"`
+}
+
 // Profile is the top-level representation of a ktranslate-compatible SNMP profile file.
 type Profile struct {
 	// FileName is the base filename, populated by the Loader (not from YAML).
@@ -62,6 +70,13 @@ type Profile struct {
 	Provider    string            `yaml:"provider"`
 	SysObjectID StringOrSlice     `yaml:"sysobjectid"`
 	Matches     map[string]string `yaml:"matches"`
+	// MatchesList is the ordered spelling of the same sysDescr redirect
+	// Matches carries. It is not an alias: a map has no order, so a profile
+	// whose sysDescr satisfies two of its patterns has no stable answer under
+	// Matches alone, and this form is what a profile in that position is meant
+	// to use. Its entries are evaluated in the order written, and all of them
+	// before any Matches entry.
+	MatchesList []Match `yaml:"matches_list"`
 	// NoUseBulkWalkAll marks an agent that answers GETBULK badly or not at all.
 	// A profile that sets it is walked with GETNEXT, one request per value.
 	NoUseBulkWalkAll bool `yaml:"no_use_bulkwalkall"`
