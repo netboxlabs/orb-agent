@@ -44,12 +44,14 @@ type stopper interface {
 //
 // The flush comes first, before anything has been cancelled. Every runner
 // context derives from the root one, so cancelling it makes an in-flight
-// collection return a context error, and a collection that returns an error has
-// its device forgotten: the observations it had stored are deleted. A flush
-// placed after that cancellation races the deletion for exactly the readings it
-// is there to export, and a deletion that wins empties the final export.
-// Exporting first settles the race, since the store the flush reads still holds
-// every device.
+// collection return a context error, and a collection whose run was cut short
+// that way keeps its device only for a bounded number of consecutive
+// interruptions before the observations it had stored are deleted. A flush
+// placed after the cancellation therefore races that deletion for exactly the
+// readings it is there to export, on any device already interrupted on the
+// preceding cycles, and a deletion that wins empties the final export for it.
+// Exporting first settles the race for every device rather than for most of
+// them, since the store the flush reads still holds them all.
 //
 // The cancellation then comes before the server stop, which is what lets
 // srv.Stop return: stopping the server first would wait on collections that
