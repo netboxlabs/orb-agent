@@ -136,8 +136,11 @@ A trap is counted, not stored. Three metrics describe what arrived:
   `v3_unauthenticated` or `no_trap_oid`. Hostile v3 traffic lands under
   `malformed` when it names a username no policy carries and under
   `v3_unauthenticated` when it names a known one without asking to be
-  authenticated, and the second is the one worth alerting on, since it means
-  someone holds a valid username.
+  authenticated, and the second is the one worth looking at, since it may mean
+  someone holds a valid username. It has a benign cause too: a v3 target polled
+  at `noAuthNoPriv` is a supported configuration, and every trap it sends
+  carries no authentication either, so all of its traps are dropped under this
+  reason. This release cannot count them.
 - `snmp.traps_datagrams` counts every datagram read from the socket. Its gap
   against the other two is loss you cannot otherwise see.
 
@@ -146,6 +149,15 @@ the trap definitions bundled with the profiles, about two hundred names. Any
 other trap is labelled `other`. A raw OID never appears as a label, because a
 sender chooses its own trap OID and a metric label a sender controls is
 unbounded.
+
+There is still a ceiling on how many distinct series one metric can carry: ten
+thousand attribute sets per instrument, after which the SDK folds every new
+series into a single `otel.metric.overflow` bucket and the metric stops
+answering questions about any of them. Trap series are the product of the
+addresses your policies name, the trap names above and the three SNMP
+versions, so a policy naming a whole `/16` whose every host sends every kind of
+trap is past what that ceiling accommodates. Name the devices you expect traps
+from.
 
 **What the source address list is, and is not.** A trap from an address no
 running policy names is dropped and counted as `unknown_source`. That is a
@@ -158,7 +170,11 @@ backend visibly polls.
 
 `--trap-accept-unknown` counts traps from unknown addresses too, labelled by
 the source address with an empty `policy`. Informs from such addresses are
-counted but never acknowledged, so the socket does not answer strangers.
+counted but never acknowledged, so the socket does not answer strangers. A
+source address is spoofable, so the number of unknown addresses that get a
+`device_ip` of their own is capped at a thousand; every unknown source past
+that is still counted, under the `device_ip` value `other`. The flag is a
+debugging aid for a registration gap, not a way to watch the network.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
 authentication**, in which case the backend authenticates it with the USM user
