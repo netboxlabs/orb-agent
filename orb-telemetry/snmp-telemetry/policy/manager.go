@@ -729,15 +729,30 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		return err
 	}
 
-	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
-		return fmt.Errorf("metrics_interval must be a positive integer")
+	if policy.Scope.Traps != nil {
+		if err := validateTrapListen(policy.Scope.Traps.Listen); err != nil {
+			return err
+		}
 	}
-	// Both are turned into a Duration by multiplying by time.Second, which
-	// wraps to a small value past this bound. Rejected here so the request is
-	// refused with the field named, and again in NewRunner where the multiply
-	// happens.
-	if *policy.Config.MetricsInterval > maxPolicySeconds {
-		return fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+
+	// A policy with no interval polls nothing. That is a valid policy only
+	// when it receives traps; otherwise the API would report as running a
+	// policy that can never produce anything.
+	if policy.Config.MetricsInterval == nil {
+		if policy.Scope.Traps == nil {
+			return errors.New("policy has neither metrics_interval nor scope.traps: nothing to do")
+		}
+	} else {
+		if *policy.Config.MetricsInterval <= 0 {
+			return fmt.Errorf("metrics_interval must be a positive integer")
+		}
+		// Turned into a Duration by multiplying by time.Second, which wraps to
+		// a small value past this bound. Rejected here so the request is
+		// refused with the field named, and again in NewRunner where the
+		// multiply happens.
+		if *policy.Config.MetricsInterval > maxPolicySeconds {
+			return fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+		}
 	}
 
 	if policy.Config.SNMPTimeout < 0 {

@@ -30,6 +30,18 @@ type Policies struct {
 type Scope struct {
 	Targets        []Target       `yaml:"targets"`
 	Authentication Authentication `yaml:"authentication"`
+	// Traps, when present, has the policy receive SNMP traps and informs from
+	// the addresses its targets expand to. It lives under scope rather than
+	// config because it is a source the policy observes, beside the targets
+	// it polls and the credentials that verify a v3 trap.
+	Traps *Traps `yaml:"traps,omitempty"`
+}
+
+// Traps is a policy's trap reception. Listen is the host:port the socket
+// binds. Policies naming the same string share one socket; two spellings of
+// one port are two bind attempts and the second fails.
+type Traps struct {
+	Listen string `yaml:"listen"`
 }
 
 // Target represents a target host to collect metrics from
@@ -66,6 +78,9 @@ type PolicyConfig struct {
 	// context. Carrying the field without reading it made a policy asking to be
 	// polled at specific times poll continuously instead, and said nothing.
 	// Absent from this struct, it is reported as an unrecognised key.
+	//
+	// MetricsInterval is optional: a policy that omits it polls nothing, and
+	// must then declare scope.traps or it has nothing to do.
 	MetricsInterval *int   `yaml:"metrics_interval"`
 	ProfilesDir     string `yaml:"profiles_dir,omitempty"`
 	SNMPTimeout     int    `yaml:"snmp_timeout"`
