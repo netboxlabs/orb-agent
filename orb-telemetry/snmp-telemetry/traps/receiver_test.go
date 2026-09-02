@@ -266,6 +266,19 @@ func TestReceiver_V1AgentAddrIsIgnoredFromAnUnregisteredSender(t *testing.T) {
 	assert.Equal(t, int64(0), h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1))
 }
 
+// A datagram no parser can read, from an address a policy does name, is the
+// operator's own device sending something wrong, and lands in malformed
+// rather than in any of the source-shaped buckets. With the security model
+// guard in place this is also where hostile v3 under an unknown username
+// ends up, since gosnmp fails the credential lookup before it parses.
+func TestReceiver_MalformedFromARegisteredSourceIsCounted(t *testing.T) {
+	h := newHarness(t, false)
+	h.registerSender(t, "core")
+	h.send(t, []byte{0x30, 0x01, 0xff})
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropUnknownSource))
+}
+
 func TestReceiver_OversizedDatagramIsDropped(t *testing.T) {
 	h := newHarness(t, false)
 	h.registerSender(t, "core")

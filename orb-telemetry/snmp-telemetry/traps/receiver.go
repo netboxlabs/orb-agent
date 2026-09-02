@@ -197,6 +197,10 @@ func (r *Receiver) loop() {
 			if agentPolicies := r.reg.Lookup(tr.AgentAddr); len(agentPolicies) > 0 {
 				deviceIP = canonical(tr.AgentAddr)
 				policies = agentPolicies
+				// Which address a count was attributed to is the one thing an
+				// operator cannot reconstruct from the exported series, since
+				// the series names only the winner.
+				r.logger.Debug("Attributed a trap to its agent-addr rather than its source", "source", src.String(), "agent_addr", deviceIP.String())
 			}
 		}
 
