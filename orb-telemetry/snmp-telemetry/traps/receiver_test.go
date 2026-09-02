@@ -81,6 +81,13 @@ func TestReceiver_DropsAnUnknownSourceBeforeParsing(t *testing.T) {
 	h.send(t, []byte{0x30, 0x01, 0xff})
 	waitFor(t, 2, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
+
+	// Nor is a stranger's datagram judged on its size first: oversized is a
+	// counter an operator reads as "my devices send oversized traps", and a
+	// stranger is not one of their devices.
+	h.send(t, make([]byte, maxDatagram+1))
+	waitFor(t, 3, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropOversized))
 }
 
 func TestReceiver_AcceptUnknownLabelsBySourceAddressWithNoPolicy(t *testing.T) {
@@ -176,6 +183,18 @@ func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
 	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1) })
+}
+
+// The agent-addr override is a claim about provenance, and an unregistered
+// sender has none to make. With accept-unknown on, a stranger naming a known
+// device would otherwise have its trap counted under that device and policy,
+// indistinguishable from the device's own.
+func TestReceiver_V1AgentAddrIsIgnoredFromAnUnregisteredSender(t *testing.T) {
+	h := newHarness(t, true)
+	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount("127.0.0.1", "", "linkDown", V1) })
+	assert.Equal(t, int64(0), h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1))
 }
 
 func TestReceiver_OversizedDatagramIsDropped(t *testing.T) {

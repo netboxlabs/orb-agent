@@ -141,8 +141,10 @@ func (r *Receiver) rebuildUsersIfChanged() {
 }
 
 // loop is the receive path, in the order the spec's section 6.2 gives: read,
-// canonicalise, look the source up before parsing, parse, filter, decode,
-// count, and acknowledge an inform only for a registered source.
+// canonicalise, look the source up before the datagram is judged on anything
+// else, size check, parse, filter, decode, count, and acknowledge an inform
+// only for a registered source. The source is first because every later drop
+// reason names a fault an operator reads as their own devices'.
 func (r *Receiver) loop() {
 	defer close(r.done)
 	buf := make([]byte, maxDatagram+1)
@@ -158,11 +160,6 @@ func (r *Receiver) loop() {
 		r.tally.Datagram()
 		src := canonical(from.Addr())
 
-		if n > maxDatagram {
-			r.drop(DropOversized, src, "")
-			continue
-		}
-
 		policies := r.reg.Lookup(src)
 		registered := len(policies) > 0
 		if !registered {
@@ -171,6 +168,11 @@ func (r *Receiver) loop() {
 				continue
 			}
 			policies = []string{""}
+		}
+
+		if n > maxDatagram {
+			r.drop(DropOversized, src, "")
+			continue
 		}
 
 		r.rebuildUsersIfChanged()
@@ -186,8 +188,12 @@ func (r *Receiver) loop() {
 			continue
 		}
 
+		// The agent-addr override is a claim about provenance, and only a
+		// registered sender has one to make. An unregistered sender reaching
+		// here is one accept-unknown let through, and its packet must not
+		// re-attribute to a device that does have a policy.
 		deviceIP := src
-		if tr.AgentAddr.IsValid() && tr.AgentAddr != src {
+		if registered && tr.AgentAddr.IsValid() && tr.AgentAddr != src {
 			if agentPolicies := r.reg.Lookup(tr.AgentAddr); len(agentPolicies) > 0 {
 				deviceIP = canonical(tr.AgentAddr)
 				policies = agentPolicies
