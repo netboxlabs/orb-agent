@@ -1,0 +1,428 @@
+# https://docs.sciencelogic.com/pdf/sciencelogic_run_book_11-2-0.pdf
+---
+
+traps:
+  - trap_oid: 1.3.6.1.4.1.19567.2.1.0.0.1
+    trap_name: em7CriticalEvent
+    drop_undefined: false
+    events:
+      - name: eventID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.1
+      - name: eventSeverity
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.2
+        enum:
+          healthy: 0
+          notice: 1
+          minor: 2
+          major: 3
+          critical: 4
+      - name: eventSource
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.3
+        enum:
+          syslog: 1
+          internal: 2
+          trap: 3
+          dynamic: 4
+          email: 7
+          other: 8
+      - name: elementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.4
+        enum:
+          organization: 0
+          device: 1
+          asset: 2
+          network: 4
+          interface: 5
+          vendor: 6
+          account: 7
+          virtual interface: 8
+          device group: 9
+          IT service: 10
+          ticket: 11
+      - name: elementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.5
+      - name: elementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.6
+      - name: elementAddress
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.7
+      - name: organizationID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.8
+      - name: organizationName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.9
+      - name: eventDescription
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.10
+      - name: subElementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.11
+        enum:
+          news feed: 0
+          cpu: 1
+          disk: 2
+          filesystem: 3
+          memory: 4
+          swap: 5
+          component: 6
+          interface: 7
+          software: 8
+          process: 9
+          port: 10
+          service: 11
+          content: 12
+          mail: 13
+      - name: subElementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.12
+      - name: subElementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.13
+  - trap_oid: 1.3.6.1.4.1.19567.2.1.0.0.2
+    trap_name: em7MajorEvent
+    drop_undefined: false
+    events:
+      - name: eventID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.1
+      - name: eventSeverity
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.2
+        enum:
+          healthy: 0
+          notice: 1
+          minor: 2
+          major: 3
+          critical: 4
+      - name: eventSource
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.3
+        enum:
+          syslog: 1
+          internal: 2
+          trap: 3
+          dynamic: 4
+          email: 7
+          other: 8
+      - name: elementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.4
+        enum:
+          organization: 0
+          device: 1
+          asset: 2
+          network: 4
+          interface: 5
+          vendor: 6
+          account: 7
+          virtual interface: 8
+          device group: 9
+          IT service: 10
+          ticket: 11
+      - name: elementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.5
+      - name: elementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.6
+      - name: elementAddress
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.7
+      - name: organizationID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.8
+      - name: organizationName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.9
+      - name: eventDescription
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.10
+      - name: subElementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.11
+        enum:
+          news feed: 0
+          cpu: 1
+          disk: 2
+          filesystem: 3
+          memory: 4
+          swap: 5
+          component: 6
+          interface: 7
+          software: 8
+          process: 9
+          port: 10
+          service: 11
+          content: 12
+          mail: 13
+      - name: subElementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.12
+      - name: subElementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.13
+  - trap_oid: 1.3.6.1.4.1.19567.2.1.0.0.3
+    trap_name: em7MinorEvent
+    drop_undefined: false
+    events:
+      - name: eventID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.1
+      - name: eventSeverity
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.2
+        enum:
+          healthy: 0
+          notice: 1
+          minor: 2
+          major: 3
+          critical: 4
+      - name: eventSource
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.3
+        enum:
+          syslog: 1
+          internal: 2
+          trap: 3
+          dynamic: 4
+          email: 7
+          other: 8
+      - name: elementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.4
+        enum:
+          organization: 0
+          device: 1
+          asset: 2
+          network: 4
+          interface: 5
+          vendor: 6
+          account: 7
+          virtual interface: 8
+          device group: 9
+          IT service: 10
+          ticket: 11
+      - name: elementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.5
+      - name: elementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.6
+      - name: elementAddress
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.7
+      - name: organizationID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.8
+      - name: organizationName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.9
+      - name: eventDescription
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.10
+      - name: subElementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.11
+        enum:
+          news feed: 0
+          cpu: 1
+          disk: 2
+          filesystem: 3
+          memory: 4
+          swap: 5
+          component: 6
+          interface: 7
+          software: 8
+          process: 9
+          port: 10
+          service: 11
+          content: 12
+          mail: 13
+      - name: subElementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.12
+      - name: subElementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.13
+  - trap_oid: 1.3.6.1.4.1.19567.2.1.0.0.4
+    trap_name: em7NoticeEvent
+    drop_undefined: false
+    events:
+      - name: eventID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.1
+      - name: eventSeverity
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.2
+        enum:
+          healthy: 0
+          notice: 1
+          minor: 2
+          major: 3
+          critical: 4
+      - name: eventSource
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.3
+        enum:
+          syslog: 1
+          internal: 2
+          trap: 3
+          dynamic: 4
+          email: 7
+          other: 8
+      - name: elementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.4
+        enum:
+          organization: 0
+          device: 1
+          asset: 2
+          network: 4
+          interface: 5
+          vendor: 6
+          account: 7
+          virtual interface: 8
+          device group: 9
+          IT service: 10
+          ticket: 11
+      - name: elementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.5
+      - name: elementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.6
+      - name: elementAddress
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.7
+      - name: organizationID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.8
+      - name: organizationName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.9
+      - name: eventDescription
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.10
+      - name: subElementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.11
+        enum:
+          news feed: 0
+          cpu: 1
+          disk: 2
+          filesystem: 3
+          memory: 4
+          swap: 5
+          component: 6
+          interface: 7
+          software: 8
+          process: 9
+          port: 10
+          service: 11
+          content: 12
+          mail: 13
+      - name: subElementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.12
+      - name: subElementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.13
+  - trap_oid: 1.3.6.1.4.1.19567.2.1.0.0.5
+    trap_name: em7HealthyEvent
+    drop_undefined: false
+    events:
+      - name: eventID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.1
+      - name: eventSeverity
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.2
+        enum:
+          healthy: 0
+          notice: 1
+          minor: 2
+          major: 3
+          critical: 4
+      - name: eventSource
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.3
+        enum:
+          syslog: 1
+          internal: 2
+          trap: 3
+          dynamic: 4
+          email: 7
+          other: 8
+      - name: elementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.4
+        enum:
+          organization: 0
+          device: 1
+          asset: 2
+          network: 4
+          interface: 5
+          vendor: 6
+          account: 7
+          virtual interface: 8
+          device group: 9
+          IT service: 10
+          ticket: 11
+      - name: elementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.5
+      - name: elementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.6
+      - name: elementAddress
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.7
+      - name: organizationID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.8
+      - name: organizationName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.9
+      - name: eventDescription
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.10
+      - name: subElementType
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.11
+        enum:
+          news feed: 0
+          cpu: 1
+          disk: 2
+          filesystem: 3
+          memory: 4
+          swap: 5
+          component: 6
+          interface: 7
+          software: 8
+          process: 9
+          port: 10
+          service: 11
+          content: 12
+          mail: 13
+      - name: subElementID
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.12
+      - name: subElementName
+        OID: 1.3.6.1.4.1.19567.2.1.1.1.13
+#  Template for customer specific custom event type traps
+#  - trap_oid: 1.3.6.1.4.1.19567.2.1.0.2.1.event_policy_ID   # make sure to replace the event policy ID
+#    trap_name: em7CustomEvent   # make sure to set an appropriate trap name
+#    drop_undefined: false
+#  Adjust the following OID's as needed to match your customized payload
+#    events:
+#      - name: eventID
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.1
+#      - name: eventSeverity
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.2
+#        enum:
+#          healthy: 0
+#          notice: 1
+#          minor: 2
+#          major: 3
+#          critical: 4
+#      - name: eventSource
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.3
+#        enum:
+#          syslog: 1
+#          internal: 2
+#          trap: 3
+#          dynamic: 4
+#          email: 7
+#          other: 8
+#      - name: elementType
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.4
+#        enum:
+#          organization: 0
+#          device: 1
+#          asset: 2
+#          network: 4
+#          interface: 5
+#          vendor: 6
+#          account: 7
+#          virtual interface: 8
+#          device group: 9
+#          IT service: 10
+#          ticket: 11
+#      - name: elementID
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.5
+#      - name: elementName
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.6
+#      - name: elementAddress
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.7
+#      - name: organizationID
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.8
+#      - name: organizationName
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.9
+#      - name: eventDescription
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.10
+#      - name: subElementType
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.11
+#        enum:
+#          news feed: 0
+#          cpu: 1
+#          disk: 2
+#          filesystem: 3
+#          memory: 4
+#          swap: 5
+#          component: 6
+#          interface: 7
+#          software: 8
+#          process: 9
+#          port: 10
+#          service: 11
+#          content: 12
+#          mail: 13
+#      - name: subElementID
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.12
+#      - name: subElementName
+#        OID: 1.3.6.1.4.1.19567.2.1.1.1.13
+# Add additional custom OID's if necessary
+

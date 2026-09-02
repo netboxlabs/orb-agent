@@ -1,0 +1,1883 @@
+# http://oid-info.com/get/1.3.6.1.4.1.9.9.91.1.1.1
+# http://oid-info.com/get/1.3.6.1.4.1.9.9.276.1.1.1
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-ucs
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.1683           # UCS C240
+  - 1.3.6.1.4.1.9.1.2178           # UCS C220 M4
+  - 1.3.6.1.4.1.9.1.2492           # UCS C220 M5
+  - 1.3.6.1.4.1.9.12.3.1.3.1062    # UCS 6248UP
+  - 1.3.6.1.4.1.9.12.3.1.3.1662    # UCS 6300
+
+metrics:
+  # Cisco UCS compute:Board table
+  - MIB: CISCO-UNIFIED-COMPUTING-COMPUTE-MIB
+    table:
+      name: cucsComputeBoardTable
+      OID: 1.3.6.1.4.1.9.9.719.1.9.6
+    symbols:
+      # Cisco UCS compute:Board:operPower
+      - name: cucsComputeBoardOperPower
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.7
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS compute:Board:operState
+      - name: cucsComputeBoardOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.8
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS compute:Board:operability
+      - name: cucsComputeBoardOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.9
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS compute:Board:perf
+      - name: cucsComputeBoardPerf
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.10
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS compute:Board:power
+      - name: cucsComputeBoardPower
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.11
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS compute:Board:presence
+      - name: cucsComputeBoardPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.12
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+      # Cisco UCS compute:Board:thermal
+      - name: cucsComputeBoardThermal
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.15
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS compute:Board:voltage
+      - name: cucsComputeBoardVoltage
+        OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.17
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+    metric_tags:
+      # Cisco UCS compute:Board distinguished name
+      - column:
+          name: cucsComputeBoardDn
+          OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.2
+      # Cisco UCS compute:Board:model
+      - column:
+          name: cucsComputeBoardModel
+          OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.6
+      # Cisco UCS compute:Board:serial
+      - column:
+          name: cucsComputeBoardSerial
+          OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.14
+      # Cisco UCS compute:Board:vendor
+      - column:
+          name: cucsComputeBoardVendor
+          OID: 1.3.6.1.4.1.9.9.719.1.9.6.1.16
+
+  # Cisco UCS compute:MbPowerStats table
+  - MIB: CISCO-UNIFIED-COMPUTING-COMPUTE-MIB
+    table:
+      name: cucsComputeMbPowerStatsTable
+      OID: 1.3.6.1.4.1.9.9.719.1.9.14
+    symbols:
+      # Cisco UCS compute:MbPowerStats:consumedPower
+      - name: cucsComputeMbPowerStatsConsumedPower
+        OID: 1.3.6.1.4.1.9.9.719.1.9.14.1.4
+      # Cisco UCS compute:MbPowerStats:inputCurrent
+      - name: cucsComputeMbPowerStatsInputCurrent
+        OID: 1.3.6.1.4.1.9.9.719.1.9.14.1.8
+      # Cisco UCS compute:MbPowerStats:inputVoltage
+      - name: cucsComputeMbPowerStatsInputVoltage
+        OID: 1.3.6.1.4.1.9.9.719.1.9.14.1.12
+    metric_tags:
+      # Cisco UCS compute:MbPowerStats distinguished name
+      - column:
+          name: cucsComputeMbPowerStatsDn
+          OID: 1.3.6.1.4.1.9.9.719.1.9.14.1.2
+
+  # Cisco UCS compute:RackUnit table
+  - MIB: CISCO-UNIFIED-COMPUTING-COMPUTE-MIB
+    table:
+      name: cucsComputeRackUnitTable
+      OID: 1.3.6.1.4.1.9.9.719.1.9.35
+    symbols:
+      # Cisco UCS compute:RackUnit:adminPower
+      - name: cucsComputeRackUnitAdminPower
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.4
+        enum:
+          cycleImmediate: 2
+          cycleWait: 3
+          hardResetImmediate: 4
+          hardResetWait: 5
+          cmosResetImmediate: 12
+          bmcResetImmediate: 13
+          bmcResetWait: 14
+          diagnosticInterrupt: 15
+          kvmReset: 16
+          policy: 30
+          adminUp: 31
+          adminDown: 32
+          ipmiReset: 33
+      # Cisco UCS compute:RackUnit:adminState
+      - name: cucsComputeRackUnitAdminState
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.5
+        enum:
+          inService: 1
+          outOfService: 2
+          inMaintenance: 3
+      # Cisco UCS compute:RackUnit:association
+      - name: cucsComputeRackUnitAssociation
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.7
+        enum:
+          none: 0
+          establishing: 1
+          associated: 2
+          removing: 3
+          failed: 4
+          throttled: 5
+      # Cisco UCS compute:RackUnit:availability
+      - name: cucsComputeRackUnitAvailability
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.8
+        enum:
+          unavailable: 0
+          available: 1
+      # Cisco UCS compute:RackUnit:availableMemory
+      - name: cucsComputeRackUnitAvailableMemory
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.9
+        tag: MemoryFree
+      # Cisco UCS compute:RackUnit:checkPoint
+      - name: cucsComputeRackUnitCheckPoint
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.10
+        enum:
+          unknown: 0
+          removing: 1
+          shallowCheckpoint: 2
+          deepCheckpoint: 3
+          discovered: 4
+      # Cisco UCS compute:RackUnit:operPower
+      - name: cucsComputeRackUnitOperPower
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.40
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS compute:RackUnit:operState
+      - name: cucsComputeRackUnitOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.42
+        enum:
+          indeterminate: 0
+          unassociated: 1
+          ok: 10
+          discovery: 11
+          config: 12
+          unconfig: 13
+          powerOff: 14
+          restart: 15
+          maintenance: 20
+          test: 21
+          computeMismatch: 29
+          computeFailed: 30
+          degraded: 31
+          discoveryFailed: 32
+          configFailure: 33
+          unconfigFailed: 34
+          testFailed: 35
+          maintenanceFailed: 36
+          removed: 40
+          disabled: 41
+          inaccessible: 50
+          thermalProblem: 60
+          powerProblem: 61
+          voltageProblem: 62
+          inoperable: 63
+          decomissioning: 101
+          biosRestore: 201
+          cmosReset: 202
+          diagnostics: 203
+          diagnosticsFailed: 204
+          pendingReboot: 210
+          pendingReassociation: 211
+          svnicNotPresent: 212
+      # Cisco UCS compute:RackUnit:operability
+      - name: cucsComputeRackUnitOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.43
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS compute:RackUnit:presence
+      - name: cucsComputeRackUnitPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.45
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          equippedUnsupported: 101
+          equippedDeprecated: 102
+      # Cisco UCS compute:RackUnit:totalMemory
+      - name: cucsComputeRackUnitTotalMemory
+        OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.49
+        tag: MemoryTotal
+    metric_tags:
+      # Cisco UCS compute:RackUnit distinguished name
+      - column:
+          name: cucsComputeRackUnitDn
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.2
+      # Cisco UCS compute:RackUnit:model
+      - column:
+          name: cucsComputeRackUnitModel
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.32
+      # Cisco UCS compute:RackUnit:name
+      - column:
+          name: cucsComputeRackUnitName
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.33
+      # Cisco UCS compute:RackUnit:numOfCores
+      - column:
+          name: cucsComputeRackUnitNumOfCores
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.35
+      # Cisco UCS compute:RackUnit:numOfCpus
+      - column:
+          name: cucsComputeRackUnitNumOfCpus
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.36
+      # Cisco UCS compute:RackUnit:numOfThreads
+      - column:
+          name: cucsComputeRackUnitNumOfThreads
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.39
+      # Cisco UCS compute:RackUnit:serial
+      - column:
+          name: cucsComputeRackUnitSerial
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.47
+      # Cisco UCS compute:RackUnit:uuid
+      - column:
+          name: cucsComputeRackUnitUuid
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.50
+      # Cisco UCS compute:RackUnit:vendor
+      - column:
+          name: cucsComputeRackUnitVendor
+          OID: 1.3.6.1.4.1.9.9.719.1.9.35.1.51
+
+  # Cisco UCS compute:RackUnitMbTempStats table
+  - MIB: CISCO-UNIFIED-COMPUTING-COMPUTE-MIB
+    table:
+      name: cucsComputeRackUnitMbTempStatsTable
+      OID: 1.3.6.1.4.1.9.9.719.1.9.44
+    symbols:
+      # Cisco UCS compute:RackUnitMbTempStats:ambientTemp
+      - name: cucsComputeRackUnitMbTempStatsAmbientTemp
+        OID: 1.3.6.1.4.1.9.9.719.1.9.44.1.4
+        tag: ambient_temp_c
+      # Cisco UCS compute:RackUnitMbTempStats:frontTemp
+      - name: cucsComputeRackUnitMbTempStatsFrontTemp
+        OID: 1.3.6.1.4.1.9.9.719.1.9.44.1.8
+        tag: front_temp_c
+      # Cisco UCS compute:RackUnitMbTempStats:ioh1Temp
+      - name: cucsComputeRackUnitMbTempStatsIoh1Temp
+        OID: 1.3.6.1.4.1.9.9.719.1.9.44.1.13
+        tag: ioh1_temp_c
+      # Cisco UCS compute:RackUnitMbTempStats:rearTemp
+      - name: cucsComputeRackUnitMbTempStatsRearTemp
+        OID: 1.3.6.1.4.1.9.9.719.1.9.44.1.21
+        tag: rear_temp_c
+    metric_tags:
+      # Cisco UCS compute:RackUnitMbTempStats distinguished name
+      - column:
+          name: cucsComputeRackUnitMbTempStatsDn
+          OID: 1.3.6.1.4.1.9.9.719.1.9.44.1.2
+
+  # Cisco UCS equipment:Fan table
+  - MIB: CISCO-UNIFIED-COMPUTING-EQUIPMENT-MIB
+    table:
+      name: cucsEquipmentFanTable
+      OID: 1.3.6.1.4.1.9.9.719.1.15.12
+    symbols:
+      # Cisco UCS equipment:Fan:operState
+      - name: cucsEquipmentFanOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.9
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS equipment:Fan:operability
+      - name: cucsEquipmentFanOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.10
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS equipment:Fan:perf
+      - name: cucsEquipmentFanPerf
+        OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.11
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS equipment:Fan:power
+      - name: cucsEquipmentFanPower
+        OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.12
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS equipment:Fan:presence
+      - name: cucsEquipmentFanPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.13
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+    metric_tags:
+      # Cisco UCS equipment:Fan distinguished name
+      - column:
+          name: cucsEquipmentFanDn
+          OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.2
+      # Cisco UCS equipment:Fan:intType
+      - column:
+          name: cucsEquipmentFanIntType
+          OID: 1.3.6.1.4.1.9.9.719.1.15.12.1.6
+          enum:
+            chassis: 0
+            switch: 1
+            fex: 2
+
+  # Cisco UCS equipment:Psu table
+  - MIB: CISCO-UNIFIED-COMPUTING-EQUIPMENT-MIB
+    table:
+      name: cucsEquipmentPsuTable
+      OID: 1.3.6.1.4.1.9.9.719.1.15.56
+    symbols:
+      # Cisco UCS equipment:Psu:operState
+      - name: cucsEquipmentPsuOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.7
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS equipment:Psu:operability
+      - name: cucsEquipmentPsuOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.8
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS equipment:Psu:perf
+      - name: cucsEquipmentPsuPerf
+        OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.9
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS equipment:Psu:power
+      - name: cucsEquipmentPsuPower
+        OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.10
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS equipment:Psu:presence
+      - name: cucsEquipmentPsuPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.11
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+    metric_tags:
+      # Cisco UCS equipment:Psu distinguished name
+      - column:
+          name: cucsEquipmentPsuDn
+          OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.2
+      # Cisco UCS equipment:Psu:model
+      - column:
+          name: cucsEquipmentPsuModel
+          OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.6
+      # Cisco UCS equipment:Psu:revision
+      - column:
+          name: cucsEquipmentPsuRevision
+          OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.12
+      # Cisco UCS equipment:Psu:serial
+      - column:
+          name: cucsEquipmentPsuSerial
+          OID: 1.3.6.1.4.1.9.9.719.1.15.56.1.13
+
+  # Cisco UCS equipment:HealthLed table
+  - MIB: CISCO-UNIFIED-COMPUTING-EQUIPMENT-MIB
+    table:
+      name: cucsEquipmentHealthLedTable
+      OID: 1.3.6.1.4.1.9.9.719.1.15.114
+    symbols:
+      # Cisco UCS equipment:HealthLed:color
+      - name: cucsEquipmentHealthLedColor
+        OID: 1.3.6.1.4.1.9.9.719.1.15.114.1.4
+        enum:
+          unknown: 0
+          green: 1
+          amber: 2
+          red: 3
+          blue: 4
+      # Cisco UCS equipment:HealthLed:healthLedState
+      - name: cucsEquipmentHealthLedState
+        OID: 1.3.6.1.4.1.9.9.719.1.15.114.1.5
+        enum:
+          normal: 0
+          minor: 1
+          critical: 2
+      # Cisco UCS equipment:HealthLed:operState
+      - name: cucsEquipmentHealthLedOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.15.114.1.9
+        enum:
+          unknown: 0
+          on: 1
+          off: 2
+          blinking: 2
+          eth: 4
+          fc: 5
+          unsupported: 6
+    metric_tags:
+      # Cisco UCS equipment:HealthLed distinguished name
+      - column:
+          name: cucsEquipmentHealthLedDn
+          OID: 1.3.6.1.4.1.9.9.719.1.15.114.1.2
+
+  # Cisco UCS memory:Unit table
+  - MIB: CISCO-UNIFIED-COMPUTING-MEMORY-MIB
+    table:
+      name: cucsMemoryUnitTable
+      OID: 1.3.6.1.4.1.9.9.719.1.30.11
+    symbols:
+      # Cisco UCS memory:Unit:capacity
+      - name: cucsMemoryUnitCapacity
+        OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.6
+      # Cisco UCS memory:Unit:operState
+      - name: cucsMemoryUnitOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.13
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS memory:Unit:operability
+      - name: cucsMemoryUnitOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.14
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS memory:Unit:perf
+      - name: cucsMemoryUnitPerf
+        OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.15
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS memory:Unit:power
+      - name: cucsMemoryUnitPower
+        OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.16
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS memory:Unit:presence
+      - name: cucsMemoryUnitPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.17
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+    metric_tags:
+      # Cisco UCS memory:Unit distinguished name
+      - column:
+          name: cucsMemoryUnitDn
+          OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.2
+      # Cisco UCS memory:Unit:location
+      - column:
+          name: cucsMemoryUnitLocation
+          OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.11
+      # Cisco UCS memory:Unit:type
+      - column:
+          name: cucsMemoryUnitType
+          OID: 1.3.6.1.4.1.9.9.719.1.30.11.1.23
+          enum:
+            undiscovered: 0
+            other: 1
+            unknown: 2
+            dram: 3
+            edram: 4
+            vram: 5
+            sram: 6
+            ram: 7
+            rom: 8
+            flash: 9
+            eeprom: 10
+            feprom: 11
+            eprom: 12
+            cdram: 13
+            n3DRAM: 14
+            sdram: 15
+            sgram: 16
+            rdram: 17
+            ddr: 18
+            ddr2: 19
+            ddr2FbDimm: 20
+            ddr3: 24
+            fbd2: 25
+            ddr4: 26
+
+  # Cisco UCS memory:UnitEnvStats table
+  - MIB: CISCO-UNIFIED-COMPUTING-MEMORY-MIB
+    table:
+      name: cucsMemoryUnitEnvStatsTable
+      OID: 1.3.6.1.4.1.9.9.719.1.30.12
+    symbols:
+      # 
+      - name: cucsMemoryUnitEnvStatsTemperature
+        OID: 1.3.6.1.4.1.9.9.719.1.30.12.1.6
+    metric_tags:
+      # 
+      - column:
+          name: cucsMemoryUnitEnvStatsDn
+          OID: 1.3.6.1.4.1.9.9.719.1.30.12.1.2
+
+  # Cisco UCS processor:EnvStats table
+  - MIB: CISCO-UNIFIED-COMPUTING-PROCESSOR-MIB
+    table:
+      name: cucsProcessorEnvStatsTable
+      OID: 1.3.6.1.4.1.9.9.719.1.41.2
+    symbols:
+      # Cisco UCS processor:EnvStats:temperature
+      - name: cucsProcessorEnvStatsTemperature
+        OID: 1.3.6.1.4.1.9.9.719.1.41.2.1.10
+    metric_tags:
+      # Cisco UCS processor:EnvStats distinguished name
+      - column:
+          name: cucsProcessorEnvStatsDn
+          OID: 1.3.6.1.4.1.9.9.719.1.41.2.1.2
+
+  # Cisco UCS processor:Unit table
+  - MIB: CISCO-UNIFIED-COMPUTING-PROCESSOR-MIB
+    table:
+      name: cucsProcessorUnitTable
+      OID: 1.3.6.1.4.1.9.9.719.1.41.9
+    symbols:
+      # Cisco UCS processor:Unit:operState
+      - name: cucsProcessorUnitOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.9
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS processor:Unit:operability
+      - name: cucsProcessorUnitOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.10
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS processor:Unit:perf
+      - name: cucsProcessorUnitPerf
+        OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.11
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS processor:Unit:power
+      - name: cucsProcessorUnitPower
+        OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.12
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS processor:Unit:presence
+      - name: cucsProcessorUnitPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.13
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+    metric_tags:
+      # Cisco UCS processor:Unit:dn
+      - column:
+          name: cucsProcessorUnitDn
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.2
+      # Cisco UCS processor:Unit:arch
+      - column:
+          name: cucsProcessorUnitArch
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.4
+          enum:
+            any: 0
+            intelP4C: 1
+            opteron: 132
+            turion64: 134
+            dualCoreOpteron: 135
+            pentium4: 178
+            xeon: 179
+            xeonMP: 181
+      # Cisco UCS processor:Unit:cores
+      - column:
+          name: cucsProcessorUnitCores
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.5
+      # Cisco UCS processor:Unit:coresEnabled
+      - column:
+          name: cucsProcessorUnitCoresEnabled
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.6
+      # Cisco UCS processor:Unit:model
+      - column:
+          name: cucsProcessorUnitModel
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.8
+      # Cisco UCS processor:Unit:threads
+      - column:
+          name: cucsProcessorUnitThreads
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.20
+      # Cisco UCS processor:Unit:vendor
+      - column:
+          name: cucsProcessorUnitVendor
+          OID: 1.3.6.1.4.1.9.9.719.1.41.9.1.21
+
+  # Cisco UCS storage:Controller table
+  - MIB: CISCO-UNIFIED-COMPUTING-STORAGE-MIB
+    table:
+      name: cucsStorageControllerTable
+      OID: 1.3.6.1.4.1.9.9.719.1.45.1
+    symbols:
+      # Cisco UCS storage:Controller:operState
+      - name: cucsStorageControllerOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.1.1.6
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+    metric_tags:
+      # Cisco UCS storage:Controller:dn
+      - column:
+          name: cucsStorageControllerDn
+          OID: 1.3.6.1.4.1.9.9.719.1.45.1.1.2
+      # Cisco UCS storage:Controller:model
+      - column:
+          name: cucsStorageControllerModel
+          OID: 1.3.6.1.4.1.9.9.719.1.45.1.1.5
+      # Cisco UCS storage:Controller:pciSlot
+      - column:
+          name: cucsStorageControllerPciSlot
+          OID: 1.3.6.1.4.1.9.9.719.1.45.1.1.9
+
+  # Cisco UCS storage:LocalDisk table
+  - MIB: CISCO-UNIFIED-COMPUTING-STORAGE-MIB
+    table:
+      name: cucsStorageLocalDiskTable
+      OID: 1.3.6.1.4.1.9.9.719.1.45.4
+    symbols:
+      # Cisco UCS storage:LocalDisk:
+      - name: cucsStorageLocalDiskDiskState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.4.1.18
+        enum:
+          unknown: 0
+          online: 1
+          unconfiguredGood: 2
+          globalHotSpare: 3
+          dedicatedHotSpare: 4
+          jbod: 5
+          offline: 6
+          rebuilding: 7
+          copyback: 8
+          failed: 9
+          unconfiguredBad: 10
+          predictiveFailure: 11
+          disabledForRemoval: 12
+          foreignConfiguration: 13
+          zeroing: 14
+          good: 15
+          bad: 16
+          lockedForeignConfiguration: 17
+    metric_tags:
+      # Cisco UCS storage:LocalDisk:dn
+      - column:
+          name: cucsStorageLocalDiskDn
+          OID: 1.3.6.1.4.1.9.9.719.1.45.4.1.2
+      # Cisco UCS storage:LocalDisk:model
+      - column:
+          name: cucsStorageLocalDiskModel
+          OID: 1.3.6.1.4.1.9.9.719.1.45.4.1.7
+      # Cisco UCS storage:LocalDisk:serial
+      - column:
+          name: cucsStorageLocalDiskSerial
+          OID: 1.3.6.1.4.1.9.9.719.1.45.4.1.12
+      # Cisco UCS storage:LocalDisk:size
+      - column:
+          name: cucsStorageLocalDiskSize
+          OID: 1.3.6.1.4.1.9.9.719.1.45.4.1.13
+      # Cisco UCS storage:LocalDisk:deviceType
+      - column:
+          name: cucsStorageLocalDiskDeviceType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.4.1.17
+          enum:
+            unspecified: 0
+            hdd: 1
+            ssd: 2
+            nvme: 3
+
+  # Cisco UCS storage:LocalLun table
+  - MIB: CISCO-UNIFIED-COMPUTING-STORAGE-MIB
+    table:
+      name: cucsStorageLocalLunTable
+      OID: 1.3.6.1.4.1.9.9.719.1.45.8
+    symbols:
+      # Cisco UCS storage:LocalLun:presence
+      - name: cucsStorageLocalLunPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.45.8.1.10
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+    metric_tags:
+      # Cisco UCS storage:LocalLun:dn
+      - column:
+          name: cucsStorageLocalLunDn
+          OID: 1.3.6.1.4.1.9.9.719.1.45.8.1.2
+      # Cisco UCS storage:LocalLun:size
+      - column:
+          name: cucsStorageLocalLunSize
+          OID: 1.3.6.1.4.1.9.9.719.1.45.8.1.13
+      # Cisco UCS storage:LocalLun:type
+      - column:
+          name: cucsStorageLocalLunType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.8.1.14
+          enum:
+            unspecified: 0
+            simple: 1
+            mirror: 2
+            stripe: 3
+            raid: 4
+            stripeParity: 5
+            stripeDualParity: 6
+            mirrorStripe: 7
+            stripeParityStripe: 8
+            stripeDualParityStripe: 9
+
+  # Cisco UCS storage:FlexFlashCard table
+  - MIB: CISCO-UNIFIED-COMPUTING-STORAGE-MIB
+    table:
+      name: cucsStorageFlexFlashCardTable
+      OID: 1.3.6.1.4.1.9.9.719.1.45.34
+    symbols:
+      # Cisco UCS storage:FlexFlashCard:cardHealth
+      - name: cucsStorageFlexFlashCardCardHealth
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.5
+        enum:
+          ffPhyHealthNa: 0
+          ffPhyHealthOk: 1
+          ffPhyUnhealthyRaid: 2
+          ffPhyUnhealthyOther: 3
+          ffPhyRaidSyncInProgress: 4
+          ffPhyRaidOutOfSync: 5
+      # Cisco UCS storage:FlexFlashCard:operability
+      - name: cucsStorageFlexFlashCardOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.17
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS storage:FlexFlashCard:presence
+      - name: cucsStorageFlexFlashCardPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.18
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+      # Cisco UCS storage:FlexFlashCard:readIOErrorCount
+      - name: cucsStorageFlexFlashCardReadIOErrorCount
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.19
+      # Cisco UCS storage:FlexFlashCard:size
+      - name: cucsStorageFlexFlashCardSize
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.22
+      # Cisco UCS storage:FlexFlashCard:writeIOErrorCount
+      - name: cucsStorageFlexFlashCardWriteIOErrorCount
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.26
+      # Cisco UCS storage:FlexFlashCard:cardState
+      - name: cucsStorageFlexFlashCardCardState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.27
+        enum:
+          undefined: 0
+          configured: 1
+          initializing: 2
+          active: 3
+          ignored: 4
+          failed: 5
+          unknown: 6
+      # Cisco UCS storage:FlexFlashCard:cardSync
+      - name: cucsStorageFlexFlashCardCardSync
+        OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.28
+        enum:
+          na: 0
+          manual: 1
+          auto: 2
+          unknown: 3
+    metric_tags:
+      # Cisco UCS storage:FlexFlashCard distinguished name
+      - column:
+          name: cucsStorageFlexFlashCardDn
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.2
+      # Cisco UCS storage:FlexFlashCard:cardMode
+      - column:
+          name: cucsStorageFlexFlashCardMode
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.6
+          enum:
+            ffPhyDriveUnpairedPrimary: 0
+            ffPhyDrivePrimary: 1
+            ffPhyDriveSecondaryAct: 2
+            ffPhyDriveSecondaryUnhealthy: 3
+      # Cisco UCS storage:FlexFlashCard:cardType
+      - column:
+          name: cucsStorageFlexFlashCardType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.7
+      # Cisco UCS storage:FlexFlashCard:connectionProtocol
+      - column:
+          name: cucsStorageFlexFlashCardConnectionProtocol
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.8
+          enum:
+            unspecified: 0
+            sas: 1
+            sata: 2
+            nvme: 3
+      # Cisco UCS storage:FlexFlashCard:revision
+      - column:
+          name: cucsStorageFlexFlashCardRevision
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.20
+      # Cisco UCS storage:FlexFlashCard:serial
+      - column:
+          name: cucsStorageFlexFlashCardSerial
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.21
+      # Cisco UCS storage:FlexFlashCard:drivesEnabled
+      - column:
+          name: cucsStorageFlexFlashCardDrivesEnabled
+          OID: 1.3.6.1.4.1.9.9.719.1.45.34.1.29
+
+  # Cisco UCS storage:FlexFlashController table
+  - MIB: CISCO-UNIFIED-COMPUTING-STORAGE-MIB
+    table:
+      name: cucsStorageFlexFlashControllerTable
+      OID: 1.3.6.1.4.1.9.9.719.1.45.35
+    symbols:
+      # Cisco UCS storage:FlexFlashController:controllerHealth
+      - name: cucsStorageFlexFlashControllerControllerHealth
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.4
+        enum:
+          ffchOk: 0
+          ffchMetadataFailure: 1
+          ffchErrorCardsAccessError: 2
+          ffchErrorOldFirmwareRunning: 3
+          ffchErrorMediaWriteProtected: 4
+          ffchErrorInvalidSize: 5
+          ffchErrorCardSizeMismatch: 6
+          ffchInconsistentMetadata: 7
+          ffchErrorSecondaryUnhealthyCard: 8
+          ffchErrorSdCardNotConfigured: 9
+          ffchErrorInconsistantMetadataIgnored: 10
+          ffchErrorSd253WithUnOrSd247: 11
+          ffchErrorRebootedDuringRebuild: 12
+          ffchErrorSd247CardDetected: 13
+          ffchFlexdErrorSdCardOpModeMismatch: 14
+          ffchFlexdErrorSdOpModeMismatchWithUn: 15
+          ffchFlexdErrorImSdUnhealthySdUnIgnored: 16
+          ffchFlexdErrorImSdHealthySdUnIgnored: 17
+          ffchFlexdErrorImSdCardsOpModeMismatch: 18
+          ffchFlexdErrorSdCard0UnhealthyOpModeMismatch: 19
+          ffchFlexdErrorSdCard0HealthyOpModeMismatch: 20
+          ffchFlexdErrorSdCard1UnhealthyOpModeMismatch: 21
+          ffchFlexdErrorSdCard1HealthyOpModeMismatch: 22
+          ffchFlexdErrorImSd0IgnoredSd1: 23
+          ffchFlexdErrorImSd0Sd1Ignored: 24
+      # Cisco UCS storage:FlexFlashController:controllerState
+      - name: cucsStorageFlexFlashControllerControllerState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.5
+        enum:
+          ffcUninitalized: 0
+          ffcSoftwareErr: 1
+          ffcInit: 2
+          ffcConfig: 3
+          ffcWaitUser: 4
+          ffcUsbDisconnecting: 5
+          ffcUsbDisconnected: 6
+          ffcUsbConnecting: 7
+          ffcUsbConnected: 8
+          ffcRebuilding: 9
+          ffcFailed: 10
+      # Cisco UCS storage:FlexFlashController:operState
+      - name: cucsStorageFlexFlashControllerOperState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.10
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS storage:FlexFlashController:operability
+      - name: cucsStorageFlexFlashControllerOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.11
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS storage:FlexFlashController:perf
+      - name: cucsStorageFlexFlashControllerPerf
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.14
+        enum:
+          unknown: 0
+          ok: 1
+          upperNonRecoverable: 2
+          upperCritical: 3
+          uppoerNonCritical: 4
+          lowerNonCritical: 5
+          lowerCritical: 6
+          lowerNonRecoverable: 7
+          notSupported: 100
+      # Cisco UCS storage:FlexFlashController:power
+      - name: cucsStorageFlexFlashControllerPower
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.16
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          notSupported: 100
+      # Cisco UCS storage:FlexFlashController:presence
+      - name: cucsStorageFlexFlashControllerPresence
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.17
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+      # Cisco UCS storage:FlexFlashController:hasError
+      - name: cucsStorageFlexFlashControllerHasError
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.43
+        enum:
+          error: 0
+          noError: 1
+      # Cisco UCS storage:FlexFlashController:isFormatFSMRunning
+      - name: cucsStorageFlexFlashControllerIsFormatFSMRunning
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.45
+        enum:
+          na: 0
+          yes: 1
+          no: 2
+      # Cisco UCS storage:FlexFlashController:operatingMode
+      - name: cucsStorageFlexFlashControllerOperatingMode
+        OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.46
+        enum:
+          unknown: 0
+          mirror: 1
+          util: 2
+    metric_tags:
+      # Cisco UCS storage:FlexFlashController distinguished name
+      - column:
+          name: cucsStorageFlexFlashControllerDn
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.2
+      # Cisco UCS storage:FlexFlashController:flexFlashType
+      - column:
+          name: cucsStorageFlexFlashControllerFlexFlashType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.6
+          enum:
+            unknown: 0
+            astorial: 1
+            fx3s: 2
+      # Cisco UCS storage:FlexFlashController:model
+      - column:
+          name: cucsStorageFlexFlashControllerModel
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.8
+      # Cisco UCS storage:FlexFlashController:physicalDriveCount
+      - column:
+          name: cucsStorageFlexFlashControllerPhysicalDriveCount
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.15
+      # Cisco UCS storage:FlexFlashController:type
+      - column:
+          name: cucsStorageFlexFlashControllerType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.24
+          enum:
+            unknown: 0
+            sas: 1
+            sata: 2
+            flash: 3
+            sd: 4
+            pt: 5
+            pch: 6
+            external: 7
+            nvme: 8
+            hba: 9
+            m2: 10
+      # Cisco UCS storage:FlexFlashController:vendor
+      - column:
+          name: cucsStorageFlexFlashControllerVendor
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.25
+      # Cisco UCS storage:FlexFlashController:virtualDriveCount
+      - column:
+          name: cucsStorageFlexFlashControllerVirtualDriveCount
+          OID: 1.3.6.1.4.1.9.9.719.1.45.35.1.26
+
+  # Cisco UCS storage:FlexFlashDrive table
+  - MIB: CISCO-UNIFIED-COMPUTING-STORAGE-MIB
+    table:
+      name: cucsStorageFlexFlashDriveTable
+      OID: 1.3.6.1.4.1.9.9.719.1.45.36
+    symbols:
+      # Cisco UCS storage:FlexFlashDrive:driveState
+      - name: cucsStorageFlexFlashDriveState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.7
+        enum:
+          nonraid: 0
+          raid: 1
+      # Cisco UCS storage:FlexFlashDrive:operability
+      - name: cucsStorageFlexFlashDriveOperability
+        OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.14
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          backplanePortProblem: 15
+          chassisIntrusion: 16
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+      # Cisco UCS storage:FlexFlashDrive:presence
+      - name: cucsStorageFlexFlashDrivePresence
+        OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.15
+        enum:
+          unknown: 0
+          empty: 1
+          equipped: 10
+          missing: 11
+          mismatch: 12
+          equippedNotPrimary: 13
+          equippedSlave: 14
+          mismatchSlave: 15
+          missingSlave: 16
+          equippedIdentityUnestablishable: 20
+          mismatchIdentityUnestablishable: 21
+          equippedWithMalformedFru: 22
+          inaccessible: 30
+          unauthorized: 40
+          notSupported: 100
+          equippedUnsupported: 101
+          equippedDiscNotStarted: 102
+          equippedDiscInProgress: 103
+          equippedDiscError: 104
+          equippedDiscUnknown: 105
+      # Cisco UCS storage:FlexFlashDrive:size
+      - name: cucsStorageFlexFlashDriveSize
+        OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.18
+      # Cisco UCS storage:FlexFlashDrive:operationState
+      - name: cucsStorageFlexFlashDriveOperationState
+        OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.25
+        enum:
+          partitionNonMirrored: 0
+          partitionMirrored: 1
+          partitionMirroredSyncing: 2
+          partitionMirroredErasing: 3
+          partitionMirroredUpdating: 4
+          partitionNonMirroredUpdating: 5
+          partitionNonMirroredErasing: 6
+          partitionMirroredSyncingFail: 7
+          partitionMirroredErasingFail: 8
+          partitionMirroredUpdatingFail: 9
+          partitionNonMirroredUpdatingFail: 10
+          partitionNonMirroredErasingFail: 11
+          partitionMirroredSyncingSuccess: 12
+          partitionMirroredErasingSuccess: 13
+          partitionMirroredUpdatingSuccess: 14
+          partitionNonMirroredUpdatingSuccess: 15
+          partitionNonMirroredErasingSuccess: 16
+          unknown: 17
+    metric_tags:
+      # Cisco UCS storage:FlexFlashDrive distinguished name
+      - column:
+          name: cucsStorageFlexFlashDriveDn
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.2
+      # Cisco UCS storage:FlexFlashDrive:connectionProtocol
+      - column:
+          name: cucsStorageFlexFlashDriveConnectionProtocol
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.5
+          enum:
+            unspecified: 0
+            sas: 1
+            sata: 2
+            nvme: 3
+      # Cisco UCS storage:FlexFlashDrive:driveType
+      - column:
+          name: cucsStorageFlexFlashDriveDriveType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.8
+          enum:
+            unknown: 0
+            scu: 1
+            huu: 2
+            hv: 3
+            drivers: 4
+      # Cisco UCS storage:FlexFlashDrive:model
+      - column:
+          name: cucsStorageFlexFlashDriveModel
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.10
+      # Cisco UCS storage:FlexFlashDrive:name
+      - column:
+          name: cucsStorageFlexFlashDriveName
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.11
+      # Cisco UCS storage:FlexFlashDrive:visible
+      - column:
+          name: cucsStorageFlexFlashDriveVisible
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.21
+          enum:
+            no: 0
+            yes: 1
+      # Cisco UCS storage:FlexFlashDrive:removable
+      - column:
+          name: cucsStorageFlexFlashDriveRemovable
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.22
+          enum:
+            na: 0
+            yes: 1
+            no: 2
+      # Cisco UCS storage:FlexFlashDrive:RWType
+      - column:
+          name: cucsStorageFlexFlashDriveRWType
+          OID: 1.3.6.1.4.1.9.9.719.1.45.36.1.23
+          enum:
+            readWrite: 0
+            readOnly: 1

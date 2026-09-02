@@ -1,0 +1,86 @@
+# https://bestmonitoringtools.com/mibdb/mibdb_search.php?mib=NIMBLE-MIB
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.37447.3.1    # HPE Nimble Storage AF40 
+
+provider: kentik-nas
+
+metrics:
+  # Volume information table
+  - MIB: NIMBLE-MIB
+    table:
+      name: volTable
+      OID: 1.3.6.1.4.1.37447.1.2
+    symbols:
+      # Volume Online (true or false).
+      - name: volOnline
+        OID: 1.3.6.1.4.1.37447.1.2.1.10
+        enum:
+          false: 0
+          true: 1
+      # Maximum defined size of a volume in bytes - low order bytes.
+      - name: volSizeLow
+        OID: 1.3.6.1.4.1.37447.1.2.1.4
+      # Maximum defined size of a volume in bytes - high order bytes.
+      - name: volSizeHigh
+        OID: 1.3.6.1.4.1.37447.1.2.1.5
+      # Current number of bytes a volume is using - low order bytes.
+      - name: volUsageLow
+        OID: 1.3.6.1.4.1.37447.1.2.1.6
+      # Current number of bytes a volume is using - high order bytes.
+      - name: volUsageHigh
+        OID: 1.3.6.1.4.1.37447.1.2.1.7
+      # Number of bytes reserved for a volume - low order bytes. 
+      - name: volReserveLow
+        OID: 1.3.6.1.4.1.37447.1.2.1.8
+      # Number of bytes reserved for a volume - high order bytes.
+      - name: volReserveHigh
+        OID: 1.3.6.1.4.1.37447.1.2.1.9
+      # Total cumulative number of Read I/Os (sequential and random).
+      - name: volIoReads
+        OID: 1.3.6.1.4.1.37447.1.2.1.13
+      # Total cumulative number of Write I/Os.
+      - name: volIoWrites
+        OID: 1.3.6.1.4.1.37447.1.2.1.34
+      # Total cumulative number of Read I/O bytes (sequential and random).
+      - name: ioReadBytes
+        OID: 1.3.6.1.4.1.37447.1.3.8
+      # Total cumulative number of Write I/O bytes (sequential and random).
+      - name: ioWriteBytes
+        OID: 1.3.6.1.4.1.37447.1.3.10
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.37447.1.2.1.3
+          name: volName
+  - MIB: NIMBLE-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.37447.1.3.2.0
+        name: ioReads
+      - OID: 1.3.6.1.4.1.37447.1.3.4.0
+        name: ioWrites
+      - OID: 1.3.6.1.4.1.37447.1.3.6.0
+        name: ioReadTimeMicrosec
+      - OID: 1.3.6.1.4.1.37447.1.3.7.0
+        name: ioWriteTimeMicrosec
+      - OID: 1.3.6.1.4.1.37447.1.3.8.0
+        name: ioReadBytes
+      - OID: 1.3.6.1.4.1.37447.1.3.9.0
+        name: ioSeqReadBytes
+      - OID: 1.3.6.1.4.1.37447.1.3.10.0
+        name: ioWriteBytes
+      - OID: 1.3.6.1.4.1.37447.1.3.11.0
+        name: ioSeqWriteBytes
+      - OID: 1.3.6.1.4.1.37447.1.3.12.0
+        name: diskVolBytesUsedLow
+      - OID: 1.3.6.1.4.1.37447.1.3.13.0
+        name: diskVolBytesUsedHigh
+      - OID: 1.3.6.1.4.1.37447.1.3.14.0
+        name: diskSnapBytesUsedLow
+      - OID: 1.3.6.1.4.1.37447.1.3.15.0
+        name: diskSnapBytesUsedHigh
+      - OID: 1.3.6.1.4.1.37447.1.3.16.0
+        name: ioNonseqReadHits

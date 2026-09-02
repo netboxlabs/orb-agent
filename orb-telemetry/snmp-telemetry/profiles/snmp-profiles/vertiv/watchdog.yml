@@ -1,0 +1,98 @@
+# https://mibs.observium.org/mib/VERTIV-BB-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-watchdog
+
+sysobjectid:
+  - 1.3.6.1.4.1.21239.5.1    # Watchdog 100
+
+metrics:
+  # Table of internal sensors for units
+  - MIB: VERTIV-BB-MIB
+    table:
+      name: internalTable
+      OID: 1.3.6.1.4.1.21239.5.1.2
+    symbols:
+      # Device availability
+      - OID: 1.3.6.1.4.1.21239.5.1.2.1.4
+        name: internalAvail
+        enum:
+          unavailable: 0
+          available: 1
+          partiallyUnavailable: 2
+      # Current reading for Temperature in tenths of degrees
+      - OID: 1.3.6.1.4.1.21239.5.1.2.1.5
+        name: internalTemp
+      # Humidity reading
+      - OID: 1.3.6.1.4.1.21239.5.1.2.1.6
+        name: internalHumidity
+      # Current reading for Dew-point in tenths of degrees
+      - OID: 1.3.6.1.4.1.21239.5.1.2.1.7
+        name: internalDewPoint
+    metric_tags:
+      # Serial Number
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.1.2.1.2
+          name: internalSerial
+      # Temperature Units
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.1.1.7.0
+          name: temperatureUnits
+          enum:
+            fahrenheit: 0
+            celsius: 1
+
+  # Remote temperature sensor table
+  - MIB: VERTIV-BB-MIB
+    table:
+      name: tempSensorTable
+      OID: 1.3.6.1.4.1.21239.5.1.4
+    symbols:
+      # Device availability
+      - OID: 1.3.6.1.4.1.21239.5.1.4.1.4
+        name: tempSensorAvail
+        enum:
+          unavailable: 0
+          available: 1
+          partiallyUnavailable: 2
+      # Current reading for Temperature in tenths of degrees
+      - OID: 1.3.6.1.4.1.21239.5.1.4.1.5
+        name: tempSensorTemp
+    metric_tags:
+      # Serial Number
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.1.4.1.2
+          name: tempSensorSerial
+      # Friendly Name
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.1.4.1.3
+          name: tempSensorName
+
+metric_tags:
+  # Product name
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.1.1.1.0
+      name: productTitle
+  # Product version
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.1.1.2.0
+      name: productVersion
+  # User-assigned name
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.1.1.3.0
+      name: productFriendlyName
+  # Product's unique MAC address
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.1.1.4.0
+      name: productMacAddress
+      conversion: hwaddr
+  # Product's main URL access point
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.1.1.5.0
+      name: productUrl
+  # Total number of devices on unit
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.1.1.6.0
+      name: deviceCount

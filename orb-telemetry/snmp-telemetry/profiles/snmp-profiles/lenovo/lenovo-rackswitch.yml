@@ -1,0 +1,141 @@
+# Lenovo RackSwitch — LENOVO-ENV-MIB (shared across ENOS/CNOS)
+# https://mibs.observium.org/mib/LENOVO-ENV-MIB/
+# https://mibs.observium.org/mib/LENOVO-PRODUCTS-MIB/
+
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.19046.1.18       # Lenovo Flex
+  - 1.3.6.1.4.1.19046.1.18.23    # si4091
+  - 1.3.6.1.4.1.19046.1.7.*      # Lenovo switch
+  - 1.3.6.1.4.1.19046.1.7.22     # g8296
+  - 1.3.6.1.4.1.19046.1.7.24     # g8272
+  - 1.3.6.1.4.1.19046.1.7.29     # g8296-cnos
+  - 1.3.6.1.4.1.19046.1.7.30     # g8272-cnos
+  - 1.3.6.1.4.1.19046.1.7.31     # g8332-cnos
+  - 1.3.6.1.4.1.19046.1.7.32     # ne1032
+  - 1.3.6.1.4.1.19046.1.7.33     # ne1032t
+  - 1.3.6.1.4.1.19046.1.7.34     # ne1072t
+  - 1.3.6.1.4.1.19046.1.7.35     # ne1072
+  - 1.3.6.1.4.1.19046.1.7.36     # ne10032
+  - 1.3.6.1.4.1.19046.1.7.37     # ce0128t
+  - 1.3.6.1.4.1.19046.1.7.38     # ce0128p
+  - 1.3.6.1.4.1.19046.1.7.39     # ce0152t
+  - 1.3.6.1.4.1.19046.1.7.40     # ne1072tv2
+  - 1.3.6.1.4.1.19046.1.7.41     # ne2572
+  - 1.3.6.1.4.1.19046.1.7.42     # ne0152t
+
+metrics:
+  - MIB: LENOVO-TOR-MIBS
+    symbol:
+      OID: 1.3.6.1.4.1.19046.2.7.24.1.2.2.9.0
+      name: mpCpuStatsUtil1MinuteRev
+      poll_time_sec: 60
+      tag: CPU
+  - MIB: LENOVO-TOR-MIBS
+    symbol:
+      OID: 1.3.6.1.4.1.19046.2.7.24.1.2.12.1.0
+      name: totalMemoryStats
+      poll_time_sec: 60
+      tag: MemoryTotal
+  - MIB: LENOVO-TOR-MIBS
+    symbol:
+      OID: 1.3.6.1.4.1.19046.2.7.24.1.2.12.2.0
+      name: memoryFreeStats
+      poll_time_sec: 60
+      tag: MemoryFree
+  - MIB: LENOVO-TOR-MIBS
+    symbol:
+      OID: 1.3.6.1.4.1.19046.2.7.24.1.3.1.15.0
+      name: hwGlobalHealthStatus
+      enum:
+        ok: 1
+        noncritical: 2
+        critical: 3
+
+  - MIB: LENOVO-ENV-MIB
+    table:
+      OID: 1.3.6.1.4.1.19046.2.3.11.1.1
+      name: lenovoEnvMibPowerSupplyTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19046.2.3.11.1.1.1.5
+        name: lenovoEnvMibPowerSupplyState
+        enum:
+          off: 0
+          on: 1
+          absent: 2
+          outputFault: 3
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.1.1.4
+          name: lenovoEnvMibPowerSupplyName
+        tag: psu_name
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.1.1.3
+          name: lenovoEnvMibPowerSupplyDesc
+        tag: psu_desc
+
+  - MIB: LENOVO-ENV-MIB
+    table:
+      OID: 1.3.6.1.4.1.19046.2.3.11.1.2
+      name: lenovoEnvMibFanTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19046.2.3.11.1.2.1.5
+        name: lenovoEnvMibFanState
+        enum:
+          ok: 0
+          absent: 1
+          fault: 2
+      - OID: 1.3.6.1.4.1.19046.2.3.11.1.2.1.8
+        name: lenovoEnvMibFanSpeedRPM
+        tag: FanRPM
+      - OID: 1.3.6.1.4.1.19046.2.3.11.1.2.1.9
+        name: lenovoEnvMibFanSpeedPercent
+        tag: FanPercent
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.2.1.4
+          name: lenovoEnvMibFanName
+        tag: fan_name
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.2.1.3
+          name: lenovoEnvMibFanDesc
+        tag: fan_desc
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.2.1.7
+          name: lenovoEnvMibFanModule
+        tag: fan_module
+
+  - MIB: LENOVO-ENV-MIB
+    table:
+      OID: 1.3.6.1.4.1.19046.2.3.11.1.3
+      name: lenovoEnvMibTempSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19046.2.3.11.1.3.1.5
+        name: lenovoEnvMibTempSensorState
+        enum:
+          ok: 0
+          fault: 1
+      - OID: 1.3.6.1.4.1.19046.2.3.11.1.3.1.6
+        name: lenovoEnvMibTempSensorTemperature
+        tag: Temperature
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.3.1.4
+          name: lenovoEnvMibTempSensorName
+        tag: sensor_name
+      - column:
+          OID: 1.3.6.1.4.1.19046.2.3.11.1.3.1.3
+          name: lenovoEnvMibTempSensorDesc
+        tag: sensor_desc
+
+  - MIB: LENOVO-ENV-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.19046.2.3.11.1.4.1.0
+      name: lenovoEnvMibTempSensorWarning
+      tag: TempWarningThreshold

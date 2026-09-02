@@ -1,0 +1,123 @@
+# https://mibs.observium.org/mib/OG-STATUS-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.25049.1.60    # IM4200
+  - 1.3.6.1.4.1.25049.1.61    # IM7200
+
+metrics:
+  # Faster polling to support anomaly detection
+  # The total amount of real/physical memory installed on this host.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalReal
+      OID: 1.3.6.1.4.1.2021.4.5.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # Faster polling to support anomaly detection
+  # The amount of real/physical memory currently unused or available.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memAvailReal
+      OID: 1.3.6.1.4.1.2021.4.6.0
+      poll_time_sec: 60
+      tag: MemoryFree
+  # Faster polling to support anomaly detection
+  # The 1 minute load average as an integer. This is computed by taking the floating point loadaverage value and multiplying by 100, then converting the value to an integer.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: laLoadInt1Min
+      OID: 1.3.6.1.4.1.2021.10.1.5.1
+      poll_time_sec: 60
+      tag: CPU
+  # This entity's serial port statistics table.
+  - MIB: OG-STATUS-MIB
+    table:
+      name: ogSerialPortStatusTable
+      OID: 1.3.6.1.4.1.25049.16.1
+    symbols:
+      # Serial port bytes received.
+      - name: ogSerialPortStatusRxBytes
+        OID: 1.3.6.1.4.1.25049.16.1.1.3
+      # Serial port bytes transmitted.
+      - name: ogSerialPortStatusTxBytes
+        OID: 1.3.6.1.4.1.25049.16.1.1.4
+      # The status of the DCD signal.
+      - name: ogSerialPortStatusDCD
+        OID: 1.3.6.1.4.1.25049.16.1.1.6
+        enum:
+          off: 0
+          on: 1
+      # The status of the DTR signal.
+      - name: ogSerialPortStatusDTR
+        OID: 1.3.6.1.4.1.25049.16.1.1.7
+        enum:
+          off: 0
+          on: 1
+      # The status of the DSR signal.
+      - name: ogSerialPortStatusDSR
+        OID: 1.3.6.1.4.1.25049.16.1.1.8
+        enum:
+          off: 0
+          on: 1
+      # The status of the CTS signal.
+      - name: ogSerialPortStatusCTS
+        OID: 1.3.6.1.4.1.25049.16.1.1.9
+        enum:
+          off: 0
+          on: 1
+      # The status of the RTS signal.
+      - name: ogSerialPortStatusRTS
+        OID: 1.3.6.1.4.1.25049.16.1.1.10
+        enum:
+          off: 0
+          on: 1
+    metric_tags:
+      # Serial port number.
+      - column:
+          name: ogSerialPortStatusPort
+          OID: 1.3.6.1.4.1.25049.16.1.1.2
+      # Serial port speed in bits per second.
+      - column:
+          name: ogSerialPortStatusSpeed
+          OID: 1.3.6.1.4.1.25049.16.1.1.5
+      # The label of the port.
+      - column:
+          name: ogSerialPortStatusLabel
+          OID: 1.3.6.1.4.1.25049.16.1.1.11
+  # This entity's RPC table.
+  - MIB: OG-STATUS-MIB
+    table:
+      name: ogRpcStatusTable
+      OID: 1.3.6.1.4.1.25049.16.3
+    symbols:
+      # Maximum temperature on the RPC.
+      - name: ogRpcStatusMaxTemp
+        OID: 1.3.6.1.4.1.25049.16.3.1.3
+    metric_tags:
+      # The name of the RPC device.
+      - column:
+          name: ogRpcStatusName
+          OID: 1.3.6.1.4.1.25049.16.3.1.2
+  # This entity's EMD table.
+  - MIB: OG-STATUS-MIB
+    table:
+      name: ogEmdStatusTable
+      OID: 1.3.6.1.4.1.25049.16.4
+    symbols:
+      # Current temperature on the EMD
+      - name: ogEmdStatusTemp
+        OID: 1.3.6.1.4.1.25049.16.4.1.3
+      # Humidity sensor on the EMD
+      - name: ogEmdStatusHumidity
+        OID: 1.3.6.1.4.1.25049.16.4.1.4
+    metric_tags:
+      # The name of the EMD device.
+      - column:
+          name: ogEmdStatusName
+          OID: 1.3.6.1.4.1.25049.16.4.1.2

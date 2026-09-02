@@ -1,0 +1,306 @@
+
+# https://mibs.observium.org/mib/ALCATEL-ENT1-HEALTH-MIB/#healthModuleCpu1MinAvg
+# https://mibs.observium.org/mib/ALCATEL-ENT1-DEVICES/
+---
+
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.6486.801.1.1.2.1.*       # Alcatel-Lucent Omniswitch ENT
+  - 1.3.6.1.4.1.6486.801.1.1.2.1.9.*     # Alcatel-Lucent Omniswitch 10000
+  - 1.3.6.1.4.1.6486.801.1.1.2.1.10.*    # Alcatel-Lucent Omniswitch 6900
+  - 1.3.6.1.4.1.6486.801.1.1.2.1.11.*    # Alcatel-Lucent Omniswitch 6860
+  - 1.3.6.1.4.1.6486.801.1.1.2.1.16.*    # Alcatel-Lucent Omniswitch 6360
+
+metrics:
+  - MIB: ALCATEL-ENT1-HEALTH-MIB
+    table:
+      name: healthModuleTable 
+      OID: 1.3.6.1.4.1.6486.801.1.2.1.16.1.1.1.1
+    symbols:
+      # Average device-level CPU utilization over the last minute (percent).
+      - name: healthModuleCpu1MinAvg
+        OID: 1.3.6.1.4.1.6486.801.1.2.1.16.1.1.1.1.1.11
+        poll_time_sec: 60
+        tag: CPU
+      # Average module-level memory utilization over the last minute (percent).
+      - name: healthModuleMemory1MinAvg
+        OID: 1.3.6.1.4.1.6486.801.1.2.1.16.1.1.1.1.1.8
+        poll_time_sec: 60
+        tag: MemoryUtilization
+    metric_tags:
+      # This is a configuraion for chassis id
+      - column:
+          name: healthModuleChassisId
+          OID: 1.3.6.1.4.1.6486.801.1.2.1.16.1.1.1.1.1.14
+
+  - MIB: ALCATEL-ENT1-CHASSIS-MIB
+    table:
+      name: chasEntPhysicalTable
+      OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1
+    symbols:
+      - name: chasEntPhysAdminStatus
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.1
+        enum:
+          unknown: 1
+          powerOff: 2
+          powerOn: 3
+          reset: 4
+          takeover: 5
+          resetAll: 6
+          standby: 7
+      - name: chasEntPhysOperStatus
+        OID: 1.3.6.1.4.1.6486.800.1.1.1.1.1.1.1.2
+        enum:
+          up: 1
+          down: 2
+          testing: 3
+          unknown: 4
+          secondary: 5
+          notPresent: 6
+          unpowered: 7
+          master: 8
+      # Chassis Management Module : CMM) front panel LED OK1 status indication
+      - name: chasEntPhysLedStatusOk1
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.6
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis Management Module : CMM) front panel LED OK2 status indication
+      - name:  chasEntPhysLedStatusOk2
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.7
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis Management Module : CMM) front panel LED Primary chassis indication
+      - name: chasEntPhysLedStatusPrimaryCMM
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.8
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis Management Module : CMM) front panel LED Secondary chassis indication
+      - name: chasEntPhysLedStatusSecondaryCMM
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.9
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis Management Module : CMM) front panel LED temperature status indication
+      - name: chasEntPhysLedStatusTemperature
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.10
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # For Hawk stacks used as a fan group status LED.  For eagle CMM's user instead Fan 1 (top left), Fan 2 (top right), Fan 3 (rear)
+      - name: chasEntPhysLedStatusFan
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.11
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis backup power supply status indication
+      - name: chasEntPhysLedStatusBackupPS
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.12
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis internal power supply status indication
+      - name: chasEntPhysLedStatusInternalPS
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.13
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis control status
+      - name: chasEntPhysLedStatusControl
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.14
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis Management Module (CMM) Fabric status indication
+      - name: chasEntPhysLedStatusFabric
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.15
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+      # Chassis Power Supply Unit status indication
+      - name: chasEntPhysLedStatusPS
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.1.1.16
+        enum:
+          notApplicable: 0
+          off: 1
+          greenOn: 2
+          greenBlink: 3
+          amberOn: 4
+          amberBlink: 5
+    metric_tags:
+      # A textual description of physical entity
+      - column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+        tag: entity_description
+      # An indication of the general hardware type of the physical entity
+      - column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10 
+            stack: 11 
+            cpu: 12
+        tag: entity_class
+      # The textual name of the physical entity
+      - column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+        tag: entity_name
+      # The vendor-specific serial number string for the physical entity
+      - column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+        tag: entity_serial
+      # The vendor-specific model name identifier string associated with this physical component
+      - column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+        tag: entity_model
+
+  - MIB: ALCATEL-ENT1-CHASSIS-MIB
+    table:
+      name: chasEntTemperatureTable
+      OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.2
+    symbols:
+      - name: chasEntTempCurrent
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.2.1.1
+      - name: chasEntTempStatus
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.1.1.2.1.4
+        enum:
+          unknown: 1
+          notPresent: 2
+          underThreshold: 3
+          overFirstThreshold: 4
+          overDangerThreshold: 5
+    metric_tags:
+      # A textual description of physical entity
+      - column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+        tag: entity_description
+      # An indication of the general hardware type of the physical entity
+      - column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10 
+            stack: 11 
+            cpu: 12
+        tag: entity_class
+      # The textual name of the physical entity
+      - column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+        tag: entity_name
+      # The vendor-specific serial number string for the physical entity
+      - column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+        tag: entity_serial
+      # The vendor-specific model name identifier string associated with this physical component
+      - column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+        tag: entity_model
+
+  - MIB: ALCATEL-ENT1-CHASSIS-MIB
+    table:
+      name: alaChasEntPhysFanTable
+      OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.11
+    symbols:
+      - name: alaChasEntPhysFanStatus
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.11.1.2
+        enum:
+          noStatus: 0
+          notRunning: 1
+          running: 2
+      - name: alaChasEntPhysFanSpeed
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.11.1.4
+
+  - MIB: ALCATEL-ENT1-CHASSIS-MIB
+    table:
+      name: alaChasBpsPowerSupplyTable
+      OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.14.4
+    symbols:
+      - name: alaChasBpsPowerSupplyOperStatus
+        OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.14.4.1.10
+        enum:
+          up: 1
+          down: 2
+          unknown: 3
+    metric_tags:
+      - column:
+          name: alaChasBpsPowerSupplyName
+          OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.14.4.1.3
+      - column:
+          name: alaChasBpsPowerSupplyDescr
+          OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.14.4.1.4
+      - column:
+          name: alaChasBpsPowerSupplySerialNum
+          OID: 1.3.6.1.4.1.6486.801.1.1.1.3.1.1.14.4.1.8

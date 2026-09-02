@@ -1,0 +1,616 @@
+# https://mibs.observium.org/mib/CISCO-RF-MIB/
+# https://mibs.observium.org/mib/CISCO-LWAPP-WLAN-MIB/
+# https://mibs.observium.org/mib/AIRESPACE-SWITCHING-MIB/
+# https://mibs.observium.org/mib/AIRESPACE-WIRELESS-MIB/
+# https://mibs.observium.org/mib/CISCO-LWAPP-HA-MIB/
+# https://mibs.observium.org/mib/CISCO-LWAPP-AP-MIB/
+---
+extends:
+  - cisco-all-devices.yml
+  - host-resources-mib.yml
+
+provider: kentik-wireless-controller
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.828    # 2106 Wireless Controller
+  - 1.3.6.1.4.1.9.1.1069    # 5508 Wireless Controller
+  - 1.3.6.1.4.1.9.1.1279    # 2504 Wireless Controller
+  - 1.3.6.1.4.1.9.1.1293    # WiSM2
+  - 1.3.6.1.4.1.9.1.1295    # Flex 7510
+  - 1.3.6.1.4.1.9.1.1615    # 8500 Wireless Controller
+  - 1.3.6.1.4.1.9.1.1631    # Virtual Wireless Controller
+  - 1.3.6.1.4.1.9.1.1645    # 5760 Wireless Controller
+  - 1.3.6.1.4.1.9.1.1926    # CT5508K9 Wireless Controller
+  - 1.3.6.1.4.1.9.1.1927    # CT2504K9 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2067    # 5760 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2170    # 5520 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2171    # 8540 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2373    # Aironet 3800
+  - 1.3.6.1.4.1.9.1.2391    # 9800 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2427    # 3504 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2530    # 9800 Wireless Controller
+  - 1.3.6.1.4.1.9.1.2860    # 9800-L Wireless Controller
+  - 1.3.6.1.4.1.9.1.2861    # 9800-L Wireless Controller
+  - 1.3.6.1.4.1.14179    # 4100 Wireless Controller
+  - 1.3.6.1.4.1.14179.1.1.4.3    # 4400 Wireless Controller
+  - 1.3.6.1.4.1.14179.1.1.4.4    # WiSM 6500-7600
+
+metrics:
+  # CPU and Hardware Health
+  - MIB: AIRESPACE-SWITCHING-MIB
+    symbols:
+      # Current CPU Load of the switch in percentage.
+      # Polled at 60s to support anomaly detection.
+      - name: agentCurrentCPUUtilization
+        OID: 1.3.6.1.4.1.14179.1.1.5.1.0
+        poll_time_sec: 60
+        tag: CPU
+      # This is to indicate if the switch has Power Supply 1 present on it. This is applicable to the 4200 series and will always return true for the earlier device versions.
+      - name: agentSwitchInfoPowerSupply1Present
+        OID: 1.3.6.1.4.1.14179.1.1.3.2.0
+        enum:
+          false: 0
+          true: 1
+      # This is to indicate if the switch's Power Supply 1 is operational. This is applicable to the 4200 series and will always return true for the earlier device versions.
+      - name: agentSwitchInfoPowerSupply1Operational
+        OID: 1.3.6.1.4.1.14179.1.1.3.3.0
+        enum:
+          false: 0
+          true: 1
+      # This is to indicate if the switch has Power Supply 2 present on it. This is applicable to the 4200 series and will always return false for the earlier device versions.
+      - name: agentSwitchInfoPowerSupply2Present
+        OID: 1.3.6.1.4.1.14179.1.1.3.4.0
+        enum:
+          false: 0
+          true: 1
+      # This is to indicate if the switch's Power Supply 2 is operational.This is applicable to the 4200 series and will always return false for the earlier device versions.
+      - name: agentSwitchInfoPowerSupply2Operational
+        OID: 1.3.6.1.4.1.14179.1.1.3.5.0
+        enum:
+          false: 0
+          true: 1
+
+  # Memory and detailed AP and Client counts
+  - MIB: CISCO-LWAPP-SYS-MIB
+    symbols:
+      # This object specifies the count of AP's that are connected with WLC
+      - name: clsSysApConnectCount
+        OID: 1.3.6.1.4.1.9.9.618.1.8.4.0
+      # This object specifies the current percent usage of system memory.
+      # Polled at 60s to support anomaly detection.
+      - name: clsSysCurrentMemoryUsage
+        OID: 1.3.6.1.4.1.9.9.618.1.8.6.0
+        poll_time_sec: 60
+        tag: MemoryUtilization
+      # This object represents the maximum clients present on the controller.
+      - name: clsMaxClientsCount
+        OID: 1.3.6.1.4.1.9.9.618.1.8.12.0
+
+  # Current Internal Temperature of the unit in Centigrade.
+  - MIB: AIRESPACE-WIRELESS-MIB
+    symbols:
+      - name: bsnSensorTemperature
+        OID: 1.3.6.1.4.1.14179.2.3.1.13.0
+
+  # Status information for the Redundancy Framework (RF)
+  - MIB: CISCO-RF-MIB
+    symbols:
+      # The current state of RF on this unit.
+      - name: cRFStatusUnitState
+        OID: 1.3.6.1.4.1.9.9.176.1.1.2.0
+        enum:
+          notKnown: 1
+          disabled: 2
+          initialization: 3
+          negotiation: 4
+          standbyCold: 5
+          standbyColdConfig: 6
+          standbyColdFileSys: 7
+          standbyColdBulk: 8
+          standbyHot: 9
+          activeFast: 10
+          activeDrain: 11
+          activePreconfig: 12
+          activePostconfig: 13
+          active: 14
+          activeExtraload: 15
+          activeHandback: 16
+      # A unique identifier for the redundant peer unit.
+      - name: cRFStatusPeerUnitId
+        OID: 1.3.6.1.4.1.9.9.176.1.1.3.0
+      # The current state of RF on the peer unit.
+      - name: cRFStatusPeerUnitState
+        OID: 1.3.6.1.4.1.9.9.176.1.1.4.0
+        enum:
+          notKnown: 1
+          disabled: 2
+          initialization: 3
+          negotiation: 4
+          standbyCold: 5
+          standbyColdConfig: 6
+          standbyColdFileSys: 7
+          standbyColdBulk: 8
+          standbyHot: 9
+          activeFast: 10
+          activeDrain: 11
+          activePreconfig: 12
+          activePostconfig: 13
+          active: 14
+          activeExtraload: 15
+          activeHandback: 16
+      # The reason for the last switch of activity.
+      - name: cRFStatusLastSwactReasonCode
+        OID: 1.3.6.1.4.1.9.9.176.1.1.8.0
+        enum:
+          unsupported: 1
+          none: 2
+          notKnown: 3
+          userInitiated: 4
+          userForced: 5
+          activeUnitFailed: 6
+          activeUnitRemoved: 7
+      # The value of sysUpTime when the primary redundant unit took over as active. The value of this object will be 0 till the first switchover.
+      - name: cRFStatusFailoverTime
+        OID: 1.3.6.1.4.1.9.9.176.1.1.9.0
+      # Indicate the operational redundancy mode of the device.
+      - name: cRFCfgRedundancyOperMode
+        OID: 1.3.6.1.4.1.9.9.176.1.2.16.0
+        enum:
+          nonRedundant: 1
+          staticLoadShareNonRedundant: 2
+          dynamicLoadShareNonRedundant: 3
+          staticLoadShareRedundant: 4
+          dynamicLoadShareRedundant: 5
+          coldStandbyRedundant: 6
+          warmStandbyRedundant: 7
+          hotStandbyRedundant: 8
+
+  # HA Sync Status for AirOS WLCs
+  - MIB: CISCO-LWAPP-HA-MIB
+    symbols:
+      - name: cLHaAvgPeerReachLatency # This object represents average value of peer controller reachable latency in micro seconds
+        OID: 1.3.6.1.4.1.9.9.843.1.5.1
+        poll_time_sec: 60
+      - name: cLHaBulkSyncStatus #  This object represents current status of bulk sync
+        OID: 1.3.6.1.4.1.9.9.843.1.5.3
+        poll_time_sec: 60
+        enum:
+          completed: 1
+          pending: 0
+
+  # This table represents the WLAN configuration sent by the controller to the LWAPP APs for their operation.
+  - MIB: CISCO-LWAPP-WLAN-MIB
+    table:
+      name: cLWlanConfigTable
+      OID: 1.3.6.1.4.1.9.9.512.1.1.1
+    symbols:
+      # This is the status column for this row and used to create, modify and delete specific instances of rows in this table.
+      - name: cLWlanRowStatus
+        OID: 1.3.6.1.4.1.9.9.512.1.1.1.1.2
+        enum:
+            active: 1
+            notInService: 2
+            notReady: 3
+            createAndGo: 4
+            createAndWait: 5
+            destroy: 6
+    metric_tags:
+      # This object represents the profile name assigned to this WLAN.
+      - column:
+          name: cLWlanProfileName
+          OID: 1.3.6.1.4.1.9.9.512.1.1.1.1.3
+        tag: wlan_profile_name
+      # This object represents the SSID assigned to this WLAN.
+      - column:
+          name: cLWlanSsid
+          OID: 1.3.6.1.4.1.9.9.512.1.1.1.1.4
+        tag: wlan_ssid
+
+
+  # The listing the Statistics of RADIUS authentication servers.
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnRadiusAuthServerStatsTable
+      OID: 1.3.6.1.4.1.14179.2.5.3
+    symbols:
+      # The time interval (in hundredths of a second) between the most recent Access-Reply/Access-Challenge and the Access-Request that matched it from this RADIUS authentication server.
+      - name: bsnRadiusAuthClientRoundTripTime
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.6
+      # The number of RADIUS Access-Request packets retransmitted to this RADIUS authentication server.
+      - name: bsnRadiusAuthClientAccessRetransmissions
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.8
+      # The number of authentication timeouts to this server. After a timeout the client may retry to the same server, send to a different server, or give up. A retry to the same server is counted as a retransmit as well as a timeout. A send to a different server is counted as a Request as well as a timeout.
+      - name: bsnRadiusAuthClientTimeouts
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.15
+    metric_tags:
+      # The IP address of the RADIUS authentication server referred to in this table entry.
+      - column:
+          name: bsnRadiusAuthServerAddress
+          OID: 1.3.6.1.4.1.14179.2.5.1.1.2
+
+  # Table of Airespace APs managed by this Airespace Switch.
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnAPTable
+      OID: 1.3.6.1.4.1.14179.2.2.1
+    symbols:
+      # Operation State of the AP. When AP associates with the Airespace Switch its state will be associated. When Airespace AP is disassociated from the Switch, its state will be disassociating. The state is downloading when the AP is downloading its firmware.
+      - name: bsnAPOperationStatus
+        OID: 1.3.6.1.4.1.14179.2.2.1.1.6
+        enum:
+          associated: 1
+          disassociating: 2
+          downloading: 3
+      # Admin State of the AP
+      - name: bsnAPAdminStatus
+        OID: 1.3.6.1.4.1.14179.2.2.1.1.37
+        enum:
+          enable: 1
+          disable: 2
+    metric_tags:
+      # The MAC address of an AP.
+      - column:
+          name: bsnAPDot3MacAddress
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.1
+          conversion: hwaddr
+      # Name assigned to this AP. If an AP is not configured its factory default name will be ap: eg. ap:af:12:be
+      - column:
+          name: bsnAPName
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.3
+      # User specified location of this AP.
+      - column:
+          name: bsnAPLocation
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.4
+      # Monitor Only Mode Setting.
+      - column:
+          name: bsnAPMonitorOnlyMode
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.5
+          enum:
+            local: 0
+            monitor: 1
+            remote: 2
+            rogueDetector: 3
+            sniffer: 4
+            bridge: 5
+            seConnect: 6
+      # Major Minor Software Version of AP
+      - column:
+          name: bsnAPSoftwareVersion
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.8
+      # Major Minor Boot Version of AP
+      - column:
+          name: bsnAPBootVersion
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.9
+      # sysName of the Airespace Switch which is suppose to be the Primary MWAR(switch) of the AP with which AP should associate.
+      - column:
+          name: bsnAPPrimaryMwarName
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.10
+      # Port on the Switch on which this APs traffic is coming through.
+      - column:
+          name: bsnAPPortNumber
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.13
+      # AP Model
+      - column:
+          name: bsnAPModel
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.16
+      # AP Serial Number.
+      - column:
+          name: bsnAPSerialNumber
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.17
+      # IP address of the AP. This will not be available when the switch is operating in the Layer2 mode. In this case, the attribute will return 0 as value.
+      - column:
+          name: bsnApIpAddress
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.19
+          conversion: hextoip
+      # This is the model of the AP in enumeration.
+      - column:
+          name: bsnAPType
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.22
+          enum:
+            ap1000: 1
+            ap1030: 2
+            mimo: 3
+            unknown: 4
+            ap1100: 5
+            ap1130: 6
+            ap1240: 7
+            ap1200: 8
+            ap1310: 9
+            ap1500: 10
+            ap1250: 11
+            ap1505: 12
+            ap3201: 13
+            ap1520: 14
+            ap800: 15
+            ap1140: 16
+            ap800agn: 17
+            ap3500i: 18
+            ap3500e: 19
+            ap1260: 20
+            ap1040: 21
+            ap1550: 22
+            ap602i: 23
+            ap3500p: 24
+            ap802gn: 25
+            ap802agn: 26
+            ap3600i: 27
+            ap3600e: 28
+            ap2600i: 29
+            ap2600e: 30
+            ap802hagn: 31
+            ap1600i: 32
+            ap1600e: 33
+            ap702e: 34
+            ap702i: 35
+            ap3600p: 36
+            ap1530i: 37
+            ap1530e: 38
+            ap3700e: 39
+            ap3700i: 40
+            ap3700p: 41
+            ap2700e: 42
+            ap2700i: 43
+            ap702w: 44
+            wap2600i: 45
+            wap2600e: 46
+            wap1600i: 47
+            wap1600e: 48
+            wap702i: 49
+            wap702e: 50
+            ap1700i: 51
+            ap1700e: 52
+            ap1570e: 53
+            ap1570i: 54
+      # sysName of the Airespace Switch which is suppose to be the Secondary MWAR(switch) of the AP with which AP should associate if Primary Switch(configured through bsnAPPrimaryMwarName) is not available.
+      - column:
+          name: bsnAPSecondaryMwarName
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.23
+      # sysName of the Airespace Switch which is suppose to be the Tertiary MWAR(switch) of the AP with which AP should associate. If primary,secondary and tertiary switch are not available then it will associate with Master Switch.
+      - column:
+          name: bsnAPTertiaryMwarName
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.24
+      # This flag when disabled implies that AP will use DHCP to get the IP address.
+      - column:
+          name: bsnAPIsStaticIP
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.25
+          enum:
+            disable: 0
+            enable: 1
+      # The Netmask of the IP address of the AP.
+      - column:
+          name: bsnAPNetmask
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.26
+          conversion: hextoip
+      # The Gateway for the AP.
+      - column:
+          name: bsnAPGateway
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.27
+          conversion: hextoip
+      # The Static IP-Address configuration for the AP.
+      - column:
+          name: bsnAPStaticIPAddress
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.28
+          conversion: hextoip
+      # This specifies if this AP is a Bridging AP.
+      - column:
+          name: bsnAPBridgingSupport
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.29
+          enum:
+            disable: 0
+            enable: 1
+      # The AP Group to which this AP has been associated with. If it is empty, then no AP Group overriding has been set.
+      - column:
+          name: bsnAPGroupVlanName
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.30
+      # IOS Version of IOS Cisco AP. Zero length string will be returned for other APs
+      - column:
+          name: bsnAPIOSVersion
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.31
+      # Enum values denoting AP Certificate Type.
+      - column:
+          name: bsnAPCertificateType
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.32
+          enum:
+            unknown: 0
+            manufactureInstalled: 1
+            selfSigned: 2
+            localSignificance: 3
+      # The Ethernet MAC address of the AP.
+      - column:
+          name: bsnAPEthernetMacAddress
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.33
+          conversion: hwaddr
+
+  # An entry in bsnDot11EssTable
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnDot11EssTable
+      OID: 1.3.6.1.4.1.14179.2.1.1
+    symbols:
+      # Administrative Status of ESS(WLAN). By disabling an ESS the corresponding SSID is no longer broadcasted in AP beacons.
+      - name: bsnDot11EssAdminStatus
+        OID: 1.3.6.1.4.1.14179.2.1.1.1.6
+        enum:
+          disable: 0
+          enable: 1
+      # Radio Policy for a WLAN.
+      - name: bsnDot11EssRadioPolicy
+        OID: 1.3.6.1.4.1.14179.2.1.1.1.30
+        enum:
+          all: 0
+          dot11bOnly: 1
+          dot11aOnly: 2
+          dot11gOnly: 3
+          dot11bgOnly: 4
+          dot11agOnly: 5
+          dot11abOnly: 6
+      # Quality of Service for a WLAN.Services such as VoIP should be set to Gold while non-discriminating services such as messaging can be set to Bronze.
+      - name: bsnDot11EssQualityOfService
+        OID: 1.3.6.1.4.1.14179.2.1.1.1.31
+        enum:
+          bronze: 0
+          silver: 1
+          gold: 2
+          platinum: 3
+      # No of Mobile Stations currently associated with the WLAN.
+      - name: bsnDot11EssNumberOfMobileStations
+        OID: 1.3.6.1.4.1.14179.2.1.1.1.38
+      # This attribute when enabled allows the switch to broadcast this SSID.
+      - name: bsnDot11EssBroadcastSsid
+        OID: 1.3.6.1.4.1.14179.2.1.1.1.51
+        enum:
+          enable: 1
+          disable: 0
+    metric_tags:
+      # SSID assigned to ESS(WLAN)
+      - column:
+          name: bsnDot11EssSsid
+          OID: 1.3.6.1.4.1.14179.2.1.1.1.2
+# This object represents the profile name assigned to this WLAN.
+      - column:
+          name: cLWlanProfileName
+          OID: 1.3.6.1.4.1.9.9.512.1.1.1.1.3
+        tag: wlan_profile_name
+      # This object represents the SSID assigned to this WLAN.
+      - column:
+          name: cLWlanSsid
+          OID: 1.3.6.1.4.1.9.9.512.1.1.1.1.4
+        tag: wlan_ssid
+      # This object specifies the AP's interface admin status.
+      - column:
+          name: cLApDot11IfAdminStatus
+          OID: 1.3.6.1.4.1.9.9.513.1.2.1.1.14
+
+   # Each entry represents an 802.11 interface in an Airespace AP.
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnAPIfTable
+      OID: 1.3.6.1.4.1.14179.2.2.2
+    symbols:
+      # The TxPowerLevel currently being used to transmit data. Some PHYs also use this value to determine the receiver sensitivity requirements for CCA.
+      - name: bsnAPIfPhyTxPowerLevel
+        OID: 1.3.6.1.4.1.14179.2.2.2.1.6
+      # Operational status of the interface.
+      - name: bsnAPIfOperStatus
+        OID: 1.3.6.1.4.1.14179.2.2.2.1.12
+        enum:
+          down: 1
+          up: 2
+          metric_tags:
+      - tag: apname_index
+        column:
+          OID: 1.3.6.1.4.1.14179.2.2.1.1.3
+          name: bsnAPNameIndex
+
+  # These are RRM performance related read only parameters per Airespace AP
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnAPIfLoadParametersTable
+      OID: 1.3.6.1.4.1.14179.2.2.13
+    symbols:
+      # Channel Utilization
+      - name: bsnAPIfLoadChannelUtilization
+        OID: 1.3.6.1.4.1.14179.2.2.13.1.3
+      # This is the number of clients attached to this Airespace AP at the last measurement interval(This comes from APF).
+      - name: bsnAPIfLoadNumOfClients
+        OID: 1.3.6.1.4.1.14179.2.2.13.1.4
+      # This is the number of clients with poor SNR attached to this Airespace AP at the last measurement interval ( This comes from APF ).
+      - name: bsnAPIfPoorSNRClients
+        OID: 1.3.6.1.4.1.14179.2.2.13.1.24
+
+  # This is a table of channel information like interference and noise from other 802.11 networks on each channel.
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnAPIfChannelInterferenceInfoTable
+      OID: 1.3.6.1.4.1.14179.2.2.14
+    symbols:
+      # Interference from other 802.11 networks on this channel.
+      - name: bsnAPIfInterferenceUtilization
+        OID: 1.3.6.1.4.1.14179.2.2.14.1.22
+
+  # The listing the Statistics of RADIUS authentication servers.
+  - MIB: AIRESPACE-WIRELESS-MIB
+    table:
+      name: bsnRadiusAuthServerStatsTable
+      OID: 1.3.6.1.4.1.14179.2.5.3
+    symbols:
+      # The time interval (in hundredths of a second) between the most recent Access-Reply/Access-Challenge and the Access-Request that matched it from this RADIUS authentication server.
+      - name: bsnRadiusAuthClientRoundTripTime
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.6
+      # The number of RADIUS Access-Request packets sent to this server. This does not include retransmissions.
+      - name: bsnRadiusAuthClientAccessRequests
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.7
+      # The number of RADIUS Access-Request packets retransmitted to this RADIUS authentication server.
+      - name: bsnRadiusAuthClientAccessRetransmissions
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.8
+      # The number of RADIUS Access-Accept packets (valid or invalid) received from this server.
+      - name: bsnRadiusAuthClientAccessAccepts
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.9
+      # The number of RADIUS Access-Reject packets (valid or invalid) received from this server.
+      - name: bsnRadiusAuthClientAccessRejects
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.10
+      # The number of RADIUS Access-Challenge packets (valid or invalid) received from this server.
+      - name: bsnRadiusAuthClientAccessChallenges
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.11
+      # The number of malformed RADIUS Access-Response packets received from this server. Malformed packets include packets with an invalid length. Bad authenticators or Signature attributes or unknown types are not included as malformed access responses.
+      - name: bsnRadiusAuthClientMalformedAccessResponses
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.12
+      # The number of RADIUS Access-Response packets containing invalid authenticators or Signature attributes received from this server.
+      - name: bsnRadiusAuthClientBadAuthenticators
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.13
+      # The number of RADIUS Access-Request packets destined for this server that have not yet timed out or received a response. This variable is incremented when an Access-Request is sent and decremented due to receipt of an Acess-Accept, Access-Reject or Access-Challenge, a timeout or retransmission.
+      - name: bsnRadiusAuthClientPendingRequests
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.14
+      # The number of authentication timeouts to this server. After a timeout the client may retry to the same server, send to a different server, or give up. A retry to the same server is counted as a retransmit as well as a timeout. A send to a different server is counted as a Request as well as a timeout.
+      - name: bsnRadiusAuthClientTimeouts
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.15
+      # The number of RADIUS packets of unknown type which were received from this server on the authentication port.
+      - name: bsnRadiusAuthClientUnknownTypes
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.16
+      # The number of RADIUS packets of which were received from this server on the authentication port and dropped for some other reason.
+      - name: bsnRadiusAuthClientPacketsDropped
+        OID: 1.3.6.1.4.1.14179.2.5.3.1.36
+    metric_tags:
+      # The IP address of the RADIUS authentication server referred to in this table entry.
+      - column:
+          name: bsnRadiusAuthServerAddress
+          OID: 1.3.6.1.4.1.14179.2.5.1.1.2
+          conversion: hextoip
+
+  # This table contains information about all the licenses installed on the device.
+  - MIB: CISCO-LICENSE-MGMT-MIB
+    table:
+      name: clmgmtLicenseInfoTable
+      OID: 1.3.6.1.4.1.9.9.543.1.2.3
+    symbols:
+      # Maximum number of entities that can use a license.
+      - OID: 1.3.6.1.4.1.9.9.543.1.2.3.1.10
+        name: clmgmtLicenseMaxUsageCount
+      # Remaining number of entities that can still use a license
+      - OID: 1.3.6.1.4.1.9.9.543.1.2.3.1.11
+        name: clmgmtLicenseUsageCountRemaining
+
+  # This table represents the information about the basic functional parameters corresponding to the dot11 interfaces of the APs that have joined the controller.
+  - MIB: CISCO-LWAPP-AP-MIB
+    table:
+      name: cLApDot11IfTable
+      OID: 1.3.6.1.4.1.9.9.513.1.2.1
+    symbols:
+      # This object specifies the AP's interface admin status.
+      - name: cLApDot11IfAdminStatus
+        OID: 1.3.6.1.4.1.9.9.513.1.2.1.1.14
+        
+metric_tags:
+  # Serial number of the switch.
+  - column:
+      name: agentInventorySerialNumber
+      OID: 1.3.6.1.4.1.14179.1.1.1.4.0
+    tag: entity_serial
+  # Operating System running on this unit.
+  - column:
+      name: agentInventoryOperatingSystem
+      OID: 1.3.6.1.4.1.14179.1.1.1.10.0
+  # Version of the product.
+  - column:
+      name: agentInventoryProductVersion
+      OID: 1.3.6.1.4.1.14179.1.1.1.14.0

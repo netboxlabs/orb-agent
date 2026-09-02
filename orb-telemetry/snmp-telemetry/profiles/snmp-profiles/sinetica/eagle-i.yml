@@ -1,0 +1,137 @@
+# https://www.circitor.fr/Mibs/Html/H/HAWK-I2-MIB.php
+---
+
+extends:
+  - system-mib.yml
+
+provider: kentik-eagle-i
+
+sysobjectid:
+  - 1.3.6.1.4.1.3711.24    # Sinetica Eagle-i
+
+metrics:
+  # A table giving data for all enabled inputs with analogue-type monitoring.
+  - MIB: HAWK-I2-MIB
+    table:
+      name: ipTHATable
+      OID: 1.3.6.1.4.1.3711.24.1.1.1.2.2
+    symbols:
+      # The current reading in the relevant measurement units.
+      - name: ipTHAValue
+        OID: 1.3.6.1.4.1.3711.24.1.1.1.2.2.1.7
+    metric_tags:
+      # The name of this input
+      - column:
+          name: ipTHAName
+          OID: 1.3.6.1.4.1.3711.24.1.1.1.2.2.1.3
+      # A system-defined name for the physical location of this input, e.g. MCU.
+      - column:
+          name: ipTHALocn
+          OID: 1.3.6.1.4.1.3711.24.1.1.1.2.2.1.4
+  # A table listing the parameters and data for all enabled inputs with contact-type monitoring.
+  - MIB: HAWK-I2-MIB
+    table:
+      name: ipContTable
+      OID: 1.3.6.1.4.1.3711.24.1.1.1.3.1
+    symbols:
+      # The current state of this contact.
+      - name: ipContCurrState
+        OID: 1.3.6.1.4.1.3711.24.1.1.1.3.1.1.7
+        conversion: to_one
+        enum:
+          open: 1
+          closed: 2
+          armed: 3
+          triggered: 4
+    metric_tags:
+      # The name of this input
+      - column:
+          name: ipContName
+          OID: 1.3.6.1.4.1.3711.24.1.1.1.3.1.1.3
+      # A system-defined name for the physical location of this input, e.g. MCU.
+      - column:
+          name: ipContLocn
+          OID: 1.3.6.1.4.1.3711.24.1.1.1.3.1.1.4
+      # The normal state for this contact.
+      - column:
+          name: ipContNormState
+          OID: 1.3.6.1.4.1.3711.24.1.1.1.3.1.1.6
+  # A table listing the parameters and data for all outputs that are enabled and available (i.e. its extension unit is connected).
+  - MIB: HAWK-I2-MIB
+    table:
+      name: opTable
+      OID: 1.3.6.1.4.1.3711.24.1.1.2.2
+    symbols:
+      # Reads the current state of this output.
+      - name: opCurrState
+        OID: 1.3.6.1.4.1.3711.24.1.1.2.2.1.6
+        conversion: to_one
+        enum:
+          on: 1
+          off: 2
+      # Reads the current control state of an output.
+      - name: opControlState
+        OID: 1.3.6.1.4.1.3711.24.1.1.2.2.1.12
+        conversion: to_one
+        enum:
+          activate: 1
+          deactivate: 2
+          logic: 3
+    metric_tags:
+      # A user-defined name for this output.
+      - column:
+          name: opName
+          OID: 1.3.6.1.4.1.3711.24.1.1.2.2.1.3
+      # A system-defined name for the physical location of this output, e.g. MCU.
+      - column:
+          name: opLocn
+          OID: 1.3.6.1.4.1.3711.24.1.1.2.2.1.4
+      # Sets or reads the required normal state of this output.
+      - column:
+          name: opNormState
+          OID: 1.3.6.1.4.1.3711.24.1.1.2.2.1.5
+          enum:
+            on: 1
+            off: 2
+  # A table containing monitor information for all PDUs enabled for monitoring.
+  - MIB: HAWK-I2-MIB
+    table:
+      name: pduMonTable
+      OID: 1.3.6.1.4.1.3711.24.1.1.7.3.1
+    symbols:
+      # RMS Volts value in volts
+      - name: pduRMSVoltsValue
+        OID: 1.3.6.1.4.1.3711.24.1.1.7.3.1.1.3
+      # RMS current value in 0.1 Amps
+      - name: pduRMSAmpsValue
+        OID: 1.3.6.1.4.1.3711.24.1.1.7.3.1.1.4
+      # Total energy value in 0.1 kWh
+      - name: pduTotalEnergyValue
+        OID: 1.3.6.1.4.1.3711.24.1.1.7.3.1.1.5
+    metric_tags:
+      # A string identifying the PDU.
+      - column:
+          name: pduName
+          OID: 1.3.6.1.4.1.3711.24.1.1.7.1.2.1.3
+
+metric_tags:
+  # Hardware revision number
+  - column:
+      name: invHwRevision
+      OID: 1.3.6.1.4.1.3711.24.1.1.99.9.0
+  # Firmware revision number
+  - column:
+      name: invFwRevision
+      OID: 1.3.6.1.4.1.3711.24.1.1.99.10.0
+  # Serial number
+  - column:
+      name: invSerialNum
+      OID: 1.3.6.1.4.1.3711.24.1.1.99.11.0
+  # Temperature scale (Celsius/Fahrenheit) for temperature monitoring.
+  - column:
+      name: ipTempScaleFlag
+      OID: 1.3.6.1.4.1.3711.24.1.1.1.2.1.0
+      enum:
+        celsius: 1
+        fahrenheit: 2
+        kelvin: 3

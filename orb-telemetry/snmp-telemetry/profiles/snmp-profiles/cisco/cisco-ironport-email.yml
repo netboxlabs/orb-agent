@@ -1,0 +1,437 @@
+# https://mibs.observium.org/mib/ASYNCOS-MAIL-MIB/
+# https://mibs.observium.org/mib/ASYNCOSWEBSECURITYAPPLIANCE-MIB/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.15497.1.*    # IronPort Email Security Appliance
+  - 1.3.6.1.4.1.15497.1.2    # IronPort S300V
+
+provider: kentik-ironport-email-appliance
+
+metrics:
+  # This object provides a general idea of how much memory is being consumed by the appliance software.
+  # Polled at 60s to support anomaly detection
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: perCentMemoryUtilization
+      OID: 1.3.6.1.4.1.15497.1.1.1.1.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # This object provides a general idea of how busy the CPU is according to the appliance software, within the last 5 seconds of utilization.
+  # Polled at 60s to support anomaly detection
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: perCentCPUUtilization
+      OID: 1.3.6.1.4.1.15497.1.1.1.2.0
+      poll_time_sec: 60
+      tag: CPU
+  # The number of seconds the oldest message has been in queue.
+  # Polled at 60s to support anomaly detection
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: oldestMessageAge
+      OID: 1.3.6.1.4.1.15497.1.1.1.14.0
+      poll_time_sec: 60
+  # This object provides a general idea of how much disk I/O has been generated within the last 5-15 seconds.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: perCentDiskIOUtilization
+      OID: 1.3.6.1.4.1.15497.1.1.1.3.0
+  # Percent of total queue capacity used.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: perCentQueueUtilization
+      OID: 1.3.6.1.4.1.15497.1.1.1.4.0
+  # Queue space status: enough space, queue near full or queue full.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: queueAvailabilityStatus
+      OID: 1.3.6.1.4.1.15497.1.1.1.5.0
+      enum:
+        queueSpaceAvailable: 1
+        queueSpaceShortage: 2
+        queueFull: 3
+  # Reason system is in Resource Conservation Mode.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: resourceConservationReason
+      OID: 1.3.6.1.4.1.15497.1.1.1.6.0
+      enum:
+        noResourceConservation: 1
+        memoryShortage: 2
+        queueSpaceShortage: 3
+        queueFull: 4
+  # Mail Transfer process's memory availability status.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: memoryAvailabilityStatus
+      OID: 1.3.6.1.4.1.15497.1.1.1.7.0
+      enum:
+        memoryAvailable: 1
+        memoryShortage: 2
+        memoryFull: 3
+  # Table of power supply status
+  - MIB: ASYNCOS-MAIL-MIB
+    table:
+      name: powerSupplyTable
+      OID: 1.3.6.1.4.1.15497.1.1.1.8
+    symbols:
+      # Represents the status of a power supply.
+      - name: powerSupplyStatus
+        OID: 1.3.6.1.4.1.15497.1.1.1.8.1.2
+        enum:
+          powerSupplyNotInstalled: 1
+          powerSupplyHealthy: 2
+          powerSupplyNoAC: 3
+          powerSupplyFaulty: 4
+      # Represents the status of a collection of one or more power supplies.
+      - name: powerSupplyRedundancy
+        OID: 1.3.6.1.4.1.15497.1.1.1.8.1.3
+        enum:
+          powerSupplyRedundancyOK: 1
+          powerSupplyRedundancyLost: 2
+    metric_tags:
+      # A textual name for a power supply. 
+      - column:
+          name: powerSupplyName
+          OID: 1.3.6.1.4.1.15497.1.1.1.8.1.4
+  # A table of chassis temperature sensor states.
+  - MIB: ASYNCOS-MAIL-MIB
+    table:
+      name: temperatureTable
+      OID: 1.3.6.1.4.1.15497.1.1.1.9
+    symbols:
+      # Temperature reading for the sensor being instrumented in Centrigrade units.
+      - name: degreesCelsius
+        OID: 1.3.6.1.4.1.15497.1.1.1.9.1.2
+    metric_tags:
+      # Textual description for sensor being instrumented.
+      - column:
+          name: temperatureName
+          OID: 1.3.6.1.4.1.15497.1.1.1.9.1.3
+  # A table of chassis fan entries.
+  - MIB: ASYNCOS-MAIL-MIB
+    table:
+      name: fanTable
+      OID: 1.3.6.1.4.1.15497.1.1.1.10
+    symbols:
+      # Speed in RPMs of a chassis fan being instrumented. When fanRPMs reports 0 RPMs the respective fan has failed.
+      - name: fanRPMs
+        OID: 1.3.6.1.4.1.15497.1.1.1.10.1.2
+    metric_tags:
+      # A textual name of the chassis fan being instrumented.
+      - column:
+          name: fanName
+          OID: 1.3.6.1.4.1.15497.1.1.1.10.1.3
+  # Number of messages in the work queue.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: workQueueMessages
+      OID: 1.3.6.1.4.1.15497.1.1.1.11.0
+  # A table of Feature Key expiration entries.
+  - MIB: ASYNCOS-MAIL-MIB
+    table:
+      name: keyExpirationTable
+      OID: 1.3.6.1.4.1.15497.1.1.1.12
+    symbols:
+      # Boolean value represented by True if Feature Key is perpetual, or False if the Feature Key is normal or expired.
+      - name: keyIsPerpetual
+        OID: 1.3.6.1.4.1.15497.1.1.1.12.1.3
+        enum:
+          true: 1
+          false: 2
+      # Seconds until the valid Feature Key expires. Only applies to non-perpetual Feature Keys, and is 0 when the Feature Key has expired.
+      - name: keySecondsUntilExpire
+        OID: 1.3.6.1.4.1.15497.1.1.1.12.1.4
+    metric_tags:
+      # Textual description for a Feature Key applicable to the appliance.
+      - column:
+          name: keyDescription
+          OID: 1.3.6.1.4.1.15497.1.1.1.12.1.2
+  # Table containing a name and number of successful and failed updates for a service
+  - MIB: ASYNCOS-MAIL-MIB
+    table:
+      name: updateTable
+      OID: 1.3.6.1.4.1.15497.1.1.1.13
+    symbols:
+      # The number of successful attempts that have occurred when updating a service.
+      - name: updates
+        OID: 1.3.6.1.4.1.15497.1.1.1.13.1.3
+      # The number of failed attempts that have occurred when updating a service.
+      - name: updateFailures
+        OID: 1.3.6.1.4.1.15497.1.1.1.13.1.4
+    metric_tags:
+      # A textual name for an update entry.
+      - column:
+          name: updateServiceName
+          OID: 1.3.6.1.4.1.15497.1.1.1.13.1.2
+  # Number of DNS requests that have been sent but for which no reply has been received.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: outstandingDNSRequests
+      OID: 1.3.6.1.4.1.15497.1.1.1.15.0
+  # Number of DNS requests waiting to be sent.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: pendingDNSRequests
+      OID: 1.3.6.1.4.1.15497.1.1.1.16.0
+  # The total number of RAID events that have occurred since the last appliance power on event.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: raidEvents
+      OID: 1.3.6.1.4.1.15497.1.1.1.17.0
+  # RAID table representing the status of a drive attached to a RAID controller in the appliance.
+  - MIB: ASYNCOS-MAIL-MIB
+    table:
+      name: raidTable
+      OID: 1.3.6.1.4.1.15497.1.1.1.18
+    symbols:
+      # Represents the status of a a drive attached to a RAID controller in the appliance.
+      - name: raidStatus
+        OID: 1.3.6.1.4.1.15497.1.1.1.18.1.2
+        enum:
+          driveHealthy: 1
+          driveFailure: 2
+          driveRebuild: 3
+      # The textual description of the last error message reported by the RAID controller or corresponding driver if one has occurred.
+      - name: raidLastError
+        OID: 1.3.6.1.4.1.15497.1.1.1.18.1.4
+        conversion: to_one
+    metric_tags:
+      # A textual name for a drive attached to a RAID controller in the appliance.
+      - column:
+          name: raidID
+          OID: 1.3.6.1.4.1.15497.1.1.1.18.1.3
+  # This object notes how many files or sockets are open on the appliance.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: openFilesOrSockets
+      OID: 1.3.6.1.4.1.15497.1.1.1.19.0
+  # Number of threads that perform some task related to transferring mail.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: mailTransferThreads
+      OID: 1.3.6.1.4.1.15497.1.1.1.20.0
+  # Whether FIPS mode is enabled.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: fipsMode
+      OID: 1.3.6.1.4.1.15497.1.1.1.23.0
+      enum:
+        enabled: 1
+        disabled: 2
+  # This object provides a general idea of how many processes are waiting in ready queue for CPU. This measurment tells how much the CPU is loaded.
+  - MIB: ASYNCOS-MAIL-MIB
+    symbol:
+      name: perCentCPULoad
+      OID: 1.3.6.1.4.1.15497.1.1.1.26.0
+  # The number of HTTP requests received from clients
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientRequests
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.2.0
+  # The number of HTTP errors caused by client connections
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientErrors
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.4.0
+  # The number of connected but idle persistent client connections
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientIdleConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.7.0
+  # The current number of active + idle client connections
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientTotalConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.8.0
+  # The maximum number of simultaneous client connections that will be allowed
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientMaxConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.9.0
+  # The total number of sockets accepted from the clients
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientAccepts
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.10.0
+  # The number of responses blocked by access control
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheClientReqDenials
+      OID: 1.3.6.1.4.1.15497.1.2.3.2.17.0
+  # The total number of HTTP requests sent to servers
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerRequests
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.2.0
+  # The total number of sockets opened from the servers
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerSockets
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.3.0 
+  # The number of HTTP errors while fetching objects
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerErrors
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.4.0
+  # The number of connected but idle persistent server connections
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerIdleConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.7.0
+  # The current number of active + idle server connections
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerTotalConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.8.0
+  # The number of server connections closed due to idle time limits
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerCloseIdleConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.9.0
+  # The number of times the number of idle persistent connections hit the count limit and caused a connection to be closed
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerLimitIdleConns
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.10.0
+  # The limit on the number of server connections
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheServerConnsThresh
+      OID: 1.3.6.1.4.1.15497.1.2.3.3.11.0
+  # Total number of HTTP requests from clients
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheTotalHttpReqs
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.1.0
+  # The HTTP mean response time
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMeanRespTime
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.2.0
+  # The HTTP mean response time of Misses
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMeanMissRespTime
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.3.0
+  # The HTTP mean response time of Hits
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMeanHitRespTime
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.4.0
+  # The HTTP hit ratio
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMeanHitRatio
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.5.0
+  # The HTTP byte hit ratio
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMeanByteHitRatio
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.6.0
+  # The total bandwidth savings for HTTP in Mbits/sec
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheTotalBandwidthSaving
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.7.0
+  # The proxy up time
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheDuration
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.8.0
+  # The percentage of errors in the HTTP replies to clients
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheCltReplyErrPct
+      OID: 1.3.6.1.4.1.15497.1.2.3.6.9.0
+  # Request throughput in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheThruputNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.1.1.0
+  # Bandwidth savings in the last minute (in Kb/sec)
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheBwidthSavingNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.2.1.0
+  # Bandwidth spent in the last minute (in Kb/sec)
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheBwidthSpentNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.3.1.0
+  # Bandwidth total in the last minute (in Kb/sec)
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheBwidthTotalNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.4.1.0
+  # Hit throughput in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheHitsNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.5.1.0
+  # Miss throughput in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMissesNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.6.1.0
+  # Cache hit response time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheHitRespTimeNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.7.1.0
+  # Cache miss response time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheMissRespTimeNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.8.1.0
+  # Cache total response time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheTotalRespTimeNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.9.1.0
+  # Cache error throughput time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheErrsNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.10.1.0
+  # Cache denial throughput time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheDeniedNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.11.1.0
+  # Cache error response time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheErrRespTimeNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.12.1.0
+  # Cache denial response time in the last minute
+  - MIB: ASYNCOSWEBSECURITYAPPLIANCE-MIB
+    symbol:
+      name: cacheDeniedRespTimeNow
+      OID: 1.3.6.1.4.1.15497.1.2.3.7.13.1.0
+
+metric_tags:
+  # The contact responsible for the administration of the proxy. Usually a name and email address.
+  - column:
+      name: cacheAdmin
+      OID: 1.3.6.1.4.1.15497.1.2.2.1.0
+  # Name of the proxy sofware.
+  - column:
+      name: cacheSoftware
+      OID: 1.3.6.1.4.1.15497.1.2.2.2.0
+  # Version of the proxy software.
+  - column:
+      name: cacheVersion
+      OID: 1.3.6.1.4.1.15497.1.2.2.3.0
+  # When does the license expire.
+  - column:
+      name: licenseExpiration
+      OID: 1.3.6.1.4.1.15497.1.2.2.4.0
+  # Current ports the proxy listens on, in comma-separated number format.
+  - column:
+      name: httpPorts
+      OID: 1.3.6.1.4.1.15497.1.2.2.5.0

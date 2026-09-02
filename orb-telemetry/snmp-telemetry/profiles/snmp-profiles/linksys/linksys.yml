@@ -1,0 +1,13 @@
+# http://www.circitor.fr/Mibs/Html/L/LINKSYS-MIB.php
+# No CPU or memory OID appears to be available for this product line, this profile just collects interface data and moves the linksys devices to the switch category
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.3955.*         # Linksys
+ 

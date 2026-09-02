@@ -1,0 +1,16 @@
+# NS-ROOT-MIB traps
+traps:
+  - trap_oid: 1.3.6.1.4.1.5951.4.1.1.56.1
+    trap_name: sslCertKeyTable
+    drop_undefined: true
+    events:
+      - name: sslCertKeyName
+        OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.1
+      - name: sslCertPath
+        OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.2
+      - name: sslKeyPath
+        OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.3
+      - name: sslInputFormat
+        OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.4
+      - name: sslDaysToExpire
+        OID: 1.3.6.1.4.1.5951.4.1.1.56.1.1.5

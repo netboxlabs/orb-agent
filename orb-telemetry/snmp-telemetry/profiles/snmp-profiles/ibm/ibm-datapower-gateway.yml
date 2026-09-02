@@ -1,0 +1,356 @@
+# https://mibs.observium.org/mib/DATAPOWER-STATUS-MIB/
+# https://www.ibm.com/support/pages/monitoring-ibm-datapower-gateways
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-datapower-gateway
+
+sysobjectid:
+  - 1.3.6.1.4.1.14685.1.8    # Datapower Gateway
+
+metrics:
+  # The average CPU usage over the the previous minute.
+  # Polled at 60s to support anomaly detection.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusCPUUsageOneMinute
+      OID: 1.3.6.1.4.1.14685.3.1.14.2.0
+      poll_time_sec: 60
+      tag: CPU
+
+  # The instantaneous memory usage as a percentage of the total memory.
+  # Polled at 60s to support anomaly detection.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusMemoryStatusUsage
+      OID: 1.3.6.1.4.1.14685.3.1.5.1.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+
+  # The percentage of total load on the device during the measurement interval. A load above 90 indicates the device is at or near load capacity.
+  # Polled at 60s to support anomaly detection.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusSystemUsageLoad
+      OID: 1.3.6.1.4.1.14685.3.1.52.2.0
+      poll_time_sec: 60
+      tag: SystemUsage
+
+  # The number of TCP connections in the established state. Connections in this state have completed all handshakes and can transfer data in either direction.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryEstablished
+      OID: 1.3.6.1.4.1.14685.3.1.12.1.0
+
+  # The number of TCP connections in the syn-sent state. Connections in this state are waiting for a matching connection request after sending a connection request.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummarySynSent
+      OID: 1.3.6.1.4.1.14685.3.1.12.2.0
+
+  # The number of TCP connections in the syn-received state. Connections in this state are waiting for a confirming connection request acknowledgment after both receiving and sending a connection request.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummarySynReceived
+      OID: 1.3.6.1.4.1.14685.3.1.12.3.0
+
+  # The number of TCP connections in the fin-wait-1 state. Connections in this state are waiting for a connection termination request from the remote TCP or an acknowledgment of the connection termination request previously sent.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryFinWait1
+      OID: 1.3.6.1.4.1.14685.3.1.12.4.0
+
+  # The number of TCP connections in the fin-wait-2 state. Connections in this state are waiting for a connection termination request from the remote TCP.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryFinWait2
+      OID: 1.3.6.1.4.1.14685.3.1.12.5.0
+
+  # The number of TCP connections in the time-wait state. Connections in this state are waiting for enough time to pass to be sure that the remote TCP received the acknowledgment of its connection termination request.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryTimeWait
+      OID: 1.3.6.1.4.1.14685.3.1.12.6.0
+
+  # The number of TCP connections in the closed state. This state represents no connection state at all.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryClosed
+      OID: 1.3.6.1.4.1.14685.3.1.12.7.0
+
+  # The number of TCP connections in the close-wait state. Connections in this state are waiting for a connection termination request from the local user.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryClosedWait
+      OID: 1.3.6.1.4.1.14685.3.1.12.8.0
+
+  # The number of TCP connections in the last-ack state. Connections in this state are waiting for an acknowledgment of the connection termination request previously sent to the remote TCP (which includes an acknowledgment of its connection termination request).
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryLastAck
+      OID: 1.3.6.1.4.1.14685.3.1.12.9.0
+
+  # The number of TCP connections in the listen state. Connections in the listen state are waiting for a connection request from any remote TCP and port.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryListen
+      OID: 1.3.6.1.4.1.14685.3.1.12.10.0
+
+  # The number of TCP connections in the closing state. Connections in this state are waiting for a connection termination request acknowledgment from the remote TCP.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusTCPSummaryClosing
+      OID: 1.3.6.1.4.1.14685.3.1.12.11.0
+
+  # The number of connections accepted in the previous 10 seconds.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusConnectionsAcceptedTenSeconds
+      OID: 1.3.6.1.4.1.14685.3.1.13.1.0
+
+  # The number of connections accepted in the previous minute.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusConnectionsAcceptedOneMinute
+      OID: 1.3.6.1.4.1.14685.3.1.13.2.0
+
+  # The number of connections accepted in the previous 10 minutes.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusConnectionsAcceptedTenMinutes
+      OID: 1.3.6.1.4.1.14685.3.1.13.3.0
+
+  # The number of connections accepted in the previous hour.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusConnectionsAcceptedOneHour
+      OID: 1.3.6.1.4.1.14685.3.1.13.4.0
+
+  # The number of connections accepted in the previous 24 hours.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusConnectionsAcceptedOneDay
+      OID: 1.3.6.1.4.1.14685.3.1.13.5.0
+
+  # Free, or unused and available, encrypted storage space on the device. All files placed in encrypted storage are automatically encrypted for security by the device.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusFilesystemStatusFreeEncrypted
+      OID: 1.3.6.1.4.1.14685.3.1.29.1.0
+
+  # Total encrypted storage space on the device (the maximum capacity). All files placed in encrypted storage are automatically encrypted for security by the device.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusFilesystemStatusTotalEncrypted
+      OID: 1.3.6.1.4.1.14685.3.1.29.2.0
+
+  # Free, or unused and available, temporary storage space on the device. The device uses temporary storage for processing, logging and debugging.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusFilesystemStatusFreeTemporary
+      OID: 1.3.6.1.4.1.14685.3.1.29.5.0
+
+  # Total temporary storage space on the device. The device uses temporary storage for processing, logging and debugging.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusFilesystemStatusTotalTemporary
+      OID: 1.3.6.1.4.1.14685.3.1.29.6.0
+
+  # Free, or unused and available, internal storage space on the device. The device uses internal storage for import, export, firmware upgrades and debug captures.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusFilesystemStatusFreeInternal
+      OID: 1.3.6.1.4.1.14685.3.1.29.7.0
+
+  # Total internal storage space on the device. The device uses internal storage for import, export, firmware upgrades and debug captures.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusFilesystemStatusTotalInternal
+      OID: 1.3.6.1.4.1.14685.3.1.29.8.0
+
+  # Current System temperature sensor measurement in Celsius.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsSystemTemp
+      OID: 1.3.6.1.4.1.14685.3.1.55.1.0
+
+  # Current CPU-1 temperature sensor measurement in Celsius.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsCpu1Temp
+      OID: 1.3.6.1.4.1.14685.3.1.55.2.0
+
+  # Current CPU-2 temperature sensor measurement in Celsius.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsCpu2Temp
+      OID: 1.3.6.1.4.1.14685.3.1.55.3.0
+
+  # Current CPU-1 fan RPM.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsCpu1RPM
+      OID: 1.3.6.1.4.1.14685.3.1.55.4.0
+
+  # Current CPU-2 fan RPM.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsCpu2RPM
+      OID: 1.3.6.1.4.1.14685.3.1.55.5.0
+
+  # Current Chassis-1 fan RPM.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsChassis1RPM
+      OID: 1.3.6.1.4.1.14685.3.1.55.6.0
+
+  # Current Chassis-2 fan RPM.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsChassis2RPM
+      OID: 1.3.6.1.4.1.14685.3.1.55.7.0
+
+  # Current Chassis-3 fan RPM.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsChassis3RPM
+      OID: 1.3.6.1.4.1.14685.3.1.55.8.0
+
+  # Indicates whether the chassis case is open.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsCaseOpen
+      OID: 1.3.6.1.4.1.14685.3.1.55.9.0
+      enum:
+        yes: 1
+        no: 2
+
+  # Current status of the chassis' power supplies.
+  - MIB: DATAPOWER-STATUS-MIB
+    symbol:
+      name: dpStatusEnvironmentalSensorsPowerSupply
+      OID: 1.3.6.1.4.1.14685.3.1.55.13.0
+      enum:
+        ok: 1
+        power-1-failure: 2
+        power-2-failure: 3
+        power-1-ac-lost: 4
+        power-2-ac-lost: 5
+
+  # This table gives the status for each log target in the domain.
+  - MIB: DATAPOWER-STATUS-MIB
+    table:
+      name: dpStatusLogTargetStatusTable
+      OID: 1.3.6.1.4.1.14685.3.1.28
+    symbols:
+      # The status of the log target. When the status indicates an error, check the error information column.
+      - name: dpStatusLogTargetStatusStatus
+        OID: 1.3.6.1.4.1.14685.3.1.28.1.2
+        enum:
+          active: 1
+          warning: 2
+          failure: 3
+          suspended: 4
+      # The number of events that this log target processed.
+      - name: dpStatusLogTargetStatusEventsProcessed
+        OID: 1.3.6.1.4.1.14685.3.1.28.1.3
+      # The number of events that this log target dropped because there are too many pending events.
+      - name: dpStatusLogTargetStatusEventsDropped
+        OID: 1.3.6.1.4.1.14685.3.1.28.1.4
+      # The number of pending events for this log target. These events are waiting to be stored at the destination.
+      - name: dpStatusLogTargetStatusEventsPending
+        OID: 1.3.6.1.4.1.14685.3.1.28.1.5
+      # Error information about the status for the log target.
+      - name: dpStatusLogTargetStatusErrorInfo
+        OID: 1.3.6.1.4.1.14685.3.1.28.1.6
+        conversion: to_one
+    metric_tags:
+      # Name of the log target.
+      - column:
+          name: dpStatusLogTargetStatusLogTarget
+          OID: 1.3.6.1.4.1.14685.3.1.28.1.1
+
+  # This table provides the generic status of all network interfaces on the appliance.
+  - MIB: DATAPOWER-STATUS-MIB
+    table:
+      name: dpStatusNetworkInterfaceStatusTable
+      OID: 1.3.6.1.4.1.14685.3.1.124
+    symbols:
+      # The configured administrative state of the interface.
+      - name: dpStatusNetworkInterfaceStatusAdminStatus
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.4
+        enum:
+          up: 1
+          down: 2
+      # The current operational state of the interface.
+      - name: dpStatusNetworkInterfaceStatusOperStatus
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.5
+        enum:
+          up: 1
+          down: 2
+          testing: 3
+          unknown: 4
+          dormant: 5
+          notPresent: 6
+          lowerLayerDown: 7
+      # The amount of data successfully received on the interface, which includes MAC framing overhead.
+      - name: dpStatusNetworkInterfaceStatusRxHCBytes
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.19
+      # The number of packets successfully received on the interface that were passed up to the network layer for processing.
+      - name: dpStatusNetworkInterfaceStatusRxHCPackets
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.20
+      # The number of packets that could not be received due to errors in the packet or in the hardware.
+      - name: dpStatusNetworkInterfaceStatusRxErrors2
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.21
+      # The number of received packets that were not in error, but were not passed up to the network layer due to resource constraints.
+      - name: dpStatusNetworkInterfaceStatusRxDrops2
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.22
+      # The amount of data successfully transmitted on the interface, which includes MAC framing overhead.
+      - name: dpStatusNetworkInterfaceStatusTxHCBytes
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.23
+      # The number of packets successfully transmitted on the interface.
+      - name: dpStatusNetworkInterfaceStatusTxHCPackets
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.24
+      # The number of packets that were not successfully transmitted due to errors on the network or in the hardware.
+      - name: dpStatusNetworkInterfaceStatusTxErrors2
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.25
+      # The number of packets that were not transmitted because the network layer was generating packets faster than the physical network could accept them.
+      - name: dpStatusNetworkInterfaceStatusTxDrops2
+        OID: 1.3.6.1.4.1.14685.3.1.124.1.26
+    metric_tags:
+      # The interface type of the network interface.
+      - column:
+          name: dpStatusNetworkInterfaceStatusInterfaceType
+          OID: 1.3.6.1.4.1.14685.3.1.124.1.2
+          enum:
+            other: 1
+            ethernet: 6
+            tunnel: 131
+            vlan: 135
+            aggregate: 161
+      # The configuration name of the interface.
+      - column:
+          name: dpStatusNetworkInterfaceStatusName
+          OID: 1.3.6.1.4.1.14685.3.1.124.1.3
+      # The IP address version: ipv4 or ipv6.
+      - column:
+          name: dpStatusNetworkInterfaceStatusIPType
+          OID: 1.3.6.1.4.1.14685.3.1.124.1.6
+          enum:
+            unknown: 0
+            ipv4: 1
+            ipv6: 2
+            ipv4z: 3
+            ipv6z: 4
+            dna: 16
+      # The primary IP address for the interface.
+      - column:
+          name: dpStatusNetworkInterfaceStatusIP
+          OID: 1.3.6.1.4.1.14685.3.1.124.1.7
+          conversion: hextoip
+      # The current MAC address of the interface.
+      - column:
+          name: dpStatusNetworkInterfaceStatusMACAddress
+          OID: 1.3.6.1.4.1.14685.3.1.124.1.9
+          conversion: hwaddr

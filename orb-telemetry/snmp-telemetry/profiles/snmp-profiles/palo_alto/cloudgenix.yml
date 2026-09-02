@@ -1,0 +1,18 @@
+# Cloudgenix SNMP support is relatively limited, will need to work with their API for further data.
+---
+extends:
+  - host-resources-mib.yml
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+
+provider: kentik-sd-wan
+
+sysobjectid:
+  - 1.3.6.1.4.1.50114.11.1.10.1000    #  CloudGenix ION 1000
+  - 1.3.6.1.4.1.50114.11.1.10.2000    #  CloudGenix ION 2000
+  - 1.3.6.1.4.1.50114.11.1.10.3000    #  CloudGenix ION 3000
+  - 1.3.6.1.4.1.50114.11.1.10.7000    #  CloudGenix ION 7000
+  - 1.3.6.1.4.1.50114.11.1.10.9000    #  CloudGenix ION 9000
+  - 1.3.6.1.4.1.50114.11.1.10.9200    #  CloudGenix ION 9200
+  - 1.3.6.1.4.1.50114.11.1.10.*       #  CloudGenix ION

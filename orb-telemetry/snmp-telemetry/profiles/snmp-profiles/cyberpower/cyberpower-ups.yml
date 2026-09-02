@@ -1,0 +1,95 @@
+---
+extends:
+  - system-mib.yml
+  - ups-mib.yml
+
+provider: kentik-ups
+
+sysobjectid:
+  - 1.3.6.1.4.1.3808.1.1.1      # Cyberpower UPS
+  - 1.3.6.1.4.1.3808.1.1.1.*    # Cyberpower UPS
+
+metrics:
+  - MIB: CPS-MIB_UPS
+    symbols:
+      - OID: 1.3.6.1.4.1.3808.1.1.1.2.1.1.0
+        name: upsBaseBatteryStatus
+        enum:
+          unknown: 1
+          batteryNormal: 2
+          batteryLow: 3
+      - OID: 1.3.6.1.4.1.3808.1.1.1.2.1.2.0
+        name: upsBaseBatteryTimeOnBattery
+
+      - OID: 1.3.6.1.4.1.3808.1.1.1.2.2.1.0
+        name: upsAdvanceBatteryCapacity
+      - OID: 1.3.6.1.4.1.3808.1.1.1.2.2.3.0
+        name: upsAdvanceBatteryTemperature
+      - OID: 1.3.6.1.4.1.3808.1.1.1.2.2.4.0
+        name: upsAdvanceBatteryRunTimeRemaining
+      - OID: 1.3.6.1.4.1.3808.1.1.1.2.2.5.0
+        name: upsAdvanceBatteryReplaceIndicator
+        enum:
+          noBatteryNeedsReplacing: 1
+          batteryNeedsReplacing: 2
+
+      - OID: 1.3.6.1.4.1.3808.1.1.1.3.1.1.0
+        name: upsBaseInputPhase
+
+      - OID: 1.3.6.1.4.1.3808.1.1.1.3.2.1.0
+        name: upsAdvanceInputLineVoltage
+      - OID: 1.3.6.1.4.1.3808.1.1.1.3.2.5.0
+        name: upsAdvanceInputLineFailCause
+        enum:
+          noTransfer: 1
+          highLineVoltage: 2
+          brownout: 3
+          selfTest: 4
+      - OID: 1.3.6.1.4.1.3808.1.1.1.3.2.6.0
+        name: upsAdvanceInputStatus
+
+      - OID: 1.3.6.1.4.1.3808.1.1.1.4.2.1.0
+        name: upsAdvanceOutputVoltage
+      - OID: 1.3.6.1.4.1.3808.1.1.1.4.2.3.0
+        name: upsAdvanceOutputLoad
+
+      - OID: 1.3.6.1.4.1.3808.1.1.1.4.1.1.0
+        name: upsBaseOutputStatus
+      - OID: 1.3.6.1.4.1.3808.1.1.1.4.1.2.0
+        name: upsBaseOutputPhase
+
+      - OID: 1.3.6.1.4.1.3808.1.1.1.7.2.3.0
+        name: upsAdvTestDiagnosticsResults
+        enum:
+          ok: 1
+          failed: 2
+          invalidTest: 3
+          testInProgress: 4
+
+  - MIB: CPS-MIB_UPS
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.1.5.1.2
+      name: upsBaseConfigDeviceTable
+    symbols:
+      # The name of the equipment plugged into the UPS.
+      - OID: 1.3.6.1.4.1.3808.1.1.1.5.1.2.1.2
+        name: deviceName
+        conversion: to_one
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.1.1.1.1
+      name: upsBaseIdentModel
+    tag: model
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.1.1.2.3
+      name: upsAdvanceIdentSerialNumber
+    tag: serial_number
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.1.1.2.1
+      name: upsAdvanceIdentFirmwareRevision
+    tag: firmware_version
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.1.1.1.2
+      name: upsBaseIdentName
+    tag: ups_name

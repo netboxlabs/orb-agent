@@ -1,0 +1,13 @@
+# This profile is used specifically to create a media gateway entity in NR
+# SNMP walk from this device shows some potentially interesting metrics,
+# but the associated MIB has not been found to date.
+# http://oidref.com/1.3.6.1.4.1.3028.6
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-dmg
+
+sysobjectid:
+  - 1.3.6.1.4.1.3028.6.1.1    # Dialogic Media Gateway

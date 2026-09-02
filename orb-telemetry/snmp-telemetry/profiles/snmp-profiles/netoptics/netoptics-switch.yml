@@ -1,0 +1,183 @@
+# https://mibs.observium.org/mib/DELLEMC-OS10-CHASSIS-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.23022.100.1.*    # NetOptics
+  - 1.3.6.1.4.1.23022.100.1.4    # xStream2400
+  - 1.3.6.1.4.1.23022.100.1.13   # xStream40
+
+metrics:
+# Unable to find CPU and Memory from provided walk
+  - MIB: NETOPTICS-XFAM-HA-MIB
+    symbols:
+      # This object controls the redundancy mode of the load balancer device itself
+      - OID: 1.3.6.1.4.1.23022.100.10.1.1.0
+        name: haConfigMode
+        enum:
+          standalone: 0
+          activeActive: 1
+      # The role this device is to play in HA mode
+      - OID: 1.3.6.1.4.1.23022.100.10.1.3.0
+        name: haConfigRole
+        enum: 
+          primary: 1
+          secondary: 2
+      # This object reports the current state of the device HA traffic state synchronization process
+      - OID: 1.3.6.1.4.1.23022.100.10.2.1.0
+        name: haState
+        enum: 
+          stUnknown: 0
+          stHuntForPeer: 1
+          stStandalone: 2
+          stPrimary: 3
+          stSecondary: 4
+          stErrSwMismatch: 5
+          stWaitSync: 6
+      # This is a high-level representation of the HA configuration synchronization process
+      - OID: 1.3.6.1.4.1.23022.100.10.2.5.0
+        name: haConfigSyncStatus
+        enum: 
+          unsynchronized: 0
+          syncToPeer: 1
+          syncFromPeer: 2
+          synchronized: 3
+
+  - MIB: NETOPTICS-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.2.1.2.3
+      name: installedModulesTable
+    symbols:
+      # The current status indication of the installed module
+      - OID: 1.3.6.1.4.1.23022.100.2.2.1.2.3.1.5
+        name: moduleStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+    metric_tags:
+      # Installed module type
+      - column:
+          OID: 1.3.6.1.4.1.23022.100.2.2.1.2.3.1.2
+          name: moduleType
+          enum:
+            na: 1
+            empty: 2
+            tbd: 3
+
+  - MIB: NETOPTICS-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.2.1.2.4
+      name: psuTable
+    symbols:
+      # The current status indication of the installed PSU
+      - OID: 1.3.6.1.4.1.23022.100.2.2.1.2.4.1.5
+        name: psuStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+    metric_tags:
+      # Installed PSU type
+      - column:
+          OID: 1.3.6.1.4.1.23022.100.2.2.1.2.4.1.2
+          name: psuType
+          enum:
+            na: 1
+            empty: 2
+            tbd: 3
+
+  - MIB: NETOPTICS-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.2.1.2.5
+      name: fansTable
+    symbols:
+      # The current status indication of the installed PSU
+      - OID: 1.3.6.1.4.1.23022.100.2.2.1.2.5.1.2
+        name: fanStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+
+  - MIB: NETOPTICS-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.2.1.2.6
+      name: temperatureSensorsTable
+    symbols:
+      # The current temperature reading (1/10 degree).
+      - OID: 1.3.6.1.4.1.23022.100.2.2.1.2.6.1.3
+        name: sensorReading
+      # The current status indication of the installed PSU
+      - OID: 1.3.6.1.4.1.23022.100.2.2.1.2.6.1.4
+        name: sensorStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.23022.100.2.2.1.2.6.1.2
+          name: sensorName
+          
+  - MIB: NETOPTICS-XFAM-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.3.1.8.1
+      name: deviceFanTable
+    symbols:
+      - OID: 1.3.6.1.4.1.23022.100.2.3.1.8.1.1.4
+        name: fanStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+    metric_tags:
+      # Fan Unit Description
+      - column:
+          OID: 1.3.6.1.4.1.23022.100.2.3.1.8.1.1.2
+          name: deviceFanDescription
+
+  - MIB: NETOPTICS-XFAM-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.3.1.8.2
+      name: devicePsuTable
+    symbols:
+      - OID: 1.3.6.1.4.1.23022.100.2.3.1.8.2.1.4
+        name: devicePsuStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+    metric_tags:
+      # Fan Unit Description
+      - column:
+          OID: 1.3.6.1.4.1.23022.100.2.3.1.8.2.1.2
+          name: devicePsuDescription
+          
+  - MIB: NETOPTICS-XFAM-DEVICE-MIB
+    table:
+      OID: 1.3.6.1.4.1.23022.100.2.3.1.8.3
+      name: deviceTempSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.23022.100.2.3.1.8.3.1.4
+        name: deviceTempSensorStatus
+        enum:
+          na: 1
+          empty: 2
+          ok: 3
+          alarm: 4
+    metric_tags:
+      # Fan Unit Description
+      - column:
+          OID: 1.3.6.1.4.1.23022.100.2.3.1.8.3.1.2
+          name: deviceTempSensorDescription

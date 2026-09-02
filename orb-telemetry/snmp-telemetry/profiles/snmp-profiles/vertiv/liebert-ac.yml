@@ -1,0 +1,82 @@
+# http://oidref.com/1.3.6.1.4.1.476.1.42.3.4
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-air-conditioner
+
+sysobjectid:
+  - 1.3.6.1.4.1.476.1.42 # Liebert Global
+
+# This sysoid is the same for a variety of Liebert/Vertic product lines
+# If the sysDesc matches this regex, use the corresponding profile.
+# Regex is run on _lower case_ version of the sysDesc string.
+matches:
+  "ups": vertiv-ups.yml
+
+metrics:
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.3
+      name: lgpEnvTemperatureTableDegF
+    symbols:
+      - OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3
+        name: lgpEnvTemperatureMeasurementDegF
+        tag: temp_f
+      - OID: 1.3.6.1.4.1.476.1.42.3.4.1.3.3.1.3
+        name: lgpEnvTemperatureMeasurementDegC
+        tag: temp_c
+      - OID: 1.3.6.1.4.1.476.1.42.3.4.2.2.3.1.3
+        name: lgpEnvHumidityMeasurementRel
+        tag: relative_humidity
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.2
+          name: lgpEnvTemperatureDescrDegF
+
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.1.0
+      name: lgpEnvStatisticsComp1RunHr
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.2.0
+      name: lgpEnvStatisticsComp2RunHr
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.3.0
+      name: lgpEnvStatisticsFanRunHr
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.4.0
+      name: lgpEnvStatisticsHumRunHr
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.7.0
+      name: lgpEnvStatisticsReheat1RunHr
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.8.0
+      name: lgpEnvStatisticsReheat2RunHr
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.6.9.0
+      name: lgpEnvStatisticsReheat3RunHr
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.1.0
+      name: lgpEnvTemperatureSettingDegF
+    tag: temp_setting
+  - column:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.2.0
+      name: lgpEnvTemperatureToleranceDegF
+    tag: temp_tolerance
+  - column:
+      OID: 1.3.6.1.4.1.476.1.42.2.1.2.0
+      name: lgpAgentIdentModel
+    tag: model
+  - column:
+      OID: 1.3.6.1.4.1.476.1.42.2.1.4.0
+      name: lgpAgentIdentSerialNumber
+    tag: serial_number

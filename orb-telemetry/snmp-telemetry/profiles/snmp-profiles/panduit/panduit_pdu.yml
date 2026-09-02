@@ -1,0 +1,221 @@
+# http://www.oid-info.com/get/1.3.6.1.4.1.19536.10
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid: 1.3.6.1.4.1.19536.10.*
+
+
+metrics:
+# Identity Table
+  - MIB: PANDUIT-MIB
+    table:
+      OID: 1.3.6.1.4.1.19536.10.1.1.2
+      name: pdug5IdentTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.1
+        name: pdug5IndentIndex
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.2
+        name: pdug5Name
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.5
+        name: pdug5FirmwareVersion
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.8
+        name: pdug5SerialNumber
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.9
+        name: pdug5Status
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.14
+        name: pdug5MACAddress
+      - OID: 1.3.6.1.4.1.19536.10.1.1.2.1.15
+        name: pdug5IPv4Address
+    metric_tags:
+      - tag: pdug5InputPhaseCount
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.1.2.1.11
+          name: pdug5InputPhaseCount
+      - tag: pdug5OutletCount
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.1.2.1.13
+          name: pdug5OutletCount
+      - tag: pdug5IPv4Address
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.1.2.1.15
+          name: pdug5IPv4Address
+      - tag:  pdug5IdentIndex
+        column:
+          OID:  1.3.6.1.4.1.19536.10.1.1.2.1.1
+          name:  pdug5IdentIndex
+
+ # Input Table
+  - MIB: PANDUIT-MIB
+    table:
+      OID: 1.3.6.1.4.1.19536.10.1.2.1
+      name: pdug5InputTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.2
+        name: pdug5InputFrequency
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.3
+        name: pdug5InputFrequencyStatus
+        enum:
+          good: 1
+          outOfRange: 2
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.4
+        name: pdug5InputPowerVA
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.5
+        name: pdug5InputPowerWatts
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.9
+        name: pdug5InputPowerFactor
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.10
+        name: pdug5InputPowerVAR
+      - OID: 1.3.6.1.4.1.19536.10.1.2.1.1.11
+        name: pdug5InputTotalCurrent
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.19
+        name: pdug5InputPhasePowerVA
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.20
+        name: pdug5InputPhasePowerWatts
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.23
+        name: pdug5InputPhasePowerFactor
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.24
+        name: pdug5InputPhasePowerVAR
+    metric_tags:
+      - tag: pdug5InputType
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.2.1.1.1
+          name: pdug5InputType
+          enum:
+            singlePhase: 1
+            splitPhase: 2
+            threePhaseDelta: 3
+            threePhaseWye: 4
+
+# Input Phases
+  - MIB: PANDUIT-MIB
+    table:
+      OID: 1.3.6.1.4.1.19536.10.1.2.2
+      name: pdug5InputPhaseTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.1
+        name: pdug5InputPhaseIndex
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.3
+        name: pdug5InputPhaseVoltage
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.11
+        name: pdug5InputPhaseCurrent
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.17
+        name: pdug5InputPhaseCurrentPercentLoad
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.18
+        name: pdug5InputPhaseCurrentMeasType
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.19
+        name: pdug5InputPhasePowerVA
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.20
+        name: pdug5InputPhasePowerWatts
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.23
+        name: pdug5InputPhasePowerFactor
+      - OID: 1.3.6.1.4.1.19536.10.1.2.2.1.24
+        name: pdug5InputPhasePowerVAR
+    metric_tags:
+      - tag: pdug5InputPhaseCurrentMeasType
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.2.2.1.9
+          name: pdug5InputPhaseCurrentMeasType
+          enum:
+            singlePhase: 1
+            neutral: 2
+            phase1: 3
+            phase2: 4
+            phase3: 5
+      - tag: pdug5InputPhaseIndex
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.2.2.1.1
+          name: pdug5InputPhaseIndex
+
+# Group Table
+  - MIB: PANDUIT-MIB
+    table:
+      OID: 1.3.6.1.4.1.19536.10.1.3.1
+      name: pdug5GroupTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.1
+        name: pdug5GroupIndex
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.2
+        name: pdug5GroupName
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.12
+        name: pdug5GroupCurrent
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.5
+        name: pdug5GroupVoltage
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.18
+        name: pdug5GroupCurrentPercentLoad
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.4
+        name: pdug5GroupVoltageMeasType
+        enum:
+          notApplicable: 0
+          singlePhase: 1
+          phase1toN: 2
+          phase2toN: 3
+          phase3toN: 4
+          phase1to2: 5
+          phase2to3: 6
+          phase3to1: 7
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.19
+        name: pdug5GroupPowerVA
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.20
+        name: pdug5GroupPowerWatts
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.26
+        name:  pdug5GroupBreakerStatus
+        enum:
+          notApplicable: 0
+          notApplicableA: 1
+          breakerOn: 2
+          breakerOff: 3
+      - OID: 1.3.6.1.4.1.19536.10.1.3.1.1.24
+        name: pdug5GroupPowerVAR
+    metric_tags:
+      - tag: pdug5GroupIndex
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.3.1.1.1
+          name: pdug5GroupIndex
+
+# Environment
+# Skip - I don't think there's any sensors plugged/enabled on these. Walking the OID tree shows them all as "disconnected"
+
+# Outlets
+  - MIB: PANDUIT-MIB
+    table:
+      OID: 1.3.6.1.4.1.19536.10.1.5.1
+      name: pdug5OutletTable
+    symbols:
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.1
+        name: pdug5OutletIndex
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.2
+        name: pdug5OutletName
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.3
+        name: pdug5OutletType
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.5
+        name: pdug5OutletCurrent
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.11
+        name: pdug5OutletCurrentPercentLoad
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.12
+        name: pdug5OutletVA
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.13
+        name: pdug5OutletWatts
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.16
+        name: pdug5OutletPowerFactor
+      - OID: 1.3.6.1.4.1.19536.10.1.5.1.1.17
+        name: pdug5OutletVAR
+    metric_tags:
+      - tag: pdug5OutletName
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.5.1.1.2
+          name: pdug5OutletName
+      - tag: pdug5OutletBranch
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.5.1.1.18
+          name: pdug5OutletBranch
+      - tag: pdug5OutletIndex
+        column:
+          OID: 1.3.6.1.4.1.19536.10.1.5.1.1.1
+          name: pdug5OutletIndex

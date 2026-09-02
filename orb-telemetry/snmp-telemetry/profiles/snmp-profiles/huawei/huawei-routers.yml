@@ -1,0 +1,344 @@
+# https://www.circitor.fr/Mibs/Html/H/HUAWEI-BGP-VPN-MIB.php
+# https://www.circitor.fr/Mibs/Html/H/HUAWEI-DNS-MIB.php
+# https://www.circitor.fr/Mibs/Html/H/HUAWEI-NAT-EXT-MIB.php
+# http://www.mibdepot.com/cgi-bin/vendor_index.cgi?r=huawei
+---
+extends:
+  - huawei-all-devices.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.2011.2.224.279    # Huawei AR651-X8
+  - 1.3.6.1.4.1.2011.2.316        # Huawei MA5800-X15
+  - 1.3.6.1.4.1.2011.2.360.1.9    # Huawei NETENGINE 8000 M8
+
+provider: kentik-router
+
+metrics:
+  # BGP metrics are tagged to match the bgp4-mib.yml values
+  # BGP Peer Table. This table contains information about the connections for BGP peers. 
+  - MIB: HUAWEI-BGP-VPN-MIB
+    table:
+      name: hwBgpPeerTable
+      OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2
+    symbols:
+      # The status of the remote BGP peer.
+      - tag: bgpPeerState
+        name: hwBgpPeerState
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.5
+        enum:
+          idle: 1
+          connect: 2
+          active: 3
+          opensent: 4
+          openconfirm: 5
+          established: 6
+      # The Counter That Records the Times the Remote BGP Peer Is Correctly Connected The counter is increased by one if the remote BGP peer is correctly connected once. The counter could be set to zero.
+      - tag: bgpPeerFsmEstablishedTransitions
+        name: hwBgpPeerFsmEstablishedCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.6
+      # The counter that records the times the remote BGP peer is correctly connected.
+      - tag: bgpPeerFsmEstablishedTime
+        name: hwBgpPeerFsmEstablishedTime
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.7
+      # Bgp peer down reason
+      - name: hwBgpPeerUnAvaiReason
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.10
+        enum:
+          configurationLeadPeerDown: 1
+          receiveNotification: 2
+          receiveErrorPacket: 3
+          holdTimerExpire: 4
+          remotePeerNotReachable: 5
+          directConnectInterfaceDown: 6
+          routeLimit: 7
+    metric_tags:
+      # The name of the VPN instance.
+      - column:
+          name: hwBgpPeerVrfName
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.1.1.6
+      # The version negotiated with the remote BGP peer.
+      - tag: negotiated_version
+        column:
+          name: hwBgpPeerNegotiatedVersion
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.1
+      # The AS number of the remote BGP peer.
+      - tag: remote_as
+        column:
+          name: hwBgpPeerRemoteAs
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.2
+      # The IP address of the remote BGP peer.
+      - tag: neighbor_ip
+        column:
+          name: hwBgpPeerRemoteAddr
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.4
+          conversion: hextoip
+
+  # BGP metrics are tagged to match the bgp4-mib.yml values
+  # Route table for BGP Peers This table contains routing information about the BGP peers.
+  - MIB: HUAWEI-BGP-VPN-MIB
+    table:
+      name: hwBgpPeerRouteTable
+      OID: 1.3.6.1.4.1.2011.5.25.177.1.1.3
+    symbols:
+      # The number of prefixes received from the remote BGP peer.
+      - name: hwBgpPeerPrefixRcvCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.3.1.1
+      # The number of active prefixes received from the remote BGP peer.
+      - name: hwBgpPeerPrefixActiveCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.3.1.2
+      # The number of prefixes sent to the remote BGP peer.
+      - name: hwBgpPeerPrefixAdvCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.3.1.3
+    metric_tags:
+      # The name of the VPN instance.
+      - column:
+          name: hwBgpPeerVrfName
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.1.1.6
+      # The IP address of the remote BGP peer.
+      - tag: neighbor_ip
+        column:
+          name: hwBgpPeerRemoteAddr
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.4
+          conversion: hextoip
+
+  # BGP metrics are tagged to match the bgp4-mib.yml values
+  # Protocol Packet Table for BGP Peers This table contains information about the protocol packets of BGP peers.
+  - MIB: HUAWEI-BGP-VPN-MIB
+    table:
+      name: hwBgpPeerMessageTable
+      OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4
+    symbols:
+      # The total number of protocol packets received from the remote BGP peer.
+      - tag: bgpPeerInTotalMessages
+        name: hwBgpPeerInTotalMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.1
+      # The total number of protocol packets sent to the remote BGP peer.
+      - tag: bgpPeerOutTotalMessages
+        name: hwBgpPeerOutTotalMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.2
+      # The total number of Open packets received from the remote BGP peer.
+      - name: hwBgpPeerInOpenMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.3
+      # The total number of Update packets received from the remote BGP peer.
+      - tag: bgpPeerInUpdates
+        name: hwBgpPeerInUpdateMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.4
+      # The total number of Notification packets received from the remote BGP peer.
+      - name: hwBgpPeerInNotificationMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.5
+      # The total number of Keepalive packets received from the remote BGP peer.
+      - name: hwBgpPeerInKeepAliveMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.6
+      # The total number of Route-Refresh packets received from the remote BGP peer.
+      - name: hwBgpPeerInRouteFreshMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.7
+      # The total number of Open packets sent to the remote BGP peer.
+      - name: hwBgpPeerOutOpenMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.8
+      # The total number of Update packets sent to the remote BGP peer.
+      - tag: bgpPeerOutUpdates
+        name: hwBgpPeerOutUpdateMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.9
+      # The total number of Notification packets sent to the remote BGP peer.
+      - name: hwBgpPeerOutNotificationMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.10
+      # The total number of Keepalive packets sent to the remote BGP peer.
+      - name: hwBgpPeerOutKeepAliveMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.11
+      # The total number of Route-Refresh packets sent to the remote BGP peer.
+      - name: hwBgpPeerOutRouteFreshMsgCounter
+        OID: 1.3.6.1.4.1.2011.5.25.177.1.1.4.1.12
+    metric_tags:
+      # The name of the VPN instance.
+      - column:
+          name: hwBgpPeerVrfName
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.1.1.6
+      # The IP address of the remote BGP peer.
+      - tag: neighbor_ip
+        column:
+          name: hwBgpPeerRemoteAddr
+          OID: 1.3.6.1.4.1.2011.5.25.177.1.1.2.1.4
+          conversion: hextoip
+
+  # This table is a list of domain names mapped to IPv4 addresses.
+  - MIB: HUAWEI-DNS-MIB
+    table:
+      name: hwDnsHostsDynamicTable
+      OID: 1.3.6.1.4.1.2011.5.25.194.1.1
+    symbols:
+      # DnsTtl indicates the TTL of a mapping entry, which is a 32-bit integer,in seconds.
+      - name: hwDnsTtl
+        OID: 1.3.6.1.4.1.2011.5.25.194.1.1.1.3
+    metric_tags:
+      # DnsDomainName indicates a domain name.
+      - column:
+          name: hwDnsDomainName
+          OID: 1.3.6.1.4.1.2011.5.25.194.1.1.1.1
+      # DnsIpAddress indicates an IP address mapped to a domain name.
+      - column:
+          name: hwDnsIpAddress
+          OID: 1.3.6.1.4.1.2011.5.25.194.1.1.1.2
+          conversion: hextoip
+      # DnsAlias indicates a domain name alias.
+      - column:
+          name: hwDnsAlias
+          OID: 1.3.6.1.4.1.2011.5.25.194.1.1.1.4
+
+  # This table is a list of server addresses.
+  - MIB: HUAWEI-DNS-MIB
+    table:
+      name: hwDnsServerAddrTable
+      OID: 1.3.6.1.4.1.2011.5.25.194.1.4
+    symbols:
+      # hwServerStatus indicates the status of server address.
+      - name: hwServerStatus
+        OID: 1.3.6.1.4.1.2011.5.25.194.1.4.1.2
+        enum:
+          static: 1
+          dynamic: 2
+    metric_tags:
+      # hwServerAddr indicates a server address.
+      - column:
+          name: hwServerAddr
+          OID: 1.3.6.1.4.1.2011.5.25.194.1.4.1.1
+          conversion: hextoip
+
+  # Table of detailed data for network events. The agent may choose to delete the instances of hwFwBasicEventsEntry as required because of lack of memory.
+  - MIB: HUAWEI-FIREWALL-MIB
+    table:
+      name: hwFwNetEventsTable
+      OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4
+    symbols:
+      # The interface index most closely associated with this event.
+      - name: hwFwNetEventInterface
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.2
+        conversion: to_one
+      # This object indicates the VRF's name.
+      - name: hwFwNetEventSrcVrfName
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.3
+        conversion: to_one
+      # Source IP address in the IP packet that caused the event.
+      - name: hwFwNetEventSrcIpAddress
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.4
+        conversion: hextoip
+      # Destination IP address in the IP packet that caused the event.
+      - name: hwFwNetEventDstIpAddress
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.7
+        conversion: hextoip
+      # Source UDP/TCP port in the IP packet that caused the event. 
+      - name: hwFwNetEventSrcIpPort
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.9
+        conversion: to_one
+      # Destination UDP/TCP port in the IP packet that caused the event. 
+      - name: hwFwNetEventDstIpPort
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.11
+        conversion: to_one
+      # A detailed description of the event.
+      - name: hwFwNetEventDescription
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.1.2.4.1.16
+        conversion: to_one
+
+  # Table of firewall statistic instances.
+  - MIB: HUAWEI-FIREWALL-MIB
+    table:
+      name: hwFwConnectionStatTable
+      OID: 1.3.6.1.4.1.2011.5.25.222.1.2.2.2
+    symbols:
+      # This is an integer that contains the value of the resource statistic.
+      - name: hwFwConnectionStatCount
+        OID: 1.3.6.1.4.1.2011.5.25.222.1.2.2.2.1.4
+    metric_tags:
+      # A detailed textual description of this statistic.
+      - column:
+          name: hwFwConnectionStatDescription
+          OID: 1.3.6.1.4.1.2011.5.25.222.1.2.2.2.1.3
+
+  # Table of NAT address pool instances.
+  - MIB: HUAWEI-NAT-EXT-MIB
+    table:
+      name: hwNatAddrPoolTable
+      OID: 1.3.6.1.4.1.2011.5.25.226.2.3.2
+    symbols:
+      # Number of times the NAT address pool is referenced.
+      - name: hwNatAddrPoolRefTimes
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.3.2.1.4
+    metric_tags:
+      # Start IP address of the NAT address pool.
+      - column:
+          name: hwNatAddrPoolStartAddr
+          OID: 1.3.6.1.4.1.2011.5.25.226.2.3.2.1.2
+          conversion: hextoip
+      # End IP address of the NAT address pool.
+      - column:
+          name: hwNatAddrPoolEndAddr
+          OID: 1.3.6.1.4.1.2011.5.25.226.2.3.2.1.3
+          conversion: hextoip
+      # Mode of referencing the NAT address pool,
+      - column:
+          name: hwNatAddrPoolRefType
+          OID: 1.3.6.1.4.1.2011.5.25.226.2.3.2.1.5
+          enum:
+            none: 0
+            pat: 1
+            noPat: 2
+
+  # Table of NAT session instances.
+  - MIB: HUAWEI-NAT-EXT-MIB
+    table:
+      name: hwNatSessionTable
+      OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2
+    symbols:
+      # The local source ip of the nat session table.
+      - name: hwNatSessionSrcLocalAddr
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.1
+        conversion: hextoip
+      # The local destination ip of the nat session table.
+      - name: hwNatSessionDstLocalAddr
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.2
+        conversion: hextoip
+      # The local source port of the nat session table.
+      - name: hwNatSessionSrcLocalPort
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.3
+      # The local destination port of the nat session table.
+      - name: hwNatSessionDstLocalPort
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.4
+      # The protocol of the nat session.
+      - name: hwNatSessionProtocol
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.5
+        enum:
+          other: 1
+          icmp: 2
+          udp: 3
+          tcp: 4
+      # The global source ip of the nat session table.
+      - name: hwNatSessionSrcGlobalAddr
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.6
+        conversion: hextoip
+      # The global destination ip of the nat session table.
+      - name: hwNatSessionDstGlobalAddr
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.7
+        conversion: hextoip
+      # The global source port of the nat session table.
+      - name: hwNatSessionSrcGlobalPort
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.8
+      # The global destination port of the nat session table.
+      - name: hwNatSessionDstGlobalPort
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.9
+      # The source VPN instance name of the nat session table.
+      - name: hwNatSessionSrcVPN
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.10
+        conversion: to_one
+      # The destination VPN instance name of the nat session table.
+      - name: hwNatSessionDstVPN
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.11
+        conversion: to_one
+      # The NAT session table row status.
+      - name: hwNatSessionStatus
+        OID: 1.3.6.1.4.1.2011.5.25.226.2.14.2.1.12
+        enum:
+          active: 1
+          notInService: 2
+          notReady: 3
+          createAndGo: 4
+          createAndWait: 5
+          destroy: 6

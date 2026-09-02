@@ -1,0 +1,765 @@
+# https://www.servertech.com/support/sentry-mib-oid-tree-downloads
+---
+extends:
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.1718.4    # Sentry 4th Gen PDU
+
+provider: kentik-pdu
+
+metrics:
+  # Unit status.
+  - MIB: Sentry4-MIB
+    symbol:
+      name: st4UnitStatus
+      OID: 1.3.6.1.4.1.1718.4.1.2.3.1.1.1
+      enum:
+        normal: 0
+        disabled: 1
+        purged: 2
+        reading: 5
+        settle: 6
+        notFound: 7
+        lost: 8
+        readError: 9
+        noComm: 10
+        pwrError: 11
+        breakerTripped: 12
+        fuseBlown: 13
+        lowAlarm: 14
+        lowWarning: 15
+        highWarning: 16
+        highAlarm: 17
+        alarm: 18
+        underLimit: 19
+        overLimit: 20
+        nvmFail: 21
+        profileError: 22
+        conflict: 23
+  # Objects to monitor for a particular input cord.
+  - MIB: Sentry4-MIB
+    table:
+      name: st4InputCordMonitorTable
+      OID: 1.3.6.1.4.1.1718.4.1.3.3
+    symbols:
+      # The on/off state of the input cord.
+      - name: st4InputCordState
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.1
+        enum:
+          unknown: 0
+          on: 1
+          off: 2
+      # The status of the input cord.
+      - name: st4InputCordStatus
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.2
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The measured active power of the input cord in Watts.
+      - name: st4InputCordActivePower
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.3
+      # The status of the measured active power of the input cord.
+      - name: st4InputCordActivePowerStatus
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.4
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The measured apparent power of the input cord in Volt-Amps.
+      - name: st4InputCordApparentPower
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.5
+      # The status of the measured apparent power of the input cord.
+      - name: st4InputCordApparentPowerStatus
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.6
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The amount of the input cord power capacity used in tenth percent.
+      - name: st4InputCordPowerUtilized
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.7
+      # The measured power factor of the input cord in hundredths.
+      - name: st4InputCordPowerFactor
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.8
+      # The status of the measured power factor of the input cord.
+      - name: st4InputCordPowerFactorStatus
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.9
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The total energy consumption of loads through the input cord in tenth Kilowatt-Hours.
+      - name: st4InputCordEnergy
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.10
+      # The frequency of the input cord voltage in tenth Hertz.
+      - name: st4InputCordFrequency
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.11
+      # The current imbalance on the lines of the input cord in tenth percent.
+      - name: st4InputCordOutOfBalance
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.12
+      # The status of the current imbalance on the lines of the input cord.
+      - name: st4InputCordOutOfBalanceStatus
+        OID: 1.3.6.1.4.1.1718.4.1.3.3.1.13
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+    metric_tags:
+      # The internal ID of the input cord.
+      - column:
+          name: st4InputCordID
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.2
+      # The name of the input cord.
+      - column:
+          name: st4InputCordName
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.3
+      # The type of plug on the input cord, or socket for the input cord.
+      - column:
+          name: st4InputCordInletType
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.6
+      # The user-configured nominal voltage of the input cord in tenth-Volts.
+      - column:
+          name: st4InputCordNominalVoltage
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.7
+      # The factory-set minimum allowed for the user-configured nominal voltage of the input cord in Volts.
+      - column:
+          name: st4InputCordNominalVoltageMin
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.8
+      # The factory-set maximum allowed for the user-configured nominal voltage of the input cord in Volts.
+      - column:
+          name: st4InputCordNominalVoltageMax
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.9
+      # The user-configured current capacity of the input cord in Amps.
+      - column:
+          name: st4InputCordCurrentCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.10
+      # The factory-set maximum allowed for the user-configured current capacity of the input cord in Amps.
+      - column:
+          name: st4InputCordCurrentCapacityMax
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.11
+      # The power capacity of the input cord in Volt-Amps.
+      - column:
+          name: st4InputCordPowerCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.12
+      # The number of current-carrying lines in the input cord.
+      - column:
+          name: st4InputCordLineCount
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.20
+      # The number of active phases from the lines in the input cord.
+      - column:
+          name: st4InputCordPhaseCount
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.21
+      # The number of over-current protectors downstream from the input cord.
+      - column:
+          name: st4InputCordOcpCount
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.22
+      # The number of branches downstream from the input cord.
+      - column:
+          name: st4InputCordBranchCount
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.23
+      # The number of outlets powered from the input cord.
+      - column:
+          name: st4InputCordOutletCount
+          OID: 1.3.6.1.4.1.1718.4.1.3.2.1.24
+  # Objects to monitor for a particular line.
+  - MIB: Sentry4-MIB
+    table:
+      name: st4LineMonitorTable
+      OID: 1.3.6.1.4.1.1718.4.1.4.3
+    symbols:
+      # The on/off state of the line.
+      - name: st4LineState
+        OID: 1.3.6.1.4.1.1718.4.1.4.3.1.1
+        enum:
+          unknown: 0
+          on: 1
+          off: 2
+      # The status of the line.
+      - name: st4LineStatus
+        OID: 1.3.6.1.4.1.1718.4.1.4.3.1.2
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The measured current on the line in hundredth Amps.
+      - name: st4LineCurrent
+        OID: 1.3.6.1.4.1.1718.4.1.4.3.1.3
+      # The status of the measured current on the line.
+      - name: st4LineCurrentStatus
+        OID: 1.3.6.1.4.1.1718.4.1.4.3.1.4
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The amount of the line current capacity used in tenth percent.
+      - name: st4LineCurrentUtilized
+        OID: 1.3.6.1.4.1.1718.4.1.4.3.1.5
+    metric_tags:
+      # The internal ID of the line.
+      - column:
+          name: st4LineID
+          OID: 1.3.6.1.4.1.1718.4.1.4.2.1.2
+      # The system label assigned to the line for identification.
+      - column:
+          name: st4LineLabel
+          OID: 1.3.6.1.4.1.1718.4.1.4.2.1.4
+      # The current capacity of the line in Amps.
+      - column:
+          name: st4LineCurrentCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.4.2.1.6
+  # Objects to monitor for a particular phase.
+  - MIB: Sentry4-MIB
+    table:
+      name: st4PhaseMonitorTable
+      OID: 1.3.6.1.4.1.1718.4.1.5.3
+    symbols:
+      # The on/off state of the phase.
+      - name: st4PhaseState
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.1
+        enum:
+          unknown: 0
+          on: 1
+          off: 2
+      # The status of the phase.
+      - name: st4PhaseStatus
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.2
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The measured voltage on the phase in tenth Volts.
+      - name: st4PhaseVoltage
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.3
+      # The status of the measured voltage on the phase.
+      - name: st4PhaseVoltageStatus
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.4
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The deviation from the nominal voltage on the phase in tenth percent.
+      - name: st4PhaseVoltageDeviation
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.5
+      # The measured current on the phase in hundredth Amps.
+      - name: st4PhaseCurrent
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.6
+      # The measured crest factor of the current waveform on the phase in tenths.
+      - name: st4PhaseCurrentCrestFactor
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.7
+      # The measured active power on the phase in Watts.
+      - name: st4PhaseActivePower
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.8
+      # The measured apparent power on the phase in Volt-Amps.
+      - name: st4PhaseApparentPower
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.9
+      # The measured power factor on the phase in hundredths.
+      - name: st4PhasePowerFactor
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.10
+      # The status of the measured power factor on the phase.
+      - name: st4PhasePowerFactorStatus
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.11
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The status of the measured reactance of the phase.
+      - name: st4PhaseReactance
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.12
+        enum:
+          unknown: 0
+          capacitive: 1
+          inductive: 2
+          resistive: 3
+      # The total energy consumption of loads through the phase in tenth Kilowatt-Hours.
+      - name: st4PhaseEnergy
+        OID: 1.3.6.1.4.1.1718.4.1.5.3.1.13
+    metric_tags:
+      # The internal ID of the phase.
+      - column:
+          name: st4PhaseID
+          OID: 1.3.6.1.4.1.1718.4.1.5.2.1.2
+      # The system label assigned to the phase for identification.
+      - column:
+          name: st4PhaseLabel
+          OID: 1.3.6.1.4.1.1718.4.1.5.2.1.4
+      # The nominal voltage of the phase in tenth Volts.
+      - column:
+          name: st4PhaseNominalVoltage
+          OID: 1.3.6.1.4.1.1718.4.1.5.2.1.6
+      # The number of outlets powered from the phase.
+      - column:
+          name: st4PhaseOutletCount
+          OID: 1.3.6.1.4.1.1718.4.1.5.2.1.21
+  # Objects to monitor for a particular over-current protector.
+  - MIB: Sentry4-MIB
+    table:
+      name: st4OcpMonitorTable
+      OID: 1.3.6.1.4.1.1718.4.1.6.3
+    symbols:
+      # The status of the over-current protector.
+      - name: st4OcpStatus
+        OID: 1.3.6.1.4.1.1718.4.1.6.3.1.1
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+    metric_tags:
+      # The internal ID of the over-current protector.
+      - column:
+          name: st4OcpID
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.2
+      # The system label assigned to the over-current protector for identification.
+      - column:
+          name: st4OcpLabel
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.4
+      # The type of over-current protector.
+      - column:
+          name: st4OcpType
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.6
+          enum:
+            fuse: 0
+            breaker: 1
+      # The user-configured current capacity of the over-current protector in Amps.
+      - column:
+          name: st4OcpCurrentCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.7
+      # The factory-set maximum allowed for the user-configured current capacity of the over-current protector in Amps.
+      - column:
+          name: st4OcpCurrentCapacityMax
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.8
+      # The number of branches downstream from the over-current protector.
+      - column:
+          name: st4OcpBranchCount
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.20
+      # The number of outlets powered from the over-current protector.
+      - column:
+          name: st4OcpOutletCount
+          OID: 1.3.6.1.4.1.1718.4.1.6.2.1.21
+  # Objects to monitor for a particular branch.
+  - MIB: Sentry4-MIB
+    table:
+      name: st4BranchMonitorTable
+      OID: 1.3.6.1.4.1.1718.4.1.7.3
+    symbols:
+      # The on/off state of the branch.
+      - name: st4BranchState
+        OID: 1.3.6.1.4.1.1718.4.1.7.3.1.1
+        enum:
+          unknown: 0
+          on: 1
+          off: 2
+      # The status of the branch.
+      - name: st4BranchStatus
+        OID: 1.3.6.1.4.1.1718.4.1.7.3.1.2
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The measured current on the branch in hundredth Amps.
+      - name: st4BranchCurrent
+        OID: 1.3.6.1.4.1.1718.4.1.7.3.1.3
+      # The status of the measured current on the branch.
+      - name: st4BranchCurrentStatus
+        OID: 1.3.6.1.4.1.1718.4.1.7.3.1.4
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+      # The amount of the branch current capacity used in tenth percent.
+      - name: st4BranchCurrentUtilized
+        OID: 1.3.6.1.4.1.1718.4.1.7.3.1.5
+    metric_tags:
+      # The internal ID of the branch.
+      - column:
+          name: st4BranchID
+          OID: 1.3.6.1.4.1.1718.4.1.7.2.1.2
+      # The system label assigned to the branch for identification.
+      - column:
+          name: st4BranchLabel
+          OID: 1.3.6.1.4.1.1718.4.1.7.2.1.4
+      # The current capacity of the branch in Amps.
+      - column:
+          name: st4BranchCurrentCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.7.2.1.6
+      # The internal ID of the phase powering this branch.
+      - column:
+          name: st4BranchPhaseID
+          OID: 1.3.6.1.4.1.1718.4.1.7.2.1.20
+      # The internal ID of the over-current protector powering this outlet.
+      - column:
+          name: st4BranchOcpID
+          OID: 1.3.6.1.4.1.1718.4.1.7.2.1.21
+      # The number of outlets powered from the branch.
+      - column:
+          name: st4BranchOutletCount
+          OID: 1.3.6.1.4.1.1718.4.1.7.2.1.30
+  # Objects to monitor for a particular outlet.
+  - MIB: Sentry4-MIB
+    table:
+      name: st4OutletMonitorTable
+      OID: 1.3.6.1.4.1.1718.4.1.8.3
+    symbols:
+      # The on/off state of the outlet.
+      - name: st4OutletState
+        OID: 1.3.6.1.4.1.1718.4.1.8.3.1.1
+        enum:
+          unknown: 0
+          on: 1
+          off: 2
+      # The status of the outlet.
+      - name: st4OutletStatus
+        OID: 1.3.6.1.4.1.1718.4.1.8.3.1.2
+        enum:
+          normal: 0
+          disabled: 1
+          purged: 2
+          reading: 5
+          settle: 6
+          notFound: 7
+          lost: 8
+          readError: 9
+          noComm: 10
+          pwrError: 11
+          breakerTripped: 12
+          fuseBlown: 13
+          lowAlarm: 14
+          lowWarning: 15
+          highWarning: 16
+          highAlarm: 17
+          alarm: 18
+          underLimit: 19
+          overLimit: 20
+          nvmFail: 21
+          profileError: 22
+          conflict: 23
+    metric_tags:
+      # The internal ID of the outlet.
+      - column:
+          name: st4OutletID
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.2
+      # The name of the outlet.
+      - column:
+          name: st4OutletName
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.3
+      # The socket type of the outlet.
+      - column:
+          name: st4OutletSocketType
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.6
+      # The current capacity of the outlet in Amps.
+      - column:
+          name: st4OutletCurrentCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.7
+      # The power capacity of the outlet in Volt-Amps.
+      - column:
+          name: st4OutletPowerCapacity
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.8
+      # The wakeup state of the outlet.
+      - column:
+          name: st4OutletWakeupState
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.20
+          enum:
+            on: 0
+            off: 1
+            last: 2
+      # The post-on delay of the outlet in seconds.
+      - column:
+          name: st4OutletPostOnDelay
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.21
+      # The internal ID of the phase powering this outlet.
+      - column:
+          name: st4OutletPhaseID
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.30
+      # The internal ID of the over-current protector powering this outlet.
+      - column:
+          name: st4OutletOcpID
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.31
+      # The internal ID of the branch powering this outlet.
+      - column:
+          name: st4OutletBranchID
+          OID: 1.3.6.1.4.1.1718.4.1.8.2.1.32
+
+metric_tags:
+  # The firmware version.
+  - column:
+      name: st4SystemFirmwareVersion
+      OID: 1.3.6.1.4.1.1718.4.1.1.1.3.0
+  # The name of the unit.
+  - column:
+      name: st4UnitName
+      OID: 1.3.6.1.4.1.1718.4.1.2.2.1.3.1
+  # The product serial number of the unit.
+  - column:
+      name: st4UnitProductSN
+      OID: 1.3.6.1.4.1.1718.4.1.2.2.1.4.1
+    tag: entity_serial
+  # The model of the unit.
+  - column:
+      name: st4UnitModel
+      OID: 1.3.6.1.4.1.1718.4.1.2.2.1.5.1
+    tag: model_number
+  # The asset tag of the unit.
+  - column:
+      name: st4UnitAssetTag
+      OID: 1.3.6.1.4.1.1718.4.1.2.2.1.6.1
+  # The type of the unit.
+  - column:
+      name: st4UnitType
+      OID: 1.3.6.1.4.1.1718.4.1.2.2.1.7.1
+      enum: 
+        masterPdu: 0
+        linkPdu: 1
+        controller: 2
+        emcu: 3
+  # The product manufacture date in YYYY-MM-DD (ISO 8601 format).
+  - column:
+      name: st4UnitProductMfrDate
+      OID: 1.3.6.1.4.1.1718.4.1.2.2.1.9.1

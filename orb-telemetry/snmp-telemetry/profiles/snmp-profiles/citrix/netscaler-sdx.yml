@@ -1,0 +1,375 @@
+# https://mibs.observium.org/mib/SDX-ROOT-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-load-balancer
+
+sysobjectid:
+  - 1.3.6.1.4.1.5951.6    # NetScaler SDX root
+
+metrics:
+  # The SDX hardwareResourcetable
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: hardwareResourceTable
+      OID: 1.3.6.1.4.1.5951.6.2.1000.1
+    symbols:
+      # Health status of the resource - OK/ERROR
+      - name: hardwareResourceStatus
+        OID: 1.3.6.1.4.1.5951.6.2.1000.1.1.7
+        conversion: to_one
+    metric_tags:
+      # Resource name
+      - column:
+          name: hardwareResourceName
+          OID: 1.3.6.1.4.1.5951.6.2.1000.1.1.1
+
+  # The SDX softwareResourceTable
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: softwareResourceTable
+      OID: 1.3.6.1.4.1.5951.6.2.1000.2
+    symbols:
+      # Health status of the resource - OK/ERROR
+      - name: softwareResourceStatus
+        OID: 1.3.6.1.4.1.5951.6.2.1000.2.1.7
+        conversion: to_one
+    metric_tags:
+      # Resource name
+      - column:
+          name: softwareResourceName
+          OID: 1.3.6.1.4.1.5951.6.2.1000.2.1.1
+
+  # The SDX Storage Repository table
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: srTable
+      OID: 1.3.6.1.4.1.5951.6.2.1000.4
+    symbols:
+      # Physical utilization of the storage repository (bytes)
+      - name: srUtilized
+        OID: 1.3.6.1.4.1.5951.6.2.1000.4.1.5
+      # Physical size of the storage repository (bytes)
+      - name: srSize
+        OID: 1.3.6.1.4.1.5951.6.2.1000.4.1.6
+      # Status of the storage repository - OK/ERROR
+      - name: srStatus
+        OID: 1.3.6.1.4.1.5951.6.2.1000.4.1.7
+        conversion: to_one
+    metric_tags:
+      # Name of the storage repository
+      - column:
+          name: srName
+          OID: 1.3.6.1.4.1.5951.6.2.1000.4.1.1
+      # Bay number
+      - column:
+          name: srBayNumber
+          OID: 1.3.6.1.4.1.5951.6.2.1000.4.1.2
+
+  # The SDX Interface table
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: interfaceTable
+      OID: 1.3.6.1.4.1.5951.6.2.1000.5
+    symbols:
+      # State of the interface - UP/DOWN
+      - name: interfaceState
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.4
+        conversion: to_one
+        tag: if_OperStatus
+      # Received packets
+      - name: interfaceRxPackets
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.5
+      # Transmitted packets
+      - name: interfaceTxPackets
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.6
+      # Received bytes
+      - name: interfaceRxBytes
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.7
+      # Transmitted bytes
+      - name: interfaceTxBytes
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.8
+      # Receiving errors
+      - name: interfaceRxErrors
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.9
+      # Transmission errors
+      - name: interfaceTxErrors
+        OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.10
+    metric_tags:
+      # Port name
+      - column:
+          name: interfacePort
+          OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.1
+        tag: if_interface_name
+      # Mapped port name
+      - column:
+          name: interfaceMappedPort
+          OID: 1.3.6.1.4.1.5951.6.2.1000.5.1.13
+        tag: if_Alias
+
+  # The SDX Health Monitoring table
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: healthMonitoringTable
+      OID: 1.3.6.1.4.1.5951.6.2.1000.6
+    symbols:
+      # IPMI Sensor Status - OK/ERROR/NA
+      - name: hmStatus
+        OID: 1.3.6.1.4.1.5951.6.2.1000.6.1.4
+        conversion: to_one
+      # Current Value of the IPMI Sensor
+      - name: hmCurrentValue
+        OID: 1.3.6.1.4.1.5951.6.2.1000.6.1.7
+    metric_tags:
+      # IPMI Sensor Name
+      - column:
+          name: hmName
+          OID: 1.3.6.1.4.1.5951.6.2.1000.6.1.1
+      # Measurement Unit
+      - column:
+          name: hmUnit
+          OID: 1.3.6.1.4.1.5951.6.2.1000.6.1.6
+
+  # The SDX XenServer Table
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: xenTable
+      OID: 1.3.6.1.4.1.5951.6.3.1
+    symbols:
+      # CPU Usage (%) of host
+      - name: xenCpuUsage
+        OID: 1.3.6.1.4.1.5951.6.3.1.1.8
+        tag: CPU
+        poll_time_sec: 60
+      # Memory Usage (%) of host
+      - name: xenMemoryUsage
+        OID: 1.3.6.1.4.1.5951.6.3.1.1.11
+        tag: MemoryUtilization
+        poll_time_sec: 60
+
+  # The SDX NetScaler table
+  - MIB: SDX-ROOT-MIB
+    table:
+      name: netscalerTable
+      OID: 1.3.6.1.4.1.5951.6.3.2
+    symbols:
+      # State of device
+      - name: nsInstanceState
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.15
+        conversion: to_one
+      # State of virtual machine (Running | Halted)
+      - name: nsVmState
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.18
+        conversion: to_one
+      # CPU Usage (%) of NetScaler Instance
+      - name: nsNsCPUUsage
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.33
+      # Memory Usage (%) of NetScaler Instance
+      - name: nsNsMemoryUsage
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.35
+      # Out Throughput of NetScaler Instance in Mbps
+      - name: nsNsTx
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.36
+      # In Throughput of NetScaler Instance in Mbps
+      - name: nsNsRx
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.37
+      # HTTP Requests/second
+      - name: nsHttpReq
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.38
+      # Master State (Primary/Secondary) of NetScaler Instance
+      - name: nsHaMasterState
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.41
+        conversion: to_one
+      # Node state of NetScaler instance
+      - name: nsNodeState
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.44
+        conversion: to_one
+      # The state of synchronization of NetScaler Instance
+      - name: nsHaSync
+        OID: 1.3.6.1.4.1.5951.6.3.2.1.45
+        conversion: to_one
+    metric_tags:
+      # Type of NetScaler IP Address
+      - column:
+          name: nsIpAddressType
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.1
+          enum:
+            unknown: 0
+            ipv4: 1
+            ipv6: 2
+            ipv4z: 3
+            ipv6z: 6
+            dns: 16
+      # IP Address for this managed device
+      - column:
+          name: nsIPAddress
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.2
+          conversion: hextoip
+      # Device Profile Name that is attached with this managed device
+      - column:
+          name: nsProfileName
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.5
+      # Name of managed device
+      - column:
+          name: nsName
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.6
+      # Type of NetScaler Netmask
+      - column:
+          name: nsNetmaskType
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.7
+          enum:
+            unknown: 0
+            ipv4: 1
+            ipv6: 2
+            ipv4z: 3
+            ipv6z: 6
+            dns: 16
+      # Netmask of managed device
+      - column:
+          name: nsNetmask
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.8
+          conversion: hextoip
+      # Type of NetScaler gateway
+      - column:
+          name: nsGatewayType
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.9
+          enum:
+            unknown: 0
+            ipv4: 1
+            ipv6: 2
+            ipv4z: 3
+            ipv6z: 6
+            dns: 16
+      # Default gateway of managed device
+      - column:
+          name: nsGateway
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.10
+          conversion: hextoip
+      # Assigned hostname of managed device
+      - column:
+          name: nsHostname
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.11
+      # Description of managed device
+      - column:
+          name: nsDescription
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.12
+      # Version of managed device
+      - column:
+          name: nsVersion
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.13
+      # Description of virtual machine
+      - column:
+          name: nsVmDescription
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.30
+      # Assigned throughput (speed) of virtual machine (Mbps)
+      - column:
+          name: nsThroughput
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.31
+      # Type of HA IP address
+      - column:
+          name: nsHaIPAddressType
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.42
+          enum:
+            unknown: 0
+            ipv4: 1
+            ipv6: 2
+            ipv4z: 3
+            ipv6z: 6
+            dns: 16
+      # Peer IP Address
+      - column:
+          name: nsHaIPAddress
+          OID: 1.3.6.1.4.1.5951.6.3.2.1.43
+          conversion: hextoip
+
+metric_tags:
+  # Product Name
+  - column:
+      name: systemProduct
+      OID: 1.3.6.1.4.1.5951.6.2.2.0
+  # Build Number
+  - column:
+      name: systemBuildNumber
+      OID: 1.3.6.1.4.1.5951.6.2.3.0
+  # The type of Management Service IP Address
+  - column:
+      name: systemSvmIPAddressType
+      OID: 1.3.6.1.4.1.5951.6.2.4.0
+      enum:
+        unknown: 0
+        ipv4: 1
+        ipv6: 2
+        ipv4z: 3
+        ipv6z: 4
+        dns: 16
+  # Management Service IP Address
+  - column:
+      name: systemSvmIPAddress
+      OID: 1.3.6.1.4.1.5951.6.2.5.0
+      conversion: hextoip
+  # The type of XenServer IP Address
+  - column:
+      name: systemXenIPAddressType
+      OID: 1.3.6.1.4.1.5951.6.2.6.0
+      enum:
+        unknown: 0
+        ipv4: 1
+        ipv6: 2
+        ipv4z: 3
+        ipv6z: 4
+        dns: 16
+  # XenServer IP Address
+  - column:
+      name: systemXenIPAddress
+      OID: 1.3.6.1.4.1.5951.6.2.7.0
+      conversion: hextoip
+  # The type of netmask address
+  - column:
+      name: systemNetmaskType
+      OID: 1.3.6.1.4.1.5951.6.2.8.0
+      enum:
+        unknown: 0
+        ipv4: 1
+        ipv6: 2
+        ipv4z: 3
+        ipv6z: 4
+        dns: 16
+  # Netmask address
+  - column:
+      name: systemNetmask
+      OID: 1.3.6.1.4.1.5951.6.2.9.0
+      conversion: hextoip
+  # The type of Gateway address
+  - column:
+      name: systemGatewayType
+      OID: 1.3.6.1.4.1.5951.6.2.10.0
+      enum:
+        unknown: 0
+        ipv4: 1
+        ipv6: 2
+        ipv4z: 3
+        ipv6z: 4
+        dns: 16
+  # Gateway address
+  - column:
+      name: systemGateway
+      OID: 1.3.6.1.4.1.5951.6.2.11.0
+      conversion: hextoip
+  # Interface on which management needs to be enabled
+  - column:
+      name: systemNetworkInterface
+      OID: 1.3.6.1.4.1.5951.6.2.12.0
+  # DNS Server address
+  - column:
+      name: systemDns
+      OID: 1.3.6.1.4.1.5951.6.2.13.0
+      conversion: hextoip
+  # Serial number
+  - column:
+      name: systemSerial
+      OID: 1.3.6.1.4.1.5951.6.2.16.0
+  # BIOS version
+  - column:
+      name: systemBiosVersion
+      OID: 1.3.6.1.4.1.5951.6.2.19.0

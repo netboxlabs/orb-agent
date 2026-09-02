@@ -1,0 +1,181 @@
+# https://mibs.observium.org/mib/OG-STATUSv2-MIB/
+# https://mibs.observium.org/mib/OG-PRODUCTS-MIB/
+---
+extends:
+  - system-mib.yml
+  - entity-sensor-mib.yml
+  - host-resources-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.25049.1.*     # Open Gear Console Managers
+  - 1.3.6.1.4.1.25049.1.10    # CM41xx series Console Managers
+  - 1.3.6.1.4.1.25049.1.11    # CM71xx series Console Managers
+
+metrics:
+  # The 1 minute load average as an integer. This is computed by taking the floating point loadaverage value and multiplying by 100, then converting the value to an integer.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: laLoadInt
+      OID: 1.3.6.1.4.1.2021.10.1.5.1
+      poll_time_sec: 60
+      tag: CPU
+  # The total amount of real/physical memory installed on this host
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalReal
+      OID: 1.3.6.1.4.1.2021.4.5.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # The total amount of memory free or available for use on this host.  This value typically covers both real memory and swap space or virtual memory
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalFree
+      OID: 1.3.6.1.4.1.2021.4.11.0
+      poll_time_sec: 60
+      tag: MemoryFree
+  # The total amount of real or virtual memory currently allocated for use as memory buffers
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memBuffer
+      OID: 1.3.6.1.4.1.2021.4.14.0
+      poll_time_sec: 60
+      tag: MemoryBuffer
+  # The total amount of real or virtual memory currently allocated for use as cached memory
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memCached
+      OID: 1.3.6.1.4.1.2021.4.15.0
+      poll_time_sec: 60
+      tag: MemoryCache
+  # The device's serial port status table
+  - MIB: OG-STATUSv2-MIB
+    table:
+      name: ogSerialPortTable
+      OID: 1.3.6.1.4.1.25049.17.2
+    symbols:
+      # Serial port bytes received
+      - name: ogSerialPortRxBytes
+        OID: 1.3.6.1.4.1.25049.17.2.1.10
+      # Serial port bytes transmitted
+      - name: ogSerialPortTxBytes
+        OID: 1.3.6.1.4.1.25049.17.2.1.11
+    metric_tags:
+      # Serial port descriptive name
+      - column:
+          name: ogSerialPortLabel
+          OID: 1.3.6.1.4.1.25049.17.2.1.2
+      # Serial port speed in bits per second
+      - column:
+          name: ogSerialPortSpeed
+          OID: 1.3.6.1.4.1.25049.17.2.1.3
+      # Serial port character size
+      - column:
+          name: ogSerialPortDataBits
+          OID: 1.3.6.1.4.1.25049.17.2.1.4
+      # Serial port parity
+      - column:
+          name: ogSerialPortPortParity
+          OID: 1.3.6.1.4.1.25049.17.2.1.5
+          enum:
+            none: 1
+            odd: 2
+            even: 3
+            mark: 4
+            space: 5
+      # Serial port number of stop bits
+      - column:
+          name: ogSerialPortStopBits
+          OID: 1.3.6.1.4.1.25049.17.2.1.6
+          enum:
+            one: 1
+            two: 2
+            oneAndAHalf: 3
+      # Serial port flow control type
+      - column:
+          name: ogSerialPortFlowControl
+          OID: 1.3.6.1.4.1.25049.17.2.1.7
+          enum:
+            none: 1
+            hardware: 2
+            software: 3
+      # Serial port operational mode type
+      - column:
+          name: ogSerialPortMode
+          OID: 1.3.6.1.4.1.25049.17.2.1.8
+          enum:
+            none: 1
+            console: 2
+            sdt: 3
+            terminal: 4
+            bridge: 5
+      # Serial port logging level
+      - column:
+          name: ogSerialPortLogLevel
+          OID: 1.3.6.1.4.1.25049.17.2.1.9
+          enum:
+            disabled: 1
+            connect: 2
+            inputAndOutput: 3
+            inputOnly: 4
+            outputOnly: 5
+      # The status of the DCD signal.
+      - column:
+          name: ogSerialPortDCD
+          OID: 1.3.6.1.4.1.25049.17.2.1.16
+          enum:
+            on: 1
+            off: 2
+      # The status of the DTR signal.
+      - column:
+          name: ogSerialPortDTR
+          OID: 1.3.6.1.4.1.25049.17.2.1.17
+          enum:
+            on: 1
+            off: 2
+      # The status of the DSR signal.
+      - column:
+          name: ogSerialPortDSR
+          OID: 1.3.6.1.4.1.25049.17.2.1.18
+          enum:
+            on: 1
+            off: 2
+      # The status of the CTS signal.
+      - column:
+          name: ogSerialPortCTS
+          OID: 1.3.6.1.4.1.25049.17.2.1.19
+          enum:
+            on: 1
+            off: 2
+      # The status of the RTS signal.
+      - column:
+          name: ogSerialPortRTS
+          OID: 1.3.6.1.4.1.25049.17.2.1.20
+          enum:
+            on: 1
+            off: 2
+  # The cellular modem status table
+  - MIB: OG-STATUSv2-MIB
+    table:
+      name: ogCellModemTable
+      OID: 1.3.6.1.4.1.25049.17.17
+    symbols:
+      # The number of alerts the modem has triggered
+      - name: ogCellModemCounter
+        OID: 1.3.6.1.4.1.25049.17.17.1.16
+      # The connected state of the modem
+      - name: ogCellModemConnected
+        OID: 1.3.6.1.4.1.25049.17.17.1.5
+        enum:
+          connected: 1
+          disconnected: 2
+    metric_tags:
+      # The enabled state of the modem
+      - column:
+          name: ogCellModemEnabled
+          OID: 1.3.6.1.4.1.25049.17.17.1.4
+          enum:
+            enabled: 1
+            disabled: 2

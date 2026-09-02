@@ -1,0 +1,74 @@
+# http://circitor.fr/Mibs/Html/R/RUCKUS-SYSTEM-MIB.php
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-wireless-controller
+
+sysobjectid:
+  - 1.3.6.1.4.1.25053.3.1.5.*     # Ruckus ZoneDirector
+  - 1.3.6.1.4.1.25053.3.1.5.1     # Ruckus ZD1000
+  - 1.3.6.1.4.1.25053.3.1.5.2     # Ruckus ZD1100
+  - 1.3.6.1.4.1.25053.3.1.5.3     # Ruckus ZD3000
+  - 1.3.6.1.4.1.25053.3.1.5.8     # Ruckus ZD5000
+  - 1.3.6.1.4.1.25053.3.1.5.15    # Ruckus ZD1200
+
+metrics:
+  - MIB: RUCKUS-UNLEASHED-SYSTEM-MIB
+    symbols:
+      # CPU utilization, Polled at 60s to support anomaly detection
+      - name: ruckusUnleashedSystemStatsCPUUtil
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.13.0
+        poll_time_sec: 60
+        tag: CPU
+      # Memory utilization, Polled at 60s to support anomaly detection
+      - name: ruckusUnleashedSystemStatsMemoryUtil
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.14.0
+        poll_time_sec: 60
+        tag: MemoryUtilization
+      # Number of registered AP
+      - name: ruckusUnleashedSystemStatsNumRegisteredAP
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.15.0
+      # Number of AP
+      - name: ruckusUnleashedSystemStatsNumAP
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.1.0
+      # Total received packets of wireless interfaces
+      - name: ruckusUnleashedSystemStatsWLANTotalRxPkts
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.5.0
+      # Total received bytes of wireless interfaces
+      - name: ruckusUnleashedSystemStatsWLANTotalRxBytes
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.6.0
+      # Total transmitted packets of wireless interfaces
+      - name: ruckusUnleashedSystemStatsWLANTotalTxPkts
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.8.0
+      # Total transmitted bytes of wireless interfaces
+      - name: ruckusUnleashedSystemStatsWLANTotalTxBytes
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.9.0
+      # Total transmitted fail packets of wireless interfaces
+      - name: ruckusUnleashedSystemStatsWLANTotalTxFail
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.11.0
+      # Total transmitted retry packets of wireless interfaces
+      - name: ruckusUnleashedSystemStatsWLANTotalTxRetry
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.12.0
+      # Total number of failed station associations
+      - name: ruckusUnleashedSystemStatsWLANTotalAssocFail
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.16.0
+      # Number of All client devices
+      - name: ruckusUnleashedSystemStatsAllNumSta
+        OID: 1.3.6.1.4.1.25053.1.15.1.1.1.15.30.0
+
+metric_tags:
+  # Model
+  - column:
+      name: 1.3.6.1.4.1.25053.1.15.1.1.1.1.9.0
+      OID: ruckusUnleashedSystemModel
+  # Licensed APs
+  - column:
+      name: ruckusUnleashedSystemLicensedAPs
+      OID: 1.3.6.1.4.1.25053.1.15.1.1.1.1.12.0
+  # Serial number
+  - column:
+      name: ruckusUnleashedSystemSerialNumber
+      OID: 1.3.6.1.4.1.25053.1.15.1.1.1.1.15.0
+    tag: serial_number

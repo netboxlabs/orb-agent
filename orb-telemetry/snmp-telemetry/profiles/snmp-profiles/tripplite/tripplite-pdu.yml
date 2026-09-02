@@ -1,0 +1,176 @@
+# http://oid-info.com/get/1.3.6.1.4.1.318.1
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid: 
+ - 1.3.6.1.4.1.850.1.1.1     # Tripp Lite PDU
+
+metrics:
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.1.1.2
+      name: tlpDeviceTable
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.1.1.2.1.10
+        name: tlpDeviceStatus
+        enum:
+          none: 0
+          critical: 1
+          warning: 2
+          info: 3
+          status: 4
+          offline: 5
+          custom: 6
+          configuration: 7
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.1.2.1.4
+          name: tlpDeviceManufacturer
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.1.2.1.5
+          name: tlpDeviceModel
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.1.2.1.6
+          name: tlpDeviceName
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.1.2.1.8
+          name: tlpDeviceLocation
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.1.2.1.9
+          name: tlpDeviceRegion
+
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.1.2.1
+      name: tlpDeviceIdentTable
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.1.2.1.1.6
+        name: tlpDeviceIdentDateInstalled
+        conversion: to_one
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.2.1.1.5
+          name: tlpDeviceIdentSerialNum
+
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.1.3.2.2.1
+      name: tlpPduDeviceTable
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.2.1.1.1
+        name: tlpPduDeviceMainLoadState
+        enum:
+          unknown: 0
+          off: 1
+          on: 2
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.2.1.1.6
+        name: tlpPduDeviceTemperatureC
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.2.1.1.7
+        name: tlpPduDeviceTemperatureF
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.2.1.1.8
+        name: tlpPduDevicePhaseImbalance
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.2.1.1.9
+        name: tlpPduDeviceOutputPowerTotal
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.3.2.2.1.1.11
+          name: tlpPduDeviceOutputCurrentPrecision
+          enum:
+            none: 0
+            tenths: 1
+            hundredths: 2
+
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1
+      name: tlpPduOutputTable 
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1.1.4
+        name: tlpPduOutputVoltage
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1.1.5
+        name: tlpPduOutputCurrent
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1.1.10
+        name: tlpPduOutputSource
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1.1.11
+        name: tlpPduOutputFrequency
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1.1.2
+          name: tlpPduOutputPhase
+          enum:
+            phase1: 1
+            phase2: 2
+            phase3: 3
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.3.2.3.2.1.1.3
+          name: tlpPduOutputPhaseType
+          enum:
+            phaseToNeutral: 0
+            phaseToPhase: 1
+
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1
+      name: tlpPduOutletTable
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1.1.4
+        name: tlpPduOutletState
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1.1.7
+        name: tlpPduOutletVoltage
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1.1.8
+        name: tlpPduOutletCurrent
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1.1.9
+        name: tlpPduOutletPower
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1.1.2
+          name: tlpPduOutletName
+      - column:
+          OID: 1.3.6.1.4.1.850.1.1.3.2.3.3.1.1.3
+          name: tlpPduOutletDescription
+
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.1.3.2.3.5.1
+      name: tlpPduBreakerTable
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.1.3.2.3.5.1.1.2
+        name: tlpPduBreakerStatus
+        enum:
+          open: 0
+          closed: 1
+          notInstalled: 2
+
+  - MIB: TRIPPLITE-PRODUCTS
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.3.1.0
+        name: tlpAlarmsPresent
+
+  - MIB: TRIPPLITE-PRODUCTS
+    table:
+      OID: 1.3.6.1.4.1.850.1.3.2
+      name: tlpAlarmTable
+    symbols:
+      - OID: 1.3.6.1.4.1.850.1.3.2.1.8
+        name: tlpAlarmState
+        enum:
+          active: 1
+          inactive: 2
+      - OID: 1.3.6.1.4.1.850.1.3.2.1.9
+        name: tlpAlarmAcknowledged
+        enum:
+          notAcknowledged: 1
+        acknowledged: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.850.1.3.2.1.2
+          name: tlpAlarmDescr
+      - column:
+          OID: 1.3.6.1.4.1.850.1.3.2.1.3
+          name: tlpAlarmTime
+      - column:
+          OID: 1.3.6.1.4.1.850.1.3.2.1.6
+          name: tlpAlarmDetail

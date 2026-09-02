@@ -1,0 +1,70 @@
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-envir-sensor
+
+sysobjectid:
+  - 1.3.6.1.4.1.20916.1.13.*   # Avtech Room Alert 3S
+
+metrics:
+  # Table of internal sensors for units
+  - MIB: ROOMALERT3S-MIB_SENSORS
+    symbols:
+      # The internal temperature reading in Fahrenheit
+      - OID: 1.3.6.1.4.1.20916.1.13.1.1.1.1.0
+        name: internal-tempf
+      # The internal temperature reading in Celsius
+      - OID: 1.3.6.1.4.1.20916.1.13.1.1.1.2.0
+        name: internal-tempc
+      # If this sensor is a Temperature, Temp/Humidity, Temp/Analog, Temp/Active Power, or Digital Extreme Temperature sensor, this value represents the current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.1.0
+        name: digital-sen1-1
+      # If this sensor is a Temperature, Temp/Humidity, Temp/Analog, Temp/Active Power, or Digital Extreme Temperature sensor, this value represents the current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.2.0
+        name: digital-sen1-2
+      # If this sensor is a Temp/Humidity sensor, this value represents the current relative humidity in % Relative Humidity. If this sensor is a Temp/Analog sensor, this value represents the current Voltage reading. If this is a Temp/Active Power sensor, this value represents the current power state (1=Power Detected, 0=No Power Detected). If this is a Digital Extreme Temperature sensor, this value represents the current temperature from the thermocouple in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.3.0
+        name: digital-sen1-3
+      # If this sensor is a Temp/Humidity sensor, this value represents the current heat index in Fahrenheit. If this sensor is a Temp/Analog sensor, this value represents the current custom reading. If this is a Digital Extreme Temperature sensor, this value represents the current temperature from the thermocouple in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.4.0
+        name: digital-sen1-4
+      # If this sensor is a Temp/Humidity sensor, this value represents the current heat index in Celsius. If this is a Digital Extreme Temperature Sensor, this value is a fault code. 0 = no fault.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.5.0
+        name: digital-sen1-5
+      # If this sensor is a Temp/Humidity sensor, this value represents the current dew point in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.6.0
+        name: digital-sen1-6
+      # If this sensor is a Temp/Humidity sensor, this value represents the current dew point in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.13.1.2.1.7.0
+        name: digital-sen1-7
+      # The reading for switch sensor 1 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.13.1.3.1.0
+        name: switch-sen1
+        enum:
+          open: 0
+          closed: 1
+      # The status of the first element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.1.0
+        name: externalrelay1-element-one
+      # The status of the second element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.2.0
+        name: externalrelay1-element-two
+      # The status of the third element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.3.0
+        name: externalrelay1-element-three
+      # The status of the fourth element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.4.0
+        name: externalrelay1-element-four
+      # The status of the fifth element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.5.0
+        name: externalrelay1-element-five
+      # The status of the sixth element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.6.0
+        name: externalrelay1-element-six
+      # The status of the seventh element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.7.0
+        name: externalrelay1-element-seven
+      # The status of the eighth element on external relay 1
+      - OID: 1.3.6.1.4.1.20916.1.13.3.1.8.0
+        name: externalrelay1-element-eight

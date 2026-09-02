@@ -1,0 +1,92 @@
+# PureStorage traps definition
+# referenced from customer-provided PURESTORAGE-MIB file
+---
+
+traps:
+  # Info Trap
+  - trap_oid: 1.3.6.1.4.1.40482.2.50
+    trap_name: pureInfoTrap
+    drop_undefined: false
+    events:
+      # Pure Storage Product Name
+      - name: pureProductName
+        OID: 1.3.6.1.4.1.40482.3.1
+      # Pure Storage Product Version
+      - name: pureProductVersion
+        OID: 1.3.6.1.4.1.40482.3.2
+      # Pure Storage Hostname
+      - name: pureHost
+        OID: 1.3.6.1.4.1.40482.3.3
+      # Alert Code
+      - name: pureAlertCode
+        OID: 1.3.6.1.4.1.40482.3.4
+      # Alert Subject
+      - name: pureAlertSubject
+        OID: 1.3.6.1.4.1.40482.3.5
+      # Alert Body or Extra Information
+      - name: pureAlertBody
+        OID: 1.3.6.1.4.1.40482.3.6
+      # If alert is a reminder, true(1) or false(2)
+      - name: pureAlertReminder
+        OID: 1.3.6.1.4.1.40482.3.7
+        enum:
+          true: 1
+          false: 2
+  # Warning Trap
+  - trap_oid: 1.3.6.1.4.1.40482.2.51
+    trap_name: pureWarningTrap
+    drop_undefined: false
+    events:
+      # Pure Storage Product Name
+      - name: pureProductName
+        OID: 1.3.6.1.4.1.40482.3.1
+      # Pure Storage Product Version
+      - name: pureProductVersion
+        OID: 1.3.6.1.4.1.40482.3.2
+      # Pure Storage Hostname
+      - name: pureHost
+        OID: 1.3.6.1.4.1.40482.3.3
+      # Alert Code
+      - name: pureAlertCode
+        OID: 1.3.6.1.4.1.40482.3.4
+      # Alert Subject
+      - name: pureAlertSubject
+        OID: 1.3.6.1.4.1.40482.3.5
+      # Alert Body or Extra Information
+      - name: pureAlertBody
+        OID: 1.3.6.1.4.1.40482.3.6
+      # If alert is a reminder, true(1) or false(2)
+      - name: pureAlertReminder
+        OID: 1.3.6.1.4.1.40482.3.7
+        enum:
+          true: 1
+          false: 2
+  # Critical Trap
+  - trap_oid: 1.3.6.1.4.1.40482.2.52
+    trap_name: pureCriticalTrap
+    drop_undefined: false
+    events:
+      # Pure Storage Product Name
+      - name: pureProductName
+        OID: 1.3.6.1.4.1.40482.3.1
+      # Pure Storage Product Version
+      - name: pureProductVersion
+        OID: 1.3.6.1.4.1.40482.3.2
+      # Pure Storage Hostname
+      - name: pureHost
+        OID: 1.3.6.1.4.1.40482.3.3
+      # Alert Code
+      - name: pureAlertCode
+        OID: 1.3.6.1.4.1.40482.3.4
+      # Alert Subject
+      - name: pureAlertSubject
+        OID: 1.3.6.1.4.1.40482.3.5
+      # Alert Body or Extra Information
+      - name: pureAlertBody
+        OID: 1.3.6.1.4.1.40482.3.6
+      # If alert is a reminder, true(1) or false(2)
+      - name: pureAlertReminder
+        OID: 1.3.6.1.4.1.40482.3.7
+        enum:
+          true: 1
+          false: 2

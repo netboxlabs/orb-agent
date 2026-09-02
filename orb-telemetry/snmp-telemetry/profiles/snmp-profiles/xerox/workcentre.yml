@@ -1,0 +1,124 @@
+# Based on Xerox WorkCentre 6015NI Printer
+# https://oid-base.com/get/1.3.6.1.4.1.253.8.62.1.19.4.36.1.1
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+mibs:
+  - SNMPv2-MIB
+  - IF-MIB
+  - PRINTER-MIB
+
+provider: kentik-printer
+
+sysobjectid:
+  - 1.3.6.1.4.1.253.8.62.1.19.4.36.1.1        # Xerox WorkCentre 6015NI
+  - 1.3.6.1.4.1.253.8.62.1.19.4.*             # Xerox WorkCentre models
+  - 1.3.6.1.4.1.253.*                         # All Xerox devices
+
+metrics:
+  # Network Interface Statistics
+  - MIB: IF-MIB
+    table:
+      name: ifTable
+      OID: 1.3.6.1.2.1.2.2.1
+    symbols:
+      - name: ifInOctets
+        OID: 1.3.6.1.2.1.2.2.1.10
+      - name: ifInErrors
+        OID: 1.3.6.1.2.1.2.2.1.14
+      - name: ifInDiscards
+        OID: 1.3.6.1.2.1.2.2.1.15
+      - name: ifOutOctets
+        OID: 1.3.6.1.2.1.2.2.1.16
+      - name: ifOutErrors
+        OID: 1.3.6.1.2.1.2.2.1.20
+      - name: ifOutDiscards
+        OID: 1.3.6.1.2.1.2.2.1.19
+    metric_tags:
+      - tag: ifName
+        column:
+          OID: 1.3.6.1.2.1.2.2.1.2
+          name: ifDescr
+
+  # Engine Lifetime Counter
+  - MIB: PRINTER-MIB
+    symbol:
+      name: printerPagesTotalLifetime
+      OID: 1.3.6.1.2.1.43.10.2.1.4.1.1
+      poll_time_sec: 60
+
+  # Printer Supplies - Toner/Cartridge levels
+  - MIB: PRINTER-MIB
+    table:
+      name: prtSupplyTable
+      OID: 1.3.6.1.2.1.43.11.1.1
+    symbols:
+      - name: prtSupplyLevel
+        OID: 1.3.6.1.2.1.43.11.1.1.9
+      - name: prtSupplyMaxCapacity
+        OID: 1.3.6.1.2.1.43.11.1.1.8
+    metric_tags:
+      - column:
+          name: prtSupplyDescription
+          OID: 1.3.6.1.2.1.43.11.1.1.6
+
+  # Input Paper Trays
+  - MIB: PRINTER-MIB
+    table:
+      name: prtInputTable
+      OID: 1.3.6.1.2.1.43.8.2.1
+    symbols:
+      - name: prtInputCapacity
+        OID: 1.3.6.1.2.1.43.8.2.1.4
+      - name: prtInputRemaining
+        OID: 1.3.6.1.2.1.43.8.2.1.5
+    metric_tags:
+      - column:
+          name: prtInputName
+          OID: 1.3.6.1.2.1.43.8.2.1.13
+
+  # Output Paper Trays
+  - MIB: PRINTER-MIB
+    table:
+      name: prtOutputTable
+      OID: 1.3.6.1.2.1.43.9.2.1
+    symbols:
+      - name: prtOutputCapacity
+        OID: 1.3.6.1.2.1.43.9.2.1.15
+      - name: prtOutputRemaining
+        OID: 1.3.6.1.2.1.43.9.2.1.16
+    metric_tags:
+      - column:
+          name: prtOutputName
+          OID: 1.3.6.1.2.1.43.9.2.1.12
+
+  # Hardware Covers Status
+  - MIB: PRINTER-MIB
+    table:
+      name: prtCoverStatusTable
+      OID: 1.3.6.1.2.1.43.6.1.1
+    symbols:
+      - name: prtCoverStatus
+        OID: 1.3.6.1.2.1.43.6.1.1.3
+        enum:
+          other: 1
+          unknown: 2
+          open: 3
+          closed: 4
+          openWithWarning: 5
+          closedWithWarning: 6
+    metric_tags:
+      - column:
+          name: prtCoverDescription
+          OID: 1.3.6.1.2.1.43.6.1.1.2
+
+# Global metadata tags
+metric_tags:
+  - column:
+      name: printerModel
+      OID: 1.3.6.1.2.1.43.5.1.1.16.1
+  - column:
+      name: printerSerialNumber
+      OID: 1.3.6.1.2.1.43.5.1.1.17.1

@@ -1,0 +1,392 @@
+# http://oid-info.com/get/1.3.6.1.4.1.318.1.1.8
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-ats
+
+sysobjectid: 1.3.6.1.4.1.318.1.3.11   # APC Automatic Transfer Switch
+
+metrics:
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.2
+      name: atsStatusSelectedSource
+      enum:
+        sourceA: 1
+        sourceB: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.3
+      name: atsStatusRedundancyState
+      enum:
+        atsRedundancyLost: 1
+        atsFullyRedundant: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.4
+      name: atsStatusOverCurrentState
+      enum:
+        atsOverCurrent: 1
+        atsCurrentOK: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.5
+      name: atsStatus5VPowerSupply
+      enum:
+        atsPowerSupplyFailure: 1
+        atsPowerSupplyOK: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.6
+      name: atsStatus24VPowerSupply
+      enum:
+        atsPowerSupplyFailure: 1
+        atsPowerSupplyOK: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.7
+      name: atsStatus24VSourceBPowerSupply
+      enum:
+        atsPowerSupplyFailure: 1
+        atsPowerSupplyOK: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.8
+      name: atsStatusPlus12VPowerSupply
+      enum:
+        atsPowerSupplyFailure: 1
+        atsPowerSupplyOK: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.9
+      name: atsStatusMinus12VPowerSupply
+      enum:
+        atsPowerSupplyFailure: 1
+        atsPowerSupplyOK: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.10
+      name: atsStatusSwitchStatus
+      enum:
+        fail: 1
+        ok: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.11
+      name: atsStatusFrontPanel
+      enum:
+        locked: 1
+        unlocked: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.12
+      name: atsStatusSourceAStatus
+      enum:
+        fail: 1
+        ok: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.13
+      name: atsStatusSourceBStatus
+      enum:
+        fail: 1
+        ok: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.14
+      name: atsStatusPhaseSyncStatus
+      enum:
+        inSync: 1
+        outOfSync: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.15
+      name: atsStatusVoltageOutStatus
+      enum:
+        fail: 1
+        ok: 2
+  - MIB: PowerNet-MIB_ATS
+    symbol:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.1.16
+      name: atsStatusHardwareStatus
+      enum:
+        fail: 1
+        ok: 2
+
+  - MIB: PowerNet-MIB_ATS
+    table:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.3.2
+      name: atsInputTable
+    symbols:
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.3.2.1.4
+        name: atsInputFrequency
+    metric_tags:
+      - tag: input_name
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.2.1.6
+          name: atsInputName
+      - tag: input_num_phases
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.2.1.2
+          name: atsNumInputPhases
+      - tag: input_voltage_orientation
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.2.1.3
+          name: atsInputVoltageOrientation
+          enum:
+            unknown: 1
+            singlePhase: 2
+            splitPhase: 3
+            threePhaseToNeutral: 4
+            threePhaseToPhase: 5
+      - tag: input_type
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.2.1.5
+          name: atsInputType
+          enum:
+            unknown: 1
+            main: 2
+            bypass: 3
+  - MIB: PowerNet-MIB_ATS
+    table:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.3.3
+      name: atsInputPhaseTable
+    symbols:
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.3
+        name: atsInputVoltage
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.6
+        name: atsInputCurrent
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.9
+        name: atsInputPower
+    metric_tags:
+      - tag: input_phase_number
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.2
+          name: atsInputPhaseIndex
+      - tag: input_max_voltage
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.4
+          name: atsInputMaxVoltage
+      - tag: input_min_voltage
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.5
+          name: atsInputMinVoltage
+      - tag: input_max_current
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.7
+          name: atsInputMaxCurrent
+      - tag: input_min_current
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.8
+          name: atsInputMinCurrent
+      - tag: input_max_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.10
+          name: atsInputMaxPower
+      - tag: input_min_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.3.3.1.11
+          name: atsInputMinPower
+
+  - MIB: PowerNet-MIB_ATS
+    table:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.4.2
+      name: atsOutputTable
+    symbols:
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.2.1.4
+        name: atsOutputFrequency
+    metric_tags:
+      - tag: output_num_phases
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.2.1.2
+          name: atsNumOutputPhases
+      - tag: output_voltage_orientation
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.2.1.3
+          name: atsOuputVoltageOrientation
+          enum:
+            unknown: 1
+            singlePhase: 2
+            splitPhase: 3
+            threePhaseToNeutral: 4
+            threePhaseToPhase: 5
+  - MIB: PowerNet-MIB_ATS
+    table:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.4.3
+      name: atsOutputPhaseTable
+    symbols:
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.3
+        name: atsOutputVoltage
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.4
+        name: atsOutputCurrent
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.7
+        name: atsOutputLoad
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.10
+        name: atsOutputPercentLoad
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.13
+        name: atsOutputPower
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.16
+        name: atsOutputPercentPower
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.19
+        name: atsOutputPhaseState
+        enum:
+          normal: 1
+          lowload: 2
+          nearoverload: 3
+          overload: 4
+    metric_tags:
+      - tag: output_phase_number
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.2
+          name: atsOutputPhaseIndex
+      - tag: output_phase_max_current
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.5
+          name: atsOutputMaxCurrent
+      - tag: output_phase_min_current
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.6
+          name: atsOutputMinCurrent
+      - tag: output_phase_max_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.8
+          name: atsOutputMaxLoad
+      - tag: output_phase_min_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.9
+          name: atsOutputMinLoad
+      - tag: output_phase_max_percent_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.11
+          name: atsOutputMaxPercentLoad
+      - tag: output_phase_min_percent_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.12
+          name: atsOutputMinPercentLoad
+      - tag: output_phase_max_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.14
+          name: atsOutputMaxPower
+      - tag: output_phase_min_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.15
+          name: atsOutputMinPower
+      - tag: output_phase_max_percent_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.17
+          name: atsOutputMaxPercentPower
+      - tag: output_phase_min_percent_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.3.1.18
+          name: atsOutputMinPercentPower
+  - MIB: PowerNet-MIB_ATS
+    table:
+      OID: 1.3.6.1.4.1.318.1.1.8.5.4.5
+      name: atsOutputBankTable
+    symbols:
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.4
+        name: atsOutputBankCurrent
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.5
+        name: atsOutputBankState
+        enum:
+          normal: 1
+          lowload: 2
+          nearoverload: 3
+          overload: 4
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.6
+        name: atsOutputBankOutputVoltage
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.9
+        name: atsOutputBankLoad
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.12
+        name: atsOutputBankPercentLoad
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.15
+        name: atsOutputBankPower
+      - OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.18
+        name: atsOutputBankPercentPower
+    metric_tags:
+      - tag: output_bank_phase
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.2
+          name: atsOutputPhase
+          enum:
+            phase1: 1
+            phase2: 2
+            phase3: 3
+      - tag: output_bank_num
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.3
+          name: atsOutputBank
+          enum:
+            total: 1
+            bank1: 2
+            bank2: 3
+      - tag: output_bank_max_current
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.7
+          name: atsOutputBankMaxCurrent
+      - tag: output_bank_min_current
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.8
+          name: atsOutputBankMinCurrent
+      - tag: output_bank_max_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.10
+          name: atsOutputBankMaxLoad
+      - tag: output_bank_min_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.11
+          name: atsOutputBankMinLoad
+      - tag: output_bank_max_percent_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.13
+          name: atsOutputBankMaxPercentLoad
+      - tag: output_bank_min_percent_load
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.14
+          name: atsOutputBankMinPercentLoad
+      - tag: output_bank_max_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.16
+          name: atsOutputBankMaxPower
+      - tag: output_bank_min_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.17
+          name: atsOutputBankMinPower
+      - tag: output_bank_max_percent_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.19
+          name: atsOutputBankMaxPercentPower
+      - tag: output_bank_min_percent_power
+        column:
+          OID: 1.3.6.1.4.1.318.1.1.8.5.4.5.1.20
+          name: atsOutputBankMinPercentPower
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.1
+      name: atsIdentHardwareRev
+    tag: hardware_revision
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.2
+      name: atsIdentFirmwareRev
+    tag: firmware_revision
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.5
+      name: atsIdentModelNumber
+    tag: model_number
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.6
+      name: atsIdentSerialNumber
+    tag: serial_number
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.9
+      name: atsIdentDeviceRating
+    tag: amps_rating  
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.7
+      name: atsIdentNominalLineVoltage
+    tag: nominal_line_voltage
+  - column:
+      OID: 1.3.6.1.4.1.318.1.1.8.1.8
+      name: atsIdentNominalLineVoltage
+    tag: nominal_line_frequency

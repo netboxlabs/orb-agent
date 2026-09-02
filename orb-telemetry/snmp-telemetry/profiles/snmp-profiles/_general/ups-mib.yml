@@ -1,0 +1,163 @@
+# Profile is intended to be used in an extends block
+# https://www.circitor.fr/Mibs/Html/U/UPS-MIB.php
+---
+metrics:
+  - MIB: UPS-MIB
+    symbols:
+      # The indication of the capacity remaining in the UPS system's batteries. A value of batteryNormal indicates that the remaining run-time is greater than upsConfigLowBattTime. A value of batteryLow indicates that the remaining battery run-time is less than or equal to upsConfigLowBattTime. A value of batteryDepleted indicates that the UPS will be unable to sustain the present load when and if the utility power is lost (including the possibility that the utility power is currently absent and the UPS is unable to sustain the output).
+      - OID: 1.3.6.1.2.1.33.1.2.1.0
+        name: upsBatteryStatus
+        enum:
+          unknown: 1
+          batteryNormal: 2
+          batteryLow: 3
+          batteryDepleted: 4
+      # If the unit is on battery power, the elapsed time since the UPS last switched to battery power, or the time since the network management subsystem was last restarted, whichever is less. Zero shall be returned if the unit is not on battery power.
+      - OID: 1.3.6.1.2.1.33.1.2.2.0
+        name: upsSecondsOnBattery
+      # An estimate of the time to battery charge depletion under the present load conditions if the utility power is off and remains off, or if it were to be lost and remain off.
+      - OID: 1.3.6.1.2.1.33.1.2.3.0
+        name: upsEstimatedMinutesRemaining
+      # An estimate of the battery charge remaining expressed as a percent of full charge.
+      - OID: 1.3.6.1.2.1.33.1.2.4.0
+        name: upsEstimatedChargeRemaining
+      # The magnitude of the present battery voltage.
+      - OID: 1.3.6.1.2.1.33.1.2.5.0
+        name: upsBatteryVoltage
+      # The present battery current.
+      - OID: 1.3.6.1.2.1.33.1.2.6.0
+        name: upsBatteryCurrent
+      # The ambient temperature at or near the UPS Battery casing.
+      - OID: 1.3.6.1.2.1.33.1.2.7.0
+        name: upsBatteryTemperature
+      # A count of the number of times the input entered an out-of-tolerance condition as defined by the manufacturer. This count is incremented by one each time the input transitions from zero out-of-tolerance lines to one or more input lines out-of-tolerance.
+      - OID: 1.3.6.1.2.1.33.1.3.1.0
+        name: upsInputLineBads
+      # The number of input lines utilized in this device. This variable indicates the number of rows in the input table.
+      - OID: 1.3.6.1.2.1.33.1.3.2.0
+        name: upsInputNumLines
+      # The present source of output power. The enumeration none(2) indicates that there is no source of output power (and therefore no output power), for example, the system has opened the output breaker.
+      - OID: 1.3.6.1.2.1.33.1.4.1.0
+        name: upsOutputSource
+        enum:
+          other: 1
+          none: 2
+          normal: 3
+          bypass: 4
+          battery: 5
+          booster: 6
+          reducer: 7
+      # The present output frequency.
+      - OID: 1.3.6.1.2.1.33.1.4.2.0
+        name: upsOutputFrequency
+      # The number of output lines utilized in this device. This variable indicates the number of rows in the output table.
+      - OID: 1.3.6.1.2.1.33.1.4.3.0
+        name: upsOutputNumLines	
+      # The present bypass frequency.
+      - OID: 1.3.6.1.2.1.33.1.5.1.0
+        name: upsBypassFrequency
+      # The number of bypass lines utilized in this device. This entry indicates the number of rows in the bypass table.
+      - OID: 1.3.6.1.2.1.33.1.5.2.0
+        name: upsBypassNumLines
+      # The present number of active alarm conditions.
+      - OID: 1.3.6.1.2.1.33.1.6.1.0
+        name: upsAlarmsPresent
+      # The results of the current or last UPS diagnostics test performed.
+      - OID: 1.3.6.1.2.1.33.1.7.3.0
+        name: upsTestResultsSummary
+        enum:
+          donePass: 1
+          doneWarning: 2
+          doneError: 3
+          aborted: 4
+          inProgress: 5
+          noTestsInitiated: 6
+      # Additional information about upsTestResultsSummary. If no additional information available, a zero length string is returned.
+      - OID: 1.3.6.1.2.1.33.1.7.4.0
+        name: upsTestResultsDetail
+      # The value of sysUpTime at the time the test in progress was initiated, or, if no test is in progress, the time the previous test was initiated. If the value of upsTestResultsSummary is noTestsInitiated(6), upsTestStartTime has the value 0.
+      - OID: 1.3.6.1.2.1.33.1.7.5.0
+        name: upsTestStartTime
+
+  - MIB: UPS-MIB
+    table:
+      # A list of output table entries. The number of entries is given by the value of upsOutputNumLines.
+      OID: 1.3.6.1.2.1.33.1.4.4
+      name: upsOutputTable
+    symbols:
+      # The present output voltage.
+      - OID: 1.3.6.1.2.1.33.1.4.4.1.2
+        name: upsOutputVoltage
+      # The present output current.
+      - OID: 1.3.6.1.2.1.33.1.4.4.1.3
+        name: upsOutputCurrent
+      # The present output true power.
+      - OID: 1.3.6.1.2.1.33.1.4.4.1.4
+        name: upsOutputPower
+      # The percentage of the UPS power capacity presently being used on this output line, i.e., the greater of the percent load of true power capacity and the percent load of VA.
+      - OID: 1.3.6.1.2.1.33.1.4.4.1.5
+        name: upsOutputPercentLoad
+
+  - MIB: UPS-MIB
+    table:
+      # A list of input table entries. The number of entries is given by the value of upsInputNumLines.
+      OID: 1.3.6.1.2.1.33.1.3.3
+      name: upsInputTable
+    symbols:
+      # The present input frequency.
+      - OID: 1.3.6.1.2.1.33.1.3.3.1.2
+        name: upsInputFrequency
+      # The magnitude of the present input voltage.
+      - OID: 1.3.6.1.2.1.33.1.3.3.1.3
+        name: upsInputVoltage
+      # The magnitude of the present input current.
+      - OID: 1.3.6.1.2.1.33.1.3.3.1.4
+        name: upsInputCurrent
+      # The magnitude of the present input true power.
+      - OID: 1.3.6.1.2.1.33.1.3.3.1.5
+        name: upsInputTruePower
+
+  - MIB: UPS-MIB
+    table:
+      # A list of bypass table entries. The number of entries is given by the value of upsBypassNumLines.
+      OID: 1.3.6.1.2.1.33.1.5.3
+      name: upsBypassTable
+    symbols:
+      # The present bypass voltage.
+      - OID: 1.3.6.1.2.1.33.1.5.3.1.2
+        name: upsBypassVoltage
+      # The present bypass current.
+      - OID: 1.3.6.1.2.1.33.1.5.3.1.3
+        name: upsBypassCurrent
+      # The present true power conveyed by the bypass.
+      - OID: 1.3.6.1.2.1.33.1.5.3.1.4
+        name: upsBypassPower
+
+  - MIB: UPS-MIB
+    table:
+      # A list of alarm table entries. The table contains zero, one, or many rows at any moment, depending upon the number of alarm conditions in effect. The table is initially empty at agent startup. The agent creates a row in the table each time a condition is detected and deletes that row when that condition no longer pertains. The number of rows in the table at any given time is reflected by the value of upsAlarmsPresent.
+      OID: 1.3.6.1.2.1.33.1.6.2
+      name: upsAlarmTable
+    symbols:
+      # The value of sysUpTime when the alarm condition was detected. If the alarm condition was detected at the time of agent startup and presumably existed before agent startup, the value of upsAlarmTime shall equal 0.
+      - OID: 1.3.6.1.2.1.33.1.6.2.1.3
+        name: upsAlarmTime
+    metric_tags:
+      # A reference to an alarm description object. The object referenced should not be accessible, but rather be used to provide a unique description of the alarm condition.
+      - column:
+          OID: 1.3.6.1.2.1.33.1.6.2.1.2
+          name: upsAlarmDescr
+
+metric_tags:
+  # The name of the UPS manufacturer.
+  - column:
+      OID: 1.3.6.1.2.1.33.1.1.1
+      name: upsIdentManufacturer
+  # The UPS Model designation.
+  - column:
+      OID: 1.3.6.1.2.1.33.1.1.2
+      name: upsIdentModel
+  # A string identifying the UPS. This object should be set by the administrator.
+  - column:
+      OID: 1.3.6.1.2.1.33.1.1.5
+      name: upsIdentName

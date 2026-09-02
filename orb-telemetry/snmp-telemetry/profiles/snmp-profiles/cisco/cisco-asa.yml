@@ -1,0 +1,527 @@
+---
+extends:
+  - cisco-all-devices.yml
+
+provider: kentik-firewall
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.227    # PIX Firewall
+  - 1.3.6.1.4.1.9.1.389    # PIX 506
+  - 1.3.6.1.4.1.9.1.390    # PIX 515
+  - 1.3.6.1.4.1.9.1.391    # PIX 520
+  - 1.3.6.1.4.1.9.1.392    # PIX 525
+  - 1.3.6.1.4.1.9.1.393    # PIX 535
+  - 1.3.6.1.4.1.9.1.417    # PIX 501
+  - 1.3.6.1.4.1.9.1.450    # PIX 506E
+  - 1.3.6.1.4.1.9.1.451    # PIX 515E
+  - 1.3.6.1.4.1.9.1.669    # ASA 5510
+  - 1.3.6.1.4.1.9.1.670    # ASA 5520
+  - 1.3.6.1.4.1.9.1.671    # ASA 5520
+  - 1.3.6.1.4.1.9.1.672    # ASA 5540
+  - 1.3.6.1.4.1.9.1.673    # ASA 5540 SC
+  - 1.3.6.1.4.1.9.1.675    # PIX 535
+  - 1.3.6.1.4.1.9.1.676    # PIX 525
+  - 1.3.6.1.4.1.9.1.677    # PIX 515E
+  - 1.3.6.1.4.1.9.1.678    # PIX 525
+  - 1.3.6.1.4.1.9.1.745    # ASA 5505
+  - 1.3.6.1.4.1.9.1.753    # ASA 5550
+  - 1.3.6.1.4.1.9.1.763    # ASA 5550
+  - 1.3.6.1.4.1.9.1.764    # ASA 5520
+  - 1.3.6.1.4.1.9.1.765    # ASA 5540
+  - 1.3.6.1.4.1.9.1.766    # ASA 5550
+  - 1.3.6.1.4.1.9.1.768    # PIX 515 SY
+  - 1.3.6.1.4.1.9.1.769    # PIX 515E SY
+  - 1.3.6.1.4.1.9.1.770    # PIX 525 SY
+  - 1.3.6.1.4.1.9.1.771    # PIX 535 SY
+  - 1.3.6.1.4.1.9.1.773    # ASA 5510 SC
+  - 1.3.6.1.4.1.9.1.774    # ASA 5510
+  - 1.3.6.1.4.1.9.1.914    # ASA 5580
+  - 1.3.6.1.4.1.9.1.915    # ASA 5580 SC
+  - 1.3.6.1.4.1.9.1.916    # ASA 5580
+  - 1.3.6.1.4.1.9.1.1101    # ASA 5505W
+  - 1.3.6.1.4.1.9.1.1194    # ASA 5585-SSP-10
+  - 1.3.6.1.4.1.9.1.1195    # ASA 5585-SSP-20
+  - 1.3.6.1.4.1.9.1.1196    # ASA 5585-X 40
+  - 1.3.6.1.4.1.9.1.1197    # ASA 5585-X 60
+  - 1.3.6.1.4.1.9.1.1198    # ASA 5585-X 10
+  - 1.3.6.1.4.1.9.1.1199    # ASA5585-S20X-K9
+  - 1.3.6.1.4.1.9.1.1200    # ASA 5585-SSP-40 SC
+  - 1.3.6.1.4.1.9.1.1201    # ASA 5585-SSP-60 SC
+  - 1.3.6.1.4.1.9.1.1202    # ASA 5585 SSP 10 SY
+  - 1.3.6.1.4.1.9.1.1203    # ASA 5585 SSP 20 SY
+  - 1.3.6.1.4.1.9.1.1204    # ASA 5585 SSP 40 SY
+  - 1.3.6.1.4.1.9.1.1205    # ASA 5585 SSP 60 SY
+  - 1.3.6.1.4.1.9.1.1233    # ASA 5585 SSP IPS20
+  - 1.3.6.1.4.1.9.1.1234    # ASA 5585 SSP IPS40
+  - 1.3.6.1.4.1.9.1.1235    # ASA 5585 SSP IPS60
+  - 1.3.6.1.4.1.9.1.1275    # WS-SVC-ASA-SM1-K9
+  - 1.3.6.1.4.1.9.1.1276    # ASA 5500 SERIES
+  - 1.3.6.1.4.1.9.1.1277    # ASA 5500 SERIES
+  - 1.3.6.1.4.1.9.1.1302    # ASA 5585-X 10007
+  - 1.3.6.1.4.1.9.1.1303    # ASA 5585-X 20007
+  - 1.3.6.1.4.1.9.1.1304    # ASA 5585-X 40007
+  - 1.3.6.1.4.1.9.1.1305    # ASA 5585-X 80007
+  - 1.3.6.1.4.1.9.1.1306    # ASA 5585-X 10007
+  - 1.3.6.1.4.1.9.1.1307    # ASA 5585-X 20007
+  - 1.3.6.1.4.1.9.1.1308    # ASA 5585-X 40007
+  - 1.3.6.1.4.1.9.1.1309    # ASA 5585-X 60007
+  - 1.3.6.1.4.1.9.1.1310    # ASA 5585-X 10007
+  - 1.3.6.1.4.1.9.1.1311    # ASA 5585-X 20007
+  - 1.3.6.1.4.1.9.1.1312    # ASA 5585-X 40007
+  - 1.3.6.1.4.1.9.1.1313    # ASA 5585-X 60007
+  - 1.3.6.1.4.1.9.1.1323    # ASA 5585-X IPS Security Services Processor 10007
+  - 1.3.6.1.4.1.9.1.1324    # ASA 5585-X IPS Security Services Processor-20007
+  - 1.3.6.1.4.1.9.1.1325    # ASA 5585-X IPS Security Services Processor-40007
+  - 1.3.6.1.4.1.9.1.1326    # ASA 5585-X IPS Security Services Processor-60007
+  - 1.3.6.1.4.1.9.1.1334    # ASA SM1 K7 SC
+  - 1.3.6.1.4.1.9.1.1335    # ASA SM1 K7 SY
+  - 1.3.6.1.4.1.9.1.1336    # ASA SM1 K7
+  - 1.3.6.1.4.1.9.1.1407    # ASA 5512-X
+  - 1.3.6.1.4.1.9.1.1408    # ASA 5525-X
+  - 1.3.6.1.4.1.9.1.1409    # ASA 5545
+  - 1.3.6.1.4.1.9.1.1410    # ASA 5555-X
+  - 1.3.6.1.4.1.9.1.1411    # ASA 5512 SC
+  - 1.3.6.1.4.1.9.1.1412    # ASA 5525-X
+  - 1.3.6.1.4.1.9.1.1413    # ASA 5545 SC
+  - 1.3.6.1.4.1.9.1.1414    # ASA 5555-X
+  - 1.3.6.1.4.1.9.1.1415    # ASA 5512 SY
+  - 1.3.6.1.4.1.9.1.1416    # ASA 5515 SY
+  - 1.3.6.1.4.1.9.1.1417    # ASA 5525 SY
+  - 1.3.6.1.4.1.9.1.1418    # ASA 5545 SY
+  - 1.3.6.1.4.1.9.1.1419    # ASA 5555 SY
+  - 1.3.6.1.4.1.9.1.1420    # ASA 5515-X
+  - 1.3.6.1.4.1.9.1.1421    # ASA 5515
+  - 1.3.6.1.4.1.9.1.1437    # ASA 5585 SSP IPS10 VIRTUAL
+  - 1.3.6.1.4.1.9.1.1438    # ASA 5585 SSP IPS20 VIRTUAL
+  - 1.3.6.1.4.1.9.1.1439    # ASA 5585 SSP IPS40 VIRTUAL
+  - 1.3.6.1.4.1.9.1.1440    # ASA 5585 SSP IPS60 VIRTUAL
+  - 1.3.6.1.4.1.9.1.1442    # ASA 5512 K7
+  - 1.3.6.1.4.1.9.1.1443    # ASA 5515 K7
+  - 1.3.6.1.4.1.9.1.1444    # ASA 5525 K7
+  - 1.3.6.1.4.1.9.1.1445    # ASA 5545
+  - 1.3.6.1.4.1.9.1.1446    # ASA 5555 K7
+  - 1.3.6.1.4.1.9.1.1447    # ASA 5512 K7 SC
+  - 1.3.6.1.4.1.9.1.1448    # ASA 5515 K7 SC
+  - 1.3.6.1.4.1.9.1.1449    # ASA 5525 K7 SC
+  - 1.3.6.1.4.1.9.1.1450    # ASA 5545
+  - 1.3.6.1.4.1.9.1.1451    # ASA 5555 K7 SC
+  - 1.3.6.1.4.1.9.1.1452    # ASA 5512 K7 SY
+  - 1.3.6.1.4.1.9.1.1453    # ASA 5515 K7 SY
+  - 1.3.6.1.4.1.9.1.1454    # ASA 5525 K7 SY
+  - 1.3.6.1.4.1.9.1.1455    # ASA 5545 K7 SY
+  - 1.3.6.1.4.1.9.1.1456    # ASA 5555 K7 SY
+  - 1.3.6.1.4.1.9.1.1610    # ASA 5585 NM20x1GE
+  - 1.3.6.1.4.1.9.1.1612    # ASA 1000V SY
+  - 1.3.6.1.4.1.9.1.1613    # ASA 1000V SC
+  - 1.3.6.1.4.1.9.1.1614    # ASA 1000V
+  - 1.3.6.1.4.1.9.1.1617    # ASA 5585 NM8x10GE
+  - 1.3.6.1.4.1.9.1.1618    # ASA 5585 NM4x10GE
+  - 1.3.6.1.4.1.9.1.1902    # Cisco VASA (Cisco Firepower Threat Defense, Version 6.7.0.2)
+  - 1.3.6.1.4.1.9.1.1903    # Cisco VASA System Context
+  - 1.3.6.1.4.1.9.1.1904    # Cisco VASA Security Context
+  - 1.3.6.1.4.1.9.1.2114    # ASA 5506-X
+  - 1.3.6.1.4.1.9.1.2115    # ASA 5506 SC
+  - 1.3.6.1.4.1.9.1.2116    # ASA 5506 SY
+  - 1.3.6.1.4.1.9.1.2117    # ASA 5506W
+  - 1.3.6.1.4.1.9.1.2118    # ASA 5506W SC
+  - 1.3.6.1.4.1.9.1.2119    # ASA 5506W SY
+  - 1.3.6.1.4.1.9.1.2120    # ASA 5508-X
+  - 1.3.6.1.4.1.9.1.2121    # ASA 5508
+  - 1.3.6.1.4.1.9.1.2122    # ASA 5508 SY
+  - 1.3.6.1.4.1.9.1.2123    # ASA 5506 K7
+  - 1.3.6.1.4.1.9.1.2124    # ASA 5506 K7 SC
+  - 1.3.6.1.4.1.9.1.2125    # ASA 5506 K7 SY
+  - 1.3.6.1.4.1.9.1.2126    # ASA 5508 K7
+  - 1.3.6.1.4.1.9.1.2127    # ASA 5508 K7 SC
+  - 1.3.6.1.4.1.9.1.2128    # ASA 5508 K7 SY
+  - 1.3.6.1.4.1.9.1.2241    # ASA 5506H
+  - 1.3.6.1.4.1.9.1.2242    # ASA 5516-X
+  - 1.3.6.1.4.1.9.1.2243    # ASA 5506H SC
+  - 1.3.6.1.4.1.9.1.2244    # ASA 5516 SC
+  - 1.3.6.1.4.1.9.1.2245    # ASA 5506H SY
+  - 1.3.6.1.4.1.9.1.2246    # ASA 5516 SY
+  - 1.3.6.1.4.1.9.1.2297    # ASA 5512 TD
+  - 1.3.6.1.4.1.9.1.2298    # ASA 5515 TD
+  - 1.3.6.1.4.1.9.1.2299    # ASA 5525 TD
+  - 1.3.6.1.4.1.9.1.2300    # ASA 5545 TD
+  - 1.3.6.1.4.1.9.1.2301    # ASA 5555 TD
+  - 1.3.6.1.4.1.9.1.2302    # ASA 5506 TD
+  - 1.3.6.1.4.1.9.1.2303    # ASA 5506W TD
+  - 1.3.6.1.4.1.9.1.2304    # ASA 5506H TD
+  - 1.3.6.1.4.1.9.1.2305    # ASA 5508 TD
+  - 1.3.6.1.4.1.9.1.2306    # ASA 5516 TD
+
+metrics:
+  - MIB: CISCO-FIREWALL-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.147.1.2.1.1
+      name: cfwHardwareStatusTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.147.1.2.1.1.1.3
+        name: cfwHardwareStatusValue
+        enum:
+          other: 1
+          up: 2
+          down: 3
+          error: 4
+          overTemp: 5
+          busy: 6
+          noMedia: 7
+          backup: 8
+          active: 9
+          standby: 10
+        tag: failover_status
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.147.1.2.1.1.1.2
+          name: cfwHardwareInformation
+        tag: failover_description
+      - column:
+          OID: 1.3.6.1.4.1.9.9.147.1.2.1.1.1.4
+          name: cfwHardwareStatusDetail
+        tag: failover_status_detail
+  - MIB: CISCO-FIREWALL-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.147.1.2.2.2.1.5.40.6
+        name: cfwConnectionStatValue
+        tag: current_firewall_connections
+      - OID: 1.3.6.1.4.1.9.9.147.1.2.2.2.1.5.40.7
+        name: cfwConnectionStatValue
+        tag: highest_firewall_connections
+  # A table of memory pool monitoring entries.
+  # Polled at 60s to support anomaly detection.
+  - MIB: CISCO-ENHANCED-MEMPOOL-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.221.1.1.1
+      name: cempMemPoolTable
+    symbols:
+      # The type of memory pool for which this entry contains information.
+      - name: cempMemPoolType
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.2
+        enum:
+          other: 1
+          processorMemory: 2
+          ioMemory: 3
+          pciMemory: 4
+          fastMemory: 5
+          multibusMemory: 6
+          interruptStackMemory: 7
+          processStackMemory: 8
+          localExceptionMemory: 9
+          virtualMemory: 10
+          reservedMemory: 11
+          imageMemory: 12
+          asicMemory: 13
+          posixMemory: 14
+
+      # Indicates the number of bytes from the memory pool that are currently in use by applications on the managed device.
+      - name: cempMemPoolUsed
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.7
+        poll_time_sec: 60
+        tag: MemoryUsed
+        allow_duplicate: true
+        condition: cempMemPoolType=10
+
+      # Indicates the number of bytes from the memory pool that are currently unused on the managed device.
+      - name: cempMemPoolFree
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.8
+        poll_time_sec: 60
+        tag: MemoryFree
+        allow_duplicate: true
+        condition: cempMemPoolType=10
+
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.3
+          name: cempMemPoolName
+  - MIB: CISCO-REMOTE-ACCESS-MONITOR-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.392.1.4.1.2.0
+        name: crasNumDeclinedSessions
+      - OID: 1.3.6.1.4.1.9.9.392.1.3.1.0
+        name: crasNumSessions
+        poll_time_sec: 60
+      - OID: 1.3.6.1.4.1.9.9.392.1.1.1.0
+        name: crasMaxSessionsSupportable
+      - OID: 1.3.6.1.4.1.9.9.392.1.3.3.0
+        name: crasNumUsers
+      - OID: 1.3.6.1.4.1.9.9.392.1.1.2.0
+        name: crasMaxUsersSupportable
+      - OID: 1.3.6.1.4.1.9.9.392.1.4.1.3.0
+        name: crasNumSetupFailInsufResources
+
+  - MIB: CISCO-IPSEC-FLOW-MONITOR-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.1.0
+        name: cipSecGlobalActiveTunnels
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.4.0
+        name: cipSecGlobalHcInOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.17.0
+        name: cipSecGlobalHcOutOctets
+  - MIB: CISCO-IPSEC-FLOW-MONITOR-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.1.1.0
+        name: cikeGlobalActiveTunnels
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.1.3.0
+        name: cikeGlobalInOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.1.4.0
+        name: cikeGlobalInPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.1.11.0
+        name: cikeGlobalOutOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.1.12.0
+        name: cikeGlobalOutPkts
+  - MIB: CISCO-IPSEC-FLOW-MONITOR-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.1.0
+        name: cipSecGlobalActiveTunnels
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.4.0
+        name: cipSecGlobalHcInOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.9.0
+        name: cipSecGlobalInPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.17.0
+        name: cipSecGlobalHcOutOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.1.22.0
+        name: cipSecGlobalOutPkts
+  - MIB: CISCO-IPSEC-FLOW-MONITOR-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.171.1.2.2
+      name: cikePeerTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.8
+        name: cikePeerActiveTime
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.1
+          name: cikePeerLocalType
+          enum:
+            ipAddrPeer: 1
+            namePeer: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.2
+          name: cikePeerLocalValue
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.3
+          name: cikePeerRemoteType
+          enum:
+            ipAddrPeer: 1
+            namePeer: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.4
+          name: cikePeerRemoteValue
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.6
+          name: cikePeerLocalAddr
+          conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.7
+          name: cikePeerRemoteAddr
+          conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.2.1.9
+          name: cikePeerActiveTunnelIndex
+  - MIB: CISCO-IPSEC-FLOW-MONITOR-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.171.1.2.3
+      name: cikeTunnelTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.16
+        name: cikeTunActiveTime
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.19
+        name: cikeTunInOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.20
+        name: cikeTunInPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.21
+        name: cikeTunInDropPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.27
+        name: cikeTunOutOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.28
+        name: cikeTunOutPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.29
+        name: cikeTunOutDropPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.35
+        name: cikeTunStatus
+        enum:
+          active: 1
+          destroy: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.2
+          name: cikeTunLocalType
+          enum:
+            ipAddrPeer: 1
+            namePeer: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.3
+          name: cikeTunLocalValue
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.4
+          name: cikeTunLocalAddr
+          conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.5
+          name: cikeTunLocalName
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.6
+          name: cikeTunRemoteType
+          enum:
+            ipAddrPeer: 1
+            namePeer: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.7
+          name: cikeTunRemoteValue
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.8
+          name: cikeTunRemoteAddr
+          conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.9
+          name: cikeTunRemoteName
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.10
+          name: cikeTunNegoMode
+          enum:
+            main: 1
+            aggressive: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.11
+          name: cikeTunDiffHellmanGrp
+          enum:
+            none: 1
+            dhGroup1: 2
+            dhGroup2: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.12
+          name: cikeTunEncryptAlgo
+          enum:
+            none: 1
+            des: 2
+            des3: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.2.3.1.13
+          name: cikeTunHashAlgo
+          enum:
+            none: 1
+            md5: 2
+            sha: 3
+  - MIB: CISCO-IPSEC-FLOW-MONITOR-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.171.1.3.2
+      name: cipSecTunnelTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.3
+        name: cipSecTunIkeTunnelAlive
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.10
+        name: cipSecTunActiveTime
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.27
+        name: cipSecTunHcInOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.32
+        name: cipSecTunInPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.40
+        name: cipSecTunHcOutOctets
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.45
+        name: cipSecTunOutPkts
+      - OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.51
+        name: cipSecTunStatus
+        enum:
+          active: 1
+          destroy: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.2
+          name: cipSecTunIkeTunnelIndex
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.4
+          name: cipSecTunLocalAddr
+          conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.5
+          name: cipSecTunRemoteAddr
+          conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.6
+          name: cipSecTunKeyType
+          enum:
+            ike: 1
+            manual: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.7
+          name: cipSecTunEncapMode
+          enum:
+            tunnel: 1
+            transport: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.16
+          name: cipSecTunInSaDiffHellmanGrp
+          enum:
+            none: 1
+            dhGroup1: 2
+            dhGroup2: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.17
+          name: cipSecTunInSaEncryptAlgo
+          enum:
+            none: 1
+            des: 2
+            des3: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.18
+          name: cipSecTunInSaAhAuthAlgo
+          enum:
+            none: 1
+            hmacMd5: 2
+            hmacSha: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.19
+          name: cipSecTunInSaEspAuthAlgo
+          enum:
+            none: 1
+            hmacMd5: 2
+            hmacSha: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.20
+          name: cipSecTunInSaDecompAlgo
+          enum:
+            none: 1
+            ldf: 2
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.21
+          name: cipSecTunOutSaDiffHellmanGrp
+          enum:
+            none: 1
+            dhGroup1: 2
+            dhGroup2: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.22
+          name: cipSecTunOutSaEncryptAlgo
+          enum:
+            none: 1
+            des: 2
+            des3: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.23
+          name: cipSecTunOutSaAhAuthAlgo
+          enum:
+            none: 1
+            hmacMd5: 2
+            hmacSha: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.24
+          name: cipSecTunOutSaEspAuthAlgo
+          enum:
+            none: 1
+            hmacMd5: 2
+            hmacSha: 3
+      - column:
+          OID: 1.3.6.1.4.1.9.9.171.1.3.2.1.25
+          name: cipSecTunOutSaCompAlgo
+          enum:
+            none: 1
+            ldf: 2
+  - MIB: CISCO-UNIFIED-FIREWALL-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.491.1.3.1.2.0
+        name: cufwUrlfRequestsNumProcessed
+      - OID: 1.3.6.1.4.1.9.9.491.1.3.1.5.0
+        name: cufwUrlfRequestsNumAllowed
+      - OID: 1.3.6.1.4.1.9.9.491.1.3.1.6.0
+        name: cufwUrlfRequestsNumDenied

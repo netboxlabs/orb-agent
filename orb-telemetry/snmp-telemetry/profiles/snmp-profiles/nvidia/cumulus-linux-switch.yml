@@ -1,0 +1,330 @@
+# https://docs.nvidia.com/networking-ethernet-software/mibs/CUMULUS-RESOURCE-QUERY-MIB.txt
+# https://docs.nvidia.com/networking-ethernet-software/mibs/CUMULUS-COUNTERS-MIB.txt
+# https://docs.nvidia.com/networking-ethernet-software/mibs/CUMULUS-POE-MIB.txt
+#
+# Based on SNMP walks provided from v4.3
+# https://docs.nvidia.com/networking-ethernet-software/cumulus-linux-43/Monitoring-and-Troubleshooting/Simple-Network-Management-Protocol-SNMP/Supported-MIBs/
+---
+extends:
+  - system-mib.yml
+  - entity-sensor-mib.yml
+  - host-resources-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.40310    # Cumulus root sysOID for all devices
+
+metrics:
+  # The 1 minute load average as an integer. This is computed by taking the floating point loadaverage value and multiplying by 100, then converting the value to an integer.
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: laLoadInt
+      OID: 1.3.6.1.4.1.2021.10.1.5.1
+      poll_time_sec: 60
+      tag: CPU
+  # The total amount of real/physical memory installed on this host
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalReal
+      OID: 1.3.6.1.4.1.2021.4.5.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # The total amount of memory free or available for use on this host.  This value typically covers both real memory and swap space or virtual memory
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memTotalFree
+      OID: 1.3.6.1.4.1.2021.4.11.0
+      poll_time_sec: 60
+      tag: MemoryFree
+  # The total amount of real or virtual memory currently allocated for use as memory buffers
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memBuffer
+      OID: 1.3.6.1.4.1.2021.4.14.0
+      poll_time_sec: 60
+      tag: MemoryBuffer
+  # The total amount of real or virtual memory currently allocated for use as cached memory
+  - MIB: UCD-SNMP-MIB
+    symbol:
+      name: memCached
+      OID: 1.3.6.1.4.1.2021.4.15.0
+      poll_time_sec: 60
+      tag: MemoryCache
+  # The number of L3 Host table entries currently in use
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3HostTableCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.1.1.0
+  # The maximum possible entries in the L3 Host table. The Host table is defined as the table holding the ARP/ND cache.
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3HostTableMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.1.2.0
+  # The number of L3 Routing table entries currently in use
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3RoutingTableCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.1.3.0
+  # The maximum possible entries in the L3 Routing table. L3 Routing table is defined as the table holding the longest prefix match (LPM) entries.
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3RoutingTableMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.1.4.0
+  # The number of L3 Next Hop table entries currently in use
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3NextHopTableCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.1.5.0
+  # The maximum possible entries in the L3 Next Hop table. The L3 Next Hop table holds information about the next hop(s) associated with a routing table entry.
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3NextHopTableMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.1.6.0
+  # The number of ECMP Next Hop table entries currently in use
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3EcmpNextHopTableCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.1.9.0
+  # The maximum possible entries in the ECMP Next Hop table. ECMP Next Hop table stores information about the next hop associated with a routing table entry that has multiple equal cost next hop neighbors.
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l3EcmpNextHopTableMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.1.10.0
+  # The current number of Ingress entries in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.1.11.0
+  # The maximum possible Ingress entries in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.1.12.0
+  # The current number of Ingress counters in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclCurrentCounters
+      OID: 1.3.6.1.4.1.40310.1.1.13.0
+  # The maximum possible Ingress counters in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclMaxCounters
+      OID: 1.3.6.1.4.1.40310.1.1.14.0
+  # The current number of Ingress meters in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclCurrentMeters
+      OID: 1.3.6.1.4.1.40310.1.1.15.0
+  # The maximum possible Ingress meters in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclMaxMeters
+      OID: 1.3.6.1.4.1.40310.1.1.16.0
+  # The current number of Ingress slices in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclCurrentSlices
+      OID: 1.3.6.1.4.1.40310.1.1.17.0
+  # The maximum possible Ingress slices in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: ingressAclMaxSlices
+      OID: 1.3.6.1.4.1.40310.1.1.18.0
+  # The current number of Egress entries in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.1.19.0
+  # The maximum possible Egress entries in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.1.20.0
+  # The current number of Egress counters in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclCurrentCounters
+      OID: 1.3.6.1.4.1.40310.1.1.21.0
+  # The maximum possible Egress counters in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclMaxCounters
+      OID: 1.3.6.1.4.1.40310.1.1.22.0
+  # The current number of Egress meters in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclCurrentMeters
+      OID: 1.3.6.1.4.1.40310.1.1.23.0
+  # The maximum possible Egress meters in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclMaxMeters
+      OID: 1.3.6.1.4.1.40310.1.1.24.0
+  # The current number of Egress slices in the Network Access Control List table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclCurrentSlices
+      OID: 1.3.6.1.4.1.40310.1.1.25.0
+  # The maximum possible Egress slices in the Network Access Control table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: egressAclMaxSlices
+      OID: 1.3.6.1.4.1.40310.1.1.26.0
+# The number of L2 Mac table entries currently in use
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l2MacTableCurrentEntries
+      OID: 1.3.6.1.4.1.40310.1.2.1.0
+  # The maximum possible entries in the L2 Mac table
+  - MIB: CUMULUS-RESOURCE-QUERY-MIB
+    symbol:
+      name: l2MacTableMaxEntries
+      OID: 1.3.6.1.4.1.40310.1.2.2.0
+  # This table breaks out ingress packet discards into more reason-specific discard counters with 64 bits.
+  - MIB: CUMULUS-COUNTERS-MIB
+    table:
+      name: discardClCountersTable
+      OID: 1.3.6.1.4.1.40310.2.1.2
+    symbols:
+      # Number of inbound IPv4 packets discarded by the routing engine
+      - name: clL3v4InDiscards
+        OID: 1.3.6.1.4.1.40310.2.1.2.1.2
+      # Number of inbound packets discarded due to ingress buffer overflow
+      - name: clBufferOverflowDiscards
+        OID: 1.3.6.1.4.1.40310.2.1.2.1.3
+      # Number of inbound IPv4 packets discarded due to ingress Access Control List
+      - name: clL3AclDiscards
+        OID: 1.3.6.1.4.1.40310.2.1.2.1.4
+      # Number of packets discarded due to egress queue overflow
+      - name: clEgressQOverflowDiscards
+        OID: 1.3.6.1.4.1.40310.2.1.2.1.6
+      # Total number of packets discarded on egress due to reasons reasons other than queue overflow. With IF MIB's ifOutDiscards not accounting for certain specific drops, this one accounts for drops seen in the egress pipeline of the system that were not because of egress queue overflow drops.
+      - name: clEgressNonQDiscards
+        OID: 1.3.6.1.4.1.40310.2.1.2.1.7
+    metric_tags:
+      # Port name
+      - column:
+          name: clPortName
+          OID: 1.3.6.1.4.1.40310.2.1.2.1.1
+  # This table shows 64 bit interface counters retrieved from ethtool -S
+  - MIB: CUMULUS-COUNTERS-MIB
+    table:
+      name: interfaceClCountersTable
+      OID: 1.3.6.1.4.1.40310.2.2.2
+    symbols:
+      # The number of input octets on the interface
+      - name: clIntInOctets
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.2
+      # The number of input unicast packets on the interface
+      - name: clIntInUcastPkts
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.3
+      # The number of input broadcast packets on the interface
+      - name: clIntInBcastPkts
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.4
+      # The number of input multicast packets on the interface
+      - name: clIntInMcastPkts
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.5
+      # The number of output octets on the interface
+      - name: clIntOutOctets
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.6
+      # The number of output unicast packets on the interface
+      - name: clIntOutUcastPkts
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.7
+      # The number of output broadcast packets on the interface
+      - name: clIntOutBcastPkts
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.8
+      # The number of output multicast packets on the interface
+      - name: clIntOutMcastPkts
+        OID: 1.3.6.1.4.1.40310.2.2.2.1.9
+    metric_tags:
+      # The port name
+      - column:
+          name: clIntPortName
+          OID: 1.3.6.1.4.1.40310.2.2.2.1.1
+  # This table shows the IEEE 802.1Qbb standard interface counters for pause and Priority Flow Control packets
+  - MIB: CUMULUS-COUNTERS-MIB
+    table:
+      name: pfcClCountersTable
+      OID: 1.3.6.1.4.1.40310.2.2.3
+    symbols:
+      # The number of ethernet flow control pause packets received on the interface
+      - name: clIntInPausePkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.2
+      # The number of ethernet flow control pause packets transmitted on the interface
+      - name: clIntOutPausePkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.3
+      # The number of ethernet priority flow control traffic class 0 packets received on the interface
+      - name: clIntInPfc0Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.4
+      # The number of ethernet priority flow control traffic class 0 packets transmitted on the interface
+      - name: clIntOutPfc0Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.5
+      # The number of ethernet priority flow control traffic class 1 packets received on the interface
+      - name: clIntInPfc1Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.6
+      # The number of ethernet priority flow control traffic class 1 packets transmitted on the interface
+      - name: clIntOutPfc1Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.7
+      # The number of ethernet priority flow control traffic class 2 packets received on the interface
+      - name: clIntInPfc2Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.8
+      # The number of ethernet priority flow control traffic class 2 packets transmitted on the interface
+      - name: clIntOutPfc2Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.9
+      # The number of ethernet priority flow control traffic class 3 packets received on the interface
+      - name: clIntInPfc3Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.10
+      # The number of ethernet priority flow control traffic class 3 packets transmitted on the interface
+      - name: clIntOutPfc3Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.11
+      # The number of ethernet priority flow control traffic class 4 packets received on the interface
+      - name: clIntInPfc4Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.12
+      # The number of ethernet priority flow control traffic class 4 packets transmitted on the interface
+      - name: clIntOutPfc4Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.13
+      # The number of ethernet priority flow control traffic class 5 packets received on the interface
+      - name: clIntInPfc5Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.14
+      # The number of ethernet priority flow control traffic class 5 packets transmitted on the interface
+      - name: clIntOutPfc5Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.15
+      # The number of ethernet priority flow control traffic class 6 packets received on the interface
+      - name: clIntInPfc6Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.16
+      # The number of ethernet priority flow control traffic class 6 packets transmitted on the interface
+      - name: clIntOutPfc6Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.17
+      # The number of ethernet priority flow control traffic class 7 packets received on the interface
+      - name: clIntInPfc7Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.18
+      # The number of ethernet priority flow control traffic class 7 packets transmitted on the interface
+      - name: clIntOutPfc7Pkt
+        OID: 1.3.6.1.4.1.40310.2.2.3.1.19
+    metric_tags:
+      # The port name
+      - column:
+          name: clIntPfcPortName
+          OID: 1.3.6.1.4.1.40310.2.2.3.1.1
+  # The total power available to the system, shown with 3 decimal place of precision (milliwatts).  Dividing this value by 1000 returns the number of watts.  For example, a value of 730400 is equivalent to 730.4 watts.
+  - MIB: CUMULUS-POE-MIB
+    symbol:
+      name: poeTotalSystemPower
+      OID: 1.3.6.1.4.1.40310.3.1.1.0
+  # The total power USED by ports in the system, shown with 3 decimal places of precision (milliwatts).  For example, an integer value of 24500 is equivalent to 24.5 Watts.
+  - MIB: CUMULUS-POE-MIB
+    symbol:
+      name: poeTotalUsedPower
+      OID: 1.3.6.1.4.1.40310.3.1.2.0
+  # The total UNUSED and available power for the system in the common pool for new devices, shown with 3 decimal places of precision (milliwatts).  For example, an integer value of 706300 is equivalent 706.3 Watts.
+  - MIB: CUMULUS-POE-MIB
+    symbol:
+      name: poeTotalAvailablePower
+      OID: 1.3.6.1.4.1.40310.3.1.3.0
+  # The system uptime timestamp when the objects in this MIB were last updated. The default for the update period is every 300 seconds or 5 minutes.
+  - MIB: CUMULUS-POE-MIB
+    symbol:
+      name: poeLastUpdateTime
+      OID: 1.3.6.1.4.1.40310.3.1.4.0

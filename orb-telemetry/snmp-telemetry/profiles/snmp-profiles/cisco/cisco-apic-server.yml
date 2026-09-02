@@ -1,0 +1,789 @@
+# https://mibs.observium.org/mib/CISCO-PROCESS-MIB/
+# https://mibs.observium.org/mib/ENTITY-MIB/
+# https://mibs.observium.org/mib/CISCO-ENTITY-FRU-CONTROL-MIB/
+# https://mibs.observium.org/mib/CISCO-ENTITY-SENSOR-MIB/
+# https://mibs.observium.org/mib/CISCO-ENVMON-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-cisco-apic
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.2238    # Cisco APIC
+
+metrics:
+  # The overall CPU busy percentage in the last 1 minute period.
+  # Polled at 60s to support anomaly detection.
+  - MIB: CISCO-PROCESS-MIB
+    symbol:
+      name: cpmCPUTotal1minRev
+      OID: 1.3.6.1.4.1.9.9.109.1.1.1.1.7.1
+      poll_time_sec: 60
+      tag: CPU
+
+  # This table lists the redundancy mode and the operational status of the power supply groups in the system.
+  - MIB: CISCO-ENTITY-FRU-CONTROL-MIB
+    table:
+      name: cefcFRUPowerSupplyGroupTable
+      OID: 1.3.6.1.4.1.9.9.117.1.1.1
+    symbols:
+      # Total current available for FRU usage.
+      - name: cefcTotalAvailableCurrent
+        OID: 1.3.6.1.4.1.9.9.117.1.1.1.1.3
+      # Total current drawn by powered-on FRUs.
+      - name: cefcTotalDrawnCurrent
+        OID: 1.3.6.1.4.1.9.9.117.1.1.1.1.4
+      # The power supply redundancy operational mode.
+      - name: cefcPowerRedundancyOperMode
+        OID: 1.3.6.1.4.1.9.9.117.1.1.1.1.5
+        tag: redundancy_oper_mode
+        enum:
+          notsupported: 1
+          redundant: 2
+          combined: 3
+          nonRedundant: 4
+          psRedundant: 5
+          inPwrSrcRedundant: 6
+          psRedundantSingleInput: 7
+    metric_tags:
+      # The administratively desired power supply redundancy mode.
+      - tag: redundancy_admin_mode
+        column:
+          name: cefcPowerRedundancyMode
+          OID: 1.3.6.1.4.1.9.9.117.1.1.1.1.1
+          enum:
+            notsupported: 1
+            redundant: 2
+            combined: 3
+            nonRedundant: 4
+            psRedundant: 5
+            inPwrSrcRedundant: 6
+            psRedundantSingleInput: 7
+      # The units of primary supply to interpret cefcTotalAvailableCurrent and cefcTotalDrawnCurrent as power.
+      # For example, one 1000-watt power supply could deliver 100 amperes at 10 volts DC. So the value of cefcPowerUnits would be 'at 10 volts DC'.
+      - tag: power_units
+        column:
+          name: cefcPowerUnits
+          OID: 1.3.6.1.4.1.9.9.117.1.1.1.1.2
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # This table lists the power-related administrative status and operational status of the manageable components in the system.
+  - MIB: CISCO-ENTITY-FRU-CONTROL-MIB
+    table:
+      name: cefcFRUPowerStatusTable
+      OID: 1.3.6.1.4.1.9.9.117.1.1.2
+    symbols:
+      # Current supplied by the FRU (positive values) or current required to operate the FRU (negative values).
+      - name: cefcFRUCurrent
+        OID: 1.3.6.1.4.1.9.9.117.1.1.2.1.3
+      # Operational FRU power state.
+      - name: cefcFRUPowerOperStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.1.2.1.2
+        enum:
+          offEnvOther: 1
+          on: 2
+          offAdmin: 3
+          offDenied: 4
+          offEnvPower: 5
+          offEnvTemp: 6
+          offEnvFan: 7
+          failed: 8
+          onButFanFail: 9
+          offCooling: 10
+          offConnectorRating: 11
+          onButInlinePowerFail: 12
+        tag: fru_power_oper_status
+    metric_tags:
+      # Administratively desired FRU power state.
+      - tag: fru_power_admin_status
+        column:
+          name: cefcFRUPowerAdminStatus
+          OID: 1.3.6.1.4.1.9.9.117.1.1.2.1.1
+          enum:
+            on: 1
+            off: 2
+            inlineAuto: 3
+            inlineOn: 4
+            powerCycle: 5
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # A cefcModuleTable entry lists the operational and administrative status information for ENTITY-MIB entPhysicalTable entries for manageable components of type PhysicalClass module(9).
+  - MIB: CISCO-ENTITY-FRU-CONTROL-MIB
+    table:
+      name: cefcModuleTable
+      OID: 1.3.6.1.4.1.9.9.117.1.2.1
+    symbols:
+      # Administratively desired status of the module.
+      - name: cefcModuleAdminStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.2.1.1.1
+        enum:
+          enabled: 1
+          disabled: 2
+          reset: 3
+          outOfServiceAdmin: 4
+          unsupported: 0
+      # Current operational state of the module.
+      - name: cefcModuleOperStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.2.1.1.2
+        enum:
+          unknown: 1
+          ok: 2
+          disabled: 3
+          okButDiagFailed: 4
+          boot: 5
+          selfTest: 6
+          failed: 7
+          missing: 8
+          mismatchWithParent: 9
+          mismatchConfig: 10
+          diagFailed: 11
+          dormant: 12
+          outOfServiceAdmin: 13
+          outOfServiceEnvTemp: 14
+          poweredDown: 15
+          poweredUp: 16
+          powerDenied: 17
+          powerCycled: 18
+          okButPowerOverWarning: 19
+          okButPowerOverCritical: 20
+          syncInProgress: 21
+          upgrading: 22
+          okButAuthFailed: 23
+          mdr: 24
+          fwMismatchFound: 25
+          fwDownloadSuccess: 26
+          fwDownloadFailure: 27
+      # This object identifies the reason for the last reset performed on the module.
+      - name: cefcModuleResetReason
+        OID: 1.3.6.1.4.1.9.9.117.1.2.1.1.3
+        enum:
+          unsupported: 0    # Override for ktranslate when no results are found
+          unknown: 1
+          powerUp: 2
+          parityError: 3
+          clearConfigReset: 4
+          manualReset: 5
+          watchDogTimeoutReset: 6
+          resourceOverflowReset: 7
+          missingTaskReset: 8
+          lowVoltageReset: 9
+          controllerReset: 10
+          systemReset: 11
+          switchoverReset: 12
+          upgradeReset: 13
+          downgradeReset: 14
+          cacheErrorReset: 15
+          deviceDriverReset: 16
+          softwareExceptionReset: 17
+          restoreConfigReset: 18
+          abortRevReset: 19
+          burnBootReset: 20
+          standbyCdHealthierReset: 21
+          nonNativeConfigClearReset: 22
+          memoryProtectionErrorReset: 23
+      # A description qualifying the module reset reason specified in cefcModuleResetReason.
+      - name: cefcModuleResetReasonDescription
+        OID: 1.3.6.1.4.1.9.9.117.1.2.1.1.6
+        conversion: to_one
+      # This object displays human-readable textual string which describes the cause of the last state change of the module.
+      - name: cefcModuleStateChangeReasonDescr
+        OID: 1.3.6.1.4.1.9.9.117.1.2.1.1.7
+        conversion: to_one
+    metric_tags:
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # This table contains the operational status information for all ENTITY-MIB entPhysicalTable entries which have an entPhysicalClass of 'fan'.
+  - MIB: CISCO-ENTITY-FRU-CONTROL-MIB
+    table:
+      name: cefcFanTrayStatusTable
+      OID: 1.3.6.1.4.1.9.9.117.1.4.1
+    symbols:
+      # The operational state of the fan or fan tray.
+      - name: cefcFanTrayOperStatus
+        OID: 1.3.6.1.4.1.9.9.117.1.4.1.1.1
+        enum:
+          unknown: 1
+          up: 2
+          down: 3
+          warning: 4
+    metric_tags:
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # This table contains a list of fan information for all ENTITY-MIB entPhysicalTable entries which have an entPhysicalClass of 'fan'.
+  - MIB: CISCO-ENTITY-FRU-CONTROL-MIB
+    table:
+      name: cefcFanTable
+      OID: 1.3.6.1.4.1.9.9.117.1.4.2
+    symbols:
+      # The speed of the fan
+      - name: cefcFanSpeed
+        OID: 1.3.6.1.4.1.9.9.117.1.4.2.1.1
+      # The percent of speed relative to the maximum speed of the fan.
+      - name: cefcFanSpeedPercent
+        OID: 1.3.6.1.4.1.9.9.117.1.4.2.1.2
+    metric_tags:
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # This table lists the type, scale, and present value of a sensor listed in the Entity-MIB entPhysicalTable.
+  - MIB: CISCO-ENTITY-SENSOR-MIB
+    table:
+      name: entSensorValueTable
+      OID: 1.3.6.1.4.1.9.9.91.1.1.1
+    symbols:
+      # This variable reports the most recent measurement seen by the sensor. 
+      - name: entSensorValue
+        OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.4
+      # This variable indicates the present operational status of the sensor.
+      - name: entSensorStatus
+        OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.5
+        tag: entity_sensor_status
+        enum:
+          ok: 1
+          unavailable: 2
+          nonoperational: 3
+    metric_tags:
+      # This variable indicates the type of data reported by the entSensorValue.
+      - tag: entity_sensor_type
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.1
+          name: entSensorType
+          enum:
+            other: 1
+            unknown: 2
+            voltsAC: 3
+            voltsDC: 4
+            amperes: 5
+            watts: 6
+            hertz: 7
+            celsius: 8
+            percentRH: 9
+            rpm: 10
+            cmm: 11
+            truthvalue: 12
+            specialEnum: 13
+            dBm: 14
+            dB: 15
+      # This variable indicates the exponent to apply to sensor values reported by entSensorValue.
+      - tag: entity_sensor_scale
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.2
+          name: entSensorScale
+          enum:
+            yocto: 1
+            zepto: 2
+            atto: 3
+            femto: 4
+            pico: 5
+            nano: 6
+            micro: 7
+            milli: 8
+            units: 9
+            kilo: 10
+            mega: 11
+            giga: 12
+            tera: 13
+            exa: 14
+            peta: 15
+            zetta: 6
+            yotta: 17
+      # This variable indicates the number of decimal places of precision in fixed-point sensor values reported by entSensorValue.
+      - tag: entity_sensor_precision
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.3
+          name: entSensorPrecision
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # The table of voltage status maintained by the environmental monitor.
+  - MIB: CISCO-ENVMON-MIB
+    table:
+      name: ciscoEnvMonVoltageStatusTable
+      OID: 1.3.6.1.4.1.9.9.13.1.2
+    symbols:
+      # The current measurement of the testpoint being instrumented.
+      - name: ciscoEnvMonVoltageStatusValue
+        OID: 1.3.6.1.4.1.9.9.13.1.2.1.3
+        tag: voltage_value
+      # The current state of the testpoint being instrumented.
+      - name: ciscoEnvMonVoltageState
+        OID: 1.3.6.1.4.1.9.9.13.1.2.1.7
+        enum:
+          normal: 1
+          warning: 2
+          critical: 3
+          shutdown: 4
+          notPresent: 5
+          notFunctioning: 6
+        tag: voltage_state
+    metric_tags:
+      # Textual description of the testpoint being instrumented.
+      - tag: voltage_descr
+        column:
+          name: ciscoEnvMonVoltageStatusDescr
+          OID: 1.3.6.1.4.1.9.9.13.1.2.1.2
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # The table of ambient temperature status maintained by the environmental monitor.
+  - MIB: CISCO-ENVMON-MIB
+    table:
+      name: ciscoEnvMonTemperatureStatusTable
+      OID: 1.3.6.1.4.1.9.9.13.1.3
+    symbols:
+      # The current measurement of the testpoint being instrumented.
+      - name: ciscoEnvMonTemperatureStatusValue
+        OID: 1.3.6.1.4.1.9.9.13.1.3.1.3
+        tag: temp_value
+      # The current state of the testpoint being instrumented.
+      - name: ciscoEnvMonTemperatureState
+        OID: 1.3.6.1.4.1.9.9.13.1.3.1.6
+        enum:
+          normal: 1
+          warning: 2
+          critical: 3
+          shutdown: 4
+          notPresent: 5
+          notFunctioning: 6
+        tag: temp_state
+    metric_tags:
+      # Textual description of the testpoint being instrumented.
+      - tag: temp_descr
+        column:
+          name: ciscoEnvMonTemperatureStatusDescr
+          OID: 1.3.6.1.4.1.9.9.13.1.3.1.2
+      # The highest value that the associated instance of the object ciscoEnvMonTemperatureStatusValue may obtain before an emergency shutdown of the managed device is initiated.
+      - tag: temp_threshold
+        column:
+          name: ciscoEnvMonTemperatureThreshold
+          OID: 1.3.6.1.4.1.9.9.13.1.3.1.4
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # The table of fan status maintained by the environmental monitor.
+  - MIB: CISCO-ENVMON-MIB
+    table:
+      name: ciscoEnvMonFanStatusTable
+      OID: 1.3.6.1.4.1.9.9.13.1.4
+    symbols:
+      # The current state of the fan being instrumented.
+      - name: ciscoEnvMonFanState
+        OID: 1.3.6.1.4.1.9.9.13.1.4.1.3
+        enum:
+          normal: 1
+          warning: 2
+          critical: 3
+          shutdown: 4
+          notPresent: 5
+          notFunctioning: 6
+        tag: fan_state
+    metric_tags:
+      # Textual description of the fan being instrumented.
+      - tag: fan_descr
+        column:
+          name: ciscoEnvMonFanStatusDescr
+          OID: 1.3.6.1.4.1.9.9.13.1.4.1.2
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # The table of power supply status maintained by the environmental monitor card.
+  - MIB: CISCO-ENVMON-MIB
+    table:
+      name: ciscoEnvMonSupplyStatusTable
+      OID: 1.3.6.1.4.1.9.9.13.1.5
+    symbols:
+      # The current state of the power supply being instrumented.
+      - name: ciscoEnvMonSupplyState
+        OID: 1.3.6.1.4.1.9.9.13.1.5.1.3
+        enum:
+          normal: 1
+          warning: 2
+          critical: 3
+          shutdown: 4
+          notPresent: 5
+          notFunctioning: 6
+        tag: power_supply_state
+    metric_tags:
+      # Textual description of the power supply being instrumented.
+      - tag: power_status_description
+        column:
+          name: ciscoEnvMonSupplyStatusDescr
+          OID: 1.3.6.1.4.1.9.9.13.1.5.1.2
+      # The power supply source.
+      - tag: power_source
+        column:
+          name: ciscoEnvMonSupplySource
+          OID: 1.3.6.1.4.1.9.9.13.1.5.1.4
+          enum:
+            unknown: 1
+            ac: 2
+            dc: 3
+            externalPowerSupply: 4
+            internalRedundant: 5
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13

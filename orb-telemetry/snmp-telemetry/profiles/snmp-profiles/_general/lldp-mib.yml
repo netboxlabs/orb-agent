@@ -1,0 +1,33 @@
+# Profile is intended to be used in an extends block
+# http://oid-info.com/get/1.0.8802.1.1.2.1.4.1
+# https://www.circitor.fr/Mibs/Html/L/LLDP-MIB.php
+
+metrics:
+  # This table contains one or more rows per physical network connection known to this agent.
+  - MIB: LLDP-MIB
+    table:
+      OID: 1.0.8802.1.1.2.1.4.1
+      name: lldpRemTable
+    symbols:
+      # The type of port identifier encoding used in the associated 'lldpRemPortId' object.
+      - OID: 1.0.8802.1.1.2.1.4.1.1.6
+        name: lldpRemPortIdSubtype
+        poll_time_sec: 3600
+        enum:
+          interfaceAlias: 1
+          portComponent: 2
+          macAddress: 3
+          networkAddress: 4
+          interfaceName: 5
+          agentCircuitId: 6
+          local: 7
+      # The string value used to identify the port component associated with the remote system.
+      - OID: 1.0.8802.1.1.2.1.4.1.1.7
+        name: lldpRemPortId
+        conversion: to_one
+        poll_time_sec: 3600
+      # The string value used to identify the system name of the remote system.
+      - OID: 1.0.8802.1.1.2.1.4.1.1.9
+        name: lldpRemSysName
+        conversion: to_one
+        poll_time_sec: 3600
