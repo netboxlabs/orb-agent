@@ -633,3 +633,68 @@ metrics:
 	assert.Contains(t, out, "sysobjectid=*", "a bare star must be named")
 	assert.Contains(t, out, "starry.yml")
 }
+
+// A profile's sysDescr redirects are its own. resolvePath copies `matches`
+// from the file being resolved and the extends merge does not touch it, which
+// is what upstream does too: its merge carries metrics, tags and the
+// sysobjectid map and leaves the redirects behind. `matches_list` is treated
+// the same way, so neither form crosses an extends edge and the ordering rule
+// has no parent list to interleave with.
+func TestResolve_RedirectsAreNotInheritedThroughExtends(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "base.yml", `
+matches:
+  parent-pattern: parent-target.yml
+matches_list:
+  - regex: parent-regex
+    target: parent-target.yml
+metrics:
+  - symbol:
+      name: sysUpTime
+      OID: 1.3.6.1.2.1.1.3.0
+`)
+	writeYAML(t, dir, "device.yml", `
+sysobjectid: 1.3.6.1.4.1.9.1.46
+extends:
+  - base.yml
+`)
+	l, err := NewLoader(dir, silentLogger)
+	require.NoError(t, err)
+
+	child, err := l.Resolve("device.yml")
+	require.NoError(t, err)
+	assert.Empty(t, child.Matches, "a matches map is not inherited through extends")
+	assert.Empty(t, child.MatchesList, "matches_list is inherited the same way, which is not at all")
+
+	parent, err := l.Resolve("base.yml")
+	require.NoError(t, err)
+	assert.Equal(t, []Match{{Regex: "parent-regex", Target: "parent-target.yml"}}, parent.MatchesList,
+		"the declaring profile keeps its own ordered redirects")
+	assert.Equal(t, map[string]string{"parent-pattern": "parent-target.yml"}, parent.Matches)
+}
+
+// The order a file writes its ordered redirects in has to reach the resolved
+// profile, since that order is the whole reason the form exists.
+func TestResolve_MatchesListKeepsTheOrderTheFileDeclares(t *testing.T) {
+	dir := t.TempDir()
+	writeYAML(t, dir, "device.yml", `
+sysobjectid: 1.3.6.1.4.1.9.1.46
+matches_list:
+  - regex: "^first"
+    target: first.yml
+  - regex: "^second"
+    target: second.yml
+  - regex: "^third"
+    target: third.yml
+`)
+	l, err := NewLoader(dir, silentLogger)
+	require.NoError(t, err)
+
+	p, err := l.Resolve("device.yml")
+	require.NoError(t, err)
+	assert.Equal(t, []Match{
+		{Regex: "^first", Target: "first.yml"},
+		{Regex: "^second", Target: "second.yml"},
+		{Regex: "^third", Target: "third.yml"},
+	}, p.MatchesList)
+}

@@ -14,8 +14,8 @@ type wildcardEntry struct {
 	profile *Profile
 }
 
-// matchRedirect is one compiled `matches` entry: a sysDescr pattern and the
-// profile it redirects to.
+// matchRedirect is one compiled redirect entry, from either `matches` or
+// `matches_list`: a sysDescr pattern and the profile it redirects to.
 type matchRedirect struct {
 	re   *regexp.Regexp
 	file string
@@ -25,8 +25,8 @@ type matchRedirect struct {
 type Matcher struct {
 	exactIndex    map[string]*Profile          // normalized OID -> profile (exact matches)
 	wildcardIndex []wildcardEntry              // sorted longest-prefix-first for wildcard matches
-	profileByFile map[string]*Profile          // filename -> profile (for matches redirects)
-	redirects     map[*Profile][]matchRedirect // profile -> compiled matches patterns, in evaluation order
+	profileByFile map[string]*Profile          // filename -> profile (for sysDescr redirects)
+	redirects     map[*Profile][]matchRedirect // profile -> compiled redirect patterns, in evaluation order
 }
 
 // keyClaims holds every profile claiming one index key, in the order the
@@ -82,9 +82,10 @@ func (c keyClaims) pick(keep func(*Profile) bool) *Profile {
 // stable order (Loader.AllResolved sorts them) so a tie between two profiles of
 // the same origin does not move between restarts.
 //
-// Each `matches` redirect is compiled and its destination looked up here, so a
-// pattern that cannot compile and one naming a file no profile carries are both
-// reported once rather than per poll. Neither fails the load: the bundled set
+// Each sysDescr redirect a profile declares, under either `matches_list` or
+// `matches`, is compiled and its destination looked up here, so a pattern that
+// cannot compile and one naming a file no profile carries are both reported
+// once rather than per poll. Neither fails the load: the bundled set
 // already ships an unresolvable one, and the operator-facing case is a typo in
 // an override, which should degrade rather than take the backend down at
 // startup.
@@ -138,12 +139,9 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 
 	m.redirects = make(map[*Profile][]matchRedirect)
 	for _, p := range profiles {
-		if len(p.Matches) == 0 {
-			continue
-		}
-		// Sort patterns for deterministic evaluation order.
 		var compiled []matchRedirect
-		for _, pattern := range slices.Sorted(maps.Keys(p.Matches)) {
+		for _, decl := range declaredRedirects(p) {
+			pattern, target := decl.pattern, decl.target
 			re, err := regexp.Compile("(?i)" + pattern)
 			if err != nil {
 				if logger != nil {
@@ -152,7 +150,6 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 				}
 				continue
 			}
-			target := p.Matches[pattern]
 			// A destination no loaded profile carries can never be reached, so
 			// a device the pattern describes silently keeps collecting this
 			// profile's symbols instead of the ones it was sent to. Reporting
@@ -173,6 +170,36 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	}
 
 	return m
+}
+
+// redirectSource is one sysDescr redirect a profile declares, before its
+// pattern is compiled.
+type redirectSource struct {
+	pattern string
+	target  string
+}
+
+// declaredRedirects returns a profile's sysDescr redirects in the order they
+// are evaluated: every `matches_list` entry in the order the file writes it,
+// then the `matches` map by sorted pattern.
+//
+// The list comes first because it is the form that carries an order, and a
+// profile writes it precisely when more than one of its patterns can match one
+// sysDescr. Upstream evaluates it first for that reason, so a profile carrying
+// both forms resolves to the list's target either way.
+//
+// The map has no order of its own, so its patterns are sorted here rather than
+// ranged: ranging a map would settle a profile whose sysDescr satisfies two
+// patterns differently on each restart.
+func declaredRedirects(p *Profile) []redirectSource {
+	out := make([]redirectSource, 0, len(p.MatchesList)+len(p.Matches))
+	for _, entry := range p.MatchesList {
+		out = append(out, redirectSource{pattern: entry.Regex, target: entry.Target})
+	}
+	for _, pattern := range slices.Sorted(maps.Keys(p.Matches)) {
+		out = append(out, redirectSource{pattern: pattern, target: p.Matches[pattern]})
+	}
+	return out
 }
 
 // reportShadowed warns about keys a profile added under the override directory
@@ -218,7 +245,7 @@ func reportShadowed(claims map[string]keyClaims, logger *slog.Logger, kind strin
 
 // Match returns the best-matching profile for the given device sysObjectID.
 // Exact matches take priority over wildcard matches. Among wildcards, the longest prefix wins.
-// Use MatchWithDescr when sysDescr is also available to support matches-redirect profiles.
+// Use MatchWithDescr when sysDescr is also available to support redirect profiles.
 func (m *Matcher) Match(deviceSysOID string) (*Profile, bool) {
 	normalized := normalizeOID(deviceSysOID)
 
@@ -238,10 +265,11 @@ func (m *Matcher) Match(deviceSysOID string) (*Profile, bool) {
 }
 
 // MatchWithDescr returns the best-matching profile using both sysObjectID and sysDescr.
-// If the OID-matched profile has a matches section, the sysDescr is tested against each
-// pattern (case-insensitive, compiled once in NewMatcher) and the first matching
-// pattern's profile is returned instead. This mirrors how ktranslate handles devices
-// that share a sysOID but differ by description.
+// If the OID-matched profile declares sysDescr redirects, the sysDescr is tested against
+// each pattern (case-insensitive, compiled once in NewMatcher) in the order
+// declaredRedirects fixes, and the first matching pattern's profile is returned instead.
+// This mirrors how ktranslate handles devices that share a sysOID but differ by
+// description.
 func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool) {
 	profile, ok := m.Match(deviceSysOID)
 	if !ok {
@@ -252,6 +280,18 @@ func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool)
 		return profile, true
 	}
 
+	// The winner is the first declared redirect whose pattern matches and whose
+	// target is loaded, not simply the first whose pattern matches. A matched
+	// entry naming a target no profile carries is passed over and the next
+	// entry is tried, which is what upstream ktranslate does: its checkMatch
+	// logs the missing target and continues the loop rather than returning.
+	//
+	// Passing over it is also the more useful of the two readings. The
+	// alternative, treating the first matched entry as decisive, would hand the
+	// device the declaring profile's generic symbols instead of a redirect the
+	// operator also declared and which resolves. The unresolved target is not
+	// lost either way: NewMatcher reports it once at load, naming the profile,
+	// the pattern and the file.
 	for _, r := range redirects {
 		if !r.re.MatchString(sysDescr) {
 			continue
@@ -261,7 +301,8 @@ func (m *Matcher) MatchWithDescr(deviceSysOID, sysDescr string) (*Profile, bool)
 		}
 	}
 
-	// No redirect matched; use original profile.
+	// No redirect matched, or every matched one named a target that is not
+	// loaded, so the declaring profile serves.
 	return profile, true
 }
 
