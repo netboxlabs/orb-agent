@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"regexp"
@@ -288,6 +289,15 @@ type MetricsCollector struct {
 	profileMu     sync.Mutex
 	deviceProfile map[deviceKey]string // device -> profileID
 
+	// Consecutive runs cut short by their own context, per device. A mutex of
+	// its own rather than storeMu: forgetDevice takes storeMu and CollectTarget
+	// decides whether to call it from this count, so sharing the lock would
+	// have the decision hold what forgetDevice goes on to take. It is not
+	// pollMu's either, since a collection reads a poll window per declaration
+	// and this is read once a run.
+	interruptMu     sync.Mutex
+	interruptedRuns map[deviceKey]int // device -> consecutive interrupted runs
+
 	// Observable gauge store: device -> metricName -> observations.
 	// Updated after each CollectTarget run; read by OTLP callbacks on every export cycle.
 	storeMu     sync.RWMutex
@@ -314,6 +324,7 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 		logger:           logger,
 		pollState:        make(map[deviceKey]map[string]time.Time),
 		deviceProfile:    make(map[deviceKey]string),
+		interruptedRuns:  make(map[deviceKey]int),
 		deviceStore:      make(map[deviceKey]map[string][]observedPoint),
 		instruments:      make(map[string]metric.Int64ObservableGauge),
 		reviewedProfiles: make(map[string]struct{}),
@@ -360,8 +371,9 @@ func (c *MetricsCollector) pollDue(key deviceKey, sym *profiles.Symbol) bool {
 // answered with: a device that does not implement an OID has still been asked,
 // and re-asking it every cycle is what the poll window is there to prevent.
 // A device forgotten after a failed run loses these timestamps with the rest of
-// its state, so the two rules agree that nothing throttles what was not
-// collected.
+// its state, and a run that ends before publishing its store has the timestamps
+// it wrote put back as they were by restorePollWindows, so every rule agrees
+// that nothing throttles a reading no series carries.
 func (c *MetricsCollector) markPolled(key deviceKey, sym *profiles.Symbol) {
 	if sym.PollTimeSec <= 0 || pollPeriodPastBound(sym) {
 		// A refused period leaves no window to start, so writing a timestamp
@@ -374,6 +386,37 @@ func (c *MetricsCollector) markPolled(key deviceKey, sym *profiles.Symbol) {
 		c.pollState[key] = make(map[string]time.Time)
 	}
 	c.pollState[key][symbolDeclKey(sym)] = time.Now()
+}
+
+// snapshotPollWindows copies a device's poll windows as they stand. The copy is
+// what makes it a snapshot: markPolled writes into the device's own map, so
+// keeping the map itself would follow this run's writes rather than record what
+// preceded them.
+func (c *MetricsCollector) snapshotPollWindows(key deviceKey) map[string]time.Time {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	return maps.Clone(c.pollState[key])
+}
+
+// restorePollWindows puts a device's poll windows back the way
+// snapshotPollWindows found them, undoing every window the run since started.
+//
+// A run restores them when it returns without publishing its store, so a
+// declaration is never throttled against a reading nothing can read. Restoring
+// rather than deleting the entries the run wrote: a declaration this run marked
+// was reported due, so its previous timestamp had expired, and putting the
+// expired timestamp back throttles exactly as little as dropping the entry
+// would. It also needs nothing threaded through the collection paths.
+func (c *MetricsCollector) restorePollWindows(key deviceKey, windows map[string]time.Time) {
+	c.pollMu.Lock()
+	defer c.pollMu.Unlock()
+	if windows == nil {
+		// A device with no windows at all holds no entry rather than an empty
+		// one, which is the shape forgetDevice leaves too.
+		delete(c.pollState, key)
+		return
+	}
+	c.pollState[key] = windows
 }
 
 // ensureInstrument lazily registers an observable gauge callback for metricName.
@@ -456,6 +499,10 @@ func (c *MetricsCollector) Close() {
 	c.deviceProfile = make(map[deviceKey]string)
 	c.profileMu.Unlock()
 
+	c.interruptMu.Lock()
+	c.interruptedRuns = make(map[deviceKey]int)
+	c.interruptMu.Unlock()
+
 	c.reviewMu.Lock()
 	c.reviewedProfiles = make(map[string]struct{})
 	c.reviewMu.Unlock()
@@ -488,6 +535,14 @@ func (c *MetricsCollector) ForgetPolicy(policyName string) {
 		}
 	}
 	c.profileMu.Unlock()
+
+	c.interruptMu.Lock()
+	for key := range c.interruptedRuns {
+		if key.policy == policyName {
+			delete(c.interruptedRuns, key)
+		}
+	}
+	c.interruptMu.Unlock()
 }
 
 // profileID names a matched profile. The relative path tells apart two profiles
@@ -526,6 +581,10 @@ func (c *MetricsCollector) noteProfile(key deviceKey, id string) {
 // so staleness is visible as an absent series. Clearing the poll timestamps too
 // means the next successful run repopulates every metric instead of throttling
 // some of them against a window that has nothing left to carry forward.
+//
+// The interrupted-run count goes with them: it counts interruptions of the
+// state being dropped here, so a device starting again from nothing starts the
+// count from nothing too.
 func (c *MetricsCollector) forgetDevice(key deviceKey) {
 	c.storeMu.Lock()
 	delete(c.deviceStore, key)
@@ -534,6 +593,10 @@ func (c *MetricsCollector) forgetDevice(key deviceKey) {
 	c.pollMu.Lock()
 	delete(c.pollState, key)
 	c.pollMu.Unlock()
+
+	c.interruptMu.Lock()
+	delete(c.interruptedRuns, key)
+	c.interruptMu.Unlock()
 }
 
 // appendIdentityAttrs renders every dimension of a device key as an attribute.
@@ -592,19 +655,75 @@ func reservedTagName(name string) bool {
 	return reserved
 }
 
+// maxInterruptedRuns bounds how many consecutive runs cut short by their own
+// context a device keeps its state through. Reaching it forgets the device.
+//
+// The bound counts attempts, not elapsed time, and the two are not
+// interchangeable here. A run's deadline is the whole metrics_interval, so an
+// interrupted run occupies its entire cycle, and the scheduler runs each target
+// under gocron.LimitModeReschedule, which drops a tick that arrives while the
+// previous run is still going rather than queueing it. Consecutive interrupted
+// attempts are therefore spaced further apart than one interval, and a reading
+// can outlive this many intervals of wall clock. Anything needing a real
+// maximum age would have to measure time rather than count attempts.
+//
+// Counting attempts is what this bound is for. The failure it exists to break
+// is a feedback loop, where forgetting a device clears its poll windows and
+// makes the next cycle the most expensive one the profile can produce, which
+// makes the next overrun likelier. That loop advances per attempt, so attempts
+// are the unit that matches it.
+//
+// A constant rather than a policy field: it is a safety bound rather than a
+// knob, and three attempts is few enough that a device whose runs keep
+// overrunning still disappears rather than exporting a stale reading forever.
+const maxInterruptedRuns = 3
+
 // CollectTarget collects SNMP metrics from a single target using its matched profile.
 // Returns nil if the device has no matching profile (not an error condition).
-// A run that fails leaves nothing behind for the device it was polling.
+// A run that the device failed leaves nothing behind for the device it was
+// polling; a run the collector cut short keeps what the device left, for up to
+// maxInterruptedRuns consecutive such runs.
 func (c *MetricsCollector) CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial DialOptions) error {
 	key := deviceKey{policy: policyName, host: target.Host, port: target.Port, id: target.ID}
 	if auth != nil {
 		key.context = auth.ContextName
 	}
-	if err := c.collect(ctx, key, target, auth, dial); err != nil {
-		c.forgetDevice(key)
+	err := c.collect(ctx, key, target, auth, dial)
+	if err == nil {
+		c.clearInterruptedRuns(key)
+		return nil
+	}
+	// The context decides, not the error. collect's early returns wrap the
+	// deadline out of existence: creating the client, connecting and getting
+	// sysObjectID all carry neither context.Canceled nor DeadlineExceeded even
+	// when the context is what killed them, so inspecting the error would read
+	// a run the collector ended as a device that failed. A live context here
+	// means the device failed, and the device's series goes empty so the
+	// absence is visible; a done one means the run overran its own deadline,
+	// which is evidence about us and no reason to discard the device.
+	if ctx.Err() != nil && c.noteInterruptedRun(key) < maxInterruptedRuns {
 		return err
 	}
-	return nil
+	c.forgetDevice(key)
+	return err
+}
+
+// noteInterruptedRun counts one more consecutive interrupted run for the device
+// and returns the new total.
+func (c *MetricsCollector) noteInterruptedRun(key deviceKey) int {
+	c.interruptMu.Lock()
+	defer c.interruptMu.Unlock()
+	c.interruptedRuns[key]++
+	return c.interruptedRuns[key]
+}
+
+// clearInterruptedRuns ends a run of consecutive interruptions. A run that
+// completed spends nothing of the bound, so an occasional overrun costs the
+// device nothing while a persistent one still drops it within a few cycles.
+func (c *MetricsCollector) clearInterruptedRuns(key deviceKey) {
+	c.interruptMu.Lock()
+	defer c.interruptMu.Unlock()
+	delete(c.interruptedRuns, key)
 }
 
 func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target config.Target, auth *config.Authentication, dial DialOptions) error {
@@ -645,6 +764,30 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	// different profile starts from nothing.
 	c.noteProfile(key, profileID(profile))
 	c.reviewProfile(profile)
+
+	// The poll windows as they stand before this run walks any of the profile's
+	// metrics, and a restore on every way out that does not publish the store.
+	//
+	// The two are written at different times: markPolled starts a declaration's
+	// window the moment its walk comes back, while the store is written once, at
+	// the end. A run that returns in between has therefore throttled
+	// declarations whose readings nothing published, and each one is skipped
+	// until poll_time_sec elapses while its series carries the run before it, or
+	// nothing at all. The windows that existed before the run are kept, since
+	// those belong to readings that were published: that is what makes the cycle
+	// after an interruption a cheap one.
+	//
+	// Taken here rather than at the top of collect: noteProfile drops the
+	// windows of a profile no longer matched, and a restore of a snapshot taken
+	// before it would put that dropped profile's windows back. Nothing past this
+	// point drops them, so a restore has no other decision to undo.
+	prevWindows := c.snapshotPollWindows(key)
+	storePublished := false
+	defer func() {
+		if !storePublished {
+			c.restorePollWindows(key, prevWindows)
+		}
+	}()
 
 	// Everything from here walks the profile's tables, which is where the round
 	// trips are. The two walks above chose the profile, so this is the first
@@ -751,6 +894,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	emptyRun := len(newStore) == 0
 	if !emptyRun || failed == 0 {
 		c.deviceStore[key] = newStore
+		storePublished = true
 	}
 	c.storeMu.Unlock()
 
