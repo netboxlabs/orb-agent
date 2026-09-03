@@ -174,7 +174,8 @@ A trap is counted, not stored. Three metrics describe what arrived:
   The counter is monotonic: a deleted policy's series stop being exported but
   keep their totals, so a policy recreated under the same name continues
   the count rather than restarting it, and nothing downstream sees a
-  decrease.
+  decrease. A trap that was already in hand when its policy was deleted is
+  kept the same way and stays unexported until the policy comes back.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
   `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window` or
@@ -203,8 +204,11 @@ A trap is counted, not stored. Three metrics describe what arrived:
   in none of the three.
 
 `trap_name` is drawn from a closed set: the six standard traps of RFC 1215 and
-the trap definitions bundled with the profiles, about two hundred names. Any
-other trap is labelled `other`. A raw OID never appears as a label, because a
+the trap definitions in the policy's own profile set, the bundled ones plus
+whatever its `profiles_dir` adds or overrides, about two hundred names. Two
+policies on one socket may therefore name one OID differently, each under
+its own `policy` label; the RFC 1215 names win over any profile's spelling.
+Any other trap is labelled `other`. A raw OID never appears as a label, because a
 sender chooses its own trap OID and a metric label a sender controls is
 unbounded.
 
@@ -237,9 +241,10 @@ strangers.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
 authentication**, in which case the backend authenticates it with the USM
-user the policy polls that device with, and no other: a credential a policy
+users the policy polls that device with, and no others: a credential a policy
 assigned to a different device, or another policy carries under the same
-username, is not tried. No trap-specific credentials are configured. v1 and v2c traps are never authenticated by any setting: the
+username, is not tried. Two targets kept at one address under different IDs
+or contexts contribute both their credentials. No trap-specific credentials are configured. v1 and v2c traps are never authenticated by any setting: the
 community they carry is not checked, because a check would be mistaken for
 authentication and would protect nothing against a sender who can read the
 community off the wire.
@@ -258,7 +263,8 @@ are acknowledged; a device that must use informs sends them as v2c for now.
 A link-local IPv6 device is matched with the interface zone the socket
 saw it on, so two devices at `fe80::1` on different interfaces are two
 devices; a target written without a zone matches the address on any
-interface, and `device_ip` carries the zone. A policy target written as a
+interface, alongside any target written with one, and `device_ip` carries
+the zone. A policy target written as a
 hostname rather than an address is not matched against trap sources, so its traps count as
 `unknown_source`; a policy declaring `traps` whose targets are all hostnames
 starts with a warning saying so, and its USM user is never tried, since it
