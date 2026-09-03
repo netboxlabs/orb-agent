@@ -115,6 +115,26 @@ func TestTimeliness_OnePrincipalCannotEvictAnothersClock(t *testing.T) {
 		assert.True(t, w.check(id, 1, 1))
 	}
 	assert.LessOrEqual(t, w.size(), maxEnginesPerPrincipal+1, "the attacker holds at most its own quota")
+	assert.Equal(t, w.size(), w.orderLen(), "an eviction within a principal frees its global slot too")
 	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: the old datagram is still a replay")
 	assert.True(t, w.check(victim, 5, 100+uint32(maxEngines)+1), "and its live traffic still passes")
+}
+
+// Eviction within a principal follows use, like the global order does: a
+// clock the principal just used is not the one that goes.
+func TestTimeliness_PrincipalEvictionFollowsUse(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	id := func(engine string) clockID { return clockID{user: "one", authPass: "p", engineID: engine} }
+	for i := range maxEnginesPerPrincipal {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(id(fmt.Sprintf("e%d", i)), 5, 1))
+	}
+	now = now.Add(time.Second)
+	assert.True(t, w.check(id("e0"), 5, uint32(maxEnginesPerPrincipal)+2), "e0 is used again")
+	now = now.Add(time.Second)
+	assert.True(t, w.check(id("new"), 5, 1), "a new engine at the principal's bound")
+	assert.Equal(t, maxEnginesPerPrincipal, w.size())
+	assert.False(t, w.check(id("e0"), 4, 1), "e0 was kept: lower boots is still a replay")
+	assert.True(t, w.check(id("e1"), 4, 1), "e1, the least recently used, was evicted and is relearned")
 }

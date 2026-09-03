@@ -174,5 +174,7 @@ func (w *timeliness) touch(c *engineClock) {
 	}
 }
 
-// size is a test accessor.
-func (w *timeliness) size() int { return len(w.clocks) }
+// Test accessors: the map's size, and the global list's length, which must
+// stay equal or a clock has leaked out of one and not the other.
+func (w *timeliness) size() int     { return len(w.clocks) }
+func (w *timeliness) orderLen() int { return w.order.Len() }
