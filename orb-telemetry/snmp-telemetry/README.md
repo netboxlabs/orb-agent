@@ -229,7 +229,14 @@ The actual boundary is a network control on the trap port, a firewall rule
 or a management VRF, the same way the actual boundary for polling is the
 segment the credentials cross.
 
-Two limits in this release. A policy target written as a hostname rather than
+Three limits in this release. SNMPv3 informs are not supported: an inform
+makes the receiver the authoritative engine, so the sender first probes for
+the receiver's engine ID and localises its keys against it, and this receiver
+has no engine ID to offer. The probe carries no username and is dropped as
+`malformed`, and the inform is never acknowledged, so the sender retries and
+gives up. SNMPv3 traps are authenticated and counted, and v1 and v2c informs
+are acknowledged; a device that must use informs sends them as v2c for now.
+A policy target written as a hostname rather than
 an address is not matched against trap sources, so its traps count as
 `unknown_source`; a policy declaring `traps` whose targets are all hostnames
 starts with a warning saying so, and still contributes its USM user to the set
