@@ -81,8 +81,12 @@ func (p *Pool) Acquire(listen, policy string, devices []Device, names map[string
 	} else {
 		p.logger.Debug("Policy joined an open trap socket", "address", config.SanitizeLogValue(listen), "policy", config.SanitizeLogValue(policy), "holders", e.refs+1)
 	}
-	e.registry.Register(policy, devices, names)
+	// Activated before the claims are published: a receiver already
+	// waiting on the registry lock counts the moment the claims land, and a
+	// count for a policy the tally still holds withdrawn would sit dormant
+	// until the same series key arrived again.
 	p.tally.Activate(policy)
+	e.registry.Register(policy, devices, names)
 	e.refs++
 	return &Lease{pool: p, entry: e, listen: listen, policy: policy}, nil
 }
