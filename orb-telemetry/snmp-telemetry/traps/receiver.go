@@ -268,7 +268,7 @@ func (r *Receiver) loop() {
 		// judged by, and two credentials at one address are two principals.
 		if tr.Version == V3 {
 			sp := pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters)
-			if !r.clocks.check(clockKey(src, sp), sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
+			if !r.clocks.check(clockKey(src, sp, pkt.MsgFlags), sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
 				r.drop(DropV3NotInTimeWindow, src, "")
 				continue
 			}
@@ -287,7 +287,7 @@ func (r *Receiver) loop() {
 		// the parser together, and the parser reports which one matched.
 		var holding func(V3User) bool
 		if tr.Version == V3 {
-			holding = credentialMatcher(pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters))
+			holding = credentialMatcher(pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters), pkt.MsgFlags)
 		}
 
 		// The agent-addr override is a claim about provenance, and only a
@@ -386,20 +386,31 @@ func (r *Receiver) parse(b []byte) (pkt *gosnmp.SnmpPacket, err error) {
 	return r.params.UnmarshalTrap(b, false)
 }
 
+// privacyVerified reports whether a message at these flags proved a privacy
+// key: only an authPriv message did. An authNoPriv message carries and
+// verifies nothing about privacy, so two credentials differing only in
+// privacy settings are the same principal to it.
+func privacyVerified(flags gosnmp.SnmpV3MsgFlags) bool {
+	return flags&gosnmp.AuthPriv == gosnmp.AuthPriv
+}
+
 // clockKey names the clock a v3 message is judged by: the sender's address,
 // the credential that verified it, and the engine ID it carries. The
-// credential is identified by everything a registered user is compared on,
-// so two users sharing a name with different passphrases are two clocks.
-func clockKey(src netip.Addr, sp *gosnmp.UsmSecurityParameters) clockID {
-	return clockID{
+// credential is identified by the fields the message's security level
+// verified: username, auth protocol and passphrase always, the privacy
+// fields only for an authPriv message.
+func clockKey(src netip.Addr, sp *gosnmp.UsmSecurityParameters, flags gosnmp.SnmpV3MsgFlags) clockID {
+	id := clockID{
 		src:       src,
 		user:      sp.UserName,
 		authPass:  sp.AuthenticationPassphrase,
-		privPass:  sp.PrivacyPassphrase,
 		authProto: sp.AuthenticationProtocol,
-		privProto: sp.PrivacyProtocol,
 		engineID:  sp.AuthoritativeEngineID,
 	}
+	if privacyVerified(flags) {
+		id.privPass, id.privProto = sp.PrivacyPassphrase, sp.PrivacyProtocol
+	}
+	return id
 }
 
 // userSetKey identifies a set of users for the credential-table cache. Every
@@ -418,22 +429,29 @@ func userSetKey(users []V3User) string {
 	return key.String()
 }
 
-// credentialMatcher reports whether a registered user is the credential the
-// parser verified a packet with. gosnmp returns the table entry it matched as
-// the packet's security parameters, passphrases and protocols included, so
-// the comparison is on the whole credential rather than the username alone,
-// which two policies may share with different passphrases.
-func credentialMatcher(sp *gosnmp.UsmSecurityParameters) func(V3User) bool {
+// credentialMatcher reports whether a registered user is a credential the
+// parser verified a packet with. gosnmp returns the table entry it matched
+// as the packet's security parameters, passphrases and protocols included,
+// so the comparison is on the fields the packet's security level actually
+// verified: username, auth protocol and auth passphrase always, and the
+// privacy protocol and passphrase only for an authPriv packet. An authNoPriv
+// packet proves nothing about privacy, and gosnmp returns whichever
+// same-auth entry it tried first, so two users differing only in privacy
+// settings both verified it and both count.
+func credentialMatcher(sp *gosnmp.UsmSecurityParameters, flags gosnmp.SnmpV3MsgFlags) func(V3User) bool {
 	return func(u V3User) bool {
-		if u.Username != sp.UserName || u.AuthPassphrase != sp.AuthenticationPassphrase || u.PrivPassphrase != sp.PrivacyPassphrase {
+		if u.Username != sp.UserName || u.AuthPassphrase != sp.AuthenticationPassphrase {
 			return false
 		}
 		authProto, err := snmp.AuthProtocol(u.AuthProtocol)
 		if err != nil || authProto != sp.AuthenticationProtocol {
 			return false
 		}
+		if !privacyVerified(flags) {
+			return true
+		}
 		privProto, err := snmp.PrivProtocol(u.PrivProtocol)
-		return err == nil && privProto == sp.PrivacyProtocol
+		return err == nil && privProto == sp.PrivacyProtocol && u.PrivPassphrase == sp.PrivacyPassphrase
 	}
 }
 

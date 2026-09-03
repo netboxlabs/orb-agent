@@ -761,12 +761,12 @@ func TestReceiver_CredentialKeysAreInjective(t *testing.T) {
 	src := netip.MustParseAddr("10.0.0.5")
 	a := &gosnmp.UsmSecurityParameters{UserName: "u|x", AuthenticationPassphrase: "password", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
 	b := &gosnmp.UsmSecurityParameters{UserName: "u", AuthenticationPassphrase: "x|password", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
-	assert.NotEqual(t, clockKey(src, a), clockKey(src, b), "a delimiter in a username is not a field boundary")
+	assert.NotEqual(t, clockKey(src, a, gosnmp.AuthPriv), clockKey(src, b, gosnmp.AuthPriv), "a delimiter in a username is not a field boundary")
 	authOnly := &gosnmp.UsmSecurityParameters{UserName: "u", AuthenticationPassphrase: "other", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
-	assert.NotEqual(t, clockKey(src, b), clockKey(src, authOnly), "the auth passphrase is part of the identity")
+	assert.NotEqual(t, clockKey(src, b, gosnmp.AuthPriv), clockKey(src, authOnly, gosnmp.AuthPriv), "the auth passphrase is part of the identity")
 	privOnly := &gosnmp.UsmSecurityParameters{UserName: "u", AuthenticationPassphrase: "x|password", PrivacyPassphrase: "other", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
-	assert.NotEqual(t, clockKey(src, b), clockKey(src, privOnly), "so is the priv passphrase")
-	assert.Equal(t, clockKey(src, b), clockKey(src, b))
+	assert.NotEqual(t, clockKey(src, b, gosnmp.AuthPriv), clockKey(src, privOnly, gosnmp.AuthPriv), "so is the priv passphrase")
+	assert.Equal(t, clockKey(src, b, gosnmp.AuthPriv), clockKey(src, b, gosnmp.AuthPriv))
 
 	ua := []V3User{{Username: "u\x00x", AuthProtocol: "SHA", AuthPassphrase: "p"}}
 	ub := []V3User{{Username: "u", AuthProtocol: "x\x00SHA", AuthPassphrase: "p"}}
@@ -790,4 +790,32 @@ func TestReceiver_AccountsADatagramAndItsCountUnderOneTallyLock(t *testing.T) {
 	})
 	h.send(t, v2cTrap("public"))
 	assert.Equal(t, [2]int64{1, 1}, <-seen, "the export waited for the outcome")
+}
+
+// An authNoPriv trap verifies the username, the auth protocol and the auth
+// passphrase and nothing about privacy, so two credentials that differ only
+// in privacy settings are both verified by it and both their policies count
+// it. An authPriv trap verifies the privacy key too and is counted only
+// under the credential that decrypted it.
+func TestReceiver_AttributesAnAuthNoPrivTrapToEveryCredentialItVerified(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	a := trapAuthPrivUser
+	b := trapAuthPrivUser
+	b.PrivPassphrase = "a-different-privpassphrase"
+
+	h := newHarness(t)
+	src := canonical(h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
+	h.reg.Register("alpha", []Device{{Policy: "alpha", Addr: src, User: &a}}, nil)
+	h.reg.Register("beta", []Device{{Policy: "beta", Addr: src, User: &b}}, nil)
+	count := func(policy string) int64 { return h.tally.receivedCount(src.String(), policy, "linkDown", V3) }
+
+	h.send(t, v3AuthNoPrivTrap(t, a, engineID))
+	waitFor(t, 1, func() int64 { return count("alpha") })
+	waitFor(t, 1, func() int64 { return count("beta") })
+
+	h.send(t, v3AuthPrivTrapAt(t, b, engineID, 1, 2))
+	waitFor(t, 2, func() int64 { return count("beta") })
+	assert.Equal(t, int64(1), count("alpha"), "the authPriv trap verified beta's privacy key, not alpha's")
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3NotInTimeWindow), "one principal at authNoPriv, its clock shared by both entries")
 }
