@@ -22,6 +22,10 @@ import (
 // the parser's length check, so it is counted as oversized instead.
 const maxDatagram = 4096
 
+// ackTimeout bounds the write of an inform acknowledgement, which runs
+// inside the intake section a close waits for.
+const ackTimeout = 100 * time.Millisecond
+
 // stopTimeout bounds how long Stop waits for the read goroutine. gosnmp's
 // listener waits three seconds, which spent out of the agent's five second
 // stop grace would starve the final export.
@@ -558,6 +562,10 @@ func (r *Receiver) logDrop(reason DropReason, src netip.Addr, detail string) {
 // acknowledge answers an inform the way an agent expects, so a registered
 // sender does not retransmit. The packet is reused with its PDU type and
 // error fields changed, which is what gosnmp's own listener does.
+//
+// The write runs inside the intake section, which close waits for, so it
+// carries a deadline: a UDP send blocks only when the local send buffer is
+// full, but a shutdown must not wait behind it.
 func (r *Receiver) acknowledge(pkt *gosnmp.SnmpPacket, to netip.AddrPort) {
 	pkt.PDUType = gosnmp.GetResponse
 	pkt.Error = gosnmp.NoError
@@ -565,6 +573,10 @@ func (r *Receiver) acknowledge(pkt *gosnmp.SnmpPacket, to netip.AddrPort) {
 	out, err := pkt.MarshalMsg()
 	if err != nil {
 		r.logger.Debug("Could not build an inform acknowledgement", "error", err)
+		return
+	}
+	if err := r.conn.SetWriteDeadline(time.Now().Add(ackTimeout)); err != nil {
+		r.logger.Debug("Could not bound an inform acknowledgement", "error", err)
 		return
 	}
 	if _, err := r.conn.WriteToUDPAddrPort(out, to); err != nil {
