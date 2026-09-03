@@ -13,4 +13,7 @@ the unnumbered port1 the expected result is `{}`, and the fixture could be trunc
 to zero bytes and still pass. port1 stays unnumbered because that is what keeps the
 signal-3 silence test meaningful.
 
-Replace this with a sanitised capture if the reporter supplies one.
+The reporter has since supplied a capture; it is the `7412_capture` scenario beside this
+one, where `switch:` and `aggregate:` appear with real values and positions. This scenario
+is kept for the unnumbered-port1 silence case described above, which the capture does not
+reproduce.
