@@ -10,13 +10,23 @@ const timeWindow = 150
 // exhausted; RFC 3414 says every message carrying it is outside the window.
 const maxEngineBoots = 2147483647
 
+// maxEngines bounds the clock map. A registered sender holding a v3
+// credential can authenticate under any engine ID it chooses, since the key
+// localises against the ID the message supplies, so the map cannot be left
+// to grow with the IDs seen. Past the bound the engine seen longest ago is
+// evicted, and loses its replay protection until it is seen again; ten
+// thousand is far more engines than the addresses a socket's policies name.
+const maxEngines = 10000
+
 // engineClock is what the receiver keeps for one sending engine: the boots
-// and time it last learned, and when it learned them, so the engine's current
-// time can be estimated without a message.
+// and time it last learned, when it learned them, so the engine's current
+// time can be estimated without a message, and when it was last seen, which
+// decides eviction.
 type engineClock struct {
 	boots   uint32
 	time    uint32
 	learned time.Time
+	seen    time.Time
 }
 
 // timeliness is the non-authoritative side of RFC 3414 section 3.2.7. A trap's
@@ -50,8 +60,13 @@ func (w *timeliness) check(engineID string, boots, engineTime uint32) bool {
 	}
 	now := w.now()
 	c, known := w.clocks[engineID]
-	if !known || boots > c.boots {
-		w.clocks[engineID] = engineClock{boots: boots, time: engineTime, learned: now}
+	if !known {
+		w.makeRoom()
+		w.clocks[engineID] = engineClock{boots: boots, time: engineTime, learned: now, seen: now}
+		return true
+	}
+	if boots > c.boots {
+		w.clocks[engineID] = engineClock{boots: boots, time: engineTime, learned: now, seen: now}
 		return true
 	}
 	if boots < c.boots {
@@ -62,7 +77,29 @@ func (w *timeliness) check(engineID string, boots, engineTime uint32) bool {
 		return false
 	}
 	if int64(engineTime) > estimate {
-		w.clocks[engineID] = engineClock{boots: boots, time: engineTime, learned: now}
+		c.time, c.learned = engineTime, now
 	}
+	c.seen = now
+	w.clocks[engineID] = c
 	return true
 }
+
+// makeRoom evicts the engine seen longest ago when the map is at its bound.
+// A scan of the map is the cost of one new engine, paid only at the bound.
+func (w *timeliness) makeRoom() {
+	if len(w.clocks) < maxEngines {
+		return
+	}
+	var oldest string
+	var oldestSeen time.Time
+	first := true
+	for id, c := range w.clocks {
+		if first || c.seen.Before(oldestSeen) {
+			oldest, oldestSeen, first = id, c.seen, false
+		}
+	}
+	delete(w.clocks, oldest)
+}
+
+// size is a test accessor.
+func (w *timeliness) size() int { return len(w.clocks) }

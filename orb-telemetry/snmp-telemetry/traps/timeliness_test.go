@@ -1,6 +1,7 @@
 package traps
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -33,4 +34,27 @@ func TestTimeliness_LearnsThenRejectsLowerBootsAndStaleTime(t *testing.T) {
 	assert.False(t, w.check("e1", 5, 5000), "the old boots are rejected however far their time claims")
 	assert.False(t, w.check("e2", maxEngineBoots, 0), "an engine reporting the boots ceiling is never in the window")
 	assert.True(t, w.check("e2", 1, 1), "a different engine keeps its own clock")
+}
+
+// A registered sender holding a v3 credential can authenticate under any
+// engine ID it likes, since the key localises against the ID it supplies, so
+// the clock map is bounded: past maxEngines the engine seen longest ago is
+// evicted to make room, and loses its replay protection until it is seen
+// again.
+func TestTimeliness_EvictsTheEngineSeenLongestAgo(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	for i := range maxEngines {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(fmt.Sprintf("e%d", i), 5, 1000))
+	}
+	assert.Equal(t, maxEngines, w.size())
+
+	now = now.Add(time.Second)
+	assert.True(t, w.check("e0", 5, uint32(1000+maxEngines+5)), "seeing e0 again, with its clock advanced, makes it the most recent")
+	now = now.Add(time.Second)
+	assert.True(t, w.check("new", 5, 1000), "a new engine is learned at the cap")
+	assert.Equal(t, maxEngines, w.size(), "by evicting one")
+	assert.True(t, w.check("e1", 4, 1000), "e1 was the one seen longest ago: relearned, so lower boots pass")
+	assert.False(t, w.check("e0", 4, 1000), "e0 was kept, so lower boots are still a replay")
 }
