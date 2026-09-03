@@ -245,7 +245,9 @@ prefix can fill the ceiling
 but cannot grow memory past it, the SDK never folds a series the backend
 chose to keep, and every series is withdrawn with the policy that made it. The clocks the receiver keeps for v3 engines are bounded the
 same way, at ten thousand engines, evicting the one used longest ago, in an
-order kept as they are used so an eviction costs no scan.
+order kept as they are used so an eviction costs no scan; and one device
+with one credential holds at most eight of them, evicting its own first, so
+a device cycling through engine IDs never evicts another device's clock.
 
 **What the source address list is, and is not.** A trap from an address that
 no policy on that socket names is dropped and counted as `unknown_source`,
