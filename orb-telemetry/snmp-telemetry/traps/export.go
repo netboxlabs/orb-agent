@@ -1,6 +1,7 @@
 package traps
 
 import (
+	"container/list"
 	"context"
 	"log/slog"
 	"sync"
@@ -81,6 +82,13 @@ type Tally struct {
 	// map so the overflow path never scans it: with nothing dormant the
 	// check is a length, and an eviction is one pop.
 	dormant map[receivedKey]struct{}
+	// baselines is the total of every series evicted while dormant, keyed
+	// like the series and kept in eviction order, so a series that comes
+	// back resumes from it and the counter never reads lower. It is bounded
+	// at maxBaselines, dropping its oldest, so the tally's memory is bounded
+	// at twice the cap.
+	baselines     map[receivedKey]*list.Element
+	baselineOrder *list.List
 
 	regMu        sync.Mutex
 	registration metric.Registration
@@ -89,11 +97,13 @@ type Tally struct {
 // NewTally returns an empty tally. Register attaches it to the meter.
 func NewTally(logger *slog.Logger) *Tally {
 	return &Tally{
-		logger:    logger,
-		received:  make(map[receivedKey]*series),
-		dropped:   make(map[DropReason]int64),
-		withdrawn: make(map[string]struct{}),
-		dormant:   make(map[receivedKey]struct{}),
+		logger:        logger,
+		received:      make(map[receivedKey]*series),
+		dropped:       make(map[DropReason]int64),
+		withdrawn:     make(map[string]struct{}),
+		dormant:       make(map[receivedKey]struct{}),
+		baselines:     make(map[receivedKey]*list.Element),
+		baselineOrder: list.New(),
 	}
 }
 
@@ -114,7 +124,7 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 	}
 	sr := t.received[k]
 	if sr == nil {
-		sr = &series{}
+		sr = &series{n: t.takeBaseline(k)}
 		t.received[k] = sr
 	}
 	sr.n++
@@ -143,11 +153,48 @@ func (t *Tally) Activate(policy string) {
 // datagram into a walk of the map.
 func (t *Tally) evictDormant() bool {
 	for k := range t.dormant {
+		t.keepBaseline(k, t.received[k].n)
 		delete(t.dormant, k)
 		delete(t.received, k)
 		return true
 	}
 	return false
+}
+
+// baseline is one evicted series' total, kept in eviction order.
+type baseline struct {
+	key receivedKey
+	n   int64
+}
+
+// maxBaselines bounds the baseline tier at the series limit.
+const maxBaselines = maxSeries
+
+// keepBaseline records an evicted series' total, dropping the oldest baseline
+// when the tier is full.
+func (t *Tally) keepBaseline(k receivedKey, n int64) {
+	if el, ok := t.baselines[k]; ok {
+		el.Value.(*baseline).n = n
+		t.baselineOrder.MoveToFront(el)
+		return
+	}
+	if t.baselineOrder.Len() >= maxBaselines {
+		oldest := t.baselineOrder.Back()
+		delete(t.baselines, oldest.Value.(*baseline).key)
+		t.baselineOrder.Remove(oldest)
+	}
+	t.baselines[k] = t.baselineOrder.PushFront(&baseline{key: k, n: n})
+}
+
+// takeBaseline returns and forgets the baseline for a series, or zero.
+func (t *Tally) takeBaseline(k receivedKey) int64 {
+	el, ok := t.baselines[k]
+	if !ok {
+		return 0
+	}
+	delete(t.baselines, k)
+	t.baselineOrder.Remove(el)
+	return el.Value.(*baseline).n
 }
 
 // Dropped counts one datagram that produced no trap, by reason.
@@ -267,6 +314,22 @@ func (t *Tally) droppedCount(r DropReason) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.dropped[r]
+}
+
+func (t *Tally) baselineCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.baselines)
+}
+
+// retainedCount is a series' total whether or not it is exported.
+func (t *Tally) retainedCount(deviceIP, policy, trapName string, v Version) int64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if sr := t.received[receivedKey{deviceIP, policy, trapName, v}]; sr != nil {
+		return sr.n
+	}
+	return 0
 }
 
 func (t *Tally) dormantCount() int {

@@ -271,3 +271,47 @@ func TestTally_TracksDormantSeriesInASet(t *testing.T) {
 	assert.Equal(t, seriesLimit, ta.seriesCount())
 	assert.Equal(t, int64(1), ta.receivedCount("192.0.2.1", "edge", "linkUp", V2c))
 }
+
+// An evicted dormant series keeps its total in a baseline tier, so a series
+// that comes back after eviction resumes rather than restarts, and the
+// monotonic counter never reads lower than it did.
+func TestTally_EvictedSeriesResumeFromTheirBaseline(t *testing.T) {
+	ta := NewTally(testLogger)
+	for i := range seriesLimit {
+		ta.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
+	}
+	ta.Received("10.0.0.1", "core", "linkDown", V2c)
+	require.Equal(t, int64(2), ta.receivedCount("10.0.0.1", "core", "linkDown", V2c))
+	ta.Withdraw("core")
+	for i := range seriesLimit {
+		ta.Received(fmt.Sprintf("192.%d.%d.%d", i>>16&255, i>>8&255, i&255), "edge", "linkUp", V2c)
+	}
+	require.Equal(t, seriesLimit, ta.seriesCount(), "every dormant core series was evicted for a live edge one")
+	assert.Equal(t, seriesLimit, ta.baselineCount(), "and each left its total behind")
+
+	ta.Withdraw("edge")
+	ta.Activate("core")
+	ta.Received("10.0.0.1", "core", "linkDown", V2c)
+	assert.Equal(t, int64(3), ta.receivedCount("10.0.0.1", "core", "linkDown", V2c), "resumed from the evicted total")
+	assert.Equal(t, seriesLimit, ta.baselineCount(), "core's baseline was consumed and the edge series evicted for it left one")
+	ta.Received("10.0.0.1", "core", "linkDown", V2c)
+	assert.Equal(t, int64(4), ta.receivedCount("10.0.0.1", "core", "linkDown", V2c))
+}
+
+// The baseline tier is bounded at the series limit, evicting its oldest
+// entry, so the tally's memory is bounded at twice the cap whatever a sender
+// or an operator's policy churn does.
+func TestTally_BaselinesAreBounded(t *testing.T) {
+	ta := NewTally(testLogger)
+	fill := func(prefix, policy string) {
+		for i := range seriesLimit {
+			ta.Received(fmt.Sprintf("%s.%d.%d.%d", prefix, i>>16&255, i>>8&255, i&255), policy, "linkDown", V2c)
+		}
+		ta.Withdraw(policy)
+	}
+	fill("10", "a")
+	fill("172", "b")
+	fill("192", "c")
+	assert.Equal(t, maxBaselines, ta.baselineCount())
+	assert.LessOrEqual(t, ta.seriesCount()+ta.baselineCount(), 2*maxSeries)
+}
