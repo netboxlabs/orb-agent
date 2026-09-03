@@ -241,10 +241,15 @@ strangers.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
 authentication**, in which case the backend authenticates it with the USM
-users the policy polls that device with, and no others: a credential a policy
-assigned to a different device, or another policy carries under the same
-username, is not tried. Two targets kept at one address under different IDs
-or contexts contribute both their credentials. No trap-specific credentials are configured. v1 and v2c traps are never authenticated by any setting: the
+users the policies naming that device poll it with, and no others: a
+credential a policy assigned to a different device is not tried. Two targets
+kept at one address under different IDs or contexts contribute both their
+credentials. An authenticated v3 trap is then counted only under the policies
+holding the credential that verified it; a policy naming the same device with
+v1, v2c or a different v3 user counts the device's v1 and v2c traps and not
+its authenticated v3 ones. The policies a trap is counted under are resolved
+when it is counted, so a policy deleted while a datagram was being parsed is
+not counted and a replacement is counted only if it names the device. No trap-specific credentials are configured. v1 and v2c traps are never authenticated by any setting: the
 community they carry is not checked, because a check would be mistaken for
 authentication and would protect nothing against a sender who can read the
 community off the wire.
