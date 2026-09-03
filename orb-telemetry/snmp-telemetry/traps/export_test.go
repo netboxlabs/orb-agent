@@ -112,6 +112,7 @@ func TestTally_FoldsNewSeriesPastTheCap(t *testing.T) {
 	assert.Equal(t, int64(1), tally.receivedCount(OtherName, "edge", OtherName, V3), "the overflow series is per policy and version")
 
 	tally.Withdraw("core")
+	tally.Activate("core")
 	tally.Received("192.0.2.1", "core", "linkUp", V2c)
 	assert.Equal(t, int64(1), tally.receivedCount("192.0.2.1", "core", "linkUp", V2c), "withdrawal frees room")
 }
@@ -148,8 +149,26 @@ func TestTally_ResumesATotalWhenAWithdrawnSeriesReappears(t *testing.T) {
 	}
 	ta.Withdraw("core")
 	assert.Equal(t, int64(0), ta.receivedCount("10.0.0.5", "core", "linkDown", V2c), "not exported while withdrawn")
+	ta.Activate("core")
 	ta.Received("10.0.0.5", "core", "linkDown", V2c)
 	assert.Equal(t, int64(4), ta.receivedCount("10.0.0.5", "core", "linkDown", V2c), "the counter never goes backwards")
+}
+
+// A datagram that was past its registry lookup when its policy was withdrawn
+// still reaches the tally. It must not bring the series back: a count for a
+// withdrawn policy stays dormant, total kept, until the policy is acquired
+// again.
+func TestTally_CountsForAWithdrawnPolicyStayDormantUntilActivated(t *testing.T) {
+	ta := NewTally(testLogger)
+	ta.Received("10.0.0.5", "core", "linkDown", V2c)
+	ta.Withdraw("core")
+	ta.Received("10.0.0.5", "core", "linkDown", V2c)
+	assert.Equal(t, int64(0), ta.receivedCount("10.0.0.5", "core", "linkDown", V2c), "an in-flight count does not revive the series")
+	ta.Received("10.0.0.6", "core", "linkUp", V2c)
+	assert.Equal(t, int64(0), ta.receivedCount("10.0.0.6", "core", "linkUp", V2c), "nor create a live one")
+	ta.Activate("core")
+	ta.Received("10.0.0.5", "core", "linkDown", V2c)
+	assert.Equal(t, int64(3), ta.receivedCount("10.0.0.5", "core", "linkDown", V2c), "every count was kept")
 }
 
 // A retained total is worth less than a live series: at the cap, a dormant
@@ -215,6 +234,7 @@ func TestTally_DormantSeriesAreNotExportedAndResumeOnReturn(t *testing.T) {
 	_, ok = export()
 	assert.False(t, ok, "a withdrawn series is not exported")
 
+	ta.Activate("core")
 	ta.Received("10.0.0.5", "core", "linkDown", V2c)
 	v, ok = export()
 	require.True(t, ok)

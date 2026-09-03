@@ -73,6 +73,11 @@ type Tally struct {
 	received  map[receivedKey]*series
 	dropped   map[DropReason]int64
 	datagrams int64
+	// withdrawn is every policy whose lease was released and not acquired
+	// again. A count for one of them is kept but stays dormant: a datagram
+	// past its registry lookup when the release happened must not bring
+	// the policy's series back to life.
+	withdrawn map[string]struct{}
 
 	regMu        sync.Mutex
 	registration metric.Registration
@@ -81,9 +86,10 @@ type Tally struct {
 // NewTally returns an empty tally. Register attaches it to the meter.
 func NewTally(logger *slog.Logger) *Tally {
 	return &Tally{
-		logger:   logger,
-		received: make(map[receivedKey]*series),
-		dropped:  make(map[DropReason]int64),
+		logger:    logger,
+		received:  make(map[receivedKey]*series),
+		dropped:   make(map[DropReason]int64),
+		withdrawn: make(map[string]struct{}),
 	}
 }
 
@@ -107,7 +113,17 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 		t.received[k] = sr
 	}
 	sr.n++
-	sr.live = true
+	if _, withdrawn := t.withdrawn[policy]; !withdrawn {
+		sr.live = true
+	}
+}
+
+// Activate marks a policy acquired, so its counts are exported again. The
+// pool calls it as a policy's lease is granted.
+func (t *Tally) Activate(policy string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.withdrawn, policy)
 }
 
 // evictDormant removes one dormant series to make room for a live one and
@@ -146,6 +162,7 @@ func (t *Tally) Datagram() {
 func (t *Tally) Withdraw(policy string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.withdrawn[policy] = struct{}{}
 	for k, sr := range t.received {
 		if k.policy == policy {
 			sr.live = false
