@@ -1,14 +1,19 @@
 #!/usr/bin/env python
 # Copyright 2026 NetBox Labs Inc
 """
-Unit tests for module discovery explaining itself when it emits nothing.
+Unit tests for module discovery explaining itself, and for what it now emits.
 
-Every path here already behaved correctly in the sense that it declined to
-invent data. What it did not do was say so. The reported symptom was always
-"no modules, no errors, identical entity count", because the whole decision
-path logged at DEBUG or not at all. These tests pin the messages an operator
-needs at the default log level, and just as importantly pin that a device with
-genuinely nothing to report stays quiet.
+Some paths here decline to invent data and warn instead of vanishing quietly:
+the reported symptom was always "no modules, no errors, identical entity
+count", because the whole decision path logged at DEBUG or not at all. Those
+tests pin the messages an operator needs at the default log level, and just as
+importantly pin that a device with genuinely nothing to report stays quiet.
+
+Other tests here cover the opposite case: a row the device serialised but did
+not name -- a blank PID, or the literal placeholder "Unspecified" -- used to
+be dropped for want of a model. It is now emitted as an unidentified module,
+using its description as the model, so an operator gets a complete inventory
+instead of a silently incomplete one.
 """
 
 import logging
@@ -34,56 +39,6 @@ def _driver(scenario: str) -> IOSDriver:
 
 class TestModuleDiscoveryDiagnostics:
     """Warnings emitted when get_modules declines to emit anything."""
-
-    def test_placeholder_pid_on_optic_row_is_announced(self, caplog) -> None:
-        """
-        An ifname row whose PID is a placeholder warns instead of vanishing.
-
-        ``Unspecified`` is what a WS-C2960S reports for an SFP it cannot
-        identify. It is truthy, so it passes the ``pid and sn`` filter and
-        never reaches the blank-PID warning, then gets rejected by the
-        transceiver type gate with a bare ``continue``. The rejection is
-        correct (there is no model to emit) but it must be visible.
-        """
-        rows = [
-            {
-                "name": "1", "descr": "WS-C2960S-24PD-L",
-                "pid": "WS-C2960S-24PD-L", "vid": "V03", "sn": "SN0081001",
-            },
-            {
-                "name": "GigabitEthernet1/0/25", "descr": "1000BaseSX SFP",
-                "pid": "Unspecified", "vid": "", "sn": "OPT0081025",
-            },
-        ]
-
-        with caplog.at_level(logging.WARNING, logger=_LOGGER):
-            _, transceivers, _ = _parse_inventory_rows(rows, False)
-
-        assert transceivers == {}, "a placeholder PID must not become a module"
-        messages = [r.getMessage() for r in caplog.records]
-        assert any(
-            "GigabitEthernet1/0/25" in m and "Unspecified" in m for m in messages
-        ), f"the skipped port and its PID must both be named, got {messages}"
-
-    def test_placeholder_pid_reason_reaches_the_operator(self, caplog) -> None:
-        """
-        The rejected row's reason survives all the way out of get_modules.
-
-        One placeholder-PID optic, nothing else, so the payload is None. The
-        requirement is not an extra summary line at the end -- it is that the
-        operator can see WHICH port was dropped and WHY without having to turn
-        on debug logging.
-        """
-        driver = _driver("unidentified_optic_pid")
-
-        with caplog.at_level(logging.WARNING, logger=_LOGGER):
-            result = driver.get_modules()
-
-        assert result is None
-        messages = [r.getMessage() for r in caplog.records]
-        assert any(
-            "GigabitEthernet1/0/25" in m and "Unspecified" in m for m in messages
-        ), f"the operator must see the port and the placeholder PID, got {messages}"
 
     def test_every_optic_declined_is_announced(self, caplog) -> None:
         """
@@ -148,3 +103,164 @@ class TestModuleDiscoveryDiagnostics:
         assert not caplog.records, (
             f"a module-free device must stay quiet, got {[r.getMessage() for r in caplog.records]}"
         )
+
+    def test_placeholder_pid_is_emitted_as_an_unidentified_transceiver(self) -> None:
+        """
+        A 2960S reports "Unspecified" for an SFP it cannot identify.
+
+        The row has a serial and a usable description, so the part is real
+        and present and must be recorded.
+
+        The type assertion is the load-bearing one:
+        classify_module_type_cisco_ios returns "linecard" for both "" and
+        "Unspecified", so deriving the type from the PID would file an optic as
+        a linecard AND let it survive linecards mode, where a transceiver is
+        correctly dropped. The row's NAME being an interface is the signal.
+        """
+        rows = [
+            {"name": "1", "descr": "WS-C2960S-24PD-L",
+             "pid": "WS-C2960S-24PD-L", "vid": "V03", "sn": "SN0081001"},
+            {"name": "GigabitEthernet1/0/25", "descr": "1000BaseSX SFP",
+             "pid": "Unspecified", "vid": "", "sn": "OPT0081025"},
+        ]
+
+        _, transceivers, _ = _parse_inventory_rows(rows, False)
+
+        optic = transceivers[None]["GigabitEthernet1/0/25"]
+        assert optic.identified is False
+        assert optic.model == "1000BaseSX SFP"
+        assert optic.serial == "OPT0081025"
+        assert optic.type == "transceiver"
+
+    def test_blank_pid_optic_is_emitted_as_an_unidentified_transceiver(self) -> None:
+        """The DAC case from the C9200L: a serial, a description, no PID."""
+        rows = [
+            {"name": "Switch 1", "descr": "C9200L-24PXG-4X",
+             "pid": "C9200L-24PXG-4X", "vid": "V01", "sn": "FCW0000001"},
+            {"name": "Te1/1/3", "descr": "SFP-10GBase-CX1",
+             "pid": "", "vid": "", "sn": "OPT0001113"},
+        ]
+
+        _, transceivers, _ = _parse_inventory_rows(rows, False)
+
+        optic = transceivers[None]["Te1/1/3"]
+        assert optic.identified is False
+        assert optic.model == "SFP-10GBase-CX1"
+        assert optic.type == "transceiver"
+
+    def test_identified_optic_is_unchanged(self) -> None:
+        """A real PID must still produce an identified transceiver."""
+        rows = [
+            {"name": "Switch 1", "descr": "C9200L-24PXG-4X",
+             "pid": "C9200L-24PXG-4X", "vid": "V01", "sn": "FCW0000001"},
+            {"name": "Te1/1/1", "descr": "SFP-10GBase-SR",
+             "pid": "SFP-10G-SR", "vid": "V03", "sn": "OPT0001111"},
+        ]
+
+        _, transceivers, _ = _parse_inventory_rows(rows, False)
+
+        optic = transceivers[None]["Te1/1/1"]
+        assert optic.identified is True
+        assert optic.model == "SFP-10G-SR"
+
+    def test_a_slot_row_without_a_pid_is_also_emitted(self) -> None:
+        """
+        The relaxed filter is not optic-specific.
+
+        It sits above the slot and FRU branches, so a linecard the device
+        serialised but did not name is recorded too, typed from its row shape
+        rather than its absent PID.
+        """
+        rows = [
+            {"name": "Slot 2 Linecard", "descr": "48-port GE line card",
+             "pid": "", "vid": "", "sn": "LC0000002"},
+        ]
+
+        bays, _, _ = _parse_inventory_rows(rows, False)
+
+        card = bays[None]["2"].module
+        assert card.identified is False
+        assert card.model == "48-port GE line card"
+        assert card.type == "linecard"
+
+    def test_a_serial_bearing_fru_row_without_a_pid_now_builds_a_bay(self) -> None:
+        """
+        The relaxed filter sits BELOW _ios_claim_slot but ABOVE the slot and FRU branches.
+
+        So a FRU row the device serialised but did not name changes from
+        claim-only to claim-and-build.
+
+        That matters for promotion: an optic whose slot is claimed by a row that
+        built no bay is declined, whereas one whose slot has a real bay nests
+        under it. This row now builds a bay, so Te1/1/1 must nest rather than be
+        declined. The existing fru_row_unusable_not_promoted fixture is
+        unaffected because its FRU row has a BLANK SERIAL, which `if not sn`
+        still drops.
+        """
+        rows = [
+            {"name": "Switch 1", "descr": "C9300-48T",
+             "pid": "C9300-48T", "vid": "V01", "sn": "FCW1"},
+            {"name": "Switch 1 FRU Uplink Module 1", "descr": "8x10GE Network Module",
+             "pid": "", "vid": "", "sn": "FRU1"},
+            {"name": "Te1/1/1", "descr": "SFP-10GBase-LR",
+             "pid": "SFP-10G-LR", "vid": "V02", "sn": "OPT1"},
+        ]
+
+        bays, transceivers, claimed = _parse_inventory_rows(rows, False)
+
+        uplink = bays[None]["1"].module
+        assert uplink.identified is False
+        assert uplink.model == "8x10GE Network Module"
+        assert (None, "1") in claimed, "the slot claim must survive the relaxation"
+        assert "Te1/1/1" in transceivers[None]
+
+    def test_row_with_no_pid_and_no_description_is_skipped(self) -> None:
+        """Nothing to name the part, so there is nothing to emit."""
+        rows = [
+            {"name": "Te1/1/4", "descr": "", "pid": "", "vid": "", "sn": "OPT0001114"},
+        ]
+
+        _, transceivers, _ = _parse_inventory_rows(rows, False)
+
+        assert transceivers == {}
+
+    def test_unidentified_optics_reach_netbox_entities(self) -> None:
+        """
+        Through the real translate path, not a hand-built payload.
+
+        On PR #570 every probe test mocked the client factory, none reached
+        the real constructor, and a configuration the real code rejected
+        outright shipped. The same failure mode is available here.
+        """
+        from netboxlabs.diode.sdk.ingester import Device as PBDevice
+        from netboxlabs.diode.sdk.ingester import DeviceType, Manufacturer
+
+        from device_discovery.policy.models import Options
+        from device_discovery.translate_modules import emit_modules_if_requested
+
+        driver = _driver("unidentified_optics_emitted")
+        payload = driver.get_modules()
+        # The manufacturer must be set explicitly. Passing device_type as a bare
+        # string builds a DeviceType with no manufacturer, and
+        # _manufacturer_from_device then returns "Unknown" for EVERY module --
+        # which would make the assertions below pass whether or not this
+        # feature works.
+        device = PBDevice(
+            name="sw1",
+            device_type=DeviceType(model="C9200L-24PXG-4X",
+                                   manufacturer=Manufacturer(name="Cisco")),
+            site="s",
+        )
+        entities: list = []
+
+        emit_modules_if_requested({"modules": payload},
+                                  Options(discover_modules="full"),
+                                  {None: device}, entities)
+
+        modules = [e.module for e in entities if e.WhichOneof("entity") == "module"]
+        assert len(modules) == 4, "all four installed optics must reach NetBox"
+        by_serial = {m.serial: m for m in modules}
+        # The discriminating pair: same device, same run, different manufacturer.
+        assert by_serial["OPT0001113"].module_type.manufacturer.name == "Unknown"
+        assert by_serial["OPT0001111"].module_type.manufacturer.name == "Cisco"
+        assert by_serial["OPT0001113"].module_type.model == "SFP-10GBase-CX1"
