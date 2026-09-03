@@ -55,6 +55,14 @@ func v2cTrap(community string) []byte {
 	return tlv(0x30, cat(berInt(1), berOctets(community), pdu))
 }
 
+// trapWithVersion is v2cTrap with the version integer chosen by the test:
+// 0 is v1, 1 is v2c, 3 is v3, and anything else is a version this backend
+// does not speak.
+func trapWithVersion(version int, community string) []byte {
+	pdu := tlv(0xa7, cat(berInt(1), berInt(0), berInt(0), linkDownVarbinds()))
+	return tlv(0x30, cat(berInt(version), berOctets(community), pdu))
+}
+
 // v2cInform is the same payload as an InformRequest-PDU (0xa6).
 func v2cInform(community string) []byte {
 	pdu := tlv(0xa6, cat(berInt(1), berInt(0), berInt(0), linkDownVarbinds()))

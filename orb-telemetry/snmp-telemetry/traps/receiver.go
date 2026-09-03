@@ -43,7 +43,11 @@ type Receiver struct {
 
 	params   *gosnmp.GoSNMP
 	usersGen uint64
-	clocks   *timeliness
+	// tables caches one credential table per set of claiming policies,
+	// keyed by the sorted policy names joined; reset when the registry
+	// changes. Only the loop goroutine touches it.
+	tables map[string]*gosnmp.SnmpV3SecurityParametersTable
+	clocks *timeliness
 
 	stopOnce sync.Once
 	done     chan struct{}
@@ -83,7 +87,6 @@ func Listen(addr string, reg *Registry, tally *Tally, names map[string]string, l
 		// community to redact.
 		Logger: gosnmp.NewLogger(nil),
 	}
-	r.rebuildUsersIfChanged()
 	go r.loop()
 	return r, nil
 }
@@ -118,16 +121,26 @@ func (r *Receiver) wait() {
 	}
 }
 
-// rebuildUsersIfChanged refreshes gosnmp's credential table when the registry
-// has changed. gosnmp's table has Add but no Remove, so it is rebuilt whole.
-// Only the loop goroutine touches r.params, so this needs no lock.
-func (r *Receiver) rebuildUsersIfChanged() {
-	gen := r.reg.Generation()
-	if r.params.TrapSecurityParametersTable != nil && gen == r.usersGen {
-		return
+// tableFor returns gosnmp's credential table for a datagram whose source the
+// given policies claimed: the v3 users of those policies and no others.
+// gosnmp keys its table by username and tries every entry under a name in
+// turn, localising keys for each, so a table holding every user on the
+// socket would make a trap from a device whose credential sits late in a
+// shared username cost the receive goroutine one localisation per candidate.
+// Tables are cached per policy set and rebuilt whole when the registry
+// changes, since gosnmp's table has Add but no Remove. Only the loop
+// goroutine touches r.params and the cache, so this needs no lock.
+func (r *Receiver) tableFor(policies []string) *gosnmp.SnmpV3SecurityParametersTable {
+	if gen := r.reg.Generation(); r.tables == nil || gen != r.usersGen {
+		r.tables = make(map[string]*gosnmp.SnmpV3SecurityParametersTable)
+		r.usersGen = gen
+	}
+	key := strings.Join(policies, "\x00")
+	if table, ok := r.tables[key]; ok {
+		return table
 	}
 	table := gosnmp.NewSnmpV3SecurityParametersTable(r.params.Logger)
-	for _, u := range r.reg.Users() {
+	for _, u := range r.reg.UsersFor(policies) {
 		authProto, err := snmp.AuthProtocol(u.AuthProtocol)
 		if err != nil {
 			r.logger.Warn("Skipping a trap v3 user with an unsupported auth protocol", "username", u.Username, "error", err)
@@ -150,8 +163,8 @@ func (r *Receiver) rebuildUsersIfChanged() {
 			r.logger.Warn("Could not add a trap v3 user", "username", u.Username, "error", err)
 		}
 	}
-	r.params.TrapSecurityParametersTable = table
-	r.usersGen = gen
+	r.tables[key] = table
+	return table
 }
 
 // loop is the receive path, in the order the spec's section 6.2 gives: read,
@@ -186,7 +199,7 @@ func (r *Receiver) loop() {
 			continue
 		}
 
-		r.rebuildUsersIfChanged()
+		r.params.TrapSecurityParametersTable = r.tableFor(policies)
 		pkt, err := r.parse(buf[:n])
 		if err != nil {
 			r.drop(DropMalformed, src, parseErrorCategory(err))

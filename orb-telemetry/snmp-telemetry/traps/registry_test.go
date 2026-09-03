@@ -109,3 +109,22 @@ func TestRegistry_ZonesDistinguishLinkLocalDevices(t *testing.T) {
 	assert.Equal(t, []string{"c"}, r.Lookup(addr("fe80::2")))
 	assert.Equal(t, 3, r.Size())
 }
+
+// UsersFor returns the users of exactly the policies named, in policy order,
+// so a receiver can try only the credentials of the policies that claimed a
+// source rather than every credential on the socket.
+func TestRegistry_UsersForNamesOnlyThosePolicies(t *testing.T) {
+	r := NewRegistry()
+	ua := V3User{Username: "shared", AuthProtocol: "SHA", AuthPassphrase: "a-pass"}
+	ub := V3User{Username: "shared", AuthProtocol: "SHA", AuthPassphrase: "b-pass"}
+	uc := V3User{Username: "other", AuthProtocol: "SHA", AuthPassphrase: "c-pass"}
+	r.Register("a", []Device{{Policy: "a", Addr: addr("10.0.0.1")}}, []V3User{ua})
+	r.Register("b", []Device{{Policy: "b", Addr: addr("10.0.0.2")}}, []V3User{ub})
+	r.Register("c", []Device{{Policy: "c", Addr: addr("10.0.0.3")}}, []V3User{uc})
+
+	assert.Equal(t, []V3User{ua}, r.UsersFor([]string{"a"}))
+	assert.Equal(t, []V3User{ua, uc}, r.UsersFor([]string{"c", "a"}), "in policy order, whatever order was asked")
+	assert.Empty(t, r.UsersFor([]string{"nobody"}))
+	assert.Empty(t, r.UsersFor(nil))
+	assert.Len(t, r.Users(), 3, "the socket-wide view still exists")
+}

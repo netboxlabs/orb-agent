@@ -135,6 +135,20 @@ func (r *Registry) Users() []V3User {
 	return out
 }
 
+// UsersFor returns the v3 users of exactly the policies named, in policy
+// order. It is what a receiver hands gosnmp for a datagram whose source those
+// policies claimed: gosnmp tries every same-username entry in turn, localising
+// keys for each, so the table is kept to the credentials that can apply.
+func (r *Registry) UsersFor(policies []string) []V3User {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []V3User
+	for _, policy := range slices.Sorted(slices.Values(policies)) {
+		out = append(out, r.users[policy]...)
+	}
+	return out
+}
+
 // Generation advances on every change, so a caller caching something derived
 // from the registry can tell when to rebuild it without diffing.
 func (r *Registry) Generation() uint64 { return r.gen.Load() }

@@ -371,3 +371,45 @@ func (b *lockedBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// A registered sender writing a version integer this backend does not speak
+// is dropped under its own reason, never counted as 2c.
+func TestReceiver_DropsAVersionItDoesNotSpeak(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "core")
+	h.send(t, trapWithVersion(2, "public"))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnsupportedVersion) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c))
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
+}
+
+// gosnmp keys its credential table by username and tries every entry under a
+// name in turn, localising keys for each, so the table a trap is parsed with
+// holds only the users of the policies that claimed its source. A credential
+// another policy carries under the same username is not tried: the trap is
+// not authenticated by it, and the receive goroutine does not pay for it.
+func TestReceiver_TriesOnlyTheSourcePoliciesCredentials(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	mine := trapAuthPrivUser
+	theirs := trapAuthPrivUser
+	theirs.AuthPassphrase = "someone-elses-authpass"
+	theirs.PrivPassphrase = "someone-elses-privpass"
+
+	h := newHarness(t)
+	src := h.registerSender(t, "core", mine)
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: netip.MustParseAddr("10.9.9.9")}}, []V3User{theirs})
+
+	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 1))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3), "another policy's credential does not authenticate this source")
+
+	h.send(t, v3AuthPrivTrapAt(t, mine, engineID, 1, 2))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+
+	// Once the policy naming the source carries the credential, it is
+	// tried: the same policy set, so the same cache key, and the table must
+	// follow the registry rather than serve what it built before.
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src}}, []V3User{mine, theirs})
+	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 3))
+	waitFor(t, 2, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+}
