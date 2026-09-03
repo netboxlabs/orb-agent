@@ -320,17 +320,17 @@ func TestProviderOptions_ApplyTheCardinalityLimit(t *testing.T) {
 	counter, err := provider.Meter("test").Int64Counter("limit.probe")
 	require.NoError(t, err)
 	ctx := context.Background()
-	for i := range cardinalityLimit - 1 {
+	for i := range CardinalityLimit - 1 {
 		counter.Add(ctx, 1, otelmetric.WithAttributes(attribute.String("k", strconv.Itoa(i))))
 	}
 
 	points, overflow := collectProbe(t, reader)
-	require.Equal(t, cardinalityLimit-1, points, "every set below the limit keeps its own attributes")
+	require.Equal(t, CardinalityLimit-1, points, "every set below the limit keeps its own attributes")
 	require.False(t, overflow, "nothing has overflowed yet")
 
 	counter.Add(ctx, 1, otelmetric.WithAttributes(attribute.String("k", "one past the limit")))
 	points, overflow = collectProbe(t, reader)
-	assert.Equal(t, cardinalityLimit, points, "the overflow set is the limit's last slot")
+	assert.Equal(t, CardinalityLimit, points, "the overflow set is the limit's last slot")
 	assert.True(t, overflow, "past the limit the SDK folds, it does not drop")
 }
 

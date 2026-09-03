@@ -29,7 +29,7 @@ var (
 	logger             *slog.Logger
 )
 
-// cardinalityLimit bounds the attribute sets one instrument may hold before
+// CardinalityLimit bounds the attribute sets one instrument may hold before
 // the SDK folds new ones into a single overflow bucket. The default is 2000
 // and, once reached, every later series including a genuine device's first
 // trap lands in that bucket for the life of the process. Ten thousand
@@ -38,7 +38,9 @@ var (
 // becomes a problem. Trap series are bounded above by registered addresses
 // times the closed trap name set times three versions; the README says that a
 // policy naming a whole /16 whose every host sends every kind is past this.
-const cardinalityLimit = 10000
+// Exported so the trap tally can bound its own map at the same number and
+// never hand the SDK a series it would fold.
+const CardinalityLimit = 10000
 
 // providerOptions is everything the meter provider is configured with beside
 // its reader. It is a function rather than a literal in SetupMetricsExport so
@@ -47,7 +49,7 @@ const cardinalityLimit = 10000
 // to: the limit only matters for what it does to an instrument, and that is
 // only observable through a provider that has it.
 func providerOptions() []sdkmetric.Option {
-	return []sdkmetric.Option{sdkmetric.WithCardinalityLimit(cardinalityLimit)}
+	return []sdkmetric.Option{sdkmetric.WithCardinalityLimit(CardinalityLimit)}
 }
 
 // endpointOptions returns the otlpmetricgrpc options for the configured

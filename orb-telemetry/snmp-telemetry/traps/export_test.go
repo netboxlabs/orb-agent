@@ -2,6 +2,7 @@ package traps
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -87,4 +88,31 @@ func TestTally_ExportsThroughObservableCounters(t *testing.T) {
 	assert.Equal(t, int64(2), got["snmp.traps_received|device_ip=10.0.0.5|policy=core|trap_name=linkDown|version=2c"])
 	assert.Equal(t, int64(1), got["snmp.traps_dropped|reason=unknown_source"])
 	assert.Equal(t, int64(1), got["snmp.traps_datagrams"])
+}
+
+// The map is bounded from the network side. Past the cap, a series that does
+// not exist yet is counted under its policy's overflow series rather than
+// inserted, an existing series still counts, and a withdrawal frees room. The
+// cap is the SDK's cardinality limit, so nothing this tally exports is ever
+// folded by the SDK either.
+func TestTally_FoldsNewSeriesPastTheCap(t *testing.T) {
+	tally := NewTally(testLogger)
+	for i := range maxSeries {
+		tally.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
+	}
+	require.Equal(t, maxSeries, tally.seriesCount())
+
+	tally.Received("192.0.2.1", "core", "linkUp", V2c)
+	assert.Equal(t, int64(0), tally.receivedCount("192.0.2.1", "core", "linkUp", V2c), "a new series past the cap is not inserted")
+	assert.Equal(t, int64(1), tally.receivedCount(OtherName, "core", OtherName, V2c), "it is counted under the policy's overflow series")
+
+	tally.Received("10.0.0.1", "core", "linkDown", V2c)
+	assert.Equal(t, int64(2), tally.receivedCount("10.0.0.1", "core", "linkDown", V2c), "an existing series still counts")
+
+	tally.Received("192.0.2.2", "edge", "linkUp", V3)
+	assert.Equal(t, int64(1), tally.receivedCount(OtherName, "edge", OtherName, V3), "the overflow series is per policy and version")
+
+	tally.Withdraw("core")
+	tally.Received("192.0.2.1", "core", "linkUp", V2c)
+	assert.Equal(t, int64(1), tally.receivedCount("192.0.2.1", "core", "linkUp", V2c), "withdrawal frees room")
 }

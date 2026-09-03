@@ -17,6 +17,18 @@ const (
 	datagramsName = "snmp.traps_datagrams"
 )
 
+// maxSeries bounds the distinct received series the tally holds. A v1 or v2c
+// sender able to spoof a registered address can vary the source across a
+// registered prefix and the trap name across the closed set, and every
+// combination is a map entry that lives until its policy is withdrawn; a /16
+// times two hundred names times three versions is tens of millions of them.
+// The SDK's cardinality limit folds series only as the callback observes
+// them, so it bounds the export and not this map. The cap is the same number,
+// so nothing the tally exports is ever folded by the SDK either. Past it, a
+// series that does not exist yet is counted under its policy's overflow
+// series, device_ip and trap_name both OtherName, and the count survives.
+const maxSeries = metrics.CardinalityLimit
+
 type receivedKey struct {
 	deviceIP, policy, trapName string
 	version                    Version
@@ -51,11 +63,16 @@ func NewTally(logger *slog.Logger) *Tally {
 
 // Received counts one trap for one policy's device. The address set is
 // bounded by the policies an operator wrote, since the receiver drops every
-// source no policy names before it counts anything.
+// source no policy names before it counts anything, and the series set is
+// bounded by maxSeries against a sender who can spoof inside that set.
 func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.received[receivedKey{deviceIP, policy, trapName, v}]++
+	k := receivedKey{deviceIP, policy, trapName, v}
+	if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries {
+		k = receivedKey{OtherName, policy, OtherName, v}
+	}
+	t.received[k]++
 }
 
 // Dropped counts one datagram that produced no trap, by reason.
@@ -163,6 +180,12 @@ func (t *Tally) droppedCount(r DropReason) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.dropped[r]
+}
+
+func (t *Tally) seriesCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.received)
 }
 
 func (t *Tally) datagramCount() int64 {
