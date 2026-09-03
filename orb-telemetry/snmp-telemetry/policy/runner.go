@@ -199,7 +199,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			// so a policy made only of them holds the socket and receives
 			// nothing it can attribute.
 			logger.Warn("Policy receives traps but none of its targets is an address, every trap it receives will be dropped as unknown_source",
-				"policy", config.SanitizeLogValue(name), "listen", policy.Scope.Traps.Listen)
+				"policy", config.SanitizeLogValue(name), "listen", config.SanitizeLogValue(policy.Scope.Traps.Listen))
 		}
 		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices, trapUsers(runner, expanded))
 		if err != nil {

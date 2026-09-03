@@ -379,7 +379,7 @@ func TestTrapPoolAdapter(t *testing.T) {
 
 	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil, nil)
 	require.Error(t, err)
-	assert.Nil(t, lease, "an error must come with an untyped nil lease")
+	assert.True(t, lease == nil, "an error must come with an untyped nil lease")
 
 	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
