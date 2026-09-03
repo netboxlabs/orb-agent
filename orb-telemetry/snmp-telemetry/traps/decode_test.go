@@ -263,3 +263,24 @@ func TestDecode_RejectsVersionsThisBackendDoesNotSpeak(t *testing.T) {
 	require.Empty(t, reason)
 	assert.Equal(t, V2c, tr.Version)
 }
+
+// Each wire version carries its own PDU types: a v1 Trap-PDU under version 1,
+// an SNMPv2-Trap-PDU or InformRequest-PDU under 2c and 3. gosnmp parses the
+// other combinations into a packet with the wrong fields zeroed, so a v2 trap
+// under version 1 would read as coldStart; they are unsupported_pdu instead.
+func TestDecode_RejectsAPDUForeignToItsVersion(t *testing.T) {
+	v1Trap := gosnmp.SnmpTrap{Enterprise: ".1.3.6.1.4.1.9", GenericTrap: 0}
+	cases := []struct {
+		name string
+		p    *gosnmp.SnmpPacket
+	}{
+		{"v2 trap under version 1", &gosnmp.SnmpPacket{Version: gosnmp.Version1, PDUType: gosnmp.SNMPv2Trap, Variables: v2cPacket(oidVar(trapOIDBareDotted, linkDownDotted)).Variables, SnmpTrap: v1Trap}},
+		{"inform under version 1", &gosnmp.SnmpPacket{Version: gosnmp.Version1, PDUType: gosnmp.InformRequest, Variables: v2cPacket(oidVar(trapOIDBareDotted, linkDownDotted)).Variables, SnmpTrap: v1Trap}},
+		{"v1 trap under version 2c", &gosnmp.SnmpPacket{Version: gosnmp.Version2c, PDUType: gosnmp.Trap, Variables: v2cPacket(oidVar(trapOIDBareDotted, linkDownDotted)).Variables, SnmpTrap: v1Trap}},
+		{"v1 trap under version 3", &gosnmp.SnmpPacket{Version: gosnmp.Version3, PDUType: gosnmp.Trap, SecurityModel: gosnmp.UserSecurityModel, MsgFlags: gosnmp.AuthPriv, SecurityParameters: &gosnmp.UsmSecurityParameters{UserName: "u", AuthoritativeEngineID: "e"}, Variables: v2cPacket(oidVar(trapOIDBareDotted, linkDownDotted)).Variables, SnmpTrap: v1Trap}},
+	}
+	for _, tc := range cases {
+		_, reason := Decode(tc.p)
+		assert.Equal(t, DropUnsupportedPDU, reason, tc.name)
+	}
+}

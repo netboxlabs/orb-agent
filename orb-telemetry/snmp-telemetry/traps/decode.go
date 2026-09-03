@@ -72,8 +72,18 @@ func normalizeOID(oid string) string {
 // Decode turns a parsed packet into a trap identity, or says why it cannot.
 // It is a pure function over the packet and never touches the network.
 func Decode(p *gosnmp.SnmpPacket) (Trap, DropReason) {
+	// Each version carries its own PDU types. gosnmp parses the other
+	// combinations into a packet with the wrong fields zeroed, so a v2 trap
+	// under version 1 would read as a coldStart; they are unsupported here.
 	switch p.PDUType {
-	case gosnmp.Trap, gosnmp.SNMPv2Trap, gosnmp.InformRequest:
+	case gosnmp.Trap:
+		if p.Version != gosnmp.Version1 {
+			return Trap{}, DropUnsupportedPDU
+		}
+	case gosnmp.SNMPv2Trap, gosnmp.InformRequest:
+		if p.Version == gosnmp.Version1 {
+			return Trap{}, DropUnsupportedPDU
+		}
 	default:
 		return Trap{}, DropUnsupportedPDU
 	}
