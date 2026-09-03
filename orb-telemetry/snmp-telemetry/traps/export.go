@@ -27,7 +27,21 @@ const (
 // so nothing the tally exports is ever folded by the SDK either. Past it, a
 // series that does not exist yet is counted under its policy's overflow
 // series, device_ip and trap_name both OtherName, and the count survives.
-const maxSeries = metrics.CardinalityLimit
+//
+// The overflow series need room of their own, or the first of them would be
+// the entry past the limit and the SDK would fold an arbitrary series
+// instead. So real series stop at seriesLimit, a reserve below maxSeries
+// holds one overflow series per overflowing policy and version, and the last
+// versionCount slots of the reserve are kept for one process-wide overflow
+// series per version, where a policy whose own overflow series would not fit
+// is counted. Nothing can push the map past maxSeries.
+const (
+	maxSeries       = metrics.CardinalityLimit
+	overflowReserve = 100
+	seriesLimit     = maxSeries - overflowReserve
+	// versionCount is how many Version values exist: V1, V2c and V3.
+	versionCount = 3
+)
 
 type receivedKey struct {
 	deviceIP, policy, trapName string
@@ -69,8 +83,11 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	k := receivedKey{deviceIP, policy, trapName, v}
-	if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries {
+	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit {
 		k = receivedKey{OtherName, policy, OtherName, v}
+		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries-versionCount {
+			k = receivedKey{OtherName, OtherName, OtherName, v}
+		}
 	}
 	t.received[k]++
 }

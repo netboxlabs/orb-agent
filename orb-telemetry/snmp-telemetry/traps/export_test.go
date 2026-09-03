@@ -90,17 +90,16 @@ func TestTally_ExportsThroughObservableCounters(t *testing.T) {
 	assert.Equal(t, int64(1), got["snmp.traps_datagrams"])
 }
 
-// The map is bounded from the network side. Past the cap, a series that does
-// not exist yet is counted under its policy's overflow series rather than
-// inserted, an existing series still counts, and a withdrawal frees room. The
-// cap is the SDK's cardinality limit, so nothing this tally exports is ever
-// folded by the SDK either.
+// The map is bounded from the network side. Real series stop at seriesLimit,
+// below the SDK's cardinality limit by a reserve; past it, a series that does
+// not exist yet is counted under its policy's overflow series, an existing
+// series still counts, and a withdrawal frees room.
 func TestTally_FoldsNewSeriesPastTheCap(t *testing.T) {
 	tally := NewTally(testLogger)
-	for i := range maxSeries {
+	for i := range seriesLimit {
 		tally.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
 	}
-	require.Equal(t, maxSeries, tally.seriesCount())
+	require.Equal(t, seriesLimit, tally.seriesCount())
 
 	tally.Received("192.0.2.1", "core", "linkUp", V2c)
 	assert.Equal(t, int64(0), tally.receivedCount("192.0.2.1", "core", "linkUp", V2c), "a new series past the cap is not inserted")
@@ -115,4 +114,25 @@ func TestTally_FoldsNewSeriesPastTheCap(t *testing.T) {
 	tally.Withdraw("core")
 	tally.Received("192.0.2.1", "core", "linkUp", V2c)
 	assert.Equal(t, int64(1), tally.receivedCount("192.0.2.1", "core", "linkUp", V2c), "withdrawal frees room")
+}
+
+// The overflow series live in the reserve, and the reserve is bounded too:
+// once it is down to the slots kept for the process-wide overflow series,
+// one per version, a policy whose overflow series does not exist yet is
+// counted there. So the map never holds more than the SDK's limit and the
+// SDK never folds a series the tally chose to keep.
+func TestTally_NeverExceedsTheCardinalityLimit(t *testing.T) {
+	tally := NewTally(testLogger)
+	for i := range seriesLimit {
+		tally.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
+	}
+	perPolicyRoom := maxSeries - versionCount - seriesLimit
+	extra := 10
+	for i := range perPolicyRoom + extra {
+		tally.Received("198.51.100.1", fmt.Sprintf("p%d", i), "linkUp", V2c)
+	}
+	assert.LessOrEqual(t, tally.seriesCount(), maxSeries)
+	assert.Equal(t, int64(1), tally.receivedCount(OtherName, "p0", OtherName, V2c), "the first overflowing policy got its own series")
+	assert.Equal(t, int64(0), tally.receivedCount(OtherName, fmt.Sprintf("p%d", perPolicyRoom), OtherName, V2c), "the first past the reserve did not")
+	assert.Equal(t, int64(extra), tally.receivedCount(OtherName, OtherName, OtherName, V2c), "and every one past the reserve counted process-wide")
 }
