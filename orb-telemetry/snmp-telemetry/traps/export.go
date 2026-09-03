@@ -123,6 +123,38 @@ func NewTally(logger *slog.Logger) *Tally {
 func (t *Tally) Received(deviceIP, policy, trapName string, v Version) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.receivedLocked(deviceIP, policy, trapName, v)
+}
+
+// Account runs fn with the tally locked, so everything fn records lands in
+// one transaction: a datagram and its outcome are seen together by an
+// export, never the datagram alone. The registry's read lock nests inside
+// this one when the receiver visits the claims; nothing takes the two in
+// the other order.
+func (t *Tally) Account(fn func(a *Account)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	fn(&Account{t: t})
+}
+
+// Account is the tally as seen from inside one transaction.
+type Account struct {
+	t *Tally
+}
+
+// Datagram counts one datagram in the transaction.
+func (a *Account) Datagram() { a.t.datagrams++ }
+
+// Dropped counts one drop in the transaction.
+func (a *Account) Dropped(r DropReason) { a.t.dropped[r]++ }
+
+// Received counts one trap in the transaction and reports whether it was
+// counted, as Tally.Received does.
+func (a *Account) Received(deviceIP, policy, trapName string, v Version) bool {
+	return a.t.receivedLocked(deviceIP, policy, trapName, v)
+}
+
+func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) bool {
 	k := receivedKey{deviceIP, policy, trapName, v}
 	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit && !t.evictDormant() {
 		k = receivedKey{OtherName, policy, OtherName, v}

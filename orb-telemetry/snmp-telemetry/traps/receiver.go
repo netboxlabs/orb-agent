@@ -318,30 +318,32 @@ func (r *Receiver) loop() {
 		claimed, counted := 0, 0
 		var dropped DropReason
 		ran := r.intake(func() {
-			r.tally.Datagram()
-			claimed = r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
-				if first {
-					first = false
-					if hook := r.duringCount.Load(); hook != nil {
-						(*hook)()
+			r.tally.Account(func(a *Account) {
+				a.Datagram()
+				claimed = r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
+					if first {
+						first = false
+						if hook := r.duringCount.Load(); hook != nil {
+							(*hook)()
+						}
 					}
+					if names == nil {
+						names = r.names
+					}
+					if a.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version) {
+						counted++
+					}
+				})
+				switch {
+				case claimed == 0:
+					dropped = DropUnknownSource
+				case counted == 0:
+					dropped = DropSeriesLimit
 				}
-				if names == nil {
-					names = r.names
-				}
-				if r.tally.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version) {
-					counted++
+				if dropped != "" {
+					a.Dropped(dropped)
 				}
 			})
-			switch {
-			case claimed == 0:
-				dropped = DropUnknownSource
-			case counted == 0:
-				dropped = DropSeriesLimit
-			}
-			if dropped != "" {
-				r.tally.Dropped(dropped)
-			}
 		})
 		if !ran {
 			continue
@@ -454,7 +456,7 @@ func parseErrorCategory(err error) string {
 // drop records a datagram and its drop reason together, so the datagram
 // counter never runs ahead of the outcomes.
 func (r *Receiver) drop(reason DropReason, src netip.Addr, detail string) {
-	if !r.intake(func() { r.tally.Datagram(); r.tally.Dropped(reason) }) {
+	if !r.intake(func() { r.tally.Account(func(a *Account) { a.Datagram(); a.Dropped(reason) }) }) {
 		return
 	}
 	r.logDrop(reason, src, detail)

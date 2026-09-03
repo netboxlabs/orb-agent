@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -358,4 +359,28 @@ func TestTally_LiveSeriesNeverReachTheSDKFold(t *testing.T) {
 		}
 	}
 	assert.Equal(t, maxSeries, points, "every live series exported with its attributes")
+}
+
+// A datagram and its outcome land under one tally lock, so an export taken
+// while a datagram is being accounted sees both or neither.
+func TestTally_AccountLandsADatagramAndItsOutcomeTogether(t *testing.T) {
+	ta := NewTally(testLogger)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	go ta.Account(func(a *Account) {
+		a.Datagram()
+		close(entered)
+		<-release
+		a.Dropped(DropMalformed)
+	})
+	<-entered
+	seen := make(chan [2]int64, 1)
+	go func() { seen <- [2]int64{ta.datagramCount(), ta.droppedCount(DropMalformed)} }()
+	select {
+	case got := <-seen:
+		t.Fatalf("an export read the tally mid-transaction: %v", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	assert.Equal(t, [2]int64{1, 1}, <-seen, "both landed before anything could read")
 }

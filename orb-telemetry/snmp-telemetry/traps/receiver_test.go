@@ -774,3 +774,20 @@ func TestReceiver_CredentialKeysAreInjective(t *testing.T) {
 	assert.NotEqual(t, userSetKey([]V3User{{Username: "ab", AuthPassphrase: "c"}}), userSetKey([]V3User{{Username: "a", AuthPassphrase: "bc"}}))
 	assert.Equal(t, userSetKey(ua), userSetKey(ua))
 }
+
+// The receiver accounts a datagram and its outcome in one tally transaction,
+// so a periodic export taken while the claims are being visited sees the
+// datagram together with its count, never the datagram alone.
+func TestReceiver_AccountsADatagramAndItsCountUnderOneTallyLock(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "core")
+	seen := make(chan [2]int64, 1)
+	h.rcv.setDuringCount(func() {
+		go func() {
+			seen <- [2]int64{h.tally.datagramCount(), h.tally.receivedCount(src.String(), "core", "linkDown", V2c)}
+		}()
+		time.Sleep(50 * time.Millisecond)
+	})
+	h.send(t, v2cTrap("public"))
+	assert.Equal(t, [2]int64{1, 1}, <-seen, "the export waited for the outcome")
+}
