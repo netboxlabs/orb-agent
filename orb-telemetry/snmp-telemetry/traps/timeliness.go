@@ -1,6 +1,9 @@
 package traps
 
-import "time"
+import (
+	"container/list"
+	"time"
+)
 
 // timeWindow is RFC 3414's bound on how far behind its engine's clock a
 // message may be and still count as timely, in seconds.
@@ -13,20 +16,22 @@ const maxEngineBoots = 2147483647
 // maxEngines bounds the clock map. A registered sender holding a v3
 // credential can authenticate under any engine ID it chooses, since the key
 // localises against the ID the message supplies, so the map cannot be left
-// to grow with the IDs seen. Past the bound the engine seen longest ago is
+// to grow with the IDs seen. Past the bound the engine used longest ago is
 // evicted, and loses its replay protection until it is seen again; ten
 // thousand is far more engines than the addresses a socket's policies name.
+// The order is kept as engines are used, so an eviction costs no scan: a
+// credential holder churning engine IDs pays the receive goroutine nothing
+// beyond the localisation it already paid for.
 const maxEngines = 10000
 
 // engineClock is what the receiver keeps for one sending engine: the boots
-// and time it last learned, when it learned them, so the engine's current
-// time can be estimated without a message, and when it was last seen, which
-// decides eviction.
+// and time it last learned, and when it learned them, so the engine's current
+// time can be estimated without a message.
 type engineClock struct {
+	id      string
 	boots   uint32
 	time    uint32
 	learned time.Time
-	seen    time.Time
 }
 
 // timeliness is the non-authoritative side of RFC 3414 section 3.2.7. A trap's
@@ -40,16 +45,19 @@ type engineClock struct {
 //
 // The state is in memory and relearned after a restart, which is what the
 // RFC expects of a non-authoritative engine. It is read and written only by
-// the receive goroutine, so it needs no lock. Every engine ID here arrived in
-// a message that verified against a registered credential, so the map is
-// bounded by the devices that hold those credentials.
+// the receive goroutine, so it needs no lock. Every engine here arrived in a
+// message that verified against a registered credential, keyed by the
+// receiver with the sender's address, so a device can poison only its own.
 type timeliness struct {
-	clocks map[string]engineClock
-	now    func() time.Time
+	clocks map[string]*list.Element
+	// order holds the engines most recently used first; the back is the
+	// next to be evicted.
+	order *list.List
+	now   func() time.Time
 }
 
 func newTimeliness(now func() time.Time) *timeliness {
-	return &timeliness{clocks: make(map[string]engineClock), now: now}
+	return &timeliness{clocks: make(map[string]*list.Element), order: list.New(), now: now}
 }
 
 // check reports whether a message carrying boots and engineTime from the
@@ -61,14 +69,20 @@ func (w *timeliness) check(engineID string, boots, engineTime uint32) bool {
 		return false
 	}
 	now := w.now()
-	c, known := w.clocks[engineID]
+	el, known := w.clocks[engineID]
 	if !known {
-		w.makeRoom()
-		w.clocks[engineID] = engineClock{boots: boots, time: engineTime, learned: now, seen: now}
+		if w.order.Len() >= maxEngines {
+			oldest := w.order.Back()
+			delete(w.clocks, oldest.Value.(*engineClock).id)
+			w.order.Remove(oldest)
+		}
+		w.clocks[engineID] = w.order.PushFront(&engineClock{id: engineID, boots: boots, time: engineTime, learned: now})
 		return true
 	}
+	c := el.Value.(*engineClock)
 	if boots > c.boots {
-		w.clocks[engineID] = engineClock{boots: boots, time: engineTime, learned: now, seen: now}
+		c.boots, c.time, c.learned = boots, engineTime, now
+		w.order.MoveToFront(el)
 		return true
 	}
 	if boots < c.boots {
@@ -81,26 +95,8 @@ func (w *timeliness) check(engineID string, boots, engineTime uint32) bool {
 	if int64(engineTime) > estimate {
 		c.time, c.learned = engineTime, now
 	}
-	c.seen = now
-	w.clocks[engineID] = c
+	w.order.MoveToFront(el)
 	return true
-}
-
-// makeRoom evicts the engine seen longest ago when the map is at its bound.
-// A scan of the map is the cost of one new engine, paid only at the bound.
-func (w *timeliness) makeRoom() {
-	if len(w.clocks) < maxEngines {
-		return
-	}
-	var oldest string
-	var oldestSeen time.Time
-	first := true
-	for id, c := range w.clocks {
-		if first || c.seen.Before(oldestSeen) {
-			oldest, oldestSeen, first = id, c.seen, false
-		}
-	}
-	delete(w.clocks, oldest)
 }
 
 // size is a test accessor.

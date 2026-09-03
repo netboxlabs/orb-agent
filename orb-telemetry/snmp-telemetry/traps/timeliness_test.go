@@ -58,3 +58,24 @@ func TestTimeliness_EvictsTheEngineSeenLongestAgo(t *testing.T) {
 	assert.True(t, w.check("e1", 4, 1000), "e1 was the one seen longest ago: relearned, so lower boots pass")
 	assert.False(t, w.check("e0", 4, 1000), "e0 was kept, so lower boots are still a replay")
 }
+
+// Eviction is by recency of use, kept in order as engines are touched, so a
+// new engine at the cap costs no scan of the map. Refreshing the oldest
+// engine moves it to the front; the next new engine evicts the one that
+// became oldest.
+func TestTimeliness_EvictionOrderFollowsUse(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	for i := range maxEngines {
+		assert.True(t, w.check(fmt.Sprintf("e%d", i), 1, 1))
+	}
+	assert.True(t, w.check("e0", 1, 1), "touch the oldest")
+	assert.True(t, w.check("e2", 1, 1), "and the third oldest")
+	assert.True(t, w.check("new1", 1, 1))
+	assert.True(t, w.check("new2", 1, 1))
+	assert.Equal(t, maxEngines, w.size())
+	assert.True(t, w.check("e1", 0, 1), "e1 was evicted first: relearned, so lower boots pass")
+	assert.True(t, w.check("e3", 0, 1), "e3 second")
+	assert.False(t, w.check("e0", 0, 1), "e0 was kept")
+	assert.False(t, w.check("e2", 0, 1), "e2 was kept")
+}
