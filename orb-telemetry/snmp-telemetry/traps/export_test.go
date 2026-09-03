@@ -317,3 +317,45 @@ func TestTally_BaselinesAreBounded(t *testing.T) {
 	assert.Equal(t, maxBaselines, ta.baselineCount())
 	assert.LessOrEqual(t, ta.seriesCount()+ta.baselineCount(), 2*maxSeries)
 }
+
+// The SDK keeps the last of its cardinality-limit slots for its own overflow
+// point, so a tally holding as many live series as the limit would have one
+// of them folded, losing its policy and device. The cap is one short of the
+// limit, and a provider configured exactly as this process configures its
+// own exports every live series with its attributes intact.
+func TestTally_LiveSeriesNeverReachTheSDKFold(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	metrics.SetMeterForTest(provider.Meter("test"))
+	t.Cleanup(metrics.ResetMeter)
+
+	ta := NewTally(testLogger)
+	ta.Register()
+	t.Cleanup(ta.Close)
+	for i := range seriesLimit {
+		ta.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
+	}
+	for i := range maxSeries - seriesLimit {
+		ta.Received("198.51.100.1", fmt.Sprintf("p%d", i), "linkUp", V2c)
+	}
+	require.Equal(t, maxSeries, ta.seriesCount())
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	points := 0
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != receivedName {
+				continue
+			}
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				points++
+				for _, kv := range dp.Attributes.ToSlice() {
+					assert.NotEqual(t, "otel.metric.overflow", string(kv.Key), "no live series was folded")
+				}
+			}
+		}
+	}
+	assert.Equal(t, maxSeries, points, "every live series exported with its attributes")
+}

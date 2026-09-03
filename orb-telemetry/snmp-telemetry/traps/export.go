@@ -37,8 +37,12 @@ const (
 // counted as a series_limit drop rather than under a series no policy owns:
 // every series in the map carries the policy that can withdraw it. Nothing
 // can push the map past maxSeries.
+//
+// maxSeries is one short of the SDK's limit: the SDK keeps its last slot for
+// its own overflow point, so a tally offering exactly the limit would have
+// one arbitrary series folded.
 const (
-	maxSeries       = metrics.CardinalityLimit
+	maxSeries       = metrics.CardinalityLimit - 1
 	overflowReserve = 100
 	seriesLimit     = maxSeries - overflowReserve
 )
@@ -209,9 +213,10 @@ func (t *Tally) Dropped(r DropReason) {
 	t.dropped[r]++
 }
 
-// Datagram counts one datagram read from the socket, before any decision, so
-// the gap against received plus dropped is the loss an operator cannot
-// otherwise see.
+// Datagram counts one datagram. The receiver records it together with the
+// datagram's outcome, a drop or a count, so the two sides of the accounting
+// agree in every export, including a final one taken while a datagram is in
+// flight.
 func (t *Tally) Datagram() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
