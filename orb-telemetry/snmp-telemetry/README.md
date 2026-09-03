@@ -55,10 +55,12 @@ Usage of snmp-telemetry:
 The policy API has no authentication. Anyone who can reach the listener can
 create a policy, and a policy names the SNMP credentials to send and the host to
 send them to, so reaching the listener is enough to make the backend poll
-arbitrary hosts with whatever credentials the caller supplies. `--host`
-therefore defaults to `localhost`: the agent runs this backend as a child
-process and reaches it over the loopback interface, so nothing legitimate needs
-a wider bind.
+arbitrary hosts with whatever credentials the caller supplies. A policy body
+also makes the process bind a UDP socket, on any local address and port it is
+permitted to bind, one per distinct `listen` string and with no cap on how many
+it opens. `--host` therefore defaults to `localhost`: the agent runs this
+backend as a child process and reaches it over the loopback interface, so
+nothing legitimate needs a wider bind.
 
 Passing `--host 0.0.0.0` publishes that unauthenticated API on every interface.
 Do it only behind access control of your own, such as a network policy or a
@@ -209,8 +211,8 @@ unknown addresses are never acknowledged, so the socket does not answer
 strangers.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
-authentication**, in which case the backend authenticates it with the USM user
-the policy for that device carries. No trap-specific credentials are
+authentication**, in which case the backend authenticates it with a USM user a
+policy on that socket carries. No trap-specific credentials are
 configured. v1 and v2c traps are never authenticated by any setting: the
 community they carry is not checked, because a check would be mistaken for
 authentication and would protect nothing against a sender who can read the
