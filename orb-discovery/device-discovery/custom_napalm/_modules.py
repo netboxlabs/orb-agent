@@ -180,7 +180,40 @@ def to_payload(members: dict[int | None, MemberModules]) -> dict | None:
     return {"members": out_members}
 
 
-def _validate_bay(bay: ModuleBay, *, depth: int) -> dict | None:  # noqa: C901
+def _log_blank_model_drop(bay: ModuleBay, sub_bays: list[dict]) -> None:
+    """
+    Say why a bay carrying no model was dropped, and what went down with it.
+
+    Three cases, deliberately at two different levels. A driver that claimed it
+    named the part and did not is a bug, so it is loud: the alternative is
+    translate substituting a placeholder, and every such part across a fleet
+    then collapsing into one ModuleType under the real vendor's name. A part
+    with neither a part number nor a description has nothing to call it, which
+    is correct to skip and not something an operator can act on -- so it stays
+    at debug, unless dropping it also discards usable sub-bays, which they
+    should be told about.
+    """
+    orphaned = f", taking {len(sub_bays)} usable sub-bay(s) with it" if sub_bays else ""
+    if bay.module.identified:
+        logger.warning(
+            "module bay dropped: identified module has no model%s",
+            orphaned,
+            extra={"bay_name": bay.name},
+        )
+    elif sub_bays:
+        logger.warning(
+            "module bay dropped: nothing to name the part%s",
+            orphaned,
+            extra={"bay_name": bay.name},
+        )
+    else:
+        logger.debug(
+            "module bay dropped: nothing to name the part",
+            extra={"bay_name": bay.name},
+        )
+
+
+def _validate_bay(bay: ModuleBay, *, depth: int) -> dict | None:
     """Recursively validate one ModuleBay. Returns serialized dict or None."""
     if depth > MAX_BAY_DEPTH:
         logger.warning(
@@ -216,29 +249,7 @@ def _validate_bay(bay: ModuleBay, *, depth: int) -> dict | None:  # noqa: C901
     # real value and defeat both checks below.
     model = (bay.module.model or "").strip()
     if not model:
-        orphaned = f", taking {len(sub_bays)} usable sub-bay(s) with it" if sub_bays else ""
-        if bay.module.identified:
-            # A driver claimed it named this part and did not. Loud, because
-            # the alternative is translate substituting a placeholder and every
-            # such part fleet-wide collapsing into one ModuleType.
-            logger.warning(
-                "module bay dropped: identified module has no model%s",
-                orphaned,
-                extra={"bay_name": bay.name},
-            )
-        elif sub_bays:
-            logger.warning(
-                "module bay dropped: nothing to name the part%s",
-                orphaned,
-                extra={"bay_name": bay.name},
-            )
-        else:
-            # Serial but neither part number nor description. Correct to skip,
-            # and nothing an operator can act on.
-            logger.debug(
-                "module bay dropped: nothing to name the part",
-                extra={"bay_name": bay.name},
-            )
+        _log_blank_model_drop(bay, sub_bays)
         return None
     module: dict[str, Any] = {
         "model": model,

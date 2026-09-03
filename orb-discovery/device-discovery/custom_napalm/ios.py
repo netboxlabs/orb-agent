@@ -928,6 +928,14 @@ def _ios_claim_slot(
         claimed_slots.add((None, slot_match.group(1)))
 
 
+#: What IOS prints in the PID column for a part it cannot identify. Compared
+#: case-folded: the exact casing is not a documented contract, just what one
+#: 2960S image happened to print, and a release that wrote it differently would
+#: otherwise have the placeholder read as a real part number and the row
+#: dropped -- the very bug this exists to remove.
+_IOS_UNIDENTIFIED_PID = "unspecified"
+
+
 def _parse_inventory_rows(
     rows: list[dict],
     vc_mode: bool,
@@ -986,7 +994,7 @@ def _parse_inventory_rows(
         # `Unspecified` is a Cisco placeholder, not a model. Normalising it here
         # rather than in the shared layer is deliberate: which strings are
         # placeholders is vendor knowledge.
-        identified = bool(pid) and pid != "Unspecified"
+        identified = bool(pid) and pid.casefold() != _IOS_UNIDENTIFIED_PID
         model = pid if identified else descr
         if not model:
             logger.debug(

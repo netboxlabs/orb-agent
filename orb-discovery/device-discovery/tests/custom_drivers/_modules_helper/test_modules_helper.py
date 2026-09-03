@@ -448,3 +448,36 @@ def test_dropping_a_parent_names_the_children_lost_with_it(caplog):
     assert any("1 usable" in r.getMessage() for r in caplog.records), (
         f"the count of lost children must be named, got {[r.getMessage() for r in caplog.records]}"
     )
+
+
+def test_unidentified_blank_model_warns_when_it_takes_sub_bays_with_it(caplog):
+    """
+    The quiet drop stops being quiet once usable hardware goes down with it.
+
+    A part with neither a part number nor a description is normally skipped at
+    debug: correct, and nothing an operator can act on. But _validate_bay
+    recurses, so a parent returning None takes its children too. When those
+    children were themselves usable, the operator has lost real inventory and
+    must be told, even though the parent alone would not have been worth a
+    word.
+    """
+    child = ModuleBay(
+        name="Te1/1/1", position="Te1/1/1",
+        module=ModuleEntry(model="SFP-10G-LR", serial="OPT1", type="transceiver"),
+    )
+    parent = ModuleBay(
+        name="1", position="1",
+        module=ModuleEntry(
+            model="", serial="SN1", type="linecard",
+            description="", identified=False, sub_bays=[child],
+        ),
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm._modules"):
+        payload = to_payload({None: MemberModules(bays=[parent], interfaces_by_bay={})})
+
+    assert payload is None
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("1 usable" in m for m in warnings), (
+        f"losing a usable sub-bay must warn, not stay at debug, got {warnings}"
+    )

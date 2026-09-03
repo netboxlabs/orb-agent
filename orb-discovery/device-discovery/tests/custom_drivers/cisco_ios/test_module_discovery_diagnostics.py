@@ -332,3 +332,27 @@ class TestModuleDiscoveryDiagnostics:
         assert by_serial["OPT0001113"].module_type.manufacturer.name == "Unknown"
         assert by_serial["OPT0001111"].module_type.manufacturer.name == "Cisco"
         assert by_serial["OPT0001113"].module_type.model == "SFP-10GBase-CX1"
+
+    def test_the_placeholder_is_recognised_whatever_its_case(self) -> None:
+        """
+        `Unspecified` is matched case-insensitively.
+
+        The exact casing is not a documented contract, it is what one 2960S
+        image happened to print. A platform or release that writes
+        `unspecified` or `UNSPECIFIED` would otherwise have its placeholder
+        read as a real part number, fail the transceiver gate, and be dropped
+        with a warning -- which is precisely the bug this feature exists to
+        remove, reappearing on a device nobody thought to check.
+        """
+        for spelling in ("Unspecified", "unspecified", "UNSPECIFIED"):
+            rows = [
+                {"name": "GigabitEthernet1/0/25", "descr": "1000BaseSX SFP",
+                 "pid": spelling, "vid": "", "sn": "OPT0081025"},
+            ]
+
+            _, transceivers, _ = _parse_inventory_rows(rows, False)
+
+            optic = transceivers[None]["GigabitEthernet1/0/25"]
+            assert optic.identified is False, f"{spelling!r} must read as a placeholder"
+            assert optic.model == "1000BaseSX SFP"
+            assert optic.type == "transceiver"
