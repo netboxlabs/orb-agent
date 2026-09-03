@@ -867,3 +867,28 @@ func TestReceiver_ResolvesASourcesCredentialsOncePerGeneration(t *testing.T) {
 	assert.Equal(t, 1, h.rcv.tableBuilds(), "one table for the source's credentials")
 	assert.Equal(t, 1, h.rcv.userSetResolutions(), "and the user set resolved once, not per datagram")
 }
+
+// An inform is acknowledged inside the same intake section that counted it,
+// so a close cannot land between the count and the acknowledgement: it waits
+// for both, and the device never retransmits an inform that was counted.
+func TestReceiver_AcknowledgesAnInformBeforeACloseCanIntervene(t *testing.T) {
+	h := newHarness(t)
+	h.registerSender(t, "core")
+	require.NoError(t, h.sender.SetReadDeadline(time.Now().Add(2*time.Second)))
+	stopped := make(chan struct{})
+	h.rcv.setDuringCount(func() {
+		go func() {
+			defer close(stopped)
+			h.rcv.Stop()
+		}()
+		time.Sleep(50 * time.Millisecond)
+	})
+	h.send(t, v2cInform("public"))
+	buf := make([]byte, 512)
+	n, err := h.sender.Read(buf)
+	require.NoError(t, err, "the acknowledgement was sent before the socket closed")
+	pkt, err := (&gosnmp.GoSNMP{Version: gosnmp.Version2c}).UnmarshalTrap(buf[:n], false)
+	require.NoError(t, err)
+	assert.Equal(t, gosnmp.GetResponse, pkt.PDUType)
+	<-stopped
+}

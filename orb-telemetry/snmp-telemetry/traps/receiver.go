@@ -417,23 +417,21 @@ func (r *Receiver) loop() {
 					a.Dropped(dropped)
 				}
 			})
+			// An inform that parsed and was attributed is acknowledged
+			// whether or not a series could be allocated for it: the limit
+			// is the tally's, not the device's, and an unacknowledged inform
+			// is sent again. It is acknowledged inside the intake section
+			// that counted it, so a close cannot land between the two and
+			// have the device retransmit an inform already counted.
+			if tr.Inform && dropped != DropUnknownSource {
+				r.acknowledge(pkt, from)
+			}
 		})
 		if !ran {
 			continue
 		}
-		if dropped == DropUnknownSource {
-			r.logDrop(dropped, src, "")
-			continue
-		}
 		if dropped != "" {
 			r.logDrop(dropped, src, "")
-		}
-		// An inform that parsed and was attributed is acknowledged whether
-		// or not a series could be allocated for it: the limit is the
-		// tally's, not the device's, and an unacknowledged inform is sent
-		// again.
-		if tr.Inform {
-			r.acknowledge(pkt, from)
 		}
 	}
 }
