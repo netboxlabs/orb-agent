@@ -175,7 +175,11 @@ A trap is counted, not stored. Three metrics describe what arrived:
   keep their totals, so a policy recreated under the same name continues
   the count rather than restarting it, and nothing downstream sees a
   decrease. A trap that was already in hand when its policy was deleted is
-  kept the same way and stays unexported until the policy comes back.
+  kept the same way and stays unexported until the policy comes back. A
+  retained series that has to make way for a live one leaves its total in a
+  baseline tier of the same size as the series ceiling, from which it
+  resumes if it reappears, so the backend holds at most twice the ceiling
+  in memory.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
   `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window`,
