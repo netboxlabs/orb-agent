@@ -1,6 +1,7 @@
 package traps
 
 import (
+	"errors"
 	"log/slog"
 	"net/netip"
 	"sync"
@@ -27,6 +28,7 @@ type Pool struct {
 
 	mu      sync.Mutex
 	entries map[string]*poolEntry
+	closed  bool
 }
 
 type poolEntry struct {
@@ -40,6 +42,7 @@ type poolEntry struct {
 // the pool was closed, does nothing.
 type Lease struct {
 	pool   *Pool
+	entry  *poolEntry
 	listen string
 	policy string
 	once   sync.Once
@@ -53,10 +56,19 @@ func NewPool(tally *Tally, names map[string]string, logger *slog.Logger) *Pool {
 
 // Acquire registers the policy's devices and users on the socket for listen,
 // binding it first when no policy holds it yet. A bind failure is returned as
-// Listen reports it and leaves the pool unchanged.
+// Listen reports it and leaves the pool unchanged. A closed pool binds
+// nothing: the socket would have no one left to stop it.
+//
+// One lease per (listen, policy) pair is what the pool expects. The registry
+// replaces a policy's claims rather than accumulating them, so a second
+// acquire for the same pair would leave the policy holding the entry twice
+// while naming its devices once.
 func (p *Pool) Acquire(listen, policy string, devices []Device, users []V3User) (*Lease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return nil, errors.New("trap pool is closed")
+	}
 	e, ok := p.entries[listen]
 	if !ok {
 		reg := NewRegistry()
@@ -72,25 +84,40 @@ func (p *Pool) Acquire(listen, policy string, devices []Device, users []V3User) 
 	}
 	e.registry.Register(policy, devices, users)
 	e.refs++
-	return &Lease{pool: p, listen: listen, policy: policy}, nil
+	return &Lease{pool: p, entry: e, listen: listen, policy: policy}, nil
 }
 
-// Release withdraws the policy. The tally is withdrawn even when the entry is
-// gone, so a policy released after Close still stops exporting.
+// Release withdraws the policy. The tally is withdrawn even when the entry
+// this lease held is gone, so a policy released after Close still stops
+// exporting.
+//
+// The entry is matched by identity, not by listen string alone. A pool that
+// was closed and then reopened, or any other path that replaces the entry
+// under a live lease, would otherwise have this release decrement a holder
+// count it never incremented and close a socket another policy is reading.
 func (l *Lease) Release() {
 	l.once.Do(func() {
 		p := l.pool
 		p.mu.Lock()
-		p.tally.Withdraw(l.policy)
 		e, ok := p.entries[l.listen]
+		if !ok || e != l.entry {
+			p.tally.Withdraw(l.policy)
+			p.mu.Unlock()
+			return
+		}
+		// The registry first, then the tally, so nothing is counted for a
+		// policy whose addresses the registry still answers for. The reverse
+		// window stays open: a datagram already past its lookup when the
+		// withdrawal runs can still count once for the released policy. That
+		// residual count is accepted, since closing it would mean holding a
+		// lock across the whole receive path.
+		e.registry.Withdraw(l.policy)
+		p.tally.Withdraw(l.policy)
+		e.refs--
 		var closing *Receiver
-		if ok {
-			e.registry.Withdraw(l.policy)
-			e.refs--
-			if e.refs == 0 {
-				delete(p.entries, l.listen)
-				closing = e.receiver
-			}
+		if e.refs == 0 {
+			delete(p.entries, l.listen)
+			closing = e.receiver
 		}
 		p.mu.Unlock()
 		// Stopping waits for the read goroutine, up to its bound; that wait
@@ -102,11 +129,13 @@ func (l *Lease) Release() {
 	})
 }
 
-// Close stops every receiver. Called once at shutdown.
+// Close stops every receiver and refuses every later Acquire. Called once at
+// shutdown.
 func (p *Pool) Close() {
 	p.mu.Lock()
 	entries := p.entries
 	p.entries = make(map[string]*poolEntry)
+	p.closed = true
 	p.mu.Unlock()
 	for _, e := range entries {
 		e.receiver.Stop()

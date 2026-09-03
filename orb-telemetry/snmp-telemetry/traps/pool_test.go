@@ -135,3 +135,52 @@ func TestPool_CloseStopsEverythingAndLaterReleaseIsHarmless(t *testing.T) {
 	assert.NotPanics(t, b.Release)
 	assert.NotPanics(t, p.Close)
 }
+
+// A lease whose entry was replaced under it must not touch the replacement.
+// Releasing it decrements nothing and closes nothing: the socket it names now
+// belongs to another policy.
+func TestPool_StaleLeaseDoesNotTouchAFreshEntry(t *testing.T) {
+	tally := NewTally(testLogger)
+	p := NewPool(tally, BuildNames(nil), testLogger)
+	t.Cleanup(p.Close)
+
+	stale, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.NoError(t, err)
+	p.Close()
+	// Close refuses every later Acquire, which is what keeps this sequence out
+	// of the running agent. The flag is cleared here to reach the case the
+	// flag does not cover: an entry replaced under a lease still naming the
+	// old one.
+	p.mu.Lock()
+	p.closed = false
+	p.mu.Unlock()
+
+	fresh, err := p.Acquire("127.0.0.1:0", "edge", nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(fresh.Release)
+	addr, ok := p.addr("127.0.0.1:0")
+	require.True(t, ok)
+
+	stale.Release()
+
+	assert.Equal(t, 1, p.size(), "the fresh entry is still in the pool")
+	assert.Equal(t, 1, p.refs("127.0.0.1:0"), "with the holder it counted for itself")
+	src, conn := senderAddr(t, addr)
+	require.True(t, p.register("127.0.0.1:0", "edge", []Device{{Policy: "edge", Addr: src}}, nil))
+	_, err = conn.Write(v2cTrap("public"))
+	require.NoError(t, err)
+	waitFor(t, 1, func() int64 { return tally.receivedCount(src.String(), "edge", "linkDown", V2c) })
+}
+
+// Acquiring after Close binds nothing. The socket would have no one left to
+// stop it, since Close is what stops them and it has already run.
+func TestPool_AcquireAfterCloseFails(t *testing.T) {
+	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p.Close()
+
+	lease, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, lease)
+	assert.Contains(t, err.Error(), "trap pool is closed")
+	assert.Equal(t, 0, p.size(), "and left no entry behind")
+}
