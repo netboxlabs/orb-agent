@@ -666,3 +666,61 @@ func TestReceiver_CountsADatagramWithItsOutcome(t *testing.T) {
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
 	assert.Equal(t, int64(2), h.tally.datagramCount())
 }
+
+// A v2 trap PDU under wire version 1 is not a v1 trap: it is dropped as an
+// unsupported PDU, never counted as a coldStart under version 1.
+func TestReceiver_DropsAV2TrapPDUUnderVersion1(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "core")
+	h.send(t, trapWithVersion(0, "public"))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnsupportedPDU) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "coldStart", V1))
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V1))
+}
+
+// A parsed and attributed inform is acknowledged whether or not a series
+// could be allocated for it: the series limit is the tally's problem, not
+// the device's, and an unacknowledged inform is retransmitted.
+func TestReceiver_AcknowledgesAnInformTheSeriesLimitRefused(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "full")
+	fillSeries(t, h.tally)
+	h.tally.Received("203.0.113.1", "taker", "warmStart", V2c)
+	require.Equal(t, maxSeries, h.tally.seriesCount())
+	require.NoError(t, h.sender.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+	h.send(t, v2cInform("public"))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropSeriesLimit) })
+	buf := make([]byte, 512)
+	n, err := h.sender.Read(buf)
+	require.NoError(t, err, "the inform is acknowledged although it was not counted")
+	pkt, err := (&gosnmp.GoSNMP{Version: gosnmp.Version2c}).UnmarshalTrap(buf[:n], false)
+	require.NoError(t, err)
+	assert.Equal(t, gosnmp.GetResponse, pkt.PDUType)
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "full", "linkDown", V2c))
+}
+
+// A datagram's terminal drop after the claims visit, series_limit here, is
+// recorded in the same intake section as the datagram itself. A close that
+// arrives while that section runs waits for it, so the final export never
+// holds a datagram without an outcome.
+func TestReceiver_RecordsAPostClaimDropWithItsDatagram(t *testing.T) {
+	h := newHarness(t)
+	h.registerSender(t, "full")
+	fillSeries(t, h.tally)
+	h.tally.Received("203.0.113.1", "taker", "warmStart", V2c)
+	require.Equal(t, maxSeries, h.tally.seriesCount())
+
+	stopped := make(chan struct{})
+	h.rcv.setDuringCount(func() {
+		go func() {
+			defer close(stopped)
+			h.rcv.Stop()
+		}()
+		time.Sleep(50 * time.Millisecond)
+	})
+	h.send(t, v2cTrap("public"))
+	<-stopped
+	assert.Equal(t, int64(1), h.tally.datagramCount())
+	assert.Equal(t, int64(1), h.tally.droppedCount(DropSeriesLimit), "the outcome landed with the datagram, ahead of the close")
+}

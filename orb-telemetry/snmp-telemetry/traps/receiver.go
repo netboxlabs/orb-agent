@@ -309,8 +309,15 @@ func (r *Receiver) loop() {
 		// that registered no names uses the socket's. The visit counts under
 		// the registry's read lock, so the claims a count is attributed
 		// under are the claims at the moment it lands.
+		// One intake section decides the datagram's whole outcome: the
+		// datagram counter, the counts, and the drop when there is one, so
+		// a close arriving meanwhile waits for all of it and the final
+		// export never holds a datagram without an outcome. series_limit is
+		// a datagram outcome: one drop, and only when no claiming policy
+		// could count the trap.
 		first := true
 		claimed, counted := 0, 0
+		var dropped DropReason
 		ran := r.intake(func() {
 			r.tally.Datagram()
 			claimed = r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
@@ -327,23 +334,30 @@ func (r *Receiver) loop() {
 					counted++
 				}
 			})
+			switch {
+			case claimed == 0:
+				dropped = DropUnknownSource
+			case counted == 0:
+				dropped = DropSeriesLimit
+			}
+			if dropped != "" {
+				r.tally.Dropped(dropped)
+			}
 		})
 		if !ran {
 			continue
 		}
-		// The datagram is already counted with this outcome, so these two
-		// drops record the reason alone.
-		if claimed == 0 {
-			r.dropDecided(DropUnknownSource, src, "")
+		if dropped == DropUnknownSource {
+			r.logDrop(dropped, src, "")
 			continue
 		}
-		// series_limit is a datagram outcome: one drop, and only when no
-		// claiming policy could count the trap.
-		if counted == 0 {
-			r.dropDecided(DropSeriesLimit, src, "")
-			continue
+		if dropped != "" {
+			r.logDrop(dropped, src, "")
 		}
-
+		// An inform that parsed and was attributed is acknowledged whether
+		// or not a series could be allocated for it: the limit is the
+		// tally's, not the device's, and an unacknowledged inform is sent
+		// again.
 		if tr.Inform {
 			r.acknowledge(pkt, from)
 		}
@@ -410,15 +424,6 @@ func parseErrorCategory(err error) string {
 // counter never runs ahead of the outcomes.
 func (r *Receiver) drop(reason DropReason, src netip.Addr, detail string) {
 	if !r.intake(func() { r.tally.Datagram(); r.tally.Dropped(reason) }) {
-		return
-	}
-	r.logDrop(reason, src, detail)
-}
-
-// dropDecided records a drop reason for a datagram already counted in the
-// same intake section as its claims visit.
-func (r *Receiver) dropDecided(reason DropReason, src netip.Addr, detail string) {
-	if !r.intake(func() { r.tally.Dropped(reason) }) {
 		return
 	}
 	r.logDrop(reason, src, detail)
