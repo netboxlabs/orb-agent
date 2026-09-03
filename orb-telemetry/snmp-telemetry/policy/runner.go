@@ -212,6 +212,12 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	}
 
 	if policy.Scope.Traps != nil {
+		// Guarded here as well as in validatePolicy so a direct NewRunner call
+		// cannot slip past, the same way the interval, the timeout and the
+		// retry count are.
+		if err := validateTrapListen(policy.Scope.Traps.Listen); err != nil {
+			return nil, err
+		}
 		if pool == nil {
 			return nil, errors.New("policy declares scope.traps but this backend has no trap pool")
 		}

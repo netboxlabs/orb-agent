@@ -198,3 +198,14 @@ func schedulerGoroutines(t *testing.T) int {
 		buf = make([]byte, 2*len(buf))
 	}
 }
+
+// The listen string is re-checked in NewRunner as well as in validatePolicy,
+// so a direct call cannot hand the pool a string the API would have refused.
+func TestRunner_ValidatesTheListenString(t *testing.T) {
+	pool := newSpyPool()
+	_, err := NewRunner(t.Context(), testLogger, "p1", trapPolicy(nil, "trap.example:162"), &spyCollector{}, pool)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "scope.traps.listen")
+	assert.Contains(t, err.Error(), "host must be an IP address")
+	assert.Empty(t, pool.callSequence(), "and nothing was acquired")
+}
