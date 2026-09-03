@@ -228,9 +228,10 @@ trap is past what that ceiling accommodates. Name the devices you expect traps
 from. The backend bounds its own series at that ceiling: real series stop a
 hundred short of it, a trap for a series that does not exist yet is then
 counted under its policy with `device_ip` and `trap_name` both `other`, and
-once that room is used up too a trap whose policy has no overflow series yet
-is counted as a `series_limit` drop rather than under a series no policy
-owns. A sender spoofing addresses inside a wide prefix can fill the ceiling
+once that room is used up too a datagram that no claiming policy can count,
+because none has an overflow series yet, is a `series_limit` drop rather
+than a count under a series no policy owns; it is one drop per datagram,
+and a datagram one policy counts is not a drop. A sender spoofing addresses inside a wide prefix can fill the ceiling
 but cannot grow memory past it, the SDK never folds a series the backend
 chose to keep, and every series is withdrawn with the policy that made it. The clocks the receiver keeps for v3 engines are bounded the
 same way, at ten thousand engines, evicting the one used longest ago, in an
