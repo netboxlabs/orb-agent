@@ -186,3 +186,25 @@ func TestNilLoggerIsSafe(t *testing.T) {
 		WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
 	})
 }
+
+// A misspelled key under scope.traps is dropped like any other unknown key,
+// so the block is one of the narrowed types the warning covers.
+func TestUnknownKeyInsideTrapsIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets:
+        - host: 192.0.2.1
+      traps:
+        listen: "0.0.0.0:162"
+        accept_unknown: true
+`)
+	require.Contains(t, out, "accept_unknown")
+	assert.NotContains(t, out, "did_you_mean")
+}
