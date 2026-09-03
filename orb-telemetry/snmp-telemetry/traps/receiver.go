@@ -46,10 +46,18 @@ type Receiver struct {
 	params   *gosnmp.GoSNMP
 	usersGen uint64
 	// tables caches one credential table per distinct set of users, keyed
-	// by their contents; reset when the registry changes. Only the loop
-	// goroutine touches it.
-	tables map[string]*gosnmp.SnmpV3SecurityParametersTable
-	clocks *timeliness
+	// by their contents, and sourceKeys caches each source's key, so a
+	// source's user set is resolved once per registry generation rather
+	// than per datagram; both reset when the registry changes. Only the
+	// loop goroutine touches them. builds and resolutions are test counters.
+	tables     map[string]*gosnmp.SnmpV3SecurityParametersTable
+	sourceKeys map[netip.Addr]string
+	// statsMu guards the test counters and the cache sizes, which a test
+	// reads from its own goroutine.
+	statsMu     sync.Mutex
+	builds      int
+	resolutions int
+	clocks      *timeliness
 
 	stopOnce sync.Once
 	done     chan struct{}
@@ -187,15 +195,28 @@ func (r *Receiver) waitUntil(expired <-chan struct{}) {
 // but no Remove. Only the loop goroutine touches r.params and the cache, so
 // this needs no lock.
 func (r *Receiver) tableFor(src netip.Addr) *gosnmp.SnmpV3SecurityParametersTable {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
 	if gen := r.reg.Generation(); r.tables == nil || gen != r.usersGen {
 		r.tables = make(map[string]*gosnmp.SnmpV3SecurityParametersTable)
+		r.sourceKeys = make(map[netip.Addr]string)
 		r.usersGen = gen
 	}
-	users := r.reg.UsersAt(src)
-	key := userSetKey(users)
+	key, known := r.sourceKeys[src]
+	var users []V3User
+	if !known {
+		users = r.reg.UsersAt(src)
+		key = userSetKey(users)
+		r.sourceKeys[src] = key
+		r.resolutions++
+	}
 	if table, ok := r.tables[key]; ok {
 		return table
 	}
+	if known {
+		users = r.reg.UsersAt(src)
+	}
+	r.builds++
 	table := gosnmp.NewSnmpV3SecurityParametersTable(r.params.Logger)
 	for _, u := range users {
 		authProto, err := snmp.AuthProtocol(u.AuthProtocol)
@@ -224,8 +245,42 @@ func (r *Receiver) tableFor(src netip.Addr) *gosnmp.SnmpV3SecurityParametersTabl
 	return table
 }
 
-// tableCacheSize is a test accessor.
-func (r *Receiver) tableCacheSize() int { return len(r.tables) }
+// Test accessors, read under statsMu.
+func (r *Receiver) tableCacheSize() int {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
+	return len(r.tables)
+}
+
+func (r *Receiver) tableBuilds() int {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
+	return r.builds
+}
+
+func (r *Receiver) userSetResolutions() int {
+	r.statsMu.Lock()
+	defer r.statsMu.Unlock()
+	return r.resolutions
+}
+
+// wireVersion reads the SNMP version integer off the first bytes of a
+// datagram: the outer SEQUENCE header, then an INTEGER of one byte. It is
+// what decides whether a credential table is needed at all, since only a v3
+// datagram is authenticated, and it costs nothing a parse would not.
+func wireVersion(b []byte) (int, bool) {
+	if len(b) < 2 || b[0] != 0x30 {
+		return 0, false
+	}
+	i := 2
+	if b[1]&0x80 != 0 {
+		i += int(b[1] & 0x7f)
+	}
+	if len(b) < i+3 || b[i] != 0x02 || b[i+1] != 0x01 {
+		return 0, false
+	}
+	return int(b[i+2]), true
+}
 
 // loop is the receive path, in the order the spec's section 6.2 gives: read,
 // canonicalise, look the source up before the datagram is judged on anything
@@ -258,7 +313,14 @@ func (r *Receiver) loop() {
 			continue
 		}
 
-		r.params.TrapSecurityParametersTable = r.tableFor(src)
+		// Only a v3 datagram is authenticated, so only a v3 datagram gets
+		// the source's credential table; a v1 or v2c one pays nothing for
+		// the credentials its source carries. A datagram whose version
+		// cannot be read gets the table and lets the parser judge it.
+		r.params.TrapSecurityParametersTable = nil
+		if v, ok := wireVersion(buf[:n]); !ok || v == int(gosnmp.Version3) {
+			r.params.TrapSecurityParametersTable = r.tableFor(src)
+		}
 		pkt, err := r.parse(buf[:n])
 		if err != nil {
 			r.drop(DropMalformed, src, parseErrorCategory(err))

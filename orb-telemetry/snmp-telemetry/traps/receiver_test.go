@@ -819,3 +819,51 @@ func TestReceiver_AttributesAnAuthNoPrivTrapToEveryCredentialItVerified(t *testi
 	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
 	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3NotInTimeWindow), "one principal at authNoPriv, its clock shared by both entries")
 }
+
+// The wire version is read off the first bytes of the datagram, before any
+// parse, so the credential table is built only for a v3 datagram.
+func TestWireVersion(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	cases := map[string]struct {
+		pkt  []byte
+		want int
+		ok   bool
+	}{
+		"v1":              {v1Trap("public", [4]byte{0, 0, 0, 0}, 2, 0), 0, true},
+		"v2c":             {v2cTrap("public"), 1, true},
+		"v3, long length": {v3AuthPrivTrap(t, trapAuthPrivUser, engineID), 3, true},
+		"garbage":         {[]byte{0x30, 0x01, 0xff}, 0, false},
+		"empty":           {nil, 0, false},
+		"not a sequence":  {[]byte{0x04, 0x03, 0x02, 0x01, 0x03}, 0, false},
+	}
+	for name, tc := range cases {
+		v, ok := wireVersion(tc.pkt)
+		assert.Equal(t, tc.ok, ok, name)
+		if ok {
+			assert.Equal(t, tc.want, v, name)
+		}
+	}
+	require.Greater(t, len(v3AuthPrivTrap(t, trapAuthPrivUser, engineID)), 127, "the v3 fixture exercises the long length form")
+}
+
+// A v1 or v2c datagram never touches the credential table, and a v3 source
+// has its user set resolved once per registry generation, however many
+// datagrams it sends and however many credentials it carries.
+func TestReceiver_ResolvesASourcesCredentialsOncePerGeneration(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	h := newHarness(t)
+	src := h.registerSender(t, "core", trapAuthPrivUser)
+	for range 5 {
+		h.send(t, v2cTrap("public"))
+	}
+	waitFor(t, 5, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
+	assert.Equal(t, 0, h.rcv.tableBuilds(), "no table for v2c")
+	assert.Equal(t, 0, h.rcv.tableCacheSize())
+
+	for i := range 5 {
+		h.send(t, v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 1, uint32(i+1)))
+	}
+	waitFor(t, 5, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+	assert.Equal(t, 1, h.rcv.tableBuilds(), "one table for the source's credentials")
+	assert.Equal(t, 1, h.rcv.userSetResolutions(), "and the user set resolved once, not per datagram")
+}
