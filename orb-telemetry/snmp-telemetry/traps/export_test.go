@@ -136,7 +136,9 @@ func TestTally_NeverExceedsTheCardinalityLimit(t *testing.T) {
 	assert.Equal(t, maxSeries, tally.seriesCount())
 	assert.Equal(t, int64(1), tally.receivedCount(OtherName, "p0", OtherName, V2c), "the first overflowing policy got its own series")
 	assert.Equal(t, int64(0), tally.receivedCount(OtherName, fmt.Sprintf("p%d", perPolicyRoom), OtherName, V2c), "the first past the reserve did not")
-	assert.Equal(t, int64(extra), tally.droppedCount(DropSeriesLimit), "and every one past the reserve is a series_limit drop")
+	assert.Equal(t, int64(0), tally.droppedCount(DropSeriesLimit), "the tally reports a refused count, the receiver decides whether the datagram is a drop")
+	assert.False(t, tally.Received("198.51.100.1", "p-late", "linkUp", V2c), "refused: no room for the policy's overflow series")
+	assert.True(t, tally.Received("198.51.100.1", "p0", "linkUp", V2c), "counted: this policy's overflow series exists")
 	assert.Equal(t, int64(0), tally.receivedCount(OtherName, OtherName, OtherName, V2c), "no series without a policy")
 
 	tally.Withdraw("p0")

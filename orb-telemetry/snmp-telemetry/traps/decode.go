@@ -45,9 +45,9 @@ const (
 	// DropUnsupportedVersion is a wire version this backend does not speak:
 	// anything but v1, v2c and v3. gosnmp keeps the integer as written.
 	DropUnsupportedVersion DropReason = "unsupported_version"
-	// DropSeriesLimit is a trap the tally could not count because its series
-	// does not exist yet and there is no room for one, not even for its
-	// policy's overflow series.
+	// DropSeriesLimit is a datagram no claiming policy could count because
+	// the trap's series does not exist yet and there is no room for one, not
+	// even for the policy's overflow series. Recorded once per datagram.
 	DropSeriesLimit       DropReason = "series_limit"
 	DropV3Unauthenticated DropReason = "v3_unauthenticated"
 	// DropV3NotInTimeWindow is an authenticated v3 trap whose engine boots

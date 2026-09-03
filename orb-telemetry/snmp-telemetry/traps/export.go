@@ -111,15 +111,19 @@ func NewTally(logger *slog.Logger) *Tally {
 // bounded by the policies an operator wrote, since the receiver drops every
 // source no policy names before it counts anything, and the series set is
 // bounded by maxSeries against a sender who can spoof inside that set.
-func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
+//
+// It reports whether the trap was counted. It is not when the series does
+// not exist and there is no room for it, not even for the policy's overflow
+// series; the receiver, which counts once per claiming policy, decides from
+// the outcomes whether the datagram as a whole is a series_limit drop.
+func (t *Tally) Received(deviceIP, policy, trapName string, v Version) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	k := receivedKey{deviceIP, policy, trapName, v}
 	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit && !t.evictDormant() {
 		k = receivedKey{OtherName, policy, OtherName, v}
 		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries && !t.evictDormant() {
-			t.dropped[DropSeriesLimit]++
-			return
+			return false
 		}
 	}
 	sr := t.received[k]
@@ -132,10 +136,11 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 		if !sr.live {
 			t.dormant[k] = struct{}{}
 		}
-		return
+		return true
 	}
 	sr.live = true
 	delete(t.dormant, k)
+	return true
 }
 
 // Activate marks a policy acquired, so its counts are exported again. The
