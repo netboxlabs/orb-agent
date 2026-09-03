@@ -245,3 +245,29 @@ func TestTally_DormantSeriesAreNotExportedAndResumeOnReturn(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, int64(4), v, "the series resumes from its total")
 }
+
+// Dormant series are tracked in a set of their own, so the overflow path
+// with nothing dormant costs a length check and an eviction costs one pop,
+// never a scan of the map. The set follows every transition: withdrawal
+// fills it, a revived series leaves it, an eviction takes from it, and a
+// count for a still-withdrawn policy leaves it in place.
+func TestTally_TracksDormantSeriesInASet(t *testing.T) {
+	ta := NewTally(testLogger)
+	for i := range seriesLimit {
+		ta.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
+	}
+	assert.Equal(t, 0, ta.dormantCount())
+	ta.Withdraw("core")
+	assert.Equal(t, seriesLimit, ta.dormantCount(), "withdrawal makes every series dormant")
+
+	ta.Received("10.0.0.1", "core", "linkDown", V2c)
+	assert.Equal(t, seriesLimit, ta.dormantCount(), "a count for a still-withdrawn policy stays dormant")
+	ta.Activate("core")
+	ta.Received("10.0.0.1", "core", "linkDown", V2c)
+	assert.Equal(t, seriesLimit-1, ta.dormantCount(), "a revived series leaves the set")
+
+	ta.Received("192.0.2.1", "edge", "linkUp", V2c)
+	assert.Equal(t, seriesLimit-2, ta.dormantCount(), "an eviction takes one from the set")
+	assert.Equal(t, seriesLimit, ta.seriesCount())
+	assert.Equal(t, int64(1), ta.receivedCount("192.0.2.1", "edge", "linkUp", V2c))
+}

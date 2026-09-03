@@ -77,6 +77,10 @@ type Tally struct {
 	// past its registry lookup when the release happened must not bring
 	// the policy's series back to life.
 	withdrawn map[string]struct{}
+	// dormant is the set of series not currently exported, kept beside the
+	// map so the overflow path never scans it: with nothing dormant the
+	// check is a length, and an eviction is one pop.
+	dormant map[receivedKey]struct{}
 
 	regMu        sync.Mutex
 	registration metric.Registration
@@ -89,6 +93,7 @@ func NewTally(logger *slog.Logger) *Tally {
 		received:  make(map[receivedKey]*series),
 		dropped:   make(map[DropReason]int64),
 		withdrawn: make(map[string]struct{}),
+		dormant:   make(map[receivedKey]struct{}),
 	}
 }
 
@@ -113,9 +118,14 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 		t.received[k] = sr
 	}
 	sr.n++
-	if _, withdrawn := t.withdrawn[policy]; !withdrawn {
-		sr.live = true
+	if _, withdrawn := t.withdrawn[policy]; withdrawn {
+		if !sr.live {
+			t.dormant[k] = struct{}{}
+		}
+		return
 	}
+	sr.live = true
+	delete(t.dormant, k)
 }
 
 // Activate marks a policy acquired, so its counts are exported again. The
@@ -128,13 +138,14 @@ func (t *Tally) Activate(policy string) {
 
 // evictDormant removes one dormant series to make room for a live one and
 // reports whether it found one. A retained total is worth less than a live
-// series, so it goes before a live series is folded.
+// series, so it goes before a live series is folded. The set makes this a
+// pop rather than a scan, so a sender past the limit cannot turn every
+// datagram into a walk of the map.
 func (t *Tally) evictDormant() bool {
-	for k, sr := range t.received {
-		if !sr.live {
-			delete(t.received, k)
-			return true
-		}
+	for k := range t.dormant {
+		delete(t.dormant, k)
+		delete(t.received, k)
+		return true
 	}
 	return false
 }
@@ -166,6 +177,7 @@ func (t *Tally) Withdraw(policy string) {
 	for k, sr := range t.received {
 		if k.policy == policy {
 			sr.live = false
+			t.dormant[k] = struct{}{}
 		}
 	}
 }
@@ -255,6 +267,12 @@ func (t *Tally) droppedCount(r DropReason) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.dropped[r]
+}
+
+func (t *Tally) dormantCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.dormant)
 }
 
 func (t *Tally) seriesCount() int {
