@@ -74,10 +74,10 @@ agent passes `--host localhost` explicitly to every backend it launches, so the
 wider default is what a standalone run gets, and there it is a listener nothing
 is guarding.
 
-The trap receiver, when `--trap-listen` is set, is the one listener in this
-process that has to be reachable from the device network, since devices send
-traps to it. It is off by default and opens no socket until asked. What it
-accepts and what protects it are described under **Receiving traps** below.
+A trap socket, when a policy declares one, is the one listener in this process
+that has to be reachable from the device network, since devices send traps to
+it. No socket is open until a policy asks for one. What it accepts and what
+protects it are described under **Receiving traps** below.
 
 ### What a poll puts on the wire
 
@@ -121,16 +121,54 @@ the case that hands one shared secret to the largest number of hosts.
 
 ### Receiving traps
 
-`--trap-listen host:port` opens a UDP socket for SNMP traps and informs from
-the devices policies poll. It is empty by default, and empty means no socket
-is opened. Port 162 is privileged; run with `CAP_NET_BIND_SERVICE` or choose a
-higher port and redirect to it. Do not run the backend as root to bind it.
+A policy receives SNMP traps and informs from the devices its targets expand
+to by declaring the address they arrive on:
+
+```yaml
+policies:
+  core:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: "v3"
+        security_level: "authPriv"
+        username: "netbox-poller"
+        auth_protocol: "SHA"
+        auth_passphrase: "authpass123"
+        priv_protocol: "AES"
+        priv_passphrase: "privpass123"
+      targets:
+        - host: "10.0.0.0/24"
+      traps:
+        listen: "0.0.0.0:162"
+```
+
+Without `traps`, a policy receives nothing and no socket is opened. `listen`
+is `host:port`; an empty host binds every interface, and the host must be an
+address, not a name. Port 162 is privileged; run with `CAP_NET_BIND_SERVICE`
+or choose a higher port and redirect to it. Do not run the backend as root to
+bind it.
+
+Policies naming the same `listen` string share one socket, opened when the
+first of them starts and closed when the last stops, the way pktvisor shares
+one input stream between the policies that name one tap. The string is the
+identity: `0.0.0.0:162` twice is one socket, while `0.0.0.0:162` and `:162`
+are two attempts at one port, and the second policy fails to start with the
+bind error in the API response. A policy on one socket never sees traps
+arriving on another.
+
+A policy may receive traps without polling. Omit `metrics_interval` and the
+policy schedules no collection at all; its targets are still expanded, because
+they are the addresses the socket accepts traps from, and its authentication
+still supplies the v3 users. A policy with neither `metrics_interval` nor
+`traps` is rejected as having nothing to do.
 
 A trap is counted, not stored. Three metrics describe what arrived:
 
 - `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps
-  from a device a running policy names, once per policy naming it, with the
-  same `device_ip` and `policy` labels every polled series carries.
+  from a device a policy on that socket names, once per policy naming it,
+  with the same `device_ip` and `policy` labels every polled series carries.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
   `v3_unauthenticated` or `no_trap_oid`. Hostile v3 traffic lands under
@@ -141,7 +179,7 @@ A trap is counted, not stored. Three metrics describe what arrived:
   at `noAuthNoPriv` is a supported configuration, and every trap it sends
   carries no authentication either, so all of its traps are dropped under this
   reason. This release cannot count them.
-- `snmp.traps_datagrams` counts every datagram read from the socket. Its gap
+- `snmp.traps_datagrams` counts every datagram read from any socket. Its gap
   against the other two is loss you cannot otherwise see.
 
 `trap_name` is drawn from a closed set: the six standard traps of RFC 1215 and
@@ -159,26 +197,20 @@ versions, so a policy naming a whole `/16` whose every host sends every kind of
 trap is past what that ceiling accommodates. Name the devices you expect traps
 from.
 
-**What the source address list is, and is not.** A trap from an address no
-running policy names is dropped and counted as `unknown_source`. That is a
-noise filter and an attribution rule. It is not authentication and it is not
-access control. SNMP traps are one-way UDP with no handshake, so anyone able
-to emit a packet with a chosen source address, which on a network without
-egress filtering is anyone, can have a trap accepted and attributed to any
-device a policy names. The addresses are not secret; they are the ones this
-backend visibly polls.
-
-`--trap-accept-unknown` counts traps from unknown addresses too, labelled by
-the source address with an empty `policy`. Informs from such addresses are
-counted but never acknowledged, so the socket does not answer strangers. A
-source address is spoofable, so the number of unknown addresses that get a
-`device_ip` of their own is capped at a thousand; every unknown source past
-that is still counted, under the `device_ip` value `other`. The flag is a
-debugging aid for a registration gap, not a way to watch the network.
+**What the source address list is, and is not.** A trap from an address that
+no policy on that socket names is dropped and counted as `unknown_source`,
+before it is parsed. That is a noise filter and an attribution rule. It is
+not authentication and it is not access control. SNMP traps are one-way UDP
+with no handshake, so anyone able to emit a packet with a chosen source
+address, which on a network without egress filtering is anyone, can have a
+trap accepted and attributed to any device a policy names. The addresses are
+not secret; they are the ones this backend visibly polls. Informs from
+unknown addresses are never acknowledged, so the socket does not answer
+strangers.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
 authentication**, in which case the backend authenticates it with the USM user
-the polling policy for that device carries. No trap-specific credentials are
+the policy for that device carries. No trap-specific credentials are
 configured. v1 and v2c traps are never authenticated by any setting: the
 community they carry is not checked, because a check would be mistaken for
 authentication and would protect nothing against a sender who can read the
@@ -190,18 +222,19 @@ segment the credentials cross.
 
 Two limits in this release. A policy target written as a hostname rather than
 an address is not matched against trap sources, so its traps count as
-`unknown_source`. A policy whose targets are all hostnames but which polls
-with v3 still contributes its USM user to the set the receiver can
-authenticate against, even though it claims no address. And a device behind a
-trap relay or NAT arrives as the relay's address; a v1 trap whose agent-addr
-field names a polled device is attributed to that device, but v2c and v3
-traps are attributed to the address they arrive from.
+`unknown_source`; a policy declaring `traps` whose targets are all hostnames
+starts with a warning saying so, and still contributes its USM user to the set
+the socket can authenticate against. And a device behind a trap relay or NAT
+arrives as the relay's address; a v1 trap whose agent-addr field names a
+polled device is attributed to that device, but v2c and v3 traps are
+attributed to the address they arrive from.
 
 ### Policy Configuration
 
 A policy names the targets to poll and the SNMP credentials to use. Each
-policy needs `metrics_interval`, the number of seconds between collection
-runs for every target in that policy.
+policy that polls needs `metrics_interval`, the number of seconds between
+collection runs for every target in that policy; a policy may omit it to
+receive traps only, as described under **Receiving traps**.
 
 Credentials go under `authentication`. Set it at the scope level as a
 fallback for every target, on individual targets, or both; a target with its
