@@ -118,24 +118,29 @@ func TestTally_FoldsNewSeriesPastTheCap(t *testing.T) {
 }
 
 // The overflow series live in the reserve, and the reserve is bounded too:
-// once it is down to the slots kept for the process-wide overflow series,
-// one per version, a policy whose overflow series does not exist yet is
-// counted there. So the map never holds more than the SDK's limit and the
-// SDK never folds a series the tally chose to keep.
+// once it is used up, a policy whose overflow series does not exist yet has
+// its trap counted as a drop under series_limit rather than under a series
+// no policy owns. So the map never holds more than the SDK's limit, the SDK
+// never folds a series the tally chose to keep, and every series carries the
+// policy that can withdraw it.
 func TestTally_NeverExceedsTheCardinalityLimit(t *testing.T) {
 	tally := NewTally(testLogger)
 	for i := range seriesLimit {
 		tally.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
 	}
-	perPolicyRoom := maxSeries - versionCount - seriesLimit
+	perPolicyRoom := maxSeries - seriesLimit
 	extra := 10
 	for i := range perPolicyRoom + extra {
 		tally.Received("198.51.100.1", fmt.Sprintf("p%d", i), "linkUp", V2c)
 	}
-	assert.LessOrEqual(t, tally.seriesCount(), maxSeries)
+	assert.Equal(t, maxSeries, tally.seriesCount())
 	assert.Equal(t, int64(1), tally.receivedCount(OtherName, "p0", OtherName, V2c), "the first overflowing policy got its own series")
 	assert.Equal(t, int64(0), tally.receivedCount(OtherName, fmt.Sprintf("p%d", perPolicyRoom), OtherName, V2c), "the first past the reserve did not")
-	assert.Equal(t, int64(extra), tally.receivedCount(OtherName, OtherName, OtherName, V2c), "and every one past the reserve counted process-wide")
+	assert.Equal(t, int64(extra), tally.droppedCount(DropSeriesLimit), "and every one past the reserve is a series_limit drop")
+	assert.Equal(t, int64(0), tally.receivedCount(OtherName, OtherName, OtherName, V2c), "no series without a policy")
+
+	tally.Withdraw("p0")
+	assert.Equal(t, int64(0), tally.receivedCount(OtherName, "p0", OtherName, V2c), "an overflow series is withdrawn with its policy")
 }
 
 // The counters are monotonic and the SDK reports a series from the provider's

@@ -30,17 +30,16 @@ const (
 //
 // The overflow series need room of their own, or the first of them would be
 // the entry past the limit and the SDK would fold an arbitrary series
-// instead. So real series stop at seriesLimit, a reserve below maxSeries
-// holds one overflow series per overflowing policy and version, and the last
-// versionCount slots of the reserve are kept for one process-wide overflow
-// series per version, where a policy whose own overflow series would not fit
-// is counted. Nothing can push the map past maxSeries.
+// instead. So real series stop at seriesLimit, and a reserve below maxSeries
+// holds one overflow series per overflowing policy and version. When the
+// reserve is used up too, a trap whose policy has no overflow series yet is
+// counted as a series_limit drop rather than under a series no policy owns:
+// every series in the map carries the policy that can withdraw it. Nothing
+// can push the map past maxSeries.
 const (
 	maxSeries       = metrics.CardinalityLimit
 	overflowReserve = 100
 	seriesLimit     = maxSeries - overflowReserve
-	// versionCount is how many Version values exist: V1, V2c and V3.
-	versionCount = 3
 )
 
 type receivedKey struct {
@@ -103,8 +102,9 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 	k := receivedKey{deviceIP, policy, trapName, v}
 	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit && !t.evictDormant() {
 		k = receivedKey{OtherName, policy, OtherName, v}
-		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries-versionCount && !t.evictDormant() {
-			k = receivedKey{OtherName, OtherName, OtherName, v}
+		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries && !t.evictDormant() {
+			t.dropped[DropSeriesLimit]++
+			return
 		}
 	}
 	sr := t.received[k]
