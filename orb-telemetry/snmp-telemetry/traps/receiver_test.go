@@ -564,3 +564,24 @@ func TestReceiver_ResolvesAndCountsTheClaimsAtomically(t *testing.T) {
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "the count went to the outgoing incarnation and left with it")
 	assert.Equal(t, int64(1), h.tally.retainedCount(src.String(), "core", "linkDown", V2c), "kept as a dormant total, not exported")
 }
+
+// An authNoPriv trap carries a digest and no encryption. One signed with a
+// wrong passphrase, that is a forged digest under a known username from a
+// registered source, must be rejected the same way an authPriv one is: the
+// receiver always installs a credential table, and gosnmp's table path
+// verifies the digest against the packet's own flags, not the receiver's.
+func TestReceiver_RejectsAForgedDigestOnAnAuthNoPrivTrap(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	h := newHarness(t)
+	src := h.registerSender(t, "core", trapAuthPrivUser)
+
+	forged := trapAuthPrivUser
+	forged.AuthPassphrase = "not-the-passphrase"
+	h.send(t, v3AuthNoPrivTrap(t, forged, engineID))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3), "a forged digest authenticates nothing")
+
+	h.send(t, v3AuthNoPrivTrap(t, trapAuthPrivUser, engineID))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+	assert.Equal(t, int64(1), h.tally.droppedCount(DropMalformed), "the genuine authNoPriv trap is counted")
+}

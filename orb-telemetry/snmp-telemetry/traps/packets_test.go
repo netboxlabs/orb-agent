@@ -159,6 +159,18 @@ func v3AuthPrivTrap(t *testing.T, u V3User, engineID string) []byte {
 // chosen by the test, which is what the receiver's time window judges.
 func v3AuthPrivTrapAt(t *testing.T, u V3User, engineID string, boots, engineTime uint32) []byte {
 	t.Helper()
+	return v3TrapAt(t, u, engineID, boots, engineTime, gosnmp.AuthPriv)
+}
+
+// v3AuthNoPrivTrap is v3AuthPrivTrap at the authNoPriv level: a real digest
+// over the wire bytes and a plaintext scoped PDU.
+func v3AuthNoPrivTrap(t *testing.T, u V3User, engineID string) []byte {
+	t.Helper()
+	return v3TrapAt(t, u, engineID, 1, 1, gosnmp.AuthNoPriv)
+}
+
+func v3TrapAt(t *testing.T, u V3User, engineID string, boots, engineTime uint32, flags gosnmp.SnmpV3MsgFlags) []byte {
+	t.Helper()
 	authProto, err := snmp.AuthProtocol(u.AuthProtocol)
 	require.NoError(t, err)
 	privProto, err := snmp.PrivProtocol(u.PrivProtocol)
@@ -178,9 +190,13 @@ func v3AuthPrivTrapAt(t *testing.T, u V3User, engineID string, boots, engineTime
 	}
 	require.NoError(t, sp.InitSecurityKeys())
 
+	if flags&gosnmp.AuthPriv != gosnmp.AuthPriv {
+		sp.PrivacyProtocol = gosnmp.NoPriv
+		sp.PrivacyPassphrase = ""
+	}
 	pkt := &gosnmp.SnmpPacket{
 		Version:            gosnmp.Version3,
-		MsgFlags:           gosnmp.AuthPriv,
+		MsgFlags:           flags,
 		SecurityModel:      gosnmp.UserSecurityModel,
 		SecurityParameters: sp,
 		MsgID:              1,
