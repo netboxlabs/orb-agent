@@ -171,6 +171,10 @@ A trap is counted, not stored. Three metrics describe what arrived:
 - `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps
   from a device a policy on that socket names, once per policy naming it,
   with the same `device_ip` and `policy` labels every polled series carries.
+  The counter is monotonic: a deleted policy's series stop being exported but
+  keep their totals, so a policy recreated under the same name continues
+  the count rather than restarting it, and nothing downstream sees a
+  decrease.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
   `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window` or
@@ -186,7 +190,8 @@ A trap is counted, not stored. Three metrics describe what arrived:
   authenticated v3 trap whose engine boots are lower than last seen from that
   engine, or whose engine time is more than 150 seconds behind the clock the
   receiver keeps for it: RFC 3414's bound on replaying a captured message. The
-  clocks are learned per engine, in memory, and relearned after a restart.
+  clocks are learned per sending address and engine, in memory, and relearned
+  after a restart, so a device can only ever poison its own clock.
 - `snmp.traps_datagrams` counts every datagram read from any socket. Every
   datagram read ends as one drop or as one trap, so `traps_datagrams` equals
   `traps_dropped` plus the datagrams that produced a trap. `traps_received` is
@@ -231,10 +236,10 @@ unknown addresses are never acknowledged, so the socket does not answer
 strangers.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
-authentication**, in which case the backend authenticates it with a USM user
-carried by a policy naming that device. A credential another policy on the
-socket carries under the same username is not tried. No trap-specific
-credentials are configured. v1 and v2c traps are never authenticated by any setting: the
+authentication**, in which case the backend authenticates it with the USM
+user the policy polls that device with, and no other: a credential a policy
+assigned to a different device, or another policy carries under the same
+username, is not tried. No trap-specific credentials are configured. v1 and v2c traps are never authenticated by any setting: the
 community they carry is not checked, because a check would be mistaken for
 authentication and would protect nothing against a sender who can read the
 community off the wire.
