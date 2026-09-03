@@ -45,6 +45,16 @@ var (
 	oidEnterprise = []byte{0x2b, 0x06, 0x01, 0x04, 0x01, 0x09}
 )
 
+// oidEnterpriseWidget is 1.3.6.1.4.1.9.9.999.0.1, an OID no bundled profile names.
+var oidEnterpriseWidget = []byte{0x2b, 0x06, 0x01, 0x04, 0x01, 0x09, 0x09, 0x87, 0x67, 0x00, 0x01}
+
+// v2cTrapWithOID is v2cTrap with the trap OID chosen by the test.
+func v2cTrapWithOID(community string, trapOID []byte) []byte {
+	varbinds := tlv(0x30, tlv(0x30, cat(tlv(0x06, oidSnmpTrapOID0), tlv(0x06, trapOID))))
+	pdu := tlv(0xa7, cat(berInt(1), berInt(0), berInt(0), varbinds))
+	return tlv(0x30, cat(berInt(1), berOctets(community), pdu))
+}
+
 func linkDownVarbinds() []byte {
 	return tlv(0x30, tlv(0x30, cat(tlv(0x06, oidSnmpTrapOID0), tlv(0x06, oidLinkDown))))
 }

@@ -22,10 +22,10 @@ func senderAddr(t *testing.T, addr netip.AddrPort) (netip.Addr, *net.UDPConn) {
 
 func TestPool_FirstAcquireBindsAndCountsATrapForThePolicy(t *testing.T) {
 	tally := NewTally(testLogger)
-	p := NewPool(tally, BuildNames(nil), testLogger)
+	p := NewPool(tally, testLogger)
 	t.Cleanup(p.Close)
 
-	lease, err := p.Acquire("127.0.0.1:0", "core", nil)
+	lease, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(lease.Release)
 	require.Equal(t, 1, p.size())
@@ -34,20 +34,20 @@ func TestPool_FirstAcquireBindsAndCountsATrapForThePolicy(t *testing.T) {
 
 	src, conn := senderAddr(t, addr)
 	// Register the sender's address under the policy so the trap is known.
-	require.True(t, p.register("127.0.0.1:0", "core", []Device{{Policy: "core", Addr: src}}))
+	require.True(t, p.register("127.0.0.1:0", "core", []Device{{Policy: "core", Addr: src}}, nil))
 	_, err = conn.Write(v2cTrap("public"))
 	require.NoError(t, err)
 	waitFor(t, 1, func() int64 { return tally.receivedCount(src.String(), "core", "linkDown", V2c) })
 }
 
 func TestPool_SameStringSharesOneSocket(t *testing.T) {
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p := NewPool(NewTally(testLogger), testLogger)
 	t.Cleanup(p.Close)
 
-	a, err := p.Acquire("127.0.0.1:0", "core", nil)
+	a, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	addrA, _ := p.addr("127.0.0.1:0")
-	b, err := p.Acquire("127.0.0.1:0", "edge", nil)
+	b, err := p.Acquire("127.0.0.1:0", "edge", nil, nil)
 	require.NoError(t, err)
 	addrB, _ := p.addr("127.0.0.1:0")
 
@@ -64,12 +64,12 @@ func TestPool_SameStringSharesOneSocket(t *testing.T) {
 
 func TestPool_ReleaseWithdrawsThePolicyFromRegistryAndTally(t *testing.T) {
 	tally := NewTally(testLogger)
-	p := NewPool(tally, BuildNames(nil), testLogger)
+	p := NewPool(tally, testLogger)
 	t.Cleanup(p.Close)
 
-	core, err := p.Acquire("127.0.0.1:0", "core", []Device{{Policy: "core", Addr: netip.MustParseAddr("10.0.0.5")}})
+	core, err := p.Acquire("127.0.0.1:0", "core", []Device{{Policy: "core", Addr: netip.MustParseAddr("10.0.0.5")}}, nil)
 	require.NoError(t, err)
-	edge, err := p.Acquire("127.0.0.1:0", "edge", []Device{{Policy: "edge", Addr: netip.MustParseAddr("10.0.0.6")}})
+	edge, err := p.Acquire("127.0.0.1:0", "edge", []Device{{Policy: "edge", Addr: netip.MustParseAddr("10.0.0.6")}}, nil)
 	require.NoError(t, err)
 	t.Cleanup(edge.Release)
 	tally.Received("10.0.0.5", "core", "linkDown", V2c)
@@ -88,13 +88,13 @@ func TestPool_CollisionFailsTheSecondAndKeepsTheFirst(t *testing.T) {
 	t.Cleanup(func() { _ = blocker.Close() })
 	taken := blocker.LocalAddr().String()
 
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p := NewPool(NewTally(testLogger), testLogger)
 	t.Cleanup(p.Close)
-	first, err := p.Acquire("127.0.0.1:0", "core", nil)
+	first, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(first.Release)
 
-	_, err = p.Acquire(taken, "edge", nil)
+	_, err = p.Acquire(taken, "edge", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "binding trap socket "+taken)
 	assert.Equal(t, 1, p.size(), "the failed acquire left no entry")
@@ -102,17 +102,17 @@ func TestPool_CollisionFailsTheSecondAndKeepsTheFirst(t *testing.T) {
 }
 
 func TestPool_LastReleaseClosesAndAcquireBindsAgain(t *testing.T) {
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p := NewPool(NewTally(testLogger), testLogger)
 	t.Cleanup(p.Close)
 
-	lease, err := p.Acquire("127.0.0.1:0", "core", nil)
+	lease, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	before, _ := p.addr("127.0.0.1:0")
 	lease.Release()
 	lease.Release() // idempotent
 	require.Equal(t, 0, p.size())
 
-	again, err := p.Acquire("127.0.0.1:0", "core", nil)
+	again, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(again.Release)
 	after, ok := p.addr("127.0.0.1:0")
@@ -124,10 +124,10 @@ func TestPool_LastReleaseClosesAndAcquireBindsAgain(t *testing.T) {
 }
 
 func TestPool_CloseStopsEverythingAndLaterReleaseIsHarmless(t *testing.T) {
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
-	a, err := p.Acquire("127.0.0.1:0", "core", nil)
+	p := NewPool(NewTally(testLogger), testLogger)
+	a, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
-	b, err := p.Acquire("[::1]:0", "edge", nil)
+	b, err := p.Acquire("[::1]:0", "edge", nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, p.size())
 
@@ -143,10 +143,10 @@ func TestPool_CloseStopsEverythingAndLaterReleaseIsHarmless(t *testing.T) {
 // belongs to another policy.
 func TestPool_StaleLeaseDoesNotTouchAFreshEntry(t *testing.T) {
 	tally := NewTally(testLogger)
-	p := NewPool(tally, BuildNames(nil), testLogger)
+	p := NewPool(tally, testLogger)
 	t.Cleanup(p.Close)
 
-	stale, err := p.Acquire("127.0.0.1:0", "core", nil)
+	stale, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	p.Close()
 	// Close refuses every later Acquire, which is what keeps this sequence out
@@ -157,7 +157,7 @@ func TestPool_StaleLeaseDoesNotTouchAFreshEntry(t *testing.T) {
 	p.closed = false
 	p.mu.Unlock()
 
-	fresh, err := p.Acquire("127.0.0.1:0", "edge", nil)
+	fresh, err := p.Acquire("127.0.0.1:0", "edge", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(fresh.Release)
 	addr, ok := p.addr("127.0.0.1:0")
@@ -168,7 +168,7 @@ func TestPool_StaleLeaseDoesNotTouchAFreshEntry(t *testing.T) {
 	assert.Equal(t, 1, p.size(), "the fresh entry is still in the pool")
 	assert.Equal(t, 1, p.refs("127.0.0.1:0"), "with the holder it counted for itself")
 	src, conn := senderAddr(t, addr)
-	require.True(t, p.register("127.0.0.1:0", "edge", []Device{{Policy: "edge", Addr: src}}))
+	require.True(t, p.register("127.0.0.1:0", "edge", []Device{{Policy: "edge", Addr: src}}, nil))
 	_, err = conn.Write(v2cTrap("public"))
 	require.NoError(t, err)
 	waitFor(t, 1, func() int64 { return tally.receivedCount(src.String(), "edge", "linkDown", V2c) })
@@ -177,10 +177,10 @@ func TestPool_StaleLeaseDoesNotTouchAFreshEntry(t *testing.T) {
 // Acquiring after Close binds nothing. The socket would have no one left to
 // stop it, since Close is what stops them and it has already run.
 func TestPool_AcquireAfterCloseFails(t *testing.T) {
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p := NewPool(NewTally(testLogger), testLogger)
 	p.Close()
 
-	lease, err := p.Acquire("127.0.0.1:0", "core", nil)
+	lease, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.Error(t, err)
 	assert.Nil(t, lease)
 	assert.Contains(t, err.Error(), "trap pool is closed")
@@ -199,14 +199,14 @@ func TestPool_ReacquireAfterLastReleaseNeverSeesAddressInUse(t *testing.T) {
 	listen := probe.LocalAddr().String()
 	require.NoError(t, probe.Close())
 
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p := NewPool(NewTally(testLogger), testLogger)
 	t.Cleanup(p.Close)
 	for i := range 50 {
-		lease, err := p.Acquire(listen, "core", nil)
+		lease, err := p.Acquire(listen, "core", nil, nil)
 		require.NoErrorf(t, err, "acquire %d of %s", i, listen)
 		lease.Release()
 	}
-	final, err := p.Acquire(listen, "core", nil)
+	final, err := p.Acquire(listen, "core", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(final.Release)
 	assert.Equal(t, 1, p.refs(listen))
@@ -222,7 +222,7 @@ func TestPool_ConcurrentReacquireNeverSeesAddressInUse(t *testing.T) {
 	listen := probe.LocalAddr().String()
 	require.NoError(t, probe.Close())
 
-	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	p := NewPool(NewTally(testLogger), testLogger)
 	t.Cleanup(p.Close)
 	var failures atomic.Int64
 	var wg sync.WaitGroup
@@ -231,7 +231,7 @@ func TestPool_ConcurrentReacquireNeverSeesAddressInUse(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for range 500 {
-				lease, err := p.Acquire(listen, "core", nil)
+				lease, err := p.Acquire(listen, "core", nil, nil)
 				if err != nil {
 					failures.Add(1)
 					continue
@@ -253,20 +253,20 @@ func TestPool_ConcurrentReacquireNeverSeesAddressInUse(t *testing.T) {
 // because macOS has only 127.0.0.1 on lo0 and a bind of 127.0.0.2 fails.
 func TestPool_SocketsAreIsolated(t *testing.T) {
 	tally := NewTally(testLogger)
-	p := NewPool(tally, BuildNames(nil), testLogger)
+	p := NewPool(tally, testLogger)
 	t.Cleanup(p.Close)
 
-	core, err := p.Acquire("127.0.0.1:0", "core", nil)
+	core, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(core.Release)
-	edge, err := p.Acquire("[::1]:0", "edge", nil)
+	edge, err := p.Acquire("[::1]:0", "edge", nil, nil)
 	require.NoError(t, err)
 	t.Cleanup(edge.Release)
 
 	coreAddr, ok := p.addr("127.0.0.1:0")
 	require.True(t, ok)
 	src, conn := senderAddr(t, coreAddr)
-	require.True(t, p.register("[::1]:0", "edge", []Device{{Policy: "edge", Addr: src}}))
+	require.True(t, p.register("[::1]:0", "edge", []Device{{Policy: "edge", Addr: src}}, nil))
 	require.Empty(t, p.lookup("127.0.0.1:0", src), "the other socket's entry never learned the address")
 
 	_, err = conn.Write(v2cTrap("public"))
@@ -274,4 +274,25 @@ func TestPool_SocketsAreIsolated(t *testing.T) {
 	waitFor(t, 1, func() int64 { return tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), tally.receivedCount(src.String(), "edge", "linkDown", V2c),
 		"a trap on one socket is never attributed to a policy registered on another")
+}
+
+// Acquiring a policy activates its series in the tally, so a count that
+// arrived after the previous lease's release, and went dormant, resumes when
+// the policy comes back.
+func TestPool_ReacquireActivatesThePolicysSeries(t *testing.T) {
+	tally := NewTally(testLogger)
+	p := NewPool(tally, testLogger)
+	t.Cleanup(p.Close)
+	lease, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.NoError(t, err)
+	tally.Received("10.0.0.5", "core", "linkDown", V2c)
+	lease.Release()
+	tally.Received("10.0.0.5", "core", "linkDown", V2c)
+	assert.Equal(t, int64(0), tally.receivedCount("10.0.0.5", "core", "linkDown", V2c), "dormant after release")
+
+	again, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(again.Release)
+	tally.Received("10.0.0.5", "core", "linkDown", V2c)
+	assert.Equal(t, int64(3), tally.receivedCount("10.0.0.5", "core", "linkDown", V2c), "live again with every count kept")
 }

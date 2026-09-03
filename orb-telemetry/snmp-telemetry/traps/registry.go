@@ -44,15 +44,19 @@ type V3User struct {
 // lock would stall the receive loop for the duration of every policy push.
 type Registry struct {
 	mu sync.RWMutex
-	// claims maps an address to the policies claiming it and the user each
-	// polls it with, nil for a v1 or v2c target.
-	claims map[netip.Addr]map[string]*V3User
-	gen    atomic.Uint64
+	// claims maps an address to the policies claiming it and the users each
+	// polls it with: none for a v1 or v2c target, more than one when a
+	// policy keeps two targets at the address under different IDs or
+	// contexts with different credentials.
+	claims map[netip.Addr]map[string][]V3User
+	// names is each policy's trap names, from its own profile set.
+	names map[string]map[string]string
+	gen   atomic.Uint64
 }
 
 // NewRegistry returns an empty registry.
 func NewRegistry() *Registry {
-	return &Registry{claims: make(map[netip.Addr]map[string]*V3User)}
+	return &Registry{claims: make(map[netip.Addr]map[string][]V3User), names: make(map[string]map[string]string)}
 }
 
 // canonical is the one spelling every address is stored and looked up under.
@@ -67,9 +71,10 @@ func canonical(a netip.Addr) netip.Addr {
 }
 
 // Register replaces the policy's claims with the ones given, each carrying
-// the user the policy polls that device with. A runner calls it once its
-// targets are expanded.
-func (r *Registry) Register(policy string, devices []Device) {
+// the user the policy polls that device with, and its trap names. A runner
+// calls it once its targets are expanded. Two devices at one address keep
+// both their users; a repeat of one user is kept once.
+func (r *Registry) Register(policy string, devices []Device, names map[string]string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.withdrawLocked(policy)
@@ -79,14 +84,16 @@ func (r *Registry) Register(policy string, devices []Device) {
 			continue
 		}
 		if r.claims[a] == nil {
-			r.claims[a] = make(map[string]*V3User)
+			r.claims[a] = make(map[string][]V3User)
 		}
-		var u *V3User
-		if d.User != nil {
-			copied := *d.User
-			u = &copied
+		users := r.claims[a][policy]
+		if d.User != nil && !slices.Contains(users, *d.User) {
+			users = append(users, *d.User)
 		}
-		r.claims[a][policy] = u
+		r.claims[a][policy] = users
+	}
+	if names != nil {
+		r.names[policy] = names
 	}
 	r.gen.Add(1)
 }
@@ -106,18 +113,34 @@ func (r *Registry) withdrawLocked(policy string) {
 			delete(r.claims, a)
 		}
 	}
+	delete(r.names, policy)
 }
 
 // claimsAt is the claims on an address, read under the lock. A claim written
-// without a zone names the address on every interface; a claim written with
-// one names only that interface.
-func (r *Registry) claimsAt(addr netip.Addr) map[string]*V3User {
+// without a zone names the address on every interface, so for a zoned
+// address it is merged with the claims written for that zone rather than
+// consulted only when there are none.
+func (r *Registry) claimsAt(addr netip.Addr) map[string][]V3User {
 	a := canonical(addr)
-	policies := r.claims[a]
-	if len(policies) == 0 && a.Zone() != "" {
-		policies = r.claims[a.WithZone("")]
+	exact := r.claims[a]
+	if a.Zone() == "" {
+		return exact
 	}
-	return policies
+	zoneless := r.claims[a.WithZone("")]
+	if len(zoneless) == 0 {
+		return exact
+	}
+	if len(exact) == 0 {
+		return zoneless
+	}
+	merged := make(map[string][]V3User, len(exact)+len(zoneless))
+	for p, u := range zoneless {
+		merged[p] = u
+	}
+	for p, u := range exact {
+		merged[p] = append(slices.Clone(merged[p]), u...)
+	}
+	return merged
 }
 
 // Lookup returns the policies naming an address, in sorted order, or nil.
@@ -142,11 +165,21 @@ func (r *Registry) UsersAt(addr netip.Addr) []V3User {
 	policies := r.claimsAt(addr)
 	var out []V3User
 	for _, policy := range slices.Sorted(maps.Keys(policies)) {
-		if u := policies[policy]; u != nil {
-			out = append(out, *u)
+		for _, u := range policies[policy] {
+			if !slices.Contains(out, u) {
+				out = append(out, u)
+			}
 		}
 	}
 	return out
+}
+
+// NamesFor is the trap names a policy registered, or nil when it registered
+// none.
+func (r *Registry) NamesFor(policy string) map[string]string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.names[policy]
 }
 
 // Generation advances on every change, so a caller caching something derived

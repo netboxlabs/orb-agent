@@ -248,9 +248,15 @@ func (r *Receiver) loop() {
 			}
 		}
 
-		name := NameFor(r.names, tr.OID)
+		// Each policy names the trap from its own profile set, so two
+		// policies on one socket can count one OID under two names; a policy
+		// that registered no names uses the socket's.
 		for _, policy := range policies {
-			r.tally.Received(deviceIP.String(), policy, name, tr.Version)
+			names := r.reg.NamesFor(policy)
+			if names == nil {
+				names = r.names
+			}
+			r.tally.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version)
 		}
 
 		if tr.Inform {

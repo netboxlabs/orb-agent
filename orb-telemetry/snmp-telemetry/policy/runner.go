@@ -55,6 +55,9 @@ const (
 type Collector interface {
 	CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial collector.DialOptions) error
 	ForgetPolicy(policyName string)
+	// TrapNames is the trap definitions of the profile set the collector
+	// polls with, which the runner registers with its trap claims.
+	TrapNames() map[string]string
 }
 
 // Runner represents the policy runner for SNMP metrics collection
@@ -227,7 +230,11 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			logger.Warn("Policy receives traps but none of its targets is an address, every trap it receives will be dropped as unknown_source",
 				"policy", config.SanitizeLogValue(name), "listen", config.SanitizeLogValue(policy.Scope.Traps.Listen))
 		}
-		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices)
+		var names map[string]string
+		if metricsCollector != nil {
+			names = metricsCollector.TrapNames()
+		}
+		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices, names)
 		if err != nil {
 			return nil, err
 		}

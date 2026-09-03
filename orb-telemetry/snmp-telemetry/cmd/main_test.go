@@ -377,25 +377,16 @@ func TestTrapPoolAdapter(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = blocker.Close() })
 
-	pool := traps.NewPool(traps.NewTally(discardLogger()), traps.BuildNames(nil), discardLogger())
+	pool := traps.NewPool(traps.NewTally(discardLogger()), discardLogger())
 	t.Cleanup(pool.Close)
 	var adapted policy.TrapPool = trapPool{pool: pool}
 
-	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil)
+	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil, nil)
 	require.Error(t, err)
 	assert.True(t, lease == nil, "an error must come with an untyped nil lease")
 
-	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil)
+	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 	lease.Release()
-}
-
-// loadTrapNames builds the closed name set from the bundled tree. It is what
-// every receiver labels with, so it must load without an override directory.
-func TestLoadTrapNamesFromTheBundledTree(t *testing.T) {
-	names, err := loadTrapNames("", discardLogger())
-	require.NoError(t, err)
-	assert.Greater(t, len(names), 150)
-	assert.Equal(t, "linkDown", names["1.3.6.1.6.3.1.1.5.3"])
 }

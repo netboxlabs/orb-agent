@@ -23,7 +23,6 @@ import (
 // traps arriving on another. The tally is shared: its series carry the policy.
 type Pool struct {
 	tally  *Tally
-	names  map[string]string
 	logger *slog.Logger
 
 	mu      sync.Mutex
@@ -48,10 +47,10 @@ type Lease struct {
 	once   sync.Once
 }
 
-// NewPool returns an empty pool. names is the closed trap-name set every
-// receiver labels with; tally is where every receiver counts.
-func NewPool(tally *Tally, names map[string]string, logger *slog.Logger) *Pool {
-	return &Pool{tally: tally, names: names, logger: logger, entries: make(map[string]*poolEntry)}
+// NewPool returns an empty pool. tally is where every receiver counts; trap
+// names come with each policy's claims.
+func NewPool(tally *Tally, logger *slog.Logger) *Pool {
+	return &Pool{tally: tally, logger: logger, entries: make(map[string]*poolEntry)}
 }
 
 // Acquire registers the policy's devices, each with its own v3 user, on the socket for listen,
@@ -63,7 +62,7 @@ func NewPool(tally *Tally, names map[string]string, logger *slog.Logger) *Pool {
 // replaces a policy's claims rather than accumulating them, so a second
 // acquire for the same pair would leave the policy holding the entry twice
 // while naming its devices once.
-func (p *Pool) Acquire(listen, policy string, devices []Device) (*Lease, error) {
+func (p *Pool) Acquire(listen, policy string, devices []Device, names map[string]string) (*Lease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -72,17 +71,18 @@ func (p *Pool) Acquire(listen, policy string, devices []Device) (*Lease, error) 
 	e, ok := p.entries[listen]
 	if !ok {
 		reg := NewRegistry()
-		rcv, err := Listen(listen, reg, p.tally, p.names, p.logger)
+		rcv, err := Listen(listen, reg, p.tally, BuildNames(nil), p.logger)
 		if err != nil {
 			return nil, err
 		}
 		e = &poolEntry{receiver: rcv, registry: reg}
 		p.entries[listen] = e
-		p.logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "policy", config.SanitizeLogValue(policy), "trap_names", len(p.names))
+		p.logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "policy", config.SanitizeLogValue(policy))
 	} else {
 		p.logger.Debug("Policy joined an open trap socket", "address", config.SanitizeLogValue(listen), "policy", config.SanitizeLogValue(policy), "holders", e.refs+1)
 	}
-	e.registry.Register(policy, devices)
+	e.registry.Register(policy, devices, names)
+	p.tally.Activate(policy)
 	e.refs++
 	return &Lease{pool: p, entry: e, listen: listen, policy: policy}, nil
 }
@@ -186,13 +186,13 @@ func (p *Pool) lookup(listen string, a netip.Addr) []string {
 	return nil
 }
 
-func (p *Pool) register(listen, policy string, devices []Device) bool {
+func (p *Pool) register(listen, policy string, devices []Device, names map[string]string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[listen]
 	if !ok {
 		return false
 	}
-	e.registry.Register(policy, devices)
+	e.registry.Register(policy, devices, names)
 	return true
 }

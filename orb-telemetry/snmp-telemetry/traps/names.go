@@ -31,8 +31,13 @@ func BuildNames(bundled map[string]string) map[string]string {
 	return names
 }
 
-// NameFor returns the closed-set name for an OID, or OtherName.
+// NameFor returns the closed-set name for an OID, or OtherName. The RFC 1215
+// names take precedence over whatever a profile set calls the same OID, so a
+// per-policy name set does not have to carry them.
 func NameFor(names map[string]string, oid string) string {
+	if name, ok := rfc1215[oid]; ok {
+		return name
+	}
 	if name, ok := names[oid]; ok {
 		return name
 	}

@@ -1,6 +1,9 @@
 package profiles
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,4 +96,26 @@ func TestTrapNames_ReadsFlatTrapEntries(t *testing.T) {
 	assert.Equal(t, "ruckusSCGAPRebootTrap", names["1.3.6.1.4.1.25053.2.10.1.25"], "written with a leading dot in the file")
 	assert.Equal(t, "ruckusSCGAPLostHeartbeatTrap", names["1.3.6.1.4.1.25053.2.10.1.24"])
 	assert.NotContains(t, names, "1.3.6.1.4.1.25053.1.8.1.1.1.1.2.1.11", "a flat gauge entry is not a trap")
+}
+
+// A matcher carries the trap names of the profile set it was built from, so a
+// policy's own profiles directory names its traps, override files included.
+func TestMatcher_TrapNamesComeFromItsProfileSet(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "custom"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom", "traps.yml"), []byte(`
+traps:
+  - trap_oid: 1.3.6.1.4.1.99999.0.1
+    trap_name: customWidgetFailed
+`), 0o644))
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+
+	names := m.TrapNames()
+	assert.Equal(t, "customWidgetFailed", names["1.3.6.1.4.1.99999.0.1"], "the override file's trap is named")
+	assert.Equal(t, "bigipTrafficGroupStandby", names["1.3.6.1.4.1.3375.2.4.0.141"], "the bundled ones still are")
+	assert.Equal(t, reflect.ValueOf(names).Pointer(), reflect.ValueOf(m.TrapNames()).Pointer(), "built once, not per call")
 }

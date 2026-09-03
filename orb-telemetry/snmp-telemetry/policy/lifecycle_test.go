@@ -20,9 +20,10 @@ import (
 
 // spyCollector records the policy names it was told to forget.
 type spyCollector struct {
-	mu     sync.Mutex
-	forgot []string
-	dials  []collector.DialOptions
+	mu        sync.Mutex
+	forgot    []string
+	dials     []collector.DialOptions
+	trapNames map[string]string
 }
 
 func (s *spyCollector) CollectTarget(_ context.Context, _ config.Target, _ *config.Authentication, _ string, dial collector.DialOptions) error {
@@ -31,6 +32,9 @@ func (s *spyCollector) CollectTarget(_ context.Context, _ config.Target, _ *conf
 	s.dials = append(s.dials, dial)
 	return nil
 }
+
+// trapNames is what TrapNames returns, standing in for a profile set.
+func (s *spyCollector) TrapNames() map[string]string { return s.trapNames }
 
 func (s *spyCollector) ForgetPolicy(name string) {
 	s.mu.Lock()
@@ -224,6 +228,8 @@ func (f *failingCollector) CollectTarget(_ context.Context, target config.Target
 	return nil
 }
 
+func (f *failingCollector) TrapNames() map[string]string { return nil }
+
 func (f *failingCollector) ForgetPolicy(string) {}
 
 // TestRunMetrics_SameEndpointTwiceKeepsErrorsApart covers a policy that names
@@ -358,6 +364,8 @@ func (s *stallingCollector) CollectTarget(ctx context.Context, target config.Tar
 	s.store[policyName] = append(s.store[policyName], target.Host)
 	return nil
 }
+
+func (s *stallingCollector) TrapNames() map[string]string { return nil }
 
 func (s *stallingCollector) ForgetPolicy(name string) {
 	s.mu.Lock()
@@ -499,6 +507,7 @@ type spyPool struct {
 	mu       sync.Mutex
 	listens  map[string]string // policy -> listen string
 	devices  map[string][]traps.Device
+	names    map[string]map[string]string
 	released []string
 	// calls is every Acquire and Release in the order they arrived, which
 	// is what a same-name replacement is judged on: the same two names in the
@@ -510,10 +519,10 @@ type spyPool struct {
 }
 
 func newSpyPool() *spyPool {
-	return &spyPool{listens: map[string]string{}, devices: map[string][]traps.Device{}}
+	return &spyPool{listens: map[string]string{}, devices: map[string][]traps.Device{}, names: map[string]map[string]string{}}
 }
 
-func (s *spyPool) Acquire(listen, policy string, devices []traps.Device) (TrapLease, error) {
+func (s *spyPool) Acquire(listen, policy string, devices []traps.Device, names map[string]string) (TrapLease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.acquireErr != nil {
@@ -521,6 +530,7 @@ func (s *spyPool) Acquire(listen, policy string, devices []traps.Device) (TrapLe
 	}
 	s.listens[policy] = listen
 	s.devices[policy] = devices
+	s.names[policy] = names
 	s.calls = append(s.calls, "acquire:"+policy)
 	return &spyLease{pool: s, policy: policy}, nil
 }
@@ -666,4 +676,15 @@ func TestRunner_RegistersEachDevicesOwnCredential(t *testing.T) {
 		byAddr[d.Addr.String()] = d.User.Username
 	}
 	assert.Equal(t, map[string]string{"10.0.0.1": pol.Scope.Authentication.Username, "10.0.0.2": "second-device"}, byAddr)
+}
+
+// The runner hands the pool the trap names of the profile set its collector
+// was built from, so the receiver names this policy's traps by them.
+func TestRunner_HandsThePoolItsProfileSetsTrapNames(t *testing.T) {
+	pool := newSpyPool()
+	spy := &spyCollector{trapNames: map[string]string{"1.2.3": "custom"}}
+	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), ":162"), spy, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	assert.Equal(t, map[string]string{"1.2.3": "custom"}, pool.names["p1"])
 }

@@ -84,6 +84,8 @@ func (g *gatedCollector) CollectTarget(_ context.Context, _ config.Target, _ *co
 	return nil
 }
 
+func (g *gatedCollector) TrapNames() map[string]string { return nil }
+
 func (g *gatedCollector) ForgetPolicy(string) {
 	close(g.entered)
 	<-g.release

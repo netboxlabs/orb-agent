@@ -16,7 +16,6 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/env"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
-	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/profiles"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/server"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/version"
@@ -159,14 +158,9 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
-	trapNames, err := loadTrapNames(profilesDir, logger)
-	if err != nil {
-		logger.Error("Failed to load trap definitions", "error", err)
-		os.Exit(1)
-	}
 	trapTally := traps.NewTally(logger)
 	trapTally.Register()
-	pool := traps.NewPool(trapTally, trapNames, logger)
+	pool := traps.NewPool(trapTally, logger)
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
@@ -189,23 +183,6 @@ func main() {
 	})
 }
 
-// loadTrapNames builds the closed trap-name set from the bundled profile tree
-// plus the operator's override directory. Every receiver labels with it, so
-// it is built once here whether or not any policy declares traps; the manager
-// loads the same tree per profiles directory for its collectors and there is
-// no shared handle to borrow.
-func loadTrapNames(profilesDir string, logger *slog.Logger) (map[string]string, error) {
-	loader, err := profiles.LoadProfiles(profilesDir, logger)
-	if err != nil {
-		return nil, fmt.Errorf("loading trap definitions: %w", err)
-	}
-	all, err := loader.AllResolved()
-	if err != nil {
-		return nil, fmt.Errorf("resolving trap definitions: %w", err)
-	}
-	return traps.BuildNames(profiles.TrapNames(all)), nil
-}
-
 // trapPool adapts *traps.Pool to policy.TrapPool. The pool returns its own
 // *traps.Lease and the interface names policy.TrapLease; Go does not widen a
 // return type, so the widening happens here, and the error path returns an
@@ -222,8 +199,8 @@ func newTrapPool(pool *traps.Pool) trapPool {
 	return trapPool{pool: pool}
 }
 
-func (p trapPool) Acquire(listen, policyName string, devices []traps.Device) (policy.TrapLease, error) {
-	lease, err := p.pool.Acquire(listen, policyName, devices)
+func (p trapPool) Acquire(listen, policyName string, devices []traps.Device, names map[string]string) (policy.TrapLease, error) {
+	lease, err := p.pool.Acquire(listen, policyName, devices, names)
 	if err != nil {
 		return nil, err
 	}

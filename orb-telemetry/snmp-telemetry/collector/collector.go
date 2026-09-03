@@ -316,6 +316,11 @@ type MetricsCollector struct {
 	reviewedProfiles map[string]struct{}
 }
 
+// TrapNames is the trap definitions of the profile set this collector polls
+// with, keyed by normalised OID. A policy registers them with its trap claims
+// so the receiver names its traps by its own set.
+func (c *MetricsCollector) TrapNames() map[string]string { return c.matcher.TrapNames() }
+
 // NewMetricsCollector creates a MetricsCollector.
 func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Matcher, logger *slog.Logger) *MetricsCollector {
 	return &MetricsCollector{

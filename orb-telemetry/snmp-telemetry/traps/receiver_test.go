@@ -59,7 +59,7 @@ func (h *harness) registerSender(t *testing.T, policy string, users ...V3User) n
 	if len(users) > 0 {
 		d.User = &users[0]
 	}
-	h.reg.Register(policy, []Device{d})
+	h.reg.Register(policy, []Device{d}, nil)
 	return canonical(local)
 }
 
@@ -127,7 +127,7 @@ func TestReceiver_DropsAnUnknownSourceBeforeParsing(t *testing.T) {
 func TestReceiver_CountsOncePerClaimingPolicy(t *testing.T) {
 	h := newHarness(t)
 	src := h.registerSender(t, "core")
-	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src}})
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src}}, nil)
 	h.send(t, v2cTrap("public"))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "edge", "linkDown", V2c) })
@@ -276,7 +276,7 @@ func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
 func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
 	h := newHarness(t)
 	h.registerSender(t, "core")
-	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}})
+	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1) })
 }
@@ -286,7 +286,7 @@ func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
 // dropped as an unknown source before the field is ever read.
 func TestReceiver_V1AgentAddrIsIgnoredFromAnUnregisteredSender(t *testing.T) {
 	h := newHarness(t)
-	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}})
+	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1))
@@ -423,7 +423,7 @@ func TestReceiver_TriesOnlyTheSourceDevicesCredentials(t *testing.T) {
 	h.reg.Register("core", []Device{
 		{Policy: "core", Addr: src, User: &mine},
 		{Policy: "core", Addr: netip.MustParseAddr("10.9.9.9"), User: &theirs},
-	})
+	}, nil)
 
 	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 1))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
@@ -432,7 +432,7 @@ func TestReceiver_TriesOnlyTheSourceDevicesCredentials(t *testing.T) {
 	h.send(t, v3AuthPrivTrapAt(t, mine, engineID, 1, 2))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
 
-	h.reg.Register("core", []Device{{Policy: "core", Addr: src, User: &theirs}})
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src, User: &theirs}}, nil)
 	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 3))
 	waitFor(t, 2, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
 	assert.LessOrEqual(t, h.rcv.tableCacheSize(), 1, "the cache was rebuilt for the new registry generation")
@@ -448,8 +448,8 @@ func TestReceiver_KeepsEngineClocksPerSender(t *testing.T) {
 	first, src1 := h.newSenderOn(t, "udp4", net.IPv4(127, 0, 0, 1))
 	other, src2 := h.newSenderOn(t, "udp6", net.IPv6loopback)
 	require.NotEqual(t, src1, src2, "the two senders must be two devices to the registry")
-	h.reg.Register("core", []Device{{Policy: "core", Addr: src1, User: &trapAuthPrivUser}})
-	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src2, User: &trapAuthPrivUser}})
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src1, User: &trapAuthPrivUser}}, nil)
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src2, User: &trapAuthPrivUser}}, nil)
 
 	_, err := first.Write(v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 9, 1))
 	require.NoError(t, err)
@@ -459,4 +459,27 @@ func TestReceiver_KeepsEngineClocksPerSender(t *testing.T) {
 	require.NoError(t, err)
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src2.String(), "edge", "linkDown", V3) })
 	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3NotInTimeWindow), "boots 5 after boots 9 is only a replay for the same sender")
+}
+
+// Each policy names a trap from its own profile set, so two policies on one
+// socket count the same trap under their own names, and a policy with no
+// names of its own falls back to the socket's. The RFC 1215 names take
+// precedence over any profile's spelling.
+func TestReceiver_NamesATrapWithThePolicysOwnNames(t *testing.T) {
+	h := newHarness(t)
+	src := canonical(h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
+	h.reg.Register("vendor", []Device{{Policy: "vendor", Addr: src}}, map[string]string{
+		"1.3.6.1.4.1.9.9.999.0.1": "widgetFailed",
+		"1.3.6.1.6.3.1.1.5.3":     "vendorLinkDown",
+	})
+	h.reg.Register("plain", []Device{{Policy: "plain", Addr: src}}, nil)
+
+	h.send(t, v2cTrapWithOID("public", oidEnterpriseWidget))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "vendor", "widgetFailed", V2c) })
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "plain", OtherName, V2c) })
+
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "vendor", "linkDown", V2c) })
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "plain", "linkDown", V2c) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "vendor", "vendorLinkDown", V2c), "RFC 1215 wins over the profile's spelling")
 }

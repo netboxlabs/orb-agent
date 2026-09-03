@@ -2,6 +2,8 @@ package policy
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -208,4 +210,24 @@ func TestRunner_ValidatesTheListenString(t *testing.T) {
 	assert.Contains(t, err.Error(), "scope.traps.listen")
 	assert.Contains(t, err.Error(), "host must be an IP address")
 	assert.Empty(t, pool.callSequence(), "and nothing was acquired")
+}
+
+// The collector the manager builds for a profiles directory carries that
+// directory's trap names, override files included, which is what a policy
+// with its own profiles_dir registers.
+func TestManager_CollectorCarriesItsProfilesDirsTrapNames(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "custom"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom", "traps.yml"), []byte(`
+traps:
+  - trap_oid: 1.3.6.1.4.1.99999.0.1
+    trap_name: customWidgetFailed
+`), 0o644))
+	m := NewManager(t.Context(), testLogger, Options{})
+	c, err := m.acquireCollector(dir)
+	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector(dir) })
+	names := c.TrapNames()
+	assert.Equal(t, "customWidgetFailed", names["1.3.6.1.4.1.99999.0.1"])
+	assert.Equal(t, "bigipTrafficGroupStandby", names["1.3.6.1.4.1.3375.2.4.0.141"])
 }
