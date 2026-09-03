@@ -119,10 +119,6 @@ func main() {
 			"path under it, or one relative to it. Empty, the default, rejects every per-policy "+
 			"profiles_dir."+
 			" Environment variable can be used by wrapping it in ${} (e.g. ${SNMP_PROFILES_ROOT})")
-	trapListen := flag.String("trap-listen", "",
-		"address to receive SNMP traps on, e.g. 0.0.0.0:162. Empty, the default, opens no socket."+
-			" Port 162 is privileged; use CAP_NET_BIND_SERVICE or a higher port. See the README's"+
-			" inbound exposure section before binding.")
 	logLevel := flag.String("log-level", "INFO", "log level (DEBUG, INFO, WARN, ERROR)")
 	logFormat := flag.String("log-format", "TEXT", "log format (TEXT, JSON)")
 	help := flag.Bool("help", false, "show this help")
@@ -153,22 +149,21 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
-	trapRegistry := traps.NewRegistry()
+	trapNames, err := loadTrapNames(profilesDir, logger)
+	if err != nil {
+		logger.Error("Failed to load trap definitions", "error", err)
+		os.Exit(1)
+	}
 	trapTally := traps.NewTally(logger)
 	trapTally.Register()
+	pool := traps.NewPool(trapTally, trapNames, logger)
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
 		AllowedEnvVars:     splitList(*policyEnvVars),
-		TrapRegistry:       newTrapRegistration(trapRegistry, trapTally),
+		TrapPool:           newTrapPool(pool),
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
-
-	trapReceiver, err := startTrapReceiver(*trapListen, profilesDir, trapRegistry, trapTally, logger)
-	if err != nil {
-		logger.Error("Failed to start the trap receiver", "error", err)
-		os.Exit(1)
-	}
 
 	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
 
@@ -177,65 +172,19 @@ func main() {
 
 	serverErrCh := srv.Start()
 
-	// trapReceiver is a *traps.Receiver; assigning it to stopAll.receiver only
-	// when it is non-nil keeps a nil case out of the interface, since a typed
-	// nil pointer stored in an interface is itself non-nil and would defeat
-	// stopAll.Stop's "if s.receiver != nil" guard.
-	shutdownStopper := stopAll{tally: trapTally, server: srv}
-	if trapReceiver != nil {
-		shutdownStopper.receiver = trapReceiver
-	}
+	shutdownStopper := stopAll{pool: pool, tally: trapTally, server: srv}
 
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
 		shutdown(cancelFunc, shutdownStopper, shutdownMetrics)
 	})
 }
 
-// trapRegistration is what a policy's lifecycle reaches, and it is two things
-// rather than one because a policy leaves two marks. The registry decides
-// whose traps are attributed to which policy, and the tally holds the counts
-// already taken.
-//
-// The registry alone satisfies policy.TrapRegistry, so passing it in bare
-// compiles and runs, and a stopped policy would go on exporting every trap
-// series it ever recorded for the life of the process. That is F6, the finding
-// the observable counter design exists to answer, and it is the contract
-// Runner.Stop documents for every other metric here.
-//
-// It lives in cmd because traps never imports policy: the registry interface
-// belongs to traps, the caller belongs to policy, and the only place that
-// knows both is the process that wires them together.
-type trapRegistration struct {
-	registry *traps.Registry
-	tally    *traps.Tally
-}
-
-func newTrapRegistration(registry *traps.Registry, tally *traps.Tally) trapRegistration {
-	return trapRegistration{registry: registry, tally: tally}
-}
-
-// Register hands the policy's addresses and users to the registry. The tally
-// has nothing to record until a trap arrives.
-func (t trapRegistration) Register(policyName string, devices []traps.Device, users []traps.V3User) {
-	t.registry.Register(policyName, devices, users)
-}
-
-// Withdraw reaches both: the registry stops attributing the policy's
-// addresses, and the tally drops the series it already holds for them.
-func (t trapRegistration) Withdraw(policyName string) {
-	t.registry.Withdraw(policyName)
-	t.tally.Withdraw(policyName)
-}
-
-// startTrapReceiver binds the trap socket when an address was given. The name
-// set is built from the bundled profile tree plus the operator's override
-// directory, loaded once here for the purpose; the manager loads the same
-// tree per profiles directory for its own collectors and there is no shared
-// handle to borrow.
-func startTrapReceiver(listen, profilesDir string, registry *traps.Registry, tally *traps.Tally, logger *slog.Logger) (*traps.Receiver, error) {
-	if listen == "" {
-		return nil, nil
-	}
+// loadTrapNames builds the closed trap-name set from the bundled profile tree
+// plus the operator's override directory. Every receiver labels with it, so
+// it is built once here whether or not any policy declares traps; the manager
+// loads the same tree per profiles directory for its collectors and there is
+// no shared handle to borrow.
+func loadTrapNames(profilesDir string, logger *slog.Logger) (map[string]string, error) {
 	loader, err := profiles.LoadProfiles(profilesDir, logger)
 	if err != nil {
 		return nil, fmt.Errorf("loading trap definitions: %w", err)
@@ -244,29 +193,45 @@ func startTrapReceiver(listen, profilesDir string, registry *traps.Registry, tal
 	if err != nil {
 		return nil, fmt.Errorf("resolving trap definitions: %w", err)
 	}
-	names := traps.BuildNames(profiles.TrapNames(all))
-	rcv, err := traps.Listen(listen, registry, tally, names, logger)
+	return traps.BuildNames(profiles.TrapNames(all)), nil
+}
+
+// trapPool adapts *traps.Pool to policy.TrapPool. The pool returns its own
+// *traps.Lease and the interface names policy.TrapLease; Go does not widen a
+// return type, so the widening happens here, and the error path returns an
+// untyped nil so the caller's nil check holds.
+//
+// It lives in cmd because traps never imports policy: the pool belongs to
+// traps, the caller belongs to policy, and the only place that knows both is
+// the process that wires them together.
+type trapPool struct {
+	pool *traps.Pool
+}
+
+func newTrapPool(pool *traps.Pool) trapPool {
+	return trapPool{pool: pool}
+}
+
+func (p trapPool) Acquire(listen, policyName string, devices []traps.Device, users []traps.V3User) (policy.TrapLease, error) {
+	lease, err := p.pool.Acquire(listen, policyName, devices, users)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "trap_names", len(names))
-	return rcv, nil
+	return lease, nil
 }
 
-// stopAll stops the trap receiver and then the server. Both run after the
-// final flush, so neither spends the flush's budget, and the tally is a map
-// the export callback reads, so the flush carried everything counted whether
-// or not the receiver was still running.
+// stopAll closes every trap socket, then the tally, then the server. All run
+// after the final flush, so none spends the flush's budget, and the tally is
+// a map the export callback reads, so the flush carried everything counted
+// whether or not a receiver was still running.
 type stopAll struct {
-	receiver stopper
-	tally    closer
-	server   stopper
+	pool   closer
+	tally  closer
+	server stopper
 }
 
 func (s stopAll) Stop() {
-	if s.receiver != nil {
-		s.receiver.Stop()
-	}
+	s.pool.Close()
 	s.tally.Close()
 	s.server.Stop()
 }

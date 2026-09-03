@@ -265,14 +265,14 @@ func TestStopPolicyHandle_AHandleWithNoRunnerStopsNothing(t *testing.T) {
 }
 
 // The sibling of the test above, on the mark a replacement leaves in the trap
-// registry rather than on the name it takes. The withdrawal is the last thing
+// pool rather than on the name it takes. The release is the last thing
 // Runner.Stop does and the manager holds the stopping reservation until Stop
 // returns, so the two calls can only arrive in one order: the replacement's
-// registration is the registry's last word for the name, not a withdrawal
-// arriving late and erasing it.
+// acquire is the pool's last word for the name, not a release arriving late
+// and erasing it.
 func TestStopPolicy_SameNameReplacementEndsRegistered(t *testing.T) {
-	reg := newSpyRegistry()
-	m := NewManager(context.Background(), testLogger, Options{TrapRegistry: reg})
+	reg := newSpyPool()
+	m := NewManager(context.Background(), testLogger, Options{TrapPool: reg})
 	_, err := m.acquireCollector("")
 	require.NoError(t, err)
 	t.Cleanup(func() { m.releaseCollector("") })
@@ -280,25 +280,25 @@ func TestStopPolicy_SameNameReplacementEndsRegistered(t *testing.T) {
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)
 
-	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate, reg)
+	r, err := NewRunner(m.ctx, testLogger, "p1", withTraps(minimalPolicy(v2cAuth()), ":162"), gate, reg)
 	require.NoError(t, err)
 	r.Start()
 	m.policies["p1"] = r
-	require.Equal(t, []string{"register:p1"}, reg.callSequence())
+	require.Equal(t, []string{"acquire:p1"}, reg.callSequence())
 
 	stopped := make(chan error, 1)
 	go func() { stopped <- m.StopPolicy("p1") }()
 	<-gate.entered
 
 	started := make(chan error, 1)
-	go func() { started <- m.StartPolicy("p1", minimalPolicy(v2cAuth())) }()
+	go func() { started <- m.StartPolicy("p1", withTraps(minimalPolicy(v2cAuth()), ":162")) }()
 
 	gate.unblock()
 	require.NoError(t, <-stopped)
 	require.NoError(t, <-started)
 	require.True(t, m.HasPolicy("p1"))
 
-	assert.Equal(t, []string{"register:p1", "withdraw:p1", "register:p1"}, reg.callSequence(),
-		"the replacement registers after the withdrawal, and exactly once")
+	assert.Equal(t, []string{"acquire:p1", "release:p1", "acquire:p1"}, reg.callSequence(),
+		"the replacement acquires after the release, and exactly once")
 	require.NoError(t, m.Stop())
 }

@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -17,8 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/metric"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
 
@@ -346,111 +343,55 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 		"the final export must carry the observations a cancelled collection forgets")
 }
 
-// With no --trap-listen, no socket is opened and nothing else changes.
-func TestTrapListenEmptyOpensNoSocket(t *testing.T) {
-	rcv, err := startTrapReceiver("", "", nil, nil, discardLogger())
-	require.NoError(t, err)
-	assert.Nil(t, rcv)
-}
-
-func TestTrapListenBindFailureIsAnError(t *testing.T) {
-	blocker, err := net.ListenPacket("udp", "127.0.0.1:0")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = blocker.Close() })
-	_, err = startTrapReceiver(blocker.LocalAddr().String(), "", traps.NewRegistry(), traps.NewTally(discardLogger()), discardLogger())
-	require.Error(t, err, "a bind failure is reported, not logged from a goroutine")
-}
-
 // closeFunc adapts a function to the closer stopAll's tally field takes.
 type closeFunc func()
 
 func (f closeFunc) Close() { f() }
 
-// stopAll stops the receiver, then closes the tally, then stops the server.
-// shutdown's own flush, cancel, stop order is a separate concern, already
-// pinned by TestShutdownCancelsRootBetweenTheFlushAndTheServerStop; this test
-// is only about the sequence stopAll.Stop itself encodes.
+// stopAll closes the trap pool, then the tally, then the server. shutdown's
+// own flush, cancel, stop order is a separate concern, already pinned by
+// TestShutdownCancelsRootBetweenTheFlushAndTheServerStop; this test is only
+// about the sequence stopAll.Stop itself encodes.
 func TestStopAllOrder(t *testing.T) {
-	t.Run("with a receiver", func(t *testing.T) {
-		var order []string
-		sa := stopAll{
-			receiver: stopFunc(func() { order = append(order, "receiver") }),
-			tally:    closeFunc(func() { order = append(order, "tally") }),
-			server:   stopFunc(func() { order = append(order, "server") }),
-		}
-		sa.Stop()
-		assert.Equal(t, []string{"receiver", "tally", "server"}, order)
-	})
-
-	t.Run("without a receiver", func(t *testing.T) {
-		var order []string
-		sa := stopAll{
-			tally:  closeFunc(func() { order = append(order, "tally") }),
-			server: stopFunc(func() { order = append(order, "server") }),
-		}
-		assert.NotPanics(t, sa.Stop)
-		assert.Equal(t, []string{"tally", "server"}, order)
-	})
-}
-
-// trapSeries collects the trap counters and keys each data point by its
-// metric name and attributes, so a withdrawn policy's absence is observable.
-func trapSeries(t *testing.T, reader sdkmetric.Reader) map[string]int64 {
-	t.Helper()
-	var rm metricdata.ResourceMetrics
-	require.NoError(t, reader.Collect(context.Background(), &rm))
-	got := map[string]int64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			if !ok {
-				continue
-			}
-			for _, dp := range sum.DataPoints {
-				key := m.Name
-				for _, kv := range dp.Attributes.ToSlice() {
-					key += "|" + string(kv.Key) + "=" + kv.Value.String()
-				}
-				got[key] = dp.Value
-			}
-		}
+	var order []string
+	sa := stopAll{
+		pool:   closeFunc(func() { order = append(order, "pool") }),
+		tally:  closeFunc(func() { order = append(order, "tally") }),
+		server: stopFunc(func() { order = append(order, "server") }),
 	}
-	return got
+	sa.Stop()
+	assert.Equal(t, []string{"pool", "tally", "server"}, order)
 }
 
-// F6: a stopped policy must stop exporting its trap series, and that only
-// happens if the withdrawal reaches the tally. The registry on its own
-// satisfies policy.TrapRegistry, so passing it in bare compiles and runs and
-// leaves every count a stopped policy ever recorded exporting for the life of
-// the process, which is exactly the contract Runner.Stop documents.
-func TestTrapRegistration_WithdrawReachesTheRegistryAndTheTally(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
-	t.Cleanup(metrics.ResetMeter)
+// The adapter is what the manager is given, so it must satisfy the interface
+// and must surface a bind failure as an error with a nil lease, not a typed
+// nil pointer inside a non-nil interface.
+func TestTrapPoolAdapter(t *testing.T) {
+	var _ policy.TrapPool = trapPool{}
 
-	registry := traps.NewRegistry()
-	tally := traps.NewTally(discardLogger())
-	tally.Register()
-	t.Cleanup(tally.Close)
+	blocker, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = blocker.Close() })
 
-	// Through the interface the manager is given, so the test fails if the
-	// adapter stops satisfying it.
-	var reg policy.TrapRegistry = newTrapRegistration(registry, tally)
-	reg.Register("core", []traps.Device{{Policy: "core", Addr: netip.MustParseAddr("10.0.0.5")}}, nil)
-	reg.Register("edge", []traps.Device{{Policy: "edge", Addr: netip.MustParseAddr("10.0.0.6")}}, nil)
-	tally.Received("10.0.0.5", "core", "linkDown", traps.V2c)
-	tally.Received("10.0.0.6", "edge", "linkDown", traps.V2c)
+	pool := traps.NewPool(traps.NewTally(discardLogger()), traps.BuildNames(nil), discardLogger())
+	t.Cleanup(pool.Close)
+	var adapted policy.TrapPool = trapPool{pool: pool}
 
-	const coreSeries = "snmp.traps_received|device_ip=10.0.0.5|policy=core|trap_name=linkDown|version=2c"
-	const edgeSeries = "snmp.traps_received|device_ip=10.0.0.6|policy=edge|trap_name=linkDown|version=2c"
-	require.Equal(t, 2, registry.Size())
-	require.Contains(t, trapSeries(t, reader), coreSeries)
+	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil, nil)
+	require.Error(t, err)
+	assert.Nil(t, lease, "an error must come with an untyped nil lease")
 
-	reg.Withdraw("core")
-	assert.Equal(t, 1, registry.Size(), "the registry stops attributing the policy's addresses")
-	series := trapSeries(t, reader)
-	assert.NotContains(t, series, coreSeries, "the tally stops exporting the policy's counts")
-	assert.Contains(t, series, edgeSeries, "another policy's series is untouched")
+	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	lease.Release()
+}
+
+// loadTrapNames builds the closed name set from the bundled tree. It is what
+// every receiver labels with, so it must load without an override directory.
+func TestLoadTrapNamesFromTheBundledTree(t *testing.T) {
+	names, err := loadTrapNames("", discardLogger())
+	require.NoError(t, err)
+	assert.Greater(t, len(names), 150)
+	assert.Equal(t, "linkDown", names["1.3.6.1.6.3.1.1.5.3"])
 }

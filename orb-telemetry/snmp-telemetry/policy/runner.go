@@ -57,15 +57,6 @@ type Collector interface {
 	ForgetPolicy(policyName string)
 }
 
-// TrapRegistry is the trap receiver's view of a policy: the addresses it
-// polls and the v3 users it carries, claimed as the runner starts and
-// withdrawn as it stops. It is a second narrow interface rather than a
-// back-reference to the manager, for the same reason Collector is.
-type TrapRegistry interface {
-	Register(policy string, devices []traps.Device, users []traps.V3User)
-	Withdraw(policy string)
-}
-
 // Runner represents the policy runner for SNMP metrics collection
 type Runner struct {
 	scheduler gocron.Scheduler
@@ -77,7 +68,8 @@ type Runner struct {
 	cancel           context.CancelFunc
 	name             string
 	metricsCollector Collector
-	trapRegistry     TrapRegistry
+	trapPool         TrapPool
+	trapLease        TrapLease
 	metricsInterval  time.Duration
 	snmpTimeout      time.Duration
 	retries          int
@@ -93,7 +85,7 @@ type Runner struct {
 // NewRunner returns a new policy runner.
 // metricsCollector is the shared collector for this policy's profiles directory —
 // created once by the Manager and reused across all policies using the same dir.
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector, registry TrapRegistry) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector, pool TrapPool) (*Runner, error) {
 	s, err := gocron.NewScheduler()
 	if err != nil {
 		return nil, err
@@ -104,10 +96,11 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	// would otherwise stay attached to the manager's for the life of the
 	// process.
 	built := false
+	var lease TrapLease
 	defer func() {
 		if !built {
-			if registry != nil {
-				registry.Withdraw(name)
+			if lease != nil {
+				lease.Release()
 			}
 			cancel()
 		}
@@ -118,7 +111,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		logger:           logger,
 		name:             name,
 		metricsCollector: metricsCollector,
-		trapRegistry:     registry,
+		trapPool:         pool,
 		config:           policy.Config,
 		scope:            policy.Scope,
 		ctx:              runCtx,
@@ -196,8 +189,23 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			"policy", config.SanitizeLogValue(name), "collapsed", collapsed, "devices", len(expanded))
 	}
 
-	if registry != nil {
-		registry.Register(name, trapDevices(name, expanded), trapUsers(runner, expanded))
+	if policy.Scope.Traps != nil {
+		if pool == nil {
+			return nil, errors.New("policy declares scope.traps but this backend has no trap pool")
+		}
+		devices := trapDevices(name, expanded)
+		if len(devices) == 0 {
+			// Hostname targets carry no address to match a source against,
+			// so a policy made only of them holds the socket and receives
+			// nothing it can attribute.
+			logger.Warn("Policy receives traps but none of its targets is an address, every trap it receives will be dropped as unknown_source",
+				"policy", config.SanitizeLogValue(name), "listen", policy.Scope.Traps.Listen)
+		}
+		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices, trapUsers(runner, expanded))
+		if err != nil {
+			return nil, err
+		}
+		runner.trapLease = lease
 	}
 
 	// Schedule a metrics job for each expanded target
@@ -408,15 +416,15 @@ func (r *Runner) Start() {
 // not cut it short. StopJobs then has a wait it can finish, and it comes before
 // the state is dropped so a run is not still writing when the drop happens.
 // Shutdown runs whatever StopJobs reported, rather than leaving the scheduler
-// behind when a job overran. ForgetPolicy and the trap withdrawal come last
+// behind when a job overran. ForgetPolicy and the trap release come last
 // and unconditionally, so the policy stops exporting either kind of series
 // even if the scheduler did not unwind cleanly.
 //
-// The withdrawal lives here, at the end of Stop, rather than in the manager
+// The release lives here, at the end of Stop, rather than in the manager
 // after Stop returns, because the manager holds the stopping policy's name
 // reservation for exactly as long as Stop runs. A same-name replacement
-// therefore cannot start and register until the withdrawal has already
-// happened, so it cannot have its own registration erased by the outgoing
+// therefore cannot start and acquire until the release has already
+// happened, so it cannot have its own lease erased by the outgoing
 // runner's.
 func (r *Runner) Stop() error {
 	r.cancel()
@@ -425,8 +433,8 @@ func (r *Runner) Stop() error {
 	if r.metricsCollector != nil {
 		r.metricsCollector.ForgetPolicy(r.name)
 	}
-	if r.trapRegistry != nil {
-		r.trapRegistry.Withdraw(r.name)
+	if r.trapLease != nil {
+		r.trapLease.Release()
 	}
 	return err
 }

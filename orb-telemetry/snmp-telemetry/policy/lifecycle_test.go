@@ -486,87 +486,139 @@ func TestNewRunner_RejectsRetriesAboveTheCeiling(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Trap registry registration and withdrawal
+// Trap pool acquisition and release
 // ---------------------------------------------------------------------------
 
-type spyRegistry struct {
-	mu         sync.Mutex
-	registered map[string][]traps.Device
-	users      map[string][]traps.V3User
-	withdrawn  []string
-	// calls is every Register and Withdraw in the order they arrived, which
+type spyPool struct {
+	mu       sync.Mutex
+	listens  map[string]string // policy -> listen string
+	devices  map[string][]traps.Device
+	users    map[string][]traps.V3User
+	released []string
+	// calls is every Acquire and Release in the order they arrived, which
 	// is what a same-name replacement is judged on: the same two names in the
 	// wrong order leave the new policy unregistered.
 	calls []string
+	// acquireErr, when set, is what Acquire returns, standing in for a bind
+	// failure.
+	acquireErr error
 }
 
-func newSpyRegistry() *spyRegistry {
-	return &spyRegistry{registered: map[string][]traps.Device{}, users: map[string][]traps.V3User{}}
+func newSpyPool() *spyPool {
+	return &spyPool{listens: map[string]string{}, devices: map[string][]traps.Device{}, users: map[string][]traps.V3User{}}
 }
 
-func (s *spyRegistry) Register(policy string, devices []traps.Device, users []traps.V3User) {
+func (s *spyPool) Acquire(listen, policy string, devices []traps.Device, users []traps.V3User) (TrapLease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.registered[policy] = devices
+	if s.acquireErr != nil {
+		return nil, s.acquireErr
+	}
+	s.listens[policy] = listen
+	s.devices[policy] = devices
 	s.users[policy] = users
-	s.calls = append(s.calls, "register:"+policy)
+	s.calls = append(s.calls, "acquire:"+policy)
+	return &spyLease{pool: s, policy: policy}, nil
 }
 
-func (s *spyRegistry) Withdraw(policy string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.withdrawn = append(s.withdrawn, policy)
-	s.calls = append(s.calls, "withdraw:"+policy)
-}
-
-// callSequence is every call so far, in order.
-func (s *spyRegistry) callSequence() []string {
+func (s *spyPool) callSequence() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.calls...)
 }
 
-// A runner registers the addresses its targets expand to, with the v3 users
-// those targets carry, and withdraws them when it stops.
-func TestRunner_RegistersExpandedTargetsAndWithdrawsOnStop(t *testing.T) {
-	reg := newSpyRegistry()
-	pol := policyWithTargets("10.0.0.0/30", "router.example.com")
+type spyLease struct {
+	pool   *spyPool
+	policy string
+}
+
+func (l *spyLease) Release() {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	l.pool.released = append(l.pool.released, l.policy)
+	l.pool.calls = append(l.pool.calls, "release:"+l.policy)
+}
+
+func withTraps(p config.Policy, listen string) config.Policy {
+	p.Scope.Traps = &config.Traps{Listen: listen}
+	return p
+}
+
+// A runner acquires the socket its policy names with the addresses its
+// targets expand to and the v3 users those targets carry, and releases it
+// when it stops.
+func TestRunner_AcquiresExpandedTargetsAndReleasesOnStop(t *testing.T) {
+	pool := newSpyPool()
+	pol := withTraps(policyWithTargets("10.0.0.0/30", "router.example.com"), "0.0.0.0:1162")
 	pol.Scope.Authentication = v3AuthAuth()
-	r, err := NewRunner(t.Context(), testLogger, "p1", pol, &spyCollector{}, reg)
+	r, err := NewRunner(t.Context(), testLogger, "p1", pol, &spyCollector{}, pool)
 	require.NoError(t, err)
 
-	devices := reg.registered["p1"]
+	assert.Equal(t, "0.0.0.0:1162", pool.listens["p1"])
+	devices := pool.devices["p1"]
 	assert.Len(t, devices, 2, "a /30 is two hosts; the hostname target has no address and is not registered")
 	for _, d := range devices {
 		assert.Equal(t, "p1", d.Policy)
 		assert.True(t, d.Addr.Is4())
 	}
-	require.Len(t, reg.users["p1"], 1)
-	assert.Equal(t, pol.Scope.Authentication.Username, reg.users["p1"][0].Username)
+	require.Len(t, pool.users["p1"], 1)
+	assert.Equal(t, pol.Scope.Authentication.Username, pool.users["p1"][0].Username)
 
 	require.NoError(t, r.Stop())
-	assert.Equal(t, []string{"p1"}, reg.withdrawn)
+	assert.Equal(t, []string{"p1"}, pool.released)
 }
 
-func TestRunner_V2cTargetsRegisterNoUsers(t *testing.T) {
-	reg := newSpyRegistry()
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets("10.0.0.1"), &spyCollector{}, reg)
+func TestRunner_V2cTargetsAcquireNoUsers(t *testing.T) {
+	pool := newSpyPool()
+	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), ":162"), &spyCollector{}, pool)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
-	assert.Empty(t, reg.users["p1"])
-	assert.Len(t, reg.registered["p1"], 1)
+	assert.Empty(t, pool.users["p1"])
+	assert.Len(t, pool.devices["p1"], 1)
 }
 
-func TestRunner_NilRegistryIsTolerated(t *testing.T) {
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets("10.0.0.1"), &spyCollector{}, nil)
+// A policy that declares no traps never reaches the pool, and a nil pool is
+// tolerated by such a policy.
+func TestRunner_WithoutTrapsNeverTouchesThePool(t *testing.T) {
+	pool := newSpyPool()
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets("10.0.0.1"), &spyCollector{}, pool)
+	require.NoError(t, err)
+	require.NoError(t, r.Stop())
+	assert.Empty(t, pool.callSequence())
+
+	r, err = NewRunner(t.Context(), testLogger, "p2", policyWithTargets("10.0.0.1"), &spyCollector{}, nil)
 	require.NoError(t, err)
 	require.NoError(t, r.Stop())
 }
 
-// The manager threads the registry from its options to every runner it builds.
-func TestManager_PassesTheRegistryToRunners(t *testing.T) {
-	reg := newSpyRegistry()
-	m := NewManager(t.Context(), testLogger, Options{TrapRegistry: reg})
+// A bind failure is a start failure, with the pool's error in the message,
+// and it leaves nothing to release.
+func TestRunner_AcquireFailureFailsTheStart(t *testing.T) {
+	pool := newSpyPool()
+	pool.acquireErr = errors.New("binding trap socket 0.0.0.0:162: address already in use")
+	_, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), "0.0.0.0:162"), &spyCollector{}, pool)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "binding trap socket 0.0.0.0:162: address already in use")
+	assert.Empty(t, pool.released)
+}
+
+// A policy that declares traps but whose targets expand to no address still
+// acquires, with no devices, so its v3 users can authenticate and so the
+// socket is held for it; every trap it receives is dropped, which the runner
+// warns about at start.
+func TestRunner_TrapsWithNoAddressTargetsAcquiresEmpty(t *testing.T) {
+	pool := newSpyPool()
+	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("router.example.com"), ":162"), &spyCollector{}, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	assert.Equal(t, []string{"acquire:p1"}, pool.callSequence())
+	assert.Empty(t, pool.devices["p1"])
+}
+
+// The manager threads the pool from its options to every runner it builds.
+func TestManager_PassesThePoolToRunners(t *testing.T) {
+	pool := newSpyPool()
+	m := NewManager(t.Context(), testLogger, Options{TrapPool: pool})
 	policies, err := m.ParsePolicies([]byte(`
 policies:
   p1:
@@ -578,9 +630,12 @@ policies:
         community: public
       targets:
         - host: 10.0.0.1
+      traps:
+        listen: "0.0.0.0:1162"
 `))
 	require.NoError(t, err)
 	require.NoError(t, m.StartPolicy("p1", policies["p1"]))
 	t.Cleanup(func() { _ = m.Stop() })
-	assert.Len(t, reg.registered["p1"], 1)
+	assert.Len(t, pool.devices["p1"], 1)
+	assert.Equal(t, "0.0.0.0:1162", pool.listens["p1"])
 }

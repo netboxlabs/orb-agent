@@ -7,6 +7,8 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
 // validateTrapListen accepts host:port where host is empty, meaning every
@@ -31,4 +33,17 @@ func validateTrapListen(listen string) error {
 		return fmt.Errorf("scope.traps.listen: port must be 1 to 65535, not %q", port)
 	}
 	return nil
+}
+
+// TrapPool hands a policy the socket its traps arrive on. A runner acquires
+// as it starts, with the addresses its targets expand to and the v3 users it
+// carries, and releases as it stops. It is a narrow interface rather than a
+// back-reference to the pool, for the same reason Collector is.
+type TrapPool interface {
+	Acquire(listen, policy string, devices []traps.Device, users []traps.V3User) (TrapLease, error)
+}
+
+// TrapLease is one runner's hold on one socket.
+type TrapLease interface {
+	Release()
 }
