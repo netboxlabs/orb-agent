@@ -181,8 +181,15 @@ A trap is counted, not stored. Three metrics describe what arrived:
   at `noAuthNoPriv` is a supported configuration, and every trap it sends
   carries no authentication either, so all of its traps are dropped under this
   reason. This release cannot count them.
-- `snmp.traps_datagrams` counts every datagram read from any socket. Its gap
-  against the other two is loss you cannot otherwise see.
+- `snmp.traps_datagrams` counts every datagram read from any socket. Every
+  datagram read ends as one drop or as one trap, so `traps_datagrams` equals
+  `traps_dropped` plus the datagrams that produced a trap. `traps_received` is
+  not that second number: a trap counts once under every policy on the socket
+  that names its source, so when two policies name the same device the
+  per-policy series add up to more than the datagrams behind them. Use
+  `traps_datagrams` as the rate the sockets are being read at, against what
+  your devices send; a datagram the kernel discarded before the read appears
+  in none of the three.
 
 `trap_name` is drawn from a closed set: the six standard traps of RFC 1215 and
 the trap definitions bundled with the profiles, about two hundred names. Any
