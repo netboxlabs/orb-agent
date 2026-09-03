@@ -118,12 +118,17 @@ func (l *Lease) Release() {
 		if e.refs == 0 {
 			delete(p.entries, l.listen)
 			closing = e.receiver
+			// Closed under the lock, because the entry is already out of the
+			// map: a policy acquiring the same string in the gap would bind
+			// while this socket was still open and fail with the operating
+			// system's address-in-use error.
+			closing.close()
 		}
 		p.mu.Unlock()
-		// Stopping waits for the read goroutine, up to its bound; that wait
-		// is spent outside the lock so another policy can acquire meanwhile.
+		// The wait for the read goroutine is spent outside the lock, so
+		// another policy can acquire meanwhile.
 		if closing != nil {
-			closing.Stop()
+			closing.wait()
 			p.logger.Info("Trap receiver closed", "address", config.SanitizeLogValue(l.listen))
 		}
 	})
@@ -136,9 +141,14 @@ func (p *Pool) Close() {
 	entries := p.entries
 	p.entries = make(map[string]*poolEntry)
 	p.closed = true
+	// Closed under the lock and waited for outside it, the same split Release
+	// makes, so no socket is left open once the map no longer names it.
+	for _, e := range entries {
+		e.receiver.close()
+	}
 	p.mu.Unlock()
 	for _, e := range entries {
-		e.receiver.Stop()
+		e.receiver.wait()
 	}
 }
 

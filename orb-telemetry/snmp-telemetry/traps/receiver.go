@@ -92,14 +92,27 @@ func (r *Receiver) Addr() netip.AddrPort {
 
 // Stop closes the socket and waits briefly for the loop to exit.
 func (r *Receiver) Stop() {
+	r.close()
+	r.wait()
+}
+
+// close closes the socket, which is what ends the read loop, and does nothing
+// on a second call. It is separate from the wait so a caller holding its own
+// lock can close under it: while this socket is open, another bind of the
+// same address fails, and the wait below is far too long to hold a lock for.
+func (r *Receiver) close() {
 	r.stopOnce.Do(func() {
 		_ = r.conn.Close()
-		select {
-		case <-r.done:
-		case <-time.After(stopTimeout):
-			r.logger.Warn("Trap receiver did not stop within its bound", "timeout", stopTimeout)
-		}
 	})
+}
+
+// wait waits for the read goroutine to exit, up to its bound.
+func (r *Receiver) wait() {
+	select {
+	case <-r.done:
+	case <-time.After(stopTimeout):
+		r.logger.Warn("Trap receiver did not stop within its bound", "timeout", stopTimeout)
+	}
 }
 
 // rebuildUsersIfChanged refreshes gosnmp's credential table when the registry

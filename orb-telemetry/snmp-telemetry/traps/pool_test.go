@@ -3,6 +3,8 @@ package traps
 import (
 	"net"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -183,4 +185,61 @@ func TestPool_AcquireAfterCloseFails(t *testing.T) {
 	assert.Nil(t, lease)
 	assert.Contains(t, err.Error(), "trap pool is closed")
 	assert.Equal(t, 0, p.size(), "and left no entry behind")
+}
+
+// The last release closes the socket under the pool lock, so a policy
+// acquiring the same string cannot find the address still in use. Closing
+// after the unlock leaves a window where the entry is gone but the socket is
+// open, and a bind in that window fails.
+func TestPool_ReacquireAfterLastReleaseNeverSeesAddressInUse(t *testing.T) {
+	// A port the kernel just handed out and nothing holds, so the loop below
+	// binds a fixed string rather than a fresh one each time.
+	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	listen := probe.LocalAddr().String()
+	require.NoError(t, probe.Close())
+
+	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	t.Cleanup(p.Close)
+	for i := range 50 {
+		lease, err := p.Acquire(listen, "core", nil, nil)
+		require.NoErrorf(t, err, "acquire %d of %s", i, listen)
+		lease.Release()
+	}
+	final, err := p.Acquire(listen, "core", nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(final.Release)
+	assert.Equal(t, 1, p.refs(listen))
+}
+
+// The same guarantee under contention, which is where the window was
+// reachable: four goroutines taking and dropping the last lease on one string
+// see the socket closed before the entry can be replaced, so no bind of it
+// ever finds the address in use.
+func TestPool_ConcurrentReacquireNeverSeesAddressInUse(t *testing.T) {
+	probe, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	listen := probe.LocalAddr().String()
+	require.NoError(t, probe.Close())
+
+	p := NewPool(NewTally(testLogger), BuildNames(nil), testLogger)
+	t.Cleanup(p.Close)
+	var failures atomic.Int64
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 500 {
+				lease, err := p.Acquire(listen, "core", nil, nil)
+				if err != nil {
+					failures.Add(1)
+					continue
+				}
+				lease.Release()
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int64(0), failures.Load(), "a bind failed while another holder's socket was still closing")
 }
