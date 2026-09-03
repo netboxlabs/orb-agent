@@ -134,6 +134,13 @@ func v3Unauthenticated(username, engineID string) []byte {
 // assembled by hand here.
 func v3AuthPrivTrap(t *testing.T, u V3User, engineID string) []byte {
 	t.Helper()
+	return v3AuthPrivTrapAt(t, u, engineID, 1, 1)
+}
+
+// v3AuthPrivTrapAt is v3AuthPrivTrap with the sending engine's boots and time
+// chosen by the test, which is what the receiver's time window judges.
+func v3AuthPrivTrapAt(t *testing.T, u V3User, engineID string, boots, engineTime uint32) []byte {
+	t.Helper()
 	authProto, err := snmp.AuthProtocol(u.AuthProtocol)
 	require.NoError(t, err)
 	privProto, err := snmp.PrivProtocol(u.PrivProtocol)
@@ -147,8 +154,8 @@ func v3AuthPrivTrap(t *testing.T, u V3User, engineID string) []byte {
 		PrivacyProtocol:          privProto,
 		PrivacyPassphrase:        u.PrivPassphrase,
 		AuthoritativeEngineID:    engineID,
-		AuthoritativeEngineBoots: 1,
-		AuthoritativeEngineTime:  1,
+		AuthoritativeEngineBoots: boots,
+		AuthoritativeEngineTime:  engineTime,
 		Logger:                   logger,
 	}
 	require.NoError(t, sp.InitSecurityKeys())

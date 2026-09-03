@@ -43,6 +43,9 @@ const (
 	DropMalformed         DropReason = "malformed"
 	DropUnsupportedPDU    DropReason = "unsupported_pdu"
 	DropV3Unauthenticated DropReason = "v3_unauthenticated"
+	// DropV3NotInTimeWindow is an authenticated v3 trap whose engine boots
+	// or time fall outside RFC 3414's window for its engine: a replay.
+	DropV3NotInTimeWindow DropReason = "v3_not_in_time_window"
 	DropNoTrapOID         DropReason = "no_trap_oid"
 )
 

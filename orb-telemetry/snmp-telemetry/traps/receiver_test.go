@@ -1,8 +1,12 @@
 package traps
 
 import (
+	"bytes"
+	"encoding/hex"
+	"log/slog"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,9 +25,16 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newHarnessWith(t, testLogger)
+}
+
+// newHarnessWith binds the receiver with the given logger, for tests that
+// read what the receiver logs.
+func newHarnessWith(t *testing.T, logger *slog.Logger) *harness {
+	t.Helper()
 	reg := NewRegistry()
-	tally := NewTally(testLogger)
-	rcv, err := Listen("127.0.0.1:0", reg, tally, BuildNames(nil), testLogger)
+	tally := NewTally(logger)
+	rcv, err := Listen("127.0.0.1:0", reg, tally, BuildNames(nil), logger)
 	require.NoError(t, err)
 	t.Cleanup(rcv.Stop)
 	sender, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(rcv.Addr()))
@@ -285,4 +296,78 @@ func TestReceiver_StopIsPromptAndIdempotent(t *testing.T) {
 	h.rcv.Stop()
 	h.rcv.Stop()
 	assert.Less(t, time.Since(start), time.Second)
+}
+
+// RFC 3414 timeliness on the non-authoritative side: a trap whose engine
+// boots are lower than last seen, or whose engine time is more than the
+// window behind the clock learned for that engine, is a replay and is
+// dropped even though its digest verifies. A later time is accepted and
+// learned, so a device's own stream is never refused.
+func TestReceiver_RejectsAV3TrapOutsideItsEngineTimeWindow(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	h := newHarness(t)
+	src := h.registerSender(t, "core", trapAuthPrivUser)
+	counted := func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) }
+	replayed := func() int64 { return h.tally.droppedCount(DropV3NotInTimeWindow) }
+
+	h.send(t, v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 5, 1000))
+	waitFor(t, 1, counted)
+	h.send(t, v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 4, 1000))
+	waitFor(t, 1, replayed)
+	h.send(t, v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 5, 700))
+	waitFor(t, 2, replayed)
+	h.send(t, v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 5, 1001))
+	waitFor(t, 2, counted)
+	h.send(t, v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 6, 0))
+	waitFor(t, 3, counted)
+	assert.Equal(t, int64(2), replayed())
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3Unauthenticated))
+}
+
+// A malformed v1 or v2c datagram from a registered sender is the operator's
+// own device misbehaving, and gosnmp reports such a fault by quoting the bytes
+// it could not parse, which begin right after the community. The community is
+// the polling credential more often than not, so the log carries the fault's
+// category and nothing the packet said. The corruption here is the one the
+// poller's own redaction documents: a community length octet larger than the
+// packet, which makes the parser dump everything from the community on.
+func TestReceiver_MalformedDetailNeverQuotesThePacket(t *testing.T) {
+	buf := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	h := newHarnessWith(t, logger)
+	h.registerSender(t, "core")
+
+	const community = "secretcommunity"
+	pkt := v2cTrap(community)
+	at := bytes.Index(pkt, append([]byte{0x04, byte(len(community))}, community...))
+	require.Positive(t, at, "the community octet string is in the packet")
+	pkt[at+1] = 0x7f
+
+	h.send(t, pkt)
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
+	out := buf.String()
+	assert.Contains(t, out, "reason=malformed")
+	assert.NotContains(t, out, community)
+	assert.NotContains(t, out, hex.EncodeToString([]byte(community)))
+	assert.Contains(t, out, "detail=\"error parsing community string\"")
+}
+
+// lockedBuffer is a bytes.Buffer the receive goroutine can write while the
+// test reads.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +43,7 @@ type Receiver struct {
 
 	params   *gosnmp.GoSNMP
 	usersGen uint64
+	clocks   *timeliness
 
 	stopOnce sync.Once
 	done     chan struct{}
@@ -68,6 +70,7 @@ func Listen(addr string, reg *Registry, tally *Tally, names map[string]string, l
 		names:  names,
 		logger: logger,
 		done:   make(chan struct{}),
+		clocks: newTimeliness(time.Now),
 	}
 	r.params = &gosnmp.GoSNMP{
 		// Version3 with the user security model is what lets UnmarshalTrap
@@ -186,7 +189,7 @@ func (r *Receiver) loop() {
 		r.rebuildUsersIfChanged()
 		pkt, err := r.parse(buf[:n])
 		if err != nil {
-			r.drop(DropMalformed, src, err.Error())
+			r.drop(DropMalformed, src, parseErrorCategory(err))
 			continue
 		}
 
@@ -194,6 +197,16 @@ func (r *Receiver) loop() {
 		if reason != "" {
 			r.drop(reason, src, "")
 			continue
+		}
+		// Decode has established that a v3 trap carries USM parameters and a
+		// verified digest, so the boots and time in them are the engine's
+		// own word; what remains is whether that word is current.
+		if tr.Version == V3 {
+			sp := pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters)
+			if !r.clocks.check(sp.AuthoritativeEngineID, sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
+				r.drop(DropV3NotInTimeWindow, src, "")
+				continue
+			}
 		}
 
 		// The agent-addr override is a claim about provenance, and only a
@@ -242,6 +255,22 @@ func (r *Receiver) parse(b []byte) (pkt *gosnmp.SnmpPacket, err error) {
 		}
 	}()
 	return r.params.UnmarshalTrap(b, false)
+}
+
+// parseErrorCategory keeps the part of a parse error that names the fault and
+// drops the part that quotes the packet. gosnmp reports a malformed message
+// by appending the bytes it could not parse, and in a v1 or v2c message those
+// begin at or just after the community, which is the polling credential more
+// often than not. The poller redacts the community it knows from such errors;
+// the receiver knows no community, so it keeps the category alone, which is
+// everything before the first colon or parenthesis: the stage that failed
+// and what it expected.
+func parseErrorCategory(err error) string {
+	s := err.Error()
+	if i := strings.IndexAny(s, ":("); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 func (r *Receiver) drop(reason DropReason, src netip.Addr, detail string) {
