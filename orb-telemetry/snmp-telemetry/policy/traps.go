@@ -36,11 +36,11 @@ func validateTrapListen(listen string) error {
 }
 
 // TrapPool hands a policy the socket its traps arrive on. A runner acquires
-// as it starts, with the addresses its targets expand to and the v3 users it
-// carries, and releases as it stops. It is a narrow interface rather than a
+// as it starts, with the addresses its targets expand to and the v3 user
+// each is polled with, and releases as it stops. It is a narrow interface rather than a
 // back-reference to the pool, for the same reason Collector is.
 type TrapPool interface {
-	Acquire(listen, policy string, devices []traps.Device, users []traps.V3User) (TrapLease, error)
+	Acquire(listen, policy string, devices []traps.Device) (TrapLease, error)
 }
 
 // TrapLease is one runner's hold on one socket.

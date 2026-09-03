@@ -222,8 +222,8 @@ func newTrapPool(pool *traps.Pool) trapPool {
 	return trapPool{pool: pool}
 }
 
-func (p trapPool) Acquire(listen, policyName string, devices []traps.Device, users []traps.V3User) (policy.TrapLease, error) {
-	lease, err := p.pool.Acquire(listen, policyName, devices, users)
+func (p trapPool) Acquire(listen, policyName string, devices []traps.Device) (policy.TrapLease, error) {
+	lease, err := p.pool.Acquire(listen, policyName, devices)
 	if err != nil {
 		return nil, err
 	}

@@ -43,9 +43,9 @@ type Receiver struct {
 
 	params   *gosnmp.GoSNMP
 	usersGen uint64
-	// tables caches one credential table per set of claiming policies,
-	// keyed by the sorted policy names joined; reset when the registry
-	// changes. Only the loop goroutine touches it.
+	// tables caches one credential table per distinct set of users, keyed
+	// by their contents; reset when the registry changes. Only the loop
+	// goroutine touches it.
 	tables map[string]*gosnmp.SnmpV3SecurityParametersTable
 	clocks *timeliness
 
@@ -121,26 +121,30 @@ func (r *Receiver) wait() {
 	}
 }
 
-// tableFor returns gosnmp's credential table for a datagram whose source the
-// given policies claimed: the v3 users of those policies and no others.
-// gosnmp keys its table by username and tries every entry under a name in
-// turn, localising keys for each, so a table holding every user on the
-// socket would make a trap from a device whose credential sits late in a
-// shared username cost the receive goroutine one localisation per candidate.
-// Tables are cached per policy set and rebuilt whole when the registry
-// changes, since gosnmp's table has Add but no Remove. Only the loop
-// goroutine touches r.params and the cache, so this needs no lock.
-func (r *Receiver) tableFor(policies []string) *gosnmp.SnmpV3SecurityParametersTable {
+// tableFor returns gosnmp's credential table for a datagram from src: the v3
+// users the claiming policies poll that device with, and no others. gosnmp
+// keys its table by username and tries every entry under a name in turn,
+// localising keys for each, so a wider table would both let another
+// device's credential vouch for this source and cost the receive goroutine
+// one localisation per candidate. Tables are cached per distinct user set
+// and rebuilt whole when the registry changes, since gosnmp's table has Add
+// but no Remove. Only the loop goroutine touches r.params and the cache, so
+// this needs no lock.
+func (r *Receiver) tableFor(src netip.Addr) *gosnmp.SnmpV3SecurityParametersTable {
 	if gen := r.reg.Generation(); r.tables == nil || gen != r.usersGen {
 		r.tables = make(map[string]*gosnmp.SnmpV3SecurityParametersTable)
 		r.usersGen = gen
 	}
-	key := strings.Join(policies, "\x00")
-	if table, ok := r.tables[key]; ok {
+	users := r.reg.UsersAt(src)
+	var key strings.Builder
+	for _, u := range users {
+		key.WriteString(u.Username + "\x00" + u.AuthProtocol + "\x00" + u.AuthPassphrase + "\x00" + u.PrivProtocol + "\x00" + u.PrivPassphrase + "\x01")
+	}
+	if table, ok := r.tables[key.String()]; ok {
 		return table
 	}
 	table := gosnmp.NewSnmpV3SecurityParametersTable(r.params.Logger)
-	for _, u := range r.reg.UsersFor(policies) {
+	for _, u := range users {
 		authProto, err := snmp.AuthProtocol(u.AuthProtocol)
 		if err != nil {
 			r.logger.Warn("Skipping a trap v3 user with an unsupported auth protocol", "username", u.Username, "error", err)
@@ -163,9 +167,12 @@ func (r *Receiver) tableFor(policies []string) *gosnmp.SnmpV3SecurityParametersT
 			r.logger.Warn("Could not add a trap v3 user", "username", u.Username, "error", err)
 		}
 	}
-	r.tables[key] = table
+	r.tables[key.String()] = table
 	return table
 }
+
+// tableCacheSize is a test accessor.
+func (r *Receiver) tableCacheSize() int { return len(r.tables) }
 
 // loop is the receive path, in the order the spec's section 6.2 gives: read,
 // canonicalise, look the source up before the datagram is judged on anything
@@ -199,7 +206,7 @@ func (r *Receiver) loop() {
 			continue
 		}
 
-		r.params.TrapSecurityParametersTable = r.tableFor(policies)
+		r.params.TrapSecurityParametersTable = r.tableFor(src)
 		pkt, err := r.parse(buf[:n])
 		if err != nil {
 			r.drop(DropMalformed, src, parseErrorCategory(err))
@@ -213,10 +220,13 @@ func (r *Receiver) loop() {
 		}
 		// Decode has established that a v3 trap carries USM parameters and a
 		// verified digest, so the boots and time in them are the engine's
-		// own word; what remains is whether that word is current.
+		// own word; what remains is whether that word is current. The clock
+		// is kept per sender as well as per engine ID: a device writing
+		// another device's engine ID with higher boots, authenticated with
+		// its own credential, poisons only its own clock.
 		if tr.Version == V3 {
 			sp := pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters)
-			if !r.clocks.check(sp.AuthoritativeEngineID, sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
+			if !r.clocks.check(src.String()+"|"+sp.AuthoritativeEngineID, sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
 				r.drop(DropV3NotInTimeWindow, src, "")
 				continue
 			}

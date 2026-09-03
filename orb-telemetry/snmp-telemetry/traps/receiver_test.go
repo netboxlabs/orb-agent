@@ -32,9 +32,16 @@ func newHarness(t *testing.T) *harness {
 // read what the receiver logs.
 func newHarnessWith(t *testing.T, logger *slog.Logger) *harness {
 	t.Helper()
+	return newHarnessOn(t, "127.0.0.1:0", logger)
+}
+
+// newHarnessOn binds the receiver on the given address, for tests that need
+// a dual-stack socket to tell two loopback senders apart.
+func newHarnessOn(t *testing.T, listen string, logger *slog.Logger) *harness {
+	t.Helper()
 	reg := NewRegistry()
 	tally := NewTally(logger)
-	rcv, err := Listen("127.0.0.1:0", reg, tally, BuildNames(nil), logger)
+	rcv, err := Listen(listen, reg, tally, BuildNames(nil), logger)
 	require.NoError(t, err)
 	t.Cleanup(rcv.Stop)
 	sender, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(rcv.Addr()))
@@ -48,8 +55,23 @@ func newHarnessWith(t *testing.T, logger *slog.Logger) *harness {
 func (h *harness) registerSender(t *testing.T, policy string, users ...V3User) netip.Addr {
 	t.Helper()
 	local := h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr()
-	h.reg.Register(policy, []Device{{Policy: policy, Addr: local}}, users)
+	d := Device{Policy: policy, Addr: local}
+	if len(users) > 0 {
+		d.User = &users[0]
+	}
+	h.reg.Register(policy, []Device{d})
 	return canonical(local)
+}
+
+// newSenderOn opens a sending socket towards the receiver from the given
+// loopback address, so that a dual-stack receiver sees 127.0.0.1 and ::1 as
+// two devices.
+func (h *harness) newSenderOn(t *testing.T, network string, ip net.IP) (*net.UDPConn, netip.Addr) {
+	t.Helper()
+	conn, err := net.DialUDP(network, nil, &net.UDPAddr{IP: ip, Port: int(h.rcv.Addr().Port())})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	return conn, canonical(conn.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
 }
 
 func (h *harness) send(t *testing.T, pkt []byte) {
@@ -105,7 +127,7 @@ func TestReceiver_DropsAnUnknownSourceBeforeParsing(t *testing.T) {
 func TestReceiver_CountsOncePerClaimingPolicy(t *testing.T) {
 	h := newHarness(t)
 	src := h.registerSender(t, "core")
-	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src}}, nil)
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src}})
 	h.send(t, v2cTrap("public"))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "edge", "linkDown", V2c) })
@@ -254,7 +276,7 @@ func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
 func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
 	h := newHarness(t)
 	h.registerSender(t, "core")
-	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}})
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1) })
 }
@@ -264,7 +286,7 @@ func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
 // dropped as an unknown source before the field is ever read.
 func TestReceiver_V1AgentAddrIsIgnoredFromAnUnregisteredSender(t *testing.T) {
 	h := newHarness(t)
-	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}})
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1))
@@ -385,10 +407,11 @@ func TestReceiver_DropsAVersionItDoesNotSpeak(t *testing.T) {
 
 // gosnmp keys its credential table by username and tries every entry under a
 // name in turn, localising keys for each, so the table a trap is parsed with
-// holds only the users of the policies that claimed its source. A credential
-// another policy carries under the same username is not tried: the trap is
-// not authenticated by it, and the receive goroutine does not pay for it.
-func TestReceiver_TriesOnlyTheSourcePoliciesCredentials(t *testing.T) {
+// holds only the credentials of the devices claimed at its source. A
+// credential the same policy assigned to another device is not tried: it
+// does not authenticate this source, and the receive goroutine does not pay
+// for it. When the registry changes, the table follows it.
+func TestReceiver_TriesOnlyTheSourceDevicesCredentials(t *testing.T) {
 	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
 	mine := trapAuthPrivUser
 	theirs := trapAuthPrivUser
@@ -396,20 +419,44 @@ func TestReceiver_TriesOnlyTheSourcePoliciesCredentials(t *testing.T) {
 	theirs.PrivPassphrase = "someone-elses-privpass"
 
 	h := newHarness(t)
-	src := h.registerSender(t, "core", mine)
-	h.reg.Register("edge", []Device{{Policy: "edge", Addr: netip.MustParseAddr("10.9.9.9")}}, []V3User{theirs})
+	src := canonical(h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
+	h.reg.Register("core", []Device{
+		{Policy: "core", Addr: src, User: &mine},
+		{Policy: "core", Addr: netip.MustParseAddr("10.9.9.9"), User: &theirs},
+	})
 
 	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 1))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
-	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3), "another policy's credential does not authenticate this source")
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V3), "another device's credential does not authenticate this source")
 
 	h.send(t, v3AuthPrivTrapAt(t, mine, engineID, 1, 2))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
 
-	// Once the policy naming the source carries the credential, it is
-	// tried: the same policy set, so the same cache key, and the table must
-	// follow the registry rather than serve what it built before.
-	h.reg.Register("core", []Device{{Policy: "core", Addr: src}}, []V3User{mine, theirs})
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src, User: &theirs}})
 	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 3))
 	waitFor(t, 2, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+	assert.LessOrEqual(t, h.rcv.tableCacheSize(), 1, "the cache was rebuilt for the new registry generation")
+}
+
+// The engine clocks are kept per sender as well as per engine ID. A device
+// that authenticates with its own credential and writes another device's
+// engine ID with higher boots poisons only its own clock; the other device's
+// traps under that engine ID are still inside their own window.
+func TestReceiver_KeepsEngineClocksPerSender(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	h := newHarnessOn(t, "[::]:0", testLogger)
+	first, src1 := h.newSenderOn(t, "udp4", net.IPv4(127, 0, 0, 1))
+	other, src2 := h.newSenderOn(t, "udp6", net.IPv6loopback)
+	require.NotEqual(t, src1, src2, "the two senders must be two devices to the registry")
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src1, User: &trapAuthPrivUser}})
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src2, User: &trapAuthPrivUser}})
+
+	_, err := first.Write(v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 9, 1))
+	require.NoError(t, err)
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src1.String(), "core", "linkDown", V3) })
+
+	_, err = other.Write(v3AuthPrivTrapAt(t, trapAuthPrivUser, engineID, 5, 1))
+	require.NoError(t, err)
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src2.String(), "edge", "linkDown", V3) })
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3NotInTimeWindow), "boots 5 after boots 9 is only a replay for the same sender")
 }

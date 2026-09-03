@@ -499,7 +499,6 @@ type spyPool struct {
 	mu       sync.Mutex
 	listens  map[string]string // policy -> listen string
 	devices  map[string][]traps.Device
-	users    map[string][]traps.V3User
 	released []string
 	// calls is every Acquire and Release in the order they arrived, which
 	// is what a same-name replacement is judged on: the same two names in the
@@ -511,10 +510,10 @@ type spyPool struct {
 }
 
 func newSpyPool() *spyPool {
-	return &spyPool{listens: map[string]string{}, devices: map[string][]traps.Device{}, users: map[string][]traps.V3User{}}
+	return &spyPool{listens: map[string]string{}, devices: map[string][]traps.Device{}}
 }
 
-func (s *spyPool) Acquire(listen, policy string, devices []traps.Device, users []traps.V3User) (TrapLease, error) {
+func (s *spyPool) Acquire(listen, policy string, devices []traps.Device) (TrapLease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.acquireErr != nil {
@@ -522,7 +521,6 @@ func (s *spyPool) Acquire(listen, policy string, devices []traps.Device, users [
 	}
 	s.listens[policy] = listen
 	s.devices[policy] = devices
-	s.users[policy] = users
 	s.calls = append(s.calls, "acquire:"+policy)
 	return &spyLease{pool: s, policy: policy}, nil
 }
@@ -567,8 +565,10 @@ func TestRunner_AcquiresExpandedTargetsAndReleasesOnStop(t *testing.T) {
 		assert.Equal(t, "p1", d.Policy)
 		assert.True(t, d.Addr.Is4())
 	}
-	require.Len(t, pool.users["p1"], 1)
-	assert.Equal(t, pol.Scope.Authentication.Username, pool.users["p1"][0].Username)
+	for _, d := range devices {
+		require.NotNil(t, d.User, "a v3 device carries the credential its target polls with")
+		assert.Equal(t, pol.Scope.Authentication.Username, d.User.Username)
+	}
 
 	require.NoError(t, r.Stop())
 	assert.Equal(t, []string{"p1"}, pool.released)
@@ -579,8 +579,8 @@ func TestRunner_V2cTargetsAcquireNoUsers(t *testing.T) {
 	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), ":162"), &spyCollector{}, pool)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
-	assert.Empty(t, pool.users["p1"])
-	assert.Len(t, pool.devices["p1"], 1)
+	require.Len(t, pool.devices["p1"], 1)
+	assert.Nil(t, pool.devices["p1"][0].User, "a v2c device carries no v3 credential")
 }
 
 // A policy that declares no traps never reaches the pool, and a nil pool is
@@ -644,4 +644,26 @@ policies:
 	t.Cleanup(func() { _ = m.Stop() })
 	assert.Len(t, pool.devices["p1"], 1)
 	assert.Equal(t, "0.0.0.0:1162", pool.listens["p1"])
+}
+
+// A target with its own v3 authentication registers with that credential,
+// not the policy-level one, so the receiver tries the right secret for the
+// right device.
+func TestRunner_RegistersEachDevicesOwnCredential(t *testing.T) {
+	pool := newSpyPool()
+	pol := withTraps(policyWithTargets("10.0.0.1", "10.0.0.2"), ":162")
+	pol.Scope.Authentication = v3AuthAuth()
+	own := v3AuthAuth()
+	own.Username = "second-device"
+	pol.Scope.Targets[1].Authentication = &own
+	r, err := NewRunner(t.Context(), testLogger, "p1", pol, &spyCollector{}, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+
+	byAddr := map[string]string{}
+	for _, d := range pool.devices["p1"] {
+		require.NotNil(t, d.User)
+		byAddr[d.Addr.String()] = d.User.Username
+	}
+	assert.Equal(t, map[string]string{"10.0.0.1": pol.Scope.Authentication.Username, "10.0.0.2": "second-device"}, byAddr)
 }

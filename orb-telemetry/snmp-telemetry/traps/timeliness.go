@@ -52,8 +52,10 @@ func newTimeliness(now func() time.Time) *timeliness {
 	return &timeliness{clocks: make(map[string]engineClock), now: now}
 }
 
-// check reports whether a message carrying boots and engineTime from engineID
-// is inside the window, learning the engine or advancing its clock as it goes.
+// check reports whether a message carrying boots and engineTime from the
+// engine keyed by engineID, which the receiver composes from the sender's
+// address and the wire engine ID, is inside the window, learning the engine
+// or advancing its clock as it goes.
 func (w *timeliness) check(engineID string, boots, engineTime uint32) bool {
 	if boots == maxEngineBoots {
 		return false

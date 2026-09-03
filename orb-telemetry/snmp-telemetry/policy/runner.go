@@ -219,7 +219,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		if pool == nil {
 			return nil, errors.New("policy declares scope.traps but this backend has no trap pool")
 		}
-		devices := trapDevices(name, expanded)
+		devices := trapDevices(runner, expanded)
 		if len(devices) == 0 {
 			// Hostname targets carry no address to match a source against,
 			// so a policy made only of them holds the socket and receives
@@ -227,7 +227,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			logger.Warn("Policy receives traps but none of its targets is an address, every trap it receives will be dropped as unknown_source",
 				"policy", config.SanitizeLogValue(name), "listen", config.SanitizeLogValue(policy.Scope.Traps.Listen))
 		}
-		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices, trapUsers(runner, expanded))
+		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices)
 		if err != nil {
 			return nil, err
 		}
@@ -477,44 +477,29 @@ func (r *Runner) Stop() error {
 	return err
 }
 
-// trapDevices is the address each expanded target names. A target that is a
-// hostname rather than an address has none and is skipped; the README says
-// such a target does not receive traps in this phase.
-func trapDevices(policy string, targets []config.Target) []traps.Device {
+// trapDevices is the address each expanded target names, with the v3 user the
+// target is polled with, so the receiver authenticates a trap from that
+// device with that credential and no other. A target that is a hostname
+// rather than an address has none and is skipped; the README says such a
+// target does not receive traps in this phase.
+func trapDevices(r *Runner, targets []config.Target) []traps.Device {
 	out := make([]traps.Device, 0, len(targets))
 	for _, t := range targets {
 		addr, err := netip.ParseAddr(t.Host)
 		if err != nil {
 			continue
 		}
-		out = append(out, traps.Device{Policy: policy, Addr: addr})
-	}
-	return out
-}
-
-// trapUsers is the v3 credential each expanded target polls with, deduplicated
-// on every field, so the receiver can authenticate a trap from that device
-// with the same user the poller uses.
-func trapUsers(r *Runner, targets []config.Target) []traps.V3User {
-	seen := make(map[traps.V3User]struct{})
-	var out []traps.V3User
-	for _, t := range targets {
-		auth := r.resolveTargetAuthentication(t)
-		if auth == nil || normalizeProtocolVersion(auth.ProtocolVersion) != "SNMPv3" {
-			continue
+		d := traps.Device{Policy: r.name, Addr: addr}
+		if auth := r.resolveTargetAuthentication(t); auth != nil && normalizeProtocolVersion(auth.ProtocolVersion) == "SNMPv3" {
+			d.User = &traps.V3User{
+				Username:       auth.Username,
+				AuthProtocol:   auth.AuthProtocol,
+				AuthPassphrase: auth.AuthPassphrase,
+				PrivProtocol:   auth.PrivProtocol,
+				PrivPassphrase: auth.PrivPassphrase,
+			}
 		}
-		u := traps.V3User{
-			Username:       auth.Username,
-			AuthProtocol:   auth.AuthProtocol,
-			AuthPassphrase: auth.AuthPassphrase,
-			PrivProtocol:   auth.PrivProtocol,
-			PrivPassphrase: auth.PrivPassphrase,
-		}
-		if _, dup := seen[u]; dup {
-			continue
-		}
-		seen[u] = struct{}{}
-		out = append(out, u)
+		out = append(out, d)
 	}
 	return out
 }

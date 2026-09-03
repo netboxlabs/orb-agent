@@ -54,7 +54,7 @@ func NewPool(tally *Tally, names map[string]string, logger *slog.Logger) *Pool {
 	return &Pool{tally: tally, names: names, logger: logger, entries: make(map[string]*poolEntry)}
 }
 
-// Acquire registers the policy's devices and users on the socket for listen,
+// Acquire registers the policy's devices, each with its own v3 user, on the socket for listen,
 // binding it first when no policy holds it yet. A bind failure is returned as
 // Listen reports it and leaves the pool unchanged. A closed pool binds
 // nothing: the socket would have no one left to stop it.
@@ -63,7 +63,7 @@ func NewPool(tally *Tally, names map[string]string, logger *slog.Logger) *Pool {
 // replaces a policy's claims rather than accumulating them, so a second
 // acquire for the same pair would leave the policy holding the entry twice
 // while naming its devices once.
-func (p *Pool) Acquire(listen, policy string, devices []Device, users []V3User) (*Lease, error) {
+func (p *Pool) Acquire(listen, policy string, devices []Device) (*Lease, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
@@ -82,7 +82,7 @@ func (p *Pool) Acquire(listen, policy string, devices []Device, users []V3User) 
 	} else {
 		p.logger.Debug("Policy joined an open trap socket", "address", config.SanitizeLogValue(listen), "policy", config.SanitizeLogValue(policy), "holders", e.refs+1)
 	}
-	e.registry.Register(policy, devices, users)
+	e.registry.Register(policy, devices)
 	e.refs++
 	return &Lease{pool: p, entry: e, listen: listen, policy: policy}, nil
 }
@@ -186,13 +186,13 @@ func (p *Pool) lookup(listen string, a netip.Addr) []string {
 	return nil
 }
 
-func (p *Pool) register(listen, policy string, devices []Device, users []V3User) bool {
+func (p *Pool) register(listen, policy string, devices []Device) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	e, ok := p.entries[listen]
 	if !ok {
 		return false
 	}
-	e.registry.Register(policy, devices, users)
+	e.registry.Register(policy, devices)
 	return true
 }

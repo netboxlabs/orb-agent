@@ -381,11 +381,11 @@ func TestTrapPoolAdapter(t *testing.T) {
 	t.Cleanup(pool.Close)
 	var adapted policy.TrapPool = trapPool{pool: pool}
 
-	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil, nil)
+	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil)
 	require.Error(t, err)
 	assert.True(t, lease == nil, "an error must come with an untyped nil lease")
 
-	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil, nil)
+	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil)
 	require.NoError(t, err)
 	require.NotNil(t, lease)
 	lease.Release()
