@@ -77,3 +77,20 @@ func TestResolve_TrapsAreNotInheritedThroughExtends(t *testing.T) {
 	require.Len(t, parent.Traps, 1)
 	assert.Equal(t, "parentTrap", parent.Traps[0].Name)
 }
+
+// One bundled file, ruckus/Ruckus_Contoller_SNMP.yml, declares its three
+// traps as flat metric entries with `type: trap` rather than under `traps:`.
+// The loader keeps such entries unfolded, since nothing polls them, and the
+// name map reads them so those traps are named rather than labelled other.
+func TestTrapNames_ReadsFlatTrapEntries(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+
+	names := TrapNames(all)
+	assert.Equal(t, "ruckusSCGAPDisconnectedTrap", names["1.3.6.1.4.1.25053.2.10.1.23"])
+	assert.Equal(t, "ruckusSCGAPRebootTrap", names["1.3.6.1.4.1.25053.2.10.1.25"], "written with a leading dot in the file")
+	assert.Equal(t, "ruckusSCGAPLostHeartbeatTrap", names["1.3.6.1.4.1.25053.2.10.1.24"])
+	assert.NotContains(t, names, "1.3.6.1.4.1.25053.1.8.1.1.1.1.2.1.11", "a flat gauge entry is not a trap")
+}
