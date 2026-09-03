@@ -48,6 +48,18 @@ type receivedKey struct {
 	version                    Version
 }
 
+// series is one received series' total and whether it is exported. A
+// withdrawn policy's series go dormant rather than away: the counter is
+// monotonic and the SDK reports a series from the provider's start time, so
+// a series that reappeared at one after a policy was deleted and recreated
+// under the same name would read as a decrease. A dormant series is not
+// observed, keeps its total, resumes from it when its key is counted again,
+// and is the first thing evicted when the map is at its cap.
+type series struct {
+	n    int64
+	live bool
+}
+
 // Tally holds the counts the receiver produces and exports them through
 // observable counters, the way the collector exports gauges. A map the
 // package owns is what makes Withdraw possible: a synchronous counter keeps
@@ -58,7 +70,7 @@ type Tally struct {
 	logger *slog.Logger
 
 	mu        sync.Mutex
-	received  map[receivedKey]int64
+	received  map[receivedKey]*series
 	dropped   map[DropReason]int64
 	datagrams int64
 
@@ -70,7 +82,7 @@ type Tally struct {
 func NewTally(logger *slog.Logger) *Tally {
 	return &Tally{
 		logger:   logger,
-		received: make(map[receivedKey]int64),
+		received: make(map[receivedKey]*series),
 		dropped:  make(map[DropReason]int64),
 	}
 }
@@ -83,13 +95,32 @@ func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	k := receivedKey{deviceIP, policy, trapName, v}
-	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit {
+	if _, exists := t.received[k]; !exists && len(t.received) >= seriesLimit && !t.evictDormant() {
 		k = receivedKey{OtherName, policy, OtherName, v}
-		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries-versionCount {
+		if _, exists := t.received[k]; !exists && len(t.received) >= maxSeries-versionCount && !t.evictDormant() {
 			k = receivedKey{OtherName, OtherName, OtherName, v}
 		}
 	}
-	t.received[k]++
+	sr := t.received[k]
+	if sr == nil {
+		sr = &series{}
+		t.received[k] = sr
+	}
+	sr.n++
+	sr.live = true
+}
+
+// evictDormant removes one dormant series to make room for a live one and
+// reports whether it found one. A retained total is worth less than a live
+// series, so it goes before a live series is folded.
+func (t *Tally) evictDormant() bool {
+	for k, sr := range t.received {
+		if !sr.live {
+			delete(t.received, k)
+			return true
+		}
+	}
+	return false
 }
 
 // Dropped counts one datagram that produced no trap, by reason.
@@ -108,14 +139,16 @@ func (t *Tally) Datagram() {
 	t.datagrams++
 }
 
-// Withdraw drops every received series the policy owns, so a stopped policy
-// stops exporting. Drops and datagrams are process-level and are kept.
+// Withdraw makes every received series the policy owns dormant, so a stopped
+// policy stops exporting; the totals are kept so a series that reappears
+// resumes rather than restarts. Drops and datagrams are process-level and
+// are kept.
 func (t *Tally) Withdraw(policy string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for k := range t.received {
+	for k, sr := range t.received {
 		if k.policy == policy {
-			delete(t.received, k)
+			sr.live = false
 		}
 	}
 }
@@ -151,8 +184,11 @@ func (t *Tally) Register() {
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		for k, n := range t.received {
-			o.ObserveInt64(received, n, metric.WithAttributes(
+		for k, sr := range t.received {
+			if !sr.live {
+				continue
+			}
+			o.ObserveInt64(received, sr.n, metric.WithAttributes(
 				attribute.String("device_ip", k.deviceIP),
 				attribute.String("policy", k.policy),
 				attribute.String("trap_name", k.trapName),
@@ -187,10 +223,15 @@ func (t *Tally) Close() {
 
 // Test accessors. Exported through _test.go only by convention: they are
 // unexported and read under the lock.
+// receivedCount is what the series exports: its total while live, zero
+// while dormant.
 func (t *Tally) receivedCount(deviceIP, policy, trapName string, v Version) int64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.received[receivedKey{deviceIP, policy, trapName, v}]
+	if sr := t.received[receivedKey{deviceIP, policy, trapName, v}]; sr != nil && sr.live {
+		return sr.n
+	}
+	return 0
 }
 
 func (t *Tally) droppedCount(r DropReason) int64 {
