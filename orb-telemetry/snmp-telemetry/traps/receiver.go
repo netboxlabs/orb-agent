@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -54,9 +55,13 @@ type Receiver struct {
 
 	// beforeCount, when set, runs after a datagram is parsed and before the
 	// policies it is counted under are resolved. Tests use it to change the
-	// registry in that window; it is nil otherwise.
-	beforeCount func()
+	// registry in that window, from their own goroutine, hence the atomic;
+	// it is nil otherwise.
+	beforeCount atomic.Pointer[func()]
 }
+
+// setBeforeCount is a test seam.
+func (r *Receiver) setBeforeCount(f func()) { r.beforeCount.Store(&f) }
 
 // Listen binds addr and starts reading. The bind is synchronous so a failure
 // is reported to the caller rather than logged from a goroutine.
@@ -237,8 +242,8 @@ func (r *Receiver) loop() {
 			}
 		}
 
-		if r.beforeCount != nil {
-			r.beforeCount()
+		if hook := r.beforeCount.Load(); hook != nil {
+			(*hook)()
 		}
 
 		// The policies a trap is counted under are resolved now, not from

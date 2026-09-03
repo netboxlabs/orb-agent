@@ -528,10 +528,10 @@ func TestReceiver_CountsAV3TrapOnlyForThePoliciesHoldingItsCredential(t *testing
 func TestReceiver_ResolvesTheClaimingPoliciesAtCountTime(t *testing.T) {
 	h := newHarness(t)
 	src := h.registerSender(t, "core")
-	h.rcv.beforeCount = func() {
+	h.rcv.setBeforeCount(func() {
 		h.reg.Withdraw("core")
 		h.reg.Register("next", []Device{{Policy: "next", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
-	}
+	})
 	h.send(t, v2cTrap("public"))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "the released policy is not counted")
@@ -540,10 +540,10 @@ func TestReceiver_ResolvesTheClaimingPoliciesAtCountTime(t *testing.T) {
 	// The sender must be claimed when the datagram is read, or it is dropped
 	// before the hook runs; the hook then swaps the claim to the replacement.
 	h.registerSender(t, "core")
-	h.rcv.beforeCount = func() {
+	h.rcv.setBeforeCount(func() {
 		h.reg.Withdraw("core")
 		h.reg.Register("next", []Device{{Policy: "next", Addr: src}}, nil)
-	}
+	})
 	h.send(t, v2cTrap("public"))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "next", "linkDown", V2c) })
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c))
