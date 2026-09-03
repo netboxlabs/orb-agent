@@ -79,7 +79,17 @@ type closer interface {
 // completes between the two, and runs the flush's timeout while collections are
 // still going. That is one cycle of freshness against the whole interval the
 // race could cost.
-func shutdown(cancelRoot context.CancelFunc, srv stopper, flush func()) {
+//
+// Trap intake closes first. The tally is a map the export callback reads, so
+// a trap counted after that callback's final run would sit in the map and
+// never be exported, and the tally is closed right after. Closing the sockets
+// ahead of the flush means every trap the process counted is in the final
+// export, at the cost of up to the receiver's stop bound per socket spent
+// before the flush rather than after it. The poll side keeps its order: the
+// flush precedes the cancel so a running collection's observations are
+// exported before they are forgotten, and the server stops last.
+func shutdown(cancelRoot context.CancelFunc, intake closer, srv stopper, flush func()) {
+	intake.Close()
 	flush()
 	cancelRoot()
 	srv.Stop()
@@ -172,10 +182,10 @@ func main() {
 
 	serverErrCh := srv.Start()
 
-	shutdownStopper := stopAll{pool: pool, tally: trapTally, server: srv}
+	shutdownStopper := stopAll{tally: trapTally, server: srv}
 
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
-		shutdown(cancelFunc, shutdownStopper, shutdownMetrics)
+		shutdown(cancelFunc, pool, shutdownStopper, shutdownMetrics)
 	})
 }
 
@@ -220,18 +230,16 @@ func (p trapPool) Acquire(listen, policyName string, devices []traps.Device, use
 	return lease, nil
 }
 
-// stopAll closes every trap socket, then the tally, then the server. All run
-// after the final flush, so none spends the flush's budget, and the tally is
-// a map the export callback reads, so the flush carried everything counted
-// whether or not a receiver was still running.
+// stopAll closes the tally, then the server. Both run after the final flush,
+// so neither spends the flush's budget. The trap sockets are not here: they
+// close in shutdown ahead of the flush, so that everything they counted is
+// in it.
 type stopAll struct {
-	pool   closer
 	tally  closer
 	server stopper
 }
 
 func (s stopAll) Stop() {
-	s.pool.Close()
 	s.tally.Close()
 	s.server.Stop()
 }

@@ -48,7 +48,10 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 		errAtFlush error
 	)
 
-	shutdown(cancel, stopFunc(func() {
+	shutdown(cancel, closeFunc(func() {
+		order = append(order, "intake")
+		require.NoError(t, rootCtx.Err(), "trap intake closes before anything is cancelled")
+	}), stopFunc(func() {
 		order = append(order, "stop")
 		errAtStop = rootCtx.Err()
 	}), func() {
@@ -56,7 +59,8 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 		errAtFlush = rootCtx.Err()
 	})
 
-	require.Equal(t, []string{"flush", "stop"}, order)
+	require.Equal(t, []string{"intake", "flush", "stop"}, order,
+		"trap intake closes first so nothing is counted after the final export; the flush still precedes the cancel")
 	require.ErrorIs(t, errAtStop, context.Canceled, "the root context must be cancelled before the server is stopped")
 	require.NoError(t, errAtFlush, "the root context must still be live during the final flush")
 }
@@ -209,7 +213,7 @@ func TestShutdownFlushesObservationsBeforeTheServerStopDropsThem(t *testing.T) {
 		storeMu.Unlock()
 	})
 
-	shutdown(cancel, stop, func() { flushMetrics(logger, metricsFlushTimeout) })
+	shutdown(cancel, closeFunc(func() {}), stop, func() { flushMetrics(logger, metricsFlushTimeout) })
 
 	assert.Equal(t, []int64{42}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations the server stop drops")
@@ -337,7 +341,7 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 		<-forgotten
 	}
 
-	shutdown(cancelRoot, stopFunc(func() {}), func() { flushMetrics(logger, metricsFlushTimeout) })
+	shutdown(cancelRoot, closeFunc(func() {}), stopFunc(func() {}), func() { flushMetrics(logger, metricsFlushTimeout) })
 
 	assert.Equal(t, []int64{7}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations a cancelled collection forgets")
@@ -348,19 +352,19 @@ type closeFunc func()
 
 func (f closeFunc) Close() { f() }
 
-// stopAll closes the trap pool, then the tally, then the server. shutdown's
+// stopAll closes the tally, then the server; the trap pool closes earlier, in
+// shutdown itself, ahead of the flush. shutdown's
 // own flush, cancel, stop order is a separate concern, already pinned by
 // TestShutdownCancelsRootBetweenTheFlushAndTheServerStop; this test is only
 // about the sequence stopAll.Stop itself encodes.
 func TestStopAllOrder(t *testing.T) {
 	var order []string
 	sa := stopAll{
-		pool:   closeFunc(func() { order = append(order, "pool") }),
 		tally:  closeFunc(func() { order = append(order, "tally") }),
 		server: stopFunc(func() { order = append(order, "server") }),
 	}
 	sa.Stop()
-	assert.Equal(t, []string{"pool", "tally", "server"}, order)
+	assert.Equal(t, []string{"tally", "server"}, order)
 }
 
 // The adapter is what the manager is given, so it must satisfy the interface
