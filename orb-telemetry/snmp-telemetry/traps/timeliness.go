@@ -2,8 +2,26 @@ package traps
 
 import (
 	"container/list"
+	"net/netip"
 	"time"
+
+	"github.com/gosnmp/gosnmp"
 )
+
+// clockID names the clock a v3 message is judged by: the sender's address,
+// the credential that verified it, identified by everything a registered
+// user is compared on, and the engine ID it carries. It is a struct rather
+// than a joined string so no operator-chosen value can act as a field
+// boundary and make two principals one clock.
+type clockID struct {
+	src       netip.Addr
+	user      string
+	authPass  string
+	privPass  string
+	authProto gosnmp.SnmpV3AuthProtocol
+	privProto gosnmp.SnmpV3PrivProtocol
+	engineID  string
+}
 
 // timeWindow is RFC 3414's bound on how far behind its engine's clock a
 // message may be and still count as timely, in seconds.
@@ -28,7 +46,7 @@ const maxEngines = 10000
 // and time it last learned, and when it learned them, so the engine's current
 // time can be estimated without a message.
 type engineClock struct {
-	id      string
+	id      clockID
 	boots   uint32
 	time    uint32
 	learned time.Time
@@ -49,7 +67,7 @@ type engineClock struct {
 // message that verified against a registered credential, keyed by the
 // receiver with the sender's address, so a device can poison only its own.
 type timeliness struct {
-	clocks map[string]*list.Element
+	clocks map[clockID]*list.Element
 	// order holds the engines most recently used first; the back is the
 	// next to be evicted.
 	order *list.List
@@ -57,26 +75,25 @@ type timeliness struct {
 }
 
 func newTimeliness(now func() time.Time) *timeliness {
-	return &timeliness{clocks: make(map[string]*list.Element), order: list.New(), now: now}
+	return &timeliness{clocks: make(map[clockID]*list.Element), order: list.New(), now: now}
 }
 
 // check reports whether a message carrying boots and engineTime from the
-// engine keyed by engineID, which the receiver composes from the sender's
-// address and the wire engine ID, is inside the window, learning the engine
-// or advancing its clock as it goes.
-func (w *timeliness) check(engineID string, boots, engineTime uint32) bool {
+// clock named by id is inside the window, learning the clock or advancing it
+// as it goes.
+func (w *timeliness) check(id clockID, boots, engineTime uint32) bool {
 	if boots == maxEngineBoots {
 		return false
 	}
 	now := w.now()
-	el, known := w.clocks[engineID]
+	el, known := w.clocks[id]
 	if !known {
 		if w.order.Len() >= maxEngines {
 			oldest := w.order.Back()
 			delete(w.clocks, oldest.Value.(*engineClock).id)
 			w.order.Remove(oldest)
 		}
-		w.clocks[engineID] = w.order.PushFront(&engineClock{id: engineID, boots: boots, time: engineTime, learned: now})
+		w.clocks[id] = w.order.PushFront(&engineClock{id: id, boots: boots, time: engineTime, learned: now})
 		return true
 	}
 	c := el.Value.(*engineClock)

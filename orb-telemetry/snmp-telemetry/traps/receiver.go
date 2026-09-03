@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -180,11 +181,8 @@ func (r *Receiver) tableFor(src netip.Addr) *gosnmp.SnmpV3SecurityParametersTabl
 		r.usersGen = gen
 	}
 	users := r.reg.UsersAt(src)
-	var key strings.Builder
-	for _, u := range users {
-		key.WriteString(u.Username + "\x00" + u.AuthProtocol + "\x00" + u.AuthPassphrase + "\x00" + u.PrivProtocol + "\x00" + u.PrivPassphrase + "\x01")
-	}
-	if table, ok := r.tables[key.String()]; ok {
+	key := userSetKey(users)
+	if table, ok := r.tables[key]; ok {
 		return table
 	}
 	table := gosnmp.NewSnmpV3SecurityParametersTable(r.params.Logger)
@@ -211,7 +209,7 @@ func (r *Receiver) tableFor(src netip.Addr) *gosnmp.SnmpV3SecurityParametersTabl
 			r.logger.Warn("Could not add a trap v3 user", "username", u.Username, "error", err)
 		}
 	}
-	r.tables[key.String()] = table
+	r.tables[key] = table
 	return table
 }
 
@@ -390,9 +388,32 @@ func (r *Receiver) parse(b []byte) (pkt *gosnmp.SnmpPacket, err error) {
 // the credential that verified it, and the engine ID it carries. The
 // credential is identified by everything a registered user is compared on,
 // so two users sharing a name with different passphrases are two clocks.
-func clockKey(src netip.Addr, sp *gosnmp.UsmSecurityParameters) string {
-	return src.String() + "|" + sp.UserName + "|" + sp.AuthenticationPassphrase + "|" + sp.PrivacyPassphrase + "|" +
-		sp.AuthenticationProtocol.String() + "|" + sp.PrivacyProtocol.String() + "|" + sp.AuthoritativeEngineID
+func clockKey(src netip.Addr, sp *gosnmp.UsmSecurityParameters) clockID {
+	return clockID{
+		src:       src,
+		user:      sp.UserName,
+		authPass:  sp.AuthenticationPassphrase,
+		privPass:  sp.PrivacyPassphrase,
+		authProto: sp.AuthenticationProtocol,
+		privProto: sp.PrivacyProtocol,
+		engineID:  sp.AuthoritativeEngineID,
+	}
+}
+
+// userSetKey identifies a set of users for the credential-table cache. Every
+// field is length-prefixed, so no operator-chosen value can act as a field
+// boundary and make two user sets one table.
+func userSetKey(users []V3User) string {
+	var key strings.Builder
+	for _, u := range users {
+		for _, field := range []string{u.Username, u.AuthProtocol, u.AuthPassphrase, u.PrivProtocol, u.PrivPassphrase} {
+			key.WriteString(strconv.Itoa(len(field)))
+			key.WriteByte(':')
+			key.WriteString(field)
+		}
+		key.WriteByte(';')
+	}
+	return key.String()
 }
 
 // credentialMatcher reports whether a registered user is the credential the

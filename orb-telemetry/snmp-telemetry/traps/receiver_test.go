@@ -751,3 +751,26 @@ func TestReceiver_KeepsEngineClocksPerCredential(t *testing.T) {
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3NotInTimeWindow) })
 	assert.Equal(t, int64(1), h.tally.receivedCount(src.String(), "core", "linkDown", V3), "and for the same credential it still is one")
 }
+
+// The clock key and the credential-table cache key are both built from
+// operator-chosen strings, so neither may be a delimiter join: a username
+// containing the delimiter could make two principals one clock, or two user
+// sets one table. Both are injective: the clock key is a struct, the cache
+// key length-prefixes every field.
+func TestReceiver_CredentialKeysAreInjective(t *testing.T) {
+	src := netip.MustParseAddr("10.0.0.5")
+	a := &gosnmp.UsmSecurityParameters{UserName: "u|x", AuthenticationPassphrase: "password", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
+	b := &gosnmp.UsmSecurityParameters{UserName: "u", AuthenticationPassphrase: "x|password", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
+	assert.NotEqual(t, clockKey(src, a), clockKey(src, b), "a delimiter in a username is not a field boundary")
+	authOnly := &gosnmp.UsmSecurityParameters{UserName: "u", AuthenticationPassphrase: "other", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
+	assert.NotEqual(t, clockKey(src, b), clockKey(src, authOnly), "the auth passphrase is part of the identity")
+	privOnly := &gosnmp.UsmSecurityParameters{UserName: "u", AuthenticationPassphrase: "x|password", PrivacyPassphrase: "other", AuthenticationProtocol: gosnmp.SHA, PrivacyProtocol: gosnmp.AES, AuthoritativeEngineID: "e"}
+	assert.NotEqual(t, clockKey(src, b), clockKey(src, privOnly), "so is the priv passphrase")
+	assert.Equal(t, clockKey(src, b), clockKey(src, b))
+
+	ua := []V3User{{Username: "u\x00x", AuthProtocol: "SHA", AuthPassphrase: "p"}}
+	ub := []V3User{{Username: "u", AuthProtocol: "x\x00SHA", AuthPassphrase: "p"}}
+	assert.NotEqual(t, userSetKey(ua), userSetKey(ub), "a NUL in a field is not a field boundary")
+	assert.NotEqual(t, userSetKey([]V3User{{Username: "ab", AuthPassphrase: "c"}}), userSetKey([]V3User{{Username: "a", AuthPassphrase: "bc"}}))
+	assert.Equal(t, userSetKey(ua), userSetKey(ua))
+}
