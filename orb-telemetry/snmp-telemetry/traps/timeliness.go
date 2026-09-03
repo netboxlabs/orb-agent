@@ -133,12 +133,23 @@ func (w *timeliness) check(id clockID, boots, engineTime uint32) bool {
 			mine = list.New()
 			w.perPrincipal[p] = mine
 		}
-		// The principal's own bound first, so churning engine IDs costs the
-		// churner its own clocks; the global bound only after that.
-		if mine.Len() >= maxEnginesPerPrincipal {
+		// The principal's own clocks go first: at its own bound, and at the
+		// global bound whenever it holds any, so churning engine IDs costs
+		// the churner its own clocks and never another principal's replay
+		// state. Only a principal's very first clock at the global bound
+		// displaces the globally oldest, and it can do that once.
+		switch {
+		case mine.Len() >= maxEnginesPerPrincipal || (w.order.Len() >= maxEngines && mine.Len() > 0):
 			w.evict(mine.Back().Value.(*engineClock).global)
-		} else if w.order.Len() >= maxEngines {
+		case w.order.Len() >= maxEngines:
 			w.evict(w.order.Back())
+		}
+		// An eviction that emptied this principal's list removed the list
+		// from the map; the new clock must join the list the map holds, or
+		// the principal's next clock would find none and evict globally.
+		if mine = w.perPrincipal[p]; mine == nil {
+			mine = list.New()
+			w.perPrincipal[p] = mine
 		}
 		c := &engineClock{id: id, boots: boots, time: engineTime, learned: now}
 		c.global = w.order.PushFront(c)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // RFC 3414 section 3.2.7(b), the non-authoritative side: the receiver learns
@@ -137,4 +138,37 @@ func TestTimeliness_PrincipalEvictionFollowsUse(t *testing.T) {
 	assert.Equal(t, maxEnginesPerPrincipal, w.size())
 	assert.False(t, w.check(id("e0"), 4, 1), "e0 was kept: lower boots is still a replay")
 	assert.True(t, w.check(id("e1"), 4, 1), "e1, the least recently used, was evicted and is relearned")
+}
+
+// At the global bound, a principal that already holds a clock evicts its
+// own rather than the globally oldest, so a credential holder below its
+// quota cannot spend the quota evicting other principals' replay state. Only
+// a principal's very first clock can displace another's, once.
+func TestTimeliness_AtTheGlobalBoundAPrincipalEvictsItself(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	filler := func(i int) clockID { return clockID{user: fmt.Sprintf("f%d", i), engineID: "e"} }
+	victim := clockID{user: "victim", authPass: "v", engineID: "ev"}
+	// The oldest clock is a filler, the victim the next oldest, then the
+	// rest of the fillers up to the global bound.
+	now = now.Add(time.Second)
+	assert.True(t, w.check(filler(0), 1, 1))
+	now = now.Add(time.Second)
+	assert.True(t, w.check(victim, 5, 100))
+	for i := 1; i < maxEngines-1; i++ {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(filler(i), 1, 1))
+	}
+	require.Equal(t, maxEngines, w.size())
+
+	attacker := clockID{user: "attacker", authPass: "a"}
+	for i := range maxEnginesPerPrincipal - 1 {
+		now = now.Add(time.Second)
+		id := attacker
+		id.engineID = fmt.Sprintf("e%d", i)
+		assert.True(t, w.check(id, 1, 1))
+	}
+	assert.Equal(t, maxEngines, w.size())
+	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: only the attacker's first clock displaced anyone, and that was the oldest filler")
+	assert.True(t, w.check(filler(0), 0, 1), "the oldest filler was the one displaced, once")
 }
