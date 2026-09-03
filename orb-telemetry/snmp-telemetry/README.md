@@ -173,14 +173,18 @@ A trap is counted, not stored. Three metrics describe what arrived:
   with the same `device_ip` and `policy` labels every polled series carries.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
-  `v3_unauthenticated` or `no_trap_oid`. Hostile v3 traffic lands under
+  `v3_unauthenticated`, `v3_not_in_time_window` or `no_trap_oid`. Hostile v3 traffic lands under
   `malformed` when it names a username no policy carries and under
   `v3_unauthenticated` when it names a known one without asking to be
   authenticated, and the second is the one worth looking at, since it may mean
   someone holds a valid username. It has a benign cause too: a v3 target polled
   at `noAuthNoPriv` is a supported configuration, and every trap it sends
   carries no authentication either, so all of its traps are dropped under this
-  reason. This release cannot count them.
+  reason. This release cannot count them. `v3_not_in_time_window` is an
+  authenticated v3 trap whose engine boots are lower than last seen from that
+  engine, or whose engine time is more than 150 seconds behind the clock the
+  receiver keeps for it: RFC 3414's bound on replaying a captured message. The
+  clocks are learned per engine, in memory, and relearned after a restart.
 - `snmp.traps_datagrams` counts every datagram read from any socket. Every
   datagram read ends as one drop or as one trap, so `traps_datagrams` equals
   `traps_dropped` plus the datagrams that produced a trap. `traps_received` is
@@ -204,7 +208,10 @@ answering questions about any of them. Trap series are the product of the
 addresses your policies name, the trap names above and the three SNMP
 versions, so a policy naming a whole `/16` whose every host sends every kind of
 trap is past what that ceiling accommodates. Name the devices you expect traps
-from.
+from. The backend holds the same ten thousand series itself: past that, a trap
+for a series that does not exist yet is counted under its policy with
+`device_ip` and `trap_name` both `other`, so a sender spoofing addresses
+inside a wide prefix can fill the ceiling but cannot grow memory past it.
 
 **What the source address list is, and is not.** A trap from an address that
 no policy on that socket names is dropped and counted as `unknown_source`,
