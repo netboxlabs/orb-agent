@@ -38,11 +38,14 @@ type DropReason string
 
 // The closed set of reasons Decode can drop a datagram for.
 const (
-	DropUnknownSource     DropReason = "unknown_source"
-	DropOversized         DropReason = "oversized"
-	DropMalformed         DropReason = "malformed"
-	DropUnsupportedPDU    DropReason = "unsupported_pdu"
-	DropV3Unauthenticated DropReason = "v3_unauthenticated"
+	DropUnknownSource  DropReason = "unknown_source"
+	DropOversized      DropReason = "oversized"
+	DropMalformed      DropReason = "malformed"
+	DropUnsupportedPDU DropReason = "unsupported_pdu"
+	// DropUnsupportedVersion is a wire version this backend does not speak:
+	// anything but v1, v2c and v3. gosnmp keeps the integer as written.
+	DropUnsupportedVersion DropReason = "unsupported_version"
+	DropV3Unauthenticated  DropReason = "v3_unauthenticated"
 	// DropV3NotInTimeWindow is an authenticated v3 trap whose engine boots
 	// or time fall outside RFC 3414's window for its engine: a replay.
 	DropV3NotInTimeWindow DropReason = "v3_not_in_time_window"
@@ -106,8 +109,13 @@ func Decode(p *gosnmp.SnmpPacket) (Trap, DropReason) {
 			return Trap{}, DropV3Unauthenticated
 		}
 		return decodeV2(p, V3)
-	default:
+	case gosnmp.Version2c:
 		return decodeV2(p, V2c)
+	default:
+		// SNMPv2u and SNMPv2p are version 2 on the wire, and a sender can
+		// write any integer. None of them is a version this backend speaks,
+		// and counting one as 2c would misreport the version breakdown.
+		return Trap{}, DropUnsupportedVersion
 	}
 }
 

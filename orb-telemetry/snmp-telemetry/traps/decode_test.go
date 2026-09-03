@@ -247,3 +247,19 @@ func TestDecode_V3NonUSMSecurityModelIsUnauthenticated(t *testing.T) {
 		assert.Equal(t, DropV3Unauthenticated, reason, "security model %d", model)
 	}
 }
+
+// gosnmp keeps whatever version integer the wire carried, and the decoder
+// used to let every value that was not v1 or v3 through as v2c. SNMPv2u and
+// SNMPv2p are version 2, and a sender can write any number; none of them is
+// a version this backend speaks, so they are dropped rather than counted
+// under a label that says 2c.
+func TestDecode_RejectsVersionsThisBackendDoesNotSpeak(t *testing.T) {
+	for _, v := range []gosnmp.SnmpVersion{2, 4, 7, 127} {
+		p := &gosnmp.SnmpPacket{Version: v, PDUType: gosnmp.SNMPv2Trap, Variables: v2cPacket(oidVar(trapOIDBareDotted, linkDownDotted)).Variables}
+		_, reason := Decode(p)
+		assert.Equal(t, DropUnsupportedVersion, reason, "version %d", v)
+	}
+	tr, reason := Decode(&gosnmp.SnmpPacket{Version: gosnmp.Version2c, PDUType: gosnmp.SNMPv2Trap, Variables: v2cPacket(oidVar(trapOIDBareDotted, linkDownDotted)).Variables})
+	require.Empty(t, reason)
+	assert.Equal(t, V2c, tr.Version)
+}
