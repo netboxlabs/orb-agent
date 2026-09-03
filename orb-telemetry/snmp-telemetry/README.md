@@ -178,8 +178,8 @@ A trap is counted, not stored. Three metrics describe what arrived:
   kept the same way and stays unexported until the policy comes back.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
-  `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window` or
-  `no_trap_oid`. `unsupported_version` is a wire version other than 1, 2c
+  `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window`,
+  `no_trap_oid` or `series_limit`. `unsupported_version` is a wire version other than 1, 2c
   and 3, such as SNMPv2u's 2, which is never counted as 2c. Hostile v3 traffic lands under
   `malformed` when it names a username no policy carries and under
   `v3_unauthenticated` when it names a known one without asking to be
@@ -222,11 +222,13 @@ trap is past what that ceiling accommodates. Name the devices you expect traps
 from. The backend bounds its own series at that ceiling: real series stop a
 hundred short of it, a trap for a series that does not exist yet is then
 counted under its policy with `device_ip` and `trap_name` both `other`, and
-once that room is nearly used up it is counted with `policy` as `other` too.
-A sender spoofing addresses inside a wide prefix can fill the ceiling but
-cannot grow memory past it, and the SDK never folds a series the backend
-chose to keep. The clocks the receiver keeps for v3 engines are bounded the
-same way, at ten thousand engines, evicting the one seen longest ago.
+once that room is used up too a trap whose policy has no overflow series yet
+is counted as a `series_limit` drop rather than under a series no policy
+owns. A sender spoofing addresses inside a wide prefix can fill the ceiling
+but cannot grow memory past it, the SDK never folds a series the backend
+chose to keep, and every series is withdrawn with the policy that made it. The clocks the receiver keeps for v3 engines are bounded the
+same way, at ten thousand engines, evicting the one used longest ago, in an
+order kept as they are used so an eviction costs no scan.
 
 **What the source address list is, and is not.** A trap from an address that
 no policy on that socket names is dropped and counted as `unknown_source`,
