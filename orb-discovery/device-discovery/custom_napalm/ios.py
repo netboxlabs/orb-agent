@@ -653,9 +653,14 @@ _INVENTORY_VC_FRU_RE = re.compile(
 # Catalyst stacks emit — e.g. ``StackPort1/1`` (the inter-switch stack
 # cable port) — which then bogusly attached as transceiver sub-bays under
 # slot 1 in VC mode. Even with the narrow prefix list a paranoid second
-# gate is applied at the parse site: rows that DON'T classify as
-# transceiver via the PID are dropped, so a non-transceiver Cisco-prefix
-# row (rare but possible) doesn't materialize a wrong sub-bay.
+# gate is applied at the parse site, but only for a row the device DID
+# name a PID for: such a row that doesn't classify as transceiver via
+# that PID is dropped, so a non-transceiver Cisco-prefix row (rare but
+# possible) doesn't materialize a wrong sub-bay. A row with no PID (an
+# unidentified optic — serial and description, no part number) has no
+# PID to second-gate on and is typed transceiver unconditionally; the
+# ifname-shaped NAME matched above is the only signal available, and by
+# design it is trusted on its own for these rows.
 _INVENTORY_IFNAME_RE = re.compile(
     r"""
     ^
@@ -941,14 +946,16 @@ def _parse_inventory_rows(
 
     ``claimed_slots`` is every ``(member_key, slot)`` pair the RAW inventory
     names via ``Switch N Slot M``, ``Switch N FRU Uplink Module M`` or plain
-    ``Slot N`` — matched against ``name`` here, BEFORE the ``pid and sn``
-    usability filter below and before any type/classification filter, and
-    keyed exactly like ``bays_by_member``. A slot lands in this set even
-    when its own row turns out unusable (blank PID or serial); the caller
-    must then decline promoting any optic mapped to that slot, because the
-    slot's parent exists in hardware — this row simply failed to describe
-    it usably. Promoting the optic to a device-rooted bay in that case
-    would invent a chassis-level parent for hardware that already has one.
+    ``Slot N`` — matched against ``name`` here, BEFORE the ``sn`` usability
+    filter below (a blank PID no longer disqualifies a row; only a blank
+    serial does) and before any type/classification filter, and keyed
+    exactly like ``bays_by_member``. A slot lands in this set even when its
+    own row turns out unusable (blank serial, or a serial with neither a
+    PID nor a description to name the part); the caller must then decline
+    promoting any optic mapped to that slot, because the slot's parent
+    exists in hardware — this row simply failed to describe it usably.
+    Promoting the optic to a device-rooted bay in that case would invent a
+    chassis-level parent for hardware that already has one.
     """
     bays_by_member: dict[int | None, dict[str, _ModuleBay]] = {}
     trans_by_member: dict[int | None, dict[str, _ModuleEntry]] = {}
