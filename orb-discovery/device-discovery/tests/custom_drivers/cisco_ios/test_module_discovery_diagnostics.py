@@ -38,7 +38,14 @@ def _driver(scenario: str) -> IOSDriver:
 
 
 class TestModuleDiscoveryDiagnostics:
-    """Warnings emitted when get_modules declines to emit anything."""
+    """
+    What get_modules warns about, and what it now emits instead of dropping.
+
+    Covers both the warn-and-decline paths (a device that reports genuinely
+    nothing stays quiet; one whose optics were declined promotion says so)
+    and the rows that used to be dropped for want of a PID and are now
+    recorded as unidentified modules instead.
+    """
 
     def test_every_optic_declined_is_announced(self, caplog) -> None:
         """
@@ -162,6 +169,39 @@ class TestModuleDiscoveryDiagnostics:
         optic = transceivers[None]["Te1/1/1"]
         assert optic.identified is True
         assert optic.model == "SFP-10G-SR"
+
+    def test_identified_non_transceiver_pid_row_is_dropped_and_warned(
+        self, caplog,
+    ) -> None:
+        """
+        The surviving PID second gate, for a row the device DID name a PID for.
+
+        An ifname-shaped NAME is the transceiver signal, but it is not
+        trusted alone once a PID is present: this is the ``StackPort``-class
+        problem the ``_INVENTORY_IFNAME_RE`` comment describes -- a
+        Cisco-prefix NAME that sneaks past the narrow regex but names
+        hardware that plainly isn't an optic. Deleting this gate leaves the
+        row silently promoted to a bogus transceiver sub-bay instead of
+        dropped and warned about.
+        """
+        rows = [
+            {"name": "Switch 1", "descr": "C9300-48T",
+             "pid": "C9300-48T", "vid": "V01", "sn": "FCW1"},
+            {"name": "Gi1/0/1", "descr": "48-port GE switch",
+             "pid": "WS-C2960S-24PD-L", "vid": "V01", "sn": "X1"},
+        ]
+
+        with caplog.at_level(logging.WARNING, logger=_LOGGER):
+            _, transceivers, _ = _parse_inventory_rows(rows, False)
+
+        assert transceivers == {}, (
+            "a non-transceiver PID on an ifname-shaped row must not "
+            f"produce a transceiver, got {transceivers}"
+        )
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(
+            "Gi1/0/1" in m and "WS-C2960S-24PD-L" in m for m in messages
+        ), f"expected a warning naming the interface and its PID, got {messages}"
 
     def test_a_slot_row_without_a_pid_is_also_emitted(self) -> None:
         """

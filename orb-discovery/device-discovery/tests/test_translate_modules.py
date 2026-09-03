@@ -649,6 +649,10 @@ def test_metric_counters_invoked_when_enabled(monkeypatch) -> None:
     # Linecard emits with type=linecard; transceiver with type=transceiver.
     assert {m[2].get("type") for m in mod_counts} == {"linecard", "transceiver"}
     assert all(c[2].get("vendor") == "Cisco" for c in mod_counts + bay_counts)
+    # Both rows in this payload are identified (real PIDs), so the metric
+    # label must say so — a deleted "identified" bump would still pass every
+    # other assertion here.
+    assert all(m[2].get("identified") == "true" for m in mod_counts)
 
 
 def test_metric_counters_noop_when_disabled(monkeypatch) -> None:
