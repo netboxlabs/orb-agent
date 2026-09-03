@@ -2,6 +2,7 @@ package policy
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -73,6 +74,65 @@ func TestValidatePolicy_TrapsAndInterval(t *testing.T) {
 	err = m.validatePolicy(trapPolicy(&huge, ""))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "metrics_interval must be at most")
+}
+
+// A policy with no metrics_interval polls nothing: no scheduler, no job, no
+// collector call, no ForgetPolicy on stop. It still expands its targets and
+// acquires the socket with them.
+func TestRunner_TrapOnlySchedulesNothing(t *testing.T) {
+	pool := newSpyPool()
+	spy := &spyCollector{}
+	pol := trapPolicy(nil, "0.0.0.0:1162")
+	pol.Scope.Targets = []config.Target{{Host: "10.0.0.0/30"}}
+	r, err := NewRunner(t.Context(), testLogger, "edge", pol, spy, pool)
+	require.NoError(t, err)
+	assert.Nil(t, r.scheduler, "a trap-only runner has no scheduler")
+	assert.Len(t, pool.devices["edge"], 2)
+
+	assert.NotPanics(t, r.Start)
+	time.Sleep(50 * time.Millisecond)
+	assert.Empty(t, spy.dials, "nothing was polled")
+
+	require.NoError(t, r.Stop())
+	assert.Equal(t, []string{"edge"}, pool.released)
+	assert.Empty(t, spy.forgotten(), "there is no collector state to forget")
+}
+
+// The guard in NewRunner mirrors validatePolicy so a direct call cannot slip
+// past.
+func TestRunner_NeitherIntervalNorTrapsIsRejected(t *testing.T) {
+	_, err := NewRunner(t.Context(), testLogger, "p1", trapPolicy(nil, ""), &spyCollector{}, newSpyPool())
+	require.Error(t, err)
+	assert.Equal(t, "policy has neither metrics_interval nor scope.traps: nothing to do", err.Error())
+}
+
+// Through the manager, so the whole start and stop path is exercised with
+// the real lifecycle and none of it dereferences the absent scheduler.
+func TestManager_TrapOnlyPolicyStartsAndStops(t *testing.T) {
+	pool := newSpyPool()
+	m := NewManager(t.Context(), testLogger, Options{TrapPool: pool})
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  edge:
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets:
+        - host: 10.0.0.1
+      traps:
+        listen: "0.0.0.0:1162"
+`))
+	require.NoError(t, err)
+	require.NoError(t, m.StartPolicy("edge", policies["edge"]))
+	require.True(t, m.HasPolicy("edge"))
+	statuses := m.GetPolicyStatuses()
+	require.Len(t, statuses, 1)
+	assert.Equal(t, "running", statuses[0].Status)
+
+	require.NoError(t, m.StopPolicy("edge"))
+	assert.Equal(t, []string{"acquire:edge", "release:edge"}, pool.callSequence())
+	require.NoError(t, m.Stop())
 }
 
 func TestParsePolicies_ReadsTheTrapsBlock(t *testing.T) {
