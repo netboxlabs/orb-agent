@@ -179,7 +179,9 @@ A trap is counted, not stored. Three metrics describe what arrived:
   retained series that has to make way for a live one leaves its total in a
   baseline tier of the same size as the series ceiling, from which it
   resumes if it reappears, so the backend holds at most twice the ceiling
-  in memory.
+  in memory. Only once more than ten thousand distinct withdrawn series
+  have been evicted does the oldest baseline go, and a series returning
+  after that restarts, which a consumer reads as a counter reset.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
   `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window`,
