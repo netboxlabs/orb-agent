@@ -51,6 +51,11 @@ type Receiver struct {
 
 	stopOnce sync.Once
 	done     chan struct{}
+
+	// beforeCount, when set, runs after a datagram is parsed and before the
+	// policies it is counted under are resolved. Tests use it to change the
+	// registry in that window; it is nil otherwise.
+	beforeCount func()
 }
 
 // Listen binds addr and starts reading. The bind is synchronous so a failure
@@ -232,13 +237,30 @@ func (r *Receiver) loop() {
 			}
 		}
 
+		if r.beforeCount != nil {
+			r.beforeCount()
+		}
+
+		// The policies a trap is counted under are resolved now, not from
+		// the lookup that admitted the datagram: a policy released while
+		// the datagram was being parsed must not be counted, and one that
+		// replaced it under the same name gets the count only if it claims
+		// the device. For a v3 trap only the policies holding the credential
+		// that verified it qualify; every user at the address was handed to
+		// the parser together, and the parser reports which one matched.
+		var holding func(V3User) bool
+		if tr.Version == V3 {
+			holding = credentialMatcher(pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters))
+		}
+		deviceIP := src
+		policies = r.reg.PoliciesAt(src, holding)
+
 		// The agent-addr override is a claim about provenance, and only a
 		// registered sender has one to make; every sender past this point
 		// is one. The claim is honoured only when the named address has a
 		// policy of its own.
-		deviceIP := src
 		if tr.AgentAddr.IsValid() && tr.AgentAddr != src {
-			if agentPolicies := r.reg.Lookup(tr.AgentAddr); len(agentPolicies) > 0 {
+			if agentPolicies := r.reg.PoliciesAt(tr.AgentAddr, holding); len(agentPolicies) > 0 {
 				deviceIP = canonical(tr.AgentAddr)
 				policies = agentPolicies
 				// Which address a count was attributed to is the one thing an
@@ -246,6 +268,10 @@ func (r *Receiver) loop() {
 				// the series names only the winner.
 				r.logger.Debug("Attributed a trap to its agent-addr rather than its source", "source", src.String(), "agent_addr", deviceIP.String())
 			}
+		}
+		if len(policies) == 0 {
+			r.drop(DropUnknownSource, src, "")
+			continue
 		}
 
 		// Each policy names the trap from its own profile set, so two
@@ -284,6 +310,25 @@ func (r *Receiver) parse(b []byte) (pkt *gosnmp.SnmpPacket, err error) {
 		}
 	}()
 	return r.params.UnmarshalTrap(b, false)
+}
+
+// credentialMatcher reports whether a registered user is the credential the
+// parser verified a packet with. gosnmp returns the table entry it matched as
+// the packet's security parameters, passphrases and protocols included, so
+// the comparison is on the whole credential rather than the username alone,
+// which two policies may share with different passphrases.
+func credentialMatcher(sp *gosnmp.UsmSecurityParameters) func(V3User) bool {
+	return func(u V3User) bool {
+		if u.Username != sp.UserName || u.AuthPassphrase != sp.AuthenticationPassphrase || u.PrivPassphrase != sp.PrivacyPassphrase {
+			return false
+		}
+		authProto, err := snmp.AuthProtocol(u.AuthProtocol)
+		if err != nil || authProto != sp.AuthenticationProtocol {
+			return false
+		}
+		privProto, err := snmp.PrivProtocol(u.PrivProtocol)
+		return err == nil && privProto == sp.PrivacyProtocol
+	}
 }
 
 // parseErrorCategory keeps the part of a parse error that names the fault and

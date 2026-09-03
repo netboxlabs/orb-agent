@@ -145,13 +145,31 @@ func (r *Registry) claimsAt(addr netip.Addr) map[string][]V3User {
 
 // Lookup returns the policies naming an address, in sorted order, or nil.
 func (r *Registry) Lookup(addr netip.Addr) []string {
+	return r.PoliciesAt(addr, nil)
+}
+
+// PoliciesAt returns the policies naming an address, in sorted order, or nil.
+// With a predicate, only the policies with at least one registered user at
+// that address satisfying it are returned: this is how an authenticated v3
+// trap is attributed to the policies holding the credential that verified
+// it, and to no other, even though every user at the address was handed to
+// the parser together.
+func (r *Registry) PoliciesAt(addr netip.Addr, holding func(V3User) bool) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	policies := r.claimsAt(addr)
-	if len(policies) == 0 {
+	claims := r.claimsAt(addr)
+	var out []string
+	for policy, users := range claims {
+		if holding != nil && !slices.ContainsFunc(users, holding) {
+			continue
+		}
+		out = append(out, policy)
+	}
+	if len(out) == 0 {
 		return nil
 	}
-	return slices.Sorted(maps.Keys(policies))
+	slices.Sort(out)
+	return out
 }
 
 // UsersAt returns the v3 users the claiming policies poll an address with,

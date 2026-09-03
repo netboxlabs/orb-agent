@@ -180,3 +180,22 @@ func TestRegistry_NamesForPolicy(t *testing.T) {
 	r.Withdraw("a")
 	assert.Nil(t, r.NamesFor("a"), "withdrawn with the claims")
 }
+
+// PoliciesAt with a credential predicate returns only the policies whose
+// registered users at the address satisfy it, so a v3 trap is attributed to
+// the policies holding the credential that verified it and to no other.
+func TestRegistry_PoliciesAtFiltersByCredential(t *testing.T) {
+	r := NewRegistry()
+	mine := V3User{Username: "shared", AuthProtocol: "SHA", AuthPassphrase: "mine"}
+	theirs := V3User{Username: "shared", AuthProtocol: "SHA", AuthPassphrase: "theirs"}
+	r.Register("core", []Device{{Policy: "core", Addr: addr("10.0.0.1"), User: &mine}}, nil)
+	r.Register("edge", []Device{{Policy: "edge", Addr: addr("10.0.0.1"), User: &theirs}}, nil)
+	r.Register("plain", []Device{{Policy: "plain", Addr: addr("10.0.0.1")}}, nil)
+
+	assert.Equal(t, []string{"core", "edge", "plain"}, r.PoliciesAt(addr("10.0.0.1"), nil), "no predicate: every claim")
+	holds := func(want V3User) func(V3User) bool { return func(u V3User) bool { return u == want } }
+	assert.Equal(t, []string{"core"}, r.PoliciesAt(addr("10.0.0.1"), holds(mine)))
+	assert.Equal(t, []string{"edge"}, r.PoliciesAt(addr("10.0.0.1"), holds(theirs)))
+	assert.Empty(t, r.PoliciesAt(addr("10.0.0.1"), holds(V3User{Username: "nobody"})))
+	assert.Empty(t, r.PoliciesAt(addr("10.0.0.9"), nil))
+}

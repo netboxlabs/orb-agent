@@ -483,3 +483,68 @@ func TestReceiver_NamesATrapWithThePolicysOwnNames(t *testing.T) {
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "plain", "linkDown", V2c) })
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "vendor", "vendorLinkDown", V2c), "RFC 1215 wins over the profile's spelling")
 }
+
+// Two policies claiming one device with different credentials share a
+// credential table, since gosnmp is handed every user at the address, but a
+// v3 trap is counted only under the policies holding the credential that
+// verified it. A policy naming the device with no v3 user, or with another
+// credential, counts its v1 and v2c traps and not its authenticated v3 ones.
+func TestReceiver_CountsAV3TrapOnlyForThePoliciesHoldingItsCredential(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	mine := trapAuthPrivUser
+	theirs := trapAuthPrivUser
+	theirs.AuthPassphrase = "someone-elses-authpass"
+	theirs.PrivPassphrase = "someone-elses-privpass"
+
+	h := newHarness(t)
+	src := canonical(h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src, User: &mine}}, nil)
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src, User: &theirs}}, nil)
+	h.reg.Register("plain", []Device{{Policy: "plain", Addr: src}}, nil)
+	count := func(policy string, v Version) int64 {
+		return h.tally.receivedCount(src.String(), policy, "linkDown", v)
+	}
+
+	h.send(t, v3AuthPrivTrapAt(t, mine, engineID, 1, 1))
+	waitFor(t, 1, func() int64 { return count("core", V3) })
+	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 1, 2))
+	waitFor(t, 1, func() int64 { return count("edge", V3) })
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return count("plain", V2c) })
+
+	assert.Equal(t, int64(1), count("core", V3), "core saw only the trap its credential verified")
+	assert.Equal(t, int64(1), count("edge", V3), "edge likewise")
+	assert.Equal(t, int64(0), count("plain", V3), "a policy without the credential counts no authenticated v3 trap")
+	assert.Equal(t, int64(1), count("core", V2c), "but every claim counts the v2c one")
+	assert.Equal(t, int64(1), count("edge", V2c))
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropMalformed))
+}
+
+// The policies a trap is counted under are resolved when it is counted, not
+// when it was read. A policy released while the datagram was being parsed,
+// and replaced by one that does not claim the device, gets nothing and the
+// datagram is an unknown source; a replacement that does claim the device
+// gets the count.
+func TestReceiver_ResolvesTheClaimingPoliciesAtCountTime(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "core")
+	h.rcv.beforeCount = func() {
+		h.reg.Withdraw("core")
+		h.reg.Register("next", []Device{{Policy: "next", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+	}
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "the released policy is not counted")
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "next", "linkDown", V2c), "nor a replacement that does not claim the device")
+
+	// The sender must be claimed when the datagram is read, or it is dropped
+	// before the hook runs; the hook then swaps the claim to the replacement.
+	h.registerSender(t, "core")
+	h.rcv.beforeCount = func() {
+		h.reg.Withdraw("core")
+		h.reg.Register("next", []Device{{Policy: "next", Addr: src}}, nil)
+	}
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "next", "linkDown", V2c) })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c))
+}
