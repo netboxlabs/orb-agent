@@ -68,7 +68,6 @@ type Runner struct {
 	cancel           context.CancelFunc
 	name             string
 	metricsCollector Collector
-	trapPool         TrapPool
 	trapLease        TrapLease
 	metricsInterval  time.Duration
 	snmpTimeout      time.Duration
@@ -129,7 +128,6 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		logger:           logger,
 		name:             name,
 		metricsCollector: metricsCollector,
-		trapPool:         pool,
 		config:           policy.Config,
 		scope:            policy.Scope,
 		ctx:              runCtx,
@@ -448,9 +446,9 @@ func (r *Runner) Start() {
 // not cut it short. StopJobs then has a wait it can finish, and it comes before
 // the state is dropped so a run is not still writing when the drop happens.
 // Shutdown runs whatever StopJobs reported, rather than leaving the scheduler
-// behind when a job overran. ForgetPolicy and the trap release come last
-// and unconditionally, so the policy stops exporting either kind of series
-// even if the scheduler did not unwind cleanly.
+// behind when a job overran. ForgetPolicy and the trap release come last and
+// outside the scheduler guard, so the policy stops exporting either kind of
+// series even if the scheduler did not unwind cleanly.
 //
 // The release lives here, at the end of Stop, rather than in the manager
 // after Stop returns, because the manager holds the stopping policy's name
@@ -459,17 +457,19 @@ func (r *Runner) Start() {
 // happened, so it cannot have its own lease erased by the outgoing
 // runner's.
 //
-// A trap-only runner has no scheduler and no collector state, so only the
-// release runs.
+// A trap-only runner has no scheduler, so the shutdown is skipped. It has no
+// collector state either, and ForgetPolicy still runs against it: dropping
+// nothing is cheaper than a second flag saying whether there is anything to
+// drop.
 func (r *Runner) Stop() error {
 	r.cancel()
 	var err error
 	if r.scheduler != nil {
 		err = r.scheduler.StopJobs()
 		err = errors.Join(err, r.scheduler.Shutdown())
-		if r.metricsCollector != nil {
-			r.metricsCollector.ForgetPolicy(r.name)
-		}
+	}
+	if r.metricsCollector != nil {
+		r.metricsCollector.ForgetPolicy(r.name)
 	}
 	if r.trapLease != nil {
 		r.trapLease.Release()

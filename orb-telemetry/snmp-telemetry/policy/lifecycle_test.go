@@ -38,6 +38,12 @@ func (s *spyCollector) ForgetPolicy(name string) {
 	s.forgot = append(s.forgot, name)
 }
 
+func (s *spyCollector) dialed() []collector.DialOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]collector.DialOptions(nil), s.dials...)
+}
+
 func (s *spyCollector) forgotten() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

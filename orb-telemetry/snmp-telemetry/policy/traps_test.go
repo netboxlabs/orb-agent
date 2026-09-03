@@ -79,9 +79,9 @@ func TestValidatePolicy_TrapsAndInterval(t *testing.T) {
 	assert.Contains(t, err.Error(), "metrics_interval must be at most")
 }
 
-// A policy with no metrics_interval polls nothing: no scheduler, no job, no
-// collector call, no ForgetPolicy on stop. It still expands its targets and
-// acquires the socket with them.
+// A policy with no metrics_interval polls nothing: no scheduler, no job and no
+// collector call. It still expands its targets and acquires the socket with
+// them, and its stop still forgets a policy the collector never heard of.
 func TestRunner_TrapOnlySchedulesNothing(t *testing.T) {
 	pool := newSpyPool()
 	spy := &spyCollector{}
@@ -94,11 +94,11 @@ func TestRunner_TrapOnlySchedulesNothing(t *testing.T) {
 
 	assert.NotPanics(t, r.Start)
 	time.Sleep(50 * time.Millisecond)
-	assert.Empty(t, spy.dials, "nothing was polled")
+	assert.Empty(t, spy.dialed(), "nothing was polled")
 
 	require.NoError(t, r.Stop())
 	assert.Equal(t, []string{"edge"}, pool.released)
-	assert.Empty(t, spy.forgotten(), "there is no collector state to forget")
+	assert.Equal(t, []string{"edge"}, spy.forgotten(), "the forget runs whatever the runner scheduled, and finds no state")
 }
 
 // The guard in NewRunner mirrors validatePolicy so a direct call cannot slip
