@@ -1,0 +1,237 @@
+== [onboard]
+        ==[dmz]
+                mode: static
+                ip: 10.10.10.1 255.255.255.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[ha1]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[ha2]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[mgmt]
+                mode: static
+                ip: 192.168.1.99 255.255.255.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port1]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port2]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port3]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port4]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port5]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port6]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port7]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port8]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port9]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port10]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port11]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port12]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 1000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[port13]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port14]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port15]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port16]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port17]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                medium: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port18]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                medium: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port19]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                medium: n/a
+                FEC: none
+                FEC_cap: none
+        ==[port20]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                medium: n/a
+                FEC: none
+                FEC_cap: none
+        ==[wan1]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[wan2]
+                mode: dhcp
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[x1]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: up
+                speed: 10000Mbps (Duplex: full)
+                FEC: none
+                FEC_cap: none
+        ==[x2]
+                mode: static
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none
+        ==[modem]
+                mode: pppoe
+                ip: 0.0.0.0 0.0.0.0
+                ipv6: ::/0
+                status: down
+                speed: n/a
+                FEC: none
+                FEC_cap: none

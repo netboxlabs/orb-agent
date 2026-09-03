@@ -13,4 +13,7 @@ discards the block and this scenario fails.
 The issue's own field order is not evidence either way: its quoted flat line puts
 `mtu-override:` last, where all eleven vendored captures put it before `wccp:`.
 
-Replace this with a sanitised capture if the reporter supplies one.
+The reporter has since supplied a capture; it is the `7412_capture` scenario beside
+this one. This scenario is kept rather than replaced, because the device puts `medium:`
+below `status:`, where a regression that discards a block on an unknown field line would
+still pass. The deliberate ordering here is what catches it.
