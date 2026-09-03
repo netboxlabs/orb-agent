@@ -247,8 +247,11 @@ has no engine ID to offer. The probe carries no username and is dropped as
 `malformed`, and the inform is never acknowledged, so the sender retries and
 gives up. SNMPv3 traps are authenticated and counted, and v1 and v2c informs
 are acknowledged; a device that must use informs sends them as v2c for now.
-A policy target written as a hostname rather than
-an address is not matched against trap sources, so its traps count as
+A link-local IPv6 device is matched with the interface zone the socket
+saw it on, so two devices at `fe80::1` on different interfaces are two
+devices; a target written without a zone matches the address on any
+interface, and `device_ip` carries the zone. A policy target written as a
+hostname rather than an address is not matched against trap sources, so its traps count as
 `unknown_source`; a policy declaring `traps` whose targets are all hostnames
 starts with a warning saying so, and still contributes its USM user to the set
 the socket can authenticate against. And a device behind a trap relay or NAT
