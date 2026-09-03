@@ -521,11 +521,14 @@ func TestReceiver_CountsAV3TrapOnlyForThePoliciesHoldingItsCredential(t *testing
 }
 
 // The policies a trap is counted under are resolved when it is counted, not
-// when it was read. A policy released while the datagram was being parsed,
-// and replaced by one that does not claim the device, gets nothing and the
-// datagram is an unknown source; a replacement that does claim the device
-// gets the count.
-func TestReceiver_ResolvesTheClaimingPoliciesAtCountTime(t *testing.T) {
+// when it was read, and the count happens in the same critical section as
+// the resolution. A policy released before the count, and replaced by one
+// that does not claim the device, gets nothing and the datagram is an
+// unknown source. A release that races the count cannot slip between the
+// two: it waits for the count, which lands under the old policy and is then
+// withdrawn with it, so the replacement never inherits a trap for a device it
+// does not claim.
+func TestReceiver_ResolvesAndCountsTheClaimsAtomically(t *testing.T) {
 	h := newHarness(t)
 	src := h.registerSender(t, "core")
 	h.rcv.setBeforeCount(func() {
@@ -536,15 +539,28 @@ func TestReceiver_ResolvesTheClaimingPoliciesAtCountTime(t *testing.T) {
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "the released policy is not counted")
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "next", "linkDown", V2c), "nor a replacement that does not claim the device")
+	h.rcv.setBeforeCount(nil)
 
-	// The sender must be claimed when the datagram is read, or it is dropped
-	// before the hook runs; the hook then swaps the claim to the replacement.
+	// Now the race: the replacement under the same name is released and
+	// recreated, claiming another device, while the claims are held for
+	// counting. It has to wait, so the count lands under the outgoing
+	// incarnation and its withdrawal takes the count with it.
 	h.registerSender(t, "core")
-	h.rcv.setBeforeCount(func() {
-		h.reg.Withdraw("core")
-		h.reg.Register("next", []Device{{Policy: "next", Addr: src}}, nil)
+	h.tally.Activate("core")
+	replaced := make(chan struct{})
+	h.rcv.setDuringCount(func() {
+		go func() {
+			defer close(replaced)
+			h.reg.Withdraw("core")
+			h.tally.Withdraw("core")
+			h.reg.Register("core", []Device{{Policy: "core", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+			h.tally.Activate("core")
+		}()
+		time.Sleep(50 * time.Millisecond)
 	})
 	h.send(t, v2cTrap("public"))
-	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "next", "linkDown", V2c) })
-	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c))
+	<-replaced
+	waitFor(t, 1, func() int64 { return h.tally.datagramCount() - 1 })
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "the count went to the outgoing incarnation and left with it")
+	assert.Equal(t, int64(1), h.tally.retainedCount(src.String(), "core", "linkDown", V2c), "kept as a dormant total, not exported")
 }

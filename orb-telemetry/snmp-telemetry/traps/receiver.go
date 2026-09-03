@@ -58,10 +58,23 @@ type Receiver struct {
 	// registry in that window, from their own goroutine, hence the atomic;
 	// it is nil otherwise.
 	beforeCount atomic.Pointer[func()]
+	// duringCount, when set, runs inside the claims visit, with the registry
+	// read-locked, before the first count. Tests use it to race a release
+	// against the count from another goroutine; it is nil otherwise.
+	duringCount atomic.Pointer[func()]
 }
 
-// setBeforeCount is a test seam.
-func (r *Receiver) setBeforeCount(f func()) { r.beforeCount.Store(&f) }
+// setBeforeCount is a test seam. A nil f clears it.
+func (r *Receiver) setBeforeCount(f func()) {
+	if f == nil {
+		r.beforeCount.Store(nil)
+		return
+	}
+	r.beforeCount.Store(&f)
+}
+
+// setDuringCount is a test seam.
+func (r *Receiver) setDuringCount(f func()) { r.duringCount.Store(&f) }
 
 // Listen binds addr and starts reading. The bind is synchronous so a failure
 // is reported to the caller rather than logged from a goroutine.
@@ -257,37 +270,41 @@ func (r *Receiver) loop() {
 		if tr.Version == V3 {
 			holding = credentialMatcher(pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters))
 		}
-		deviceIP := src
-		policies = r.reg.PoliciesAt(src, holding)
 
 		// The agent-addr override is a claim about provenance, and only a
 		// registered sender has one to make; every sender past this point
 		// is one. The claim is honoured only when the named address has a
 		// policy of its own.
-		if tr.AgentAddr.IsValid() && tr.AgentAddr != src {
-			if agentPolicies := r.reg.PoliciesAt(tr.AgentAddr, holding); len(agentPolicies) > 0 {
-				deviceIP = canonical(tr.AgentAddr)
-				policies = agentPolicies
-				// Which address a count was attributed to is the one thing an
-				// operator cannot reconstruct from the exported series, since
-				// the series names only the winner.
-				r.logger.Debug("Attributed a trap to its agent-addr rather than its source", "source", src.String(), "agent_addr", deviceIP.String())
-			}
-		}
-		if len(policies) == 0 {
-			r.drop(DropUnknownSource, src, "")
-			continue
+		deviceIP := src
+		if tr.AgentAddr.IsValid() && tr.AgentAddr != src && len(r.reg.PoliciesAt(tr.AgentAddr, holding)) > 0 {
+			deviceIP = canonical(tr.AgentAddr)
+			// Which address a count was attributed to is the one thing an
+			// operator cannot reconstruct from the exported series, since
+			// the series names only the winner.
+			r.logger.Debug("Attributed a trap to its agent-addr rather than its source", "source", src.String(), "agent_addr", deviceIP.String())
 		}
 
 		// Each policy names the trap from its own profile set, so two
 		// policies on one socket can count one OID under two names; a policy
-		// that registered no names uses the socket's.
-		for _, policy := range policies {
-			names := r.reg.NamesFor(policy)
+		// that registered no names uses the socket's. The visit counts under
+		// the registry's read lock, so the claims a count is attributed
+		// under are the claims at the moment it lands.
+		first := true
+		counted := r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
+			if first {
+				first = false
+				if hook := r.duringCount.Load(); hook != nil {
+					(*hook)()
+				}
+			}
 			if names == nil {
 				names = r.names
 			}
 			r.tally.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version)
+		})
+		if counted == 0 {
+			r.drop(DropUnknownSource, src, "")
+			continue
 		}
 
 		if tr.Inform {

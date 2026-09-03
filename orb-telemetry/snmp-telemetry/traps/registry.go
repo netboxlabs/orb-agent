@@ -192,6 +192,29 @@ func (r *Registry) UsersAt(addr netip.Addr) []V3User {
 	return out
 }
 
+// VisitClaims calls visit for every policy claiming an address, with that
+// policy's trap names, under the registry's read lock, and reports how many
+// it visited. With a predicate, only the policies holding a user satisfying
+// it are visited. Counting inside the visit is what keeps a count consistent
+// with the claims it was attributed under: a release needs the write lock
+// and so waits for the visit, rather than slipping between the resolution
+// and the count. The tally's own lock nests inside this one and nothing
+// takes the two in the other order.
+func (r *Registry) VisitClaims(addr netip.Addr, holding func(V3User) bool, visit func(policy string, names map[string]string)) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	claims := r.claimsAt(addr)
+	visited := 0
+	for _, policy := range slices.Sorted(maps.Keys(claims)) {
+		if holding != nil && !slices.ContainsFunc(claims[policy], holding) {
+			continue
+		}
+		visit(policy, r.names[policy])
+		visited++
+	}
+	return visited
+}
+
 // NamesFor is the trap names a policy registered, or nil when it registered
 // none.
 func (r *Registry) NamesFor(policy string) map[string]string {
