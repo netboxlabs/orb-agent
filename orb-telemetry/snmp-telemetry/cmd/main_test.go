@@ -348,7 +348,7 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 
 // With no --trap-listen, no socket is opened and nothing else changes.
 func TestTrapListenEmptyOpensNoSocket(t *testing.T) {
-	rcv, err := startTrapReceiver("", "", false, nil, nil, discardLogger())
+	rcv, err := startTrapReceiver("", "", nil, nil, discardLogger())
 	require.NoError(t, err)
 	assert.Nil(t, rcv)
 }
@@ -357,7 +357,7 @@ func TestTrapListenBindFailureIsAnError(t *testing.T) {
 	blocker, err := net.ListenPacket("udp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = blocker.Close() })
-	_, err = startTrapReceiver(blocker.LocalAddr().String(), "", false, traps.NewRegistry(), traps.NewTally(discardLogger()), discardLogger())
+	_, err = startTrapReceiver(blocker.LocalAddr().String(), "", traps.NewRegistry(), traps.NewTally(discardLogger()), discardLogger())
 	require.Error(t, err, "a bind failure is reported, not logged from a goroutine")
 }
 

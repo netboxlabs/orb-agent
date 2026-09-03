@@ -123,9 +123,6 @@ func main() {
 		"address to receive SNMP traps on, e.g. 0.0.0.0:162. Empty, the default, opens no socket."+
 			" Port 162 is privileged; use CAP_NET_BIND_SERVICE or a higher port. See the README's"+
 			" inbound exposure section before binding.")
-	trapAcceptUnknown := flag.Bool("trap-accept-unknown", false,
-		"count traps from addresses no policy names, labelled by source address with no policy."+
-			" Off by default; informs from such sources are never acknowledged.")
 	logLevel := flag.String("log-level", "INFO", "log level (DEBUG, INFO, WARN, ERROR)")
 	logFormat := flag.String("log-format", "TEXT", "log format (TEXT, JSON)")
 	help := flag.Bool("help", false, "show this help")
@@ -167,7 +164,7 @@ func main() {
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 
-	trapReceiver, err := startTrapReceiver(*trapListen, profilesDir, *trapAcceptUnknown, trapRegistry, trapTally, logger)
+	trapReceiver, err := startTrapReceiver(*trapListen, profilesDir, trapRegistry, trapTally, logger)
 	if err != nil {
 		logger.Error("Failed to start the trap receiver", "error", err)
 		os.Exit(1)
@@ -235,7 +232,7 @@ func (t trapRegistration) Withdraw(policyName string) {
 // directory, loaded once here for the purpose; the manager loads the same
 // tree per profiles directory for its own collectors and there is no shared
 // handle to borrow.
-func startTrapReceiver(listen, profilesDir string, acceptUnknown bool, registry *traps.Registry, tally *traps.Tally, logger *slog.Logger) (*traps.Receiver, error) {
+func startTrapReceiver(listen, profilesDir string, registry *traps.Registry, tally *traps.Tally, logger *slog.Logger) (*traps.Receiver, error) {
 	if listen == "" {
 		return nil, nil
 	}
@@ -248,11 +245,11 @@ func startTrapReceiver(listen, profilesDir string, acceptUnknown bool, registry 
 		return nil, fmt.Errorf("resolving trap definitions: %w", err)
 	}
 	names := traps.BuildNames(profiles.TrapNames(all))
-	rcv, err := traps.Listen(listen, registry, tally, names, acceptUnknown, logger)
+	rcv, err := traps.Listen(listen, registry, tally, names, logger)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "accept_unknown", acceptUnknown, "trap_names", len(names))
+	logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "trap_names", len(names))
 	return rcv, nil
 }
 

@@ -2,7 +2,6 @@ package traps
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -88,34 +87,4 @@ func TestTally_ExportsThroughObservableCounters(t *testing.T) {
 	assert.Equal(t, int64(2), got["snmp.traps_received|device_ip=10.0.0.5|policy=core|trap_name=linkDown|version=2c"])
 	assert.Equal(t, int64(1), got["snmp.traps_dropped|reason=unknown_source"])
 	assert.Equal(t, int64(1), got["snmp.traps_datagrams"])
-}
-
-// I4: with --trap-accept-unknown on, every distinct source address makes a new
-// series, and a source address is spoofable, so the map would grow from the
-// network without bound. Past the cap the addresses fold into one sentinel,
-// which keeps the total count right while the cardinality stops.
-func TestTally_CapsTheDeviceIPsUnknownSourcesCanCreate(t *testing.T) {
-	ta := NewTally(testLogger)
-	for i := range maxUnknownSources + 1 {
-		ta.Received(fmt.Sprintf("10.0.%d.%d", i/256, i%256), "", "linkDown", V2c)
-	}
-
-	distinct := map[string]struct{}{}
-	ta.mu.Lock()
-	for k := range ta.received {
-		distinct[k.deviceIP] = struct{}{}
-	}
-	ta.mu.Unlock()
-
-	assert.Len(t, distinct, maxUnknownSources+1, "the cap plus the one sentinel")
-	assert.Contains(t, distinct, unknownSourceOverflow)
-	assert.Equal(t, int64(1), ta.receivedCount(unknownSourceOverflow, "", "linkDown", V2c),
-		"the source past the cap is counted, under the sentinel")
-	assert.Equal(t, int64(1), ta.receivedCount("10.0.0.0", "", "linkDown", V2c),
-		"a source seen before the cap keeps its own address")
-
-	// A registered device is bounded by the policies an operator wrote, not by
-	// what the network sends, so the cap must not reach it.
-	ta.Received("10.9.9.9", "core", "linkDown", V2c)
-	assert.Equal(t, int64(1), ta.receivedCount("10.9.9.9", "core", "linkDown", V2c))
 }

@@ -34,12 +34,11 @@ const stopTimeout = 250 * time.Millisecond
 // beyond that is a hundred lines of bind and loop, which live here instead.
 // gosnmp still does every byte of the decoding through UnmarshalTrap.
 type Receiver struct {
-	conn          *net.UDPConn
-	reg           *Registry
-	tally         *Tally
-	names         map[string]string
-	acceptUnknown bool
-	logger        *slog.Logger
+	conn   *net.UDPConn
+	reg    *Registry
+	tally  *Tally
+	names  map[string]string
+	logger *slog.Logger
 
 	params   *gosnmp.GoSNMP
 	usersGen uint64
@@ -50,26 +49,25 @@ type Receiver struct {
 
 // Listen binds addr and starts reading. The bind is synchronous so a failure
 // is reported to the caller rather than logged from a goroutine.
-func Listen(addr string, reg *Registry, tally *Tally, names map[string]string, acceptUnknown bool, logger *slog.Logger) (*Receiver, error) {
+func Listen(addr string, reg *Registry, tally *Tally, names map[string]string, logger *slog.Logger) (*Receiver, error) {
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("trap listen address %q: %w", addr, err)
 	}
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
-		return nil, fmt.Errorf("binding trap listener on %s: %w", addr, err)
+		return nil, fmt.Errorf("binding trap socket %s: %w", addr, err)
 	}
 	if err := conn.SetReadBuffer(4 << 20); err != nil {
 		logger.Warn("Could not size the trap socket read buffer", "error", err)
 	}
 	r := &Receiver{
-		conn:          conn,
-		reg:           reg,
-		tally:         tally,
-		names:         names,
-		acceptUnknown: acceptUnknown,
-		logger:        logger,
-		done:          make(chan struct{}),
+		conn:   conn,
+		reg:    reg,
+		tally:  tally,
+		names:  names,
+		logger: logger,
+		done:   make(chan struct{}),
 	}
 	r.params = &gosnmp.GoSNMP{
 		// Version3 with the user security model is what lets UnmarshalTrap
@@ -142,9 +140,10 @@ func (r *Receiver) rebuildUsersIfChanged() {
 
 // loop is the receive path, in the order the spec's section 6.2 gives: read,
 // canonicalise, look the source up before the datagram is judged on anything
-// else, size check, parse, filter, decode, count, and acknowledge an inform
-// only for a registered source. The source is first because every later drop
-// reason names a fault an operator reads as their own devices'.
+// else, size check, parse, filter, decode, count, and acknowledge an inform.
+// The source is first because every later drop reason names a fault an
+// operator reads as their own devices', and because every sender that
+// reaches those later steps is one a policy has already claimed.
 func (r *Receiver) loop() {
 	defer close(r.done)
 	buf := make([]byte, maxDatagram+1)
@@ -161,13 +160,9 @@ func (r *Receiver) loop() {
 		src := canonical(from.Addr())
 
 		policies := r.reg.Lookup(src)
-		registered := len(policies) > 0
-		if !registered {
-			if !r.acceptUnknown {
-				r.drop(DropUnknownSource, src, "")
-				continue
-			}
-			policies = []string{""}
+		if len(policies) == 0 {
+			r.drop(DropUnknownSource, src, "")
+			continue
 		}
 
 		if n > maxDatagram {
@@ -189,11 +184,11 @@ func (r *Receiver) loop() {
 		}
 
 		// The agent-addr override is a claim about provenance, and only a
-		// registered sender has one to make. An unregistered sender reaching
-		// here is one accept-unknown let through, and its packet must not
-		// re-attribute to a device that does have a policy.
+		// registered sender has one to make; every sender past this point
+		// is one. The claim is honoured only when the named address has a
+		// policy of its own.
 		deviceIP := src
-		if registered && tr.AgentAddr.IsValid() && tr.AgentAddr != src {
+		if tr.AgentAddr.IsValid() && tr.AgentAddr != src {
 			if agentPolicies := r.reg.Lookup(tr.AgentAddr); len(agentPolicies) > 0 {
 				deviceIP = canonical(tr.AgentAddr)
 				policies = agentPolicies
@@ -209,7 +204,7 @@ func (r *Receiver) loop() {
 			r.tally.Received(deviceIP.String(), policy, name, tr.Version)
 		}
 
-		if tr.Inform && registered {
+		if tr.Inform {
 			r.acknowledge(pkt, from)
 		}
 	}

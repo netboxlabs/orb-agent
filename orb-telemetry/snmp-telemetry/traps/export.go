@@ -17,21 +17,6 @@ const (
 	datagramsName = "snmp.traps_datagrams"
 )
 
-// maxUnknownSources bounds the distinct device_ip values the tally will hold
-// for sources no policy names. With --trap-accept-unknown on, every distinct
-// address that sends a datagram makes a new series, and a source address is
-// spoofable, so without a cap the map grows from the network without bound.
-// A thousand is far more unregistered senders than an operator closing a
-// registration gap needs to see, and a tenth of the SDK cardinality ceiling
-// this backend sets, so the fold happens here where the count survives it
-// rather than in the SDK where the metric stops answering anything.
-const maxUnknownSources = 1000
-
-// unknownSourceOverflow is the device_ip every unknown source past the cap is
-// counted under, mirroring the closed sink NameFor folds unrecognised trap
-// OIDs into: the traps are still counted, they just stop naming their sender.
-const unknownSourceOverflow = "other"
-
 type receivedKey struct {
 	deviceIP, policy, trapName string
 	version                    Version
@@ -50,10 +35,6 @@ type Tally struct {
 	received  map[receivedKey]int64
 	dropped   map[DropReason]int64
 	datagrams int64
-	// unknownSources is the set of addresses that have already been given a
-	// device_ip of their own with no policy behind them, so the cap counts
-	// distinct senders rather than datagrams.
-	unknownSources map[string]struct{}
 
 	regMu        sync.Mutex
 	registration metric.Registration
@@ -62,32 +43,18 @@ type Tally struct {
 // NewTally returns an empty tally. Register attaches it to the meter.
 func NewTally(logger *slog.Logger) *Tally {
 	return &Tally{
-		logger:         logger,
-		received:       make(map[receivedKey]int64),
-		dropped:        make(map[DropReason]int64),
-		unknownSources: make(map[string]struct{}),
+		logger:   logger,
+		received: make(map[receivedKey]int64),
+		dropped:  make(map[DropReason]int64),
 	}
 }
 
-// Received counts one trap for one policy's device.
-//
-// A claim with no policy came from an address no policy names, which only
-// --trap-accept-unknown produces. Those addresses are the ones a stranger
-// chooses, so they are capped: past maxUnknownSources distinct ones the count
-// still lands, under the overflow device_ip. A registered device is bounded by
-// the policies an operator wrote and is never folded.
+// Received counts one trap for one policy's device. The address set is
+// bounded by the policies an operator wrote, since the receiver drops every
+// source no policy names before it counts anything.
 func (t *Tally) Received(deviceIP, policy, trapName string, v Version) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if policy == "" {
-		if _, seen := t.unknownSources[deviceIP]; !seen {
-			if len(t.unknownSources) >= maxUnknownSources {
-				deviceIP = unknownSourceOverflow
-			} else {
-				t.unknownSources[deviceIP] = struct{}{}
-			}
-		}
-	}
 	t.received[receivedKey{deviceIP, policy, trapName, v}]++
 }
 

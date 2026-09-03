@@ -19,11 +19,11 @@ type harness struct {
 	sender *net.UDPConn
 }
 
-func newHarness(t *testing.T, acceptUnknown bool) *harness {
+func newHarness(t *testing.T) *harness {
 	t.Helper()
 	reg := NewRegistry()
 	tally := NewTally(testLogger)
-	rcv, err := Listen("127.0.0.1:0", reg, tally, BuildNames(nil), acceptUnknown, testLogger)
+	rcv, err := Listen("127.0.0.1:0", reg, tally, BuildNames(nil), testLogger)
 	require.NoError(t, err)
 	t.Cleanup(rcv.Stop)
 	sender, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(rcv.Addr()))
@@ -61,7 +61,7 @@ func waitFor(t *testing.T, want int64, get func() int64) {
 }
 
 func TestReceiver_CountsAKnownV2cTrap(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core")
 	h.send(t, v2cTrap("public"))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
@@ -71,7 +71,7 @@ func TestReceiver_CountsAKnownV2cTrap(t *testing.T) {
 // The source check runs before any parsing, so an unknown sender costs a map
 // lookup and nothing else (F5), and is counted as dropped.
 func TestReceiver_DropsAnUnknownSourceBeforeParsing(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.send(t, v2cTrap("public"))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.receivedCount("127.0.0.1", "", "linkDown", V2c))
@@ -90,15 +90,9 @@ func TestReceiver_DropsAnUnknownSourceBeforeParsing(t *testing.T) {
 	assert.Equal(t, int64(0), h.tally.droppedCount(DropOversized))
 }
 
-func TestReceiver_AcceptUnknownLabelsBySourceAddressWithNoPolicy(t *testing.T) {
-	h := newHarness(t, true)
-	h.send(t, v2cTrap("public"))
-	waitFor(t, 1, func() int64 { return h.tally.receivedCount("127.0.0.1", "", "linkDown", V2c) })
-}
-
 // A trap from an address two policies name counts once per policy.
 func TestReceiver_CountsOncePerClaimingPolicy(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core")
 	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src}}, nil)
 	h.send(t, v2cTrap("public"))
@@ -107,17 +101,17 @@ func TestReceiver_CountsOncePerClaimingPolicy(t *testing.T) {
 }
 
 // F4: an inform from a registered source is acknowledged, so the device does
-// not retransmit and double count. An inform from anyone else never is, so
-// the socket does not reflect.
+// not retransmit and double count. An inform from anyone else is dropped
+// before it is parsed and never answered, so the socket does not reflect.
 func TestReceiver_AcknowledgesInformsOnlyFromRegisteredSources(t *testing.T) {
-	h := newHarness(t, true)
+	h := newHarness(t)
 	require.NoError(t, h.sender.SetReadDeadline(time.Now().Add(500*time.Millisecond)))
 	buf := make([]byte, 512)
 
 	h.send(t, v2cInform("public"))
-	waitFor(t, 1, func() int64 { return h.tally.receivedCount("127.0.0.1", "", "linkDown", V2c) })
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	_, err := h.sender.Read(buf)
-	assert.Error(t, err, "an accepted-unknown inform is counted but never answered")
+	assert.Error(t, err, "an inform from an unregistered source is never answered")
 
 	src := h.registerSender(t, "core")
 	h.send(t, v2cInform("public"))
@@ -131,7 +125,7 @@ func TestReceiver_AcknowledgesInformsOnlyFromRegisteredSources(t *testing.T) {
 }
 
 func TestReceiver_RejectsANonTrapPDU(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.registerSender(t, "core")
 	h.send(t, v2cGet("public"))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnsupportedPDU) })
@@ -150,7 +144,7 @@ var trapUser = V3User{
 // F1, end to end: the engine discovery shape reaches gosnmp's parser and is
 // accepted there, and is rejected here.
 func TestReceiver_RejectsUnauthenticatedV3(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.registerSender(t, "core", trapUser)
 	h.send(t, v3Unauthenticated("trapuser", ""))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3Unauthenticated) })
@@ -161,7 +155,7 @@ func TestReceiver_RejectsUnauthenticatedV3(t *testing.T) {
 // while gosnmp verifies no digest at all. Nothing about that packet was
 // authenticated, so it must not be counted as a v3 trap.
 func TestReceiver_RejectsV3WithoutTheAuthFlag(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core", trapUser)
 	h.send(t, v3Unauthenticated("trapuser", "\x80\x00\x1f\x88\x80"))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3Unauthenticated) })
@@ -174,7 +168,7 @@ func TestReceiver_RejectsV3WithoutTheAuthFlag(t *testing.T) {
 // digest ever being verified, while its security parameters still carry a
 // username and engine ID, so every other guard passes.
 func TestReceiver_RejectsV3WithANonUSMSecurityModel(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core", trapUser)
 	h.send(t, v3Packet(v3Options{
 		username:     "trapuser",
@@ -195,7 +189,7 @@ func TestReceiver_RejectsV3WithANonUSMSecurityModel(t *testing.T) {
 // the only reader of the socket, so one such datagram from anyone the
 // registry knows would take the process down with it.
 func TestReceiver_SurvivesAV3DatagramThatPanicsTheParser(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core", trapUser)
 	h.send(t, v3Packet(v3Options{
 		username:         "trapuser",
@@ -229,7 +223,7 @@ var trapAuthPrivUser = V3User{
 // itself, digest and encrypted scoped PDU included.
 func TestReceiver_AcceptsAnAuthenticatedV3Trap(t *testing.T) {
 	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core", trapAuthPrivUser)
 	h.send(t, v3AuthPrivTrap(t, trapAuthPrivUser, engineID))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
@@ -238,7 +232,7 @@ func TestReceiver_AcceptsAnAuthenticatedV3Trap(t *testing.T) {
 }
 
 func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	src := h.registerSender(t, "core")
 	h.send(t, v1Trap("public", [4]byte{0, 0, 0, 0}, 2, 0))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V1) })
@@ -247,7 +241,7 @@ func TestReceiver_V1TrapIsNormalisedAndCounted(t *testing.T) {
 // F9, narrow phase 1 rule: a v1 agent-addr that is itself registered wins
 // over the source address.
 func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.registerSender(t, "core")
 	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
@@ -255,14 +249,13 @@ func TestReceiver_V1AgentAddrWinsWhenRegistered(t *testing.T) {
 }
 
 // The agent-addr override is a claim about provenance, and an unregistered
-// sender has none to make. With accept-unknown on, a stranger naming a known
-// device would otherwise have its trap counted under that device and policy,
-// indistinguishable from the device's own.
+// sender has none to make. A stranger naming a known device in a v1 trap is
+// dropped as an unknown source before the field is ever read.
 func TestReceiver_V1AgentAddrIsIgnoredFromAnUnregisteredSender(t *testing.T) {
-	h := newHarness(t, true)
+	h := newHarness(t)
 	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
 	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
-	waitFor(t, 1, func() int64 { return h.tally.receivedCount("127.0.0.1", "", "linkDown", V1) })
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropUnknownSource) })
 	assert.Equal(t, int64(0), h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1))
 }
 
@@ -272,7 +265,7 @@ func TestReceiver_V1AgentAddrIsIgnoredFromAnUnregisteredSender(t *testing.T) {
 // guard in place this is also where hostile v3 under an unknown username
 // ends up, since gosnmp fails the credential lookup before it parses.
 func TestReceiver_MalformedFromARegisteredSourceIsCounted(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.registerSender(t, "core")
 	h.send(t, []byte{0x30, 0x01, 0xff})
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
@@ -280,14 +273,14 @@ func TestReceiver_MalformedFromARegisteredSourceIsCounted(t *testing.T) {
 }
 
 func TestReceiver_OversizedDatagramIsDropped(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	h.registerSender(t, "core")
 	h.send(t, make([]byte, maxDatagram+1))
 	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropOversized) })
 }
 
 func TestReceiver_StopIsPromptAndIdempotent(t *testing.T) {
-	h := newHarness(t, false)
+	h := newHarness(t)
 	start := time.Now()
 	h.rcv.Stop()
 	h.rcv.Stop()
