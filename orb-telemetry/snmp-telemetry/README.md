@@ -200,8 +200,9 @@ A trap is counted, not stored. Three metrics describe what arrived:
   clocks are learned per sending address and engine, in memory, and relearned
   after a restart, so a device can only ever poison its own clock.
 - `snmp.traps_datagrams` counts every datagram read from any socket. Every
-  datagram read ends as one drop or as one trap, so `traps_datagrams` equals
-  `traps_dropped` plus the datagrams that produced a trap. `traps_received` is
+  datagram read ends as one drop or as one trap, and it is counted together
+  with that outcome, so `traps_datagrams` equals `traps_dropped` plus the
+  datagrams that produced a trap in every export, the final one included. `traps_received` is
   not that second number: a trap counts once under every policy on the socket
   that names its source, so when two policies name the same device the
   per-policy series add up to more than the datagrams behind them. Use
@@ -225,7 +226,8 @@ answering questions about any of them. Trap series are the product of the
 addresses your policies name, the trap names above and the three SNMP
 versions, so a policy naming a whole `/16` whose every host sends every kind of
 trap is past what that ceiling accommodates. Name the devices you expect traps
-from. The backend bounds its own series at that ceiling: real series stop a
+from. The backend bounds its own series one short of that ceiling, since the
+SDK keeps its last slot for its own overflow point: real series stop a
 hundred short of it, a trap for a series that does not exist yet is then
 counted under its policy with `device_ip` and `trap_name` both `other`, and
 once that room is used up too a datagram that no claiming policy can count,
