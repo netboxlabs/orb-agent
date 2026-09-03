@@ -243,3 +243,35 @@ func TestPool_ConcurrentReacquireNeverSeesAddressInUse(t *testing.T) {
 	wg.Wait()
 	assert.Equal(t, int64(0), failures.Load(), "a bind failed while another holder's socket was still closing")
 }
+
+// Each entry has its own registry, which is what keeps a policy on one socket
+// from attributing traps that arrived on another. An address registered only
+// on the second socket's entry is unknown to the first, so a trap from it is
+// dropped there rather than counted for the policy that named it elsewhere.
+//
+// The second address is the IPv6 loopback rather than another 127/8 address,
+// because macOS has only 127.0.0.1 on lo0 and a bind of 127.0.0.2 fails.
+func TestPool_SocketsAreIsolated(t *testing.T) {
+	tally := NewTally(testLogger)
+	p := NewPool(tally, BuildNames(nil), testLogger)
+	t.Cleanup(p.Close)
+
+	core, err := p.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(core.Release)
+	edge, err := p.Acquire("[::1]:0", "edge", nil, nil)
+	require.NoError(t, err)
+	t.Cleanup(edge.Release)
+
+	coreAddr, ok := p.addr("127.0.0.1:0")
+	require.True(t, ok)
+	src, conn := senderAddr(t, coreAddr)
+	require.True(t, p.register("[::1]:0", "edge", []Device{{Policy: "edge", Addr: src}}, nil))
+	require.Empty(t, p.lookup("127.0.0.1:0", src), "the other socket's entry never learned the address")
+
+	_, err = conn.Write(v2cTrap("public"))
+	require.NoError(t, err)
+	waitFor(t, 1, func() int64 { return tally.droppedCount(DropUnknownSource) })
+	assert.Equal(t, int64(0), tally.receivedCount(src.String(), "edge", "linkDown", V2c),
+		"a trap on one socket is never attributed to a policy registered on another")
+}
