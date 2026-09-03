@@ -173,7 +173,9 @@ A trap is counted, not stored. Three metrics describe what arrived:
   with the same `device_ip` and `policy` labels every polled series carries.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
-  `v3_unauthenticated`, `v3_not_in_time_window` or `no_trap_oid`. Hostile v3 traffic lands under
+  `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window` or
+  `no_trap_oid`. `unsupported_version` is a wire version other than 1, 2c
+  and 3, such as SNMPv2u's 2, which is never counted as 2c. Hostile v3 traffic lands under
   `malformed` when it names a username no policy carries and under
   `v3_unauthenticated` when it names a known one without asking to be
   authenticated, and the second is the one worth looking at, since it may mean
@@ -229,9 +231,10 @@ unknown addresses are never acknowledged, so the socket does not answer
 strangers.
 
 **Trap contents are unauthenticated unless the sender uses SNMPv3 with
-authentication**, in which case the backend authenticates it with a USM user a
-policy on that socket carries. No trap-specific credentials are
-configured. v1 and v2c traps are never authenticated by any setting: the
+authentication**, in which case the backend authenticates it with a USM user
+carried by a policy naming that device. A credential another policy on the
+socket carries under the same username is not tried. No trap-specific
+credentials are configured. v1 and v2c traps are never authenticated by any setting: the
 community they carry is not checked, because a check would be mistaken for
 authentication and would protect nothing against a sender who can read the
 community off the wire.
@@ -253,8 +256,8 @@ devices; a target written without a zone matches the address on any
 interface, and `device_ip` carries the zone. A policy target written as a
 hostname rather than an address is not matched against trap sources, so its traps count as
 `unknown_source`; a policy declaring `traps` whose targets are all hostnames
-starts with a warning saying so, and still contributes its USM user to the set
-the socket can authenticate against. And a device behind a trap relay or NAT
+starts with a warning saying so, and its USM user is never tried, since it
+claims no device for the user to authenticate. And a device behind a trap relay or NAT
 arrives as the relay's address; a v1 trap whose agent-addr field names a
 polled device is attributed to that device, but v2c and v3 traps are
 attributed to the address they arrive from.
