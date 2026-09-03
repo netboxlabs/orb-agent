@@ -185,8 +185,12 @@ A trap is counted, not stored. Three metrics describe what arrived:
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
   `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
   `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window`,
-  `no_trap_oid` or `series_limit`. `unsupported_version` is a wire version other than 1, 2c
-  and 3, such as SNMPv2u's 2, which is never counted as 2c. Hostile v3 traffic lands under
+  `no_trap_oid` or `series_limit`. `unsupported_version` is a wire version
+  other than 1, 2c and 3, such as SNMPv2u's 2, which is never counted as 2c.
+  `unsupported_pdu` is a PDU that is not a trap or inform, or one carried
+  under the wrong version: a v2 trap or inform under version 1, or a v1
+  Trap-PDU under 2c or 3, is dropped rather than read with the wrong fields.
+  Hostile v3 traffic lands under
   `malformed` when it names a username no policy carries and under
   `v3_unauthenticated` when it names a known one without asking to be
   authenticated, and the second is the one worth looking at, since it may mean
@@ -233,7 +237,10 @@ counted under its policy with `device_ip` and `trap_name` both `other`, and
 once that room is used up too a datagram that no claiming policy can count,
 because none has an overflow series yet, is a `series_limit` drop rather
 than a count under a series no policy owns; it is one drop per datagram,
-and a datagram one policy counts is not a drop. A sender spoofing addresses inside a wide prefix can fill the ceiling
+and a datagram one policy counts is not a drop. An inform refused this way
+is still acknowledged, since it parsed and was attributed and the limit is
+the backend's, not the device's. A sender spoofing addresses inside a wide
+prefix can fill the ceiling
 but cannot grow memory past it, the SDK never folds a series the backend
 chose to keep, and every series is withdrawn with the policy that made it. The clocks the receiver keeps for v3 engines are bounded the
 same way, at ten thousand engines, evicting the one used longest ago, in an
