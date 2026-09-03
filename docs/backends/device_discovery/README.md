@@ -127,6 +127,30 @@ Current supported options:
 | emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the SVI-style interface the contributing address lives on. One of `off` (default) or `svi-name`. Any scalar is read as its text, so a bare `on`, a number and a mistyped mode all resolve to `off` with a warning rather than erroring; a list or mapping is a policy error, as it is for snmp-discovery. See [Prefix](#prefix). |
 | emit_device_name | bool | Emit `Device.name` from the hostname the driver reported. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
 
+#### Modules the device cannot identify
+
+Some devices report a module with a serial number and a description but no part
+number. A Cisco C9200L does this for DAC cables, and a 2960S reports the literal
+placeholder `Unspecified` for an SFP whose vendor coding it does not recognise.
+
+These are recorded rather than dropped. The description is used as the module
+model, and the manufacturer is set to `Unknown` rather than the switch's own
+vendor, because the device has not told us who made the part and reporting
+`Unspecified` usually means it is *not* the chassis vendor's. Filing them under
+`Unknown` also keeps them findable: every module NetBox holds only a description
+for can be listed with a single manufacturer filter.
+
+A module with a serial but neither a part number nor a description is skipped,
+since NetBox requires a model and there would be nothing to call it.
+
+> **Manual corrections do not survive.** NetBox matches a Module by the module
+> bay it occupies, so if you correct one of these by hand and discovery runs
+> again, your edit is overwritten. This applies to any discovered module, but it
+> matters most here, where the model is a description rather than a part number.
+
+Currently applies to the `ios` driver. Other drivers still skip modules without
+a part number.
+
 #### Defaults
 Current supported defaults:
 
