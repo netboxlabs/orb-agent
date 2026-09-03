@@ -201,8 +201,9 @@ A trap is counted, not stored. Three metrics describe what arrived:
   authenticated v3 trap whose engine boots are lower than last seen from that
   engine, or whose engine time is more than 150 seconds behind the clock the
   receiver keeps for it: RFC 3414's bound on replaying a captured message. The
-  clocks are learned per sending address and engine, in memory, and relearned
-  after a restart, so a device can only ever poison its own clock.
+  clocks are learned per sending address, credential and engine, in memory,
+  and relearned after a restart, so a device can only ever poison the clock
+  its own credential is judged by.
 - `snmp.traps_datagrams` counts every datagram read from any socket. Every
   datagram read ends as one drop or as one trap, and it is counted together
   with that outcome, so `traps_datagrams` equals `traps_dropped` plus the
