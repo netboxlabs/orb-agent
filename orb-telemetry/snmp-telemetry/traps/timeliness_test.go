@@ -79,3 +79,20 @@ func TestTimeliness_EvictionOrderFollowsUse(t *testing.T) {
 	assert.False(t, w.check(clockID{engineID: "e0"}, 0, 1), "e0 was kept")
 	assert.False(t, w.check(clockID{engineID: "e2"}, 0, 1), "e2 was kept")
 }
+
+// RFC 3414 bounds engineBoots and engineTime to 2^31 minus 1. gosnmp casts a
+// negative wire integer to uint32, so a value past the bound is a malformed
+// clock rather than a very late one; it is rejected and, above all, never
+// learned, or every genuine value for that clock would read as older.
+func TestTimeliness_RejectsOutOfRangeClockValuesWithoutLearningThem(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	id := clockID{engineID: "e1"}
+	assert.False(t, w.check(id, 0x80000000, 1), "boots past the bound")
+	assert.False(t, w.check(id, 1, 0xffffffff), "time past the bound")
+	assert.False(t, w.check(id, 0xffffffff, 0xffffffff))
+	assert.Equal(t, 0, w.size(), "nothing was learned from them")
+	assert.True(t, w.check(id, 1, 0x7fffffff), "the bound itself is a valid time")
+	assert.True(t, w.check(id, 2, 5), "and the clock is a normal one afterwards")
+	assert.False(t, w.check(id, 1, 5), "so a lower boots is still a replay")
+}

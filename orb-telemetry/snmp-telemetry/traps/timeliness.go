@@ -29,6 +29,9 @@ const timeWindow = 150
 
 // maxEngineBoots is the boots value an engine reports once its counter is
 // exhausted; RFC 3414 says every message carrying it is outside the window.
+// It is also the largest value either clock field may hold: gosnmp casts a
+// negative wire integer to uint32, so a value past it is a malformed clock
+// and is rejected before it can be learned.
 const maxEngineBoots = 2147483647
 
 // maxEngines bounds the clock map. A registered sender holding a v3
@@ -82,7 +85,7 @@ func newTimeliness(now func() time.Time) *timeliness {
 // clock named by id is inside the window, learning the clock or advancing it
 // as it goes.
 func (w *timeliness) check(id clockID, boots, engineTime uint32) bool {
-	if boots == maxEngineBoots {
+	if boots >= maxEngineBoots || engineTime > maxEngineBoots {
 		return false
 	}
 	now := w.now()
