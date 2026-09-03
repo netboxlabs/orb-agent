@@ -1,11 +1,13 @@
 package traps
 
 import (
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -295,4 +297,42 @@ func TestPool_ReacquireActivatesThePolicysSeries(t *testing.T) {
 	t.Cleanup(again.Release)
 	tally.Received("10.0.0.5", "core", "linkDown", V2c)
 	assert.Equal(t, int64(3), tally.receivedCount("10.0.0.5", "core", "linkDown", V2c), "live again with every count kept")
+}
+
+// Close waits for every receiver under one shared deadline, not one bound
+// per receiver in turn, so however many sockets a process holds, shutdown
+// spends at most the stop bound before the final flush.
+func TestPool_CloseWaitsUnderOneSharedDeadline(t *testing.T) {
+	p := NewPool(NewTally(testLogger), testLogger)
+	const sockets = 5
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	for i := range sockets {
+		// A distinct free port per socket, so each is its own entry.
+		probe, err := net.ListenPacket("udp", "127.0.0.1:0")
+		require.NoError(t, err)
+		listen := probe.LocalAddr().String()
+		require.NoError(t, probe.Close())
+		lease, err := p.Acquire(listen, fmt.Sprintf("p%d", i), nil, nil)
+		require.NoError(t, err)
+		t.Cleanup(lease.Release)
+		addr, ok := p.addr(listen)
+		require.True(t, ok)
+		// Park each receiver's goroutine after a parse, so none can exit
+		// within the bound.
+		entered := make(chan struct{})
+		rcv := p.receiver(listen)
+		rcv.setBeforeCount(func() { close(entered); <-release })
+		src, conn := senderAddr(t, addr)
+		require.True(t, p.register(listen, fmt.Sprintf("p%d", i), []Device{{Policy: fmt.Sprintf("p%d", i), Addr: src}}, nil))
+		_, err = conn.Write(v2cTrap("public"))
+		require.NoError(t, err)
+		<-entered
+	}
+
+	started := time.Now()
+	p.Close()
+	elapsed := time.Since(started)
+	assert.Less(t, elapsed, 2*stopTimeout, "five stalled receivers cost one bound, not five")
+	assert.GreaterOrEqual(t, elapsed, stopTimeout, "and the bound was actually waited")
 }

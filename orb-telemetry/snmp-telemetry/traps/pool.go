@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
@@ -139,7 +140,9 @@ func (l *Lease) Release() {
 }
 
 // Close stops every receiver and refuses every later Acquire. Called once at
-// shutdown.
+// shutdown. The loops are waited for under one shared deadline rather than
+// one bound each in turn, so however many sockets the process holds, Close
+// spends at most the stop bound before the final flush that follows it.
 func (p *Pool) Close() {
 	p.mu.Lock()
 	entries := p.entries
@@ -151,9 +154,24 @@ func (p *Pool) Close() {
 		e.receiver.close()
 	}
 	p.mu.Unlock()
+	// A closed channel, not a time.After: that delivers once, and the first
+	// stalled receiver would drain it and leave the rest waiting forever.
+	expired := make(chan struct{})
+	timer := time.AfterFunc(stopTimeout, func() { close(expired) })
+	defer timer.Stop()
 	for _, e := range entries {
-		e.receiver.wait()
+		e.receiver.waitUntil(expired)
 	}
+}
+
+// receiver is a test accessor.
+func (p *Pool) receiver(listen string) *Receiver {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if e, ok := p.entries[listen]; ok {
+		return e.receiver
+	}
+	return nil
 }
 
 // Test accessors. Unexported and read under the lock.

@@ -159,9 +159,20 @@ func (r *Receiver) intake(fn func()) bool {
 
 // wait waits for the read goroutine to exit, up to its bound.
 func (r *Receiver) wait() {
+	expired := make(chan struct{})
+	timer := time.AfterFunc(stopTimeout, func() { close(expired) })
+	defer timer.Stop()
+	r.waitUntil(expired)
+}
+
+// waitUntil waits for the read goroutine to exit or expired to close,
+// whichever is first, so a pool can wait for every receiver under one
+// deadline: a closed channel is observed by every waiter, where a timer's
+// channel would be drained by the first.
+func (r *Receiver) waitUntil(expired <-chan struct{}) {
 	select {
 	case <-r.done:
-	case <-time.After(stopTimeout):
+	case <-expired:
 		r.logger.Warn("Trap receiver did not stop within its bound", "timeout", stopTimeout)
 	}
 }
