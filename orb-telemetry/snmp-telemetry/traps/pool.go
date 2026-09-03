@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/netip"
 	"sync"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
 // Pool opens one receiver per listen address and shares it between the
@@ -64,9 +66,9 @@ func (p *Pool) Acquire(listen, policy string, devices []Device, users []V3User) 
 		}
 		e = &poolEntry{receiver: rcv, registry: reg}
 		p.entries[listen] = e
-		p.logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "policy", policy, "trap_names", len(p.names))
+		p.logger.Info("Trap receiver listening", "address", rcv.Addr().String(), "policy", config.SanitizeLogValue(policy), "trap_names", len(p.names))
 	} else {
-		p.logger.Debug("Policy joined an open trap socket", "address", listen, "policy", policy, "holders", e.refs+1)
+		p.logger.Debug("Policy joined an open trap socket", "address", config.SanitizeLogValue(listen), "policy", config.SanitizeLogValue(policy), "holders", e.refs+1)
 	}
 	e.registry.Register(policy, devices, users)
 	e.refs++
@@ -95,7 +97,7 @@ func (l *Lease) Release() {
 		// is spent outside the lock so another policy can acquire meanwhile.
 		if closing != nil {
 			closing.Stop()
-			p.logger.Info("Trap receiver closed", "address", l.listen)
+			p.logger.Info("Trap receiver closed", "address", config.SanitizeLogValue(l.listen))
 		}
 	})
 }
