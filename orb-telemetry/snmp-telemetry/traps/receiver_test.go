@@ -3,6 +3,7 @@ package traps
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -584,4 +585,70 @@ func TestReceiver_RejectsAForgedDigestOnAnAuthNoPrivTrap(t *testing.T) {
 	h.send(t, v3AuthNoPrivTrap(t, trapAuthPrivUser, engineID))
 	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
 	assert.Equal(t, int64(1), h.tally.droppedCount(DropMalformed), "the genuine authNoPriv trap is counted")
+}
+
+// fillSeries takes the tally to one slot short of its limit: every real
+// series slot, and the overflow reserve but one, each reserve slot holding a
+// filler policy's overflow series.
+func fillSeries(t *testing.T, tally *Tally) {
+	t.Helper()
+	for i := range seriesLimit {
+		tally.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "filler", "linkDown", V2c)
+	}
+	for i := range maxSeries - seriesLimit - 1 {
+		tally.Received("198.51.100.1", fmt.Sprintf("filler%d", i), "linkUp", V2c)
+	}
+	require.Equal(t, maxSeries-1, tally.seriesCount())
+}
+
+// series_limit is a datagram outcome, recorded once and only when no policy
+// could count the trap. A datagram that one claiming policy counts and
+// another cannot is not a drop, and one that no policy can count is one
+// drop however many policies claimed it.
+func TestReceiver_RecordsSeriesLimitOncePerUncountedDatagram(t *testing.T) {
+	h := newHarness(t)
+	src := canonical(h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
+	fillSeries(t, h.tally)
+	// "room" already has an overflow series; "full" and "fuller" have none
+	// and cannot get one.
+	h.tally.Received("203.0.113.1", "room", "warmStart", V2c)
+	require.Equal(t, int64(1), h.tally.receivedCount(OtherName, "room", OtherName, V2c))
+	require.Equal(t, maxSeries, h.tally.seriesCount(), "room took the last slot")
+	h.reg.Register("room", []Device{{Policy: "room", Addr: src}}, nil)
+	h.reg.Register("full", []Device{{Policy: "full", Addr: src}}, nil)
+	h.reg.Register("fuller", []Device{{Policy: "fuller", Addr: src}}, nil)
+
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 2, func() int64 { return h.tally.receivedCount(OtherName, "room", OtherName, V2c) })
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropSeriesLimit), "a datagram one policy counted is not a drop")
+
+	// Take room's claim off the sender, keeping its series live so nothing
+	// dormant can be evicted to make room for the others.
+	h.reg.Register("room", []Device{{Policy: "room", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropSeriesLimit) })
+	assert.Equal(t, int64(1), h.tally.droppedCount(DropSeriesLimit), "one drop for the datagram, not one per policy")
+	assert.Equal(t, int64(2), h.tally.datagramCount())
+}
+
+// Once the receiver is closed, nothing it was still doing reaches the tally:
+// a datagram whose parse outlasted the stop bound is discarded rather than
+// counted after the final export has run.
+func TestReceiver_CountsNothingAfterItIsClosed(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "core")
+	release := make(chan struct{})
+	entered := make(chan struct{})
+	h.rcv.setBeforeCount(func() {
+		close(entered)
+		<-release
+	})
+	h.send(t, v2cTrap("public"))
+	<-entered
+	h.rcv.Stop()
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int64(1), h.tally.datagramCount(), "read before the stop")
+	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "not counted after it")
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropUnknownSource))
 }

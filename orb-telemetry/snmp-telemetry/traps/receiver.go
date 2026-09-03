@@ -52,6 +52,12 @@ type Receiver struct {
 
 	stopOnce sync.Once
 	done     chan struct{}
+	// intakeMu guards every call into the tally against close: close takes
+	// it for writing and sets stopped, so once close has returned no count
+	// or drop can land, even from a read whose parse outlasted the stop
+	// bound. Shutdown relies on that to run the final export after Close.
+	intakeMu sync.RWMutex
+	stopped  bool
 
 	// beforeCount, when set, runs after a datagram is parsed and before the
 	// policies it is counted under are resolved. Tests use it to change the
@@ -131,8 +137,23 @@ func (r *Receiver) Stop() {
 // same address fails, and the wait below is far too long to hold a lock for.
 func (r *Receiver) close() {
 	r.stopOnce.Do(func() {
+		r.intakeMu.Lock()
+		r.stopped = true
+		r.intakeMu.Unlock()
 		_ = r.conn.Close()
 	})
+}
+
+// intake runs fn, which touches the tally, unless the receiver has been
+// closed, and reports whether it ran.
+func (r *Receiver) intake(fn func()) bool {
+	r.intakeMu.RLock()
+	defer r.intakeMu.RUnlock()
+	if r.stopped {
+		return false
+	}
+	fn()
+	return true
 }
 
 // wait waits for the read goroutine to exit, up to its bound.
@@ -215,7 +236,9 @@ func (r *Receiver) loop() {
 			r.logger.Debug("Trap socket read failed", "error", err)
 			continue
 		}
-		r.tally.Datagram()
+		if !r.intake(r.tally.Datagram) {
+			continue
+		}
 		src := canonical(from.Addr())
 
 		policies := r.reg.Lookup(src)
@@ -290,20 +313,34 @@ func (r *Receiver) loop() {
 		// the registry's read lock, so the claims a count is attributed
 		// under are the claims at the moment it lands.
 		first := true
-		counted := r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
-			if first {
-				first = false
-				if hook := r.duringCount.Load(); hook != nil {
-					(*hook)()
+		claimed, counted := 0, 0
+		ran := r.intake(func() {
+			claimed = r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
+				if first {
+					first = false
+					if hook := r.duringCount.Load(); hook != nil {
+						(*hook)()
+					}
 				}
-			}
-			if names == nil {
-				names = r.names
-			}
-			r.tally.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version)
+				if names == nil {
+					names = r.names
+				}
+				if r.tally.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version) {
+					counted++
+				}
+			})
 		})
-		if counted == 0 {
+		if !ran {
+			continue
+		}
+		if claimed == 0 {
 			r.drop(DropUnknownSource, src, "")
+			continue
+		}
+		// series_limit is a datagram outcome: one drop, and only when no
+		// claiming policy could count the trap.
+		if counted == 0 {
+			r.drop(DropSeriesLimit, src, "")
 			continue
 		}
 
@@ -370,7 +407,9 @@ func parseErrorCategory(err error) string {
 }
 
 func (r *Receiver) drop(reason DropReason, src netip.Addr, detail string) {
-	r.tally.Dropped(reason)
+	if !r.intake(func() { r.tally.Dropped(reason) }) {
+		return
+	}
 	r.logger.Debug("Dropped a trap datagram", "reason", string(reason), "source", src.String(), "registered_addresses", r.reg.Size(), "detail", detail)
 }
 
