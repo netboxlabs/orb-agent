@@ -1009,13 +1009,18 @@ def _parse_inventory_rows(
         if vc_fru:
             member_key = int(vc_fru.group(1)) if vc_mode else None
             slot = vc_fru.group(2)
-            # FRU uplink modules have no role hint in NAME, so trust the
-            # classifier (linecard for non-transceiver Cisco PIDs).
+            # FRU uplink modules have no role hint in NAME, so classify from
+            # `model` alone (empty role hint) via the same
+            # transceiver-shaped-classification downgrade the slot branches
+            # use: for an unidentified row `model` is the raw device
+            # description, and a description that happens to start with a
+            # recognized MSA optic prefix must not silently type the bay
+            # transceiver, or it would vanish in linecards mode.
             bays_by_member.setdefault(member_key, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
                     model=model, serial=sn,
-                    type=classify_module_type_cisco_ios(model),
+                    type=_classify_slot_module(model, ""),
                     description=descr,
                     identified=identified,
                 ),

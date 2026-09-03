@@ -211,6 +211,7 @@ class TestModuleDiscoveryDiagnostics:
         uplink = bays[None]["1"].module
         assert uplink.identified is False
         assert uplink.model == "8x10GE Network Module"
+        assert uplink.type == "linecard"
         assert (None, "1") in claimed, "the slot claim must survive the relaxation"
         assert "Te1/1/1" in transceivers[None]
 
