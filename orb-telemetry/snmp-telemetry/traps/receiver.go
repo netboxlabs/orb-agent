@@ -264,12 +264,13 @@ func (r *Receiver) loop() {
 		// Decode has established that a v3 trap carries USM parameters and a
 		// verified digest, so the boots and time in them are the engine's
 		// own word; what remains is whether that word is current. The clock
-		// is kept per sender as well as per engine ID: a device writing
-		// another device's engine ID with higher boots, authenticated with
-		// its own credential, poisons only its own clock.
+		// is kept per sender, per credential and per engine ID: a device
+		// writing another device's engine ID with higher boots, authenticated
+		// with its own credential, poisons only the clock that credential is
+		// judged by, and two credentials at one address are two principals.
 		if tr.Version == V3 {
 			sp := pkt.SecurityParameters.(*gosnmp.UsmSecurityParameters)
-			if !r.clocks.check(src.String()+"|"+sp.AuthoritativeEngineID, sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
+			if !r.clocks.check(clockKey(src, sp), sp.AuthoritativeEngineBoots, sp.AuthoritativeEngineTime) {
 				r.drop(DropV3NotInTimeWindow, src, "")
 				continue
 			}
@@ -383,6 +384,15 @@ func (r *Receiver) parse(b []byte) (pkt *gosnmp.SnmpPacket, err error) {
 		}
 	}()
 	return r.params.UnmarshalTrap(b, false)
+}
+
+// clockKey names the clock a v3 message is judged by: the sender's address,
+// the credential that verified it, and the engine ID it carries. The
+// credential is identified by everything a registered user is compared on,
+// so two users sharing a name with different passphrases are two clocks.
+func clockKey(src netip.Addr, sp *gosnmp.UsmSecurityParameters) string {
+	return src.String() + "|" + sp.UserName + "|" + sp.AuthenticationPassphrase + "|" + sp.PrivacyPassphrase + "|" +
+		sp.AuthenticationProtocol.String() + "|" + sp.PrivacyProtocol.String() + "|" + sp.AuthoritativeEngineID
 }
 
 // credentialMatcher reports whether a registered user is the credential the

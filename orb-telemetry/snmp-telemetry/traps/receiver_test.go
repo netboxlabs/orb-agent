@@ -724,3 +724,30 @@ func TestReceiver_RecordsAPostClaimDropWithItsDatagram(t *testing.T) {
 	assert.Equal(t, int64(1), h.tally.datagramCount())
 	assert.Equal(t, int64(1), h.tally.droppedCount(DropSeriesLimit), "the outcome landed with the datagram, ahead of the close")
 }
+
+// The engine clocks are kept per credential as well as per sender and engine
+// ID. Two credentials at one address are two principals: a device holding
+// one, writing the other's engine ID with higher boots, poisons only the
+// clock its own credential is judged by, and the other principal's traps
+// under that engine ID are still inside their own window.
+func TestReceiver_KeepsEngineClocksPerCredential(t *testing.T) {
+	const engineID = "\x80\x00\x1f\x88\x80\x41\x42\x43"
+	mine := trapAuthPrivUser
+	theirs := trapAuthPrivUser
+	theirs.AuthPassphrase = "someone-elses-authpass"
+	theirs.PrivPassphrase = "someone-elses-privpass"
+
+	h := newHarness(t)
+	src := canonical(h.sender.LocalAddr().(*net.UDPAddr).AddrPort().Addr())
+	h.reg.Register("core", []Device{{Policy: "core", Addr: src, User: &mine}}, nil)
+	h.reg.Register("edge", []Device{{Policy: "edge", Addr: src, User: &theirs}}, nil)
+
+	h.send(t, v3AuthPrivTrapAt(t, mine, engineID, 9, 1))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V3) })
+	h.send(t, v3AuthPrivTrapAt(t, theirs, engineID, 5, 1))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "edge", "linkDown", V3) })
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropV3NotInTimeWindow), "boots 5 after boots 9 is only a replay for the same credential")
+	h.send(t, v3AuthPrivTrapAt(t, mine, engineID, 8, 1))
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropV3NotInTimeWindow) })
+	assert.Equal(t, int64(1), h.tally.receivedCount(src.String(), "core", "linkDown", V3), "and for the same credential it still is one")
+}
