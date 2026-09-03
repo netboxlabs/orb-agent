@@ -215,6 +215,33 @@ class TestModuleDiscoveryDiagnostics:
         assert (None, "1") in claimed, "the slot claim must survive the relaxation"
         assert "Te1/1/1" in transceivers[None]
 
+    def test_fru_row_with_an_optic_shaped_description_is_still_a_linecard(self) -> None:
+        """
+        An unidentified FRU row's model is a free-text description.
+
+        A vendor could plausibly write one that starts with a recognized MSA
+        optic prefix (e.g. describing what the uplink module takes, not what
+        it is). vc_slot and slot_match already guard against a PID that
+        classifies as transceiver by downgrading it back to linecard; vc_fru
+        must apply the same downgrade to model-derived classification, or a
+        FRU bay would be silently typed transceiver and vanish entirely in
+        linecards mode, where a transceiver is correctly dropped -- not
+        merely mislabeled, but missing from NetBox.
+        """
+        rows = [
+            {"name": "Switch 1", "descr": "C9300-48T",
+             "pid": "C9300-48T", "vid": "V01", "sn": "FCW1"},
+            {"name": "Switch 1 FRU Uplink Module 1", "descr": "SFP-10GBase-SR uplink module",
+             "pid": "", "vid": "", "sn": "FRU2"},
+        ]
+
+        bays, _, _ = _parse_inventory_rows(rows, False)
+
+        uplink = bays[None]["1"].module
+        assert uplink.identified is False
+        assert uplink.model == "SFP-10GBase-SR uplink module"
+        assert uplink.type == "linecard"
+
     def test_row_with_no_pid_and_no_description_is_skipped(self) -> None:
         """Nothing to name the part, so there is nothing to emit."""
         rows = [
