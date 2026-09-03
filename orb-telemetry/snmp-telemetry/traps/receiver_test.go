@@ -648,7 +648,21 @@ func TestReceiver_CountsNothingAfterItIsClosed(t *testing.T) {
 	h.rcv.Stop()
 	close(release)
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, int64(1), h.tally.datagramCount(), "read before the stop")
+	assert.Equal(t, int64(0), h.tally.datagramCount(), "a datagram is counted with its outcome, and this one had none before the stop")
 	assert.Equal(t, int64(0), h.tally.receivedCount(src.String(), "core", "linkDown", V2c), "not counted after it")
 	assert.Equal(t, int64(0), h.tally.droppedCount(DropUnknownSource))
+}
+
+// The datagram counter is recorded together with the datagram's outcome, a
+// drop or a count, so the two sides of the accounting never disagree, not
+// even in a final export taken while a datagram is in flight.
+func TestReceiver_CountsADatagramWithItsOutcome(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "core")
+	h.send(t, v2cTrap("public"))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "core", "linkDown", V2c) })
+	assert.Equal(t, int64(1), h.tally.datagramCount())
+	h.send(t, []byte{0x30, 0x01, 0xff})
+	waitFor(t, 1, func() int64 { return h.tally.droppedCount(DropMalformed) })
+	assert.Equal(t, int64(2), h.tally.datagramCount())
 }

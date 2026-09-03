@@ -236,9 +236,6 @@ func (r *Receiver) loop() {
 			r.logger.Debug("Trap socket read failed", "error", err)
 			continue
 		}
-		if !r.intake(r.tally.Datagram) {
-			continue
-		}
 		src := canonical(from.Addr())
 
 		policies := r.reg.Lookup(src)
@@ -315,6 +312,7 @@ func (r *Receiver) loop() {
 		first := true
 		claimed, counted := 0, 0
 		ran := r.intake(func() {
+			r.tally.Datagram()
 			claimed = r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
 				if first {
 					first = false
@@ -333,14 +331,16 @@ func (r *Receiver) loop() {
 		if !ran {
 			continue
 		}
+		// The datagram is already counted with this outcome, so these two
+		// drops record the reason alone.
 		if claimed == 0 {
-			r.drop(DropUnknownSource, src, "")
+			r.dropDecided(DropUnknownSource, src, "")
 			continue
 		}
 		// series_limit is a datagram outcome: one drop, and only when no
 		// claiming policy could count the trap.
 		if counted == 0 {
-			r.drop(DropSeriesLimit, src, "")
+			r.dropDecided(DropSeriesLimit, src, "")
 			continue
 		}
 
@@ -406,10 +406,25 @@ func parseErrorCategory(err error) string {
 	return strings.TrimSpace(s)
 }
 
+// drop records a datagram and its drop reason together, so the datagram
+// counter never runs ahead of the outcomes.
 func (r *Receiver) drop(reason DropReason, src netip.Addr, detail string) {
+	if !r.intake(func() { r.tally.Datagram(); r.tally.Dropped(reason) }) {
+		return
+	}
+	r.logDrop(reason, src, detail)
+}
+
+// dropDecided records a drop reason for a datagram already counted in the
+// same intake section as its claims visit.
+func (r *Receiver) dropDecided(reason DropReason, src netip.Addr, detail string) {
 	if !r.intake(func() { r.tally.Dropped(reason) }) {
 		return
 	}
+	r.logDrop(reason, src, detail)
+}
+
+func (r *Receiver) logDrop(reason DropReason, src netip.Addr, detail string) {
 	r.logger.Debug("Dropped a trap datagram", "reason", string(reason), "source", src.String(), "registered_addresses", r.reg.Size(), "detail", detail)
 }
 
