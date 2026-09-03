@@ -23,6 +23,21 @@ type clockID struct {
 	engineID  string
 }
 
+// principal is the clockID without its engine ID: one sender with one
+// credential, which is what can churn engine IDs and what must not be able
+// to evict anyone else's clock by doing so.
+func (id clockID) principal() clockID {
+	id.engineID = ""
+	return id
+}
+
+// maxEnginesPerPrincipal bounds the clocks one principal may hold. A device
+// has one engine ID, two across a re-provisioning; past the bound the
+// principal's own least recently used clock goes, so a principal cycling
+// through engine IDs evicts only itself and never reaches the global bound
+// on anyone else's behalf.
+const maxEnginesPerPrincipal = 8
+
 // timeWindow is RFC 3414's bound on how far behind its engine's clock a
 // message may be and still count as timely, in seconds.
 const timeWindow = 150
@@ -53,6 +68,10 @@ type engineClock struct {
 	boots   uint32
 	time    uint32
 	learned time.Time
+	// global and local are this clock's places in the global recency list
+	// and in its principal's own.
+	global *list.Element
+	local  *list.Element
 }
 
 // timeliness is the non-authoritative side of RFC 3414 section 3.2.7. A trap's
@@ -72,13 +91,30 @@ type engineClock struct {
 type timeliness struct {
 	clocks map[clockID]*list.Element
 	// order holds the engines most recently used first; the back is the
-	// next to be evicted.
+	// next to be evicted at the global bound.
 	order *list.List
-	now   func() time.Time
+	// perPrincipal holds each principal's clocks most recently used first;
+	// the back is the next to be evicted at the principal's bound.
+	perPrincipal map[clockID]*list.List
+	now          func() time.Time
 }
 
 func newTimeliness(now func() time.Time) *timeliness {
-	return &timeliness{clocks: make(map[clockID]*list.Element), order: list.New(), now: now}
+	return &timeliness{clocks: make(map[clockID]*list.Element), order: list.New(), perPrincipal: make(map[clockID]*list.List), now: now}
+}
+
+// evict removes one clock from every structure that holds it.
+func (w *timeliness) evict(el *list.Element) {
+	c := el.Value.(*engineClock)
+	delete(w.clocks, c.id)
+	w.order.Remove(el)
+	p := c.id.principal()
+	if l := w.perPrincipal[p]; l != nil {
+		l.Remove(c.local)
+		if l.Len() == 0 {
+			delete(w.perPrincipal, p)
+		}
+	}
 }
 
 // check reports whether a message carrying boots and engineTime from the
@@ -91,18 +127,29 @@ func (w *timeliness) check(id clockID, boots, engineTime uint32) bool {
 	now := w.now()
 	el, known := w.clocks[id]
 	if !known {
-		if w.order.Len() >= maxEngines {
-			oldest := w.order.Back()
-			delete(w.clocks, oldest.Value.(*engineClock).id)
-			w.order.Remove(oldest)
+		p := id.principal()
+		mine := w.perPrincipal[p]
+		if mine == nil {
+			mine = list.New()
+			w.perPrincipal[p] = mine
 		}
-		w.clocks[id] = w.order.PushFront(&engineClock{id: id, boots: boots, time: engineTime, learned: now})
+		// The principal's own bound first, so churning engine IDs costs the
+		// churner its own clocks; the global bound only after that.
+		if mine.Len() >= maxEnginesPerPrincipal {
+			w.evict(mine.Back().Value.(*engineClock).global)
+		} else if w.order.Len() >= maxEngines {
+			w.evict(w.order.Back())
+		}
+		c := &engineClock{id: id, boots: boots, time: engineTime, learned: now}
+		c.global = w.order.PushFront(c)
+		c.local = mine.PushFront(c)
+		w.clocks[id] = c.global
 		return true
 	}
 	c := el.Value.(*engineClock)
 	if boots > c.boots {
 		c.boots, c.time, c.learned = boots, engineTime, now
-		w.order.MoveToFront(el)
+		w.touch(c)
 		return true
 	}
 	if boots < c.boots {
@@ -115,8 +162,16 @@ func (w *timeliness) check(id clockID, boots, engineTime uint32) bool {
 	if int64(engineTime) > estimate {
 		c.time, c.learned = engineTime, now
 	}
-	w.order.MoveToFront(el)
+	w.touch(c)
 	return true
+}
+
+// touch marks a clock as just used in both recency lists.
+func (w *timeliness) touch(c *engineClock) {
+	w.order.MoveToFront(c.global)
+	if l := w.perPrincipal[c.id.principal()]; l != nil {
+		l.MoveToFront(c.local)
+	}
 }
 
 // size is a test accessor.
