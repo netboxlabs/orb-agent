@@ -1,6 +1,9 @@
 package policy
 
 import (
+	"errors"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,4 +156,45 @@ policies:
 	require.NotNil(t, policies["edge"].Scope.Traps)
 	assert.Equal(t, "0.0.0.0:162", policies["edge"].Scope.Traps.Listen)
 	assert.Nil(t, policies["edge"].Config.MetricsInterval)
+}
+
+// A start that fails after the scheduler exists shuts it down. gocron starts a
+// goroutine in NewScheduler, so a rejected policy that only cancelled its
+// context would strand one for the life of the process, and a trap socket
+// collision is a rejection that happens after the scheduler is built.
+func TestRunner_FailedStartShutsDownTheScheduler(t *testing.T) {
+	pool := newSpyPool()
+	pool.acquireErr = errors.New("binding trap socket 0.0.0.0:1162: address already in use")
+	sixty := 60
+
+	baseline := schedulerGoroutines(t)
+	const rejected = 20
+	for range rejected {
+		_, err := NewRunner(t.Context(), testLogger, "p1", trapPolicy(&sixty, "0.0.0.0:1162"), &spyCollector{}, pool)
+		require.Error(t, err)
+	}
+
+	// Shutdown returns before the goroutine it stopped has finished unwinding,
+	// so the count is polled rather than read once.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && schedulerGoroutines(t) > baseline {
+		time.Sleep(10 * time.Millisecond)
+	}
+	assert.LessOrEqual(t, schedulerGoroutines(t), baseline,
+		"every rejected policy's scheduler goroutine is gone, not %d of them left running", rejected)
+}
+
+// schedulerGoroutines counts the live goroutines gocron.NewScheduler started.
+// The dump names the creator of every goroutine, which is what tells a
+// scheduler's own goroutine apart from the rest of the test binary's.
+func schedulerGoroutines(t *testing.T) int {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "gocron/v2.NewScheduler")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
 }

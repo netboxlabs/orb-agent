@@ -113,6 +113,13 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			if lease != nil {
 				lease.Release()
 			}
+			// gocron starts a goroutine in NewScheduler, before any job is
+			// added and before Start is called, so a rejected policy that
+			// only cancelled its context would strand one for the life of
+			// the process.
+			if s != nil {
+				_ = s.Shutdown()
+			}
 			cancel()
 		}
 	}()
