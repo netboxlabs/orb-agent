@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from custom_napalm._modules import (
     MAX_BAY_DEPTH,
     MemberModules,
@@ -327,3 +329,122 @@ def test_orphan_optic_bay_has_no_sub_bays():
 
     assert bay.module is not None
     assert bay.module.sub_bays == []
+
+
+# ---- identified flag validation -----------------------------------------
+
+
+def _flagged_bay(model: str, *, identified: bool = True, description: str = "d") -> ModuleBay:
+    """One standalone bay carrying a module, for the validator's own checks."""
+    return ModuleBay(
+        name="1",
+        position="1",
+        module=ModuleEntry(
+            model=model,
+            serial="SN1",
+            type="transceiver",
+            description=description,
+            identified=identified,
+        ),
+    )
+
+
+def test_identified_module_with_blank_model_is_dropped_and_warned(caplog):
+    """
+    A driver that emits no model while claiming the part is identified has a bug.
+
+    Before this flag existed the payload carried the blank through to
+    translate, which substituted the literal "Unknown" -- collapsing every such
+    part fleet-wide into one ModuleType under the real vendor's name. It must
+    fail loudly at the one place all drivers funnel through.
+    """
+    with caplog.at_level(logging.WARNING, logger="custom_napalm._modules"):
+        payload = to_payload({None: MemberModules(bays=[_flagged_bay("")], interfaces_by_bay={})})
+
+    assert payload is None
+    assert any("no model" in r.getMessage() for r in caplog.records), (
+        f"the drop must say why, got {[r.getMessage() for r in caplog.records]}"
+    )
+
+
+def test_unidentified_module_with_blank_model_is_dropped_quietly(caplog):
+    """
+    Silent drop for serial with no part number or description.
+
+    There is nothing to call the part and NetBox requires a model, so it is
+    skipped. Rare, and nothing an operator can act on, so it must not warn.
+    """
+    with caplog.at_level(logging.WARNING, logger="custom_napalm._modules"):
+        payload = to_payload(
+            {None: MemberModules(bays=[_flagged_bay("", identified=False, description="")],
+                                 interfaces_by_bay={})}
+        )
+
+    assert payload is None
+    assert not caplog.records
+
+
+def test_whitespace_only_model_counts_as_blank():
+    """
+    Whitespace-only model is treated as blank.
+
+    The serial is trimmed but the model was passed through raw, so "   " was
+    truthy and would have defeated both checks above.
+    """
+    payload = to_payload({None: MemberModules(bays=[_flagged_bay("   ")], interfaces_by_bay={})})
+
+    assert payload is None
+
+
+def test_unidentified_module_with_a_description_model_survives():
+    """The whole point: a described part reaches the payload, flag intact."""
+    payload = to_payload(
+        {None: MemberModules(bays=[_flagged_bay("SFP-10GBase-CX1", identified=False)],
+                             interfaces_by_bay={})}
+    )
+
+    assert payload is not None
+    module = payload["members"][None]["bays"][0]["module"]
+    assert module["model"] == "SFP-10GBase-CX1"
+    assert module["identified"] is False
+
+
+def test_identified_module_omits_the_flag_entirely():
+    """
+    Identified modules must omit the flag key entirely.
+
+    The flag is an exception marker, not a field on every module. 132
+    expected_result.json fixtures across 17 drivers deep-compare this dict, so
+    a key present on identified modules would rewrite all of them to record
+    something true everywhere.
+    """
+    payload = to_payload({None: MemberModules(bays=[_flagged_bay("SFP-10G-LR")], interfaces_by_bay={})})
+
+    module = payload["members"][None]["bays"][0]["module"]
+    assert "identified" not in module
+
+
+def test_dropping_a_parent_names_the_children_lost_with_it(caplog):
+    """
+    Parent drop must name orphaned children in the warning.
+
+    _validate_bay recurses and a parent returning None takes its sub-bays with
+    it, so an identified optic under an unidentified linecard would vanish
+    without trace. The drop must say how much usable hardware went with it.
+    """
+    child = ModuleBay(
+        name="Te1/1/1", position="Te1/1/1",
+        module=ModuleEntry(model="SFP-10G-LR", serial="OPT1", type="transceiver"),
+    )
+    parent = ModuleBay(
+        name="1", position="1",
+        module=ModuleEntry(model="", serial="SN1", type="linecard", sub_bays=[child]),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="custom_napalm._modules"):
+        payload = to_payload({None: MemberModules(bays=[parent], interfaces_by_bay={})})
+
+    assert payload is None
+    assert any("1 usable" in r.getMessage() for r in caplog.records), (
+        f"the count of lost children must be named, got {[r.getMessage() for r in caplog.records]}"
+    )
