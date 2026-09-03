@@ -49,7 +49,8 @@ func TestRegistry_CanonicalisesIPv4MappedAndZonedAddresses(t *testing.T) {
 
 	zoned := addr("fe80::1").WithZone("eth0")
 	r.Register("z", []Device{{Policy: "z", Addr: zoned}}, nil)
-	assert.Equal(t, []string{"z"}, r.Lookup(addr("fe80::1")), "the zone is dropped")
+	assert.Equal(t, []string{"z"}, r.Lookup(zoned), "the zone is part of the claim")
+	assert.Empty(t, r.Lookup(addr("fe80::1")), "and a zoned claim is not matched without it")
 }
 
 // F11: gosnmp's credential table is keyed by username and holds a list per
@@ -87,4 +88,24 @@ func TestRegistry_ReRegisterReplacesAPolicysClaims(t *testing.T) {
 	r.Register("p", []Device{{Policy: "p", Addr: addr("10.0.0.2")}}, nil)
 	assert.Empty(t, r.Lookup(addr("10.0.0.1")), "the old claim is gone")
 	assert.Equal(t, []string{"p"}, r.Lookup(addr("10.0.0.2")))
+}
+
+// Link-local IPv6 addresses are only unique per interface, and a wildcard
+// socket receives them from every interface with the zone the kernel saw
+// them on. Two devices at fe80::1 on different interfaces are two devices,
+// so a zoned claim matches only its own zone. A claim written without a zone
+// still matches the address on any interface, so an operator who did not
+// spell the zone is not silently unmatched.
+func TestRegistry_ZonesDistinguishLinkLocalDevices(t *testing.T) {
+	r := NewRegistry()
+	r.Register("a", []Device{{Policy: "a", Addr: addr("fe80::1").WithZone("eth0")}}, nil)
+	r.Register("b", []Device{{Policy: "b", Addr: addr("fe80::1").WithZone("eth1")}}, nil)
+	r.Register("c", []Device{{Policy: "c", Addr: addr("fe80::2")}}, nil)
+
+	assert.Equal(t, []string{"a"}, r.Lookup(addr("fe80::1").WithZone("eth0")))
+	assert.Equal(t, []string{"b"}, r.Lookup(addr("fe80::1").WithZone("eth1")))
+	assert.Empty(t, r.Lookup(addr("fe80::1").WithZone("eth2")), "a zone no policy named")
+	assert.Equal(t, []string{"c"}, r.Lookup(addr("fe80::2").WithZone("eth0")), "a claim without a zone matches the address on any interface")
+	assert.Equal(t, []string{"c"}, r.Lookup(addr("fe80::2")))
+	assert.Equal(t, 3, r.Size())
 }

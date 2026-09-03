@@ -54,10 +54,12 @@ func NewRegistry() *Registry {
 // canonical is the one spelling every address is stored and looked up under.
 // A dual-stack socket delivers an IPv4 sender as an IPv4-mapped IPv6 address,
 // and netip.Addr compares by representation, so without this every IPv4
-// device misses the registry. The zone on a link-local address is dropped for
-// the same reason.
+// device misses the registry. The zone on a link-local address is kept: such
+// an address is unique only per interface, and a wildcard socket sees the
+// same fe80::1 from two interfaces as two devices. Lookup falls back to the
+// zoneless form so a claim written without a zone still matches.
 func canonical(a netip.Addr) netip.Addr {
-	return a.Unmap().WithZone("")
+	return a.Unmap()
 }
 
 // Register replaces the policy's claims and users with the ones given. A
@@ -104,7 +106,13 @@ func (r *Registry) withdrawLocked(policy string) {
 func (r *Registry) Lookup(addr netip.Addr) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	policies := r.claims[canonical(addr)]
+	a := canonical(addr)
+	policies := r.claims[a]
+	if len(policies) == 0 && a.Zone() != "" {
+		// A claim written without a zone names the address on every
+		// interface; a claim written with one names only that interface.
+		policies = r.claims[a.WithZone("")]
+	}
 	if len(policies) == 0 {
 		return nil
 	}
