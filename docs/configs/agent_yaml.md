@@ -188,6 +188,15 @@ orb:
           targets: [192.168.1.0/24]
 ```
 
+### Policy names
+
+The key beneath a backend is the policy name. `my_policy` and `scan_policy` above are names, not reserved words.
+
+- **Forwarded verbatim.** Nothing along the path slugifies, trims or case-folds the name, and it is the name that appears in backend status and in telemetry.
+- **Spaces and non-ASCII are supported.** `My Office Network #2` and `café` are valid. The agent percent-escapes the name when it addresses the policy over the backend's API, so characters that carry meaning in a URL (`#`, `?`, `%`, `/`) are safe to use.
+- **Must be distinct within a backend.** The name is a YAML mapping key, so a repeat silently replaces the earlier entry rather than erroring.
+- **Best kept distinct across backends too.** The agent indexes policies by name alone, so the same name under two backends can attach one policy's dataset IDs to the other's telemetry.
+
 For the full list of parameters per backend, see:
 - [Device Discovery](../backends/device_discovery/README.md)
 - [SNMP Discovery](../backends/snmp_discovery/README.md)

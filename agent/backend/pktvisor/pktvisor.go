@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -334,7 +334,7 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	p.configFile = tmpFile.Name()
 
 	if common.Otlp.HTTP != "" {
-		uri, err := url.Parse(common.Otlp.HTTP)
+		uri, err := neturl.Parse(common.Otlp.HTTP)
 		if err != nil {
 			return fmt.Errorf("failed to parse otlp receiver http url: %w", err)
 		}
@@ -440,7 +440,7 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, name)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, neturl.PathEscape(name))
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "error")
 	if err != nil {
