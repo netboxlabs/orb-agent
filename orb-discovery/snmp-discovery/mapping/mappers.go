@@ -675,7 +675,15 @@ func maskToPrefixSize(maskStr string) (int, error) {
 	}
 
 	mask := net.IPv4Mask(ip[0], ip[1], ip[2], ip[3])
-	ones, _ := mask.Size()
+	// Size returns (0, 0) for a mask that is not a run of ones followed by a
+	// run of zeros. Discarding the bit width made a malformed 255.0.255.0 read
+	// as a valid /0, which then outranked the other table's host route and put
+	// every address on the device into /0. A mask that has no prefix length is
+	// not a prefix.
+	ones, bits := mask.Size()
+	if bits == 0 {
+		return 0, fmt.Errorf("mask is not contiguous: %s", maskStr)
+	}
 
 	return ones, nil
 }

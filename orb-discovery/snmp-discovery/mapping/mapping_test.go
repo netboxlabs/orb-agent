@@ -2549,3 +2549,31 @@ func TestDedup_BothPrefixesResolved_KeepsTheWinnersPrefix(t *testing.T) {
 			"when both tables report a prefix, the kept row's own prefix stands")
 	}
 }
+
+// TestDedup_NonContiguousNetmask_IsNotTreatedAsAPrefix guards a hazard this
+// change created.
+//
+// net.IPMask.Size returns (0, 0) for a mask that is not a run of ones followed
+// by a run of zeros, and maskToPrefixSize discarded that second value, so a
+// malformed 255.0.255.0 read as a perfectly good /0. Before provenance
+// tracking that bogus prefix stayed on its own row; now, marked resolved, it
+// would be transplanted over the other table's host route and turn every
+// address on the device into /0. A mask that cannot be expressed as a prefix
+// length is not a prefix, and must leave the row on its default.
+func TestDedup_NonContiguousNetmask_IsNotTreatedAsAPrefix(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		legacyIPv4WithNetmaskOIDs("10.0.0.1", "Gi0", "255.0.255.0"),
+		modernIPv4UnresolvedPrefixPDUs("10.0.0.1"),
+	))
+
+	ip := survivingIPFor(entities, "10.0.0.1")
+	if assert.NotNil(t, ip) {
+		assert.Equal(t, "10.0.0.1/32", *ip.Address,
+			"a non-contiguous mask is not a prefix and must not be transplanted")
+	}
+}
