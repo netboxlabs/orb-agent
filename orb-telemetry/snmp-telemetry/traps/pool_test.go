@@ -336,3 +336,42 @@ func TestPool_CloseWaitsUnderOneSharedDeadline(t *testing.T) {
 	assert.Less(t, elapsed, 2*stopTimeout, "five stalled receivers cost one bound, not five")
 	assert.GreaterOrEqual(t, elapsed, stopTimeout, "and the bound was actually waited")
 }
+
+// Close closes every receiver concurrently, so the time it spends waiting
+// on receivers busy inside an intake section is the slowest one's, not the
+// sum: fifty busy sockets must not spend the agent's grace period.
+func TestPool_ClosesReceiversConcurrently(t *testing.T) {
+	tally := NewTally(testLogger)
+	p := NewPool(tally, testLogger)
+	const sockets = 5
+	const park = 200 * time.Millisecond
+	listens := make([]string, sockets)
+	for i := range sockets {
+		listens[i] = fmt.Sprintf("127.0.0.1:0#%d", i)
+	}
+	// Each socket needs its own listen string to be its own entry; the
+	// kernel-chosen port makes "127.0.0.1:0" the same entry every time, so
+	// the entries are bound one at a time on real ports.
+	for i := range sockets {
+		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		require.NoError(t, err)
+		listens[i] = conn.LocalAddr().String()
+		_ = conn.Close()
+		lease, err := p.Acquire(listens[i], fmt.Sprintf("p%d", i), nil, nil)
+		require.NoError(t, err)
+		t.Cleanup(lease.Release)
+		addr, ok := p.addr(listens[i])
+		require.True(t, ok)
+		src, sender := senderAddr(t, addr)
+		require.True(t, p.register(listens[i], fmt.Sprintf("p%d", i), []Device{{Policy: fmt.Sprintf("p%d", i), Addr: src}}, nil))
+		p.receiver(listens[i]).setDuringCount(func() { time.Sleep(park) })
+		_, err = sender.Write(v2cTrap("public"))
+		require.NoError(t, err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	started := time.Now()
+	p.Close()
+	elapsed := time.Since(started)
+	assert.Less(t, elapsed, park+stopTimeout+150*time.Millisecond, "closed concurrently: %s", elapsed)
+	assert.Equal(t, 0, p.size())
+}

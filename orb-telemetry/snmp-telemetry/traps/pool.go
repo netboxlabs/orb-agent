@@ -149,10 +149,19 @@ func (p *Pool) Close() {
 	p.entries = make(map[string]*poolEntry)
 	p.closed = true
 	// Closed under the lock and waited for outside it, the same split Release
-	// makes, so no socket is left open once the map no longer names it.
+	// makes, so no socket is left open once the map no longer names it. The
+	// closes run concurrently: each waits for its receiver's intake section,
+	// up to an acknowledgement write, and fifty busy sockets must cost the
+	// slowest one's wait, not the sum.
+	var closing sync.WaitGroup
 	for _, e := range entries {
-		e.receiver.close()
+		closing.Add(1)
+		go func(r *Receiver) {
+			defer closing.Done()
+			r.close()
+		}(e.receiver)
 	}
+	closing.Wait()
 	p.mu.Unlock()
 	// A closed channel, not a time.After: that delivers once, and the first
 	// stalled receiver would drain it and leave the rest waiting forever.
