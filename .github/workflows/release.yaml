@@ -165,12 +165,12 @@ jobs:
             fi
             return 1
           }
-          if [ "$DEVICE" = "true" ];  then wait_for device-discovery-release.yaml;  fi
-          if [ "$WORKER" = "true" ];  then wait_for worker-release.yaml;            fi
-          if [ "$NETWORK" = "true" ]; then wait_for network-discovery-release.yaml; fi
-          if [ "$SNMP" = "true" ];    then wait_for snmp-discovery-release.yaml;     fi
-          if [ "$GNMI" = "true" ];    then wait_for gnmi-discovery-release.yaml;     fi
-          if [ "$TELEMETRY" = "true" ]; then wait_for snmp-telemetry-release.yaml; fi
+          if [ "$DEVICE" = "true" ];    then wait_for device-discovery-release.yaml;  fi
+          if [ "$WORKER" = "true" ];    then wait_for worker-release.yaml;            fi
+          if [ "$NETWORK" = "true" ];   then wait_for network-discovery-release.yaml; fi
+          if [ "$SNMP" = "true" ];      then wait_for snmp-discovery-release.yaml;    fi
+          if [ "$GNMI" = "true" ];      then wait_for gnmi-discovery-release.yaml;    fi
+          if [ "$TELEMETRY" = "true" ]; then wait_for snmp-telemetry-release.yaml;    fi
           echo "all changed backend releases complete"
 
   resolve-versions:
