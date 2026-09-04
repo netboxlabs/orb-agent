@@ -97,7 +97,9 @@ func TestSnmpTelemetryBackendStart(t *testing.T) {
 	require.NoError(t, err)
 
 	mockCmd := &mocks.MockCmd{}
-	mocks.SetupSuccessfulProcess(mockCmd, 12345)
+	// PID 0: a stray Stop on the mock's single status would wait out the
+	// grace, but StopProcess skips the SIGKILL escalation for an invalid pid.
+	mocks.SetupSuccessfulProcess(mockCmd, 0)
 
 	overrideNewCmdOptions(t, mockCmd, func(options backend.CmdOptions, name string, args []string) {
 		assert.Equal(t, "snmp-telemetry", name)
@@ -144,11 +146,10 @@ func TestSnmpTelemetryBackendStart(t *testing.T) {
 	assert.Equal(t, backend.Running, status)
 	assert.Empty(t, msg)
 
-	// A name with a slash: PathEscape turns it into one path segment,
-	// core%2Fmetrics, while the raw name would be a different route.
+	// A name the binary accepts (one path segment) that still needs escaping.
 	policy := policies.PolicyData{
 		ID:   "id-1",
-		Name: "core/metrics",
+		Name: "core metrics",
 		Data: map[string]any{
 			"config": map[string]any{"metrics_interval": 60},
 			"scope":  map[string]any{"targets": []any{map[string]any{"host": "10.0.0.1"}}},
@@ -167,11 +168,11 @@ func TestSnmpTelemetryBackendStart(t *testing.T) {
 	assert.Equal(t, http.MethodPost, reqs[0].method)
 	assert.Equal(t, "/api/v1/policies", reqs[0].path)
 	assert.Equal(t, "application/x-yaml", reqs[0].contentType)
-	assert.Contains(t, reqs[0].body, "policies:\n    core/metrics:\n")
+	assert.Contains(t, reqs[0].body, "policies:\n    core metrics:\n")
 	assert.Contains(t, reqs[0].body, "metrics_interval: 60")
 
 	assert.Equal(t, http.MethodDelete, reqs[1].method)
-	assert.Equal(t, "/api/v1/policies/core%2Fmetrics", reqs[1].path, "an update removes the previous name first, escaped as one segment")
+	assert.Equal(t, "/api/v1/policies/core%20metrics", reqs[1].path, "an update removes the previous name first, escaped")
 
 	assert.Equal(t, http.MethodPost, reqs[2].method)
 	assert.Contains(t, reqs[2].body, "policies:\n    core:\n")
@@ -189,9 +190,48 @@ func TestSnmpTelemetryBackendStart(t *testing.T) {
 	assert.Equal(t, "process running, REST API unavailable", msg)
 
 	// No trailing Stop: the mock delivers exactly one process status, which
-	// FullReset's Stop consumed. A second Stop would wait out the whole grace
-	// on an empty channel and then SIGKILL the mock's PID on this host.
+	// FullReset's Stop consumed; a second Stop would wait out the whole grace.
 	mockCmd.AssertExpectations(t)
+}
+
+// The binary validates policy names and bodies itself and answers 400 with a
+// detail; that detail is the error the agent surfaces.
+func TestSnmpTelemetryBackendSurfacesTheServersRejection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/status" {
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(statusResponse{Version: "1.0.0"})
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"detail": `policy name must be a single path segment, so it may not contain "/": "core/metrics"`})
+	}))
+	defer server.Close()
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 0)
+	overrideNewCmdOptions(t, mockCmd, nil)
+
+	assert.True(t, snmptelemetry.Register())
+	be := backend.GetBackend("snmp_telemetry")
+	var commons config.BackendCommons
+	commons.Otlp.Grpc = "collector:4317"
+	require.NoError(t, be.Configure(slog.New(slog.NewTextHandler(os.Stdout, nil)), nil, map[string]any{
+		"host": serverURL.Hostname(), "port": serverURL.Port(),
+	}, commons, nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, be.Start(ctx, cancel))
+
+	err = be.ApplyPolicy(policies.PolicyData{ID: "id-2", Name: "core/metrics", Data: map[string]any{}}, false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "policy name must be a single path segment")
+
+	require.NoError(t, be.Stop(ctx))
 }
 
 func TestSnmpTelemetryBackendCompleted(t *testing.T) {

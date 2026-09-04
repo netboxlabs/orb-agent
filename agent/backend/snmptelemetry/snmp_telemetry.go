@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	neturl "net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -26,8 +28,12 @@ var _ backend.Backend = (*snmpTelemetryBackend)(nil)
 const (
 	versionTimeout      = 2
 	capabilitiesTimeout = 5
-	applyPolicyTimeout  = 10
-	removePolicyTimeout = 20
+	// The binary's DELETE blocks on the policy's scheduler shutdown, which it
+	// bounds at 24 seconds, and a POST for a name still stopping waits on that
+	// same shutdown; both timeouts clear that bound.
+	applyPolicyTimeout  = 30
+	removePolicyTimeout = 30
+	maxPort             = 65535
 	defaultExec         = "snmp-telemetry"
 	defaultAPIHost      = "localhost"
 	defaultAPIPort      = "8078"
@@ -92,6 +98,80 @@ func Register() bool {
 	return true
 }
 
+// envVarName is what --policy-env-vars accepts: variable names. A value that
+// is not a name, such as a secrets-manager reference the agent has resolved
+// into a secret, must not reach the command line.
+var envVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// readHost reads the API host. Absent, null or empty keeps the loopback
+// default: the binary joins an empty host with the port and binds every
+// interface, and its API has no authentication.
+func readHost(cfg map[string]any) (string, error) {
+	v, prs := cfg["host"]
+	if !prs || v == nil {
+		return defaultAPIHost, nil
+	}
+	host, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("host must be a string, got %T", v)
+	}
+	if host == "" {
+		return defaultAPIHost, nil
+	}
+	return host, nil
+}
+
+// readPort reads the API port as the binary's integer flag takes it. Absent,
+// null or empty keeps the default; anything the flag would reject is refused
+// here rather than at the binary's startup, which the agent would repeat.
+func readPort(cfg map[string]any) (string, error) {
+	v, prs := cfg["port"]
+	if !prs || v == nil || v == "" {
+		return defaultAPIPort, nil
+	}
+	var n int
+	switch val := v.(type) {
+	case int:
+		n = val
+	case int64:
+		n = int(val)
+	case float64:
+		if val != float64(int64(val)) {
+			return "", fmt.Errorf("port must be an integer from 1 to %d, got %v", maxPort, val)
+		}
+		n = int(val)
+	case string:
+		parsed, err := strconv.Atoi(val)
+		if err != nil {
+			return "", fmt.Errorf("port must be an integer from 1 to %d, got %q", maxPort, val)
+		}
+		n = parsed
+	default:
+		return "", fmt.Errorf("port must be an integer from 1 to %d, got %T", maxPort, v)
+	}
+	if n < 1 || n > maxPort {
+		return "", fmt.Errorf("port must be an integer from 1 to %d, got %d", maxPort, n)
+	}
+	return strconv.Itoa(n), nil
+}
+
+// readChoice reads an optional key whose value the binary matches
+// case-insensitively against a fixed set. An unrecognised value is refused
+// here because the binary falls back silently: any other level runs at
+// DEBUG and any other format is JSON.
+func readChoice(cfg map[string]any, key string, choices ...string) (string, error) {
+	value, err := optionalString(cfg, key)
+	if err != nil || value == "" {
+		return value, err
+	}
+	for _, choice := range choices {
+		if strings.EqualFold(value, choice) {
+			return value, nil
+		}
+	}
+	return "", fmt.Errorf("%s must be one of %s, got %q", key, strings.Join(choices, ", "), value)
+}
+
 func parseExportPeriod(v any) (int, error) {
 	var n int
 
@@ -143,13 +223,16 @@ func optionalString(cfg map[string]any, key string) (string, error) {
 // parsePolicyEnvVars accepts the flag's own comma-separated string, or a YAML
 // list of names so an operator does not have to write the comma form by hand.
 func parsePolicyEnvVars(v any) (string, error) {
+	var names []string
 	switch val := v.(type) {
 	case string:
-		return val, nil
+		if val == "" {
+			return "", nil
+		}
+		names = strings.Split(val, ",")
 	case []string:
-		return strings.Join(val, ","), nil
+		names = val
 	case []any:
-		names := make([]string, 0, len(val))
 		for _, item := range val {
 			name, ok := item.(string)
 			if !ok {
@@ -157,84 +240,117 @@ func parsePolicyEnvVars(v any) (string, error) {
 			}
 			names = append(names, name)
 		}
-		return strings.Join(names, ","), nil
 	default:
 		return "", fmt.Errorf("policy_env_vars must be a string or a list of strings, got %T", v)
 	}
+	for i, name := range names {
+		names[i] = strings.TrimSpace(name)
+		if !envVarName.MatchString(names[i]) {
+			return "", fmt.Errorf("policy_env_vars takes environment variable names, not %q", name)
+		}
+	}
+	return strings.Join(names, ","), nil
+}
+
+// settings is what Configure derives from the backend map. It is applied to
+// the backend only once every key has been read, so a refused reconfiguration
+// leaves the running backend, and the address the agent polls it on, as they
+// were.
+type settings struct {
+	apiHost, apiPort, otelEndpoint           string
+	otelExportPeriod, logLevel, logFormat    string
+	policyEnvVars, profilesRoot, profilesDir string
 }
 
 func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	cfg map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
-	d.logger = logger.With("backend", "snmp_telemetry")
-	d.policyRepo = repo
-
-	if common.Otlp.Grpc == "" {
-		return errors.New("snmp_telemetry: common.otlp.grpc is required, the backend exports its metrics over OTLP")
-	}
-	d.otelEndpoint = common.Otlp.Grpc
-
-	// An empty host would bind the unauthenticated API on every interface,
-	// since the binary joins "" with the port; keep it on loopback.
-	d.apiHost = backend.ConfigValueOrDefault(cfg, "host", defaultAPIHost)
-	if d.apiHost == "" {
-		d.apiHost = defaultAPIHost
-	}
-	d.apiPort = backend.ConfigValueOrDefault(cfg, "port", defaultAPIPort)
-	if d.apiPort == "" {
-		d.apiPort = defaultAPIPort
-	}
-
-	d.otelExportPeriod = ""
-	if v, prs := cfg["otel_export_period"]; prs {
-		period, err := parseExportPeriod(v)
-		if err != nil {
-			return fmt.Errorf("snmp_telemetry: %w", err)
-		}
-		d.otelExportPeriod = strconv.Itoa(period)
-	}
-
-	level, err := optionalString(cfg, "log_level")
+	st, err := readSettings(logger, cfg, common)
 	if err != nil {
 		return fmt.Errorf("snmp_telemetry: %w", err)
 	}
-	d.logLevel = level
-	if d.logLevel == "" {
-		if debug, prs := cfg["debug"].(bool); prs && debug {
-			d.logLevel = "DEBUG"
-		} else if logger.Enabled(context.Background(), slog.LevelDebug) {
-			d.logLevel = "DEBUG"
-		}
-	}
 
-	if d.logFormat, err = optionalString(cfg, "log_format"); err != nil {
-		return fmt.Errorf("snmp_telemetry: %w", err)
-	}
-
-	d.policyEnvVars = ""
-	if v, prs := cfg["policy_env_vars"]; prs {
-		names, err := parsePolicyEnvVars(v)
-		if err != nil {
-			return fmt.Errorf("snmp_telemetry: %w", err)
-		}
-		d.policyEnvVars = names
-	}
-
-	if d.profilesRoot, err = optionalString(cfg, "snmp_profiles_root"); err != nil {
-		return fmt.Errorf("snmp_telemetry: %w", err)
-	}
-	if d.profilesDir, err = optionalString(cfg, "snmp_profiles_dir"); err != nil {
-		return fmt.Errorf("snmp_telemetry: %w", err)
-	}
+	d.logger = logger.With("backend", "snmp_telemetry")
+	d.policyRepo = repo
+	d.apiHost = st.apiHost
+	d.apiPort = st.apiPort
+	d.otelEndpoint = st.otelEndpoint
+	d.otelExportPeriod = st.otelExportPeriod
+	d.logLevel = st.logLevel
+	d.logFormat = st.logFormat
+	d.policyEnvVars = st.policyEnvVars
+	d.profilesRoot = st.profilesRoot
+	d.profilesDir = st.profilesDir
 
 	d.logger.Info("snmp-telemetry using OTLP endpoint", "endpoint", d.otelEndpoint)
 
 	return nil
 }
 
+func readSettings(logger *slog.Logger, cfg map[string]any, common config.BackendCommons) (settings, error) {
+	var st settings
+	var err error
+
+	if common.Otlp.Grpc == "" {
+		return st, errors.New("common.otlp.grpc is required, the backend exports its metrics over OTLP")
+	}
+	st.otelEndpoint = common.Otlp.Grpc
+
+	if st.apiHost, err = readHost(cfg); err != nil {
+		return st, err
+	}
+	if st.apiPort, err = readPort(cfg); err != nil {
+		return st, err
+	}
+
+	if v, prs := cfg["otel_export_period"]; prs {
+		period, err := parseExportPeriod(v)
+		if err != nil {
+			return st, err
+		}
+		st.otelExportPeriod = strconv.Itoa(period)
+	}
+
+	if st.logLevel, err = readChoice(cfg, "log_level", "DEBUG", "INFO", "WARN", "ERROR"); err != nil {
+		return st, err
+	}
+	if st.logLevel == "" {
+		if debug, prs := cfg["debug"].(bool); prs && debug {
+			st.logLevel = "DEBUG"
+		} else if logger.Enabled(context.Background(), slog.LevelDebug) {
+			st.logLevel = "DEBUG"
+		}
+	}
+
+	if st.logFormat, err = readChoice(cfg, "log_format", "TEXT", "JSON"); err != nil {
+		return st, err
+	}
+
+	if v, prs := cfg["policy_env_vars"]; prs {
+		if st.policyEnvVars, err = parsePolicyEnvVars(v); err != nil {
+			return st, err
+		}
+	}
+
+	if st.profilesRoot, err = optionalString(cfg, "snmp_profiles_root"); err != nil {
+		return st, err
+	}
+	if st.profilesDir, err = optionalString(cfg, "snmp_profiles_dir"); err != nil {
+		return st, err
+	}
+
+	return st, nil
+}
+
+// apiURL joins the API address the way the binary binds it, so an IPv6 host
+// is bracketed.
+func (d *snmpTelemetryBackend) apiURL(path string) string {
+	return fmt.Sprintf("%s://%s/api/v1/%s", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort), path)
+}
+
 func (d *snmpTelemetryBackend) Version() (string, error) {
 	var info info
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	url := d.apiURL("status")
 	err := backend.CommonRequest("snmp-telemetry", d.proc, d.logger, url, &info, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
@@ -268,6 +384,12 @@ func (d *snmpTelemetryBackend) buildArgs() []string {
 }
 
 func (d *snmpTelemetryBackend) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
+	// A registered backend the agent never configured has no logger and no
+	// arguments; a fleet full reset walks the whole registry and would reach
+	// it, so refuse rather than start a process on empty flags.
+	if d.logger == nil {
+		return errors.New("snmp_telemetry: started before it was configured")
+	}
 	d.startTime = time.Now()
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
@@ -329,13 +451,21 @@ func (d *snmpTelemetryBackend) logLineAdapter(line string, isStderr bool) {
 // shorter grace would SIGKILL it with traps in hand and the final export
 // unsent; a kill after the flush costs nothing but a warning in the log.
 func (d *snmpTelemetryBackend) Stop(ctx context.Context) error {
+	if d.cancelFunc != nil {
+		defer d.cancelFunc()
+	}
+	if d.proc == nil {
+		return nil
+	}
 	d.logger.Info("routine call to stop snmp-telemetry", "routine", ctx.Value(config.ContextKey("routine")))
-	defer d.cancelFunc()
 	stopProcess(d.logger, d.proc, d.statusChan, backend.DefaultStopGracePeriod, "snmp_telemetry")
 	return nil
 }
 
 func (d *snmpTelemetryBackend) FullReset(ctx context.Context) error {
+	if d.logger == nil {
+		return errors.New("snmp_telemetry: reset before it was configured")
+	}
 	if state, _, _ := backend.GetRunningStatus(d.proc); state == backend.Running {
 		if err := d.Stop(ctx); err != nil {
 			d.logger.Error("failed to stop backend on restart procedure", "error", err)
@@ -356,7 +486,7 @@ func (d *snmpTelemetryBackend) GetStartTime() time.Time {
 
 func (d *snmpTelemetryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
-	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
+	url := d.apiURL("capabilities")
 	err := backend.CommonRequest("snmp-telemetry", d.proc, d.logger, url, &caps, http.MethodGet,
 		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
@@ -405,7 +535,7 @@ func (d *snmpTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", d.apiProtocol, d.apiHost, d.apiPort)
+	url := d.apiURL("policies")
 	err = backend.CommonRequest("snmp-telemetry", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
@@ -425,7 +555,7 @@ func (d *snmpTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, neturl.PathEscape(name))
+	url := d.apiURL("policies/" + neturl.PathEscape(name))
 	err := backend.CommonRequest("snmp-telemetry", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
