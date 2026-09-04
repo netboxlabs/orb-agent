@@ -63,6 +63,7 @@ type EntityRegistry struct {
 	logger             *slog.Logger
 	excludedInterfaces map[string]struct{}
 	ipSource           map[*diode.IPAddress]string
+	prefixResolved     map[*diode.IPAddress]struct{}
 	verifiedInterfaces map[*diode.Interface]struct{}
 }
 
@@ -73,6 +74,7 @@ func NewEntityRegistry(logger *slog.Logger) *EntityRegistry {
 		logger:             logger,
 		excludedInterfaces: make(map[string]struct{}),
 		ipSource:           make(map[*diode.IPAddress]string),
+		prefixResolved:     make(map[*diode.IPAddress]struct{}),
 		verifiedInterfaces: make(map[*diode.Interface]struct{}),
 	}
 }
@@ -118,6 +120,32 @@ func (r *EntityRegistry) MarkIPSource(ip *diode.IPAddress, source string) {
 		r.ipSource = make(map[*diode.IPAddress]string)
 	}
 	r.ipSource[ip] = source
+}
+
+// MarkPrefixResolved records that this address's prefix came from something
+// the device actually reported: a netmask in ipAdEntNetMask, or an
+// ipAddressPrefix RowPointer that parsed and passed its family, ifIndex and
+// containment checks.
+//
+// The absence of the mark means the prefix is the host-route default applied
+// when no usable prefix was found. Cross-table dedup needs that distinction:
+// a /32 the device reported is a real host route and must survive, while a /32
+// we defaulted to must lose to a real prefix from the other table.
+//
+// Marked positively rather than negatively on purpose. A future prefix source
+// counts as unresolved until someone opts it in, which is the safe direction.
+func (r *EntityRegistry) MarkPrefixResolved(ip *diode.IPAddress) {
+	if r.prefixResolved == nil {
+		r.prefixResolved = make(map[*diode.IPAddress]struct{})
+	}
+	r.prefixResolved[ip] = struct{}{}
+}
+
+// PrefixResolved reports whether this address's prefix came from the device
+// rather than from the host-route default.
+func (r *EntityRegistry) PrefixResolved(ip *diode.IPAddress) bool {
+	_, ok := r.prefixResolved[ip]
+	return ok
 }
 
 // IPSource returns the source table for an IP address, or "" if unknown.
@@ -1207,6 +1235,28 @@ func (r *EntityRegistry) hasVerifiedInterface(ip *diode.IPAddress) bool {
 	return r.IsInterfaceVerified(iface)
 }
 
+// transplantPrefix rewrites dst's prefix with src's, keeping dst's own network
+// portion. Returns the merged address and whether anything changed.
+//
+// Only the prefix moves. The two rows describe the same address from different
+// tables, so dst's other fields (its interface binding above all) are the ones
+// the dedup rules already chose to keep.
+func transplantPrefix(dst, src *diode.IPAddress) (string, bool) {
+	if dst == nil || src == nil || dst.Address == nil || src.Address == nil {
+		return "", false
+	}
+	slash := strings.LastIndex(*src.Address, "/")
+	if slash < 0 {
+		return "", false
+	}
+	merged := stripPrefix(*dst.Address) + (*src.Address)[slash:]
+	if merged == *dst.Address {
+		return "", false
+	}
+	*dst.Address = merged
+	return merged, true
+}
+
 // dedupIPAddresses resolves cross-table overlap for *diode.IPAddress
 // entities that share the same canonical address (prefix-stripped).
 // When both a legacy (ipAddrTable) and modern (ipAddressTable) entry
@@ -1253,11 +1303,26 @@ func (m *ObjectIDMapper) dedupIPAddresses(entities map[diode.Entity]bool) {
 		// them has it; otherwise default to modern.
 		modernAssigned := hasAssignedInterface(b.modern)
 		legacyAssigned := hasAssignedInterface(b.legacy)
-		drop := b.legacy
+		drop, keptIP := b.legacy, b.modern
 		kept := "modern"
 		if !modernAssigned && legacyAssigned {
-			drop = b.modern
+			drop, keptIP = b.modern, b.legacy
 			kept = "legacy"
+		}
+		// The prefix travels with whichever row is kept, so a kept row
+		// holding only the host-route default would discard a real prefix
+		// reported by the other table. Roughly one device in six that
+		// implements ipAddressTable returns zeroDotZero for every
+		// ipAddressPrefix, which makes every one of its addresses a /32.
+		// Transplant rather than swap rows: keeping the loser wholesale
+		// cannot help a device whose modern row holds the only interface
+		// binding while the legacy row holds the only real prefix.
+		if !m.registry.PrefixResolved(keptIP) && m.registry.PrefixResolved(drop) {
+			if merged, ok := transplantPrefix(keptIP, drop); ok {
+				m.logger.Debug("took the reported prefix from the dropped row",
+					"address", merged, "kept", kept)
+				m.registry.MarkPrefixResolved(keptIP)
+			}
 		}
 		// entities is keyed by the entity pointer itself; drop is that
 		// pointer, so delete directly without a second scan.

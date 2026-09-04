@@ -1935,10 +1935,15 @@ func TestMapObjectIDsToEntity_LegacyKeptWhenModernLacksInterface(t *testing.T) {
 	}
 	assert.Equal(t, 1, count, "exactly one IP entity must survive dedup")
 	if assert.NotNil(t, survivingIP) {
-		// The legacy row carries the interface binding (host-route /32);
-		// the modern row would be /24 but has no AssignedObject.
-		assert.Equal(t, "10.0.0.1/32", *survivingIP.Address,
-			"legacy entry with interface binding must win when modern lacks one")
+		// The legacy row carries the interface binding, the modern row
+		// carries the only prefix the device actually reported, and the
+		// result now keeps both. This assertion used to expect /32: the
+		// legacy row won for its binding and its host-route default came
+		// with it, silently discarding the modern row's resolved /24. That
+		// is the same defect as an unusable RowPointer, mirrored, and the
+		// prefix transplant in dedupIPAddresses fixes both directions.
+		assert.Equal(t, "10.0.0.1/24", *survivingIP.Address,
+			"the row that wins on its interface binding must still take the reported prefix")
 		_, assigned := survivingIP.AssignedObject.(*diode.Interface)
 		assert.True(t, assigned, "surviving entity must keep its interface assignment")
 	}
@@ -2395,5 +2400,152 @@ func TestMappingYAML_CiscoSBOverlayEntriesPresent(t *testing.T) {
 		if !found {
 			t.Errorf("mapping.yaml missing CISCOSB-scoped OID %s", oid)
 		}
+	}
+}
+
+// primaryIPFixtureBothTablesWithNetmask is primaryIPFixtureBothTables plus the
+// legacy ipAdEntNetMask column. The shipped policy/mapping.yaml maps that
+// column; the shared test fixture omits it, which is why legacy rows in most
+// of these tests carry the host-route default rather than a real prefix.
+func primaryIPFixtureBothTablesWithNetmask() []config.MappingEntry {
+	entries := primaryIPFixtureBothTables()
+	for i := range entries {
+		if entries[i].OID != ".1.3.6.1.2.1.4.20.1" {
+			continue
+		}
+		entries[i].MappingEntries = append(entries[i].MappingEntries, config.MappingEntry{
+			OID: ".1.3.6.1.2.1.4.20.1.3", Entity: "ipAddress", Field: "addressPrefixSize",
+		})
+	}
+	return entries
+}
+
+// legacyIPv4WithNetmaskOIDs is primaryIPOneInterfaceOIDs plus the
+// ipAdEntNetMask column, so the legacy row carries a prefix the device
+// actually reported rather than falling back to a host route.
+func legacyIPv4WithNetmaskOIDs(address, ifName, netmask string) mapping.ObjectIDValueMap {
+	pdus := primaryIPOneInterfaceOIDs(address, ifName)
+	pdus[".1.3.6.1.2.1.4.20.1.3."+address] = mapping.Value{
+		Value: netmask, Type: mapping.Asn1BER(mapping.IPAddress), IdentifierSize: 4,
+	}
+	return pdus
+}
+
+// modernIPv4UnresolvedPrefixPDUs is modernIPv4PDUs with ipAddressPrefix
+// set to zeroDotZero, which is what an agent returns when it does not
+// populate ipAddressPrefixTable at all. snmpwalk renders it "ccitt.0".
+func modernIPv4UnresolvedPrefixPDUs(addr string) mapping.ObjectIDValueMap {
+	pdus := modernIPv4PDUs(addr, 24)
+	rowSuffix := "1.4." + strings.Join(strings.Split(addr, "."), ".")
+	pdus[".1.3.6.1.2.1.4.34.1.5."+rowSuffix] = mapping.Value{
+		Value: "0.0", Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+	}
+	return pdus
+}
+
+func survivingIPFor(entities []diode.Entity, prefix string) *diode.IPAddress {
+	for _, e := range entities {
+		if ip, ok := e.(*diode.IPAddress); ok && ip.Address != nil &&
+			strings.HasPrefix(*ip.Address, prefix) {
+			return ip
+		}
+	}
+	return nil
+}
+
+// TestDedup_UnresolvedModernPrefix_TakesLegacyNetmask is the reported bug.
+//
+// An agent that populates ipAddressTable but returns zeroDotZero for every
+// ipAddressPrefix has no usable prefix in the modern row, so we fall back to a
+// host route. Both tables carry the same ifIndex, so dedup's interface-binding
+// tiebreak never fires and the modern row wins by default, taking its /32 with
+// it and deleting the legacy row that held the real netmask. Every address on
+// the device then lands in NetBox as /32.
+func TestDedup_UnresolvedModernPrefix_TakesLegacyNetmask(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		legacyIPv4WithNetmaskOIDs("10.0.0.1", "Gi0", "255.255.255.0"),
+		modernIPv4UnresolvedPrefixPDUs("10.0.0.1"),
+	))
+
+	ip := survivingIPFor(entities, "10.0.0.1")
+	if assert.NotNil(t, ip, "the address must survive dedup") {
+		assert.Equal(t, "10.0.0.1/24", *ip.Address,
+			"the netmask the device reported must beat the host-route fallback")
+	}
+}
+
+// TestDedup_GenuineHostRoute_StaysA32 is the guard that keeps the fix honest.
+//
+// A /32 the device actually reported is a legitimate host route, and must not
+// be "corrected" into anything else. The fix has to key off where a prefix came
+// from, not off its value.
+func TestDedup_GenuineHostRoute_StaysA32(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		legacyIPv4WithNetmaskOIDs("10.0.0.1", "Gi0", "255.255.255.255"),
+		modernIPv4UnresolvedPrefixPDUs("10.0.0.1"),
+	))
+
+	ip := survivingIPFor(entities, "10.0.0.1")
+	if assert.NotNil(t, ip) {
+		assert.Equal(t, "10.0.0.1/32", *ip.Address,
+			"a reported /32 is a real host route, not something to repair")
+	}
+}
+
+// TestDedup_BothPrefixesUnresolved_StaysA32 pins that there is nothing to
+// recover when neither table reported a prefix, and that we do not invent one.
+func TestDedup_BothPrefixesUnresolved_StaysA32(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		primaryIPOneInterfaceOIDs("10.0.0.1", "Gi0"), // legacy, no netmask column
+		modernIPv4UnresolvedPrefixPDUs("10.0.0.1"),
+	))
+
+	ip := survivingIPFor(entities, "10.0.0.1")
+	if assert.NotNil(t, ip) {
+		assert.Equal(t, "10.0.0.1/32", *ip.Address)
+	}
+}
+
+// TestDedup_BothPrefixesResolved_KeepsTheWinnersPrefix pins the half of the
+// transplant condition the other tests cannot see.
+//
+// When both tables report a prefix and they disagree, the row dedup already
+// chose is authoritative and its prefix must stand. Without the
+// "kept prefix is unresolved" half of the guard, the dropped row's prefix would
+// overwrite it, quietly inverting the table precedence the rest of dedup exists
+// to enforce. The guard that a reported /32 survives cannot catch this, because
+// there both rows are /32 and the mistake is invisible.
+func TestDedup_BothPrefixesResolved_KeepsTheWinnersPrefix(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		// Legacy says /25, modern resolves /24. Modern wins the row, so
+		// modern's prefix wins too.
+		legacyIPv4WithNetmaskOIDs("10.0.0.1", "Gi0", "255.255.255.128"),
+		modernIPv4PDUs("10.0.0.1", 24),
+	))
+
+	ip := survivingIPFor(entities, "10.0.0.1")
+	if assert.NotNil(t, ip) {
+		assert.Equal(t, "10.0.0.1/24", *ip.Address,
+			"when both tables report a prefix, the kept row's own prefix stands")
 	}
 }

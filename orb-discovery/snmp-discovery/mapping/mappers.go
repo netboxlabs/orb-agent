@@ -266,6 +266,9 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						m.logger.Warn("error converting mask to prefix size", "error", err, "value", value.Value)
 						continue
 					}
+					// A netmask the device reported. Marked so dedup can tell
+					// it from the host-route default.
+					entityRegistry.MarkPrefixResolved(&ipAddress)
 					if ipAddress.Address == nil || *ipAddress.Address == "" {
 						// No address set yet
 						if extractedIP != "" {
@@ -363,6 +366,9 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 							"raw", prefixLen, "clamped", maxLen, "address", canonical)
 						prefixLen = maxLen
 					}
+					// The RowPointer parsed and passed every check, so this
+					// prefix came from the device rather than from the default.
+					entityRegistry.MarkPrefixResolved(&ipAddress)
 					setOrUpdateAddress(fmt.Sprintf("%s/%d", canonical, prefixLen))
 					fieldFound = true
 				case "assignedObject":
