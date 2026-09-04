@@ -464,14 +464,26 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 			lastErr = err
 			continue
 		}
-		result.Updates = append(result.Updates, n.Updates...)
-		result.Deletes = append(result.Deletes, n.Deletes...)
+		mergeGetResults(&result, n)
 		got++
 	}
 	if got == 0 && lastErr != nil {
 		return Notification{}, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
 	}
 	return result, nil
+}
+
+// mergeGetResults folds one converted notification into a merged Get result:
+// updates and deletes are appended, and the greatest device timestamp wins. A
+// Get response carries one notification per path, so the latest device time is
+// the honest stamp for the merged snapshot; a notification the target left
+// unstamped (zero) never lowers it.
+func mergeGetResults(into *Notification, n Notification) {
+	into.Updates = append(into.Updates, n.Updates...)
+	into.Deletes = append(into.Deletes, n.Deletes...)
+	if n.Timestamp > into.Timestamp {
+		into.Timestamp = n.Timestamp
+	}
 }
 
 // getPaths issues a single gNMI Get for the given paths and merges the response
@@ -497,9 +509,7 @@ func (s *gnmicSession) getPaths(ctx context.Context, paths []string) (Notificati
 	var result Notification
 	result.SyncDone = true
 	for _, notif := range resp.GetNotification() {
-		n := convertNotification(notif)
-		result.Updates = append(result.Updates, n.Updates...)
-		result.Deletes = append(result.Deletes, n.Deletes...)
+		mergeGetResults(&result, convertNotification(notif))
 	}
 	return result, nil
 }

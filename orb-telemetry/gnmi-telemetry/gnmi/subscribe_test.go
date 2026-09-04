@@ -44,3 +44,14 @@ func TestBuildSubscribeRequestRejectsAnUnknownMode(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `mode "get" is not a stream mode`)
 }
+
+func TestMergeGetResultsKeepsTheLatestDeviceTimestamp(t *testing.T) {
+	var merged Notification
+	merged.SyncDone = true
+	mergeGetResults(&merged, Notification{Timestamp: 5, Updates: []Update{{Path: "/a", Value: uint64(1)}}})
+	mergeGetResults(&merged, Notification{Timestamp: 9, Updates: []Update{{Path: "/b", Value: uint64(2)}}, Deletes: []string{"/c"}})
+	mergeGetResults(&merged, Notification{Timestamp: 0, Updates: []Update{{Path: "/d", Value: uint64(3)}}})
+	assert.Equal(t, int64(9), merged.Timestamp, "the latest device time stamps the merged snapshot, and an unstamped notification does not lower it")
+	require.Len(t, merged.Updates, 3)
+	assert.Equal(t, []string{"/c"}, merged.Deletes)
+}
