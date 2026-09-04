@@ -98,3 +98,47 @@ func stripIndexFamilyPrefix(index string) string {
 // errMalformedInetAddress signals a malformed inet_address-indexed row
 // during framework-level grouping.
 var errMalformedInetAddress = errors.New("malformed InetAddress index")
+
+// decodeIPv6AddrPrefixIndex parses the row index of IPV6-MIB
+// ipv6AddrPfxLength, which is <ifIndex>.<16 address bytes>. That is a
+// composite index rather than the RFC 4001 InetAddress
+// decodeInetAddressIndex reads, so it needs its own parser instead of a
+// flag on that one.
+//
+// The canonical address it returns carries the same "ipv6:" prefix
+// decodeInetAddressIndex produces, so an annotation row lands in the same
+// PDU group as the ipAddressTable row it describes and no separate
+// joining step is needed. The ifIndex is returned alongside it so the
+// caller can check the annotation against the row's own binding.
+func decodeIPv6AddrPrefixIndex(suffix []string) (string, string, bool) {
+	const addrLen = 16
+	if len(suffix) != addrLen+1 {
+		return "", "", false
+	}
+	// The ifIndex is kept as text: it is only ever compared against
+	// ipAddressIfIndex, which arrives as text too.
+	if _, err := strconv.Atoi(suffix[0]); err != nil {
+		return "", "", false
+	}
+	body, ok := parseDecimalBytes(suffix[1:])
+	if !ok {
+		return "", "", false
+	}
+	var arr [addrLen]byte
+	copy(arr[:], body)
+	return suffix[0], "ipv6:" + netip.AddrFrom16(arr).String(), true
+}
+
+// ipv6AddrPrefixIfIndex returns the ifIndex component of an
+// ipv6AddrPfxLength row OID, or "" when the OID does not belong to the
+// column or its index is malformed.
+func ipv6AddrPrefixIfIndex(objectID, columnOID string) string {
+	if !strings.HasPrefix(objectID, columnOID+".") {
+		return ""
+	}
+	ifIndex, _, ok := decodeIPv6AddrPrefixIndex(strings.Split(objectID[len(columnOID)+1:], "."))
+	if !ok {
+		return ""
+	}
+	return ifIndex
+}

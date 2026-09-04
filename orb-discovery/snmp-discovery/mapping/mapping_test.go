@@ -1,6 +1,7 @@
 package mapping_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -2576,4 +2577,203 @@ func TestDedup_NonContiguousNetmask_IsNotTreatedAsAPrefix(t *testing.T) {
 		assert.Equal(t, "10.0.0.1/32", *ip.Address,
 			"a non-contiguous mask is not a prefix and must not be transplanted")
 	}
+}
+
+// ipv6DecimalBytes renders an IPv6 literal as its 16 address bytes in
+// decimal, joined by dots, which is how both ipAddressTable and
+// IPV6-MIB spell an address inside a row index.
+func ipv6DecimalBytes(addr string) string {
+	ip := net.ParseIP(addr)
+	if ip == nil || ip.To4() != nil {
+		panic("ipv6DecimalBytes requires an IPv6 literal: " + addr)
+	}
+	ip = ip.To16()
+	parts := make([]string, 16)
+	for i, b := range ip {
+		parts[i] = fmt.Sprintf("%d", b)
+	}
+	return strings.Join(parts, ".")
+}
+
+// primaryIPFixtureWithV6PrefixLength adds the IPV6-MIB
+// ipv6AddrPfxLength annotation column to the modern table's entry.
+func primaryIPFixtureWithV6PrefixLength() []config.MappingEntry {
+	entries := primaryIPFixtureBothTables()
+	for i := range entries {
+		if entries[i].OID != ".1.3.6.1.2.1.4.34.1" {
+			continue
+		}
+		entries[i].MappingEntries = append(entries[i].MappingEntries, config.MappingEntry{
+			OID: ".1.3.6.1.2.1.55.1.8.1.2", Entity: "ipAddress",
+			Field: "addressPrefixLength", IndexKind: "ipv6_addr_prefix",
+		})
+	}
+	return entries
+}
+
+// modernIPv6UnresolvedPrefixPDUs is the v6 sibling of
+// modernIPv4UnresolvedPrefixPDUs: an ipAddressTable row whose
+// ipAddressPrefix is zeroDotZero, so nothing in the current tables says
+// what the prefix is. Both Junos walks in the reference corpus have
+// exactly this shape.
+func modernIPv6UnresolvedPrefixPDUs(addr string) mapping.ObjectIDValueMap {
+	pdus := modernIPv6PDUs(addr, 64)
+	pdus[".1.3.6.1.2.1.4.34.1.5.2.16."+ipv6DecimalBytes(addr)] = mapping.Value{
+		Value: "0.0", Type: mapping.Asn1BER(mapping.ObjectIdentifier), IdentifierSize: 0,
+	}
+	return pdus
+}
+
+// ipv6PfxLengthPDU builds one IPV6-MIB ipv6AddrPfxLength row, indexed by
+// ifIndex followed by the 16 address bytes.
+func ipv6PfxLengthPDU(addr string, ifIndex, plen int) mapping.ObjectIDValueMap {
+	return mapping.ObjectIDValueMap{
+		fmt.Sprintf(".1.3.6.1.2.1.55.1.8.1.2.%d.%s", ifIndex, ipv6DecimalBytes(addr)): mapping.Value{
+			Value: fmt.Sprintf("%d", plen), Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+		},
+	}
+}
+
+// mapV6PrefixOnce runs one mapping pass over the given PDUs with the
+// annotation column configured, returning the surviving IPv6 address.
+func mapV6PrefixOnce(t *testing.T, pdus mapping.ObjectIDValueMap) *diode.IPAddress {
+	t.Helper()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	return survivingIPFor(m.MapObjectIDsToEntity(pdus), "2001:db8::")
+}
+
+// TestIPv6PrefixLength_RecoversPrefixWhenPointerIsZeroDotZero is the
+// IPv6 half of the reported bug. An agent that populates ipAddressTable
+// but returns zeroDotZero for every ipAddressPrefix leaves us with the
+// host-route default, so every IPv6 address on the device lands in
+// NetBox as /128. Where the device still answers the deprecated
+// IPV6-MIB, the prefix it reports there is the only one available.
+func TestIPv6PrefixLength_RecoversPrefixWhenPointerIsZeroDotZero(t *testing.T) {
+	ip := mapV6PrefixOnce(t, mergeOIDs(
+		mapping.ObjectIDValueMap{".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		}},
+		modernIPv6UnresolvedPrefixPDUs("2001:db8::4"),
+		ipv6PfxLengthPDU("2001:db8::4", 1, 64),
+	))
+	assert.NotNil(t, ip, "the address must survive")
+	assert.Equal(t, "2001:db8::4/64", *ip.Address,
+		"ipv6AddrPfxLength is the only prefix the device reported, so it must be used")
+}
+
+// TestIPv6PrefixLength_DoesNotOverrideResolvedPointer pins the
+// precedence between a current MIB and one RFC 4293 obsoleted. It runs
+// the mapping repeatedly because a row's PDUs are iterated in Go map
+// order: a precedence that happened to work by ordering rather than by
+// rank would pass once and fail intermittently in the field.
+func TestIPv6PrefixLength_DoesNotOverrideResolvedPointer(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		ip := mapV6PrefixOnce(t, mergeOIDs(
+			mapping.ObjectIDValueMap{".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+				Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+			}},
+			modernIPv6PDUs("2001:db8::4", 64),
+			ipv6PfxLengthPDU("2001:db8::4", 1, 48),
+		))
+		assert.NotNil(t, ip)
+		assert.Equal(t, "2001:db8::4/64", *ip.Address,
+			"a resolved ipAddressPrefix outranks the deprecated IPV6-MIB regardless of PDU order")
+	}
+}
+
+// TestIPv6PrefixLength_IfIndexMismatchIsRefused covers the annotation's
+// composite index: the same address on two interfaces has two rows that
+// may disagree, so a row describing a different interface than the one
+// the address is bound to must not be believed.
+func TestIPv6PrefixLength_IfIndexMismatchIsRefused(t *testing.T) {
+	ip := mapV6PrefixOnce(t, mergeOIDs(
+		mapping.ObjectIDValueMap{".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		}},
+		modernIPv6UnresolvedPrefixPDUs("2001:db8::4"),
+		ipv6PfxLengthPDU("2001:db8::4", 9, 64),
+	))
+	assert.NotNil(t, ip)
+	assert.Equal(t, "2001:db8::4/128", *ip.Address,
+		"an annotation for another interface must leave the host route alone")
+}
+
+// TestIPv6PrefixLength_UnboundRowAcceptsAnnotation is the other half of
+// the ifIndex rule. RFC 4293 permits an address with no interface
+// binding, and refusing those outright would discard a prefix for a
+// reason no operator could see.
+func TestIPv6PrefixLength_UnboundRowAcceptsAnnotation(t *testing.T) {
+	pdus := modernIPv6UnresolvedPrefixPDUs("2001:db8::4")
+	pdus[".1.3.6.1.2.1.4.34.1.3.2.16."+ipv6DecimalBytes("2001:db8::4")] = mapping.Value{
+		Value: "0", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+	}
+	ip := mapV6PrefixOnce(t, mergeOIDs(pdus, ipv6PfxLengthPDU("2001:db8::4", 9, 64)))
+	assert.NotNil(t, ip)
+	assert.Equal(t, "2001:db8::4/64", *ip.Address,
+		"an unbound address places no constraint on which annotation row applies")
+}
+
+// TestIPv6PrefixLength_AnnotationWithNoRowMintsNothing pins that the
+// annotation never creates an address of its own. Both Junos walks in
+// the corpus report link-local addresses in IPV6-MIB that their
+// ipAddressTable omits; emitting those would invent inventory from a
+// table that only describes prefixes.
+func TestIPv6PrefixLength_AnnotationWithNoRowMintsNothing(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	// An interface PDU rides along so the assertion below is made against
+	// a walk that did produce entities, rather than an empty result that
+	// would satisfy it for the wrong reason.
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		mapping.ObjectIDValueMap{".1.3.6.1.2.1.2.2.1.2.24": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		}},
+		ipv6PfxLengthPDU("fe80::e20:16ff:fe22:e801", 24, 64),
+	))
+	assert.NotEmpty(t, entities, "the walk must have produced something to check against")
+	for _, e := range entities {
+		_, isIP := e.(*diode.IPAddress)
+		assert.False(t, isIP, "an annotation with no row to annotate must not become an address")
+	}
+}
+
+// TestIPv6PrefixLength_OutOfRangeIsIgnored keeps a malformed length from
+// becoming a prefix, the same way a non-contiguous netmask is refused on
+// the IPv4 side.
+func TestIPv6PrefixLength_OutOfRangeIsIgnored(t *testing.T) {
+	ip := mapV6PrefixOnce(t, mergeOIDs(
+		mapping.ObjectIDValueMap{".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		}},
+		modernIPv6UnresolvedPrefixPDUs("2001:db8::4"),
+		ipv6PfxLengthPDU("2001:db8::4", 1, 200),
+	))
+	assert.NotNil(t, ip)
+	assert.Equal(t, "2001:db8::4/128", *ip.Address,
+		"a length no IPv6 address can have is not a prefix")
+}
+
+// TestIPv6PrefixLength_AnnotationWithNoRowIsQuiet pins the log level of
+// that drop. Both Junos walks in the reference corpus report link-local
+// addresses in IPV6-MIB that their ipAddressTable omits, so this fires
+// on normal operation for every device the fallback exists to help. A
+// warning per address per cycle is the noise mistake corrected in #560.
+func TestIPv6PrefixLength_AnnotationWithNoRowIsQuiet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureWithV6PrefixLength(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	m.MapObjectIDsToEntity(ipv6PfxLengthPDU("fe80::e20:16ff:fe22:e801", 24, 64))
+
+	assert.NotContains(t, buf.String(), `"level":"WARN"`,
+		"an annotation with no row to annotate is an expected shape, not a fault")
+	assert.Contains(t, buf.String(), "skipping annotation with no row to annotate",
+		"the drop must still be observable at debug")
 }

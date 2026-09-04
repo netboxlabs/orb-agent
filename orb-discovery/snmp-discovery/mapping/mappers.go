@@ -170,6 +170,25 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 	}
 }
 
+// rowInterfaceIndex returns the value of the row's interface-binding
+// column (the one mapped to "assignedObject"), or "" when the row has
+// none. Found by field rather than by OID arithmetic on a sibling,
+// because the caller may be handling a column that belongs to a
+// different table than the row it annotates.
+func rowInterfaceIndex(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry) string {
+	for _, propertyMappingEntry := range mappingEntry.MappingEntries {
+		if propertyMappingEntry.Field != "assignedObject" {
+			continue
+		}
+		for objectID, value := range values {
+			if objectID.HasParent(propertyMappingEntry.OID) {
+				return value.Value
+			}
+		}
+	}
+	return ""
+}
+
 // Map maps IP addresses to entities
 func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
 	m.logger.Debug("mapping values to ipAddress entity", "values", values, "mapping_entry", mappingEntry)
@@ -268,7 +287,7 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					// A netmask the device reported. Marked so dedup can tell
 					// it from the host-route default.
-					entityRegistry.MarkPrefixResolved(&ipAddress)
+					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankReported)
 					if ipAddress.Address == nil || *ipAddress.Address == "" {
 						// No address set yet
 						if extractedIP != "" {
@@ -368,7 +387,55 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					}
 					// The RowPointer parsed and passed every check, so this
 					// prefix came from the device rather than from the default.
-					entityRegistry.MarkPrefixResolved(&ipAddress)
+					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankReported)
+					setOrUpdateAddress(fmt.Sprintf("%s/%d", canonical, prefixLen))
+					fieldFound = true
+				case "addressPrefixLength":
+					// IPV6-MIB ipv6AddrPfxLength, a column of a table RFC
+					// 4293 obsoleted. Read only as a fallback: the two
+					// current tables have first claim and this one applies
+					// only where neither of them resolved a prefix. The
+					// guard is a rank comparison rather than an assumption
+					// about ordering, because a row's PDUs are iterated in
+					// map order.
+					if ipAddress.Address == nil || *ipAddress.Address == "" {
+						continue
+					}
+					if entityRegistry.PrefixRank(&ipAddress) > prefixRankDeprecated {
+						continue
+					}
+					canonical := stripPrefix(*ipAddress.Address)
+					if !strings.Contains(canonical, ":") {
+						// The table is IPv6-only, so an IPv4 address here
+						// means the row is describing something other than
+						// the address it grouped with.
+						m.logger.Debug("ipv6AddrPfxLength on a non-IPv6 address, keeping host route",
+							"address", *ipAddress.Address)
+						continue
+					}
+					prefixLen, err := strconv.Atoi(value.Value)
+					if err != nil || prefixLen < 0 || prefixLen > 128 {
+						m.logger.Debug("ipv6AddrPfxLength not usable, keeping host route",
+							"value", value.Value, "address", *ipAddress.Address)
+						continue
+					}
+					// The annotation is indexed by (ifIndex, address), so
+					// one address on two interfaces has two rows that may
+					// disagree. Take a row only where it agrees with the
+					// address's own binding; an unbound side is no
+					// constraint, matching how addressPrefix treats
+					// InterfaceIndexOrZero.
+					prefixIfIndex := ipv6AddrPrefixIfIndex(string(objectID), propertyMappingEntry.OID)
+					rowIfIndex := rowInterfaceIndex(values, mappingEntry)
+					if prefixIfIndex != "" && prefixIfIndex != "0" &&
+						rowIfIndex != "" && rowIfIndex != "0" &&
+						prefixIfIndex != rowIfIndex {
+						m.logger.Debug("ipv6AddrPfxLength ifIndex mismatch, keeping host route",
+							"address", *ipAddress.Address,
+							"prefix_ifindex", prefixIfIndex, "row_ifindex", rowIfIndex)
+						continue
+					}
+					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankDeprecated)
 					setOrUpdateAddress(fmt.Sprintf("%s/%d", canonical, prefixLen))
 					fieldFound = true
 				case "assignedObject":
