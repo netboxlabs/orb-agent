@@ -58,6 +58,7 @@ aggregated agent release):
 
 - `device-discovery`
 - `gnmi-discovery` *(experimental)*
+- `gnmi-telemetry`
 - `network-discovery`
 - `snmp-discovery`
 - `snmp-telemetry`
@@ -85,7 +86,7 @@ Other scopes:
 > **Agent version vs. non-agent scopes.** The mapping above is the per-component
 > rule. For the **agent** release specifically, both the backend scopes
 > (`device-discovery`, `network-discovery`, `snmp-discovery`, `gnmi-discovery`,
-> `snmp-telemetry`, `worker`) and the no-release scopes (`repo`, `ci`, `docs`,
+> `gnmi-telemetry`, `snmp-telemetry`, `worker`) and the no-release scopes (`repo`, `ci`, `docs`,
 > `deps-dev`) are set to `release: false`, so even a releasing *type* on those
 > scopes (e.g. `feat(repo)`, `fix(ci)`) does **not** bump the agent version.
 > Backend commits still appear in the aggregated agent release notes. The one
