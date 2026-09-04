@@ -204,3 +204,31 @@ func TestTimeliness_SourceChurnUnderOneCredentialEvictsOnlyThatCredential(t *tes
 	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: after the attacker's first clock, its churn evicted only its own credential's clocks")
 	assert.True(t, w.check(filler(0), 0, 1), "the oldest filler was the one displaced, once")
 }
+
+// Eviction within a credential's group follows use too: at the global bound
+// the group gives up its least recently used clock, not one a principal in
+// it has just used.
+func TestTimeliness_CredentialEvictionFollowsUse(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	member := func(i int) clockID {
+		return clockID{src: netip.AddrFrom4([4]byte{10, 0, 0, byte(i)}), user: "fleet", authPass: "f", engineID: "e"}
+	}
+	for i := 1; i <= 3; i++ {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(member(i), 5, 1))
+	}
+	for i := range maxEngines - 3 {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(clockID{user: fmt.Sprintf("f%d", i), engineID: "e"}, 1, 1))
+	}
+	require.Equal(t, maxEngines, w.size())
+
+	now = now.Add(time.Second)
+	assert.True(t, w.check(member(1), 5, uint32(maxEngines)+5), "member 1 is used again, with its clock advanced")
+	now = now.Add(time.Second)
+	assert.True(t, w.check(member(4), 5, 1), "a new member of the fleet at the global bound")
+	assert.Equal(t, maxEngines, w.size())
+	assert.False(t, w.check(member(1), 4, 1), "member 1 was kept: lower boots is still a replay")
+	assert.True(t, w.check(member(2), 4, 1), "member 2, the fleet's least recently used, was evicted and is relearned")
+}
