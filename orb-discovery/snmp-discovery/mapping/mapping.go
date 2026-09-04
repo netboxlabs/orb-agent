@@ -63,6 +63,7 @@ type EntityRegistry struct {
 	logger             *slog.Logger
 	excludedInterfaces map[string]struct{}
 	ipSource           map[*diode.IPAddress]string
+	prefixRank         map[*diode.IPAddress]int
 	verifiedInterfaces map[*diode.Interface]struct{}
 }
 
@@ -73,6 +74,7 @@ func NewEntityRegistry(logger *slog.Logger) *EntityRegistry {
 		logger:             logger,
 		excludedInterfaces: make(map[string]struct{}),
 		ipSource:           make(map[*diode.IPAddress]string),
+		prefixRank:         make(map[*diode.IPAddress]int),
 		verifiedInterfaces: make(map[*diode.Interface]struct{}),
 	}
 }
@@ -118,6 +120,51 @@ func (r *EntityRegistry) MarkIPSource(ip *diode.IPAddress, source string) {
 		r.ipSource = make(map[*diode.IPAddress]string)
 	}
 	r.ipSource[ip] = source
+}
+
+// Prefix provenance ranks, ordered by how far the source can be trusted.
+// A prefix may only be written over one of the same rank or lower, which is
+// what keeps the outcome independent of the order the PDUs of a row happen to
+// be iterated in.
+const (
+	// prefixRankDefault is the host-route fallback: nothing on the device
+	// reported a prefix for this address.
+	prefixRankDefault = 0
+	// prefixRankDeprecated is IPV6-MIB ipv6AddrPfxLength, which RFC 4293
+	// obsoleted. Believed only when the current tables said nothing.
+	prefixRankDeprecated = 1
+	// prefixRankReported is a netmask in ipAdEntNetMask, or an
+	// ipAddressPrefix RowPointer that parsed and passed its family, ifIndex
+	// and containment checks.
+	prefixRankReported = 2
+)
+
+// MarkPrefixSource records where this address's prefix came from, so a later
+// source can tell whether it is allowed to overwrite it and so cross-table
+// dedup can tell a reported prefix from the default.
+//
+// Ranked positively on purpose. A future prefix source counts as the default
+// until someone opts it in, which is the safe direction.
+func (r *EntityRegistry) MarkPrefixSource(ip *diode.IPAddress, rank int) {
+	if r.prefixRank == nil {
+		r.prefixRank = make(map[*diode.IPAddress]int)
+	}
+	r.prefixRank[ip] = rank
+}
+
+// PrefixRank returns the provenance rank of this address's prefix,
+// prefixRankDefault when nothing has claimed it.
+func (r *EntityRegistry) PrefixRank(ip *diode.IPAddress) int {
+	return r.prefixRank[ip]
+}
+
+// PrefixResolved reports whether this address's prefix came from the device
+// rather than from the host-route default. Cross-table dedup needs that
+// distinction: a /32 the device reported is a real host route and must
+// survive, while a /32 we defaulted to must lose to a real prefix from the
+// other table.
+func (r *EntityRegistry) PrefixResolved(ip *diode.IPAddress) bool {
+	return r.PrefixRank(ip) > prefixRankDefault
 }
 
 // IPSource returns the source table for an IP address, or "" if unknown.
@@ -420,11 +467,17 @@ func (m *Entry) MapToEntity(pdus map[ObjectIDIndex]*ObjectIDValue, entityRegistr
 // Config is a struct that contains a mapping of ObjectIDs to Entries
 type Config struct {
 	mapping map[string]*Entry
-	// inetAddressEntries is the subset of `mapping` whose IndexKind is
-	// "inet_address". Pre-computed so groupByObjectIDIndex can skip the
-	// per-PDU getMappingEntry call (an O(depth) prefix walk) when the
-	// OID falls outside any inet_address-using table.
-	inetAddressEntries map[string]*Entry
+	// indexedEntries holds every entry that declares an IndexKind, keyed
+	// by the OID its row indices hang off. Pre-computed so
+	// groupByObjectIDIndex can skip the per-PDU getMappingEntry call (an
+	// O(depth) prefix walk) when the OID falls outside any such table.
+	indexedEntries map[string]*Entry
+	// annotationPrefixes lists the OIDs of columns that only annotate
+	// another table's rows. groupByObjectIDIndex consults this slice via
+	// HasPrefix to recognise a group made of nothing but annotations,
+	// which is a row the annotated table never reported and so must be
+	// dropped quietly rather than warned about.
+	annotationPrefixes []string
 	// postPassPrefixes is the pre-computed list of OID prefixes that
 	// belong to post-pass-only entity types (vlan, interface_vlan).
 	// groupByObjectIDIndex consults this slice via HasPrefix per PDU
@@ -481,8 +534,9 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 	}
 
 	mapping := make(map[string]*Entry)
-	inetAddressEntries := make(map[string]*Entry)
+	indexedEntries := make(map[string]*Entry)
 	var postPassPrefixes []string
+	var annotationPrefixes []string
 	for _, m := range mappings {
 		logger.Debug("adding mapping", "oid", m.OID, "entity", m.Entity, "field", m.Field, "relationship", m.Relationship)
 		Entry := newMappingEntry(m, logger, entityMappers)
@@ -490,14 +544,26 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 			continue
 		}
 		mapping[m.OID] = Entry
-		// inetAddressEntryFor uses these to anchor the column boundary
+		// indexedEntryFor uses these to anchor the column boundary
 		// in newObjectIDValueForEntry. Only top-level table entries
 		// belong here: the anchor is `<table-OID>` (column sub-OID is
 		// the next sub-OID under it). Children inherit IndexKind via
 		// newChildMappingEntries; caching them too would let a column
 		// OID win the longest-prefix scan and miscompute columnDepth.
-		if Entry.IndexKind == "inet_address" {
-			inetAddressEntries[m.OID] = Entry
+		if Entry.IndexKind == indexKindInetAddress {
+			indexedEntries[m.OID] = Entry
+		}
+		// Annotation columns are the exception to "only top-level table
+		// entries belong here": they live in a foreign table's subtree,
+		// so their own OID is the anchor and no child of theirs can win
+		// the scan against their parent's. validateIndexKind enforces
+		// that disjointness.
+		for i := range Entry.MappingEntries {
+			child := &Entry.MappingEntries[i]
+			if child.IndexKind == indexKindIPv6AddrPrefix {
+				indexedEntries[child.OID] = child
+				annotationPrefixes = append(annotationPrefixes, child.OID+".")
+			}
 		}
 		// Cache top-level OID prefixes for post-pass-only entity types
 		// so groupByObjectIDIndex can skip these PDUs without doing a
@@ -516,47 +582,87 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 	}
 	return &Config{
 		mapping:            mapping,
-		inetAddressEntries: inetAddressEntries,
+		indexedEntries:     indexedEntries,
+		annotationPrefixes: annotationPrefixes,
 		postPassPrefixes:   postPassPrefixes,
 		postPassMappers:    postPassMappers,
 		options:            options,
 	}, nil
 }
 
+// Index kinds. An empty string keeps the historical fixed-size
+// behavior; "fixed" states it explicitly.
+const (
+	// indexKindInetAddress decodes an RFC 4001 InetAddress row index
+	// (<addrType>.<addrLen>.<addrBytes...>) on a table entry.
+	indexKindInetAddress = "inet_address"
+	// indexKindIPv6AddrPrefix decodes an IPV6-MIB ipv6AddrPfxLength row
+	// index (<ifIndex>.<16 address bytes>). It is declared on a column
+	// that annotates another table's rows rather than on a table of its
+	// own, so it is the one index kind that belongs on a child entry.
+	indexKindIPv6AddrPrefix = "ipv6_addr_prefix"
+)
+
 // validIndexKinds enumerates the values index_kind may take. An empty
 // string keeps the historical fixed-size behavior. Anything else must
 // match exactly — typos like "inetaddress" or "InetAddress" are
 // rejected so misconfigurations surface immediately.
 var validIndexKinds = map[string]struct{}{
-	"":             {},
-	"fixed":        {},
-	"inet_address": {},
+	"":                      {},
+	"fixed":                 {},
+	indexKindInetAddress:    {},
+	indexKindIPv6AddrPrefix: {},
 }
 
 // validateIndexKind walks every entry (top-level and nested) and
-// rejects unknown index_kind values. It also enforces that
-// index_kind is declared ONLY on a top-level table entry: the
-// fast-path cache keys on top-level OIDs, and a child-only
-// declaration would pass YAML loading but silently fall through to
-// fixed-size parsing at the cache layer (re-triggering the
-// "modern-only device, no IPs" regression). Children inherit
-// IndexKind by leaving the field empty.
+// rejects unknown or misplaced index_kind values.
+//
+// index_kind normally belongs ONLY on a top-level table entry: the
+// fast-path cache keys on top-level OIDs, and a child-only declaration
+// would pass YAML loading but silently fall through to fixed-size
+// parsing at the cache layer (re-triggering the "modern-only device, no
+// IPs" regression). Children inherit IndexKind by leaving the field
+// empty.
+//
+// The single exception is an annotation column, whose rows describe
+// another table's rows and are indexed differently from them. Such a
+// column is declared as a direct child of the table it annotates, and
+// its own OID must fall outside that table's subtree so that it anchors
+// its own index decoding without ever out-matching its parent in the
+// longest-prefix scan.
 func validateIndexKind(entries []config.MappingEntry) error {
-	return validateIndexKindWithParent(entries, "", true)
+	return validateIndexKindWithParent(entries, "", "", 0)
 }
 
-func validateIndexKindWithParent(entries []config.MappingEntry, parentKind string, isTopLevel bool) error {
+func validateIndexKindWithParent(entries []config.MappingEntry, parentKind, parentOID string, depth int) error {
 	for _, m := range entries {
 		if _, ok := validIndexKinds[m.IndexKind]; !ok {
-			return fmt.Errorf("invalid index_kind %q on mapping entry %q (allowed: \"\", \"fixed\", \"inet_address\")", m.IndexKind, m.OID)
+			return fmt.Errorf("invalid index_kind %q on mapping entry %q (allowed: \"\", \"fixed\", %q, %q)", m.IndexKind, m.OID, indexKindInetAddress, indexKindIPv6AddrPrefix)
 		}
-		if !isTopLevel && m.IndexKind != "" {
-			// Child explicitly setting index_kind is rejected even
-			// when it matches the parent: it adds noise to the YAML
-			// without changing semantics, and a divergent value
-			// would silently misbehave (the cache only sees
-			// top-level entries).
-			return fmt.Errorf("index_kind must be declared only on the top-level table entry; child %q sets it explicitly (parent's effective kind is %q)", m.OID, parentKind)
+		if depth == 0 && m.IndexKind == indexKindIPv6AddrPrefix {
+			// Its rows annotate another table's rows and carry none of
+			// their own. Standing alone it would group addresses that
+			// the annotated table never reported.
+			return fmt.Errorf("index_kind %q must be declared on a child column of the table it annotates, not on the top-level entry %q", indexKindIPv6AddrPrefix, m.OID)
+		}
+		if depth > 0 && m.IndexKind != "" {
+			// A child explicitly setting any other index_kind is
+			// rejected even when it matches the parent: it adds noise to
+			// the YAML without changing semantics, and a divergent value
+			// would silently misbehave.
+			if m.IndexKind != indexKindIPv6AddrPrefix {
+				return fmt.Errorf("index_kind must be declared only on the top-level table entry; child %q sets it explicitly (parent's effective kind is %q)", m.OID, parentKind)
+			}
+			if depth > 1 {
+				return fmt.Errorf("index_kind %q must be declared on a direct child of a top-level table entry; %q is nested deeper", indexKindIPv6AddrPrefix, m.OID)
+			}
+			// Disjointness is what makes the annotation's own OID a safe
+			// anchor for its column boundary. A column inside the parent
+			// table's subtree would also win the longest-prefix scan
+			// against that table and miscompute every row's index.
+			if m.OID == parentOID || strings.HasPrefix(m.OID, parentOID+".") {
+				return fmt.Errorf("index_kind %q requires the annotation column %q to sit outside the annotated table %q; it is inside that subtree", indexKindIPv6AddrPrefix, m.OID, parentOID)
+			}
 		}
 		// inet_address requires the top-level OID to be a table-row
 		// prefix with at least one child column underneath it: the
@@ -564,14 +670,14 @@ func validateIndexKindWithParent(entries []config.MappingEntry, parentKind strin
 		// A scalar or childless entry would pass every other check
 		// here and then silently skip all rows in
 		// newObjectIDValueForEntry as malformed.
-		if isTopLevel && m.IndexKind == "inet_address" && len(m.MappingEntries) == 0 {
-			return fmt.Errorf("index_kind \"inet_address\" requires the top-level entry %q to have at least one child mapping_entry (column OID); a scalar/childless entry would skip every row as malformed", m.OID)
+		if depth == 0 && m.IndexKind == indexKindInetAddress && len(m.MappingEntries) == 0 {
+			return fmt.Errorf("index_kind %q requires the top-level entry %q to have at least one child mapping_entry (column OID); a scalar/childless entry would skip every row as malformed", indexKindInetAddress, m.OID)
 		}
 		effective := m.IndexKind
 		if effective == "" {
 			effective = parentKind
 		}
-		if err := validateIndexKindWithParent(m.MappingEntries, effective, false); err != nil {
+		if err := validateIndexKindWithParent(m.MappingEntries, effective, m.OID, depth+1); err != nil {
 			return err
 		}
 	}
@@ -753,7 +859,11 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 		m.logger.Debug("mapping object ID index", "object_id_index", index, "values", value.Values)
 		entry, err := m.resolveMappingEntry(value)
 		if err != nil {
-			m.logger.Warn("error finding mapping entry", "error", err, "object_id", value.Index)
+			if errors.Is(err, errAnnotationOnlyGroup) {
+				m.logger.Debug("skipping annotation with no row to annotate", "index", string(index))
+			} else {
+				m.logger.Warn("error finding mapping entry", "error", err, "object_id", value.Index)
+			}
 			continue
 		}
 		newEntity := entry.MapToEntity(value.Values, m.registry, m.defaults, m.logger)
@@ -1207,6 +1317,28 @@ func (r *EntityRegistry) hasVerifiedInterface(ip *diode.IPAddress) bool {
 	return r.IsInterfaceVerified(iface)
 }
 
+// transplantPrefix rewrites dst's prefix with src's, keeping dst's own network
+// portion. Returns the merged address and whether anything changed.
+//
+// Only the prefix moves. The two rows describe the same address from different
+// tables, so dst's other fields (its interface binding above all) are the ones
+// the dedup rules already chose to keep.
+func transplantPrefix(dst, src *diode.IPAddress) (string, bool) {
+	if dst == nil || src == nil || dst.Address == nil || src.Address == nil {
+		return "", false
+	}
+	slash := strings.LastIndex(*src.Address, "/")
+	if slash < 0 {
+		return "", false
+	}
+	merged := stripPrefix(*dst.Address) + (*src.Address)[slash:]
+	if merged == *dst.Address {
+		return "", false
+	}
+	*dst.Address = merged
+	return merged, true
+}
+
 // dedupIPAddresses resolves cross-table overlap for *diode.IPAddress
 // entities that share the same canonical address (prefix-stripped).
 // When both a legacy (ipAddrTable) and modern (ipAddressTable) entry
@@ -1253,11 +1385,29 @@ func (m *ObjectIDMapper) dedupIPAddresses(entities map[diode.Entity]bool) {
 		// them has it; otherwise default to modern.
 		modernAssigned := hasAssignedInterface(b.modern)
 		legacyAssigned := hasAssignedInterface(b.legacy)
-		drop := b.legacy
+		drop, keptIP := b.legacy, b.modern
 		kept := "modern"
 		if !modernAssigned && legacyAssigned {
-			drop = b.modern
+			drop, keptIP = b.modern, b.legacy
 			kept = "legacy"
+		}
+		// The prefix travels with whichever row is kept, so a kept row
+		// holding only the host-route default would discard a real prefix
+		// reported by the other table. Roughly one device in six that
+		// implements ipAddressTable returns zeroDotZero for every
+		// ipAddressPrefix, which makes every one of its addresses a /32.
+		// Transplant rather than swap rows: keeping the loser wholesale
+		// cannot help a device whose modern row holds the only interface
+		// binding while the legacy row holds the only real prefix.
+		if !m.registry.PrefixResolved(keptIP) && m.registry.PrefixResolved(drop) {
+			if merged, ok := transplantPrefix(keptIP, drop); ok {
+				m.logger.Debug("took the reported prefix from the dropped row",
+					"address", merged, "kept", kept)
+				// The prefix keeps the provenance it had on the dropped
+				// row: moving it between rows does not make it any more
+				// or less reported than it already was.
+				m.registry.MarkPrefixSource(keptIP, m.registry.PrefixRank(drop))
+			}
 		}
 		// entities is keyed by the entity pointer itself; drop is that
 		// pointer, so delete directly without a second scan.
@@ -1393,6 +1543,35 @@ func (*ObjectIDMapper) getAssignedInterfaces(uniqueEntities map[diode.Entity]boo
 // randomised, so relying on whichever Parent landed first is
 // nondeterministic. Fall back to trying each PDU's Parent until one
 // resolves.
+// errAnnotationOnlyGroup marks a PDU group made up entirely of
+// annotation columns: the annotated table reported no row for that
+// index, so there is nothing to annotate and the group is dropped. It
+// is an expected shape rather than a fault — Junos lists link-local
+// addresses in IPV6-MIB that its ipAddressTable omits — so callers log
+// it at debug rather than warning once per address per cycle.
+var errAnnotationOnlyGroup = errors.New("group contains only annotation columns")
+
+// isAnnotationOnlyGroup reports whether every PDU in the group belongs
+// to an annotation column.
+func (m *Config) isAnnotationOnlyGroup(values map[ObjectIDIndex]*ObjectIDValue) bool {
+	if m == nil || len(m.annotationPrefixes) == 0 || len(values) == 0 {
+		return false
+	}
+	for objectID := range values {
+		annotation := false
+		for _, prefix := range m.annotationPrefixes {
+			if strings.HasPrefix(string(objectID), prefix) {
+				annotation = true
+				break
+			}
+		}
+		if !annotation {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *ObjectIDMapper) resolveMappingEntry(details *ObjectIDIndexDetails) (*Entry, error) {
 	entry, err := m.mappingConfig.getMappingEntry(details.Index)
 	if err == nil {
@@ -1405,6 +1584,9 @@ func (m *ObjectIDMapper) resolveMappingEntry(details *ObjectIDIndexDetails) (*En
 		if e, e2 := m.mappingConfig.getMappingEntry(pdu.Parent); e2 == nil {
 			return e, nil
 		}
+	}
+	if m.mappingConfig.isAnnotationOnlyGroup(details.Values) {
+		return nil, errAnnotationOnlyGroup
 	}
 	return nil, err
 }
@@ -1435,7 +1617,7 @@ func (m *ObjectIDMapper) groupByObjectIDIndex(objectIDs ObjectIDValueMap) map[Ob
 		// the per-PDU getMappingEntry call (an O(depth) prefix walk)
 		// avoids a noticeable CPU hit on large walks where 99% of PDUs
 		// belong to fixed-index tables.
-		entry := m.mappingConfig.inetAddressEntryFor(objectID)
+		entry := m.mappingConfig.indexedEntryFor(objectID)
 		objectIDValue, err := newObjectIDValueForEntry(objectID, value, entry)
 		if err != nil {
 			// errMalformedInetAddress covers the expected skip cases —
@@ -1508,7 +1690,29 @@ func (m *Config) isPostPassOIDPrefix(objectID string) bool {
 // removes the ambiguity.
 func newObjectIDValueForEntry(objectID string, value Value, entry *Entry) (*ObjectIDValue, error) {
 	parts := strings.Split(objectID, ".")
-	if entry != nil && entry.IndexKind == "inet_address" {
+	if entry != nil && entry.IndexKind == indexKindIPv6AddrPrefix {
+		// An annotation column's own OID is the anchor: the row index
+		// starts immediately after it, with no column sub-OID in
+		// between. Its decoded index deliberately matches the key
+		// decodeInetAddressIndex produces for the same address, so the
+		// annotation groups with the row it describes.
+		columnDepth := len(strings.Split(entry.OID, "."))
+		if len(parts) <= columnDepth {
+			return nil, errMalformedInetAddress
+		}
+		_, canonical, ok := decodeIPv6AddrPrefixIndex(parts[columnDepth:])
+		if !ok {
+			return nil, errMalformedInetAddress
+		}
+		return &ObjectIDValue{
+			OID:    objectID,
+			Index:  ObjectIDIndex(canonical),
+			Parent: entry.OID,
+			Value:  value.Value,
+			Type:   value.Type,
+		}, nil
+	}
+	if entry != nil && entry.IndexKind == indexKindInetAddress {
 		entryParts := strings.Split(entry.OID, ".")
 		// Resolved entry's OID is the table-row prefix
 		// (e.g. ".1.3.6.1.2.1.4.34.1"). The column sub-OID immediately
@@ -1560,27 +1764,31 @@ func (m *Config) getMappingEntry(objectID string) (*Entry, error) {
 	return nil, fmt.Errorf("no mapping entry found")
 }
 
-// inetAddressEntryFor returns the inet_address-indexed Entry whose OID
-// is the longest prefix of the given objectID, or nil when no such
-// entry exists. It walks `inetAddressEntries` (which contains ONLY the
-// top-level table OIDs, not their column children — caching children
-// would let a column OID win the longest-prefix scan and miscompute
-// columnDepth in newObjectIDValueForEntry; see NewConfig) instead of
-// the full `mapping`, so the common case where no inet_address table
-// is configured is a single map-len check. Returning the longest match
-// matches getMappingEntry's most-specific-wins semantics, which
-// matters when two distinct inet_address tables are registered.
+// indexedEntryFor returns the index_kind-declaring Entry whose OID is
+// the longest prefix of the given objectID, or nil when no such entry
+// exists. It walks `indexedEntries` instead of the full `mapping`, so
+// the common case where no such table is configured is a single map-len
+// check. Returning the longest match mirrors getMappingEntry's
+// most-specific-wins semantics, which matters when two such tables are
+// registered.
+//
+// `indexedEntries` holds top-level table OIDs plus annotation columns,
+// and no others: a column child of an indexed table would win this scan
+// against its own table and miscompute columnDepth in
+// newObjectIDValueForEntry. Annotation columns are safe because
+// validateIndexKind requires them to sit outside the table they
+// annotate. See NewConfig.
 //
 // Nil receiver is treated as "no inet_address tables configured" so
 // that an ObjectIDMapper constructed without a Config (used in some
 // internal tests) doesn't panic on the hot path.
-func (m *Config) inetAddressEntryFor(objectID string) *Entry {
-	if m == nil || len(m.inetAddressEntries) == 0 {
+func (m *Config) indexedEntryFor(objectID string) *Entry {
+	if m == nil || len(m.indexedEntries) == 0 {
 		return nil
 	}
 	var best *Entry
 	bestLen := -1
-	for prefix, entry := range m.inetAddressEntries {
+	for prefix, entry := range m.indexedEntries {
 		if objectID != prefix && !strings.HasPrefix(objectID, prefix+".") {
 			continue
 		}
