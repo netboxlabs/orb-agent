@@ -148,9 +148,10 @@ policies:
 
 Without `traps`, a policy receives nothing and no socket is opened. `listen`
 is `host:port`; an empty host binds every interface, and the host must be an
-address, not a name. Port 162 is privileged; run with `CAP_NET_BIND_SERVICE`
-or choose a higher port and redirect to it. Do not run the backend as root to
-bind it.
+address, not a name. Port 162 is privileged. Outside the agent image, run with
+`CAP_NET_BIND_SERVICE` or choose a higher port and redirect to it rather than
+running the backend as root. The agent image runs as root already, so a
+policy there binds 162 as it is.
 
 Policies naming the same `listen` string share one socket, opened when the
 first of them starts and closed when the last stops, the way pktvisor shares

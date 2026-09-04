@@ -599,6 +599,62 @@ docker run --net=host \
     run -c "/opt/orb/snmp-config.yaml"
 ```
 
+## SNMP Telemetry Backend
+
+The SNMP telemetry backend polls SNMP devices and receives their traps, exporting metrics over OTLP to the collector named in `common.otlp`. It ingests nothing into Diode. See the [backend documentation](backends/snmp_telemetry.md) for every parameter.
+
+### Basic Configuration
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
+    snmp_telemetry:
+  policies:
+    snmp_telemetry:
+      core_metrics:
+        config:
+          metrics_interval: 60 # seconds between collection runs
+        scope:
+          targets:
+            - host: "192.168.1.0/24"
+          authentication:
+            protocol_version: "v2c"
+            community: "public"
+      core_traps: # receives traps only: no metrics_interval
+        scope:
+          targets:
+            - host: "192.168.1.0/24"
+          authentication:
+            protocol_version: "v2c"
+            community: "public"
+          traps:
+            listen: "0.0.0.0:162"
+```
+
+### Running the SNMP Telemetry Backend
+
+With host networking the trap port is already exposed:
+
+```bash
+docker run --net=host \
+    -v "/local/orb:/opt/orb/" \
+    netboxlabs/orb-agent:latest \
+    run -c "/opt/orb/snmp-telemetry-config.yaml"
+```
+
+In bridge mode publish the port the policy listens on:
+
+```bash
+docker run -p 162:162/udp \
+    -v "/local/orb:/opt/orb/" \
+    netboxlabs/orb-agent:latest \
+    run -c "/opt/orb/snmp-telemetry-config.yaml"
+```
+
 ## Diode Dry Run Mode
 
 The Orb Agent supports a diode dry run mode that allows you to test your configuration without sending data to the Diode server. This is useful for debugging and validating your configuration.

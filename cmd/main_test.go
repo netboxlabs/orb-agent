@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
 
@@ -76,4 +77,9 @@ func TestApplyConfigDebug_BothOnNoDuplicateAnnounce(t *testing.T) {
 	assert.Equal(t, slog.LevelDebug, level.Level())
 	assert.NotContains(t, buf.String(), "debug logging enabled via config file",
 		"flag already enabled debug; config adds nothing to announce")
+}
+
+// init registers every bundled backend; snmp_telemetry must be among them.
+func TestInitRegistersSnmpTelemetry(t *testing.T) {
+	assert.True(t, backend.HaveBackend("snmp_telemetry"))
 }

@@ -24,11 +24,9 @@ pipeline keys off **PR titles** — so titles must follow the convention below.
   dash (`snmp-discovery-v1.2.3`); this is cosmetic — the git tag and ref keep the
   slash form. `worker` and `device-discovery` also publish to PyPI.
 - Pushing to `develop` rebuilds and publishes the `orb-agent:develop` image.
-  This fires on changes under `agent/`, `cmd/`, **or** `orb-discovery/`, so a
-  change to a backend the image bundles still refreshes it continuously.
-  `orb-telemetry/snmp-telemetry` is absent from that list on purpose: the agent
-  does not build or ship it yet, so rebuilding the image for it would publish
-  nothing new.
+  This fires on changes under `agent/`, `cmd/`, `orb-discovery/` or
+  `orb-telemetry/`, so a change to a backend the image bundles still refreshes
+  it continuously.
 - The **Validate PR title** check runs on every PR targeting `develop`. Once it
   is marked a required status check in branch protection, it blocks merge when
   the title doesn't match the convention; until then it reports status without

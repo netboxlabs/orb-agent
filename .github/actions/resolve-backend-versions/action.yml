@@ -1,6 +1,6 @@
 name: Resolve backend versions
 description: >-
-  Resolve the latest released version of each discovery backend (the highest
+  Resolve the latest released version of each bundled backend (the highest
   <backend>/vX.Y.Z tag, pre-releases excluded) via git ls-remote against origin
   — reachability-independent and depth-independent. A backend with no released
   tag resolves to 0.0.0; a transport/auth failure fails the step rather than
@@ -22,6 +22,9 @@ outputs:
   worker:
     description: 'Latest released worker version (X.Y.Z, or 0.0.0).'
     value: ${{ steps.resolve.outputs.worker }}
+  telemetry:
+    description: 'Latest released snmp-telemetry version (X.Y.Z, or 0.0.0).'
+    value: ${{ steps.resolve.outputs.telemetry }}
 
 runs:
   using: composite
@@ -44,10 +47,12 @@ runs:
         gd=$(backend_version gnmi-discovery)
         dd=$(backend_version device-discovery)
         wk=$(backend_version worker)
+        st=$(backend_version snmp-telemetry)
         {
           echo "network=${nd:-0.0.0}"
           echo "snmp=${sd:-0.0.0}"
           echo "gnmi=${gd:-0.0.0}"
           echo "device=${dd:-0.0.0}"
           echo "worker=${wk:-0.0.0}"
+          echo "telemetry=${st:-0.0.0}"
         } >> "$GITHUB_OUTPUT"
