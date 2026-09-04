@@ -119,3 +119,22 @@ traps:
 	assert.Equal(t, "bigipTrafficGroupStandby", names["1.3.6.1.4.1.3375.2.4.0.141"], "the bundled ones still are")
 	assert.Equal(t, reflect.ValueOf(names).Pointer(), reflect.ValueOf(m.TrapNames()).Pointer(), "built once, not per call")
 }
+
+// An override file may write a trap OID in the iso. form the repository
+// supports, iso. before the full numeric OID; it is normalised the same way a
+// metric OID is, dropping the iso. label, so the numeric wire OID finds it.
+func TestTrapNames_NormalisesTheIsoPrefix(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "custom"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom", "traps.yml"), []byte(`
+traps:
+  - trap_oid: iso.1.3.6.1.4.1.99999.0.7
+    trap_name: isoSpelledTrap
+`), 0o644))
+	l, err := LoadProfiles(dir, silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	names := TrapNames(all)
+	assert.Equal(t, "isoSpelledTrap", names["1.3.6.1.4.1.99999.0.7"], "the iso. label is stripped like a metric OID's")
+}

@@ -17,7 +17,7 @@ import "strings"
 func TrapNames(all []*Profile) map[string]string {
 	names := make(map[string]string)
 	add := func(oid, name string) {
-		oid = strings.TrimPrefix(strings.TrimSpace(oid), ".")
+		oid = normalizeOID(oid)
 		if oid == "" || name == "" {
 			return
 		}
