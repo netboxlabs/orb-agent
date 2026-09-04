@@ -215,6 +215,35 @@ func (r *Registry) VisitClaims(addr netip.Addr, holding func(V3User) bool, visit
 	return visited
 }
 
+// VisitClaimsPreferring is VisitClaims for a trap that names an agent
+// address: under one read lock it visits the claims on agent when any policy
+// holds one, and the claims on src otherwise, and reports which address was
+// visited and how many policies. Resolving the preference and the claims in
+// one critical section means a claim on the agent address released between
+// the two cannot leave the trap attributed to an address nobody claims.
+func (r *Registry) VisitClaimsPreferring(agent, src netip.Addr, holding func(V3User) bool, visit func(policy string, names map[string]string)) (netip.Addr, int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, addr := range []netip.Addr{agent, src} {
+		if !addr.IsValid() {
+			continue
+		}
+		claims := r.claimsAt(addr)
+		visited := 0
+		for _, policy := range slices.Sorted(maps.Keys(claims)) {
+			if holding != nil && !slices.ContainsFunc(claims[policy], holding) {
+				continue
+			}
+			visit(policy, r.names[policy])
+			visited++
+		}
+		if visited > 0 {
+			return canonical(addr), visited
+		}
+	}
+	return canonical(src), 0
+}
+
 // NamesFor is the trap names a policy registered, or nil when it registered
 // none.
 func (r *Registry) NamesFor(policy string) map[string]string {

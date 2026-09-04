@@ -892,3 +892,22 @@ func TestReceiver_AcknowledgesAnInformBeforeACloseCanIntervene(t *testing.T) {
 	assert.Equal(t, gosnmp.GetResponse, pkt.PDUType)
 	<-stopped
 }
+
+// The agent-addr override is resolved inside the same locked visit as the
+// claims it selects. A policy claiming the agent address that is released
+// between the read and the count no longer decides anything: the visit sees
+// no claim on the agent address and falls back to the relay's own claims,
+// so the trap is counted under the relay's policy rather than dropped.
+func TestReceiver_ResolvesTheAgentAddrFallbackUnderTheClaimsLock(t *testing.T) {
+	h := newHarness(t)
+	src := h.registerSender(t, "relay")
+	h.reg.Register("agent", []Device{{Policy: "agent", Addr: netip.MustParseAddr("10.9.9.9")}}, nil)
+	// Withdrawn inside the intake section, after the datagram was admitted
+	// and before the claims are visited: the window an unlocked
+	// pre-selection of the agent address would have left open.
+	h.rcv.setBeforeAccount(func() { h.reg.Withdraw("agent") })
+	h.send(t, v1Trap("public", [4]byte{10, 9, 9, 9}, 2, 0))
+	waitFor(t, 1, func() int64 { return h.tally.receivedCount(src.String(), "relay", "linkDown", V1) })
+	assert.Equal(t, int64(0), h.tally.receivedCount("10.9.9.9", "agent", "linkDown", V1))
+	assert.Equal(t, int64(0), h.tally.droppedCount(DropUnknownSource), "the relay still claims the source")
+}
