@@ -104,6 +104,42 @@ func TestConfigureBuildsArgs(t *testing.T) {
 			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317", "--otel-export-period", "20"},
 		},
 		{
+			name:    "a nil map, the documented bare snmp_telemetry key, uses the defaults",
+			cfg:     nil,
+			commons: commonsWithOTLP("collector:4317"),
+			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317"},
+		},
+		{
+			name:    "an empty host or port stays on the default rather than binding everywhere",
+			cfg:     map[string]any{"host": "", "port": ""},
+			commons: commonsWithOTLP("collector:4317"),
+			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317"},
+		},
+		{
+			name:    "an empty log_level still follows the debug rule",
+			cfg:     map[string]any{"log_level": "", "debug": true},
+			commons: commonsWithOTLP("collector:4317"),
+			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
+		},
+		{
+			name:    "a non-string log_level is refused",
+			cfg:     map[string]any{"log_level": false},
+			commons: commonsWithOTLP("collector:4317"),
+			wantErr: "snmp_telemetry: log_level must be a string, got bool",
+		},
+		{
+			name:    "a non-string log_format is refused",
+			cfg:     map[string]any{"log_format": 7},
+			commons: commonsWithOTLP("collector:4317"),
+			wantErr: "snmp_telemetry: log_format must be a string, got int",
+		},
+		{
+			name:    "a non-string profiles path is refused",
+			cfg:     map[string]any{"snmp_profiles_root": true},
+			commons: commonsWithOTLP("collector:4317"),
+			wantErr: "snmp_telemetry: snmp_profiles_root must be a string, got bool",
+		},
+		{
 			name:    "missing OTLP endpoint is refused",
 			cfg:     map[string]any{},
 			commons: config.BackendCommons{},

@@ -125,6 +125,21 @@ func parseExportPeriod(v any) (int, error) {
 	return n, nil
 }
 
+// optionalString reads a key that is either absent, or a string passed to the
+// binary verbatim. Any other type is refused rather than coerced, so a stray
+// YAML boolean does not reach a flag the binary would silently reinterpret.
+func optionalString(cfg map[string]any, key string) (string, error) {
+	v, prs := cfg[key]
+	if !prs {
+		return "", nil
+	}
+	str, ok := v.(string)
+	if !ok {
+		return "", fmt.Errorf("%s must be a string, got %T", key, v)
+	}
+	return str, nil
+}
+
 // parsePolicyEnvVars accepts the flag's own comma-separated string, or a YAML
 // list of names so an operator does not have to write the comma form by hand.
 func parsePolicyEnvVars(v any) (string, error) {
@@ -159,8 +174,16 @@ func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	}
 	d.otelEndpoint = common.Otlp.Grpc
 
+	// An empty host would bind the unauthenticated API on every interface,
+	// since the binary joins "" with the port; keep it on loopback.
 	d.apiHost = backend.ConfigValueOrDefault(cfg, "host", defaultAPIHost)
+	if d.apiHost == "" {
+		d.apiHost = defaultAPIHost
+	}
 	d.apiPort = backend.ConfigValueOrDefault(cfg, "port", defaultAPIPort)
+	if d.apiPort == "" {
+		d.apiPort = defaultAPIPort
+	}
 
 	d.otelExportPeriod = ""
 	if v, prs := cfg["otel_export_period"]; prs {
@@ -171,16 +194,22 @@ func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.otelExportPeriod = strconv.Itoa(period)
 	}
 
-	d.logLevel = ""
-	if level, prs := cfg["log_level"].(string); prs && level != "" {
-		d.logLevel = level
-	} else if debug, prs := cfg["debug"].(bool); prs && debug {
-		d.logLevel = "DEBUG"
-	} else if logger.Enabled(context.Background(), slog.LevelDebug) {
-		d.logLevel = "DEBUG"
+	level, err := optionalString(cfg, "log_level")
+	if err != nil {
+		return fmt.Errorf("snmp_telemetry: %w", err)
+	}
+	d.logLevel = level
+	if d.logLevel == "" {
+		if debug, prs := cfg["debug"].(bool); prs && debug {
+			d.logLevel = "DEBUG"
+		} else if logger.Enabled(context.Background(), slog.LevelDebug) {
+			d.logLevel = "DEBUG"
+		}
 	}
 
-	d.logFormat = backend.ConfigValueOrDefault(cfg, "log_format", "")
+	if d.logFormat, err = optionalString(cfg, "log_format"); err != nil {
+		return fmt.Errorf("snmp_telemetry: %w", err)
+	}
 
 	d.policyEnvVars = ""
 	if v, prs := cfg["policy_env_vars"]; prs {
@@ -191,8 +220,12 @@ func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 		d.policyEnvVars = names
 	}
 
-	d.profilesRoot = backend.ConfigValueOrDefault(cfg, "snmp_profiles_root", "")
-	d.profilesDir = backend.ConfigValueOrDefault(cfg, "snmp_profiles_dir", "")
+	if d.profilesRoot, err = optionalString(cfg, "snmp_profiles_root"); err != nil {
+		return fmt.Errorf("snmp_telemetry: %w", err)
+	}
+	if d.profilesDir, err = optionalString(cfg, "snmp_profiles_dir"); err != nil {
+		return fmt.Errorf("snmp_telemetry: %w", err)
+	}
 
 	d.logger.Info("snmp-telemetry using OTLP endpoint", "endpoint", d.otelEndpoint)
 
@@ -289,10 +322,12 @@ func (d *snmpTelemetryBackend) logLineAdapter(line string, isStderr bool) {
 	d.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 
-// Stop hands the process the agent's default grace. The binary sizes its own
-// shutdown, closing the trap sockets and then flushing the last OTLP export,
-// to that five seconds; a shorter grace would SIGKILL it with traps in hand
-// and the final export unsent.
+// Stop hands the process the agent's default grace. The binary bounds the
+// part of its shutdown that carries data, closing the trap sockets and then
+// flushing the last OTLP export, to that same five seconds, and what follows
+// (cancelling collections, stopping its API) normally takes milliseconds. A
+// shorter grace would SIGKILL it with traps in hand and the final export
+// unsent; a kill after the flush costs nothing but a warning in the log.
 func (d *snmpTelemetryBackend) Stop(ctx context.Context) error {
 	d.logger.Info("routine call to stop snmp-telemetry", "routine", ctx.Value(config.ContextKey("routine")))
 	defer d.cancelFunc()
