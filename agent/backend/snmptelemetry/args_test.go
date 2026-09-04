@@ -1,9 +1,11 @@
 package snmptelemetry
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -366,4 +368,27 @@ func TestAPIURLBracketsAnIPv6Host(t *testing.T) {
 	require.NoError(t, b.Configure(quietLogger(slog.LevelInfo), nil, map[string]any{"host": "::1"}, commonsWithOTLP("collector:4317"), nil))
 	assert.Equal(t, "http://[::1]:8078/api/v1/status", b.apiURL("status"))
 	assert.Equal(t, "http://[::1]:8078/api/v1/policies/a%20b", b.apiURL("policies/a%20b"))
+}
+
+// The binary's log lines are re-logged by the agent. A JSON record, the
+// binary's output under log_format JSON, must keep its severity and
+// attributes rather than arrive as one INFO string.
+func TestLogLineAdapterKeepsSeverityForBothFormats(t *testing.T) {
+	var out bytes.Buffer
+	b := &snmpTelemetryBackend{apiProtocol: "http", exec: defaultExec}
+	require.NoError(t, b.Configure(slog.New(slog.NewTextHandler(&out, &slog.HandlerOptions{Level: slog.LevelDebug})), nil, map[string]any{}, commonsWithOTLP("collector:4317"), nil))
+
+	b.logLineAdapter(`{"time":"2026-09-04T12:00:00Z","level":"ERROR","msg":"trap socket bind failed","listen":"0.0.0.0:162"}`, false)
+	b.logLineAdapter(`time=2026-09-04T12:00:00Z level=WARN msg="trap dropped" reason=unknown_source`, false)
+	b.logLineAdapter(`plain text from the child`, true)
+
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	require.Len(t, lines, 4, "configure line plus the three forwarded lines")
+	assert.Contains(t, lines[1], "level=ERROR")
+	assert.Contains(t, lines[1], `msg="trap socket bind failed"`)
+	assert.Contains(t, lines[1], "listen=0.0.0.0:162")
+	assert.Contains(t, lines[2], "level=WARN")
+	assert.Contains(t, lines[2], "reason=unknown_source")
+	assert.Contains(t, lines[3], "level=ERROR", "stderr keeps the error fallback")
+	assert.Contains(t, lines[3], `msg="plain text from the child"`)
 }

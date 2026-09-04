@@ -417,8 +417,10 @@ func (d *snmpTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	})
 }
 
-// logLineAdapter routes a streamed stdout/stderr line to the logfmt normalizer
-// with the level matching the source stream.
+// logLineAdapter routes a streamed stdout/stderr line to the agent's logger
+// with the level matching the source stream. The binary writes logfmt under
+// its TEXT format and one JSON object per line under JSON; both are parsed,
+// so a WARN or ERROR record keeps its severity and attributes either way.
 func (d *snmpTelemetryBackend) logLineAdapter(line string, isStderr bool) {
 	fallback := slog.LevelInfo
 	if isStderr {
@@ -435,6 +437,10 @@ func (d *snmpTelemetryBackend) logLineAdapter(line string, isStderr bool) {
 	level := fallback
 
 	if parsedMsg, parsedAttrs, parsedLevel, ok := backend.NormalizeLogfmtLine(trimmed, fallback); ok {
+		msg = parsedMsg
+		attrs = parsedAttrs
+		level = parsedLevel
+	} else if parsedMsg, parsedAttrs, parsedLevel, ok := backend.NormalizeJSONLine(trimmed, fallback); ok {
 		msg = parsedMsg
 		attrs = parsedAttrs
 		level = parsedLevel
