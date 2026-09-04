@@ -82,6 +82,11 @@ type Tally struct {
 	// past its registry lookup when the release happened must not bring
 	// the policy's series back to life.
 	withdrawn map[string]struct{}
+	// polSeries counts the received entries and baselines each policy has,
+	// its retained state; a withdrawn marker is kept only while this is
+	// positive, so the withdrawn set is bounded by retained state rather
+	// than by how many policies were ever deleted.
+	polSeries map[string]int
 	// dormant is the set of series not currently exported, kept beside the
 	// map so the overflow path never scans it: with nothing dormant the
 	// check is a length, and an eviction is one pop.
@@ -105,6 +110,7 @@ func NewTally(logger *slog.Logger) *Tally {
 		received:      make(map[receivedKey]*series),
 		dropped:       make(map[DropReason]int64),
 		withdrawn:     make(map[string]struct{}),
+		polSeries:     make(map[string]int),
 		dormant:       make(map[receivedKey]struct{}),
 		baselines:     make(map[receivedKey]*list.Element),
 		baselineOrder: list.New(),
@@ -166,6 +172,13 @@ func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) boo
 	if sr == nil {
 		sr = &series{n: t.takeBaseline(k)}
 		t.received[k] = sr
+		// A brand-new key, not one taken back from a baseline, is a new
+		// piece of retained state for its policy. takeBaseline returns a
+		// positive total for a real baseline, since a series is at least
+		// one before it can be evicted.
+		if sr.n == 0 {
+			t.polSeries[k.policy]++
+		}
 	}
 	sr.n++
 	if _, withdrawn := t.withdrawn[policy]; withdrawn {
@@ -221,10 +234,23 @@ func (t *Tally) keepBaseline(k receivedKey, n int64) {
 	}
 	if t.baselineOrder.Len() >= maxBaselines {
 		oldest := t.baselineOrder.Back()
-		delete(t.baselines, oldest.Value.(*baseline).key)
+		dropped := oldest.Value.(*baseline).key
+		delete(t.baselines, dropped)
 		t.baselineOrder.Remove(oldest)
+		t.releaseSeries(dropped.policy)
 	}
 	t.baselines[k] = t.baselineOrder.PushFront(&baseline{key: k, n: n})
+}
+
+// releaseSeries records that a policy lost one retained entry and prunes its
+// withdrawn marker once it has none left, so the marker cannot outlive the
+// state it protects.
+func (t *Tally) releaseSeries(policy string) {
+	t.polSeries[policy]--
+	if t.polSeries[policy] <= 0 {
+		delete(t.polSeries, policy)
+		delete(t.withdrawn, policy)
+	}
 }
 
 // takeBaseline returns and forgets the baseline for a series, or zero.
@@ -262,12 +288,17 @@ func (t *Tally) Datagram() {
 func (t *Tally) Withdraw(policy string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.withdrawn[policy] = struct{}{}
 	for k, sr := range t.received {
 		if k.policy == policy {
 			sr.live = false
 			t.dormant[k] = struct{}{}
 		}
+	}
+	// The marker only protects retained series from an in-flight count
+	// reviving them; a policy with none needs none, which is what keeps
+	// deleting uniquely named policies from accumulating markers.
+	if t.polSeries[policy] > 0 {
+		t.withdrawn[policy] = struct{}{}
 	}
 }
 
@@ -372,6 +403,12 @@ func (t *Tally) retainedCount(deviceIP, policy, trapName string, v Version) int6
 		return sr.n
 	}
 	return 0
+}
+
+func (t *Tally) withdrawnCount() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.withdrawn)
 }
 
 func (t *Tally) dormantCount() int {

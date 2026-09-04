@@ -384,3 +384,36 @@ func TestTally_AccountLandsADatagramAndItsOutcomeTogether(t *testing.T) {
 	close(release)
 	assert.Equal(t, [2]int64{1, 1}, <-seen, "both landed before anything could read")
 }
+
+// The withdrawn set is bounded by retained state, not by history. A policy
+// that received nothing leaves no marker when withdrawn, and a policy whose
+// series were all evicted and whose baselines were all dropped loses its
+// marker too, so a long-running agent creating and deleting uniquely named
+// trap policies does not accumulate markers.
+func TestTally_WithdrawnSetIsBoundedByRetainedState(t *testing.T) {
+	ta := NewTally(testLogger)
+	for i := range 1000 {
+		ta.Withdraw(fmt.Sprintf("never-received-%d", i))
+	}
+	assert.Equal(t, 0, ta.withdrawnCount(), "a policy that received nothing leaves no marker")
+
+	ta.Received("10.0.0.1", "had-one", "linkDown", V2c)
+	ta.Withdraw("had-one")
+	assert.Equal(t, 1, ta.withdrawnCount(), "a policy with a retained series keeps its marker")
+	ta.Activate("had-one")
+	assert.Equal(t, 0, ta.withdrawnCount(), "acquiring it again clears the marker")
+	ta.Withdraw("had-one")
+
+	// Every one of these received one trap and was withdrawn under a unique
+	// name, far more than the retained tiers can hold. The withdrawn set is
+	// bounded by that retained state, not by how many were ever deleted.
+	const churn = 5 * maxSeries
+	for i := range churn {
+		name := fmt.Sprintf("churn-%d", i)
+		ta.Received(fmt.Sprintf("198.%d.%d.%d", i>>16&255, i>>8&255, i&255), name, "linkUp", V2c)
+		ta.Withdraw(name)
+	}
+	assert.GreaterOrEqual(t, ta.withdrawnCount(), 1, "policies with retained series keep their markers")
+	assert.LessOrEqual(t, ta.withdrawnCount(), maxSeries+maxBaselines, "markers are bounded by retained state")
+	assert.Less(t, ta.withdrawnCount(), churn/2, "and far below the number of policies deleted")
+}
