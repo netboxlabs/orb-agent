@@ -1,0 +1,157 @@
+package gnmi
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+)
+
+// FakeSession is an in-memory Session for tests. It replays scripted
+// notifications and answers Capabilities/Get from fixed data.
+type FakeSession struct {
+	// mu guards the recorded call state below: the sweep closes and probes one
+	// shared fake from concurrent goroutines.
+	mu              sync.Mutex
+	Caps            *CapabilitiesResult
+	CapsErr         error
+	OnChangeStream  []Notification // replayed once for Subscribe(OnChange)
+	OnChangeSupport bool
+	SampleSnapshots []Notification // re-sent every SampleReplay for Subscribe(Sample)
+	SampleReplay    time.Duration  // gap between SAMPLE re-sends (default 20ms)
+	StreamErr       error          // if set, sent on the error channel after replay (simulates a mid-stream drop)
+	GetResult       Notification
+	GetErr          error
+	ConfigBytes     []byte // returned by GetConfig
+	ConfigErr       error  // if set, GetConfig returns this error
+	ConfigGets      int    // count of GetConfig calls (test assertion)
+	Closed          bool
+	StopSubscribes  int // count of StopSubscribe calls (test assertion)
+	// SubscribeManyFn answers SubscribeMany when set; nil falls back to Subscribe.
+	SubscribeManyFn func(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error)
+	// lastSubscriptions records the most recent SubscribeMany request.
+	lastSubscriptions []Subscription
+}
+
+// Capabilities returns the scripted capabilities.
+func (f *FakeSession) Capabilities(_ context.Context) (*CapabilitiesResult, error) {
+	return f.Caps, f.CapsErr
+}
+
+// Subscribe replays the scripted stream. OnChange replays once then errors (if
+// StreamErr set) or blocks; SAMPLE re-sends the snapshot set every SampleReplay,
+// matching real SAMPLE semantics so periodic reconciliation/pruning is exercised.
+func (f *FakeSession) Subscribe(ctx context.Context, mode Mode, _ []string, _ int) (<-chan Notification, <-chan error, error) {
+	if mode == OnChange && !f.OnChangeSupport {
+		return nil, nil, errors.New("on_change unsupported")
+	}
+	notes := make(chan Notification)
+	errs := make(chan error, 1)
+	send := func(stream []Notification) bool { // false if ctx cancelled mid-send
+		for _, n := range stream {
+			select {
+			case notes <- n:
+			case <-ctx.Done():
+				return false
+			}
+		}
+		return true
+	}
+	go func() {
+		defer close(notes)
+		defer close(errs)
+		if mode == Sample {
+			interval := f.SampleReplay
+			if interval <= 0 {
+				interval = 20 * time.Millisecond
+			}
+			for {
+				if !send(f.SampleSnapshots) {
+					return
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(interval):
+				}
+			}
+		}
+		if !send(f.OnChangeStream) {
+			return
+		}
+		if f.StreamErr != nil {
+			select {
+			case errs <- f.StreamErr:
+			case <-ctx.Done():
+			}
+			return
+		}
+		<-ctx.Done()
+	}()
+	return notes, errs, nil
+}
+
+// SubscribeMany records the request and answers through SubscribeManyFn, or
+// through the Subscribe method with the first subscription's mode and every
+// path when the hook is nil.
+func (f *FakeSession) SubscribeMany(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error) {
+	f.mu.Lock()
+	f.lastSubscriptions = append([]Subscription(nil), subs...)
+	fn := f.SubscribeManyFn
+	f.mu.Unlock()
+	if fn != nil {
+		return fn(ctx, subs)
+	}
+	paths := make([]string, 0, len(subs))
+	mode, interval := Sample, 0
+	for i, sub := range subs {
+		paths = append(paths, sub.Path)
+		if i == 0 {
+			mode, interval = sub.Mode, sub.SampleIntervalMs
+		}
+	}
+	return f.Subscribe(ctx, mode, paths, interval)
+}
+
+// Subscriptions returns a copy of the last SubscribeMany request.
+func (f *FakeSession) Subscriptions() []Subscription {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]Subscription(nil), f.lastSubscriptions...)
+}
+
+// GetOnce returns the scripted Get result.
+func (f *FakeSession) GetOnce(_ context.Context, _ []string) (Notification, error) {
+	return f.GetResult, f.GetErr
+}
+
+// GetConfig records the call and returns the scripted config bytes/error.
+func (f *FakeSession) GetConfig(_ context.Context) ([]byte, error) {
+	f.mu.Lock()
+	f.ConfigGets++
+	f.mu.Unlock()
+	return f.ConfigBytes, f.ConfigErr
+}
+
+// StopSubscribe records the call; the fake has no real subscription to tear down.
+func (f *FakeSession) StopSubscribe() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.StopSubscribes++
+}
+
+// Close marks the session closed.
+func (f *FakeSession) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Closed = true
+	return nil
+}
+
+// FakeDialer always returns the same FakeSession.
+type FakeDialer struct{ Session *FakeSession }
+
+// Dial returns the configured fake session.
+func (d *FakeDialer) Dial(_ context.Context, _ TargetSpec) (Session, error) {
+	return d.Session, nil
+}
