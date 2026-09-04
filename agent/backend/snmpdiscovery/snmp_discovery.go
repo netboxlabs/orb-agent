@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	neturl "net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -360,8 +359,12 @@ func (d *snmpDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, neturl.PathEscape(name))
-	err := backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
+	segment, err := backend.PolicyPathSegment(name)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, segment)
+	err = backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
 		return err

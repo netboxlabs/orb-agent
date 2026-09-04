@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	neturl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -568,8 +567,12 @@ func (d *snmpTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	if data.PreviousPolicyData != nil && data.PreviousPolicyData.Name != data.Name {
 		name = data.PreviousPolicyData.Name
 	}
-	url := d.apiURL("policies/" + neturl.PathEscape(name))
-	err := backend.CommonRequest("snmp-telemetry", d.proc, d.logger, url, &resp, http.MethodDelete,
+	segment, err := backend.PolicyPathSegment(name)
+	if err != nil {
+		return err
+	}
+	url := d.apiURL("policies/" + segment)
+	err = backend.CommonRequest("snmp-telemetry", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
 		return err

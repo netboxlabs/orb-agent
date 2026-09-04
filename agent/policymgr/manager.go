@@ -241,6 +241,21 @@ func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, b
 }
 
 func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) {
+	// A name the agent cannot address over a backend's API is refused before
+	// the policy is created rather than when it is removed. Removal is the
+	// wrong place to find out: RemovePolicy discards the local record even
+	// when the backend refuses, so a policy applied under such a name would
+	// be left running with no state to retry its removal from. Checked here
+	// rather than per backend because the constraint is the agent's, and this
+	// is the one path every apply goes through.
+	if _, err := backend.PolicyPathSegment(pd.Name); err != nil {
+		a.logger.Warn("policy name cannot address a policy on the backend; not applying",
+			"policy_id", payload.ID, "policy_name", payload.Name, "backend", pd.Backend, "error", err)
+		pd.State = policies.FailedToApply
+		pd.BackendErr = err.Error()
+		return
+	}
+
 	state, detail, err := be.GetRunningStatus()
 	if state != backend.Running || err != nil {
 		pd.State = policies.FailedToApply

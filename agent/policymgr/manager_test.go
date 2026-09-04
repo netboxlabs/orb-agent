@@ -1460,3 +1460,53 @@ func TestRemovePolicyBackendNon404StillLogsError(t *testing.T) {
 
 	assert.Contains(t, logs.String(), "level=ERROR", "non-404 backend failures must stay ERROR")
 }
+
+// TestManagePolicy_RefusesUnaddressableName pins that a policy the agent
+// could never remove is not created in the first place.
+//
+// A slash cannot be carried inside one path segment of the backend's API
+// URL, so RemovePolicy refuses such a name. Finding that out at removal
+// would be too late: RemovePolicy discards the local record even when the
+// backend refuses, so the policy would keep running on the backend with no
+// state left to retry from. The apply is refused instead, and reported
+// through the same FailedToApply path any other apply failure uses.
+func TestManagePolicy_RefusesUnaddressableName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+
+	mockBe := &mockBackend{name: "testbackend"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("testbackend", mockBe)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+
+	payload := config.PolicyPayload{
+		Action:       "manage",
+		ID:           "policy1",
+		Name:         "nightly/rollup",
+		Backend:      "testbackend",
+		Version:      1,
+		Data:         map[string]any{"key": "value"},
+		DatasetID:    "dataset1",
+		AgentGroupID: "group1",
+	}
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+
+	mgr.ManagePolicy(payload)
+
+	// No ApplyPolicy expectation is registered, so AssertExpectations would
+	// not catch an unwanted call on its own; the mock would panic instead.
+	// Assert the outcome the operator sees.
+	mockBe.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, policies.FailedToApply, state[0].State,
+		"a name the agent cannot address must not be reported as running")
+	assert.Contains(t, state[0].BackendErr, "slash",
+		"the recorded error must say why, since the operator has to rename the policy")
+
+	secretsMgr.AssertExpectations(t)
+}
