@@ -24,8 +24,12 @@ import (
 // AppName is the application name
 const AppName = "snmp-telemetry"
 
-// metricsFlushTimeout bounds the final export at shutdown.
-const metricsFlushTimeout = 5 * time.Second
+// shutdownBudget bounds the trap intake close and the final export together.
+// The agent sends SIGTERM and escalates to SIGKILL after a five-second grace,
+// so the two steps that spend time before the process can exit share one
+// deadline inside it rather than each keeping a bound of their own that only
+// add up to more than the grace.
+const shutdownBudget = 5 * time.Second
 
 // defaultHost is the address the policy API binds unless --host says otherwise.
 // The API has no authentication, so anyone who can route to the listener can
@@ -83,13 +87,17 @@ type closer interface {
 // a trap counted after that callback's final run would sit in the map and
 // never be exported, and the tally is closed right after. Closing the sockets
 // ahead of the flush means every trap the process counted is in the final
-// export, at the cost of up to the receiver's stop bound per socket spent
-// before the flush rather than after it. The poll side keeps its order: the
-// flush precedes the cancel so a running collection's observations are
-// exported before they are forgotten, and the server stops last.
-func shutdown(cancelRoot context.CancelFunc, intake closer, srv stopper, flush func()) {
+// export, at the cost of up to the receiver's stop bound spent before the
+// flush rather than after it. That cost comes out of the flush's budget: the
+// deadline is taken before the intake close and the flush is handed what
+// remains, so the two together stay inside the agent's stop grace. The poll
+// side keeps its order: the flush precedes the cancel so a running
+// collection's observations are exported before they are forgotten, and the
+// server stops last.
+func shutdown(budget time.Duration, cancelRoot context.CancelFunc, intake closer, srv stopper, flush func(timeout time.Duration)) {
+	deadline := time.Now().Add(budget)
 	intake.Close()
-	flush()
+	flush(max(time.Until(deadline), 0))
 	cancelRoot()
 	srv.Stop()
 }
@@ -169,7 +177,7 @@ func main() {
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 
-	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
+	shutdownMetrics := func(timeout time.Duration) { flushMetrics(logger, timeout) }
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
@@ -179,7 +187,7 @@ func main() {
 	shutdownStopper := stopAll{tally: trapTally, server: srv}
 
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
-		shutdown(cancelFunc, pool, shutdownStopper, shutdownMetrics)
+		shutdown(shutdownBudget, cancelFunc, pool, shutdownStopper, shutdownMetrics)
 	})
 }
 

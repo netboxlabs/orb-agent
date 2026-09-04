@@ -48,13 +48,13 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 		errAtFlush error
 	)
 
-	shutdown(cancel, closeFunc(func() {
+	shutdown(shutdownBudget, cancel, closeFunc(func() {
 		order = append(order, "intake")
 		require.NoError(t, rootCtx.Err(), "trap intake closes before anything is cancelled")
 	}), stopFunc(func() {
 		order = append(order, "stop")
 		errAtStop = rootCtx.Err()
-	}), func() {
+	}), func(time.Duration) {
 		order = append(order, "flush")
 		errAtFlush = rootCtx.Err()
 	})
@@ -63,6 +63,22 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 		"trap intake closes first so nothing is counted after the final export; the flush still precedes the cancel")
 	require.ErrorIs(t, errAtStop, context.Canceled, "the root context must be cancelled before the server is stopped")
 	require.NoError(t, errAtFlush, "the root context must still be live during the final flush")
+}
+
+// The agent gives the process one stop grace. Closing trap intake spends part
+// of it, so the flush is handed what is left of the shared budget rather than
+// a budget of its own that, added to the intake close, could outlast the grace.
+func TestShutdownChargesTheIntakeCloseAgainstTheFlushBudget(t *testing.T) {
+	const budget = 500 * time.Millisecond
+	const intakeTook = 200 * time.Millisecond
+
+	var flushGot time.Duration
+	shutdown(budget, func() {}, closeFunc(func() { time.Sleep(intakeTook) }), stopFunc(func() {}), func(timeout time.Duration) {
+		flushGot = timeout
+	})
+
+	assert.Greater(t, flushGot, time.Duration(0), "the flush still runs when the intake close leaves budget")
+	assert.LessOrEqual(t, flushGot, budget-intakeTook, "the intake close is charged against the flush's budget")
 }
 
 // The flush runs on its own context, so a root context already cancelled when
@@ -213,7 +229,7 @@ func TestShutdownFlushesObservationsBeforeTheServerStopDropsThem(t *testing.T) {
 		storeMu.Unlock()
 	})
 
-	shutdown(cancel, closeFunc(func() {}), stop, func() { flushMetrics(logger, metricsFlushTimeout) })
+	shutdown(shutdownBudget, cancel, closeFunc(func() {}), stop, func(timeout time.Duration) { flushMetrics(logger, timeout) })
 
 	assert.Equal(t, []int64{42}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations the server stop drops")
@@ -341,7 +357,7 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 		<-forgotten
 	}
 
-	shutdown(cancelRoot, closeFunc(func() {}), stopFunc(func() {}), func() { flushMetrics(logger, metricsFlushTimeout) })
+	shutdown(shutdownBudget, cancelRoot, closeFunc(func() {}), stopFunc(func() {}), func(timeout time.Duration) { flushMetrics(logger, timeout) })
 
 	assert.Equal(t, []int64{7}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations a cancelled collection forgets")
