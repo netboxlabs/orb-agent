@@ -337,41 +337,63 @@ func TestPool_CloseWaitsUnderOneSharedDeadline(t *testing.T) {
 	assert.GreaterOrEqual(t, elapsed, stopTimeout, "and the bound was actually waited")
 }
 
-// Close closes every receiver concurrently, so the time it spends waiting
-// on receivers busy inside an intake section is the slowest one's, not the
-// sum: fifty busy sockets must not spend the agent's grace period.
+// Close asks every receiver to close at once rather than one after another,
+// so a shutdown waits for the slowest busy socket, not the sum. Each
+// receiver here is parked inside its intake section; a close asked of it
+// begins, and is visible as begun, before it can take the intake lock. With
+// concurrent closes every receiver is asked while all of them are parked;
+// sequential closes would ask the second only after the first was released.
 func TestPool_ClosesReceiversConcurrently(t *testing.T) {
 	tally := NewTally(testLogger)
 	p := NewPool(tally, testLogger)
 	const sockets = 5
-	const park = 200 * time.Millisecond
-	listens := make([]string, sockets)
-	for i := range sockets {
-		listens[i] = fmt.Sprintf("127.0.0.1:0#%d", i)
-	}
-	// Each socket needs its own listen string to be its own entry; the
-	// kernel-chosen port makes "127.0.0.1:0" the same entry every time, so
-	// the entries are bound one at a time on real ports.
+	release := make(chan struct{})
+	var parked atomic.Int32
+	receivers := make([]*Receiver, 0, sockets)
 	for i := range sockets {
 		conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 		require.NoError(t, err)
-		listens[i] = conn.LocalAddr().String()
+		listen := conn.LocalAddr().String()
 		_ = conn.Close()
-		lease, err := p.Acquire(listens[i], fmt.Sprintf("p%d", i), nil, nil)
+		policy := fmt.Sprintf("p%d", i)
+		lease, err := p.Acquire(listen, policy, nil, nil)
 		require.NoError(t, err)
 		t.Cleanup(lease.Release)
-		addr, ok := p.addr(listens[i])
+		addr, ok := p.addr(listen)
 		require.True(t, ok)
 		src, sender := senderAddr(t, addr)
-		require.True(t, p.register(listens[i], fmt.Sprintf("p%d", i), []Device{{Policy: fmt.Sprintf("p%d", i), Addr: src}}, nil))
-		p.receiver(listens[i]).setDuringCount(func() { time.Sleep(park) })
+		require.True(t, p.register(listen, policy, []Device{{Policy: policy, Addr: src}}, nil))
+		r := p.receiver(listen)
+		r.setBeforeAccount(func() {
+			parked.Add(1)
+			<-release
+		})
+		receivers = append(receivers, r)
 		_, err = sender.Write(v2cTrap("public"))
 		require.NoError(t, err)
 	}
-	time.Sleep(20 * time.Millisecond)
-	started := time.Now()
-	p.Close()
-	elapsed := time.Since(started)
-	assert.Less(t, elapsed, park+stopTimeout+150*time.Millisecond, "closed concurrently: %s", elapsed)
+	waitFor(t, sockets, func() int64 { return int64(parked.Load()) })
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		p.Close()
+	}()
+	// Every receiver is asked to close while all of them are still parked.
+	waitFor(t, sockets, func() int64 {
+		n := int64(0)
+		for _, r := range receivers {
+			if r.closeRequested() {
+				n++
+			}
+		}
+		return n
+	})
+	close(release)
+	select {
+	case <-closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return once the receivers were released")
+	}
 	assert.Equal(t, 0, p.size())
 }

@@ -71,6 +71,10 @@ type Receiver struct {
 	// bound. Shutdown relies on that to run the final export after Close.
 	intakeMu sync.RWMutex
 	stopped  bool
+	// closing is set as close begins, before it waits for the intake lock,
+	// so a test can tell that every receiver in a pool was asked to close
+	// at once rather than one after another.
+	closing atomic.Bool
 
 	// beforeCount, when set, runs after a datagram is parsed and before the
 	// policies it is counted under are resolved. Tests use it to change the
@@ -81,7 +85,15 @@ type Receiver struct {
 	// read-locked, before the first count. Tests use it to race a release
 	// against the count from another goroutine; it is nil otherwise.
 	duringCount atomic.Pointer[func()]
+	// beforeAccount, when set, runs inside the intake section, before the
+	// tally transaction and the claims visit, holding neither lock. Tests
+	// use it to park a receiver inside its intake section; it is nil
+	// otherwise.
+	beforeAccount atomic.Pointer[func()]
 }
+
+// setBeforeAccount is a test seam.
+func (r *Receiver) setBeforeAccount(f func()) { r.beforeAccount.Store(&f) }
 
 // setBeforeCount is a test seam. A nil f clears it.
 func (r *Receiver) setBeforeCount(f func()) {
@@ -150,12 +162,17 @@ func (r *Receiver) Stop() {
 // same address fails, and the wait below is far too long to hold a lock for.
 func (r *Receiver) close() {
 	r.stopOnce.Do(func() {
+		r.closing.Store(true)
 		r.intakeMu.Lock()
 		r.stopped = true
 		r.intakeMu.Unlock()
 		_ = r.conn.Close()
 	})
 }
+
+// closeRequested is a test accessor: whether close has begun, whether or
+// not it has yet taken the intake lock.
+func (r *Receiver) closeRequested() bool { return r.closing.Load() }
 
 // intake runs fn, which touches the tally, unless the receiver has been
 // closed, and reports whether it ran.
@@ -370,15 +387,13 @@ func (r *Receiver) loop() {
 		// The agent-addr override is a claim about provenance, and only a
 		// registered sender has one to make; every sender past this point
 		// is one. The claim is honoured only when the named address has a
-		// policy of its own.
-		deviceIP := src
-		if tr.AgentAddr.IsValid() && tr.AgentAddr != src && len(r.reg.PoliciesAt(tr.AgentAddr, holding)) > 0 {
-			deviceIP = canonical(tr.AgentAddr)
-			// Which address a count was attributed to is the one thing an
-			// operator cannot reconstruct from the exported series, since
-			// the series names only the winner.
-			r.logger.Debug("Attributed a trap to its agent-addr rather than its source", "source", src.String(), "agent_addr", deviceIP.String())
+		// policy of its own, decided inside the same locked visit as the
+		// claims, with the source's own claims as the fallback.
+		agent := netip.Addr{}
+		if tr.AgentAddr.IsValid() && tr.AgentAddr != src {
+			agent = tr.AgentAddr
 		}
+		deviceIP := src
 
 		// Each policy names the trap from its own profile set, so two
 		// policies on one socket can count one OID under two names; a policy
@@ -395,9 +410,13 @@ func (r *Receiver) loop() {
 		claimed, counted := 0, 0
 		var dropped DropReason
 		ran := r.intake(func() {
+			if hook := r.beforeAccount.Load(); hook != nil {
+				(*hook)()
+			}
 			r.tally.Account(func(a *Account) {
 				a.Datagram()
-				claimed = r.reg.VisitClaims(deviceIP, holding, func(policy string, names map[string]string) {
+				var counts []func(deviceIP string) bool
+				deviceIP, claimed = r.reg.VisitClaimsPreferring(agent, src, holding, func(policy string, names map[string]string) {
 					if first {
 						first = false
 						if hook := r.duringCount.Load(); hook != nil {
@@ -407,10 +426,14 @@ func (r *Receiver) loop() {
 					if names == nil {
 						names = r.names
 					}
-					if a.Received(deviceIP.String(), policy, NameFor(names, tr.OID), tr.Version) {
+					name := NameFor(names, tr.OID)
+					counts = append(counts, func(ip string) bool { return a.Received(ip, policy, name, tr.Version) })
+				})
+				for _, count := range counts {
+					if count(deviceIP.String()) {
 						counted++
 					}
-				})
+				}
 				switch {
 				case claimed == 0:
 					dropped = DropUnknownSource
@@ -436,6 +459,12 @@ func (r *Receiver) loop() {
 		}
 		if dropped != "" {
 			r.logDrop(dropped, src, "")
+		}
+		if deviceIP != src && claimed > 0 {
+			// Which address a count was attributed to is the one thing an
+			// operator cannot reconstruct from the exported series, since
+			// the series names only the winner.
+			r.logger.Debug("Attributed a trap to its agent-addr rather than its source", "source", src.String(), "agent_addr", deviceIP.String())
 		}
 	}
 }
