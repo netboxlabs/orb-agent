@@ -30,7 +30,9 @@ ND_VERSION ?= $(shell v=$$(git tag -l 'network-discovery/v[0-9]*' | sed 's|.*/v|
 SD_VERSION ?= $(shell v=$$(git tag -l 'snmp-discovery/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
 DD_VERSION ?= $(shell v=$$(git tag -l 'device-discovery/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
 WK_VERSION ?= $(shell v=$$(git tag -l 'worker/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
-BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --build-arg SNMP_DISCOVERY_VERSION=$(SD_VERSION) --build-arg DEVICE_DISCOVERY_VERSION=$(DD_VERSION) --build-arg WORKER_VERSION=$(WK_VERSION) --build-arg BUILD_COMMIT=$(COMMIT_HASH) --build-arg BUILD_TRACK=$(COMMIT_BRANCH)
+GD_VERSION ?= $(shell v=$$(git tag -l 'gnmi-discovery/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
+ST_VERSION ?= $(shell v=$$(git tag -l 'snmp-telemetry/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
+BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --build-arg SNMP_DISCOVERY_VERSION=$(SD_VERSION) --build-arg GNMI_DISCOVERY_VERSION=$(GD_VERSION) --build-arg SNMP_TELEMETRY_VERSION=$(ST_VERSION) --build-arg DEVICE_DISCOVERY_VERSION=$(DD_VERSION) --build-arg WORKER_VERSION=$(WK_VERSION) --build-arg BUILD_COMMIT=$(COMMIT_HASH) --build-arg BUILD_TRACK=$(COMMIT_BRANCH)
 
 # Make targets operate on the agent (a single module), so never use a local
 # go.work — workspace mode is incompatible with the -mod=mod build flow. The
