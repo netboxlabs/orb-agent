@@ -2777,3 +2777,83 @@ func TestIPv6PrefixLength_AnnotationWithNoRowIsQuiet(t *testing.T) {
 	assert.Contains(t, buf.String(), "skipping annotation with no row to annotate",
 		"the drop must still be observable at debug")
 }
+
+// TestDedup_AllZeroNetmask_IsNotTreatedAsAPrefix covers the agent quirk
+// where ipAdEntNetMask is 0.0.0.0. Go's mask.Size reports that as a
+// contiguous /0, so the non-contiguous check does not catch it. Read as
+// a prefix it would outrank the modern row's host route and put every
+// address on the device onto a network covering everything.
+//
+// ciscosb_cbs350-4x in the LibreNMS corpus reports exactly this, and is
+// also one of the devices whose ipAddressPrefix is null for every row.
+func TestDedup_AllZeroNetmask_IsNotTreatedAsAPrefix(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	cfg, err := mapping.NewConfig(primaryIPFixtureBothTablesWithNetmask(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, config.Options{})
+	assert.NoError(t, err)
+
+	m := mapping.NewObjectIDMapper(cfg, logger, &config.Defaults{}, "")
+	entities := m.MapObjectIDsToEntity(mergeOIDs(
+		legacyIPv4WithNetmaskOIDs("10.0.0.1", "Gi0", "0.0.0.0"),
+		modernIPv4UnresolvedPrefixPDUs("10.0.0.1"),
+	))
+
+	ip := survivingIPFor(entities, "10.0.0.1")
+	assert.NotNil(t, ip)
+	assert.Equal(t, "10.0.0.1/32", *ip.Address,
+		"a mask with no network bits is not a prefix and must not displace the host route")
+}
+
+// TestIPv6PrefixLength_UnboundRowWithDisagreeingAnnotationsIsRefused is
+// the other half of the ifIndex rule. An unbound address rules no
+// annotation row out, so where several rows describe it and disagree
+// there is no answer to take: picking one would depend on PDU order.
+func TestIPv6PrefixLength_UnboundRowWithDisagreeingAnnotationsIsRefused(t *testing.T) {
+	pdus := modernIPv6UnresolvedPrefixPDUs("2001:db8::4")
+	pdus[".1.3.6.1.2.1.4.34.1.3.2.16."+ipv6DecimalBytes("2001:db8::4")] = mapping.Value{
+		Value: "0", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+	}
+	for i := 0; i < 25; i++ {
+		ip := mapV6PrefixOnce(t, mergeOIDs(pdus,
+			ipv6PfxLengthPDU("2001:db8::4", 1, 64),
+			ipv6PfxLengthPDU("2001:db8::4", 9, 48),
+		))
+		assert.NotNil(t, ip)
+		assert.Equal(t, "2001:db8::4/128", *ip.Address,
+			"annotations that disagree are no evidence, in any PDU order")
+	}
+}
+
+// TestIPv6PrefixLength_UnboundRowWithAgreeingAnnotationsIsAccepted keeps
+// the refusal above from degrading into "more than one row means give
+// up". Rows that agree still say what the prefix is.
+func TestIPv6PrefixLength_UnboundRowWithAgreeingAnnotationsIsAccepted(t *testing.T) {
+	pdus := modernIPv6UnresolvedPrefixPDUs("2001:db8::4")
+	pdus[".1.3.6.1.2.1.4.34.1.3.2.16."+ipv6DecimalBytes("2001:db8::4")] = mapping.Value{
+		Value: "0", Type: mapping.Asn1BER(mapping.Integer), IdentifierSize: 0,
+	}
+	ip := mapV6PrefixOnce(t, mergeOIDs(pdus,
+		ipv6PfxLengthPDU("2001:db8::4", 1, 64),
+		ipv6PfxLengthPDU("2001:db8::4", 9, 64),
+	))
+	assert.NotNil(t, ip)
+	assert.Equal(t, "2001:db8::4/64", *ip.Address,
+		"rows that agree are still evidence, however many there are")
+}
+
+// TestIPv6PrefixLength_BoundRowIgnoresOtherInterfacesDisagreement pins
+// that the unanimity rule applies to candidates, not to every row in the
+// table. A row for another interface was already ruled out, so it cannot
+// veto the one that describes this address's own binding.
+func TestIPv6PrefixLength_BoundRowIgnoresOtherInterfacesDisagreement(t *testing.T) {
+	ip := mapV6PrefixOnce(t, mergeOIDs(
+		mapping.ObjectIDValueMap{".1.3.6.1.2.1.2.2.1.2.1": mapping.Value{
+			Value: "Gi0", Type: mapping.Asn1BER(mapping.OctetString), IdentifierSize: 1,
+		}},
+		modernIPv6UnresolvedPrefixPDUs("2001:db8::4"),
+		ipv6PfxLengthPDU("2001:db8::4", 1, 64),
+		ipv6PfxLengthPDU("2001:db8::4", 9, 48),
+	))
+	assert.NotNil(t, ip)
+	assert.Equal(t, "2001:db8::4/64", *ip.Address,
+		"a bound address takes the row for its own interface")
+}

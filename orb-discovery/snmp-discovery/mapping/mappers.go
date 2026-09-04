@@ -189,6 +189,49 @@ func rowInterfaceIndex(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *En
 	return ""
 }
 
+// ipv6AnnotatedPrefixLength returns the prefix length the IPV6-MIB rows
+// in this group agree on for the address they annotate, and when they do
+// not, a short reason for the debug line.
+//
+// The annotation is indexed by (ifIndex, address), so one address on
+// several interfaces has several rows that may disagree. A row
+// describing an interface other than the one the address is bound to is
+// ignored; where the address is unbound nothing can be ruled out that
+// way, so every row is a candidate and candidates that disagree are no
+// evidence at all.
+//
+// Decided over the whole group rather than per PDU, so that the answer
+// cannot depend on which row is iterated first. A malformed length is
+// skipped rather than counted as disagreement: it is not evidence in
+// either direction.
+func ipv6AnnotatedPrefixLength(values map[ObjectIDIndex]*ObjectIDValue, columnOID, rowIfIndex string) (int, string, bool) {
+	agreed := 0
+	found := false
+	for objectID, value := range values {
+		if !objectID.HasParent(columnOID) {
+			continue
+		}
+		prefixIfIndex := ipv6AddrPrefixIfIndex(string(objectID), columnOID)
+		if rowIfIndex != "" && rowIfIndex != "0" &&
+			prefixIfIndex != "" && prefixIfIndex != "0" &&
+			prefixIfIndex != rowIfIndex {
+			continue
+		}
+		prefixLen, err := strconv.Atoi(value.Value)
+		if err != nil || prefixLen < 0 || prefixLen > 128 {
+			continue
+		}
+		if found && prefixLen != agreed {
+			return 0, "rows for this address disagree on the length", false
+		}
+		agreed, found = prefixLen, true
+	}
+	if !found {
+		return 0, "no usable row for this address's interface", false
+	}
+	return agreed, "", true
+}
+
 // Map maps IP addresses to entities
 func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
 	m.logger.Debug("mapping values to ipAddress entity", "values", values, "mapping_entry", mappingEntry)
@@ -394,10 +437,15 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 					// IPV6-MIB ipv6AddrPfxLength, a column of a table RFC
 					// 4293 obsoleted. Read only as a fallback: the two
 					// current tables have first claim and this one applies
-					// only where neither of them resolved a prefix. The
-					// guard is a rank comparison rather than an assumption
-					// about ordering, because a row's PDUs are iterated in
-					// map order.
+					// only where neither of them resolved a prefix.
+					//
+					// A row's PDUs are iterated in map order, so nothing
+					// here may depend on which one arrives first. Two
+					// things secure that: the guard below is a rank
+					// comparison rather than an assumption about ordering,
+					// and the length is decided over the group as a whole,
+					// which makes this case idempotent however many of the
+					// address's annotation rows trigger it.
 					if ipAddress.Address == nil || *ipAddress.Address == "" {
 						continue
 					}
@@ -413,26 +461,12 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 							"address", *ipAddress.Address)
 						continue
 					}
-					prefixLen, err := strconv.Atoi(value.Value)
-					if err != nil || prefixLen < 0 || prefixLen > 128 {
-						m.logger.Debug("ipv6AddrPfxLength not usable, keeping host route",
-							"value", value.Value, "address", *ipAddress.Address)
-						continue
-					}
-					// The annotation is indexed by (ifIndex, address), so
-					// one address on two interfaces has two rows that may
-					// disagree. Take a row only where it agrees with the
-					// address's own binding; an unbound side is no
-					// constraint, matching how addressPrefix treats
-					// InterfaceIndexOrZero.
-					prefixIfIndex := ipv6AddrPrefixIfIndex(string(objectID), propertyMappingEntry.OID)
 					rowIfIndex := rowInterfaceIndex(values, mappingEntry)
-					if prefixIfIndex != "" && prefixIfIndex != "0" &&
-						rowIfIndex != "" && rowIfIndex != "0" &&
-						prefixIfIndex != rowIfIndex {
-						m.logger.Debug("ipv6AddrPfxLength ifIndex mismatch, keeping host route",
-							"address", *ipAddress.Address,
-							"prefix_ifindex", prefixIfIndex, "row_ifindex", rowIfIndex)
+					prefixLen, reason, ok := ipv6AnnotatedPrefixLength(values, propertyMappingEntry.OID, rowIfIndex)
+					if !ok {
+						m.logger.Debug("ipv6AddrPfxLength not usable, keeping host route",
+							"reason", reason, "address", *ipAddress.Address,
+							"row_ifindex", rowIfIndex)
 						continue
 					}
 					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankDeprecated)
@@ -750,6 +784,15 @@ func maskToPrefixSize(maskStr string) (int, error) {
 	ones, bits := mask.Size()
 	if bits == 0 {
 		return 0, fmt.Errorf("mask is not contiguous: %s", maskStr)
+	}
+	// An all-zero mask is the well-known agent quirk for "no mask
+	// configured" rather than a default route on an interface address, and
+	// 31 walks in the LibreNMS corpus report one. Reading it as /0 put the
+	// address on a network covering everything; once a prefix carries
+	// provenance, that /0 would also outrank the other table's host route
+	// and spread to every address on the device.
+	if ones == 0 {
+		return 0, fmt.Errorf("mask has no network bits: %s", maskStr)
 	}
 
 	return ones, nil
