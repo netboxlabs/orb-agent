@@ -81,10 +81,11 @@ Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and
 - [gNMI Discovery](./docs/backends/gnmi_discovery.md)
 
 #### Observability Backends
-Observability backends focus on collecting and exporting rich telemetry from network traffic or probes so you can feed metrics into your monitoring stack.
+Observability backends focus on collecting and exporting rich telemetry from network traffic, probes or device polling so you can feed metrics into your monitoring stack. SNMP Telemetry polls SNMP devices and receives their traps, exporting metrics over OTLP.
 
 - [pktvisor](./docs/backends/pktvisor.md)
 - [OpenTelemetry Infinity](./docs/backends/opentelemetry_infinity.md)
+- [SNMP Telemetry](./docs/backends/snmp_telemetry.md)
 
 #### Common
 A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings and OpenTelemetry configuration to all backends.
@@ -127,6 +128,9 @@ orb:
     snmp_discovery:
       snmp_policy_1:
        # see docs/backends/snmp.md
+    snmp_telemetry:
+      snmp_telemetry_policy_1:
+       # see docs/backends/snmp_telemetry.md
  ```
 
 ## System Requirements
@@ -182,6 +186,8 @@ podman run --privileged --net=host \
 ```
 
 **Note for rootless podman users:** If running podman without root/sudo privileges, network discovery requires specific configuration to avoid raw socket limitations. The command above requires `sudo` for full NMAP functionality. For rootless operation, see the [Network Discovery backend documentation](./docs/backends/network_discovery.md#rootless-podman-deployment) for TCP connect scan configuration.
+
+An `snmp_telemetry` policy that receives traps binds the UDP port its `listen` names on the agent host, conventionally 162, which `--net=host` already exposes. In bridge mode publish that port, `-p 162:162/udp` for a policy listening on 162. There is no default port: `listen` is required and the policy chooses it. The container runs as root by default, the image sets no other user, so binding a port below 1024 inside it needs no capability.
 
 ### Running as a service
 

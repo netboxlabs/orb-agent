@@ -148,7 +148,7 @@ Optional OpenTelemetry export for backend metrics.
 
 ### Backend keys
 
-Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends accept optional `host` and `port` overrides.
+Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends and `snmp_telemetry` accept optional `host` and `port` overrides.
 
 | Key | Backend | Default port | Notes |
 |-----|---------|-------------|-------|
@@ -158,6 +158,7 @@ Each backend key enables that backend. An empty value (no sub-keys) uses all def
 | `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
 | `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor.md) |
 | `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
+| `snmp_telemetry` | SNMP metrics and traps | 8078 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [SNMP Telemetry docs](../backends/snmp_telemetry.md) |
 
 ---
 
@@ -192,6 +193,7 @@ For the full list of parameters per backend, see:
 - [SNMP Discovery](../backends/snmp_discovery/README.md)
 - [Network Discovery](../backends/network_discovery.md)
 - [Worker](../backends/worker.md)
+- [SNMP Telemetry](../backends/snmp_telemetry.md)
 
 ---
 
