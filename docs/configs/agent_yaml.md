@@ -346,6 +346,7 @@ Values can reference environment variables using `${VAR_NAME}` syntax. Resolutio
 | CyberArk secrets manager | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | Go agent at startup |
 | `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
 | `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, `context_name` | Go SNMP backend at policy execution |
+| `snmp_telemetry` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, only for variables named in `backends.snmp_telemetry.policy_env_vars`; unset refuses every reference | Go SNMP telemetry backend at policy execution |
 
 ```yaml
 # Git config (resolved by Go agent)

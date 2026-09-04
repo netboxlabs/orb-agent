@@ -19,8 +19,9 @@ orb:
       log_format: TEXT                   # default TEXT (TEXT, JSON)
       otel_export_period: 10             # seconds between exports, default 10
       policy_env_vars: [SNMP_COMMUNITY]  # unset by default: every ${NAME} reference in a policy is refused
-      snmp_profiles_root: /opt/orb/profiles   # unset by default: every per-policy profiles_dir is refused
-      snmp_profiles_dir: /opt/orb/overrides   # unset by default: only the bundled profiles are used; the directory must exist
+      # Both directories must exist; the image creates neither, so they are shown commented out.
+      # snmp_profiles_root: /opt/orb/profiles   # unset by default: every per-policy profiles_dir is refused
+      # snmp_profiles_dir: /opt/orb/overrides   # unset by default: only the bundled profiles are used
 ```
 
 | Parameter | Type | Default | Description |
