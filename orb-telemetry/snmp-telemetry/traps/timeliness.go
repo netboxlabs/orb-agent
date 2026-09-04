@@ -31,6 +31,16 @@ func (id clockID) principal() clockID {
 	return id
 }
 
+// credential is the clockID without its sender or engine ID: the level above
+// the principal, since a holder of one credential can spoof every registered
+// source it covers and so mint principals at will. Eviction at the global
+// bound stays inside the credential's own group whenever it holds a clock.
+func (id clockID) credential() clockID {
+	id.src = netip.Addr{}
+	id.engineID = ""
+	return id
+}
+
 // maxEnginesPerPrincipal bounds the clocks one principal may hold. A device
 // has one engine ID, two across a re-provisioning; past the bound the
 // principal's own least recently used clock goes, so a principal cycling
@@ -68,10 +78,11 @@ type engineClock struct {
 	boots   uint32
 	time    uint32
 	learned time.Time
-	// global and local are this clock's places in the global recency list
-	// and in its principal's own.
+	// global, local and group are this clock's places in the global recency
+	// list, in its principal's own, and in its credential's.
 	global *list.Element
 	local  *list.Element
+	group  *list.Element
 }
 
 // timeliness is the non-authoritative side of RFC 3414 section 3.2.7. A trap's
@@ -96,11 +107,31 @@ type timeliness struct {
 	// perPrincipal holds each principal's clocks most recently used first;
 	// the back is the next to be evicted at the principal's bound.
 	perPrincipal map[clockID]*list.List
-	now          func() time.Time
+	// perCredential holds each credential's clocks most recently used
+	// first, across every source it is used from; the back is the next to
+	// be evicted at the global bound when the credential holds any.
+	perCredential map[clockID]*list.List
+	now           func() time.Time
 }
 
 func newTimeliness(now func() time.Time) *timeliness {
-	return &timeliness{clocks: make(map[clockID]*list.Element), order: list.New(), perPrincipal: make(map[clockID]*list.List), now: now}
+	return &timeliness{
+		clocks:        make(map[clockID]*list.Element),
+		order:         list.New(),
+		perPrincipal:  make(map[clockID]*list.List),
+		perCredential: make(map[clockID]*list.List),
+		now:           now,
+	}
+}
+
+// listFor returns the recency list under key in m, creating it.
+func listFor(m map[clockID]*list.List, key clockID) *list.List {
+	l := m[key]
+	if l == nil {
+		l = list.New()
+		m[key] = l
+	}
+	return l
 }
 
 // evict removes one clock from every structure that holds it.
@@ -115,6 +146,13 @@ func (w *timeliness) evict(el *list.Element) {
 			delete(w.perPrincipal, p)
 		}
 	}
+	g := c.id.credential()
+	if l := w.perCredential[g]; l != nil {
+		l.Remove(c.group)
+		if l.Len() == 0 {
+			delete(w.perCredential, g)
+		}
+	}
 }
 
 // check reports whether a message carrying boots and engineTime from the
@@ -127,33 +165,32 @@ func (w *timeliness) check(id clockID, boots, engineTime uint32) bool {
 	now := w.now()
 	el, known := w.clocks[id]
 	if !known {
-		p := id.principal()
-		mine := w.perPrincipal[p]
-		if mine == nil {
-			mine = list.New()
-			w.perPrincipal[p] = mine
-		}
-		// The principal's own clocks go first: at its own bound, and at the
-		// global bound whenever it holds any, so churning engine IDs costs
-		// the churner its own clocks and never another principal's replay
-		// state. Only a principal's very first clock at the global bound
-		// displaces the globally oldest, and it can do that once.
+		p, g := id.principal(), id.credential()
+		mine := listFor(w.perPrincipal, p)
+		ours := listFor(w.perCredential, g)
+		// The churner's own clocks go first. A principal past its bound
+		// evicts its own; at the global bound a principal holding any clock
+		// evicts its own, a credential holding any clock evicts within its
+		// own group, and only a credential's very first clock displaces the
+		// globally oldest, once. So neither engine-ID churn nor source churn
+		// under one credential reaches another credential's replay state.
 		switch {
 		case mine.Len() >= maxEnginesPerPrincipal || (w.order.Len() >= maxEngines && mine.Len() > 0):
 			w.evict(mine.Back().Value.(*engineClock).global)
+		case w.order.Len() >= maxEngines && ours.Len() > 0:
+			w.evict(ours.Back().Value.(*engineClock).global)
 		case w.order.Len() >= maxEngines:
 			w.evict(w.order.Back())
 		}
-		// An eviction that emptied this principal's list removed the list
-		// from the map; the new clock must join the list the map holds, or
-		// the principal's next clock would find none and evict globally.
-		if mine = w.perPrincipal[p]; mine == nil {
-			mine = list.New()
-			w.perPrincipal[p] = mine
-		}
+		// An eviction that emptied a list removed it from its map; the new
+		// clock must join the lists the maps hold, or the next clock would
+		// find none and evict globally.
+		mine = listFor(w.perPrincipal, p)
+		ours = listFor(w.perCredential, g)
 		c := &engineClock{id: id, boots: boots, time: engineTime, learned: now}
 		c.global = w.order.PushFront(c)
 		c.local = mine.PushFront(c)
+		c.group = ours.PushFront(c)
 		w.clocks[id] = c.global
 		return true
 	}
@@ -182,6 +219,9 @@ func (w *timeliness) touch(c *engineClock) {
 	w.order.MoveToFront(c.global)
 	if l := w.perPrincipal[c.id.principal()]; l != nil {
 		l.MoveToFront(c.local)
+	}
+	if l := w.perCredential[c.id.credential()]; l != nil {
+		l.MoveToFront(c.group)
 	}
 }
 

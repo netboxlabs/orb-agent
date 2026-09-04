@@ -2,6 +2,7 @@ package traps
 
 import (
 	"fmt"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -170,5 +171,36 @@ func TestTimeliness_AtTheGlobalBoundAPrincipalEvictsItself(t *testing.T) {
 	}
 	assert.Equal(t, maxEngines, w.size())
 	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: only the attacker's first clock displaced anyone, and that was the oldest filler")
+	assert.True(t, w.check(filler(0), 0, 1), "the oldest filler was the one displaced, once")
+}
+
+// Source churn under one credential makes every spoofed registered source a
+// new principal, so eviction ownership has a level above the principal: the
+// credential. At the global bound a credential that holds any clock evicts
+// within its own group, so thousands of first clocks from one credential
+// displace only that credential's own state, never another's.
+func TestTimeliness_SourceChurnUnderOneCredentialEvictsOnlyThatCredential(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	filler := func(i int) clockID { return clockID{user: fmt.Sprintf("f%d", i), engineID: "e"} }
+	victim := clockID{src: netip.MustParseAddr("10.0.0.1"), user: "victim", authPass: "v", engineID: "ev"}
+	now = now.Add(time.Second)
+	assert.True(t, w.check(filler(0), 1, 1))
+	now = now.Add(time.Second)
+	assert.True(t, w.check(victim, 5, 100))
+	for i := 1; i < maxEngines-1; i++ {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(filler(i), 1, 1))
+	}
+	require.Equal(t, maxEngines, w.size())
+
+	// One credential, spoofing a fresh registered source every time.
+	for i := range 3 * maxEngines {
+		now = now.Add(time.Second)
+		id := clockID{src: netip.AddrFrom4([4]byte{10, 1, byte(i >> 8), byte(i)}), user: "attacker", authPass: "a", engineID: "e"}
+		assert.True(t, w.check(id, 1, 1))
+	}
+	assert.Equal(t, maxEngines, w.size())
+	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: after the attacker's first clock, its churn evicted only its own credential's clocks")
 	assert.True(t, w.check(filler(0), 0, 1), "the oldest filler was the one displaced, once")
 }
