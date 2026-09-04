@@ -25,6 +25,14 @@ func commonsWithOTLP(endpoint string) config.BackendCommons {
 	return c
 }
 
+// debugCommons is what the agent hands a backend when run with its debug
+// flag; the flag arrives through the commons, not the config map.
+func debugCommons(endpoint string) config.BackendCommons {
+	c := commonsWithOTLP(endpoint)
+	c.Debug = true
+	return c
+}
+
 func TestConfigureBuildsArgs(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -79,17 +87,22 @@ func TestConfigureBuildsArgs(t *testing.T) {
 			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
 		},
 		{
-			name:    "a debug-enabled agent logger selects DEBUG",
+			name:    "the agent's debug flag selects DEBUG",
+			cfg:     map[string]any{},
+			commons: debugCommons("collector:4317"),
+			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
+		},
+		{
+			name:    "a debug-enabled logger alone does not select DEBUG",
 			cfg:     map[string]any{},
 			commons: commonsWithOTLP("collector:4317"),
 			logger:  quietLogger(slog.LevelDebug),
-			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
+			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317"},
 		},
 		{
 			name:    "an explicit log_level wins over debug",
 			cfg:     map[string]any{"debug": true, "log_level": "ERROR"},
-			commons: commonsWithOTLP("collector:4317"),
-			logger:  quietLogger(slog.LevelDebug),
+			commons: debugCommons("collector:4317"),
 			want:    []string{"--host", "localhost", "--port", "8078", "--otel-endpoint", "collector:4317", "--log-level", "ERROR"},
 		},
 		{

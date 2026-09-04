@@ -265,7 +265,7 @@ type settings struct {
 func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	cfg map[string]any, common config.BackendCommons, _ filesmgr.Manager,
 ) error {
-	st, err := readSettings(logger, cfg, common)
+	st, err := readSettings(cfg, common)
 	if err != nil {
 		return fmt.Errorf("snmp_telemetry: %w", err)
 	}
@@ -287,7 +287,7 @@ func (d *snmpTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	return nil
 }
 
-func readSettings(logger *slog.Logger, cfg map[string]any, common config.BackendCommons) (settings, error) {
+func readSettings(cfg map[string]any, common config.BackendCommons) (settings, error) {
 	var st settings
 	var err error
 
@@ -314,10 +314,14 @@ func readSettings(logger *slog.Logger, cfg map[string]any, common config.Backend
 	if st.logLevel, err = readChoice(cfg, "log_level", "DEBUG", "INFO", "WARN", "ERROR"); err != nil {
 		return st, err
 	}
+	// The agent's debug flag comes through the commons. The logger is not
+	// consulted: when OTLP log export is on, the agent wraps it in a handler
+	// that accepts debug records whatever the console level, so asking the
+	// logger would put every OTLP-exporting agent's backend at DEBUG.
 	if st.logLevel == "" {
 		if debug, prs := cfg["debug"].(bool); prs && debug {
 			st.logLevel = "DEBUG"
-		} else if logger.Enabled(context.Background(), slog.LevelDebug) {
+		} else if common.Debug {
 			st.logLevel = "DEBUG"
 		}
 	}
@@ -520,7 +524,10 @@ func (d *snmpTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 		}
 	}
 
-	d.logger.Debug("snmp-telemetry policy apply", "policy_id", data.ID, "data", data.Data)
+	// The body carries solved secrets (community, passphrases), and a debug
+	// record reaches the OTLP log collector when export is on, so only the
+	// policy's identity is logged.
+	d.logger.Debug("snmp-telemetry policy apply", "policy_id", data.ID, "policy_name", data.Name)
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{

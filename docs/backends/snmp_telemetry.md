@@ -28,7 +28,7 @@ orb:
 |:---------:|:----:|:-------:|:------------|
 | host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control. |
 | port | int | 8078 | Port of the backend's API, 1 to 65535. |
-| log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent itself logs at debug. |
+| log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
 | log_format | str | `TEXT` | `TEXT` or `JSON`; any other value is refused. |
 | otel_export_period | int | 10 | Seconds between OTLP exports, 1 to 31536000. |
 | policy_env_vars | str or list | unset | Environment variable names a policy may read through `${NAME}` in `community`, `username`, `auth_passphrase` or `priv_passphrase`. A comma-separated string or a list of names, never `${...}` references. Unset refuses every reference. |

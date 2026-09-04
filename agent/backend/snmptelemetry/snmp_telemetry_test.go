@@ -1,6 +1,7 @@
 package snmptelemetry_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -192,6 +193,49 @@ func TestSnmpTelemetryBackendStart(t *testing.T) {
 	// No trailing Stop: the mock delivers exactly one process status, which
 	// FullReset's Stop consumed; a second Stop would wait out the whole grace.
 	mockCmd.AssertExpectations(t)
+}
+
+// A policy body reaches the agent with its secrets solved, and a debug record
+// reaches the OTLP log collector when export is on, so the apply log must not
+// carry the body.
+func TestSnmpTelemetryBackendDoesNotLogPolicyCredentials(t *testing.T) {
+	rec := &apiRecorder{}
+	server := httptest.NewServer(rec.handler(t))
+	defer server.Close()
+	serverURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 0)
+	overrideNewCmdOptions(t, mockCmd, nil)
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	assert.True(t, snmptelemetry.Register())
+	be := backend.GetBackend("snmp_telemetry")
+	var commons config.BackendCommons
+	commons.Otlp.Grpc = "collector:4317"
+	require.NoError(t, be.Configure(logger, nil, map[string]any{
+		"host": serverURL.Hostname(), "port": serverURL.Port(),
+	}, commons, nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, be.Start(ctx, cancel))
+
+	require.NoError(t, be.ApplyPolicy(policies.PolicyData{ID: "id-3", Name: "core", Data: map[string]any{
+		"scope": map[string]any{"authentication": map[string]any{
+			"community": "c0mmun1ty-secret", "auth_passphrase": "auth-secret", "priv_passphrase": "priv-secret",
+		}},
+	}}, false))
+	require.NoError(t, be.Stop(ctx))
+
+	out := logs.String()
+	assert.Contains(t, out, "snmp-telemetry policy apply", "the apply is still logged")
+	for _, secret := range []string{"c0mmun1ty-secret", "auth-secret", "priv-secret"} {
+		assert.NotContains(t, out, secret)
+	}
 }
 
 // The binary validates policy names and bodies itself and answers 400 with a
