@@ -440,8 +440,12 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, neturl.PathEscape(name))
-	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
+	segment, err := backend.PolicyPathSegment(name)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, segment)
+	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "error")
 	if err != nil {
 		return err

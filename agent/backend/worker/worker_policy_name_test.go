@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -42,6 +43,16 @@ func TestWorkerRemovePolicyEscapesTheName(t *testing.T) {
 		if r.URL.Path == "/api/v1/status" {
 			w.WriteHeader(http.StatusOK)
 			require.NoError(t, json.NewEncoder(w).Encode(map[string]any{"version": "1.0.0"}))
+			return
+		}
+		// Model the receiving framework rather than accepting every path.
+		// ASGI decodes percent-escapes before routing, so a "%2F" arrives as
+		// a separator, and Starlette's redirect_slashes then 307s a trailing
+		// slash to the route without it. A handler that accepted everything
+		// would report a slash name as delivered when it had in fact been
+		// redirected onto a different policy.
+		if strings.HasSuffix(r.URL.Path, "/") && r.URL.Path != "/" {
+			http.Redirect(w, r, strings.TrimSuffix(r.URL.Path, "/"), http.StatusTemporaryRedirect)
 			return
 		}
 		if r.Method == http.MethodDelete {
@@ -83,8 +94,19 @@ func TestWorkerRemovePolicyEscapesTheName(t *testing.T) {
 			"removing %q must not fail; before escaping, %%  did not even parse as a URL", c.name)
 	}
 
+	// A slash cannot be kept inside one path segment, so the name is refused
+	// before a request is built. Escaping it would send "%2F", which the
+	// framework decodes back into a separator and redirects, deleting the
+	// policy without the slash and reporting success.
+	mu.Lock()
+	sent := len(deletes)
+	mu.Unlock()
+	require.Error(t, be.RemovePolicy(policies.PolicyData{ID: "id-1", Name: "nightly/"}),
+		"a name carrying a slash must fail rather than address another policy")
+
 	mu.Lock()
 	defer mu.Unlock()
+	assert.Len(t, deletes, sent, "the refused name must not reach the backend at all")
 	require.Len(t, deletes, len(policyNameEscapingCases))
 	for i, c := range policyNameEscapingCases {
 		assert.Equal(t, c.wantPath, deletes[i], "policy name %q", c.name)
@@ -109,7 +131,4 @@ var policyNameEscapingCases = []struct {
 	// "%" is worse: the URL does not parse at all, so the request is
 	// never made.
 	{"100%", "/api/v1/policies/100%25"},
-	// A trailing slash is not a route miss. Unescaped it earns a 307 to
-	// the name without it, so it silently deletes a different policy.
-	{"nightly/", "/api/v1/policies/nightly%2F"},
 }
