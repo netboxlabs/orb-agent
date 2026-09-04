@@ -73,6 +73,7 @@ jobs:
             GNMI_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.gnmi }}
             DEVICE_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.device }}
             WORKER_VERSION=${{ steps.backend-versions.outputs.worker }}
+            SNMP_TELEMETRY_VERSION=${{ steps.backend-versions.outputs.telemetry }}
           tags: orb-agent:scan
 
       - name: Scan image for vulnerabilities

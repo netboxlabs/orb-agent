@@ -11,6 +11,8 @@ on:
       - "orb-discovery/**"
       - "!agent/docker/**"
       - "!orb-discovery/**/docker/**"
+      - "orb-telemetry/**"
+      - "!orb-telemetry/**/docker/**"
 
 permissions:
   contents: write
@@ -89,6 +91,7 @@ jobs:
             GNMI_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.gnmi }}
             DEVICE_DISCOVERY_VERSION=${{ steps.backend-versions.outputs.device }}
             WORKER_VERSION=${{ steps.backend-versions.outputs.worker }}
+            SNMP_TELEMETRY_VERSION=${{ steps.backend-versions.outputs.telemetry }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest

@@ -16,6 +16,8 @@ on:
     paths:
       - "orb-discovery/**"
       - "!orb-discovery/**/docker/**"
+      - "orb-telemetry/**"
+      - "!orb-telemetry/**/docker/**"
       - "agent/**"
       - "!agent/docker/**"
       - "cmd/**"
@@ -44,6 +46,7 @@ jobs:
       network: ${{ steps.detect.outputs.network }}
       snmp: ${{ steps.detect.outputs.snmp }}
       gnmi: ${{ steps.detect.outputs.gnmi }}
+      telemetry: ${{ steps.detect.outputs.telemetry }}
       agent: ${{ steps.detect.outputs.agent }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
@@ -69,6 +72,7 @@ jobs:
               echo "network=true"
               echo "snmp=true"
               echo "gnmi=true"
+              echo "telemetry=true"
               echo "agent=true"
             } >> "$GITHUB_OUTPUT"
             exit 0
@@ -99,6 +103,7 @@ jobs:
             echo "network=$(detect '^orb-discovery/network-discovery/' '^orb-discovery/network-discovery/docker/')"
             echo "snmp=$(detect '^orb-discovery/snmp-discovery/' '^orb-discovery/snmp-discovery/docker/')"
             echo "gnmi=$(detect '^orb-discovery/gnmi-discovery/' '^orb-discovery/gnmi-discovery/docker/')"
+            echo "telemetry=$(detect '^orb-telemetry/snmp-telemetry/' '^orb-telemetry/snmp-telemetry/docker/')"
             echo "agent=$(detect '^(agent/|cmd/|go\.mod$|go\.sum$)' '^agent/docker/')"
           } >> "$GITHUB_OUTPUT"
 
@@ -114,7 +119,7 @@ jobs:
       ${{ github.event_name == 'push' && needs.changes.outputs.agent == 'true' &&
           (needs.changes.outputs.device == 'true' || needs.changes.outputs.worker == 'true' ||
            needs.changes.outputs.network == 'true' || needs.changes.outputs.snmp == 'true' ||
-           needs.changes.outputs.gnmi == 'true') }}
+           needs.changes.outputs.gnmi == 'true' || needs.changes.outputs.telemetry == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     permissions:
@@ -128,6 +133,7 @@ jobs:
       NETWORK: ${{ needs.changes.outputs.network }}
       SNMP: ${{ needs.changes.outputs.snmp }}
       GNMI: ${{ needs.changes.outputs.gnmi }}
+      TELEMETRY: ${{ needs.changes.outputs.telemetry }}
     steps:
       - name: Wait for changed backend release runs
         run: |
@@ -164,6 +170,7 @@ jobs:
           if [ "$NETWORK" = "true" ]; then wait_for network-discovery-release.yaml; fi
           if [ "$SNMP" = "true" ];    then wait_for snmp-discovery-release.yaml;     fi
           if [ "$GNMI" = "true" ];    then wait_for gnmi-discovery-release.yaml;     fi
+          if [ "$TELEMETRY" = "true" ]; then wait_for snmp-telemetry-release.yaml; fi
           echo "all changed backend releases complete"
 
   resolve-versions:
@@ -178,6 +185,7 @@ jobs:
       gnmi: ${{ steps.versions.outputs.gnmi }}
       device: ${{ steps.versions.outputs.device }}
       worker: ${{ steps.versions.outputs.worker }}
+      telemetry: ${{ steps.versions.outputs.telemetry }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       # wait-for-backend-releases has ensured any changed backend already tagged
@@ -196,4 +204,5 @@ jobs:
       gnmi-version: ${{ needs.resolve-versions.outputs.gnmi }}
       device-version: ${{ needs.resolve-versions.outputs.device }}
       worker-version: ${{ needs.resolve-versions.outputs.worker }}
+      telemetry-version: ${{ needs.resolve-versions.outputs.telemetry }}
     secrets: inherit
