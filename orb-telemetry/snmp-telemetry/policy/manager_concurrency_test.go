@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
@@ -83,6 +84,8 @@ func (g *gatedCollector) CollectTarget(_ context.Context, _ config.Target, _ *co
 	return nil
 }
 
+func (g *gatedCollector) TrapNames() map[string]string { return nil }
+
 func (g *gatedCollector) ForgetPolicy(string) {
 	close(g.entered)
 	<-g.release
@@ -107,7 +110,7 @@ func TestStopPolicy_HoldsTheNameUntilTheRunnerHasStopped(t *testing.T) {
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)
 
-	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate)
+	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate, nil)
 	require.NoError(t, err)
 	r.Start()
 	m.policies["p1"] = r
@@ -185,7 +188,7 @@ func TestStopPolicy_DoesNotBlockOtherNames(t *testing.T) {
 
 	gate := newGatedCollector()
 	t.Cleanup(gate.unblock)
-	r, err := NewRunner(m.ctx, testLogger, "slow", minimalPolicy(v2cAuth()), gate)
+	r, err := NewRunner(m.ctx, testLogger, "slow", minimalPolicy(v2cAuth()), gate, nil)
 	require.NoError(t, err)
 	r.Start()
 	m.policies["slow"] = r
@@ -261,4 +264,43 @@ func TestStopPolicyHandle_AHandleWithNoRunnerStopsNothing(t *testing.T) {
 		require.True(t, m.HasPolicy("p1"))
 		require.NoError(t, m.Stop())
 	}
+}
+
+// The sibling of the test above, on the mark a replacement leaves in the trap
+// pool rather than on the name it takes. The release is the last thing
+// Runner.Stop does and the manager holds the stopping reservation until Stop
+// returns, so the two calls can only arrive in one order: the replacement's
+// acquire is the pool's last word for the name, not a release arriving late
+// and erasing it.
+func TestStopPolicy_SameNameReplacementEndsRegistered(t *testing.T) {
+	reg := newSpyPool()
+	m := NewManager(context.Background(), testLogger, Options{TrapPool: reg})
+	_, err := m.acquireCollector("")
+	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector("") })
+
+	gate := newGatedCollector()
+	t.Cleanup(gate.unblock)
+
+	r, err := NewRunner(m.ctx, testLogger, "p1", withTraps(minimalPolicy(v2cAuth()), ":162"), gate, reg)
+	require.NoError(t, err)
+	r.Start()
+	m.policies["p1"] = r
+	require.Equal(t, []string{"acquire:p1"}, reg.callSequence())
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- m.StopPolicy("p1") }()
+	<-gate.entered
+
+	started := make(chan error, 1)
+	go func() { started <- m.StartPolicy("p1", withTraps(minimalPolicy(v2cAuth()), ":162")) }()
+
+	gate.unblock()
+	require.NoError(t, <-stopped)
+	require.NoError(t, <-started)
+	require.True(t, m.HasPolicy("p1"))
+
+	assert.Equal(t, []string{"acquire:p1", "release:p1", "acquire:p1"}, reg.callSequence(),
+		"the replacement acquires after the release, and exactly once")
+	require.NoError(t, m.Stop())
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/targets"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
 // Define a custom type for the context key
@@ -53,6 +55,9 @@ const (
 type Collector interface {
 	CollectTarget(ctx context.Context, target config.Target, auth *config.Authentication, policyName string, dial collector.DialOptions) error
 	ForgetPolicy(policyName string)
+	// TrapNames is the trap definitions of the profile set the collector
+	// polls with, which the runner registers with its trap claims.
+	TrapNames() map[string]string
 }
 
 // Runner represents the policy runner for SNMP metrics collection
@@ -66,6 +71,7 @@ type Runner struct {
 	cancel           context.CancelFunc
 	name             string
 	metricsCollector Collector
+	trapLease        TrapLease
 	metricsInterval  time.Duration
 	snmpTimeout      time.Duration
 	retries          int
@@ -81,10 +87,21 @@ type Runner struct {
 // NewRunner returns a new policy runner.
 // metricsCollector is the shared collector for this policy's profiles directory —
 // created once by the Manager and reused across all policies using the same dir.
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector) (*Runner, error) {
-	s, err := gocron.NewScheduler()
-	if err != nil {
-		return nil, err
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, metricsCollector Collector, pool TrapPool) (*Runner, error) {
+	polls := policy.Config.MetricsInterval != nil
+	if !polls && policy.Scope.Traps == nil {
+		return nil, errors.New("policy has neither metrics_interval nor scope.traps: nothing to do")
+	}
+	// A trap-only policy has no scheduler at all. Every use of it below and in
+	// Start and Stop is guarded on nil rather than on a second flag, so the
+	// field is the one source of truth.
+	var s gocron.Scheduler
+	if polls {
+		var err error
+		s, err = gocron.NewScheduler()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	runCtx, cancel := context.WithCancel(context.WithValue(ctx, policyKey, name))
@@ -92,8 +109,19 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	// would otherwise stay attached to the manager's for the life of the
 	// process.
 	built := false
+	var lease TrapLease
 	defer func() {
 		if !built {
+			if lease != nil {
+				lease.Release()
+			}
+			// gocron starts a goroutine in NewScheduler, before any job is
+			// added and before Start is called, so a rejected policy that
+			// only cancelled its context would strand one for the life of
+			// the process.
+			if s != nil {
+				_ = s.Shutdown()
+			}
 			cancel()
 		}
 	}()
@@ -110,17 +138,19 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		targetErrs:       make(map[targetKey]error),
 	}
 
-	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
-		return nil, fmt.Errorf("metrics_interval must be a positive integer")
+	if polls {
+		if *policy.Config.MetricsInterval <= 0 {
+			return nil, fmt.Errorf("metrics_interval must be a positive integer")
+		}
+		// Bounded before the multiply rather than after it: seconds past the
+		// bound wrap to a small duration, and every check below would then
+		// compare the wrapped values and pass. Guarded here as well as in
+		// validatePolicy so a direct NewRunner call cannot slip past.
+		if *policy.Config.MetricsInterval > maxPolicySeconds {
+			return nil, fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+		}
+		runner.metricsInterval = time.Duration(*policy.Config.MetricsInterval) * time.Second
 	}
-	// Bounded before the multiply rather than after it: seconds past the bound
-	// wrap to a small duration, and every check below would then compare the
-	// wrapped values and pass. Guarded here as well as in validatePolicy so a
-	// direct NewRunner call cannot slip past.
-	if *policy.Config.MetricsInterval > maxPolicySeconds {
-		return nil, fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
-	}
-	runner.metricsInterval = time.Duration(*policy.Config.MetricsInterval) * time.Second
 
 	if policy.Config.SNMPTimeout > maxPolicySeconds {
 		return nil, fmt.Errorf("snmp_timeout must be at most %d seconds", maxPolicySeconds)
@@ -139,27 +169,29 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if runner.retries < 0 {
 		runner.retries = 0
 	}
-	// A single attempt that fills the interval can never produce a sample: the
-	// run's deadline expires at or before the first request returns. That is
-	// rejected, matching snmp-discovery.
-	if runner.snmpTimeout >= runner.metricsInterval {
-		return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
-	}
-	// Retries raise the ceiling for one request to snmp_timeout times
-	// retries+1, but that ceiling is only reached against a device that never
-	// answers. Warning rather than rejecting keeps a policy that collects
-	// normally from being refused for its worst case.
-	//
-	// Attempts are capped at what the interval holds, which is a different
-	// bound from maxPolicyRetries: that one refuses a count the client would
-	// allocate on, this one reports the ceiling the run's deadline actually
-	// permits rather than the one the policy asked for.
-	attempts := min(int64(runner.retries)+1, int64(runner.metricsInterval/runner.snmpTimeout)+1)
-	if ceiling := time.Duration(attempts) * runner.snmpTimeout; ceiling >= runner.metricsInterval {
-		logger.Warn("SNMP retries can exceed the collection interval, a run against an unresponsive device will be cut short",
-			"policy", config.SanitizeLogValue(name),
-			"snmp_timeout", runner.snmpTimeout, "retries", runner.retries,
-			"request_ceiling", ceiling, "metrics_interval", runner.metricsInterval)
+	if polls {
+		// A single attempt that fills the interval can never produce a
+		// sample: the run's deadline expires at or before the first request
+		// returns. That is rejected, matching snmp-discovery.
+		if runner.snmpTimeout >= runner.metricsInterval {
+			return nil, fmt.Errorf("snmp_timeout (%s) must be less than metrics_interval (%s)", runner.snmpTimeout, runner.metricsInterval)
+		}
+		// Retries raise the ceiling for one request to snmp_timeout times
+		// retries+1, but that ceiling is only reached against a device that
+		// never answers. Warning rather than rejecting keeps a policy that
+		// collects normally from being refused for its worst case.
+		//
+		// Attempts are capped at what the interval holds, which is a
+		// different bound from maxPolicyRetries: that one refuses a count the
+		// client would allocate on, this one reports the ceiling the run's
+		// deadline actually permits rather than the one the policy asked for.
+		attempts := min(int64(runner.retries)+1, int64(runner.metricsInterval/runner.snmpTimeout)+1)
+		if ceiling := time.Duration(attempts) * runner.snmpTimeout; ceiling >= runner.metricsInterval {
+			logger.Warn("SNMP retries can exceed the collection interval, a run against an unresponsive device will be cut short",
+				"policy", config.SanitizeLogValue(name),
+				"snmp_timeout", runner.snmpTimeout, "retries", runner.retries,
+				"request_ceiling", ceiling, "metrics_interval", runner.metricsInterval)
+		}
 	}
 
 	// Charged over the whole policy before any target is expanded, since
@@ -180,12 +212,43 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			"policy", config.SanitizeLogValue(name), "collapsed", collapsed, "devices", len(expanded))
 	}
 
+	if policy.Scope.Traps != nil {
+		// Guarded here as well as in validatePolicy so a direct NewRunner call
+		// cannot slip past, the same way the interval, the timeout and the
+		// retry count are.
+		if err := validateTrapListen(policy.Scope.Traps.Listen); err != nil {
+			return nil, err
+		}
+		if pool == nil {
+			return nil, errors.New("policy declares scope.traps but this backend has no trap pool")
+		}
+		devices := trapDevices(runner, expanded)
+		if len(devices) == 0 {
+			// Hostname targets carry no address to match a source against,
+			// so a policy made only of them holds the socket and receives
+			// nothing it can attribute.
+			logger.Warn("Policy receives traps but none of its targets is an address, every trap it receives will be dropped as unknown_source",
+				"policy", config.SanitizeLogValue(name), "listen", config.SanitizeLogValue(policy.Scope.Traps.Listen))
+		}
+		var names map[string]string
+		if metricsCollector != nil {
+			names = metricsCollector.TrapNames()
+		}
+		lease, err = pool.Acquire(policy.Scope.Traps.Listen, name, devices, names)
+		if err != nil {
+			return nil, err
+		}
+		runner.trapLease = lease
+	}
+
 	// Schedule a metrics job for each expanded target
-	for _, t := range expanded {
-		metricsTask := gocron.NewTask(runner.runMetrics, t)
-		if _, err := s.NewJob(gocron.DurationJob(runner.metricsInterval), metricsTask,
-			gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
-			return nil, fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
+	if polls {
+		for _, t := range expanded {
+			metricsTask := gocron.NewTask(runner.runMetrics, t)
+			if _, err := s.NewJob(gocron.DurationJob(runner.metricsInterval), metricsTask,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
+				return nil, fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
+			}
 		}
 	}
 
@@ -375,8 +438,10 @@ func (r *Runner) buildCombinedError() error {
 
 // Start starts the policy runner
 func (r *Runner) Start() {
-	r.logger.Info("Starting policy runner", "policy", config.SanitizeLogValue(r.name))
-	r.scheduler.Start()
+	r.logger.Info("Starting policy runner", "policy", config.SanitizeLogValue(r.name), "polls", r.scheduler != nil)
+	if r.scheduler != nil {
+		r.scheduler.Start()
+	}
 }
 
 // Stop stops the policy runner and drops the collector state it owns, so a
@@ -388,14 +453,60 @@ func (r *Runner) Start() {
 // not cut it short. StopJobs then has a wait it can finish, and it comes before
 // the state is dropped so a run is not still writing when the drop happens.
 // Shutdown runs whatever StopJobs reported, rather than leaving the scheduler
-// behind when a job overran. ForgetPolicy comes last and unconditionally, so
-// the policy stops exporting even if the scheduler did not unwind cleanly.
+// behind when a job overran. ForgetPolicy and the trap release come last and
+// outside the scheduler guard, so the policy stops exporting either kind of
+// series even if the scheduler did not unwind cleanly.
+//
+// The release lives here, at the end of Stop, rather than in the manager
+// after Stop returns, because the manager holds the stopping policy's name
+// reservation for exactly as long as Stop runs. A same-name replacement
+// therefore cannot start and acquire until the release has already
+// happened, so it cannot have its own lease erased by the outgoing
+// runner's.
+//
+// A trap-only runner has no scheduler, so the shutdown is skipped. It has no
+// collector state either, and ForgetPolicy still runs against it: dropping
+// nothing is cheaper than a second flag saying whether there is anything to
+// drop.
 func (r *Runner) Stop() error {
 	r.cancel()
-	err := r.scheduler.StopJobs()
-	err = errors.Join(err, r.scheduler.Shutdown())
+	var err error
+	if r.scheduler != nil {
+		err = r.scheduler.StopJobs()
+		err = errors.Join(err, r.scheduler.Shutdown())
+	}
 	if r.metricsCollector != nil {
 		r.metricsCollector.ForgetPolicy(r.name)
 	}
+	if r.trapLease != nil {
+		r.trapLease.Release()
+	}
 	return err
+}
+
+// trapDevices is the address each expanded target names, with the v3 user the
+// target is polled with, so the receiver authenticates a trap from that
+// device with that credential and no other. A target that is a hostname
+// rather than an address has none and is skipped; the README says such a
+// target does not receive traps in this phase.
+func trapDevices(r *Runner, targets []config.Target) []traps.Device {
+	out := make([]traps.Device, 0, len(targets))
+	for _, t := range targets {
+		addr, err := netip.ParseAddr(t.Host)
+		if err != nil {
+			continue
+		}
+		d := traps.Device{Policy: r.name, Addr: addr}
+		if auth := r.resolveTargetAuthentication(t); auth != nil && normalizeProtocolVersion(auth.ProtocolVersion) == "SNMPv3" {
+			d.User = &traps.V3User{
+				Username:       auth.Username,
+				AuthProtocol:   auth.AuthProtocol,
+				AuthPassphrase: auth.AuthPassphrase,
+				PrivProtocol:   auth.PrivProtocol,
+				PrivPassphrase: auth.PrivPassphrase,
+			}
+		}
+		out = append(out, d)
+	}
+	return out
 }

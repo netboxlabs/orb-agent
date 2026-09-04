@@ -51,6 +51,14 @@ type Match struct {
 	Target string `yaml:"target"`
 }
 
+// TrapDef names one trap a definition file describes. Phase 1 of the trap
+// receiver reads only the OID and the name; the events and attributes upstream
+// carries belong to the payload work and are not decoded here.
+type TrapDef struct {
+	OID  string `yaml:"trap_oid"`
+	Name string `yaml:"trap_name"`
+}
+
 // Profile is the top-level representation of a ktranslate-compatible SNMP profile file.
 type Profile struct {
 	// FileName is the base filename, populated by the Loader (not from YAML).
@@ -83,6 +91,11 @@ type Profile struct {
 
 	Metrics    []MetricEntry `yaml:"metrics"`
 	MetricTags []MetricTag   `yaml:"metric_tags"`
+	// Traps are the trap definitions a file declares. The bundled tree ships
+	// ten such files, which carry no sysobjectid and no metrics and so match
+	// no device; they exist to name traps. Like the two redirect forms, they
+	// are the declaring file's own and are not merged through extends.
+	Traps []TrapDef `yaml:"traps"`
 }
 
 // UnmarshalYAML implements yaml.Unmarshaler for Profile.

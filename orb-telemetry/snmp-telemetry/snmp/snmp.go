@@ -323,6 +323,14 @@ func ValidateV3SecurityParameters(auth *config.Authentication) error {
 	return nil
 }
 
+// AuthProtocol maps a policy's auth_protocol spelling to gosnmp's constant.
+// Exported for the trap receiver, which builds USM parameters from the same
+// policy fields the poller uses.
+func AuthProtocol(name string) (gosnmp.SnmpV3AuthProtocol, error) { return getAuthProtocol(name) }
+
+// PrivProtocol maps a policy's priv_protocol spelling to gosnmp's constant.
+func PrivProtocol(name string) (gosnmp.SnmpV3PrivProtocol, error) { return getPrivProtocol(name) }
+
 func getAuthProtocol(authProtocol string) (gosnmp.SnmpV3AuthProtocol, error) {
 	switch authProtocol {
 	case "", "NoAuth":

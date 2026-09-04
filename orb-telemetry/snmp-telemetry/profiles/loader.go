@@ -296,6 +296,7 @@ func (l *Loader) resolvePath(key string) (*Profile, error) {
 		// and there is no parent list for a child's to interleave with.
 		Matches:          p.Matches,
 		MatchesList:      p.MatchesList,
+		Traps:            p.Traps,
 		NoUseBulkWalkAll: p.NoUseBulkWalkAll,
 	}
 

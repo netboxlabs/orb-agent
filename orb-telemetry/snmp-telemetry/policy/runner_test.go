@@ -32,7 +32,7 @@ func TestNewRunner_RejectsUnexpandableTarget(t *testing.T) {
 		"inverted range":          "10.0.0.100-10.0.0.1",
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := NewRunner(context.Background(), testLogger, "p1", policyWithTargets(host), &spyCollector{})
+			_, err := NewRunner(context.Background(), testLogger, "p1", policyWithTargets(host), &spyCollector{}, nil)
 			require.Error(t, err, "an unexpandable target must fail the runner, not be skipped")
 			assert.Contains(t, err.Error(), host, "the error must name the offending target")
 		})
@@ -44,7 +44,7 @@ func TestNewRunner_RejectsUnexpandableTarget(t *testing.T) {
 // operator who asked for two subnets and got one is not told which.
 func TestNewRunner_RejectsUnexpandableTargetAmongValidOnes(t *testing.T) {
 	_, err := NewRunner(context.Background(), testLogger, "p1",
-		policyWithTargets("192.168.1.1", "10.0.0.1/99"), &spyCollector{})
+		policyWithTargets("192.168.1.1", "10.0.0.1/99"), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "10.0.0.1/99")
 }
@@ -60,7 +60,7 @@ func TestNewRunner_AcceptsExpandableTargets(t *testing.T) {
 		"snmp.example.com", "edge-router-1.example.com", "10.0.0.256", "192.168.1.1", "10.0.0.0/30",
 	} {
 		t.Run(host, func(t *testing.T) {
-			r, err := NewRunner(context.Background(), testLogger, "p1", policyWithTargets(host), &spyCollector{})
+			r, err := NewRunner(context.Background(), testLogger, "p1", policyWithTargets(host), &spyCollector{}, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = r.Stop() })
 			assert.NotEmpty(t, r.scheduler.Jobs(), "an accepted target must schedule at least one job")
@@ -181,7 +181,7 @@ func TestExpandTargets_ReportsAnUnexpandableTarget(t *testing.T) {
 // defeats.
 func TestNewRunner_SchedulesOneJobPerIdentity(t *testing.T) {
 	r, err := NewRunner(context.Background(), testLogger, "p1",
-		policyWithTargets("10.0.0.0/30", "10.0.0.1"), &spyCollector{})
+		policyWithTargets("10.0.0.0/30", "10.0.0.1"), &spyCollector{}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
 	assert.Len(t, r.scheduler.Jobs(), 2, "the repeated address must not get a second job")
@@ -193,7 +193,7 @@ func TestNewRunner_SchedulesOneJobPerIdentity(t *testing.T) {
 // counts the raw notation and refuses.
 func TestNewRunner_ChargesTheBudgetBeforeCollapsing(t *testing.T) {
 	_, err := NewRunner(context.Background(), testLogger, "p1",
-		policyWithTargets("10.0.0.0/16", "10.0.0.0/16"), &spyCollector{})
+		policyWithTargets("10.0.0.0/16", "10.0.0.0/16"), &spyCollector{}, nil)
 	require.Error(t, err, "a policy may not name a prefix twice to pay for it once")
 	assert.Contains(t, err.Error(), "more than the limit")
 }
@@ -240,7 +240,7 @@ func TestNewRunner_SchedulesBothTargetsACollidingKeyWouldMerge(t *testing.T) {
 		config.Target{Host: "10.0.0.1", Port: 161, ID: "a context=b"},
 		config.Target{Host: "10.0.0.1", Port: 161, ID: "a", Authentication: v3ContextAuth("b")},
 	)
-	r, err := NewRunner(context.Background(), testLogger, "p1", pol, &spyCollector{})
+	r, err := NewRunner(context.Background(), testLogger, "p1", pol, &spyCollector{}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
 	assert.Len(t, r.scheduler.Jobs(), 2, "a target was collapsed into another and is never polled")

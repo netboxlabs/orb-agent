@@ -15,13 +15,15 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/collector"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
 // spyCollector records the policy names it was told to forget.
 type spyCollector struct {
-	mu     sync.Mutex
-	forgot []string
-	dials  []collector.DialOptions
+	mu        sync.Mutex
+	forgot    []string
+	dials     []collector.DialOptions
+	trapNames map[string]string
 }
 
 func (s *spyCollector) CollectTarget(_ context.Context, _ config.Target, _ *config.Authentication, _ string, dial collector.DialOptions) error {
@@ -31,10 +33,19 @@ func (s *spyCollector) CollectTarget(_ context.Context, _ config.Target, _ *conf
 	return nil
 }
 
+// trapNames is what TrapNames returns, standing in for a profile set.
+func (s *spyCollector) TrapNames() map[string]string { return s.trapNames }
+
 func (s *spyCollector) ForgetPolicy(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.forgot = append(s.forgot, name)
+}
+
+func (s *spyCollector) dialed() []collector.DialOptions {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]collector.DialOptions(nil), s.dials...)
 }
 
 func (s *spyCollector) forgotten() []string {
@@ -45,7 +56,7 @@ func (s *spyCollector) forgotten() []string {
 
 func TestRunnerStop_ForgetsCollectorState(t *testing.T) {
 	spy := &spyCollector{}
-	r, err := NewRunner(context.Background(), testLogger, "p1", minimalPolicy(v2cAuth()), spy)
+	r, err := NewRunner(context.Background(), testLogger, "p1", minimalPolicy(v2cAuth()), spy, nil)
 	require.NoError(t, err)
 	require.NoError(t, r.Stop())
 	assert.Equal(t, []string{"p1"}, spy.forgotten())
@@ -54,7 +65,7 @@ func TestRunnerStop_ForgetsCollectorState(t *testing.T) {
 func TestStopPolicy_ForgetsCollectorState(t *testing.T) {
 	spy := &spyCollector{}
 	m := newTestManager()
-	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), spy)
+	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), spy, nil)
 	require.NoError(t, err)
 	m.policies["p1"] = r
 
@@ -67,7 +78,7 @@ func TestManagerStop_ForgetsEveryPolicy(t *testing.T) {
 	spy := &spyCollector{}
 	m := newTestManager()
 	for _, name := range []string{"p1", "p2"} {
-		r, err := NewRunner(m.ctx, testLogger, name, minimalPolicy(v2cAuth()), spy)
+		r, err := NewRunner(m.ctx, testLogger, name, minimalPolicy(v2cAuth()), spy, nil)
 		require.NoError(t, err)
 		m.policies[name] = r
 	}
@@ -89,14 +100,14 @@ func policyWithDial(intervalSec, timeoutSec, retries int) config.Policy {
 }
 
 func TestNewRunner_DerivesDialSettingsFromPolicy(t *testing.T) {
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(120, 12, 4), &spyCollector{})
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(120, 12, 4), &spyCollector{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 12*time.Second, r.snmpTimeout)
 	assert.Equal(t, 4, r.retries)
 }
 
 func TestNewRunner_ZeroSNMPTimeoutFallsBackToDefault(t *testing.T) {
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 0, 0), &spyCollector{})
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 0, 0), &spyCollector{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, defaultSNMPTimeout, r.snmpTimeout)
 	assert.Equal(t, 0, r.retries)
@@ -105,25 +116,25 @@ func TestNewRunner_ZeroSNMPTimeoutFallsBackToDefault(t *testing.T) {
 func TestNewRunner_RejectsTimeoutAtOrAboveInterval(t *testing.T) {
 	// The run context is bounded by metrics_interval, so a dial allowed to take
 	// the whole interval can never complete a collection.
-	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{})
+	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "snmp_timeout")
 
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 45, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 45, 0), &spyCollector{}, nil)
 	assert.Error(t, err)
 
 	// The default applies before the comparison, so a short interval is caught
 	// even when the policy never named a timeout.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(3, 0, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(3, 0, 0), &spyCollector{}, nil)
 	assert.Error(t, err)
 
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 29, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 29, 0), &spyCollector{}, nil)
 	assert.NoError(t, err)
 }
 
 func TestRunMetrics_PassesDialSettingsToCollector(t *testing.T) {
 	spy := &spyCollector{}
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(120, 12, 4), spy)
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(120, 12, 4), spy, nil)
 	require.NoError(t, err)
 
 	r.runMetrics(config.Target{Host: "192.168.1.1", Port: 161})
@@ -160,21 +171,21 @@ func TestValidate_RejectsSecondsThatCannotBeADuration(t *testing.T) {
 // NewRunner is where the multiply happens, and it is reachable without the
 // API, so it carries the bound too.
 func TestNewRunner_RejectsSecondsThatCannotBeADuration(t *testing.T) {
-	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(40423014371506394, 5, 0), &spyCollector{})
+	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(40423014371506394, 5, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "metrics_interval")
 
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(maxPolicySeconds+1, 5, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(maxPolicySeconds+1, 5, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "metrics_interval")
 
 	// The interval is sane, so only the timeout can be at fault, and it must be
 	// named rather than reported as a timeout below a tiny interval.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 20211507185753197, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 20211507185753197, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "snmp_timeout")
 
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, maxPolicySeconds+1, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, maxPolicySeconds+1, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "snmp_timeout")
 }
@@ -183,7 +194,7 @@ func TestNewRunner_RejectsSecondsThatCannotBeADuration(t *testing.T) {
 // durations the runner keeps are the ones the policy asked for, not a wrapped
 // remainder.
 func TestNewRunner_KeepsTheDurationsAtTheBound(t *testing.T) {
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(maxPolicySeconds, maxPolicySeconds-1, 0), &spyCollector{})
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(maxPolicySeconds, maxPolicySeconds-1, 0), &spyCollector{}, nil)
 	require.NoError(t, err)
 	assert.Equal(t, maxPolicySeconds*time.Second, r.metricsInterval)
 	assert.Equal(t, (maxPolicySeconds-1)*time.Second, r.snmpTimeout)
@@ -196,7 +207,7 @@ func TestNewRunner_KeepsTheDurationsAtTheBound(t *testing.T) {
 func TestNewRunner_RetryCeilingHoldsAtTheBound(t *testing.T) {
 	var buf bytes.Buffer
 	lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := NewRunner(t.Context(), lg, "p1", policyWithDial(maxPolicySeconds, maxPolicySeconds-1, maxPolicyRetries), &spyCollector{})
+	_, err := NewRunner(t.Context(), lg, "p1", policyWithDial(maxPolicySeconds, maxPolicySeconds-1, maxPolicyRetries), &spyCollector{}, nil)
 	require.NoError(t, err)
 	assert.Contains(t, buf.String(), "SNMP retries can exceed the collection interval")
 }
@@ -217,6 +228,8 @@ func (f *failingCollector) CollectTarget(_ context.Context, target config.Target
 	return nil
 }
 
+func (f *failingCollector) TrapNames() map[string]string { return nil }
+
 func (f *failingCollector) ForgetPolicy(string) {}
 
 // TestRunMetrics_SameEndpointTwiceKeepsErrorsApart covers a policy that names
@@ -225,7 +238,7 @@ func (f *failingCollector) ForgetPolicy(string) {}
 // healthy while half its targets were unreachable.
 func TestRunMetrics_SameEndpointTwiceKeepsErrorsApart(t *testing.T) {
 	c := &failingCollector{failIDs: map[string]bool{"11": true}}
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, 0), c, nil)
 	require.NoError(t, err)
 
 	failing := config.Target{Host: "10.0.0.1", Port: 161, ID: "11"}
@@ -270,7 +283,7 @@ func TestNewRunner_WarnsWhenRetriesCanExceedTheInterval(t *testing.T) {
 	capture := func(pol config.Policy) (string, error) {
 		var buf bytes.Buffer
 		lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-		_, err := NewRunner(t.Context(), lg, "p1", pol, &spyCollector{})
+		_, err := NewRunner(t.Context(), lg, "p1", pol, &spyCollector{}, nil)
 		return buf.String(), err
 	}
 
@@ -291,7 +304,7 @@ func TestNewRunner_WarnsWhenRetriesCanExceedTheInterval(t *testing.T) {
 	assert.NotContains(t, out, "SNMP retries can exceed the collection interval")
 
 	// A single attempt filling the interval is still an error, not a warning.
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(30, 30, 0), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "snmp_timeout")
 	assert.NotContains(t, err.Error(), "retries")
@@ -352,6 +365,8 @@ func (s *stallingCollector) CollectTarget(ctx context.Context, target config.Tar
 	return nil
 }
 
+func (s *stallingCollector) TrapNames() map[string]string { return nil }
+
 func (s *stallingCollector) ForgetPolicy(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -381,7 +396,7 @@ func (s *stallingCollector) unblock() {
 // through to completion first.
 func TestRunnerStop_CancelsACollectionStillInFlight(t *testing.T) {
 	c := newStallingCollector()
-	r, err := NewRunner(context.Background(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	r, err := NewRunner(context.Background(), testLogger, "p1", policyWithDial(60, 5, 0), c, nil)
 	require.NoError(t, err)
 	c.runner = r
 	t.Cleanup(c.unblock)
@@ -406,7 +421,7 @@ func TestRunnerStop_CancelsACollectionStillInFlight(t *testing.T) {
 // then fails it. Cancelling before that wait is what lets the wait succeed.
 func TestRunnerStop_CancelsBeforeWaitingForTheScheduler(t *testing.T) {
 	c := newStallingCollector()
-	r, err := NewRunner(context.Background(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	r, err := NewRunner(context.Background(), testLogger, "p1", policyWithDial(60, 5, 0), c, nil)
 	require.NoError(t, err)
 	c.runner = r
 	t.Cleanup(c.unblock)
@@ -430,7 +445,7 @@ func TestRunnerStop_CancelsBeforeWaitingForTheScheduler(t *testing.T) {
 // joined into one string.
 func TestRunMetrics_CollidingIdentityFieldsKeepErrorsApart(t *testing.T) {
 	c := &failingCollector{failIDs: map[string]bool{"a context=b": true}}
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, 0), c)
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, 0), c, nil)
 	require.NoError(t, err)
 
 	failing := config.Target{Host: "10.0.0.1", Port: 161, ID: "a context=b"}
@@ -467,19 +482,209 @@ func TestValidate_RejectsRetriesAboveTheCeiling(t *testing.T) {
 // NewRunner builds the dial options the client is constructed from and is
 // reachable without the API, so it carries the bound too.
 func TestNewRunner_RejectsRetriesAboveTheCeiling(t *testing.T) {
-	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, maxPolicyRetries+1), &spyCollector{})
+	_, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, maxPolicyRetries+1), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "retries")
 
-	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, math.MaxInt), &spyCollector{})
+	_, err = NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, math.MaxInt), &spyCollector{}, nil)
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "retries")
 
 	// The ceiling itself is accepted, and reaches the collector unchanged.
 	spy := &spyCollector{}
-	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, maxPolicyRetries), spy)
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithDial(60, 5, maxPolicyRetries), spy, nil)
 	require.NoError(t, err)
 	r.runMetrics(config.Target{Host: "192.168.1.1", Port: 161})
 	require.Len(t, spy.dials, 1)
 	assert.Equal(t, maxPolicyRetries, spy.dials[0].Retries)
+}
+
+// ---------------------------------------------------------------------------
+// Trap pool acquisition and release
+// ---------------------------------------------------------------------------
+
+type spyPool struct {
+	mu       sync.Mutex
+	listens  map[string]string // policy -> listen string
+	devices  map[string][]traps.Device
+	names    map[string]map[string]string
+	released []string
+	// calls is every Acquire and Release in the order they arrived, which
+	// is what a same-name replacement is judged on: the same two names in the
+	// wrong order leave the new policy unregistered.
+	calls []string
+	// acquireErr, when set, is what Acquire returns, standing in for a bind
+	// failure.
+	acquireErr error
+}
+
+func newSpyPool() *spyPool {
+	return &spyPool{listens: map[string]string{}, devices: map[string][]traps.Device{}, names: map[string]map[string]string{}}
+}
+
+func (s *spyPool) Acquire(listen, policy string, devices []traps.Device, names map[string]string) (TrapLease, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.acquireErr != nil {
+		return nil, s.acquireErr
+	}
+	s.listens[policy] = listen
+	s.devices[policy] = devices
+	s.names[policy] = names
+	s.calls = append(s.calls, "acquire:"+policy)
+	return &spyLease{pool: s, policy: policy}, nil
+}
+
+func (s *spyPool) callSequence() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.calls...)
+}
+
+type spyLease struct {
+	pool   *spyPool
+	policy string
+}
+
+func (l *spyLease) Release() {
+	l.pool.mu.Lock()
+	defer l.pool.mu.Unlock()
+	l.pool.released = append(l.pool.released, l.policy)
+	l.pool.calls = append(l.pool.calls, "release:"+l.policy)
+}
+
+func withTraps(p config.Policy, listen string) config.Policy {
+	p.Scope.Traps = &config.Traps{Listen: listen}
+	return p
+}
+
+// A runner acquires the socket its policy names with the addresses its
+// targets expand to and the v3 users those targets carry, and releases it
+// when it stops.
+func TestRunner_AcquiresExpandedTargetsAndReleasesOnStop(t *testing.T) {
+	pool := newSpyPool()
+	pol := withTraps(policyWithTargets("10.0.0.0/30", "router.example.com"), "0.0.0.0:1162")
+	pol.Scope.Authentication = v3AuthAuth()
+	r, err := NewRunner(t.Context(), testLogger, "p1", pol, &spyCollector{}, pool)
+	require.NoError(t, err)
+
+	assert.Equal(t, "0.0.0.0:1162", pool.listens["p1"])
+	devices := pool.devices["p1"]
+	assert.Len(t, devices, 2, "a /30 is two hosts; the hostname target has no address and is not registered")
+	for _, d := range devices {
+		assert.Equal(t, "p1", d.Policy)
+		assert.True(t, d.Addr.Is4())
+	}
+	for _, d := range devices {
+		require.NotNil(t, d.User, "a v3 device carries the credential its target polls with")
+		assert.Equal(t, pol.Scope.Authentication.Username, d.User.Username)
+	}
+
+	require.NoError(t, r.Stop())
+	assert.Equal(t, []string{"p1"}, pool.released)
+}
+
+func TestRunner_V2cTargetsAcquireNoUsers(t *testing.T) {
+	pool := newSpyPool()
+	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), ":162"), &spyCollector{}, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	require.Len(t, pool.devices["p1"], 1)
+	assert.Nil(t, pool.devices["p1"][0].User, "a v2c device carries no v3 credential")
+}
+
+// A policy that declares no traps never reaches the pool, and a nil pool is
+// tolerated by such a policy.
+func TestRunner_WithoutTrapsNeverTouchesThePool(t *testing.T) {
+	pool := newSpyPool()
+	r, err := NewRunner(t.Context(), testLogger, "p1", policyWithTargets("10.0.0.1"), &spyCollector{}, pool)
+	require.NoError(t, err)
+	require.NoError(t, r.Stop())
+	assert.Empty(t, pool.callSequence())
+
+	r, err = NewRunner(t.Context(), testLogger, "p2", policyWithTargets("10.0.0.1"), &spyCollector{}, nil)
+	require.NoError(t, err)
+	require.NoError(t, r.Stop())
+}
+
+// A bind failure is a start failure, with the pool's error in the message,
+// and it leaves nothing to release.
+func TestRunner_AcquireFailureFailsTheStart(t *testing.T) {
+	pool := newSpyPool()
+	pool.acquireErr = errors.New("binding trap socket 0.0.0.0:162: address already in use")
+	_, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), "0.0.0.0:162"), &spyCollector{}, pool)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "binding trap socket 0.0.0.0:162: address already in use")
+	assert.Empty(t, pool.released)
+}
+
+// A policy that declares traps but whose targets expand to no address still
+// acquires, with no devices, so its v3 users can authenticate and so the
+// socket is held for it; every trap it receives is dropped, which the runner
+// warns about at start.
+func TestRunner_TrapsWithNoAddressTargetsAcquiresEmpty(t *testing.T) {
+	pool := newSpyPool()
+	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("router.example.com"), ":162"), &spyCollector{}, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	assert.Equal(t, []string{"acquire:p1"}, pool.callSequence())
+	assert.Empty(t, pool.devices["p1"])
+}
+
+// The manager threads the pool from its options to every runner it builds.
+func TestManager_PassesThePoolToRunners(t *testing.T) {
+	pool := newSpyPool()
+	m := NewManager(t.Context(), testLogger, Options{TrapPool: pool})
+	policies, err := m.ParsePolicies([]byte(`
+policies:
+  p1:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: v2c
+        community: public
+      targets:
+        - host: 10.0.0.1
+      traps:
+        listen: "0.0.0.0:1162"
+`))
+	require.NoError(t, err)
+	require.NoError(t, m.StartPolicy("p1", policies["p1"]))
+	t.Cleanup(func() { _ = m.Stop() })
+	assert.Len(t, pool.devices["p1"], 1)
+	assert.Equal(t, "0.0.0.0:1162", pool.listens["p1"])
+}
+
+// A target with its own v3 authentication registers with that credential,
+// not the policy-level one, so the receiver tries the right secret for the
+// right device.
+func TestRunner_RegistersEachDevicesOwnCredential(t *testing.T) {
+	pool := newSpyPool()
+	pol := withTraps(policyWithTargets("10.0.0.1", "10.0.0.2"), ":162")
+	pol.Scope.Authentication = v3AuthAuth()
+	own := v3AuthAuth()
+	own.Username = "second-device"
+	pol.Scope.Targets[1].Authentication = &own
+	r, err := NewRunner(t.Context(), testLogger, "p1", pol, &spyCollector{}, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+
+	byAddr := map[string]string{}
+	for _, d := range pool.devices["p1"] {
+		require.NotNil(t, d.User)
+		byAddr[d.Addr.String()] = d.User.Username
+	}
+	assert.Equal(t, map[string]string{"10.0.0.1": pol.Scope.Authentication.Username, "10.0.0.2": "second-device"}, byAddr)
+}
+
+// The runner hands the pool the trap names of the profile set its collector
+// was built from, so the receiver names this policy's traps by them.
+func TestRunner_HandsThePoolItsProfileSetsTrapNames(t *testing.T) {
+	pool := newSpyPool()
+	spy := &spyCollector{trapNames: map[string]string{"1.2.3": "custom"}}
+	r, err := NewRunner(t.Context(), testLogger, "p1", withTraps(policyWithTargets("10.0.0.1"), ":162"), spy, pool)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	assert.Equal(t, map[string]string{"1.2.3": "custom"}, pool.names["p1"])
 }

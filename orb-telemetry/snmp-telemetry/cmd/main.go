@@ -17,14 +17,19 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/server"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/version"
 )
 
 // AppName is the application name
 const AppName = "snmp-telemetry"
 
-// metricsFlushTimeout bounds the final export at shutdown.
-const metricsFlushTimeout = 5 * time.Second
+// shutdownBudget bounds the trap intake close and the final export together.
+// The agent sends SIGTERM and escalates to SIGKILL after a five-second grace,
+// so the two steps that spend time before the process can exit share one
+// deadline inside it rather than each keeping a bound of their own that only
+// add up to more than the grace.
+const shutdownBudget = 5 * time.Second
 
 // defaultHost is the address the policy API binds unless --host says otherwise.
 // The API has no authentication, so anyone who can route to the listener can
@@ -38,6 +43,11 @@ const defaultHost = "localhost"
 // stopper is the part of the server the shutdown sequence uses.
 type stopper interface {
 	Stop()
+}
+
+// closer is the part of the tally the shutdown sequence uses.
+type closer interface {
+	Close()
 }
 
 // shutdown unwinds the process in the order the export and the runners need.
@@ -72,8 +82,22 @@ type stopper interface {
 // completes between the two, and runs the flush's timeout while collections are
 // still going. That is one cycle of freshness against the whole interval the
 // race could cost.
-func shutdown(cancelRoot context.CancelFunc, srv stopper, flush func()) {
-	flush()
+//
+// Trap intake closes first. The tally is a map the export callback reads, so
+// a trap counted after that callback's final run would sit in the map and
+// never be exported, and the tally is closed right after. Closing the sockets
+// ahead of the flush means every trap the process counted is in the final
+// export, at the cost of up to the receiver's stop bound spent before the
+// flush rather than after it. That cost comes out of the flush's budget: the
+// deadline is taken before the intake close and the flush is handed what
+// remains, so the two together stay inside the agent's stop grace. The poll
+// side keeps its order: the flush precedes the cancel so a running
+// collection's observations are exported before they are forgotten, and the
+// server stops last.
+func shutdown(budget time.Duration, cancelRoot context.CancelFunc, intake closer, srv stopper, flush func(timeout time.Duration)) {
+	deadline := time.Now().Add(budget)
+	intake.Close()
+	flush(max(time.Until(deadline), 0))
 	cancelRoot()
 	srv.Stop()
 }
@@ -142,23 +166,67 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*snmpProfilesDir)
+	trapTally := traps.NewTally(logger)
+	trapTally.Register()
+	pool := traps.NewPool(trapTally, logger)
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
 		AllowedEnvVars:     splitList(*policyEnvVars),
+		TrapPool:           newTrapPool(pool),
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 
-	shutdownMetrics := func() { flushMetrics(logger, metricsFlushTimeout) }
+	shutdownMetrics := func(timeout time.Duration) { flushMetrics(logger, timeout) }
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	serverErrCh := srv.Start()
 
+	shutdownStopper := stopAll{tally: trapTally, server: srv}
+
 	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
-		shutdown(cancelFunc, srv, shutdownMetrics)
+		shutdown(shutdownBudget, cancelFunc, pool, shutdownStopper, shutdownMetrics)
 	})
+}
+
+// trapPool adapts *traps.Pool to policy.TrapPool. The pool returns its own
+// *traps.Lease and the interface names policy.TrapLease; Go does not widen a
+// return type, so the widening happens here, and the error path returns an
+// untyped nil so the caller's nil check holds.
+//
+// It lives in cmd because traps never imports policy: the pool belongs to
+// traps, the caller belongs to policy, and the only place that knows both is
+// the process that wires them together.
+type trapPool struct {
+	pool *traps.Pool
+}
+
+func newTrapPool(pool *traps.Pool) trapPool {
+	return trapPool{pool: pool}
+}
+
+func (p trapPool) Acquire(listen, policyName string, devices []traps.Device, names map[string]string) (policy.TrapLease, error) {
+	lease, err := p.pool.Acquire(listen, policyName, devices, names)
+	if err != nil {
+		return nil, err
+	}
+	return lease, nil
+}
+
+// stopAll closes the tally, then the server. Both run after the final flush,
+// so neither spends the flush's budget. The trap sockets are not here: they
+// close in shutdown ahead of the flush, so that everything they counted is
+// in it.
+type stopAll struct {
+	tally  closer
+	server stopper
+}
+
+func (s stopAll) Stop() {
+	s.tally.Close()
+	s.server.Stop()
 }
 
 // splitList reads a comma-separated flag value as its non-empty, trimmed

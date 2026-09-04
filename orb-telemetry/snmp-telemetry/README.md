@@ -55,10 +55,12 @@ Usage of snmp-telemetry:
 The policy API has no authentication. Anyone who can reach the listener can
 create a policy, and a policy names the SNMP credentials to send and the host to
 send them to, so reaching the listener is enough to make the backend poll
-arbitrary hosts with whatever credentials the caller supplies. `--host`
-therefore defaults to `localhost`: the agent runs this backend as a child
-process and reaches it over the loopback interface, so nothing legitimate needs
-a wider bind.
+arbitrary hosts with whatever credentials the caller supplies. A policy body
+also makes the process bind a UDP socket, on any local address and port it is
+permitted to bind, one per distinct `listen` string and with no cap on how many
+it opens. `--host` therefore defaults to `localhost`: the agent runs this
+backend as a child process and reaches it over the loopback interface, so
+nothing legitimate needs a wider bind.
 
 Passing `--host 0.0.0.0` publishes that unauthenticated API on every interface.
 Do it only behind access control of your own, such as a network policy or a
@@ -73,6 +75,11 @@ default to `0.0.0.0`. The difference is deliberate rather than an oversight: the
 agent passes `--host localhost` explicitly to every backend it launches, so the
 wider default is what a standalone run gets, and there it is a listener nothing
 is guarding.
+
+A trap socket, when a policy declares one, is the one listener in this process
+that has to be reachable from the device network, since devices send traps to
+it. No socket is open until a policy asks for one. What it accepts and what
+protects it are described under **Receiving traps** below.
 
 ### What a poll puts on the wire
 
@@ -114,11 +121,190 @@ On a segment you do not control, use SNMPv3 with `authPriv`, or name targets
 individually rather than by prefix, or both. A v2c policy over a wide prefix is
 the case that hands one shared secret to the largest number of hosts.
 
+### Receiving traps
+
+A policy receives SNMP traps and informs from the devices its targets expand
+to by declaring the address they arrive on:
+
+```yaml
+policies:
+  core:
+    config:
+      metrics_interval: 60
+    scope:
+      authentication:
+        protocol_version: "v3"
+        security_level: "authPriv"
+        username: "netbox-poller"
+        auth_protocol: "SHA"
+        auth_passphrase: "authpass123"
+        priv_protocol: "AES"
+        priv_passphrase: "privpass123"
+      targets:
+        - host: "10.0.0.0/24"
+      traps:
+        listen: "0.0.0.0:162"
+```
+
+Without `traps`, a policy receives nothing and no socket is opened. `listen`
+is `host:port`; an empty host binds every interface, and the host must be an
+address, not a name. Port 162 is privileged; run with `CAP_NET_BIND_SERVICE`
+or choose a higher port and redirect to it. Do not run the backend as root to
+bind it.
+
+Policies naming the same `listen` string share one socket, opened when the
+first of them starts and closed when the last stops, the way pktvisor shares
+one input stream between the policies that name one tap. The string is the
+identity: `0.0.0.0:162` twice is one socket, while `0.0.0.0:162` and `:162`
+are two attempts at one port, and the second policy fails to start with the
+bind error in the API response. A policy on one socket never sees traps
+arriving on another.
+
+A policy may receive traps without polling. Omit `metrics_interval` and the
+policy schedules no collection at all; its targets are still expanded, because
+they are the addresses the socket accepts traps from, and its authentication
+still supplies the v3 users. A policy with neither `metrics_interval` nor
+`traps` is rejected as having nothing to do.
+
+A trap is counted, not stored. Three metrics describe what arrived:
+
+- `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps
+  from a device a policy on that socket names, once per policy naming it,
+  with the same `device_ip` and `policy` labels every polled series carries.
+  The counter is monotonic: a deleted policy's series stop being exported but
+  keep their totals, so a policy recreated under the same name continues
+  the count rather than restarting it, and nothing downstream sees a
+  decrease. A trap that was already in hand when its policy was deleted is
+  kept the same way and stays unexported until the policy comes back. A
+  retained series that has to make way for a live one leaves its total in a
+  baseline tier of the same size as the series ceiling, from which it
+  resumes if it reappears, so the backend holds at most twice the ceiling
+  in memory. Only once more than ten thousand distinct withdrawn series
+  have been evicted does the oldest baseline go, and a series returning
+  after that restarts, which a consumer reads as a counter reset.
+- `snmp.traps_dropped{reason}` counts datagrams that produced no trap:
+  `unknown_source`, `oversized`, `malformed`, `unsupported_pdu`,
+  `unsupported_version`, `v3_unauthenticated`, `v3_not_in_time_window`,
+  `no_trap_oid` or `series_limit`. `unsupported_version` is a wire version
+  other than 1, 2c and 3, such as SNMPv2u's 2, which is never counted as 2c.
+  `unsupported_pdu` is a PDU that is not a trap or inform, or one carried
+  under the wrong version: a v2 trap or inform under version 1, or a v1
+  Trap-PDU under 2c or 3, is dropped rather than read with the wrong fields.
+  Hostile v3 traffic lands under
+  `malformed` when it names a username no policy carries and under
+  `v3_unauthenticated` when it names a known one without asking to be
+  authenticated, and the second is the one worth looking at, since it may mean
+  someone holds a valid username. It has a benign cause too: a v3 target polled
+  at `noAuthNoPriv` is a supported configuration, and every trap it sends
+  carries no authentication either, so all of its traps are dropped under this
+  reason. This release cannot count them. `v3_not_in_time_window` is an
+  authenticated v3 trap whose engine boots are lower than last seen from that
+  engine, or whose engine time is more than 150 seconds behind the clock the
+  receiver keeps for it: RFC 3414's bound on replaying a captured message. The
+  clocks are learned per sending address, credential and engine, in memory,
+  and relearned after a restart, so a device can only ever poison the clock
+  its own credential is judged by.
+- `snmp.traps_datagrams` counts every datagram read from any socket. Every
+  datagram read ends as one drop or as one trap, and it is counted together
+  with that outcome, so `traps_datagrams` equals `traps_dropped` plus the
+  datagrams that produced a trap in every export, the final one included. `traps_received` is
+  not that second number: a trap counts once under every policy on the socket
+  that names its source, so when two policies name the same device the
+  per-policy series add up to more than the datagrams behind them. Use
+  `traps_datagrams` as the rate the sockets are being read at, against what
+  your devices send; a datagram the kernel discarded before the read appears
+  in none of the three.
+
+`trap_name` is drawn from a closed set: the six standard traps of RFC 1215 and
+the trap definitions in the policy's own profile set, the bundled ones plus
+whatever its `profiles_dir` adds or overrides, about two hundred names. Two
+policies on one socket may therefore name one OID differently, each under
+its own `policy` label; the RFC 1215 names win over any profile's spelling.
+Any other trap is labelled `other`. A raw OID never appears as a label, because a
+sender chooses its own trap OID and a metric label a sender controls is
+unbounded.
+
+There is still a ceiling on how many distinct series one metric can carry: ten
+thousand attribute sets per instrument, after which the SDK folds every new
+series into a single `otel.metric.overflow` bucket and the metric stops
+answering questions about any of them. Trap series are the product of the
+addresses your policies name, the trap names above and the three SNMP
+versions, so a policy naming a whole `/16` whose every host sends every kind of
+trap is past what that ceiling accommodates. Name the devices you expect traps
+from. The backend bounds its own series one short of that ceiling, since the
+SDK keeps its last slot for its own overflow point: real series stop a
+hundred short of it, a trap for a series that does not exist yet is then
+counted under its policy with `device_ip` and `trap_name` both `other`, and
+once that room is used up too a datagram that no claiming policy can count,
+because none has an overflow series yet, is a `series_limit` drop rather
+than a count under a series no policy owns; it is one drop per datagram,
+and a datagram one policy counts is not a drop. An inform refused this way
+is still acknowledged, since it parsed and was attributed and the limit is
+the backend's, not the device's. A sender spoofing addresses inside a wide
+prefix can fill the ceiling
+but cannot grow memory past it, the SDK never folds a series the backend
+chose to keep, and every series is withdrawn with the policy that made it. The clocks the receiver keeps for v3 engines are bounded the
+same way, at ten thousand engines, evicting the one used longest ago, in an
+order kept as they are used so an eviction costs no scan; and one device
+with one credential holds at most eight of them, evicting its own first, so
+a device cycling through engine IDs never evicts another device's clock.
+
+**What the source address list is, and is not.** A trap from an address that
+no policy on that socket names is dropped and counted as `unknown_source`,
+before it is parsed. That is a noise filter and an attribution rule. It is
+not authentication and it is not access control. SNMP traps are one-way UDP
+with no handshake, so anyone able to emit a packet with a chosen source
+address, which on a network without egress filtering is anyone, can have a
+trap accepted and attributed to any device a policy names. The addresses are
+not secret; they are the ones this backend visibly polls. Informs from
+unknown addresses are never acknowledged, so the socket does not answer
+strangers.
+
+**Trap contents are unauthenticated unless the sender uses SNMPv3 with
+authentication**, in which case the backend authenticates it with the USM
+users the policies naming that device poll it with, and no others: a
+credential a policy assigned to a different device is not tried. Two targets
+kept at one address under different IDs or contexts contribute both their
+credentials. An authenticated v3 trap is then counted only under the policies
+holding the credential that verified it; a policy naming the same device with
+v1, v2c or a different v3 user counts the device's v1 and v2c traps and not
+its authenticated v3 ones. The policies a trap is counted under are resolved
+when it is counted, so a policy deleted while a datagram was being parsed is
+not counted and a replacement is counted only if it names the device. No trap-specific credentials are configured. v1 and v2c traps are never authenticated by any setting: the
+community they carry is not checked, because a check would be mistaken for
+authentication and would protect nothing against a sender who can read the
+community off the wire.
+
+The actual boundary is a network control on the trap port, a firewall rule
+or a management VRF, the same way the actual boundary for polling is the
+segment the credentials cross.
+
+Three limits in this release. SNMPv3 informs are not supported: an inform
+makes the receiver the authoritative engine, so the sender first probes for
+the receiver's engine ID and localises its keys against it, and this receiver
+has no engine ID to offer. The probe carries no username and is dropped as
+`malformed`, and the inform is never acknowledged, so the sender retries and
+gives up. SNMPv3 traps are authenticated and counted, and v1 and v2c informs
+are acknowledged; a device that must use informs sends them as v2c for now.
+A link-local IPv6 device is matched with the interface zone the socket
+saw it on, so two devices at `fe80::1` on different interfaces are two
+devices; a target written without a zone matches the address on any
+interface, alongside any target written with one, and `device_ip` carries
+the zone. A policy target written as a
+hostname rather than an address is not matched against trap sources, so its traps count as
+`unknown_source`; a policy declaring `traps` whose targets are all hostnames
+starts with a warning saying so, and its USM user is never tried, since it
+claims no device for the user to authenticate. And a device behind a trap relay or NAT
+arrives as the relay's address; a v1 trap whose agent-addr field names a
+polled device is attributed to that device, but v2c and v3 traps are
+attributed to the address they arrive from.
+
 ### Policy Configuration
 
 A policy names the targets to poll and the SNMP credentials to use. Each
-policy needs `metrics_interval`, the number of seconds between collection
-runs for every target in that policy.
+policy that polls needs `metrics_interval`, the number of seconds between
+collection runs for every target in that policy; a policy may omit it to
+receive traps only, as described under **Receiving traps**.
 
 Credentials go under `authentication`. Set it at the scope level as a
 fallback for every target, on individual targets, or both; a target with its

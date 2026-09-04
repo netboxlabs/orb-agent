@@ -23,6 +23,10 @@ type matchRedirect struct {
 
 // Matcher matches a device sysObjectID (and optionally sysDescr) to a Profile.
 type Matcher struct {
+	// trapNames is the trap definitions of the profile set this matcher was
+	// built from, keyed by normalised OID, built once. A policy registers
+	// them with its trap claims so its traps are named by its own set.
+	trapNames     map[string]string
 	exactIndex    map[string]*Profile          // normalized OID -> profile (exact matches)
 	wildcardIndex []wildcardEntry              // sorted longest-prefix-first for wildcard matches
 	profileByFile map[string]*Profile          // filename -> profile (for sysDescr redirects)
@@ -111,6 +115,7 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	reportShadowed(byWildcard, logger, "sysobjectid", keyClaims.bundled)
 
 	m := &Matcher{
+		trapNames:     TrapNames(profiles),
 		exactIndex:    make(map[string]*Profile, len(byExact)),
 		profileByFile: make(map[string]*Profile, len(byBase)),
 		wildcardIndex: make([]wildcardEntry, 0, len(byWildcard)),
@@ -356,3 +361,7 @@ func normalizeOID(raw string) string {
 	oid = strings.TrimPrefix(oid, "iso.")
 	return oid
 }
+
+// TrapNames is the trap definitions of the profile set this matcher was built
+// from, keyed by normalised OID. The same map is returned every time.
+func (m *Matcher) TrapNames() map[string]string { return m.trapNames }

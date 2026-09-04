@@ -20,6 +20,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/policy"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/traps"
 )
 
 // stopFunc adapts a function to the stopper the shutdown sequence takes.
@@ -46,17 +48,37 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 		errAtFlush error
 	)
 
-	shutdown(cancel, stopFunc(func() {
+	shutdown(shutdownBudget, cancel, closeFunc(func() {
+		order = append(order, "intake")
+		require.NoError(t, rootCtx.Err(), "trap intake closes before anything is cancelled")
+	}), stopFunc(func() {
 		order = append(order, "stop")
 		errAtStop = rootCtx.Err()
-	}), func() {
+	}), func(time.Duration) {
 		order = append(order, "flush")
 		errAtFlush = rootCtx.Err()
 	})
 
-	require.Equal(t, []string{"flush", "stop"}, order)
+	require.Equal(t, []string{"intake", "flush", "stop"}, order,
+		"trap intake closes first so nothing is counted after the final export; the flush still precedes the cancel")
 	require.ErrorIs(t, errAtStop, context.Canceled, "the root context must be cancelled before the server is stopped")
 	require.NoError(t, errAtFlush, "the root context must still be live during the final flush")
+}
+
+// The agent gives the process one stop grace. Closing trap intake spends part
+// of it, so the flush is handed what is left of the shared budget rather than
+// a budget of its own that, added to the intake close, could outlast the grace.
+func TestShutdownChargesTheIntakeCloseAgainstTheFlushBudget(t *testing.T) {
+	const budget = 500 * time.Millisecond
+	const intakeTook = 200 * time.Millisecond
+
+	var flushGot time.Duration
+	shutdown(budget, func() {}, closeFunc(func() { time.Sleep(intakeTook) }), stopFunc(func() {}), func(timeout time.Duration) {
+		flushGot = timeout
+	})
+
+	assert.Greater(t, flushGot, time.Duration(0), "the flush still runs when the intake close leaves budget")
+	assert.LessOrEqual(t, flushGot, budget-intakeTook, "the intake close is charged against the flush's budget")
 }
 
 // The flush runs on its own context, so a root context already cancelled when
@@ -207,7 +229,7 @@ func TestShutdownFlushesObservationsBeforeTheServerStopDropsThem(t *testing.T) {
 		storeMu.Unlock()
 	})
 
-	shutdown(cancel, stop, func() { flushMetrics(logger, metricsFlushTimeout) })
+	shutdown(shutdownBudget, cancel, closeFunc(func() {}), stop, func(timeout time.Duration) { flushMetrics(logger, timeout) })
 
 	assert.Equal(t, []int64{42}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations the server stop drops")
@@ -335,8 +357,52 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 		<-forgotten
 	}
 
-	shutdown(cancelRoot, stopFunc(func() {}), func() { flushMetrics(logger, metricsFlushTimeout) })
+	shutdown(shutdownBudget, cancelRoot, closeFunc(func() {}), stopFunc(func() {}), func(timeout time.Duration) { flushMetrics(logger, timeout) })
 
 	assert.Equal(t, []int64{7}, receiver.gaugeValues(metricName),
 		"the final export must carry the observations a cancelled collection forgets")
+}
+
+// closeFunc adapts a function to the closer stopAll's tally field takes.
+type closeFunc func()
+
+func (f closeFunc) Close() { f() }
+
+// stopAll closes the tally, then the server; the trap pool closes earlier, in
+// shutdown itself, ahead of the flush. shutdown's
+// own flush, cancel, stop order is a separate concern, already pinned by
+// TestShutdownCancelsRootBetweenTheFlushAndTheServerStop; this test is only
+// about the sequence stopAll.Stop itself encodes.
+func TestStopAllOrder(t *testing.T) {
+	var order []string
+	sa := stopAll{
+		tally:  closeFunc(func() { order = append(order, "tally") }),
+		server: stopFunc(func() { order = append(order, "server") }),
+	}
+	sa.Stop()
+	assert.Equal(t, []string{"tally", "server"}, order)
+}
+
+// The adapter is what the manager is given, so it must satisfy the interface
+// and must surface a bind failure as an error with a nil lease, not a typed
+// nil pointer inside a non-nil interface.
+func TestTrapPoolAdapter(t *testing.T) {
+	var _ policy.TrapPool = trapPool{}
+
+	blocker, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = blocker.Close() })
+
+	pool := traps.NewPool(traps.NewTally(discardLogger()), discardLogger())
+	t.Cleanup(pool.Close)
+	var adapted policy.TrapPool = trapPool{pool: pool}
+
+	lease, err := adapted.Acquire(blocker.LocalAddr().String(), "core", nil, nil)
+	require.Error(t, err)
+	assert.True(t, lease == nil, "an error must come with an untyped nil lease")
+
+	lease, err = adapted.Acquire("127.0.0.1:0", "core", nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	lease.Release()
 }

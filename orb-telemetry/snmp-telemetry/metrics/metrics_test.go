@@ -13,7 +13,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	otlpmetric "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	otelmetric "go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
@@ -295,4 +298,62 @@ func TestSetupMetricsExport_PeriodPastTheBoundIsInertWithNoEndpoint(t *testing.T
 
 	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), "", config.MaxDurationSeconds+1))
 	assert.Nil(t, GetMeter())
+}
+
+// F7: the SDK's default cardinality limit is 2000 per instrument, and past it
+// every new attribute set folds into one bucket carrying nothing but
+// otel.metric.overflow, so the metric stops answering any question. The trap
+// counters are the first instruments here whose label values a sender
+// influences, so the limit is chosen rather than inherited.
+//
+// This drives a real instrument through a provider built from the same
+// options SetupMetricsExport builds its own from, because a limit that is
+// configured and not applied looks exactly like one that is not configured.
+// The SDK reserves one slot of the limit for the overflow set itself
+// (aggregate/limit.go: len(measurements) >= aggLimit-1), so the last
+// distinct set that keeps its own attributes is number aggLimit-1.
+func TestProviderOptions_ApplyTheCardinalityLimit(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(append(providerOptions(), sdkmetric.WithReader(reader))...)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	counter, err := provider.Meter("test").Int64Counter("limit.probe")
+	require.NoError(t, err)
+	ctx := context.Background()
+	for i := range CardinalityLimit - 1 {
+		counter.Add(ctx, 1, otelmetric.WithAttributes(attribute.String("k", strconv.Itoa(i))))
+	}
+
+	points, overflow := collectProbe(t, reader)
+	require.Equal(t, CardinalityLimit-1, points, "every set below the limit keeps its own attributes")
+	require.False(t, overflow, "nothing has overflowed yet")
+
+	counter.Add(ctx, 1, otelmetric.WithAttributes(attribute.String("k", "one past the limit")))
+	points, overflow = collectProbe(t, reader)
+	assert.Equal(t, CardinalityLimit, points, "the overflow set is the limit's last slot")
+	assert.True(t, overflow, "past the limit the SDK folds, it does not drop")
+}
+
+// collectProbe reports how many data points the probe instrument holds and
+// whether one of them is the SDK's overflow set.
+func collectProbe(t *testing.T, reader sdkmetric.Reader) (points int, overflow bool) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "limit.probe" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			require.True(t, ok)
+			points = len(sum.DataPoints)
+			for _, dp := range sum.DataPoints {
+				if _, ok := dp.Attributes.Value("otel.metric.overflow"); ok {
+					overflow = true
+				}
+			}
+		}
+	}
+	return points, overflow
 }

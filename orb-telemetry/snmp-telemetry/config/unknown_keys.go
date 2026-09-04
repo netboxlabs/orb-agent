@@ -34,6 +34,7 @@ var narrowedTypes = map[string]bool{
 	"config.Scope":          true,
 	"config.Target":         true,
 	"config.Authentication": true,
+	"config.Traps":          true,
 }
 
 // credentialParents are the blocks that hold an authentication block one level

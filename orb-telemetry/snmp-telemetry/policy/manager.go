@@ -64,6 +64,10 @@ type Manager struct {
 	// allowedEnvVars is the set of environment variables a policy may read
 	// through a ${NAME} credential reference. Empty reads none.
 	allowedEnvVars map[string]struct{}
+	// trapPool hands each policy that declares scope.traps the socket it
+	// names, as its runner starts, and takes it back as the runner stops. Nil
+	// makes such a policy fail to start.
+	trapPool TrapPool
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*cachedCollector
@@ -103,6 +107,10 @@ type Options struct {
 	// inherits the agent's environment, so an unrestricted resolver hands any
 	// process secret to whatever host the policy targets.
 	AllowedEnvVars []string
+	// TrapPool hands each policy that declares scope.traps the socket it
+	// names, as its runner starts, and takes it back as the runner stops. Nil
+	// makes such a policy fail to start.
+	TrapPool TrapPool
 }
 
 // NewManager returns a new policy manager
@@ -123,6 +131,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		profilesRoot:       opts.ProfilesRoot,
 		allowedEnvVars:     allowed,
 		collectorsByDir:    make(map[string]*cachedCollector),
+		trapPool:           opts.TrapPool,
 	}
 }
 
@@ -439,7 +448,7 @@ func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, 
 	}
 	defer m.mu.Unlock()
 
-	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector)
+	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector, m.trapPool)
 	if err != nil {
 		return Handle{}, err
 	}
@@ -720,15 +729,30 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		return err
 	}
 
-	if policy.Config.MetricsInterval == nil || *policy.Config.MetricsInterval <= 0 {
-		return fmt.Errorf("metrics_interval must be a positive integer")
+	if policy.Scope.Traps != nil {
+		if err := validateTrapListen(policy.Scope.Traps.Listen); err != nil {
+			return err
+		}
 	}
-	// Both are turned into a Duration by multiplying by time.Second, which
-	// wraps to a small value past this bound. Rejected here so the request is
-	// refused with the field named, and again in NewRunner where the multiply
-	// happens.
-	if *policy.Config.MetricsInterval > maxPolicySeconds {
-		return fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+
+	// A policy with no interval polls nothing. That is a valid policy only
+	// when it receives traps; otherwise the API would report as running a
+	// policy that can never produce anything.
+	if policy.Config.MetricsInterval == nil {
+		if policy.Scope.Traps == nil {
+			return errors.New("policy has neither metrics_interval nor scope.traps: nothing to do")
+		}
+	} else {
+		if *policy.Config.MetricsInterval <= 0 {
+			return fmt.Errorf("metrics_interval must be a positive integer")
+		}
+		// Turned into a Duration by multiplying by time.Second, which wraps to
+		// a small value past this bound. Rejected here so the request is
+		// refused with the field named, and again in NewRunner where the
+		// multiply happens.
+		if *policy.Config.MetricsInterval > maxPolicySeconds {
+			return fmt.Errorf("metrics_interval must be at most %d seconds", maxPolicySeconds)
+		}
 	}
 
 	if policy.Config.SNMPTimeout < 0 {
