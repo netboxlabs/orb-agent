@@ -308,7 +308,9 @@ initial dump no longer includes it, whichever mode that stream settled on, or
 when the first Get snapshot of a target that fell through to polling no longer
 includes it: an element removed while the stream was down is never deleted on
 the stream, so the dump the replacement opens with is what says which elements
-the device still carries.
+the device still carries. A snapshot speaks only for the subscriptions Get
+polling can ask for, so the series of a subscription it skips for carrying an
+origin of its own are left where they are.
 
 Two other things withdraw a series: a delete notification, which withdraws the
 deleted element and everything under it, and stopping the policy, which

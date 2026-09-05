@@ -370,7 +370,9 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 			return
 		}
 		reconciled = true
-		c.store.evictBefore(baseAttrs(target, opts), started)
+		// A stream subscribes to the whole profile, so its dump speaks for every
+		// metric in it.
+		c.store.evictBefore(nil, baseAttrs(target, opts), started)
 		// A sync response is the stream saying its dump is complete, which is as
 		// good a sign of recovery as a value: a stream over a subtree with nothing
 		// in it carries no value at all, and the target would stand at the error of
@@ -417,12 +419,24 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 // logged once; a native overlay path is only reachable by streaming.
 func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Subscription, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	paths := make([]string, 0, len(subs))
+	// The metrics of the subscriptions this poll really asks for. A snapshot says
+	// nothing about a subtree the poll skipped, so the reconciliation below must
+	// leave that subtree's series where they are.
+	polled := map[string]struct{}{}
 	for _, s := range subs {
 		if s.Origin != target.ResolvedOrigin() {
 			c.logger.Info("gnmi get polling skips a subscription with its own origin", "host", target.Host, "path", s.Path)
 			continue
 		}
 		paths = append(paths, s.Path)
+		for i := range p.Subscriptions {
+			if p.Subscriptions[i].Path != s.Path {
+				continue
+			}
+			for j := range p.Subscriptions[i].Metrics {
+				polled[p.Subscriptions[i].Metrics[j].Name] = struct{}{}
+			}
+		}
 	}
 	if len(paths) == 0 {
 		const reason = "nothing to poll: every profile subscription uses another origin"
@@ -448,7 +462,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		c.apply(ctx, n, "get", target, opts, p)
 		if !reconciled {
 			reconciled = true
-			c.store.evictBefore(baseAttrs(target, opts), started)
+			c.store.evictBefore(polled, baseAttrs(target, opts), started)
 		}
 		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		select {

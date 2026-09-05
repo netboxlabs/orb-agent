@@ -191,19 +191,29 @@ func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyVa
 	}
 }
 
-// evictBefore withdraws every never-stale series carrying all the given
-// attributes whose last update arrived before the given time. It is how a
-// reconnected stream withdraws what its initial dump no longer mentions: a
-// series with no age is refreshed only when the device sends the leaf, so an
-// element removed while the stream was down would otherwise keep its last
-// value for ever. An aged series is left alone, its own age being what
-// withdraws it.
-func (s *store) evictBefore(want []attribute.KeyValue, before int64) {
+// evictBefore withdraws every never-stale series of one of the named metrics
+// that carries all the given attributes and whose last update arrived before
+// the given time. It is how a reconnected stream withdraws what its initial
+// dump no longer mentions: a series with no age is refreshed only when the
+// device sends the leaf, so an element removed while the stream was down would
+// otherwise keep its last value for ever. An aged series is left alone, its own
+// age being what withdraws it.
+//
+// A nil name set means every metric, which is what a stream that subscribed to
+// the whole profile reconciles against. A caller that covered only part of the
+// profile names the metrics it covered: a snapshot says nothing about a
+// subtree it never asked for, so it must not withdraw one.
+func (s *store) evictBefore(names map[string]struct{}, want []attribute.KeyValue, before int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, pt := range s.series {
 		if pt.maxAge != 0 || pt.ts >= before {
 			continue
+		}
+		if names != nil {
+			if _, ok := names[k.metric]; !ok {
+				continue
+			}
 		}
 		if hasAll(pt.attrs, want) {
 			delete(s.series, k)

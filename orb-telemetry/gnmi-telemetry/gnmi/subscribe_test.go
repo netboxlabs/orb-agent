@@ -44,6 +44,29 @@ func TestJSONNumbersDecodeWithoutRounding(t *testing.T) {
 	}
 }
 
+// A decoder reads one value and stops where a whole-payload unmarshal refuses
+// what follows it, so a payload that is not one JSON value would have decoded to
+// its own prefix: "123garbage" would have been the number 123. The caller keeps
+// such a payload as the string the device sent.
+func TestAPayloadThatIsNotOneJSONValueStaysAString(t *testing.T) {
+	for name, tc := range map[string]struct {
+		raw  string
+		want any
+	}{
+		"trailing text":    {raw: "123garbage", want: "123garbage"},
+		"hex":              {raw: "0x10", want: "0x10"},
+		"two objects":      {raw: `{"a":1}{"b":2}`, want: `{"a":1}{"b":2}`},
+		"number":           {raw: "123", want: json.Number("123")},
+		"trailing newline": {raw: "123\n", want: json.Number("123")},
+		"object":           {raw: `{"a":1}`, want: map[string]any{"a": json.Number("1")}},
+		"array":            {raw: "[1,2]", want: []any{json.Number("1"), json.Number("2")}},
+		"string":           {raw: `"text"`, want: "text"},
+	} {
+		got := decodeTypedValue(&gnmiproto.TypedValue{Value: &gnmiproto.TypedValue_JsonIetfVal{JsonIetfVal: []byte(tc.raw)}})
+		assert.Equal(t, tc.want, got, name)
+	}
+}
+
 func TestBuildSubscribeRequestCarriesEachSubscriptionsModeAndOrigin(t *testing.T) {
 	req, err := buildSubscribeRequest("PROTO", []Subscription{
 		{Path: "/interfaces/interface[name=*]/state/counters", Origin: "openconfig", Mode: Sample, SampleIntervalMs: 30000},

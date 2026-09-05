@@ -784,11 +784,20 @@ func joinPaths(prefix, path string) string {
 // exported as 9007199254740992. Consumers of a decoded value read a json.Number
 // alongside the shapes a PROTO update yields. It reports false for a payload
 // that is not JSON, which the caller keeps as the string it is.
+//
+// A decoder reads one value and stops, where a whole-payload unmarshal refuses
+// anything after it, so the payload has to be whole here too: "123garbage",
+// "0x10" and two objects in a row are not one JSON value, and a prefix of them
+// is not what the device sent. Trailing space is not another value, so a
+// payload that ends in a newline still decodes.
 func decodeJSON(raw []byte) (any, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
 	var decoded any
 	if err := dec.Decode(&decoded); err != nil {
+		return nil, false
+	}
+	if dec.More() {
 		return nil, false
 	}
 	return decoded, true

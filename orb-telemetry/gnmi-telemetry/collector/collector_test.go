@@ -1185,21 +1185,34 @@ func TestGetRungReconcilesAgelessSeries(t *testing.T) {
 func TestASyncClearsAPriorError(t *testing.T) {
 	testReader(t)
 	var attempts atomic.Int64
+	// The second stream waits until the test has seen the error it has to clear,
+	// so the window is not one the test has to catch inside a backoff.
+	resume := make(chan struct{})
 	sess := &gnmi.FakeSession{
 		Caps: &gnmi.CapabilitiesResult{},
 		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
-			attempt := attempts.Add(1)
+			// The first stream ends before any data, which spends the forced rung
+			// and leaves the loop reporting the Get refusal below it.
+			if attempts.Add(1) == 1 {
+				out := make(chan gnmi.Notification)
+				errs := make(chan error, 1)
+				go func() {
+					defer close(out)
+					defer close(errs)
+					errs <- errors.New("stream reset")
+				}()
+				return out, errs, nil
+			}
+			select {
+			case <-resume:
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
 			out := make(chan gnmi.Notification)
 			errs := make(chan error, 1)
 			go func() {
 				defer close(out)
 				defer close(errs)
-				// The first stream ends before any data, which spends the forced
-				// rung and leaves the loop reporting the Get refusal below it.
-				if attempt == 1 {
-					errs <- errors.New("stream reset")
-					return
-				}
 				select {
 				case out <- gnmi.Notification{SyncDone: true}:
 				case <-ctx.Done():
@@ -1221,8 +1234,106 @@ func TestASyncClearsAPriorError(t *testing.T) {
 		st := c.TargetStatuses("p")
 		return len(st) == 1 && strings.Contains(st[0].LastError, "get refused")
 	})
+	close(resume)
 	waitFor(t, 3*time.Second, func() bool {
 		st := c.TargetStatuses("p")
 		return len(st) == 1 && st[0].Up && st[0].LastError == ""
+	})
+}
+
+// Get polling asks only for the subscriptions that share the target's origin, so
+// a snapshot says nothing at all about one that carries a native origin of its
+// own. The reconciliation is bounded by the metrics the poll really asked for:
+// an ageless series of a skipped subscription is not one any snapshot could
+// restate, and evicting it would blank a subtree on the first poll.
+func TestGetRungReconcilesOnlyTheMetricsItPolls(t *testing.T) {
+	reader := testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed_origin.yaml"), []byte(`
+match: {}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/oper-status
+    mode: on_change
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: ., name: if_oper_status, type: gauge, enum: {UP: 1, DOWN: 0}}
+  - path: /platform/control[slot=*]/state
+    mode: on_change
+    origin: ""
+    attributes: {slot: slot}
+    metrics:
+      - {leaf: oper-state, name: control_oper_state, type: gauge, enum: {UP: 1, DOWN: 0}}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	var attempts atomic.Int64
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			if attempts.Add(1) > 1 {
+				select {
+				case <-resume:
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				}
+				return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+			}
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				for _, n := range []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+						{Path: "/platform/control[slot=A]/state/oper-state", Value: "UP"},
+					}},
+					{SyncDone: true},
+				} {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				errs <- errors.New("stream reset")
+			}()
+			return out, errs, nil
+		},
+		// The snapshot restates one of the two polled elements and, being a Get
+		// against the target's own origin, can say nothing about the native
+		// subscription.
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{
+			{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+		}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "mixed_origin"})
+	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+	points := func(name string) int {
+		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		if !ok {
+			return 0
+		}
+		return len(g.DataPoints)
+	}
+	waitFor(t, 3*time.Second, func() bool { return points("gnmi.if_oper_status") == 2 && points("gnmi.control_oper_state") == 1 })
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	// The element the snapshot omits goes, the element it restates stays, and the
+	// series of the subscription the poll never asked for stays with it.
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		name, has := g.DataPoints[0].Attributes.Value("interface_name")
+		return has && name.AsString() == "e2" && points("gnmi.control_oper_state") == 1
 	})
 }
