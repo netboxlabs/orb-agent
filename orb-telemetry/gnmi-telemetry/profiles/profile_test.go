@@ -214,6 +214,11 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		// carries on, but the parser the subscribe and Get builders use rejects
 		// the path, and one bad path fails the whole request: the profile would
 		// load and every target on it would export nothing.
+		{"module_qualified_path", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/openconfig-interfaces:interfaces/interface[name=*]/state/counters", Mode: "sample",
+			Attributes: map[string]string{"interface_name": "name"},
+			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
+		}}}, "path elements are written without a module prefix"},
 		{"unbalanced_bracket", Profile{Name: "x", Subscriptions: []Subscription{{
 			Path: "/interfaces/interface[name=*", Mode: "sample",
 			Metrics: []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},

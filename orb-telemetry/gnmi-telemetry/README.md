@@ -433,6 +433,8 @@ subscriptions:
   subscription made directly to a leaf, and must then be the only metric in it.
   A `leaf` may not carry a `[key=...]` predicate: it is matched by element name
   alone, so a keyed list belongs in `path`, where an attribute promotes its key.
+  A `path` is written with bare element names too; a module-qualified element
+  is rejected at load for the same reason.
   A `leaf` is written as a bare name, never module-qualified: the matcher drops
   the module prefix from every element of an incoming path, so a leaf written
   `openconfig-interfaces:in-octets` would match nothing and each update under

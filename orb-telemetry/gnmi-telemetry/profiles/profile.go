@@ -185,6 +185,14 @@ func (p *Profile) Validate() error {
 		// what the file wrote, so two spellings of one path, a trailing "/" for
 		// instance, are the one subscription the device and the matcher both
 		// see.
+		// The matcher drops module prefixes from the paths a target sends, so a
+		// qualified element here would never match and would also let one path
+		// be declared twice under two spellings.
+		for _, e := range gp.GetElem() {
+			if strings.Contains(e.GetName(), ":") {
+				return fmt.Errorf("profile %s: subscription %q: path elements are written without a module prefix", p.Name, s.Path)
+			}
+		}
 		canon := canonicalPath(gp)
 		if paths[canon] {
 			return fmt.Errorf("profile %s: subscription %q is declared twice", p.Name, s.Path)
