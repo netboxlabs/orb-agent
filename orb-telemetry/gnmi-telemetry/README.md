@@ -425,7 +425,9 @@ subscriptions:
   rejected there instead of failing the whole request on the device. A `path` is
   unique within the resolved profile: two subscriptions on one path are matched
   at the same depth, so only the first would ever be written, and a repeat is
-  rejected.
+  rejected. Uniqueness is judged on what the path parses to, so two spellings of
+  one path, a trailing `/` or a multi-key element written in the other key order,
+  are one subscription.
 - `leaf` is relative to `path` and may contain `/`, as `total/instant` does under
   a CPU's state. A `leaf` of `.` is the subscription path itself, for a
   subscription made directly to a leaf, and must then be the only metric in it.

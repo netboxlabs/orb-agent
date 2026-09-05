@@ -214,6 +214,28 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			{Path: "/a", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "a", Type: "gauge"}}},
 			{Path: "/a", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "b", Type: "gauge"}}},
 		}}, `subscription "/a" is declared twice`},
+		// The two spellings parse to one path and so reach the device and the
+		// matcher as one subscription; keying the check on what the file wrote
+		// would let the pair through, to the same effect as the literal repeat
+		// above.
+		{"duplicate_subscription_path_spelling", Profile{Name: "x", Subscriptions: []Subscription{
+			{
+				Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
+				Attributes: map[string]string{"interface_name": "name"},
+				Metrics:    []Metric{{Leaf: "in-octets", Name: "a", Type: "counter"}},
+			},
+			{
+				Path: "/interfaces/interface[name=*]/state/counters/", Mode: "sample",
+				Attributes: map[string]string{"interface_name": "name"},
+				Metrics:    []Metric{{Leaf: "in-octets", Name: "b", Type: "counter"}},
+			},
+		}}, `subscription "/interfaces/interface[name=*]/state/counters/" is declared twice`},
+		// A multi-key element written in either key order is one path too, which
+		// is what the canonical rendering orders the keys by name for.
+		{"duplicate_subscription_path_key_order", Profile{Name: "x", Subscriptions: []Subscription{
+			{Path: "/a/b[x=1][y=2]", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "a", Type: "gauge"}}},
+			{Path: "/a/b[y=2][x=1]", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "b", Type: "gauge"}}},
+		}}, `subscription "/a/b[y=2][x=1]" is declared twice`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

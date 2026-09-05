@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	gpath "github.com/openconfig/gnmic/pkg/api/path"
 	"gopkg.in/yaml.v3"
 
@@ -104,6 +105,30 @@ var reservedMetrics = func() map[string]bool {
 	return out
 }()
 
+// canonicalPath renders a parsed path back to one spelling: the element names
+// joined by "/", each with its own keys appended in name order. Two spellings
+// the request parser reads alike, a trailing "/" for instance, render alike, so
+// it is what a subscription is deduplicated on. A subscription's origin is a
+// field of its own rather than part of its path, so the elements are the whole
+// of the path here.
+func canonicalPath(p *gnmiproto.Path) string {
+	var b strings.Builder
+	for _, e := range p.GetElem() {
+		b.WriteString("/")
+		b.WriteString(e.GetName())
+		keys := e.GetKey()
+		names := make([]string, 0, len(keys))
+		for k := range keys {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, k := range names {
+			b.WriteString("[" + k + "=" + keys[k] + "]")
+		}
+	}
+	return b.String()
+}
+
 // Validate checks the schema rules: at least one subscription, a path and
 // metrics per subscription, a path the request parser accepts and no two
 // subscriptions on one path, a stream mode, metric types, unique lower-case
@@ -137,7 +162,8 @@ func (p *Profile) Validate() error {
 		// here and then has every target on the profile walk the ladder to the
 		// bottom exporting nothing. Parsing with the builders' own parser is
 		// what keeps validation and the wire in agreement.
-		if _, err := gpath.ParsePath(s.Path); err != nil {
+		gp, err := gpath.ParsePath(s.Path)
+		if err != nil {
 			return fmt.Errorf("profile %s: subscription %q: path does not parse: %v", p.Name, s.Path, err)
 		}
 		// merge keys a parent's subscriptions by path, so a path stated twice
@@ -145,11 +171,15 @@ func (p *Profile) Validate() error {
 		// mistake: both entries sit at the same depth, so matchUpdate's deepest
 		// wins preference keeps whichever comes first and the other's metrics
 		// are never written, while Get polling buckets metric names by path and
-		// would merge the two.
-		if paths[s.Path] {
+		// would merge the two. Keyed on what the path parses to rather than on
+		// what the file wrote, so two spellings of one path, a trailing "/" for
+		// instance, are the one subscription the device and the matcher both
+		// see.
+		canon := canonicalPath(gp)
+		if paths[canon] {
 			return fmt.Errorf("profile %s: subscription %q is declared twice", p.Name, s.Path)
 		}
-		paths[s.Path] = true
+		paths[canon] = true
 		if s.Mode != "sample" && s.Mode != "on_change" {
 			return fmt.Errorf("profile %s: subscription %q: mode %q is not sample or on_change", p.Name, s.Path, s.Mode)
 		}
