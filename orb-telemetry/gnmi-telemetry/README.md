@@ -97,6 +97,13 @@ the policy's `metrics_interval`, `on_change` paths as such, and each with its ow
 origin. TARGET_DEFINED is never requested, so a device's own idea of a sample
 interval never replaces the policy's.
 
+The first subscribe on a session probes each of those paths first, with a
+one-path Get under that path's own origin, and leaves out the ones the target
+rejects, logging each with the error it gave. A subscription is atomic on a
+strict target, so one path the device does not carry would otherwise sink every
+other path with it. The verdicts are remembered for the session, and a target
+that rejects every probe is sent the full set rather than nothing.
+
 A device that refuses that request is not abandoned. The delivery mode walks a
 ladder, and each step down counts one `gnmi.mode_fallback_total`:
 
@@ -109,8 +116,10 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
    it an origin of its own is skipped here and logged once, because one Get
    carries one origin; a native path is reachable only by streaming.
 
-A policy that sets `mode: on_change` or `mode: sample` forces that one rung for
-every path and falls only to Get. The rung a target settled on is reported as
+A policy that names a mode chooses which of those rungs are tried. `mode:
+on_change` keeps the mode the profile gives each path, so counters still stream
+as SAMPLE, and skips the all-SAMPLE rung. `mode: sample` asks for SAMPLE on
+every path. Both still fall to Get. The rung a target settled on is reported as
 its `mode` in `GET /api/v1/status` and as the `mode` attribute of that device's
 `gnmi.target_up` gauge.
 
@@ -197,7 +206,7 @@ set on the command line rather than by a policy.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
-| `mode` | `auto`, `on_change` or `sample` | `auto` | Overrides the mode each profile subscription names. `auto` walks the ladder above; the other two force one rung for every path. |
+| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
 | `probe_timeout_ms` | milliseconds | `3000` | How long one sweep probe waits for an address to answer Capabilities. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be at least 60000 when set. |
@@ -273,15 +282,24 @@ the sample cadence. What is exported is the last value of each series, whenever
 it arrived: a 30 second SAMPLE subscription read every 10 seconds repeats a
 value twice, and an ON_CHANGE leaf that changed three times between exports
 reports the last of the three. The device timestamp is not exported, because the
-SDK stamps an observation at collection time; it is kept per series for
-staleness.
+SDK stamps an observation at collection time.
 
 Staleness is what keeps a quiet device from reporting a stale value as current.
-A series whose last notification is older than three `metrics_interval`s is
-withheld from export and dropped from the store, and reappears when the device
-sends the leaf again. Two other things withdraw a series: a delete notification,
-which withdraws the deleted element and everything under it, and stopping the
-policy, which withdraws every series that policy wrote.
+A SAMPLE or Get series is withheld from export and dropped from the store when
+no update arrived for three `metrics_interval`s, and reappears when the device
+sends the leaf again. The window is measured by arrival at the agent, not by
+the device clock, so a device whose clock lags never blanks itself.
+
+An ON_CHANGE series carries no window at all, because it refreshes only when
+the leaf changes: it keeps its last value until the device deletes the element
+or the policy stops, and `gnmi.target_up` is what says whether the stream is
+still alive. A path the profile marks `on_change` is aged like any other when
+the target settled on the SAMPLE rung or on Get, since there it arrives at the
+interval.
+
+Two other things withdraw a series: a delete notification, which withdraws the
+deleted element and everything under it, and stopping the policy, which
+withdraws every series that policy wrote.
 
 A counter whose new value is below the last is read as a device-side reset: the
 series continues at the new value, and the consumer sees the drop as the reset
@@ -305,7 +323,7 @@ Seven metrics describe the backend itself rather than a device:
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound. |
 | `gnmi.mode_fallback_total` | counter | none | Delivery-mode downgrades, one per step down the ladder. |
-| `gnmi.profile_fallback_total` | counter | none | Targets whose vendor matched no overlay and used `_base`. |
+| `gnmi.profile_fallback_total` | counter | none | Dial attempts whose vendor matched no overlay and used `_base`. One target counts once per attempt, so a device that reconnects counts again. |
 
 `unmatched_path` is expected in small numbers: a subscription is to a subtree,
 so a device that serves more leaves under it than the profile names counts one
@@ -321,7 +339,6 @@ are embedded into the binary at build time, so the backend runs with a working
 set out of the box.
 
 ```yaml
-name: _base
 match: {}                          # vendor aliases; empty matches nothing, _base is the fallback
 subscriptions:
   - path: /interfaces/interface[name=*]/state/counters
@@ -342,6 +359,8 @@ subscriptions:
         enum: {UP: 1, DOWN: 0, TESTING: 2, UNKNOWN: 3, DORMANT: 4, NOT_PRESENT: 5, LOWER_LAYER_DOWN: 6}
 ```
 
+- The profile's name is its file name without `.yaml`, so `_base.yaml` is the
+  profile `_base`. There is no `name` key in the file.
 - `path` is the subscription, with `[key=*]` wildcards for keyed lists. `mode` is
   `sample` or `on_change` and decides what is asked of the device for that path.
 - `leaf` is relative to `path` and may contain `/`, as `total/instant` does under
