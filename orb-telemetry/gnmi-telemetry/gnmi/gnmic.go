@@ -30,11 +30,11 @@ import (
 // to Get.
 const subscriptionPrefix = "gnmi-telemetry"
 
-// defaultProbeTimeout bounds one probe a session runs on its own, the
-// Capabilities call that opens it and the Get it runs per subscription path,
-// when the dial spec named none of its own. Ten seconds is long enough for a
-// busy target to answer either and short enough that a silent one costs a
-// probe rather than the life of the policy.
+// defaultProbeTimeout bounds one probe a session runs under a caller's
+// unbounded context, the Capabilities call that opens it and the Get it runs
+// per subscription path, when the dial spec named none of its own. Ten seconds
+// is long enough for a busy target to answer either and short enough that a
+// silent one costs a probe rather than the life of the policy.
 const defaultProbeTimeout = 10 * time.Second
 
 // GnmicDialer implements Dialer using the gnmic library.
@@ -169,6 +169,25 @@ func (s *gnmicSession) probeDeadline() time.Duration {
 	return s.probeTimeout
 }
 
+// bounded gives one call the context it runs under: the session's own probe
+// deadline when the caller's context carries none, and a plain cancellable
+// child of it when it already carries one.
+//
+// A caller that bounded its own context keeps that bound and the reading it
+// draws from it. The sweep tells a silent address from an answering one by
+// whether its own context ended the Capabilities call, since a peer may send
+// DeadlineExceeded itself and the code alone says nothing; a shorter deadline
+// of ours firing first would leave that context unexpired and the silence
+// counted as an answer. Applying ours only where there is none to keep leaves
+// every such caller with its own classification and still bounds the loop's
+// context, which has no deadline and lives as long as the policy.
+func (s *gnmicSession) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, s.probeDeadline())
+}
+
 // acceptedPaths returns the subset of paths the target accepts, so one
 // unsupported path can't make a strict target reject the whole atomic
 // subscription. Fast path: a single multi-path Get — if it succeeds, every path
@@ -255,13 +274,14 @@ func negotiateSubEncoding(advertised []string) string {
 
 // Capabilities runs the gNMI Capabilities RPC and returns a normalized result.
 //
-// The RPC carries a deadline of its own rather than the caller's context,
-// which is the loop's and lives as long as the policy: a target that accepts
+// A caller whose context carries no deadline of its own, the loop's above all,
+// gets the session's: it lives as long as the policy, so a target that accepts
 // the connection and then never answers would otherwise hold the loop for
 // ever, with no error, no backoff and no reconnect. A call that misses the
-// deadline fails like any other, and the loop reconnects through it.
+// deadline fails like any other, and the loop reconnects through it. A caller
+// that already bounded its context keeps its own bound.
 func (s *gnmicSession) Capabilities(ctx context.Context) (*CapabilitiesResult, error) {
-	capsCtx, cancel := context.WithTimeout(ctx, s.probeDeadline())
+	capsCtx, cancel := s.bounded(ctx)
 	resp, err := s.tg.Capabilities(capsCtx)
 	cancel()
 	if err != nil {
@@ -487,8 +507,8 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 // probe; every session method runs on the caller's goroutine, so a caller
 // that used one session from two goroutines at once would break this.
 //
-// Each probe carries a deadline of its own rather than the caller's context,
-// which is the loop's and lives as long as the policy: a target that answers
+// Each probe carries a deadline where the caller's context has none, which is
+// the loop's case and lives as long as the policy: a target that answers
 // Capabilities and then never answers the Get would otherwise hold the probe
 // for ever, and there would be no stream, no ladder and no reconnect until the
 // policy was deleted. A probe that misses its deadline is a path this session
@@ -505,7 +525,7 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 		if !seen {
 			saved := s.origin
 			s.origin = sub.Origin
-			probeCtx, cancelProbe := context.WithTimeout(ctx, s.probeDeadline())
+			probeCtx, cancelProbe := s.bounded(ctx)
 			_, err := s.getPaths(probeCtx, []string{sub.Path})
 			cancelProbe()
 			s.origin = saved

@@ -119,10 +119,12 @@ type TargetSpec struct {
 	CAFile     string
 	CertFile   string
 	KeyFile    string
-	// ProbeTimeout bounds each probe the session runs on its own: the
-	// Capabilities call that opens it and the Get it runs per path before it
-	// opens a stream. Either would otherwise run under the caller's context,
-	// which lives as long as the policy, so a target that goes silent would
-	// hold the session open for ever. Zero takes the package default.
+	// ProbeTimeout bounds each probe the session runs under a caller's
+	// unbounded context: the Capabilities call that opens it and the Get it
+	// runs per path before it opens a stream. Either would otherwise run under
+	// the loop's context, which lives as long as the policy, so a target that
+	// goes silent would hold the session open for ever. A caller that bounded
+	// its own context keeps that bound instead. Zero takes the package
+	// default.
 	ProbeTimeout time.Duration
 }

@@ -395,6 +395,43 @@ func TestACapabilitiesCallThatNeverAnswersIsBounded(t *testing.T) {
 	}
 }
 
+// A caller that bounded its own context keeps that bound. The sweep probes an
+// address under a context of its own and reads whether that context ended the
+// Capabilities call as the difference between a silent address and one that
+// answered, since a peer may send DeadlineExceeded itself and the code alone
+// says nothing. A deadline of the session's firing first left the sweep's
+// context unexpired, and every silent address in a range under a policy whose
+// probe timeout ran past the session's default was admitted as a device.
+func TestACallerThatBoundedItsContextKeepsItsOwnDeadline(t *testing.T) {
+	addr := serveGet(t, &getServer{capsBlocks: true})
+	// Shorter than the caller's, so a session that applied its own deadline
+	// regardless would be the one to end the call.
+	s, err := (&GnmicDialer{}).Dial(context.Background(), TargetSpec{Host: addr, Insecure: true, ProbeTimeout: 50 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	type answered struct {
+		capsErr   error
+		callerErr error
+	}
+	done := make(chan answered, 1)
+	go func() {
+		_, capsErr := s.Capabilities(ctx)
+		done <- answered{capsErr: capsErr, callerErr: ctx.Err()}
+	}()
+
+	select {
+	case got := <-done:
+		require.Error(t, got.capsErr, "a target that never answers Capabilities fails the call")
+		assert.Error(t, got.callerErr, "the caller's own context is what ended the call, which is how a sweep tells silence from an answer")
+	case <-time.After(time.Second):
+		t.Fatal("Capabilities never returned: a call to a silent target is unbounded")
+	}
+}
+
 // A spec that named no probe timeout takes the package default. Zero cannot be
 // used as the deadline itself: a context with a zero timeout is already expired,
 // which would prune every path of every subscription on sight.

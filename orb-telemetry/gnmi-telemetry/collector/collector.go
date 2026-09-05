@@ -43,8 +43,8 @@ type Options struct {
 	Mode            string
 	PolicyName      string
 	// ProbeTimeout bounds each probe the session dialed for this target runs
-	// on its own: its Capabilities call and one subscription-path Get. Zero
-	// leaves the session on its own default.
+	// under the loop's unbounded context: its Capabilities call and one
+	// subscription-path Get. Zero leaves the session on its own default.
 	ProbeTimeout time.Duration
 }
 

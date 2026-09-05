@@ -93,7 +93,9 @@ treated as a failure, since devices advertise private ones. Nothing the backend
 sends waits on a target indefinitely: the Capabilities call and each
 subscription-path probe are bounded by the probe timeout, and each Get poll by
 `metrics_interval`, so a device that accepts the connection and then goes silent
-costs one call rather than the life of the policy.
+costs one call rather than the life of the policy. That bound applies to a call
+whose context carries no deadline of its own; a caller that already set one, the
+sweep below, keeps its own and the reading it draws from it.
 
 Then one STREAM subscription per target carries every path of its profile in a
 single request, each path with the mode the profile gives it: `sample` paths at
@@ -227,7 +229,7 @@ set on the command line rather than by a policy.
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
 | `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before its first sync response or data, or that reports InvalidArgument or Unimplemented after its sync, alike. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
-| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` sweep, `10000` path probe | How long one sweep probe waits for an address to answer Capabilities. Set, it also bounds a dialed session's own Capabilities call and each subscription-path probe; unset, the sweep waits 3 s and either of those 10 s. |
+| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` sweep, `10000` path probe | How long one sweep probe waits for an address to answer Capabilities. Set, it also bounds a dialed session's own Capabilities call and each subscription-path probe, which are the calls it makes under a context carrying no deadline of its own; unset, the sweep waits 3 s and either of those 10 s. The sweep bounds its own probe and keeps that bound whatever this is set to. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |
 | `send_credentials_to_unverified_targets` | boolean | `false` | Permits a CIDR or range target to carry a password while TLS does not verify the server. |
 
