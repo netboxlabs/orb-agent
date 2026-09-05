@@ -390,15 +390,33 @@ func (m *Manager) reserveStopping(name string) func() {
 	}
 }
 
-// Handle names one runner a start created. A caller that may have to undo its
-// start keeps this rather than the policy name: by the time it rolls back, a
-// concurrent delete and a recreate can have put a different runner under that
-// name, and stopping by name alone would stop that replacement.
+// Handle names one runner a start created or a detach removed. A caller that
+// may have to undo its start, or that has just taken a runner out of the map,
+// keeps this rather than the policy name: by the time it stops, a concurrent
+// delete and a recreate can have put a different runner under that name, and
+// stopping by name alone would stop that replacement.
 //
 // The zero Handle names nothing, so stopping it does nothing.
 type Handle struct {
 	name   string
 	runner *Runner
+	// detached is the bookkeeping a handle from DetachPolicy carries. Its
+	// runner is already out of the map, so stopping it releases the name
+	// reservation and the profile set this records rather than looking either
+	// up again. Nil on a handle from a start, whose stop still has to detach.
+	detached *detached
+}
+
+// detached is a runner taken out of the policies map and what its stop owes:
+// the release that frees the name reservation and the profiles directory to
+// give back. The once makes a second stop through the same handle do nothing,
+// the way a second stop by name finds nothing left to do.
+type detached struct {
+	runner  *Runner
+	release func()
+	dir     string
+	once    sync.Once
+	err     error
 }
 
 // StartPolicy starts a single named policy. For a caller with nothing to roll
@@ -481,64 +499,93 @@ func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, 
 	return Handle{name: name, runner: r}, nil
 }
 
-// StopPolicy stops whichever runner is registered under name, which is what a
-// DELETE for that name asks for.
+// StopPolicy stops whichever runner is registered under name, and reports no
+// error when nothing is. Implemented over the same atomic detach a DELETE
+// uses, so the two cannot disagree about which runner a name held.
 func (m *Manager) StopPolicy(name string) error {
-	return m.stopPolicy(name, nil)
+	d, ok := m.detach(name, nil)
+	if !ok {
+		return nil
+	}
+	return m.stopDetached(name, d)
+}
+
+// DetachPolicy removes whichever runner is registered under name and returns a
+// handle bound to it, reporting false when nothing is registered. The lookup,
+// the reservation and the removal happen together under mu, which is what a
+// DELETE needs: checking the name and then stopping by it leaves a window in
+// which another DELETE takes the runner and a POST puts a replacement under the
+// name, and the stop by name then deletes that replacement.
+//
+// The caller owes the returned handle a StopPolicyHandle: until then the name
+// is reserved and the profile set the runner charged is still held.
+func (m *Manager) DetachPolicy(name string) (Handle, bool) {
+	d, ok := m.detach(name, nil)
+	if !ok {
+		return Handle{}, false
+	}
+	return Handle{name: name, runner: d.runner, detached: d}, true
 }
 
 // StopPolicyHandle stops the runner the handle names and does nothing if that
 // runner is no longer the one registered under its name, so a caller undoing
-// its own start cannot stop a replacement it never started. The zero Handle
+// its own start cannot stop a replacement it never started. A handle from
+// DetachPolicy carries its runner with it and stops that one. The zero Handle
 // stops nothing.
 func (m *Manager) StopPolicyHandle(h Handle) error {
 	if h.runner == nil {
 		return nil
 	}
-	return m.stopPolicy(h.name, h.runner)
-}
-
-// stopPolicy detaches the policy under name and stops it. A non-nil want
-// requires the registered runner to be that one: the comparison and the detach
-// happen together under mu, so a replacement started between the two cannot be
-// caught by it.
-//
-// The runner is detached under mu and stopped outside it, since Stop blocks on
-// the sweep unwinding. The name stays reserved for the whole of Stop so a
-// POST for the same name cannot start a replacement that the outgoing runner
-// would then forget.
-func (m *Manager) stopPolicy(name string, want *Runner) error {
-	m.mu.Lock()
-	r, ok := m.policies[name]
-	if ok && want != nil && r != want {
-		// The runner this caller started is already gone and something else
-		// holds the name. Nothing to stop, and stopping what is there would
-		// delete a policy this caller never created.
-		m.mu.Unlock()
-		return nil
+	if h.detached != nil {
+		return m.stopDetached(h.name, h.detached)
 	}
-	var release func()
-	var profilesDir string
-	if ok {
-		delete(m.policies, name)
-		profilesDir = m.policyDirs[name]
-		delete(m.policyDirs, name)
-		release = m.reserveStopping(name)
-	}
-	m.mu.Unlock()
+	d, ok := m.detach(h.name, h.runner)
 	if !ok {
 		return nil
 	}
-	// The profile set is given back only once the runner has stopped, so a
-	// replacement waiting on the name finds it still loaded.
-	defer func() {
-		release()
-		m.releaseCollector(profilesDir)
-	}()
-	if err := r.Stop(); err != nil {
-		return fmt.Errorf("stopping policy %s: %w", name, err)
+	return m.stopDetached(h.name, d)
+}
+
+// detach takes the policy under name out of the map and reserves the name for
+// the stop that follows. A non-nil want requires the registered runner to be
+// that one: the comparison and the removal happen together under mu, so a
+// replacement started between the two cannot be caught by it.
+func (m *Manager) detach(name string, want *Runner) (*detached, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r, ok := m.policies[name]
+	if !ok {
+		return nil, false
 	}
-	return nil
+	if want != nil && r != want {
+		// The runner this caller started is already gone and something else
+		// holds the name. Nothing to stop, and stopping what is there would
+		// delete a policy this caller never created.
+		return nil, false
+	}
+	profilesDir := m.policyDirs[name]
+	delete(m.policies, name)
+	delete(m.policyDirs, name)
+	return &detached{runner: r, release: m.reserveStopping(name), dir: profilesDir}, true
+}
+
+// stopDetached stops a runner detach removed. It runs outside mu, since Stop
+// blocks on the sweep unwinding. The name stays reserved for the whole of Stop
+// so a POST for the same name cannot start a replacement that the outgoing
+// runner would then forget.
+func (m *Manager) stopDetached(name string, d *detached) error {
+	d.once.Do(func() {
+		// The profile set is given back only once the runner has stopped, so a
+		// replacement waiting on the name finds it still loaded.
+		defer func() {
+			d.release()
+			m.releaseCollector(d.dir)
+		}()
+		if err := d.runner.Stop(); err != nil {
+			d.err = fmt.Errorf("stopping policy %s: %w", name, err)
+		}
+	})
+	return d.err
 }
 
 // Stop stops all running policies. Every runner is attempted even after one

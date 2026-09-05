@@ -449,6 +449,84 @@ func TestDeletePolicy_RefusedNamesDoNotAddressTheirPolicy(t *testing.T) {
 	assert.Equal(t, "http://127.0.0.1:8079/api/v1/policies", base.JoinPath(url.PathEscape(".")).String())
 }
 
+// deletePolicy sends DELETE for one policy name, escaped the way the agent's
+// backends escape it, and returns what the handler answered.
+func deletePolicy(t *testing.T, srv *server.Server, name string) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodDelete, "/api/v1/policies/"+url.PathEscape(name), nil)
+	require.NoError(t, err)
+	srv.Router().ServeHTTP(w, req)
+	return w
+}
+
+// A DELETE answers for the name it was given: 404 when nothing holds it, 200
+// with the policy gone when something does. Both answers come from the one
+// detach that removed the runner rather than from a lookup taken before it.
+func TestDeletePolicy_MissesAnUnknownNameAndDeletesAKnownOne(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Stop()
+
+	w := deletePolicy(t, srv, "absent")
+	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
+	assert.Contains(t, w.Body.String(), "policy not found")
+
+	require.Equal(t, http.StatusCreated, postPolicy(t, srv, "application/x-yaml", namedPolicyBody(t, "present")).Code)
+	w = deletePolicy(t, srv, "present")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	w = httptest.NewRecorder()
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+	require.NoError(t, err)
+	srv.Router().ServeHTTP(w, req)
+	assert.JSONEq(t, `[]`, w.Body.String(), "the deleted policy is still listed")
+}
+
+// Two DELETEs for one name are one delete: the request that removes the runner
+// answers 200 and the other 404. A handler that checked the name and then
+// stopped by it answered 200 to both, which is the observable half of the
+// hazard: the other half is that its stop names whatever holds the name by
+// then, so a POST landing between the check and the stop has its replacement
+// deleted by a request that never saw it.
+func TestDeletePolicy_ConcurrentDeletesLeaveOneSuccess(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.Stop()
+
+	require.Equal(t, http.StatusCreated, postPolicy(t, srv, "application/x-yaml", namedPolicyBody(t, "raced")).Code)
+
+	// Every request is built before any is sent and each worker parks on the
+	// same gate, so the handlers overlap rather than queueing behind one
+	// another's setup.
+	const requests = 32
+	codes := make(chan int, requests)
+	start := make(chan struct{})
+	var ready, wg sync.WaitGroup
+	for range requests {
+		req, err := http.NewRequest(http.MethodDelete, "/api/v1/policies/raced", nil)
+		require.NoError(t, err)
+		ready.Add(1)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready.Done()
+			<-start
+			w := httptest.NewRecorder()
+			srv.Router().ServeHTTP(w, req)
+			codes <- w.Code
+		}()
+	}
+	ready.Wait()
+	close(start)
+	wg.Wait()
+	close(codes)
+
+	counts := map[int]int{}
+	for code := range codes {
+		counts[code]++
+	}
+	assert.Equal(t, map[int]int{http.StatusOK: 1, http.StatusNotFound: requests - 1}, counts, "more than one request claimed the same delete")
+}
+
 // ---------------------------------------------------------------------------
 // A batch POST that fails partway undoes what it started
 // ---------------------------------------------------------------------------

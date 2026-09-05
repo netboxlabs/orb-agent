@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1054,6 +1055,63 @@ func TestClosingACollectorReturnsItsSeriesToTheBudget(t *testing.T) {
 	start("10.0.0.2")
 	waitFor(t, 3*time.Second, func() bool { return deviceOf("10.0.0.2") })
 	assert.Zero(t, drops(t, reader, "series_limit"), "the closed collector's slots were free to take")
+}
+
+// gnmi.target_up is one series per target on an instrument every collector in
+// the process writes to, so it draws on the same per-name allowance every
+// profile metric draws on. A callback that observed a point per loop whatever
+// the budget said would hand the SDK the series past the bound that the bound
+// exists to keep it from folding into the overflow set. A loop refused a slot
+// still collects: only its up point stands down, until an observation after a
+// slot frees takes one.
+func TestTargetUpIsBoundedByTheSharedBudget(t *testing.T) {
+	reader := testReader(t)
+	budget := newBudget(1)
+	start := func(host string, notes ...gnmi.Notification) *Collector {
+		sess := &gnmi.FakeSession{
+			Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+			SubscribeManyFn: streamOf(notes...),
+		}
+		c := NewWithShared(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget, nil)
+		t.Cleanup(c.Close)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		require.NoError(t, c.CollectTarget(ctx, target(host, ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+		return c
+	}
+	upDevices := func() []string {
+		m, ok := collect(t, reader)["gnmi.target_up"]
+		if !ok {
+			return nil
+		}
+		var hosts []string
+		for _, pt := range m.Data.(metricdata.Gauge[int64]).DataPoints {
+			if v, ok := pt.Attributes.Value("device_ip"); ok {
+				hosts = append(hosts, v.AsString())
+			}
+		}
+		sort.Strings(hosts)
+		return hosts
+	}
+	onlyUp := func(host string) bool {
+		up := upDevices()
+		return len(up) == 1 && up[0] == host
+	}
+
+	first := start("10.0.0.1", sample(1394, time.Now().UnixNano()))
+	waitFor(t, 3*time.Second, func() bool { return onlyUp("10.0.0.1") })
+	require.Zero(t, drops(t, reader, "series_limit"), "the first target's up point fits the allowance")
+
+	// The second target's updates match no metric of the profile, so its loop
+	// asks the budget for nothing but its up point and the refusal below is
+	// that point's alone.
+	start("10.0.0.2", gnmi.Notification{Updates: []gnmi.Update{{Path: "/nothing/the/profiles/name", Value: uint64(1)}}})
+	waitFor(t, 3*time.Second, func() bool { return drops(t, reader, "unmatched_path") > 0 })
+	assert.Equal(t, []string{"10.0.0.1"}, upDevices(), "the second loop observed a point past the bound")
+	assert.Equal(t, int64(1), drops(t, reader, "series_limit"), "the refused up point is counted once for the target")
+
+	first.ForgetPolicy("p")
+	waitFor(t, 3*time.Second, func() bool { return onlyUp("10.0.0.2") })
 }
 
 // The SDK holds one instrument per metric name however many collectors write

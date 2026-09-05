@@ -251,6 +251,57 @@ func TestStopPolicyHandle_StopsTheRunnerItStarted(t *testing.T) {
 	require.NoError(t, m.Stop())
 }
 
+// A DELETE has to look the name up and detach it in one step. Looking first
+// and stopping by name after leaves a window in which another DELETE takes the
+// runner and a POST puts a replacement under the name, and the first request's
+// stop then deletes a policy it never saw. The detach hands back a handle bound
+// to the runner it removed, so the stop that follows reaches that runner alone.
+//
+// The interleave is written in sequence: what the stop reaches depends on the
+// order the requests reach the manager, not on their overlapping, and mu
+// serialises the map operations anyway.
+func TestDetachThenReplaceStopsOnlyTheOriginal(t *testing.T) {
+	m := newTestManager()
+	require.NoError(t, m.StartPolicy("p1", minimalPolicy()))
+	original := m.policies["p1"]
+	require.NotNil(t, original)
+
+	h, ok := m.DetachPolicy("p1")
+	require.True(t, ok)
+	require.False(t, m.HasPolicy("p1"), "the detach left the runner registered under its name")
+
+	// The name stays reserved until the detached runner has stopped, which is
+	// what keeps a replacement from being erased by the runner it replaced, so
+	// the replacement is started after that stop rather than between the two.
+	require.NoError(t, m.StopPolicyHandle(h))
+	require.Error(t, original.ctx.Err(), "the detached runner was never stopped")
+
+	require.NoError(t, m.StartPolicy("p1", minimalPolicy()))
+	replacement := m.policies["p1"]
+	require.NotNil(t, replacement)
+	require.NotSame(t, original, replacement)
+
+	// The handle names the runner the detach removed, so a second stop through
+	// it reaches nothing: by now the name holds a runner this caller never
+	// detached.
+	require.NoError(t, m.StopPolicyHandle(h))
+	require.True(t, m.HasPolicy("p1"), "the stop deleted the replacement")
+	require.Same(t, replacement, m.policies["p1"], "the name holds a different runner")
+	require.NoError(t, replacement.ctx.Err(), "the replacement's collections were cancelled")
+	require.NoError(t, m.Stop())
+}
+
+// A name nothing holds detaches nothing, which is the answer a DELETE turns
+// into its 404. Reporting it from the detach rather than from a lookup before
+// it is what makes the two one step.
+func TestDetachPolicy_ReportsAnUnknownName(t *testing.T) {
+	m := newTestManager()
+	h, ok := m.DetachPolicy("absent")
+	require.False(t, ok)
+	require.NoError(t, m.StopPolicyHandle(h))
+	require.NoError(t, m.Stop())
+}
+
 // A handle naming no runner stops nothing, whatever name it carries. That is
 // what a failed start returns, and falling back to the name would make it stop
 // a policy the caller never created.

@@ -266,14 +266,21 @@ func rollback(manager *policy.Manager, started []policy.Handle) error {
 	return errors.Join(errs...)
 }
 
+// deletePolicy detaches the policy and stops what it detached. The lookup and
+// the removal are one step in the manager rather than a check here and a stop
+// by name after it: between those two, a concurrent DELETE can take the runner
+// and a POST put a replacement under the name, and the stop by name would then
+// delete a policy this request never saw. The handle names the runner that was
+// removed, so the stop reaches that one alone.
 func (s *Server) deletePolicy(c *gin.Context) {
 	pol := c.Param("policy")
-	if !s.manager.HasPolicy(pol) {
+	h, ok := s.manager.DetachPolicy(pol)
+	if !ok {
 		c.IndentedJSON(http.StatusNotFound, Response{"policy not found"})
 		return
 	}
 
-	if err := s.manager.StopPolicy(pol); err != nil {
+	if err := s.manager.StopPolicyHandle(h); err != nil {
 		c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
 	} else {
 		c.IndentedJSON(http.StatusOK, Response{"policy '" + pol + "' was deleted"})

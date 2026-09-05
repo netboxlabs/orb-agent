@@ -329,7 +329,9 @@ profile sets write to it, so every policy running draws on the same allowance.
 Series are the product of the devices the policies name and the path keys their
 profiles promote, so policies over a wide prefix whose devices each have
 hundreds of interfaces are what approach it. An update refused by that bound is
-counted, not exported.
+counted, not exported. `gnmi.target_up` draws on the same allowance, one series
+per target, so a target refused a slot keeps collecting and its up point alone
+stands down until a slot frees.
 
 Seven metrics describe the backend itself rather than a device:
 

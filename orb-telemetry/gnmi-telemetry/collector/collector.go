@@ -51,8 +51,14 @@ type loopKey struct{ policy, host string }
 type loop struct {
 	cancel context.CancelFunc
 	done   chan struct{}
-	mu     sync.Mutex
-	status TargetStatus
+	// upSlot is whether this loop holds the target_up series slot its point
+	// needs, and upWarned whether the refusal of one has been logged for this
+	// target already. Both are guarded by the collector's loopsMu, which the
+	// callback reading them holds too, so neither joins the status lock below.
+	upSlot   bool
+	upWarned bool
+	mu       sync.Mutex
+	status   TargetStatus
 }
 
 func (l *loop) update(fn func(*TargetStatus)) {
@@ -121,6 +127,11 @@ func (c *Collector) Budget() *Budget { return c.budget }
 // against, the counterpart of Budget for a caller sharing one.
 func (c *Collector) Schemas() *Schemas { return c.schemas }
 
+// targetUpSeries is gnmi.target_up as the series budget names it. The budget
+// is keyed on the metric name the exporter prefixes with "gnmi.", so the gauge
+// draws on the same allowance a profile metric of that name would.
+const targetUpSeries = "target_up"
+
 // ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
 // has a live stream or poll, 0 while it reconnects. A collector built before
 // the meter exists registers nothing and keeps its once, so the first target
@@ -140,6 +151,15 @@ func (c *Collector) ensureTargetUp() {
 			c.loopsMu.Lock()
 			defer c.loopsMu.Unlock()
 			for k, l := range c.loops {
+				// A loop refused a slot when it started asks again here: the
+				// allowance it wanted may since have been freed by a policy
+				// that was forgotten, and this is its next observation. A loop
+				// still without one observes nothing, so the point the SDK
+				// would fold into its overflow set is never handed over.
+				if !l.upSlot && !c.budget.take(targetUpSeries) {
+					continue
+				}
+				l.upSlot = true
 				s := l.snapshot()
 				v := int64(0)
 				if s.Up {
@@ -180,8 +200,26 @@ func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opt
 		return errors.New("collector is closed")
 	}
 	old := c.loops[k]
+	// The outgoing loop's slot is given back before the replacement asks for
+	// one, so replacing a target does not need the allowance to hold two
+	// points for it. The warning travels with the name rather than the loop,
+	// so a target refused a slot is logged once however often it restarts.
+	c.releaseUpSlot(old)
+	if old != nil {
+		l.upWarned = old.upWarned
+	}
+	l.upSlot = c.budget.take(targetUpSeries)
+	warn := !l.upSlot && !l.upWarned
+	if warn {
+		l.upWarned = true
+	}
 	c.loops[k] = l
 	c.loopsMu.Unlock()
+	if warn {
+		c.logger.Warn("gnmi target_up point refused by the series budget",
+			"policy", opts.PolicyName, "host", target.Host, "series", targetUpSeries)
+		metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropSeriesLimit)))
+	}
 	if old != nil {
 		old.cancel()
 		<-old.done
@@ -654,6 +692,18 @@ func promoted(sub *profiles.Subscription, keys map[string]string) []attribute.Ke
 	return out
 }
 
+// releaseUpSlot gives a loop's target_up slot back to the budget, for the next
+// target to take. Called with loopsMu held, wherever a loop leaves the map: a
+// slot a departed loop kept would be one no collector in the process could
+// ever observe against again. A loop that never held one releases nothing.
+func (c *Collector) releaseUpSlot(l *loop) {
+	if l == nil || !l.upSlot {
+		return
+	}
+	l.upSlot = false
+	c.budget.release(targetUpSeries)
+}
+
 // ForgetPolicy stops the policy's loops, waits for them, and withdraws its
 // series, in that order, so no loop writes after the withdrawal.
 func (c *Collector) ForgetPolicy(policyName string) {
@@ -662,6 +712,7 @@ func (c *Collector) ForgetPolicy(policyName string) {
 	for k, l := range c.loops {
 		if k.policy == policyName {
 			l.cancel()
+			c.releaseUpSlot(l)
 			stopped = append(stopped, l)
 			delete(c.loops, k)
 		}
@@ -695,6 +746,7 @@ func (c *Collector) Close() {
 	var all []*loop
 	for k, l := range c.loops {
 		l.cancel()
+		c.releaseUpSlot(l)
 		all = append(all, l)
 		delete(c.loops, k)
 	}
