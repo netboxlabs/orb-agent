@@ -342,6 +342,90 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
+// validatePolicy — one device, once
+// ---------------------------------------------------------------------------
+
+// A target's identity is the device. Everything below validation keys on the
+// bare host — the runner's subscribed map, the sweep's pre-marking, the
+// collector's loop — so a second entry for a host already named is silently
+// dropped rather than refused. Keying those on the port instead would only move
+// the collision into the series store, where the two would share device_ip and
+// policy.
+func TestParsePolicies_RejectsTwoPortsOnOneHost(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: 10.0.0.1
+          port: 6030
+        - host: 10.0.0.1
+          port: 57400
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "duplicate of target")
+}
+
+// The inline spelling of the same mistake. The check runs after the host and
+// the port have been decided together, so it cannot be evaded by writing the
+// port on the other side of the colon.
+func TestParsePolicies_RejectsTwoInlinePortsOnOneHost(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: 10.0.0.1:6030
+        - host: 10.0.0.1:57400
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "duplicate of target")
+}
+
+// Two spellings of one address are one device. Comparing the raw text would let
+// these through and leave the effective configuration to depend on which entry
+// the collector happened to start first.
+func TestParsePolicies_RejectsTwoSpellingsOfOneAddress(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: "[2001:db8::1]"
+        - host: 2001:0db8::1
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "duplicate of target")
+}
+
+// A range is not part of the check. Pinning a host inside a subnet is the
+// documented way to give one device its own credentials, and the sweep's
+// expansion dedupe is what resolves it: the explicit entry wins the address.
+func TestParsePolicies_AcceptsAHostPinnedInsideARange(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: 10.0.0.1
+        - host: 10.0.0.0/24
+`))
+	require.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
 // validatePolicy — rescan_interval_ms
 // ---------------------------------------------------------------------------
 

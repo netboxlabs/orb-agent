@@ -655,7 +655,38 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			}
 		}
 	}
+	if err := checkDuplicateTargets(policy.Scope.Targets); err != nil {
+		return err
+	}
 	return checkPolicyExpansion(policy.Scope.Targets)
+}
+
+// checkDuplicateTargets rejects two explicit targets naming one device.
+//
+// A target's identity is the device, not the endpoint. The runner's subscribed
+// map, the sweep's pre-marking and the collector's loop key are all keyed on the
+// bare host, so a second entry for a host already named is silently dropped
+// somewhere below validation rather than refused here. Keying those on the port
+// as well would not help: both entries would export device_ip and policy
+// attributes that are equal, and collide in the series store instead.
+//
+// Only single endpoints are compared. A CIDR or range is left to the sweep's
+// expansion dedupe, where an explicitly named host beats the candidate the
+// range produced for it and keeps its own port and credentials.
+func checkDuplicateTargets(entries []config.Target) error {
+	seen := make(map[string]string, len(entries))
+	for _, t := range entries {
+		bare, _, _ := splitEffectivePort(t.Host, t.Port)
+		if !targets.IsSingleEndpoint(bare) {
+			continue
+		}
+		key := canonicalHost(bare)
+		if first, dup := seen[key]; dup {
+			return fmt.Errorf("target %s: duplicate of target %s; one policy subscribes to a device once", t.Host, first)
+		}
+		seen[key] = t.Host
+	}
+	return nil
 }
 
 // validMode accepts the subscription modes a policy or a target may name. An

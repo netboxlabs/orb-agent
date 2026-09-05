@@ -16,13 +16,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/gnmi"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/policy"
 )
 
 func newInternalTestServer(t *testing.T) *Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	manager := policy.NewManager(context.Background(), logger, policy.Options{})
+	// The fake dialer for the reason server_test.go uses one: a policy start
+	// dials its targets, and nothing in this file should reach the network.
+	dialer := &gnmi.FakeDialer{Session: &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}, SampleReplay: time.Hour}}
+	manager := policy.NewManager(context.Background(), logger, policy.Options{Dialer: dialer})
 	return NewServer("127.0.0.1", 0, logger, manager, "1.0.0")
 }
 

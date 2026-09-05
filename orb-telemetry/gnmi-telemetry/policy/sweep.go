@@ -224,8 +224,8 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 	return admitted, out, nil
 }
 
-// sweepOutcome is what the sweep run reports. Run has only EntityCount and
-// Reason to say it with, so the counts are rendered into the reason text.
+// sweepOutcome is what one sweep did, rendered into the single Debug line the
+// sweep logs when it ends.
 //
 // explicit is kept apart from admitted because the two are not the same claim. A
 // named host is started without being probed, so folding it into admitted
@@ -248,10 +248,10 @@ func (o sweepOutcome) probed() int { return o.admitted + o.rejected }
 func (o sweepOutcome) started() int { return o.explicit + o.admitted }
 
 // total is how many targets this policy is subscribed to once the sweep
-// finishes. It is what the run reports as its entity count, rather than the
-// number newly started: a rescan tick that finds nothing new is the normal state
-// of a healthy policy, and reporting 0 there would read as a policy that had
-// stopped discovering anything.
+// finishes. It is what the summary leads with, rather than the number newly
+// started: a rescan tick that finds nothing new is the normal state of a healthy
+// policy, and leading with 0 there would read as a policy that had stopped
+// discovering anything.
 func (o sweepOutcome) total() int { return o.subscribed + o.started() }
 
 func (o sweepOutcome) summary() string {
@@ -337,7 +337,7 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 				derived.ID = ""
 			}
 
-			key := dedupeKey(derived.Host, derived.Port)
+			key := dedupeKey(derived.Host)
 			if at, dup := seen[key]; dup {
 				// An explicit entry beats one produced by an expansion, so a
 				// device pinned inside a subnet keeps its own settings — in
@@ -379,10 +379,13 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 	return out, nil
 }
 
-// dedupeKey collapses two spellings of one endpoint. The key is the canonical
-// host plus the effective port, so two ports on one address stay two endpoints.
-func dedupeKey(host string, port uint16) string {
-	return fmt.Sprintf("%s:%d", canonicalHost(host), port)
+// dedupeKey collapses two spellings of one device. The key is the canonical host
+// alone, because a policy subscribes to a device once: everything below keys on
+// the bare host, from the runner's subscribed map to the collector's loop, so a
+// pinned entry inside a range wins the address and keeps its own port and
+// credentials rather than becoming a second endpoint beside the derived one.
+func dedupeKey(host string) string {
+	return canonicalHost(host)
 }
 
 // probe asks one address whether anything is listening.

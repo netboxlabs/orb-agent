@@ -27,7 +27,6 @@ type perHostDialer struct {
 
 	mu       sync.Mutex
 	dialed   []string
-	specs    []gnmi.TargetSpec
 	closed   map[string]int
 	inFlight int
 	peak     int
@@ -45,7 +44,6 @@ func (d *perHostDialer) Dial(_ context.Context, spec gnmi.TargetSpec) (gnmi.Sess
 	}
 	d.mu.Lock()
 	d.dialed = append(d.dialed, spec.Host)
-	d.specs = append(d.specs, spec)
 	d.mu.Unlock()
 	// Embed a real FakeSession so an admitted target's loop can run: it needs
 	// Subscribe and the rest of the interface, not just the two methods the
@@ -346,9 +344,9 @@ func TestAnAddressThatNeverRepliesIsRejected(t *testing.T) {
 		"only .2 answered; .1 went silent and gets no subscription")
 }
 
-// The key separates two ports on one address and collapses two spellings of
-// one address, so the sweep cannot subscribe to one device twice.
-func TestDedupeKeySeparatesPorts(t *testing.T) {
-	require.NotEqual(t, dedupeKey("10.0.0.1", 6030), dedupeKey("10.0.0.1", 57400))
-	require.Equal(t, dedupeKey("2001:0db8::1", 9339), dedupeKey("2001:db8::1", 9339))
+// The key is the canonical host, so two spellings of one device collapse and the
+// sweep cannot subscribe to it twice.
+func TestDedupeKeyIsTheCanonicalHost(t *testing.T) {
+	require.Equal(t, dedupeKey("2001:0db8::1"), dedupeKey("2001:db8::1"))
+	require.Equal(t, dedupeKey("SW1.example.net"), dedupeKey("sw1.example.net"))
 }
