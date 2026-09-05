@@ -155,9 +155,14 @@ func TestRunnerStopWaitsForTheSweep(t *testing.T) {
 }
 
 // The path probes a session runs before it opens a stream are bounded by the
-// policy, not by the loop's own context, so the resolved probe timeout has to
-// reach the collector with the target it applies to.
-func TestRunnerHandsTheCollectorTheResolvedProbeTimeout(t *testing.T) {
+// policy, not by the loop's own context, so the probe timeout has to reach the
+// collector with the target it applies to. What passes is the field as written,
+// not the resolved value: the sweep's three-second default is a reachability
+// check on an address that answers or does not, while a path probe waits on a
+// live device's Get, and resolving here would have handed the shorter of the
+// two to both and pruned a slow but healthy path. An unset field passes zero,
+// which leaves the session on its own default.
+func TestRunnerHandsTheCollectorTheProbeTimeoutAsWritten(t *testing.T) {
 	start := func(cfg config.PolicyConfig) collector.Options {
 		spy := &spyCollector{}
 		cfg.MetricsInterval = intp(30)
@@ -173,8 +178,8 @@ func TestRunnerHandsTheCollectorTheResolvedProbeTimeout(t *testing.T) {
 		return spy.started[0]
 	}
 
-	assert.Equal(t, config.DefaultProbeTimeoutMs*time.Millisecond, start(config.PolicyConfig{}).ProbeTimeout,
-		"a policy that names no probe timeout hands over the default")
+	assert.Zero(t, start(config.PolicyConfig{}).ProbeTimeout,
+		"a policy that names no probe timeout hands over none, leaving the session its own default")
 	assert.Equal(t, 750*time.Millisecond, start(config.PolicyConfig{ProbeTimeoutMs: 750}).ProbeTimeout,
 		"a policy that names one hands over what it named")
 }

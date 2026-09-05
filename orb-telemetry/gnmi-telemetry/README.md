@@ -101,13 +101,14 @@ The first subscribe on a session probes each of those paths first, with a
 one-path Get under that path's own origin, and leaves out the ones the target
 rejects, logging each with the error it gave. A subscription is atomic on a
 strict target, so one path the device does not carry would otherwise sink every
-other path with it. Each probe is bounded by `probe_timeout_ms`, so a target
-that answers Capabilities and then goes silent under one path costs that probe
-rather than the whole subscription. The verdicts are remembered for the session,
-and a target that rejects every probe is sent the full set rather than nothing. The stream's
-sync response names the paths it ended up carrying, so a reconnect withdraws
-only the series of the subtrees that streamed: a pruned path restates nothing
-because it was never subscribed.
+other path with it. Each probe is bounded, by `probe_timeout_ms` when the policy
+sets one and by ten seconds when it does not, so a target that answers
+Capabilities and then goes silent under one path costs that probe rather than
+the whole subscription. The verdicts are remembered for the session, and a
+target that rejects every probe is sent the full set rather than nothing. The
+stream's sync response names the paths it ended up carrying, so a reconnect
+withdraws only the series of the subtrees that streamed: a pruned path restates
+nothing because it was never subscribed.
 
 A device that refuses that request is not abandoned. The delivery mode walks a
 ladder, and each step down counts one `gnmi.mode_fallback_total`:
@@ -222,7 +223,7 @@ set on the command line rather than by a policy.
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
 | `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before its first sync response or data, or that reports InvalidArgument or Unimplemented after its sync, alike. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
-| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` | How long one sweep probe waits for an address to answer Capabilities, and how long one subscription-path probe waits for its Get. Zero takes the default. |
+| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` sweep, `10000` path probe | How long one sweep probe waits for an address to answer Capabilities. Set, it also bounds each subscription-path probe; unset, the sweep waits 3 s and a path probe 10 s. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |
 | `send_credentials_to_unverified_targets` | boolean | `false` | Permits a CIDR or range target to carry a password while TLS does not verify the server. |
 

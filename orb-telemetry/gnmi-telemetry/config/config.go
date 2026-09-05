@@ -15,7 +15,10 @@ const (
 	// DefaultGNMIPort is the IANA port for gNMI, used when neither the scope
 	// nor the target names one.
 	DefaultGNMIPort = 9339
-	// DefaultProbeTimeoutMs bounds a sweep probe of one address.
+	// DefaultProbeTimeoutMs bounds a sweep probe of one address. It is not the
+	// default for a subscription path probe, which has a longer one of its own:
+	// a sweep probe asks whether an address answers at all, while a path probe
+	// waits on a live device's Get.
 	DefaultProbeTimeoutMs = 3000
 	// MinRescanIntervalMs is the floor for a non-zero rescan interval.
 	MinRescanIntervalMs = 60000
@@ -149,7 +152,10 @@ type PolicyConfig struct {
 	// ProfilesDir is a per-policy override tree, resolved inside the root the
 	// process was started with.
 	ProfilesDir string `yaml:"profiles_dir,omitempty"`
-	// ProbeTimeoutMs bounds how long a sweep waits for one address.
+	// ProbeTimeoutMs bounds how long a sweep waits for one address and, when
+	// set, how long each subscription path probe waits for its Get. Unset, the
+	// sweep takes DefaultProbeTimeoutMs and the path probe its own default of
+	// ten seconds.
 	ProbeTimeoutMs int `yaml:"probe_timeout_ms,omitempty"`
 	// RescanIntervalMs re-probes addresses the policy is not subscribed to.
 	// Zero disables it; a non-zero value below MinRescanIntervalMs is

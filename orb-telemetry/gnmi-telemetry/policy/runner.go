@@ -130,7 +130,12 @@ func (r *Runner) startTarget(t config.Target) {
 	t.Port = resolvedPort(t.Port)
 	err := r.collector.CollectTarget(r.ctx, t, collector.Options{
 		MetricsInterval: r.interval, Mode: r.modeFor(t), PolicyName: r.name,
-		ProbeTimeout: r.policy.Config.ResolvedProbeTimeout(),
+		// The field as written, not the resolved value: unset, it leaves the
+		// session's own default in force, because the sweep's default is a
+		// reachability check on an address while a path probe waits on a live
+		// device's Get, and the shorter of the two would prune a slow but
+		// healthy path for the session.
+		ProbeTimeout: time.Duration(r.policy.Config.ProbeTimeoutMs) * time.Millisecond,
 	})
 	if err != nil {
 		r.logger.Warn("target not started", "policy", r.name, "host", t.Host, "error", err)
