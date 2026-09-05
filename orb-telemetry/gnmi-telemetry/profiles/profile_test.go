@@ -500,6 +500,57 @@ subscriptions:
 // conflicts before validation has dropped it marks the valid profile that
 // defines one of those names too, and both go in the one pass; no later pass
 // can bring the valid one back, because the profile it disagreed with is gone.
+// A profile that loses on one name must not claim its other names: with acme_a
+// holding x, acme_b disagreeing on x while also defining y, and acme_c defining
+// y differently, registering acme_b's y before it is dropped would take acme_c
+// down with it in the same pass.
+func TestAConflictLoserDoesNotClaimItsOtherNames(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644))
+	}
+	write("acme_a.yaml", `
+extends: _base
+match: {vendor: acme_a}
+subscriptions:
+  - path: /acme/a/state
+    mode: sample
+    metrics:
+      - {leaf: x, name: acme_x, type: counter, unit: By}
+`)
+	write("acme_b.yaml", `
+extends: _base
+match: {vendor: acme_b}
+subscriptions:
+  - path: /acme/b/state
+    mode: sample
+    metrics:
+      - {leaf: x, name: acme_x, type: gauge, unit: By}
+      - {leaf: y, name: acme_y, type: gauge, unit: By}
+`)
+	write("acme_c.yaml", `
+extends: _base
+match: {vendor: acme_c}
+subscriptions:
+  - path: /acme/c/state
+    mode: sample
+    metrics:
+      - {leaf: y, name: acme_y, type: counter, unit: "{packet}"}
+`)
+	for range 10 {
+		store, err := LoadProfiles(dir, quiet())
+		require.NoError(t, err)
+		require.Contains(t, store.Names(), "acme_a")
+		require.NotContains(t, store.Names(), "acme_b", "the loser on x is skipped")
+		require.Contains(t, store.Names(), "acme_c", "the loser's y must not have claimed the name first")
+		c, ok := store.Get("acme_c")
+		require.True(t, ok)
+		m := metricOf(c, "acme_y")
+		require.NotNil(t, m)
+		require.Equal(t, "counter", m.Type)
+	}
+}
+
 func TestAnInvalidProfileDoesNotTakeAValidOneDownWithIt(t *testing.T) {
 	dir := t.TempDir()
 	// acme_bad sorts first, so its acme_value would be the definition the

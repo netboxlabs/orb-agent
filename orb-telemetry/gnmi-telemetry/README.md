@@ -309,7 +309,8 @@ Every metric name comes from the profile: a metric named `if_in_octets` is
 exported as `gnmi.if_in_octets`. Nothing derives a name from the device, so the
 names a policy produces are known before it runs, from the profile it will
 match. A metric name has one kind and one unit across every profile the process
-loads: a profile that disagrees with a name another profile already defines is
+loads: a profile is judged as a whole, so one that loses on a name claims none
+of its names; a profile that disagrees with a name another profile already defines is
 skipped with a warning, and a series that disagrees at export time is dropped
 with reason `schema_conflict`.
 

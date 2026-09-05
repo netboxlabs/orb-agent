@@ -456,17 +456,27 @@ func schemaConflicts(resolved map[string]*Profile, isOverride func(name string) 
 	owner := map[string]string{}
 	out := map[string]error{}
 	for _, name := range append(bundledNames, overrideNames...) {
+		// A profile is judged as a whole before it registers anything: one
+		// that loses on a name is dropped by the loader, so letting it claim
+		// its other names first would make a later profile lose to a
+		// definition that is about to disappear.
 		for _, sub := range resolved[name].Subscriptions {
 			for _, m := range sub.Metrics {
 				want, seen := held[m.Name]
-				switch {
-				case !seen:
-					held[m.Name] = metricSchema{typ: m.Type, unit: m.Unit}
-					owner[m.Name] = name
-				case want.typ == m.Type && want.unit == m.Unit:
-				case out[name] == nil:
+				if seen && (want.typ != m.Type || want.unit != m.Unit) && out[name] == nil {
 					out[name] = fmt.Errorf("profile %s: metric %q is %s in unit %q here and %s in unit %q in profile %s; one metric name has one type and unit across every profile",
 						name, m.Name, m.Type, m.Unit, want.typ, want.unit, owner[m.Name])
+				}
+			}
+		}
+		if out[name] != nil {
+			continue
+		}
+		for _, sub := range resolved[name].Subscriptions {
+			for _, m := range sub.Metrics {
+				if _, seen := held[m.Name]; !seen {
+					held[m.Name] = metricSchema{typ: m.Type, unit: m.Unit}
+					owner[m.Name] = name
 				}
 			}
 		}
