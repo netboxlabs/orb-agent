@@ -42,7 +42,7 @@ export GOWORK = off
 # Backends, grouped by toolchain — used by the *-all aggregate targets. Go
 # backends carry their parent directory since they are not all under
 # orb-discovery/ (snmp-telemetry lives under orb-telemetry/).
-GO_BACKENDS = orb-discovery/network-discovery orb-discovery/snmp-discovery orb-discovery/gnmi-discovery orb-telemetry/snmp-telemetry
+GO_BACKENDS = orb-discovery/network-discovery orb-discovery/snmp-discovery orb-discovery/gnmi-discovery orb-telemetry/snmp-telemetry orb-telemetry/gnmi-telemetry
 PY_BACKENDS = device-discovery worker
 
 .PHONY: agent agent_bin
