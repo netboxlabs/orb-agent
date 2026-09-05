@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	gpath "github.com/openconfig/gnmic/pkg/api/path"
 	"gopkg.in/yaml.v3"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
@@ -104,7 +105,8 @@ var reservedMetrics = func() map[string]bool {
 }()
 
 // Validate checks the schema rules: at least one subscription, a path and
-// metrics per subscription, a stream mode, metric types, unique lower-case
+// metrics per subscription, a path the request parser accepts and no two
+// subscriptions on one path, a stream mode, metric types, unique lower-case
 // names that no health metric of the backend already owns, enum and bool only
 // on gauges, a "." leaf alone in its subscription, a leaf carrying no key
 // predicate and mapped by one metric of its subscription, an attribute that
@@ -123,10 +125,31 @@ func (p *Profile) Validate() error {
 		return fmt.Errorf("profile %s has no subscriptions", p.Name)
 	}
 	seen := map[string]bool{}
+	paths := map[string]bool{}
 	for i, s := range p.Subscriptions {
 		if s.Path == "" {
 			return fmt.Errorf("profile %s: subscription %d: path is required", p.Name, i+1)
 		}
+		// The request builders parse every path with this parser, and one path
+		// it rejects fails the whole subscribe or Get request rather than its
+		// own entry. The matcher's parser is more forgiving (an unbalanced
+		// bracket is just a key part to it), so a path only it accepts loads
+		// here and then has every target on the profile walk the ladder to the
+		// bottom exporting nothing. Parsing with the builders' own parser is
+		// what keeps validation and the wire in agreement.
+		if _, err := gpath.ParsePath(s.Path); err != nil {
+			return fmt.Errorf("profile %s: subscription %q: path does not parse: %v", p.Name, s.Path, err)
+		}
+		// merge keys a parent's subscriptions by path, so a path stated twice
+		// in one file is the only way a duplicate reaches here, and it is a
+		// mistake: both entries sit at the same depth, so matchUpdate's deepest
+		// wins preference keeps whichever comes first and the other's metrics
+		// are never written, while Get polling buckets metric names by path and
+		// would merge the two.
+		if paths[s.Path] {
+			return fmt.Errorf("profile %s: subscription %q is declared twice", p.Name, s.Path)
+		}
+		paths[s.Path] = true
 		if s.Mode != "sample" && s.Mode != "on_change" {
 			return fmt.Errorf("profile %s: subscription %q: mode %q is not sample or on_change", p.Name, s.Path, s.Mode)
 		}
@@ -197,6 +220,16 @@ func (p *Profile) Validate() error {
 			if strings.Contains(m.Leaf, "[") {
 				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key",
 					p.Name, s.Path, m.Name)
+			}
+			// A metric's full path is its subscription path plus its leaf, and
+			// that is the form the device's own update paths take. A leaf that
+			// makes the join unparseable can never be a path an update carries,
+			// so the metric names a series nothing ever writes.
+			if m.Leaf != "." {
+				if _, err := gpath.ParsePath(s.Path + "/" + m.Leaf); err != nil {
+					return fmt.Errorf("profile %s: subscription %q: metric %s: path does not parse: %v",
+						p.Name, s.Path, m.Name, err)
+				}
 			}
 			if leaves[m.Leaf] {
 				return fmt.Errorf("profile %s: subscription %q: leaf %s is mapped twice", p.Name, s.Path, m.Leaf)

@@ -191,6 +191,29 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Attributes: map[string]string{"interface_name": "name"},
 			Metrics:    []Metric{{Leaf: "subinterfaces/subinterface[index=*]/state/counters/in-octets", Name: "n", Type: "counter"}},
 		}}}, `subscription "/interfaces/interface[name=*]/state": metric n: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key`},
+		// The matcher's parser reads an unbalanced bracket as a key part and
+		// carries on, but the parser the subscribe and Get builders use rejects
+		// the path, and one bad path fails the whole request: the profile would
+		// load and every target on it would export nothing.
+		{"unbalanced_bracket", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/interfaces/interface[name=*", Mode: "sample",
+			Metrics: []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
+		}}}, `subscription "/interfaces/interface[name=*": path does not parse`},
+		// A metric's path is its subscription path plus its leaf, in the form
+		// the device's own update paths take, so a leaf the request parser
+		// cannot read names a series no update can match.
+		{
+			"bad_leaf_path",
+			Profile{Name: "x", Subscriptions: one(Metric{Leaf: "in-octets]", Name: "n", Type: "counter"})},
+			`subscription "/a": metric n: path does not parse`,
+		},
+		// Both entries sit at one depth, so the collector's deepest-wins match
+		// keeps the first and the second's metrics are never written, while Get
+		// polling buckets metric names by path and merges the two.
+		{"duplicate_subscription_path", Profile{Name: "x", Subscriptions: []Subscription{
+			{Path: "/a", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "a", Type: "gauge"}}},
+			{Path: "/a", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "b", Type: "gauge"}}},
+		}}, `subscription "/a" is declared twice`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

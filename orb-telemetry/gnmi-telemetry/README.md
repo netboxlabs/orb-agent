@@ -419,7 +419,13 @@ subscriptions:
   keys, so a list element must be written with its key: `/interfaces/interface`
   matches nothing the device sends for `interface[name=eth0]`. Writing the key
   is also what gives `attributes` something to promote, without which every
-  element of the list would share one series.
+  element of the list would share one series. Every `path`, and every `path`
+  joined with a metric's `leaf`, is checked at load with the same gNMI path
+  parser the subscribe and Get requests are built with, so a malformed one is
+  rejected there instead of failing the whole request on the device. A `path` is
+  unique within the resolved profile: two subscriptions on one path are matched
+  at the same depth, so only the first would ever be written, and a repeat is
+  rejected.
 - `leaf` is relative to `path` and may contain `/`, as `total/instant` does under
   a CPU's state. A `leaf` of `.` is the subscription path itself, for a
   subscription made directly to a leaf, and must then be the only metric in it.
