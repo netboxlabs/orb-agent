@@ -155,7 +155,10 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
    subtree sends a sync and no data at all.
 3. Get polling at `metrics_interval`, last. A subscription whose profile gives
    it an origin of its own is skipped here and logged once, because one Get
-   carries one origin; a native path is reachable only by streaming.
+   carries one origin; a native path is reachable only by streaming. A Get asks
+   for the subscription path exactly as the profile writes it, keyed wildcards
+   included, so a target that answers a wildcard Get with an error cannot use
+   this rung at all.
 
 A policy that names a mode chooses which of those rungs are tried. `mode:
 on_change` keeps the mode the profile gives each path, so counters still stream
@@ -506,7 +509,10 @@ reported per target in `GET /api/v1/status`.
 file there whose name matches a bundled profile replaces it, and a file with any
 other name is added as a new profile. An override that fails to parse, fails to
 resolve its `extends`, or breaks a schema rule is logged and the bundled profile
-it displaced is restored, so one bad file cannot take down a working set.
+it displaced is restored, so one bad file cannot take down a working set. An
+override that fails on its own is dropped before the profiles are judged against
+each other over a metric name's kind and unit, so it cannot take a valid one
+down with it.
 
 A policy may set `profiles_dir` under `config` to use a directory of its own
 instead. That value arrives over the API and names a tree the backend reads, so

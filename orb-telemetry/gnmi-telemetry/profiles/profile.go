@@ -588,55 +588,76 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 	// Validation mirrors the restore above: a pass over the resolved profiles
 	// only restores an invalid override to its bundled version or drops one that
 	// has none, never erroring, and the passes repeat while anything changed.
-	// A profile that disagrees with another about a metric name's type or unit
-	// takes the same path as an invalid one, and is recomputed each pass because
-	// the profile it disagreed with may itself have been restored or dropped.
 	// Leaving an entry that already IS its bundled one for the next pass is what
 	// makes a bad shared parent survivable: `resolved` was built before any
 	// restore, so every child of an invalid _base override is invalid in the
 	// first pass too and erroring there would turn one bad override file into a
 	// fatal startup, whatever the map order. Repeating also covers an override
 	// that was valid against an overridden parent and invalid against the
-	// restored one; it is skipped like any other bad override. The loop is
-	// bounded by the number of names, because each change replaces an override
-	// with its bundled entry or drops it.
+	// restored one; it is skipped like any other bad override.
+	//
+	// A profile that disagrees with another about a metric name's type or unit
+	// takes the same path, but never in the same pass as a profile that failed
+	// on its own: an invalid profile contributes nothing to the store, so the
+	// names it claims are not names anything else has to agree with, and judging
+	// the conflicts against them would mark the valid profile defining one of
+	// those names too and drop both at once, which no later pass can undo.
+	// Conflicts are therefore computed only among the profiles that validated,
+	// and only once the validation step has left a pass with nothing to change.
+	// They are recomputed each pass, because the profile a name disagreed with
+	// may itself have been restored or dropped since.
+	//
+	// The loop is bounded by the number of names, because each change replaces
+	// an override with its bundled entry or drops it, and neither can happen to
+	// one name twice.
 	var invalid error
+	// fallBack restores an override to the bundled profile it displaced, or
+	// drops one that displaced nothing, and reports whether it changed the set.
+	// An entry already standing as its bundled self has nothing to fall back to;
+	// it is left alone, and `invalid` carries it out below as a build bug.
+	fallBack := func(name string, err error) bool {
+		if invalid == nil {
+			invalid = err
+		}
+		b, ok := bundled[name]
+		switch {
+		case ok && raw[name] != b:
+			raw[name] = b
+			if logger != nil {
+				logger.Warn("invalid gNMI profile override; falling back to bundled profile",
+					"profile", name, "error", err)
+			}
+			return true
+		case !ok:
+			delete(raw, name)
+			if logger != nil {
+				logger.Warn("skipping invalid gNMI profile", "profile", name, "error", err)
+			}
+			return true
+		}
+		return false
+	}
 	for {
 		changed := false
 		invalid = nil
-		conflicts := schemaConflicts(resolved, func(name string) bool {
-			b, ok := bundled[name]
-			return !ok || raw[name] != b
-		})
+		valid := make(map[string]*Profile, len(resolved))
 		for name, p := range resolved {
-			err := p.Validate()
-			if err == nil {
-				// A name the process exports has one kind and unit, which no
-				// single profile can settle: the conflict belongs to whichever
-				// profile disagrees with the definition already registered.
-				err = conflicts[name]
-			}
-			if err == nil {
+			if err := p.Validate(); err != nil {
+				changed = fallBack(name, err) || changed
 				continue
 			}
-			if invalid == nil {
-				invalid = err
-			}
-			b, ok := bundled[name]
-			switch {
-			case ok && raw[name] != b:
-				raw[name] = b
-				changed = true
-				if logger != nil {
-					logger.Warn("invalid gNMI profile override; falling back to bundled profile",
-						"profile", name, "error", err)
-				}
-			case !ok:
-				delete(raw, name)
-				changed = true
-				if logger != nil {
-					logger.Warn("skipping invalid gNMI profile", "profile", name, "error", err)
-				}
+			valid[name] = p
+		}
+		if !changed {
+			// A name the process exports has one kind and unit, which no single
+			// profile can settle: the conflict belongs to whichever profile
+			// disagrees with the definition already registered.
+			conflicts := schemaConflicts(valid, func(name string) bool {
+				b, ok := bundled[name]
+				return !ok || raw[name] != b
+			})
+			for name, err := range conflicts {
+				changed = fallBack(name, err) || changed
 			}
 		}
 		if !changed {

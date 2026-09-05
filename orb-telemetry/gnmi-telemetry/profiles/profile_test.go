@@ -495,6 +495,48 @@ subscriptions:
 	assert.Equal(t, "gauge", m.Type, "the bundled definition stands")
 }
 
+// A profile that fails on its own contributes no metric to the store, so the
+// names it claims are not names anything else has to agree with. Judging the
+// conflicts before validation has dropped it marks the valid profile that
+// defines one of those names too, and both go in the one pass; no later pass
+// can bring the valid one back, because the profile it disagreed with is gone.
+func TestAnInvalidProfileDoesNotTakeAValidOneDownWithIt(t *testing.T) {
+	dir := t.TempDir()
+	// acme_bad sorts first, so its acme_value would be the definition the
+	// conflict check registers. It is invalid on its own: a counter carrying an
+	// enum.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme_bad.yaml"), []byte(`
+extends: _base
+match: {vendor: acmebad}
+subscriptions:
+  - path: /acme/bad/state
+    mode: sample
+    metrics:
+      - {leaf: count, name: acme_count, type: counter, enum: {A: 1}}
+      - {leaf: value, name: acme_value, type: gauge, unit: By}
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme_good.yaml"), []byte(`
+extends: _base
+match: {vendor: acmegood}
+subscriptions:
+  - path: /acme/good/state
+    mode: sample
+    metrics:
+      - {leaf: value, name: acme_value, type: counter, unit: "{packet}"}
+`), 0o644))
+
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err)
+	assert.NotContains(t, store.Names(), "acme_bad", "the profile that fails on its own is dropped")
+	require.Contains(t, store.Names(), "acme_good", "the valid profile is not dropped with it")
+	good, ok := store.Get("acme_good")
+	require.True(t, ok)
+	m := metricOf(good, "acme_value")
+	require.NotNil(t, m, "the valid profile keeps its definition")
+	assert.Equal(t, "counter", m.Type)
+	assert.Equal(t, "{packet}", m.Unit)
+}
+
 // A profile with match criteria but nothing to subscribe to would win targets
 // away from the profile that could serve them and then export nothing at all,
 // so it is skipped like any other invalid override rather than loaded empty.
