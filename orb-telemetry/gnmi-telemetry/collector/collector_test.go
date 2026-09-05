@@ -703,3 +703,45 @@ func TestCollectorsSharingABudgetRefuseSeriesPastIt(t *testing.T) {
 	assert.Equal(t, "10.0.0.1", device.AsString(), "the series the allowance already holds is the one kept")
 	assert.Same(t, budget, first.Budget(), "the collector bounds itself on the budget it was given")
 }
+
+// A collector the manager releases is closed, and the series it was holding
+// have to go back to the shared budget with it. The manager forgets every
+// policy before it releases a collector, which frees them by the other path,
+// so a collector that keeps its slots past Close costs the process an
+// allowance nothing will ever export against again.
+func TestClosingACollectorReturnsItsSeriesToTheBudget(t *testing.T) {
+	reader := testReader(t)
+	budget := newBudget(1)
+	start := func(host string) *Collector {
+		sess := &gnmi.FakeSession{
+			Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+			SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
+		}
+		c := NewWithBudget(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget)
+		t.Cleanup(c.Close)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		require.NoError(t, c.CollectTarget(ctx, target(host, ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+		return c
+	}
+	deviceOf := func(host string) bool {
+		m, ok := collect(t, reader)["gnmi.if_in_octets"]
+		if !ok {
+			return false
+		}
+		for _, pt := range m.Data.(metricdata.Sum[int64]).DataPoints {
+			if v, ok := pt.Attributes.Value("device_ip"); ok && v.AsString() == host {
+				return true
+			}
+		}
+		return false
+	}
+
+	first := start("10.0.0.1")
+	waitFor(t, 3*time.Second, func() bool { return deviceOf("10.0.0.1") })
+	first.Close()
+
+	start("10.0.0.2")
+	waitFor(t, 3*time.Second, func() bool { return deviceOf("10.0.0.2") })
+	assert.Zero(t, drops(t, reader, "series_limit"), "the closed collector's slots were free to take")
+}

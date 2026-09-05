@@ -130,4 +130,10 @@ func TestStoresShareOneSeriesBudget(t *testing.T) {
 
 	first.forgetPolicy("p1")
 	assert.True(t, second.setGauge(k3, 1, 1, age, a3), "the slot one store frees is one another can take")
+
+	require.False(t, first.setGauge(k1, 1, 1, age, a1), "the allowance is full again")
+	second.deleteMatching(map[string]struct{}{"g": {}}, []attribute.KeyValue{
+		attribute.String("policy", "p2"), attribute.String("interface_name", "b"),
+	})
+	assert.True(t, first.setGauge(k1, 1, 1, age, a1), "a slot a delete frees in one store is one another can take")
 }

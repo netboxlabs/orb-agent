@@ -603,7 +603,9 @@ func (c *Collector) TargetStatuses(policyName string) []TargetStatus {
 	return out
 }
 
-// Close stops every loop, waits, and unregisters every instrument.
+// Close stops every loop, waits, unregisters every instrument, and hands the
+// series it was holding back to the budget. The withdrawal runs after the
+// instruments are gone, so no callback can observe a store being emptied.
 func (c *Collector) Close() {
 	c.loopsMu.Lock()
 	c.closed = true
@@ -618,4 +620,5 @@ func (c *Collector) Close() {
 		<-l.done
 	}
 	c.exporter.close()
+	c.store.releaseAll()
 }

@@ -156,6 +156,21 @@ func (s *store) forgetPolicy(policy string) {
 	}
 }
 
+// releaseAll withdraws every series the store holds and returns each one's
+// slot to the budget. A closed collector's series are never exported again, so
+// a slot it kept would be one no store in the process could ever use. The
+// manager forgets a policy before it releases the collector that ran it, which
+// frees them by the other path, but a collector must not depend on its caller
+// for that.
+func (s *store) releaseAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.series {
+		s.budget.release(k.metric)
+	}
+	s.series = map[seriesKey]*point{}
+}
+
 // deleteMatching withdraws every series of one of the named metrics that
 // carries all the given attributes, whatever else it carries: a deleted list
 // element takes its metrics with it. The names bound the blast radius: a
