@@ -180,6 +180,21 @@ type getServer struct {
 	holds  map[string]bool
 	blocks map[string]bool
 	multi  bool
+	// capsBlocks holds the Capabilities RPC the same way blocks holds a Get:
+	// the request waits for its own cancellation, which is how a target that
+	// accepts a connection and then says nothing at all behaves.
+	capsBlocks bool
+}
+
+// Capabilities answers the RPC that opens every session, with the empty
+// advertisement of a target that names no encoding, or holds it for ever when
+// the server is told to.
+func (g *getServer) Capabilities(ctx context.Context, _ *gnmiproto.CapabilityRequest) (*gnmiproto.CapabilityResponse, error) {
+	if g.capsBlocks {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
+	return &gnmiproto.CapabilityResponse{}, nil
 }
 
 func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
@@ -346,6 +361,37 @@ func TestASubscriptionPathProbeThatNeverAnswersIsPruned(t *testing.T) {
 		assert.Equal(t, []string{memory}, n.Paths, "the path that never answered its probe is pruned, the one that did is kept")
 	case <-time.After(10 * time.Second):
 		t.Fatal("no sync response from the stream")
+	}
+}
+
+// Capabilities opens every session, and it ran under the context the loop
+// hands runOnce, which lives as long as the policy. A target that accepts the
+// connection and then never answers held that loop for ever: no profile, no
+// subscription, no error to back off from and no reconnect, until the policy
+// was deleted. The call carries the session's probe deadline, and a target
+// that misses it fails like any other.
+func TestACapabilitiesCallThatNeverAnswersIsBounded(t *testing.T) {
+	addr := serveGet(t, &getServer{capsBlocks: true})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Dialed the way a target is, so the timeout travels the whole way: the
+	// policy's spec, the session it dials, and the call that session opens on.
+	s, err := (&GnmicDialer{}).Dial(ctx, TargetSpec{Host: addr, Insecure: true, ProbeTimeout: 100 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	done := make(chan error, 1)
+	go func() {
+		_, capsErr := s.Capabilities(ctx)
+		done <- capsErr
+	}()
+
+	select {
+	case capsErr := <-done:
+		require.Error(t, capsErr, "a target that never answers Capabilities fails the call, it does not succeed")
+	case <-time.After(time.Second):
+		t.Fatal("Capabilities never returned: a call to a silent target is unbounded")
 	}
 }
 

@@ -55,6 +55,22 @@ func fallbacks(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 	return total
 }
 
+// reconnects totals gnmi.subscription_reconnects_total, the way fallbacks
+// totals the ladder's counter: what the run loop counts each time it dials a
+// target again after an attempt of its own ended.
+func reconnects(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	m, ok := collect(t, reader)["gnmi.subscription_reconnects_total"]
+	if !ok {
+		return 0
+	}
+	var total int64
+	for _, pt := range m.Data.(metricdata.Sum[int64]).DataPoints {
+		total += pt.Value
+	}
+	return total
+}
+
 // drops totals gnmi.updates_dropped_total for one reason, the way fallbacks
 // totals the ladder's counter.
 func drops(t *testing.T, reader *sdkmetric.ManualReader, reason string) int64 {

@@ -42,8 +42,9 @@ type Options struct {
 	MetricsInterval time.Duration
 	Mode            string
 	PolicyName      string
-	// ProbeTimeout bounds one subscription-path probe on the session dialed for
-	// this target. Zero leaves the session on its own default.
+	// ProbeTimeout bounds each probe the session dialed for this target runs
+	// on its own: its Capabilities call and one subscription-path Get. Zero
+	// leaves the session on its own default.
 	ProbeTimeout time.Duration
 }
 
@@ -527,7 +528,16 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 	started := time.Now().UnixNano()
 	reconciled := false
 	for {
-		n, err := sess.GetOnce(ctx, paths)
+		// Each Get carries a deadline of its own rather than the loop's
+		// context, which lives as long as the policy: a target that stops
+		// replying without closing would otherwise hold the poll for ever,
+		// with Up still true and no error to back off from. A poll that
+		// outlasts the interval it is due again in has failed, so the
+		// interval is the deadline, and a miss returns like any other Get
+		// error, for the loop to record, back off from and reconnect through.
+		getCtx, cancelGet := context.WithTimeout(ctx, opts.MetricsInterval)
+		n, err := sess.GetOnce(getCtx, paths)
+		cancelGet()
 		if err != nil {
 			return err
 		}

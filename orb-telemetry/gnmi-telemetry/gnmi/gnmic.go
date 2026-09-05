@@ -30,10 +30,11 @@ import (
 // to Get.
 const subscriptionPrefix = "gnmi-telemetry"
 
-// defaultProbeTimeout bounds one subscription-path probe when the dial spec
-// named none of its own. Ten seconds is long enough for a busy target to answer
-// a one-path Get and short enough that a silent path costs one probe rather
-// than the life of the policy.
+// defaultProbeTimeout bounds one probe a session runs on its own, the
+// Capabilities call that opens it and the Get it runs per subscription path,
+// when the dial spec named none of its own. Ten seconds is long enough for a
+// busy target to answer either and short enough that a silent one costs a
+// probe rather than the life of the policy.
 const defaultProbeTimeout = 10 * time.Second
 
 // GnmicDialer implements Dialer using the gnmic library.
@@ -158,8 +159,9 @@ func logPruned(logger *slog.Logger, sub Subscription, err error) {
 	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
 }
 
-// probeDeadline is how long one subscription-path probe may take: what the dial
-// spec asked for, or the package default when it asked for nothing.
+// probeDeadline is how long one probe this session runs may take, the
+// Capabilities call and each subscription-path Get alike: what the dial spec
+// asked for, or the package default when it asked for nothing.
 func (s *gnmicSession) probeDeadline() time.Duration {
 	if s.probeTimeout <= 0 {
 		return defaultProbeTimeout
@@ -252,8 +254,16 @@ func negotiateSubEncoding(advertised []string) string {
 }
 
 // Capabilities runs the gNMI Capabilities RPC and returns a normalized result.
+//
+// The RPC carries a deadline of its own rather than the caller's context,
+// which is the loop's and lives as long as the policy: a target that accepts
+// the connection and then never answers would otherwise hold the loop for
+// ever, with no error, no backoff and no reconnect. A call that misses the
+// deadline fails like any other, and the loop reconnects through it.
 func (s *gnmicSession) Capabilities(ctx context.Context) (*CapabilitiesResult, error) {
-	resp, err := s.tg.Capabilities(ctx)
+	capsCtx, cancel := context.WithTimeout(ctx, s.probeDeadline())
+	resp, err := s.tg.Capabilities(capsCtx)
+	cancel()
 	if err != nil {
 		return nil, fmt.Errorf("gnmi capabilities: %w", err)
 	}

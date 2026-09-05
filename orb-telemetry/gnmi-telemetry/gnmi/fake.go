@@ -25,8 +25,11 @@ type FakeSession struct {
 	// means every path the caller asked for, which is what a target that
 	// answered the whole request returns; a test that wants a snapshot which
 	// only some paths answered names those.
-	GetPaths       []string
-	GetErr         error
+	GetPaths []string
+	GetErr   error
+	// GetBlocks makes GetOnce wait for its context rather than answer, the way
+	// a target that stops replying without closing the connection behaves.
+	GetBlocks      bool
 	ConfigBytes    []byte // returned by GetConfig
 	ConfigErr      error  // if set, GetConfig returns this error
 	ConfigGets     int    // count of GetConfig calls (test assertion)
@@ -126,8 +129,13 @@ func (f *FakeSession) Subscriptions() []Subscription {
 }
 
 // GetOnce returns the scripted Get result, reporting GetPaths as the paths it
-// fetched, or every requested path when the test named none.
-func (f *FakeSession) GetOnce(_ context.Context, paths []string) (Notification, error) {
+// fetched, or every requested path when the test named none. A fake told to
+// block answers nothing at all, until its context ends.
+func (f *FakeSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
+	if f.GetBlocks {
+		<-ctx.Done()
+		return Notification{}, ctx.Err()
+	}
 	n := f.GetResult
 	n.Paths = f.GetPaths
 	if n.Paths == nil {

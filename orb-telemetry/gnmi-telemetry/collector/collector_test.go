@@ -1671,6 +1671,42 @@ func TestASyncOnlyStreamKeepsItsModeOnALaterError(t *testing.T) {
 	assert.Equal(t, int64(0), fallbacks(t, reader), "a drop after the sync is no mode refusal, so no step down the ladder")
 }
 
+// A Get poll ran under the loop's context, which lives as long as the policy.
+// A target that stops replying without closing the connection held that poll
+// for ever: the loop stayed in it with Up still true, so the status reported a
+// healthy target that had delivered nothing since, and there was no error to
+// back off from and no reconnect. Each Get carries the policy's metrics
+// interval as its deadline, since a poll that outlasts the interval it is due
+// again in has failed, and a miss leaves the poll like any other Get error.
+func TestAGetPollThatNeverAnswersFailsTheLoop(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+		},
+		GetBlocks: true,
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A forced mode has one rung, and the synchronous refusal spends it, so
+	// the loop is on Get before the first poll.
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{
+		MetricsInterval: 100 * time.Millisecond, Mode: "sample", PolicyName: "p",
+	}))
+
+	// The poll leaves rather than waits: the target goes down carrying the
+	// error, and the loop that recorded it dials again.
+	waitFor(t, time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && !st[0].Up && st[0].LastError != ""
+	})
+	waitFor(t, time.Second, func() bool { return reconnects(t, reader) > 0 })
+}
+
 // specDialer records the spec of every dial, which the shared FakeDialer
 // discards.
 type specDialer struct {
