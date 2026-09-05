@@ -653,6 +653,12 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			return err
 		}
 		bare, _, inline := splitEffectivePort(t.Host, t.Port)
+		// The blank check above reads the raw host, which ":9339" passes: the
+		// split then leaves an empty host with a valid port, ParsePolicies
+		// stores it, and the target dials ":9339" for the life of the policy.
+		if strings.TrimSpace(bare) == "" {
+			return fmt.Errorf("target %d: host is required", i+1)
+		}
 		if inline && !targets.IsSingleEndpoint(bare) {
 			return fmt.Errorf("target %q: a CIDR or range cannot carry an inline port; use the port field", t.Host)
 		}

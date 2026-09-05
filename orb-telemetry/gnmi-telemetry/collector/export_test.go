@@ -122,6 +122,16 @@ func TestConvertValue(t *testing.T) {
 	assert.Equal(t, int64(42), i)
 	_, ok = counterValue(counter, "18446744073709551615")
 	assert.False(t, ok, "a string counter above int64 is dropped rather than wrapped")
+	_, ok = counterValue(counter, int64(-1))
+	assert.False(t, ok, "a negative int64 is not a cumulative count")
+	_, ok = counterValue(counter, "-1")
+	assert.False(t, ok, "a negative numeric string is not a cumulative count")
+	i, ok = counterValue(counter, int64(0))
+	require.True(t, ok, "zero is a cumulative count")
+	assert.Equal(t, int64(0), i)
+	i, ok = counterValue(counter, "0")
+	require.True(t, ok, "zero as a string is a cumulative count")
+	assert.Equal(t, int64(0), i)
 }
 
 func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {

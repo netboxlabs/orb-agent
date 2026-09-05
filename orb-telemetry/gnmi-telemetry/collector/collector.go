@@ -433,11 +433,11 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 }
 
 // apply matches every update to a profile metric and stores it; a delete
-// withdraws the series of the deleted element and everything under it, and a
-// delete of a single leaf withdraws that leaf's series alone. The
-// notification is stamped with its arrival here rather than with the device's
-// own timestamp: a device whose clock lags by more than the staleness window
-// would otherwise export nothing, silently.
+// withdraws the series of every metric that sits at or below the deleted path,
+// so a container, a list element and a single leaf each withdraw exactly what
+// they name. The notification is stamped with its arrival here rather than with
+// the device's own timestamp: a device whose clock lags by more than the
+// staleness window would otherwise export nothing, silently.
 func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile) {
 	base := baseAttrs(target, opts)
 	ts := time.Now().UnixNano()
@@ -474,24 +474,31 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "series_limit")))
 		}
 	}
+	// A delete is matched against the full path of every metric, the
+	// subscription path with the metric's leaf on the end, so one pass covers
+	// every level: an ancestor of the subscription matches all of its metrics,
+	// an exact leaf matches that metric alone, and a path in between, deeper
+	// than the subscription and shallower than a multi-element leaf, matches
+	// the metrics nested under it. Matching the subscription path alone left
+	// that middle ground to no pass at all, and the series stood until it went
+	// stale, which for an on_change series is for ever. No deepest-subscription
+	// preference is needed here: a full metric path names one series, so every
+	// subscription the delete matches has series the delete really covers.
 	for _, d := range n.Deletes {
 		for i := range p.Subscriptions {
 			sub := &p.Subscriptions[i]
-			keys, ok := profiles.MatchPrefix(sub.Path, d)
-			if !ok {
-				continue
+			for j := range sub.Metrics {
+				m := &sub.Metrics[j]
+				full := sub.Path
+				if m.Leaf != "." {
+					full = sub.Path + "/" + m.Leaf
+				}
+				keys, ok := profiles.MatchPrefix(full, d)
+				if !ok {
+					continue
+				}
+				c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
 			}
-			names := make(map[string]struct{}, len(sub.Metrics))
-			for _, m := range sub.Metrics {
-				names[m.Name] = struct{}{}
-			}
-			c.store.deleteMatching(names, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
-		}
-		// A leaf delete sits below every subscription rather than above one, so
-		// the prefix pass matched nothing. It names the same series an update
-		// to that path would write, and only that one.
-		if sub, m, keys, ok := matchUpdate(p, d); ok {
-			c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
 		}
 	}
 }

@@ -384,6 +384,40 @@ func TestLeafDeleteWithdrawsOnlyThatSeries(t *testing.T) {
 	})
 }
 
+// A delete between the two extremes, deeper than the subscription path and
+// shallower than the metric's leaf, matched neither the prefix pass nor the
+// exact-leaf pass, so the series stood until it went stale.
+func TestIntermediateDeleteWithdrawsTheNestedLeaf(t *testing.T) {
+	reader := testReader(t)
+	ts := time.Now().UnixNano()
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: streamOf(
+			gnmi.Notification{Timestamp: ts, Updates: []gnmi.Update{
+				{Path: "/system/cpus/cpu[index=0]/state/total/instant", Value: 12.5},
+				{Path: "/system/cpus/cpu[index=0]/state/user/instant", Value: 3.5},
+			}},
+			gnmi.Notification{Timestamp: ts + 1, Deletes: []string{"/system/cpus/cpu[index=0]/state/total"}},
+		),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	// The condition names the survivor, so it cannot pass on the instant
+	// between the two stores of the first notification.
+	waitFor(t, 3*time.Second, func() bool {
+		got := collect(t, reader)
+		user, ok := got["gnmi.cpu_user"]
+		if !ok || len(user.Data.(metricdata.Gauge[float64]).DataPoints) != 1 {
+			return false
+		}
+		total, ok := got["gnmi.cpu_utilization"]
+		return !ok || len(total.Data.(metricdata.Gauge[float64]).DataPoints) == 0
+	})
+}
+
 // A container delete names an ancestor of several subscriptions and carries no
 // keys, so the series it withdraws are bounded by the metrics of the
 // subscriptions it matched, not by the target and policy alone.

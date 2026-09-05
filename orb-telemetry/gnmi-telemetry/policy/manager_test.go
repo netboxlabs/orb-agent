@@ -295,6 +295,20 @@ func TestValidate_RejectsBlankTargetHost(t *testing.T) {
 	}
 }
 
+// A host that is nothing but an inline port clears the raw blank check, and the
+// split then leaves an empty bare host with a valid port, so the policy started
+// and dialed ":9339" for ever.
+func TestValidate_RejectsHostThatIsOnlyAnInlinePort(t *testing.T) {
+	m := newTestManager()
+	err := m.validatePolicy(policyWithTargets(":9339"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "host is required")
+
+	err = m.validatePolicy(policyWithTargets("[]:9339"))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "host is required")
+}
+
 // The blank host arrives in the request body, so the check has to hold on the
 // parse path and not only on a direct validatePolicy call.
 func TestParsePolicies_RejectsTargetWithNoHost(t *testing.T) {

@@ -70,8 +70,14 @@ func counterValue(_ profiles.Metric, v any) (int64, bool) {
 		}
 		return int64(x), true
 	case int64:
+		if x < 0 {
+			return 0, false
+		}
 		return x, true
 	case int:
+		if x < 0 {
+			return 0, false
+		}
 		return int64(x), true
 	case float64:
 		if x < 0 || x != math.Trunc(x) || x >= math.MaxInt64 {
@@ -86,6 +92,9 @@ func counterValue(_ profiles.Metric, v any) (int64, bool) {
 			return int64(n), true
 		}
 		if n, err := strconv.ParseInt(x, 10, 64); err == nil {
+			if n < 0 {
+				return 0, false
+			}
 			return n, true
 		}
 		return 0, false
