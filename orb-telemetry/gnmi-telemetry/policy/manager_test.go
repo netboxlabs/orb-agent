@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -710,4 +711,32 @@ func TestNewManager_GivesTheDefaultDialerItsLogger(t *testing.T) {
 	dialer, ok := m.dialer.(*gnmi.GnmicDialer)
 	require.True(t, ok, "a nil dialer defaults to the gnmic one")
 	assert.Same(t, testLogger, dialer.Logger)
+}
+
+// The cache hands one collector per profiles directory, and each of them
+// writes to the same SDK instrument per metric name, so the series bound has
+// to be the manager's rather than one made per collector: two profile sets
+// each holding a full allowance would hand that instrument twice what it
+// takes, and the SDK would fold the excess into its overflow set.
+func TestAcquireCollector_SharesOneSeriesBudgetAcrossProfileDirs(t *testing.T) {
+	root := t.TempDir()
+	dirA, dirB := filepath.Join(root, "vendor-a"), filepath.Join(root, "vendor-b")
+	require.NoError(t, os.Mkdir(dirA, 0o750))
+	require.NoError(t, os.Mkdir(dirB, 0o750))
+
+	m := newTestManager()
+	a, err := m.acquireCollector(dirA)
+	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector(dirA) })
+	b, err := m.acquireCollector(dirB)
+	require.NoError(t, err)
+	t.Cleanup(func() { m.releaseCollector(dirB) })
+	require.NotSame(t, a, b, "a second profiles directory gets its own collector")
+
+	first, ok := a.(*collector.Collector)
+	require.True(t, ok)
+	second, ok := b.(*collector.Collector)
+	require.True(t, ok)
+	assert.Same(t, m.budget, first.Budget(), "a collector bounds itself on the manager's budget")
+	assert.Same(t, first.Budget(), second.Budget(), "every collector the manager builds draws on one allowance")
 }

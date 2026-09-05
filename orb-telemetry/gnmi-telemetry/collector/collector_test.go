@@ -666,3 +666,40 @@ func TestGetRungWithNoPollablePathReportsIt(t *testing.T) {
 		return len(st) == 1 && strings.Contains(st[0].LastError, "nothing to poll")
 	})
 }
+
+// The manager builds one collector per profile set and every one of them
+// writes to the same SDK instrument per metric name, so the series bound they
+// are given has to be one bound. A collector reaching it refuses the series
+// and counts the refusal, whichever collector filled the allowance.
+func TestCollectorsSharingABudgetRefuseSeriesPastIt(t *testing.T) {
+	reader := testReader(t)
+	budget := newBudget(1)
+	newCollector := func(host string) *Collector {
+		sess := &gnmi.FakeSession{
+			Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+			SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
+		}
+		c := NewWithBudget(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget)
+		t.Cleanup(c.Close)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		require.NoError(t, c.CollectTarget(ctx, target(host, ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+		return c
+	}
+
+	first := newCollector("10.0.0.1")
+	waitFor(t, 3*time.Second, func() bool {
+		_, ok := collect(t, reader)["gnmi.if_in_octets"]
+		return ok
+	})
+	require.Zero(t, drops(t, reader, "series_limit"), "the first collector's series fit the allowance")
+
+	newCollector("10.0.0.2")
+	waitFor(t, 3*time.Second, func() bool { return drops(t, reader, "series_limit") > 0 })
+
+	sum := collect(t, reader)["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+	require.Len(t, sum.DataPoints, 1, "the second collector's series is refused, not exported alongside")
+	device, _ := sum.DataPoints[0].Attributes.Value("device_ip")
+	assert.Equal(t, "10.0.0.1", device.AsString(), "the series the allowance already holds is the one kept")
+	assert.Same(t, budget, first.Budget(), "the collector bounds itself on the budget it was given")
+}

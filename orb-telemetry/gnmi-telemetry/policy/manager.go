@@ -65,6 +65,11 @@ type Manager struct {
 	// is held here rather than per collector so a test can substitute one for
 	// the whole manager.
 	dialer gnmi.Dialer
+	// budget is the series bound every collector this manager builds shares.
+	// The cache below holds one collector per profiles directory, and the SDK
+	// holds one instrument per metric name across all of them, so the bound
+	// has to be one for the process rather than one per collector.
+	budget *collector.Budget
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*cachedCollector
@@ -135,6 +140,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		allowedEnvVars:     allowed,
 		collectorsByDir:    make(map[string]*cachedCollector),
 		dialer:             dialer,
+		budget:             collector.NewBudget(),
 	}
 }
 
@@ -160,7 +166,7 @@ func (m *Manager) acquireCollector(profilesDir string) (releasableCollector, err
 	// The subscription settings are per policy, so they are passed to each
 	// target rather than baked into the collector shared by every policy using
 	// this profile set.
-	c := collector.New(m.dialer, store, m.logger)
+	c := collector.NewWithBudget(m.dialer, store, m.logger, m.budget)
 	m.collectorsByDir[profilesDir] = &cachedCollector{collector: c, refs: 1}
 	m.logger.Info("loaded gNMI metric profiles", "override_dir", config.SanitizeLogValue(profilesDir), "count", len(store.Names()))
 	return c, nil

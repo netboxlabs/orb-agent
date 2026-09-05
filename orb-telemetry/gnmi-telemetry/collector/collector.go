@@ -75,6 +75,7 @@ type Collector struct {
 	profiles    *profiles.Store
 	logger      *slog.Logger
 	store       *store
+	budget      *Budget
 	exporter    *exporter
 	loopsMu     sync.Mutex
 	loops       map[loopKey]*loop
@@ -83,17 +84,33 @@ type Collector struct {
 	upOnce      sync.Once
 }
 
-// New builds a collector over a profile store.
+// New builds a collector over a profile store, with a series budget of its
+// own. A process running several collectors shares one budget between them
+// through NewWithBudget.
 func New(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger) *Collector {
+	return NewWithBudget(dialer, profileStore, logger, nil)
+}
+
+// NewWithBudget builds a collector whose series bound is the given budget, so
+// every collector handed the same one draws on a single allowance per metric
+// name. A nil budget gives this collector a private one.
+func NewWithBudget(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger, budget *Budget) *Collector {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	st := newStore(metrics.CardinalityLimit - 1)
+	if budget == nil {
+		budget = NewBudget()
+	}
+	st := newStoreOn(budget)
 	return &Collector{
-		dialer: dialer, profiles: profileStore, logger: logger, store: st,
+		dialer: dialer, profiles: profileStore, logger: logger, store: st, budget: budget,
 		exporter: newExporter(st, logger), loops: map[loopKey]*loop{}, backoffBase: time.Second,
 	}
 }
+
+// Budget reports the series budget this collector bounds itself on, so a
+// caller sharing one across collectors can see which it got.
+func (c *Collector) Budget() *Budget { return c.budget }
 
 // ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
 // has a live stream or poll, 0 while it reconnects. A collector built before

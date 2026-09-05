@@ -33,8 +33,10 @@ var (
 // one metric on one device with one attribute set, so a policy over a /24 with
 // fifty interfaces and ten counters is a few thousand series per metric name,
 // and the limit is per instrument. Past it the SDK folds new series into its
-// overflow set. Exported so the collector's series store can bound itself one
-// below this and never hand the SDK a series it would fold.
+// overflow set. Exported so the collector's series budget can bound itself one
+// below this and never hand the SDK a series it would fold. That budget counts
+// for the whole process, because one instrument per metric name serves every
+// collector.
 const CardinalityLimit = 10000
 
 // providerOptions is everything the meter provider is configured with beside

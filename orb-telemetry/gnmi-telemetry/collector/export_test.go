@@ -54,6 +54,23 @@ func fallbacks(t *testing.T, reader *sdkmetric.ManualReader) int64 {
 	return total
 }
 
+// drops totals gnmi.updates_dropped_total for one reason, the way fallbacks
+// totals the ladder's counter.
+func drops(t *testing.T, reader *sdkmetric.ManualReader, reason string) int64 {
+	t.Helper()
+	m, ok := collect(t, reader)["gnmi.updates_dropped_total"]
+	if !ok {
+		return 0
+	}
+	var total int64
+	for _, pt := range m.Data.(metricdata.Sum[int64]).DataPoints {
+		if v, ok := pt.Attributes.Value("reason"); ok && v.AsString() == reason {
+			total += pt.Value
+		}
+	}
+	return total
+}
+
 func TestConvertValue(t *testing.T) {
 	gauge := profiles.Metric{Type: "gauge"}
 	enum := profiles.Metric{Type: "gauge", Enum: map[string]int64{"UP": 1, "DOWN": 0}}

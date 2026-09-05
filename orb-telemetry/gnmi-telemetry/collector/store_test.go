@@ -112,3 +112,22 @@ func TestStoreSeriesWithNoAgeIsNeverStale(t *testing.T) {
 	_, ok := s.get(k)
 	assert.True(t, ok, "and it is not evicted")
 }
+
+// The bound protects one SDK instrument per metric name, and every store in
+// the process writes to that instrument, so two stores have to count against
+// one allowance rather than one each.
+func TestStoresShareOneSeriesBudget(t *testing.T) {
+	budget := newBudget(2)
+	first, second := newStoreOn(budget), newStoreOn(budget)
+	k1, a1 := series("g", "10.0.0.1", "p1", "a")
+	k2, a2 := series("g", "10.0.0.2", "p2", "b")
+	k3, a3 := series("g", "10.0.0.3", "p3", "c")
+	require.True(t, first.setGauge(k1, 1, 1, age, a1))
+	require.True(t, second.setGauge(k2, 1, 1, age, a2))
+	assert.False(t, second.setGauge(k3, 1, 1, age, a3), "the other store's series count against the same bound")
+	_, ok := second.get(k3)
+	assert.False(t, ok, "a refused series is not stored")
+
+	first.forgetPolicy("p1")
+	assert.True(t, second.setGauge(k3, 1, 1, age, a3), "the slot one store frees is one another can take")
+}

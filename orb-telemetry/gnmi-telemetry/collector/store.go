@@ -45,18 +45,25 @@ type point struct {
 	policy string
 }
 
-// store keeps the last value per series, bounded per metric name. Bounding
-// here rather than only in the SDK keeps a series the backend chose over one
-// the SDK would fold into its overflow set.
+// store keeps the last value per series, bounded per metric name by a budget.
+// Bounding here rather than only in the SDK keeps a series the backend chose
+// over one the SDK would fold into its overflow set. The count lives on the
+// budget rather than here because every store in the process writes to the
+// same instruments and so draws on one allowance.
 type store struct {
-	mu      sync.RWMutex
-	limit   int
-	series  map[seriesKey]*point
-	perName map[string]int
+	mu     sync.RWMutex
+	budget *Budget
+	series map[seriesKey]*point
 }
 
+// newStore gives one store a budget of its own. A collector sharing the
+// process budget is built on newStoreOn instead.
 func newStore(perMetricLimit int) *store {
-	return &store{limit: perMetricLimit, series: map[seriesKey]*point{}, perName: map[string]int{}}
+	return newStoreOn(newBudget(perMetricLimit))
+}
+
+func newStoreOn(budget *Budget) *store {
+	return &store{budget: budget, series: map[seriesKey]*point{}}
 }
 
 // setCounter records a cumulative value at its arrival time; a value below
@@ -81,12 +88,11 @@ func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribu
 	pt, ok := s.series[k]
 	fresh := !ok
 	if fresh {
-		if s.perName[k.metric] >= s.limit {
+		if !s.budget.take(k.metric) {
 			return false
 		}
 		pt = &point{attrs: attrs, policy: policyOf(attrs)}
 		s.series[k] = pt
-		s.perName[k.metric]++
 	}
 	apply(pt, fresh)
 	pt.ts = ts
@@ -131,7 +137,7 @@ func (s *store) forEach(metric string, now time.Time, visit func(seriesKey, poin
 		}
 		if pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
 			delete(s.series, k)
-			s.perName[k.metric]--
+			s.budget.release(k.metric)
 			continue
 		}
 		visit(k, *pt)
@@ -145,7 +151,7 @@ func (s *store) forgetPolicy(policy string) {
 	for k, pt := range s.series {
 		if pt.policy == policy {
 			delete(s.series, k)
-			s.perName[k.metric]--
+			s.budget.release(k.metric)
 		}
 	}
 }
@@ -165,7 +171,7 @@ func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyVa
 		}
 		if hasAll(pt.attrs, want) {
 			delete(s.series, k)
-			s.perName[k.metric]--
+			s.budget.release(k.metric)
 		}
 	}
 }
