@@ -336,6 +336,10 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 // that ends before its first notification is reported as an early failure.
 func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	productive := false
+	// The stream's own start, against which its initial dump is judged: every
+	// series the dump refreshes arrives after it.
+	started := time.Now().UnixNano()
+	reconciled := false
 	early := func(err error) error {
 		if productive {
 			return err
@@ -363,6 +367,17 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 				default:
 				}
 				return early(errors.New("stream closed"))
+			}
+			if n.SyncDone && !reconciled {
+				reconciled = true
+				// The sync response says the initial dump is complete, so a
+				// never-stale series this stream did not restate is one the
+				// device no longer carries. Only the on_change rung leaves a
+				// series ageless; on the others every series is aged and goes
+				// quiet on its own.
+				if rung == "on_change" {
+					c.store.evictBefore(baseAttrs(target, opts), started)
+				}
 			}
 			if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
 				continue
@@ -416,10 +431,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 // own timestamp: a device whose clock lags by more than the staleness window
 // would otherwise export nothing, silently.
 func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile) {
-	base := []attribute.KeyValue{attribute.String("device_ip", target.Host), attribute.String("policy", opts.PolicyName)}
-	if target.ID != "" {
-		base = append(base, attribute.String("netbox_id", target.ID))
-	}
+	base := baseAttrs(target, opts)
 	ts := time.Now().UnixNano()
 	updates := make([]gnmi.Update, 0, len(n.Updates))
 	for _, u := range n.Updates {
@@ -476,6 +488,17 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 	}
 }
 
+// baseAttrs is what every series of one target and policy carries, and so
+// what selects them all: the device, the policy, and the NetBox id when the
+// target names one.
+func baseAttrs(target config.Target, opts Options) []attribute.KeyValue {
+	base := []attribute.KeyValue{attribute.String("device_ip", target.Host), attribute.String("policy", opts.PolicyName)}
+	if target.ID != "" {
+		base = append(base, attribute.String("netbox_id", target.ID))
+	}
+	return base
+}
+
 // flattenUpdate splits a container value into one update per scalar leaf,
 // keyed by the path the leaf sits at. A Get, and any target that serializes a
 // stream as JSON, answers with one update at the container path whose value
@@ -517,7 +540,9 @@ func leafName(key string) string {
 // changes, so its series carries no age; every other delivery refreshes at
 // the interval, so a gap of three of them means the device went quiet. The
 // rung decides it rather than the profile alone: the SAMPLE rung and Get
-// polling deliver an on_change path at the interval like any other.
+// polling deliver an on_change path at the interval like any other. A series
+// with no age is withdrawn by a delete, by a reconnected stream whose initial
+// dump no longer carries it, by forgetting the policy, or by a replacement.
 func maxAgeFor(rung string, sub *profiles.Subscription, interval time.Duration) time.Duration {
 	if rung == "on_change" && sub.Mode == "on_change" {
 		return 0

@@ -628,11 +628,19 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if err := validMode(policy.Config.Mode); err != nil {
 		return err
 	}
-	if policy.Config.RescanIntervalMs != 0 && policy.Config.RescanIntervalMs < config.MinRescanIntervalMs {
-		return fmt.Errorf("rescan_interval_ms must be 0 or at least %d, got %d", config.MinRescanIntervalMs, policy.Config.RescanIntervalMs)
+	// Both millisecond fields are multiplied by time.Millisecond before they
+	// are used, so a value near the int64 maximum wraps to a negative
+	// duration: the sweep's ticker panics on one, and a wrapped probe timeout
+	// expires every probe as it starts. The ceiling is the year every other
+	// duration a policy names is held to.
+	if policy.Config.RescanIntervalMs != 0 &&
+		(policy.Config.RescanIntervalMs < config.MinRescanIntervalMs || policy.Config.RescanIntervalMs > config.MaxDurationMs) {
+		return fmt.Errorf("rescan_interval_ms must be 0 or from %d to %d milliseconds, got %d",
+			config.MinRescanIntervalMs, config.MaxDurationMs, policy.Config.RescanIntervalMs)
 	}
-	if policy.Config.ProbeTimeoutMs < 0 {
-		return fmt.Errorf("probe_timeout_ms must not be negative, got %d", policy.Config.ProbeTimeoutMs)
+	if policy.Config.ProbeTimeoutMs < 0 || policy.Config.ProbeTimeoutMs > config.MaxDurationMs {
+		return fmt.Errorf("probe_timeout_ms must be from 0 to %d milliseconds, got %d",
+			config.MaxDurationMs, policy.Config.ProbeTimeoutMs)
 	}
 	for i, t := range policy.Scope.Targets {
 		if strings.TrimSpace(t.Host) == "" {

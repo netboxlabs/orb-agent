@@ -140,6 +140,16 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		{"no metrics", Profile{Name: "x", Subscriptions: []Subscription{{Path: "/a", Mode: "sample"}}}, `subscription "/a": no metrics`},
 		{"empty path", Profile{Name: "x", Subscriptions: []Subscription{{Path: "", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "n", Type: "gauge"}}}}}, `subscription 1: path is required`},
 		{"dot leaf with siblings", Profile{Name: "x", Subscriptions: one(Metric{Leaf: ".", Name: "a", Type: "gauge"}, Metric{Leaf: "l", Name: "b", Type: "gauge"})}, `subscription "/a": a "." leaf must be the only metric`},
+		{"attribute_key_absent", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
+			Attributes: map[string]string{"interface_name": "ifname"},
+			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
+		}}}, `attribute interface_name names key ifname, which the path does not carry`},
+		{"attribute_name_reserved", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
+			Attributes: map[string]string{"device_ip": "name"},
+			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
+		}}}, `attribute device_ip is set by the collector`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

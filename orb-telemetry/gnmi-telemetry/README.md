@@ -213,8 +213,8 @@ set on the command line rather than by a policy.
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
 | `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before any data alike. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
-| `probe_timeout_ms` | milliseconds | `3000` | How long one sweep probe waits for an address to answer Capabilities. |
-| `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be at least 60000 when set. |
+| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` | How long one sweep probe waits for an address to answer Capabilities. Zero takes the default. |
+| `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |
 | `send_credentials_to_unverified_targets` | boolean | `false` | Permits a CIDR or range target to carry a password while TLS does not verify the server. |
 
 #### `scope`
@@ -300,7 +300,10 @@ the leaf changes: it keeps its last value until the device deletes the element
 or the policy stops, and `gnmi.target_up` is what says whether the stream is
 still alive. A path the profile marks `on_change` is aged like any other when
 the target settled on the SAMPLE rung or on Get, since there it arrives at the
-interval.
+interval. An ON_CHANGE series is also withdrawn when a reconnected stream's
+initial dump no longer includes it: an element removed while the stream was
+down is never deleted on the stream, so the dump the replacement opens with is
+what says which elements the device still carries.
 
 Two other things withdraw a series: a delete notification, which withdraws the
 deleted element and everything under it, and stopping the policy, which
@@ -383,7 +386,10 @@ subscriptions:
   is tried ahead of `match.vendor`; a NOS is not a manufacturer, so a target that
   reports one still reports its hardware OEM as the vendor.
 - `attributes` promotes path keys to attributes: `interface_name: name` reads the
-  `name` key of the matched path element and exports it as `interface_name`.
+  `name` key of the matched path element and exports it as `interface_name`. The
+  key named on the right must be one the subscription path carries, and the
+  attribute name on the left may not be `device_ip`, `policy` or `netbox_id`,
+  which the collector sets itself.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own

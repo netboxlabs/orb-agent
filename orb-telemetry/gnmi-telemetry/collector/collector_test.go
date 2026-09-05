@@ -548,6 +548,95 @@ func TestOnChangeSeriesAreNeverStale(t *testing.T) {
 	assert.Equal(t, 1.0, g.DataPoints[0].Value)
 }
 
+// An ON_CHANGE series carries no age, so an element removed while the stream
+// was down is never withdrawn on its own: the replacement stream's initial
+// dump simply does not mention it. The reconnected stream's first sync
+// response is what says the dump is complete, and every never-stale series of
+// this target older than that stream goes with it.
+func TestReconnectReconcilesOnChangeSeries(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	// The replacement stream holds its dump until the test has seen both
+	// series, so the window the eviction closes is not one the test has to
+	// catch between polls.
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			attempt := attempts.Add(1)
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			notes := []gnmi.Notification{
+				{Updates: []gnmi.Update{{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"}}},
+				{SyncDone: true},
+			}
+			if attempt == 1 {
+				notes = []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(11)},
+					}},
+					{SyncDone: true},
+				}
+			}
+			go func() {
+				defer close(out)
+				defer close(errs)
+				if attempt > 1 {
+					select {
+					case <-resume:
+					case <-ctx.Done():
+						return
+					}
+				}
+				for _, n := range notes {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if attempt == 1 {
+					errs <- errors.New("stream reset")
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, errs, nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A long interval keeps the SAMPLE counter fresh for the whole test, so
+	// what happens to it is the eviction's doing rather than its own age.
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		return ok && len(g.DataPoints) == 2
+	})
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		name, has := g.DataPoints[0].Attributes.Value("interface_name")
+		return has && name.AsString() == "e2"
+	})
+	sum, ok := collect(t, reader)["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+	require.True(t, ok, "the aged counter is untouched by the eviction")
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, int64(11), sum.DataPoints[0].Value)
+	iface, has := sum.DataPoints[0].Attributes.Value("interface_name")
+	require.True(t, has)
+	assert.Equal(t, "e1", iface.AsString(), "an aged series is withdrawn by its own age, not by the reconcile")
+}
+
 // A device whose clock lags by more than the staleness window must not blank
 // itself: the window runs from arrival at the agent.
 func TestStalenessUsesArrivalTimeNotDeviceTime(t *testing.T) {

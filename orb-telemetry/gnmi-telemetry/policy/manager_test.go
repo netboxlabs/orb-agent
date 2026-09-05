@@ -3,9 +3,11 @@ package policy
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -445,7 +447,46 @@ policies:
         - host: 10.0.0.0/24
 `))
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "rescan_interval_ms must be 0 or at least 60000")
+	assert.ErrorContains(t, err, "rescan_interval_ms must be 0 or from 60000")
+}
+
+// A millisecond field is multiplied by time.Millisecond, so a value near the
+// int64 maximum wraps to a negative duration: the sweep's time.NewTicker
+// panics on one, and a probe timeout that wrapped expires every probe at once.
+func TestParsePolicies_RejectsAMillisecondFieldPastItsBound(t *testing.T) {
+	m := newTestManager()
+	for _, field := range []string{"rescan_interval_ms", "probe_timeout_ms"} {
+		_, err := m.ParsePolicies([]byte(fmt.Sprintf(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+      %s: 9223372036854775807
+    scope:
+      targets:
+        - host: 10.0.0.0/24
+`, field)))
+		require.Error(t, err, field)
+		assert.ErrorContains(t, err, field)
+		assert.ErrorContains(t, err, strconv.Itoa(config.MaxDurationSeconds*1000), field)
+	}
+}
+
+// The ceiling is a year, the same one every other duration a policy names is
+// held to, so a value at it is accepted rather than refused by an off-by-one.
+func TestParsePolicies_AcceptsAMillisecondFieldAtItsBound(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+      rescan_interval_ms: 31536000000
+    scope:
+      targets:
+        - host: 10.0.0.0/24
+`))
+	require.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------

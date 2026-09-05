@@ -191,6 +191,27 @@ func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyVa
 	}
 }
 
+// evictBefore withdraws every never-stale series carrying all the given
+// attributes whose last update arrived before the given time. It is how a
+// reconnected stream withdraws what its initial dump no longer mentions: a
+// series with no age is refreshed only when the device sends the leaf, so an
+// element removed while the stream was down would otherwise keep its last
+// value for ever. An aged series is left alone, its own age being what
+// withdraws it.
+func (s *store) evictBefore(want []attribute.KeyValue, before int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k, pt := range s.series {
+		if pt.maxAge != 0 || pt.ts >= before {
+			continue
+		}
+		if hasAll(pt.attrs, want) {
+			delete(s.series, k)
+			s.budget.release(k.metric)
+		}
+	}
+}
+
 func hasAll(have, want []attribute.KeyValue) bool {
 	for _, w := range want {
 		found := false

@@ -8,6 +8,10 @@ const (
 	// MaxDurationSeconds bounds every duration a policy or flag names, one
 	// year, so an interval times a bounded count cannot wrap.
 	MaxDurationSeconds = 365 * 24 * 60 * 60
+	// MaxDurationMs is MaxDurationSeconds in milliseconds, the ceiling on
+	// every millisecond field a policy names, so multiplying one by
+	// time.Millisecond cannot wrap the duration negative.
+	MaxDurationMs = MaxDurationSeconds * 1000
 	// DefaultGNMIPort is the IANA port for gNMI, used when neither the scope
 	// nor the target names one.
 	DefaultGNMIPort = 9339

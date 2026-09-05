@@ -83,9 +83,15 @@ type Profile struct {
 
 var metricName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// reservedAttributes are the attribute names the collector sets on every
+// series it writes. A profile that promotes a path key under one of them
+// would have the collector's value and its own on the same series.
+var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "netbox_id": true}
+
 // Validate checks the schema rules: a path and metrics per subscription, a
 // stream mode, metric types, unique lower-case names, enum and bool only on
-// gauges, and a "." leaf alone in its subscription.
+// gauges, a "." leaf alone in its subscription, and an attribute that names a
+// key its own path carries and does not shadow the collector's own names.
 func (p *Profile) Validate() error {
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
@@ -97,6 +103,26 @@ func (p *Profile) Validate() error {
 		}
 		if len(s.Metrics) == 0 {
 			return fmt.Errorf("profile %s: subscription %q: no metrics", p.Name, s.Path)
+		}
+		// An attribute is filled from the keys the update path carries, so one
+		// naming a key the subscription path does not have is dropped from
+		// every series in silence, collapsing each element of the list onto
+		// one series. Sorted, so a subscription with two bad attributes always
+		// names the same one.
+		keys := pathKeys(s.Path)
+		attrs := make([]string, 0, len(s.Attributes))
+		for attr := range s.Attributes {
+			attrs = append(attrs, attr)
+		}
+		sort.Strings(attrs)
+		for _, attr := range attrs {
+			if reservedAttributes[attr] {
+				return fmt.Errorf("profile %s: subscription %q: attribute %s is set by the collector", p.Name, s.Path, attr)
+			}
+			if _, ok := keys[s.Attributes[attr]]; !ok {
+				return fmt.Errorf("profile %s: subscription %q: attribute %s names key %s, which the path does not carry",
+					p.Name, s.Path, attr, s.Attributes[attr])
+			}
 		}
 		for _, m := range s.Metrics {
 			if m.Leaf == "" {

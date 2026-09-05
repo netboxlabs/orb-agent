@@ -58,6 +58,20 @@ func parsePath(p string) []pathElem {
 	return elems
 }
 
+// pathKeys is the set of key names a path's elements carry, which is what a
+// subscription's attributes may name as their source: a key the path does not
+// carry is never reported by a match, so an attribute reading it would be
+// silently dropped from every series.
+func pathKeys(p string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, e := range parsePath(p) {
+		for k := range e.keys {
+			out[k] = struct{}{}
+		}
+	}
+	return out
+}
+
 // matchElems matches a pattern's elements against a path's of equal length.
 // A pattern key value "*" accepts any value; a literal must match exactly;
 // every key the path carries is reported.
