@@ -70,6 +70,10 @@ type Manager struct {
 	// holds one instrument per metric name across all of them, so the bound
 	// has to be one for the process rather than one per collector.
 	budget *collector.Budget
+	// schemas is the metric-name schema registry every collector this manager
+	// builds shares, for the same reason: one instrument per metric name across
+	// every profile set, so one kind and unit per name across them too.
+	schemas *collector.Schemas
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*cachedCollector
@@ -141,6 +145,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		collectorsByDir:    make(map[string]*cachedCollector),
 		dialer:             dialer,
 		budget:             collector.NewBudget(),
+		schemas:            collector.NewSchemas(),
 	}
 }
 
@@ -166,7 +171,7 @@ func (m *Manager) acquireCollector(profilesDir string) (releasableCollector, err
 	// The subscription settings are per policy, so they are passed to each
 	// target rather than baked into the collector shared by every policy using
 	// this profile set.
-	c := collector.NewWithBudget(m.dialer, store, m.logger, m.budget)
+	c := collector.NewWithShared(m.dialer, store, m.logger, m.budget, m.schemas)
 	m.collectorsByDir[profilesDir] = &cachedCollector{collector: c, refs: 1}
 	m.logger.Info("loaded gNMI metric profiles", "override_dir", config.SanitizeLogValue(profilesDir), "count", len(store.Names()))
 	return c, nil

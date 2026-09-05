@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	gpath "github.com/openconfig/gnmi/path"
@@ -16,10 +17,15 @@ import (
 	"github.com/openconfig/gnmic/pkg/api/target"
 )
 
-// subscriptionName is the gnmic-side name used for this session's single
-// subscription. It is reused across re-Subscribe calls (the auto-fallback
-// ladder) so StopSubscription can clear the prior subscription's state.
-const subscriptionName = "default"
+// subscriptionPrefix begins the gnmic-side name of every subscription attempt
+// this backend registers. Each attempt is named prefix + its own generation
+// rather than one fixed name: gnmic's attemptSubscription defers
+// StopSubscription(name), which cancels and deletes whatever the target holds
+// under that name, so an old producer exiting after the ladder opened the next
+// attempt would tear the new attempt down under a shared name. A target that
+// rejects ON_CHANGE would then skip the SAMPLE rung it does support and fall
+// to Get.
+const subscriptionPrefix = "gnmi-telemetry"
 
 // GnmicDialer implements Dialer using the gnmic library.
 type GnmicDialer struct {
@@ -93,6 +99,13 @@ type gnmicSession struct {
 	// always observes cancellation, even while it is blocked in gnmic's
 	// internal retry-timer wait (which only selects on this context).
 	subCancel context.CancelFunc
+	// subGen numbers the subscription attempts made on this session, so each
+	// one registers with gnmic under a name no other attempt owns.
+	subGen atomic.Uint64
+	// subName is the gnmic-side name of the attempt subCancel drives, the one
+	// StopSubscribe tears down. Empty until stream registers the first attempt,
+	// and again once one is stopped.
+	subName string
 	// encoding is the request encoding negotiated from the target's advertised
 	// Capabilities (set by Capabilities()); empty until then, defaulting to
 	// json_ietf via enc(). Used for Get, where a leaf-path request yields a flat
@@ -242,7 +255,21 @@ func (s *gnmicSession) StopSubscribe() {
 		s.subCancel()
 		s.subCancel = nil
 	}
-	s.tg.StopSubscription(subscriptionName)
+	// Only ever the name this session registered: a fixed name would be the
+	// next attempt's too, and stopping it here (or from the old producer's own
+	// deferred StopSubscription) would cancel the stream the ladder just
+	// opened. Empty means no attempt of ours is registered.
+	if s.subName != "" {
+		s.tg.StopSubscription(s.subName)
+		s.subName = ""
+	}
+}
+
+// nextSubscriptionName returns the gnmic-side name for this session's next
+// subscription attempt: the backend prefix and a generation that never
+// repeats, so no two attempts on one session share a name.
+func (s *gnmicSession) nextSubscriptionName() string {
+	return fmt.Sprintf("%s-%d", subscriptionPrefix, s.subGen.Add(1))
 }
 
 // Subscribe opens a gNMI STREAM subscription.
@@ -266,8 +293,8 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	// calls Subscribe twice on the same session (on_change, then sample on
 	// downgrade); cancelling subCancel is the only thing that unblocks a producer
 	// parked in gnmic's retry-timer wait. Cancel funcs are idempotent, so a later
-	// Close() calling subCancel again is harmless. StopSubscription is a no-op for
-	// an unknown name, so it is safe before any prior subscribe.
+	// Close() calling subCancel again is harmless. No attempt is registered
+	// before the first subscribe, so this is safe there too.
 	s.StopSubscribe()
 
 	// A gNMI SubscribeRequest is ATOMIC: a strict target (e.g. Nokia SR Linux)
@@ -314,8 +341,9 @@ func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeReque
 	// caller's ctx lifetime.
 	subCtx, cancel := context.WithCancel(ctx)
 	s.subCancel = cancel
+	s.subName = s.nextSubscriptionName()
 
-	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, subscriptionName)
+	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, s.subName)
 
 	notes := make(chan Notification)
 	errs := make(chan error, 1)

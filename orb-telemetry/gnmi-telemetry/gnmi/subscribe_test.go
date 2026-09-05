@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
+	gapi "github.com/openconfig/gnmic/pkg/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,4 +82,38 @@ func TestLogPrunedWritesToTheSessionsLogger(t *testing.T) {
 	// A session dialed by a GnmicDialer with no logger of its own still logs.
 	logPruned(nil, Subscription{Path: "/x"}, errors.New("unknown path"))
 	assert.Contains(t, fallback.String(), "gnmi subscription path pruned")
+}
+
+// gnmic's attemptSubscription defers StopSubscription(name), which cancels and
+// deletes whatever the target holds under that name. The auto ladder stops one
+// attempt and opens the next on the same session, so an attempt registered
+// under the name the previous one still owns is torn down by the previous
+// producer's own cleanup as it exits, and a target that rejects ON_CHANGE
+// skips the SAMPLE rung it does support. Each attempt therefore registers
+// under a name of its own.
+func TestEachSubscriptionAttemptRegistersUnderItsOwnName(t *testing.T) {
+	s := &gnmicSession{}
+	first, second := s.nextSubscriptionName(), s.nextSubscriptionName()
+
+	assert.NotEqual(t, first, second, "a second attempt must not reuse the name the first still owns")
+	for _, name := range []string{first, second} {
+		assert.True(t, strings.HasPrefix(name, subscriptionPrefix+"-"),
+			"a subscription name carries the backend's prefix, got %q", name)
+	}
+}
+
+// StopSubscribe stops the name of the attempt this session registered and
+// releases it, so it never reaches into a name a later attempt owns. A session
+// that registered nothing stops nothing: there is no name of ours on the
+// target, and no target to stop it on either.
+func TestStopSubscribeStopsOnlyTheNameThisSessionRegistered(t *testing.T) {
+	assert.NotPanics(t, (&gnmicSession{}).StopSubscribe, "a session that never subscribed stops nothing")
+
+	tg, err := gapi.NewTarget(gapi.Name("t"), gapi.Address("127.0.0.1:57400"), gapi.Insecure(true))
+	require.NoError(t, err)
+	s := &gnmicSession{tg: tg}
+	s.subName = s.nextSubscriptionName()
+	s.StopSubscribe()
+	assert.Empty(t, s.subName, "the stopped attempt's name is released with it")
+	assert.NotPanics(t, s.StopSubscribe, "stopping again is a no-op")
 }

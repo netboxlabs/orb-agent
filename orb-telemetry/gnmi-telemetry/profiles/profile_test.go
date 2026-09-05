@@ -253,3 +253,117 @@ subscriptions:
 	require.True(t, ok, "children of the bad parent survive")
 	assert.NoError(t, srl.Validate())
 }
+
+// metricOf finds a metric by exported name anywhere in a resolved profile.
+func metricOf(p *Profile, name string) *Metric {
+	for i := range p.Subscriptions {
+		for j := range p.Subscriptions[i].Metrics {
+			if m := &p.Subscriptions[i].Metrics[j]; m.Name == name {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+// A metric name is one instrument in the SDK however many profiles the process
+// loads, so two profiles that define one name with different kinds or units
+// would have that instrument export as two streams. The bundled definition is
+// the one that stands and the override saying otherwise is skipped, the way an
+// invalid override is.
+func TestAnOverrideDisagreeingWithABundledMetricIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/counters
+    mode: sample
+    attributes:
+      interface_name: name
+    metrics:
+      - {leaf: in-octets, name: if_in_octets, type: gauge, unit: "{packet}"}
+`), 0o644))
+
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err, "an override that disagrees is skipped, not fatal")
+	assert.NotContains(t, store.Names(), "acme")
+
+	base, ok := store.Get("_base")
+	require.True(t, ok)
+	m := metricOf(base, "if_in_octets")
+	require.NotNil(t, m, "the bundled definition survives")
+	assert.Equal(t, "counter", m.Type)
+	assert.Equal(t, "By", m.Unit)
+}
+
+// Two overrides can only disagree with each other, so one of them has to win
+// and which one cannot depend on the map order the profiles were resolved in.
+// The sorted-first name wins: profiles are registered bundled-first and then
+// by sorted name, so the same directory always yields the same store.
+func TestTwoOverridesDisagreeingOnAMetricKeepTheSortedFirstOne(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+subscriptions:
+  - path: /acme/widgets/state
+    mode: sample
+    metrics:
+      - {leaf: count, name: widget_count, type: counter, unit: "{widget}"}
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "beta.yaml"), []byte(`
+extends: _base
+match: {vendor: beta}
+subscriptions:
+  - path: /beta/widgets/state
+    mode: sample
+    metrics:
+      - {leaf: count, name: widget_count, type: gauge, unit: "%"}
+`), 0o644))
+
+	// Repeated, because map iteration order is randomized per range: a rule
+	// that only usually picks the same winner shows up here.
+	for range 20 {
+		store, err := LoadProfiles(dir, quiet())
+		require.NoError(t, err)
+		require.Contains(t, store.Names(), "acme", "the sorted-first override keeps the name")
+		require.NotContains(t, store.Names(), "beta", "the one that disagrees with it is skipped")
+		acme, ok := store.Get("acme")
+		require.True(t, ok)
+		m := metricOf(acme, "widget_count")
+		require.NotNil(t, m)
+		require.Equal(t, "counter", m.Type)
+		require.Equal(t, "{widget}", m.Unit)
+	}
+}
+
+// Registering by sorted name alone would let an override that sorts before the
+// bundled overlay using a name claim it, leaving the bundled profile as the one
+// that disagrees. A bundled profile has nothing to fall back to, so that turns
+// one bad override into a fatal load. Bundled definitions are registered first
+// for that reason.
+func TestAnOverrideNeverOutranksABundledMetricItSortsBefore(t *testing.T) {
+	dir := t.TempDir()
+	// memory_free_native is a gauge in bytes, and only nokia_srlinux, which
+	// sorts after acme, defines it.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+subscriptions:
+  - path: /acme/memory/state
+    mode: sample
+    metrics:
+      - {leaf: free, name: memory_free_native, type: counter, unit: By}
+`), 0o644))
+
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err, "the override gives way, and the bundled profile is not what fails")
+	assert.NotContains(t, store.Names(), "acme")
+
+	srl, ok := store.Get("nokia_srlinux")
+	require.True(t, ok)
+	m := metricOf(srl, "memory_free_native")
+	require.NotNil(t, m)
+	assert.Equal(t, "gauge", m.Type, "the bundled definition stands")
+}

@@ -76,6 +76,7 @@ type Collector struct {
 	logger      *slog.Logger
 	store       *store
 	budget      *Budget
+	schemas     *Schemas
 	exporter    *exporter
 	loopsMu     sync.Mutex
 	loops       map[loopKey]*loop
@@ -84,33 +85,41 @@ type Collector struct {
 	upOnce      sync.Once
 }
 
-// New builds a collector over a profile store, with a series budget of its
-// own. A process running several collectors shares one budget between them
-// through NewWithBudget.
+// New builds a collector over a profile store, with a series budget and a
+// schema registry of its own. A process running several collectors shares
+// both between them through NewWithShared.
 func New(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger) *Collector {
-	return NewWithBudget(dialer, profileStore, logger, nil)
+	return NewWithShared(dialer, profileStore, logger, nil, nil)
 }
 
-// NewWithBudget builds a collector whose series bound is the given budget, so
-// every collector handed the same one draws on a single allowance per metric
-// name. A nil budget gives this collector a private one.
-func NewWithBudget(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger, budget *Budget) *Collector {
+// NewWithShared builds a collector on the process-level state every collector
+// has to agree on: the series budget, so they draw on a single allowance per
+// metric name, and the schema registry, so they export one kind and unit per
+// metric name. A nil budget or registry gives this collector a private one.
+func NewWithShared(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger, budget *Budget, schemas *Schemas) *Collector {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if budget == nil {
 		budget = NewBudget()
 	}
+	if schemas == nil {
+		schemas = NewSchemas()
+	}
 	st := newStoreOn(budget)
 	return &Collector{
-		dialer: dialer, profiles: profileStore, logger: logger, store: st, budget: budget,
-		exporter: newExporter(st, logger), loops: map[loopKey]*loop{}, backoffBase: time.Second,
+		dialer: dialer, profiles: profileStore, logger: logger, store: st, budget: budget, schemas: schemas,
+		exporter: newExporter(st, logger, schemas), loops: map[loopKey]*loop{}, backoffBase: time.Second,
 	}
 }
 
 // Budget reports the series budget this collector bounds itself on, so a
 // caller sharing one across collectors can see which it got.
 func (c *Collector) Budget() *Budget { return c.budget }
+
+// Schemas reports the registry this collector registers its metric names
+// against, the counterpart of Budget for a caller sharing one.
+func (c *Collector) Schemas() *Schemas { return c.schemas }
 
 // ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
 // has a live stream or poll, 0 while it reconnects. A collector built before
@@ -453,7 +462,7 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 		}
 		attrs := append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...)
 		maxAge := maxAgeFor(rung, sub, opts.MetricsInterval)
-		var stored bool
+		var dropped string
 		switch m.Type {
 		case "counter":
 			v, ok := counterValue(*m, u.Value)
@@ -461,17 +470,17 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
 				continue
 			}
-			stored = c.exporter.observeCounter(m.Name, m.Unit, attrs, v, ts, maxAge)
+			dropped = c.exporter.observeCounter(m.Name, m.Unit, attrs, v, ts, maxAge)
 		default:
 			v, ok := gaugeValue(*m, u.Value)
 			if !ok {
 				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
 				continue
 			}
-			stored = c.exporter.observeGauge(m.Name, m.Unit, attrs, v, ts, maxAge)
+			dropped = c.exporter.observeGauge(m.Name, m.Unit, attrs, v, ts, maxAge)
 		}
-		if !stored {
-			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "series_limit")))
+		if dropped != "" {
+			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropped)))
 		}
 	}
 	// A delete is matched against the full path of every metric, the

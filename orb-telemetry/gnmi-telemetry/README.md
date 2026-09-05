@@ -263,7 +263,10 @@ connection.
 Every metric name comes from the profile: a metric named `if_in_octets` is
 exported as `gnmi.if_in_octets`. Nothing derives a name from the device, so the
 names a policy produces are known before it runs, from the profile it will
-match.
+match. A metric name has one kind and one unit across every profile the process
+loads: a profile that disagrees with a name another profile already defines is
+skipped with a warning, and a series that disagrees at export time is dropped
+with reason `schema_conflict`.
 
 Every series carries:
 
@@ -333,7 +336,7 @@ Seven metrics describe the backend itself rather than a device:
 | `gnmi.target_up` | gauge | `device_ip`, `policy`, `mode` | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
 | `gnmi.subscription_reconnects_total` | counter | none | Reconnects after a stream ended or failed. Backoff runs from one second to a thirty second cap, and resets after an attempt that delivered data. |
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
-| `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound. |
+| `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
 | `gnmi.mode_fallback_total` | counter | none | Delivery-mode downgrades, one per step down the ladder. |
 | `gnmi.profile_fallback_total` | counter | none | Dial attempts whose NOS or vendor matched no overlay and used `_base`. One target counts once per attempt, so a device that reconnects counts again. |
 

@@ -107,8 +107,12 @@ func counterValue(_ profiles.Metric, v any) (int64, bool) {
 // collector: a second exporter over the same store would observe every
 // series twice and the SDK would sum them.
 type exporter struct {
-	store    *store
-	logger   *slog.Logger
+	store  *store
+	logger *slog.Logger
+	// schemas is the process-wide record of what each metric name is already
+	// exported as, so this exporter never creates an instrument another
+	// collector holds under the same name with a different kind or unit.
+	schemas  *Schemas
 	mu       sync.Mutex
 	closed   bool
 	counters map[string]metric.Int64ObservableCounter
@@ -116,53 +120,88 @@ type exporter struct {
 	regs     []metric.Registration
 }
 
-func newExporter(st *store, logger *slog.Logger) *exporter {
+// newExporter builds an exporter over a store. A nil registry gives it one of
+// its own, which is what a test observing a single exporter wants; a collector
+// is handed the process registry.
+func newExporter(st *store, logger *slog.Logger, schemas *Schemas) *exporter {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if schemas == nil {
+		schemas = NewSchemas()
+	}
 	return &exporter{
-		store: st, logger: logger,
+		store: st, logger: logger, schemas: schemas,
 		counters: map[string]metric.Int64ObservableCounter{}, gauges: map[string]metric.Float64ObservableGauge{},
 	}
 }
 
 // observeCounter stores a cumulative value with its arrival time and
-// staleness age, and ensures its instrument.
-func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) bool {
-	if !e.store.setCounter(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
-		return false
+// staleness age, and ensures its instrument. It returns "" when the value was
+// stored, or the reason it was dropped. The instrument is ensured FIRST: a
+// series refused there must not be left in the store, holding a budget slot
+// against a name this collector will never export.
+func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) string {
+	if reason := e.ensureCounter(name, unit); reason != "" {
+		return reason
 	}
-	e.ensureCounter(name, unit)
-	return true
+	if !e.store.setCounter(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
+		return dropSeriesLimit
+	}
+	return ""
 }
 
 // observeGauge stores a gauge value with its arrival time and staleness age,
-// and ensures its instrument.
-func (e *exporter) observeGauge(name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) bool {
-	if !e.store.setGauge(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
-		return false
+// and ensures its instrument, returning the reason it was dropped or "".
+func (e *exporter) observeGauge(name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) string {
+	if reason := e.ensureGauge(name, unit); reason != "" {
+		return reason
 	}
-	e.ensureGauge(name, unit)
-	return true
+	if !e.store.setGauge(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
+		return dropSeriesLimit
+	}
+	return ""
 }
 
-func (e *exporter) ensureCounter(name, unit string) {
+// admit consults the process registry for a metric name, logging the first
+// refusal of each name so a profile set that disagrees says so once rather
+// than once per update. It returns "" when the name is this exporter's to
+// write, or the reason to drop the observation.
+func (e *exporter) admit(name, kind, unit string) string {
+	held, first := e.schemas.admit(name, kind, unit)
+	if held == nil {
+		return ""
+	}
+	if first {
+		e.logger.Warn("refusing a metric that disagrees with the schema its name is already exported with",
+			"name", name, "type", kind, "unit", unit, "exported_type", held.kind, "exported_unit", held.unit)
+	}
+	return dropSchemaConflict
+}
+
+// ensureCounter registers the name as a counter in the process registry and
+// creates the instrument on first use. It returns the reason to drop the
+// observation, or "".
+func (e *exporter) ensureCounter(name, unit string) string {
+	if reason := e.admit(name, kindCounter, unit); reason != "" {
+		return reason
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return
+		return ""
 	}
 	if _, ok := e.counters[name]; ok {
-		return
+		return ""
 	}
 	m := metrics.GetMeter()
 	if m == nil {
-		return
+		return ""
 	}
 	inst, err := m.Int64ObservableCounter("gnmi."+name, metric.WithUnit(unit))
 	if err != nil {
 		e.logger.Error("failed to create counter", "name", name, "error", err)
-		return
+		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		e.store.forEach(name, time.Now(), func(_ seriesKey, pt point) {
@@ -172,29 +211,35 @@ func (e *exporter) ensureCounter(name, unit string) {
 	}, inst)
 	if err != nil {
 		e.logger.Error("failed to register counter callback", "name", name, "error", err)
-		return
+		return ""
 	}
 	e.counters[name] = inst
 	e.regs = append(e.regs, reg)
+	return ""
 }
 
-func (e *exporter) ensureGauge(name, unit string) {
+// ensureGauge is ensureCounter for a gauge: the same registration, and the
+// same reason back.
+func (e *exporter) ensureGauge(name, unit string) string {
+	if reason := e.admit(name, kindGauge, unit); reason != "" {
+		return reason
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
-		return
+		return ""
 	}
 	if _, ok := e.gauges[name]; ok {
-		return
+		return ""
 	}
 	m := metrics.GetMeter()
 	if m == nil {
-		return
+		return ""
 	}
 	inst, err := m.Float64ObservableGauge("gnmi."+name, metric.WithUnit(unit))
 	if err != nil {
 		e.logger.Error("failed to create gauge", "name", name, "error", err)
-		return
+		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		e.store.forEach(name, time.Now(), func(_ seriesKey, pt point) {
@@ -204,10 +249,11 @@ func (e *exporter) ensureGauge(name, unit string) {
 	}, inst)
 	if err != nil {
 		e.logger.Error("failed to register gauge callback", "name", name, "error", err)
-		return
+		return ""
 	}
 	e.gauges[name] = inst
 	e.regs = append(e.regs, reg)
+	return ""
 }
 
 // register adds a callback the collector owns (the target_up gauge) so

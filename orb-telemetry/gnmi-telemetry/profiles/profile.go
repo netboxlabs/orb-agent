@@ -241,6 +241,59 @@ func (s *Store) Match(in MatchInput) *Profile {
 	return s.profiles["_base"]
 }
 
+// metricSchema is how one exported metric name reaches the SDK: the kind of
+// instrument it becomes and the unit it carries.
+type metricSchema struct {
+	typ  string
+	unit string
+}
+
+// schemaConflicts reports, for each profile that disagrees, the first metric
+// name it defines with a kind or unit another profile already claimed. The SDK
+// holds one instrument per metric name however many profiles feed it, so a
+// store where if_in_octets is a byte counter in one profile and a packet gauge
+// in another exports that name as two conflicting streams; Validate cannot see
+// it, because its uniqueness check is within a single profile.
+//
+// Which profile keeps a name is fixed rather than left to the map order the
+// profiles resolved in: the definitions of the profiles still standing as
+// bundled are registered first, then the overrides, each group by sorted name.
+// A bundled definition therefore always outranks an override that disagrees
+// with it, and between two overrides the sorted-first one wins.
+func schemaConflicts(resolved map[string]*Profile, isOverride func(name string) bool) map[string]error {
+	var bundledNames, overrideNames []string
+	for name := range resolved {
+		if isOverride(name) {
+			overrideNames = append(overrideNames, name)
+		} else {
+			bundledNames = append(bundledNames, name)
+		}
+	}
+	sort.Strings(bundledNames)
+	sort.Strings(overrideNames)
+
+	held := map[string]metricSchema{}
+	owner := map[string]string{}
+	out := map[string]error{}
+	for _, name := range append(bundledNames, overrideNames...) {
+		for _, sub := range resolved[name].Subscriptions {
+			for _, m := range sub.Metrics {
+				want, seen := held[m.Name]
+				switch {
+				case !seen:
+					held[m.Name] = metricSchema{typ: m.Type, unit: m.Unit}
+					owner[m.Name] = name
+				case want.typ == m.Type && want.unit == m.Unit:
+				case out[name] == nil:
+					out[name] = fmt.Errorf("profile %s: metric %q is %s in unit %q here and %s in unit %q in profile %s; one metric name has one type and unit across every profile",
+						name, m.Name, m.Type, m.Unit, want.typ, want.unit, owner[m.Name])
+				}
+			}
+		}
+	}
+	return out
+}
+
 // LoadProfiles loads the bundled profiles, overlays any in overrideDir,
 // resolves extends and validates the result; unreadable or invalid overrides
 // are skipped and logged, and logger may be nil.
@@ -355,6 +408,9 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 	// Validation mirrors the restore above: a pass over the resolved profiles
 	// only restores an invalid override to its bundled version or drops one that
 	// has none, never erroring, and the passes repeat while anything changed.
+	// A profile that disagrees with another about a metric name's type or unit
+	// takes the same path as an invalid one, and is recomputed each pass because
+	// the profile it disagreed with may itself have been restored or dropped.
 	// Leaving an entry that already IS its bundled one for the next pass is what
 	// makes a bad shared parent survivable: `resolved` was built before any
 	// restore, so every child of an invalid _base override is invalid in the
@@ -368,8 +424,18 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 	for {
 		changed := false
 		invalid = nil
+		conflicts := schemaConflicts(resolved, func(name string) bool {
+			b, ok := bundled[name]
+			return !ok || raw[name] != b
+		})
 		for name, p := range resolved {
 			err := p.Validate()
+			if err == nil {
+				// A name the process exports has one kind and unit, which no
+				// single profile can settle: the conflict belongs to whichever
+				// profile disagrees with the definition already registered.
+				err = conflicts[name]
+			}
 			if err == nil {
 				continue
 			}

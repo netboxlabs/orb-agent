@@ -136,10 +136,10 @@ func TestConvertValue(t *testing.T) {
 
 func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {
 	reader := testReader(t)
-	e := newExporter(newStore(100), nil)
+	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1"), attribute.String("policy", "p"), attribute.String("interface_name", "e1")}
-	require.True(t, e.observeCounter("if_in_octets", "By", attrs, 1394, time.Now().UnixNano(), age))
-	require.True(t, e.observeGauge("if_oper_status", "", attrs, 1, time.Now().UnixNano(), age))
+	require.Empty(t, e.observeCounter("if_in_octets", "By", attrs, 1394, time.Now().UnixNano(), age))
+	require.Empty(t, e.observeGauge("if_oper_status", "", attrs, 1, time.Now().UnixNano(), age))
 
 	got := collect(t, reader)
 	sum, ok := got["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
@@ -160,9 +160,9 @@ func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {
 
 func TestExporterWithholdsStaleSeries(t *testing.T) {
 	reader := testReader(t)
-	e := newExporter(newStore(100), nil)
+	e := newExporter(newStore(100), nil, nil)
 	attrs := []attribute.KeyValue{attribute.String("device_ip", "1"), attribute.String("policy", "p")}
-	require.True(t, e.observeGauge("cpu_utilization", "%", attrs, 12, time.Now().Add(-time.Minute).UnixNano(), age))
+	require.Empty(t, e.observeGauge("cpu_utilization", "%", attrs, 12, time.Now().Add(-time.Minute).UnixNano(), age))
 	_, stored := e.store.get(seriesKey{metric: "cpu_utilization", attrs: attrKey(attrs)})
 	require.True(t, stored, "the store accepted the write")
 	got := collect(t, reader)

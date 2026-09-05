@@ -989,7 +989,7 @@ func TestCollectorsSharingABudgetRefuseSeriesPastIt(t *testing.T) {
 			Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
 			SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
 		}
-		c := NewWithBudget(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget)
+		c := NewWithShared(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget, nil)
 		t.Cleanup(c.Close)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
@@ -1027,7 +1027,7 @@ func TestClosingACollectorReturnsItsSeriesToTheBudget(t *testing.T) {
 			Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
 			SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
 		}
-		c := NewWithBudget(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget)
+		c := NewWithShared(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil, budget, nil)
 		t.Cleanup(c.Close)
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
@@ -1054,4 +1054,52 @@ func TestClosingACollectorReturnsItsSeriesToTheBudget(t *testing.T) {
 	start("10.0.0.2")
 	waitFor(t, 3*time.Second, func() bool { return deviceOf("10.0.0.2") })
 	assert.Zero(t, drops(t, reader, "series_limit"), "the closed collector's slots were free to take")
+}
+
+// The SDK holds one instrument per metric name however many collectors write
+// to it, so two profile sets that disagree about a name would have that one
+// instrument export as two streams with different kinds or units. The first
+// definition the process registers is the one it exports, and a series that
+// disagrees is refused and counted rather than handed over.
+func TestCollectorsSharingASchemaRegistryRefuseADisagreeingSeries(t *testing.T) {
+	reader := testReader(t)
+	// memory_free_native is a gauge in bytes in the bundled SR Linux overlay.
+	// This override makes it a counter; it is the only profile in its own store
+	// that names it, so the store loads.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nokia_srlinux.yaml"), []byte(
+		"extends: _base\nmatch: {vendor: nokia}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    attributes:\n      slot: slot\n    metrics:\n      - {leaf: free, name: memory_free_native, type: counter, unit: By}\n"), 0o600))
+	disagreeing, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+
+	schemas := NewSchemas()
+	start := func(host string, store *profiles.Store) *Collector {
+		sess := &gnmi.FakeSession{
+			Caps: &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+			SubscribeManyFn: streamOf(gnmi.Notification{Timestamp: time.Now().UnixNano(), Updates: []gnmi.Update{
+				{Path: "/platform/control[slot=A]/memory/free", Value: uint64(1024)},
+			}}),
+		}
+		c := NewWithShared(&gnmi.FakeDialer{Session: sess}, store, nil, nil, schemas)
+		t.Cleanup(c.Close)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		require.NoError(t, c.CollectTarget(ctx, target(host, ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+		return c
+	}
+
+	first := start("10.0.0.1", loadStore(t))
+	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_free_native"]; return ok })
+	require.Zero(t, drops(t, reader, "schema_conflict"), "the first definition of a name is the process's")
+
+	start("10.0.0.2", disagreeing)
+	waitFor(t, 3*time.Second, func() bool { return drops(t, reader, "schema_conflict") > 0 })
+
+	got := collect(t, reader)
+	g, ok := got["gnmi.memory_free_native"].Data.(metricdata.Gauge[float64])
+	require.True(t, ok, "the name keeps the kind it was first exported with")
+	require.Len(t, g.DataPoints, 1, "the disagreeing series is refused, not exported alongside")
+	device, _ := g.DataPoints[0].Attributes.Value("device_ip")
+	assert.Equal(t, "10.0.0.1", device.AsString(), "the series that defined the name is the one kept")
+	assert.Same(t, schemas, first.Schemas(), "the collector registers against the registry it was given")
 }

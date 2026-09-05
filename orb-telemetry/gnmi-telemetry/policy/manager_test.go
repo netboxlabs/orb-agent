@@ -773,7 +773,7 @@ func TestNewManager_GivesTheDefaultDialerItsLogger(t *testing.T) {
 // to be the manager's rather than one made per collector: two profile sets
 // each holding a full allowance would hand that instrument twice what it
 // takes, and the SDK would fold the excess into its overflow set.
-func TestAcquireCollector_SharesOneSeriesBudgetAcrossProfileDirs(t *testing.T) {
+func TestAcquireCollector_SharesTheProcessBudgetAndSchemasAcrossProfileDirs(t *testing.T) {
 	root := t.TempDir()
 	dirA, dirB := filepath.Join(root, "vendor-a"), filepath.Join(root, "vendor-b")
 	require.NoError(t, os.Mkdir(dirA, 0o750))
@@ -794,4 +794,9 @@ func TestAcquireCollector_SharesOneSeriesBudgetAcrossProfileDirs(t *testing.T) {
 	require.True(t, ok)
 	assert.Same(t, m.budget, first.Budget(), "a collector bounds itself on the manager's budget")
 	assert.Same(t, first.Budget(), second.Budget(), "every collector the manager builds draws on one allowance")
+	// The same argument for the schema of a metric name: one instrument per
+	// name across every profile set, so the kind and unit it is exported with
+	// has to be settled once for the process rather than per collector.
+	assert.Same(t, m.schemas, first.Schemas(), "a collector registers against the manager's schema registry")
+	assert.Same(t, first.Schemas(), second.Schemas(), "every collector the manager builds agrees on one schema per name")
 }
