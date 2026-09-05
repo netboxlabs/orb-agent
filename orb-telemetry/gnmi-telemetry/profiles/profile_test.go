@@ -174,6 +174,15 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
 			Metrics: []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
 		}}}, `wildcard key name must be promoted by an attribute, or every element shares one series`},
+		// A leaf is matched by element name alone, so a predicate in it can
+		// never match and dropping it would collapse every element of the list
+		// onto one series. The keyed list belongs in the path, where its key is
+		// promoted to an attribute.
+		{"keyed_leaf", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/interfaces/interface[name=*]/state", Mode: "sample",
+			Attributes: map[string]string{"interface_name": "name"},
+			Metrics:    []Metric{{Leaf: "subinterfaces/subinterface[index=*]/state/counters/in-octets", Name: "n", Type: "counter"}},
+		}}}, `subscription "/interfaces/interface[name=*]/state": metric n: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

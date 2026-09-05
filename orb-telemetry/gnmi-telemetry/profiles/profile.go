@@ -106,9 +106,10 @@ var reservedMetrics = func() map[string]bool {
 // Validate checks the schema rules: a path and metrics per subscription, a
 // stream mode, metric types, unique lower-case names that no health metric of
 // the backend already owns, enum and bool only on gauges, a "." leaf alone in
-// its subscription, an attribute that names a key its own path carries on
-// exactly one element and does not shadow the collector's own names, and an
-// attribute promoting every key the path wildcards.
+// its subscription, a leaf carrying no key predicate, an attribute that names a
+// key its own path carries on exactly one element and does not shadow the
+// collector's own names, and an attribute promoting every key the path
+// wildcards.
 func (p *Profile) Validate() error {
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
@@ -170,6 +171,15 @@ func (p *Profile) Validate() error {
 			}
 			if m.Leaf == "." && len(s.Metrics) != 1 {
 				return fmt.Errorf("profile %s: subscription %q: a \".\" leaf must be the only metric", p.Name, s.Path)
+			}
+			// A leaf is matched against the update path by element name
+			// alone, so a predicate in it matches nothing and the metric is
+			// never exported; dropping the predicate instead would have every
+			// element of the list write one shared series. A keyed list belongs
+			// in the subscription path, where an attribute promotes its key.
+			if strings.Contains(m.Leaf, "[") {
+				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key",
+					p.Name, s.Path, m.Name)
 			}
 			if !metricName.MatchString(m.Name) {
 				return fmt.Errorf("profile %s: metric %q: name must be lower-case letters, digits and underscores", p.Name, m.Name)

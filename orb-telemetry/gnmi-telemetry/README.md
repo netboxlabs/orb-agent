@@ -111,7 +111,10 @@ strict target, so one path the device does not carry would otherwise sink every
 other path with it. Each probe is bounded, by `probe_timeout_ms` when the policy
 sets one and by ten seconds when it does not, so a target that answers
 Capabilities and then goes silent under one path costs that probe rather than
-the whole subscription. The verdicts are remembered for the session, and a
+the whole subscription. A refusal is remembered for the session, so a rung
+change does not probe it again; a probe that reached no verdict, one that missed
+its deadline or found the target unavailable, is not, so the path is left out of
+that attempt alone and probed again by the next subscribe on the session. A
 target that rejects every probe is sent the full set rather than nothing. The
 stream's sync response names the paths it ended up carrying, so a reconnect
 withdraws only the series of the subtrees that streamed: a pruned path restates
@@ -122,12 +125,15 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
 
 1. The profile's own modes, with `on_change` paths streaming on change.
 2. Every path as SAMPLE at `metrics_interval`, which is where a device that
-   rejects ON_CHANGE lands. A stream that ends before its first sync response or
-   data, or that reports InvalidArgument or Unimplemented after its sync, is
-   read as a refusal too, since a device may accept the RPC and fail the
-   subscription on the stream. A stream that answered its sync response and then
-   dropped for any other reason keeps the rung it held: a subscription over an
-   empty subtree sends a sync and no data at all.
+   rejects ON_CHANGE lands. A stream that reports InvalidArgument or
+   Unimplemented is read as a refusal too, wherever on the stream it reports it,
+   since a device may accept the RPC and fail the subscription on the stream, and
+   so is one that ends with no error at all, or sends nothing at all within the
+   probe deadline, before its first sync response or data. A stream that fails
+   under any other code keeps the rung it held and reconnects on it, before the
+   sync response as well as after: an Unavailable during the initial dump is the
+   connection going, not the mode being refused, and a subscription over an empty
+   subtree sends a sync and no data at all.
 3. Get polling at `metrics_interval`, last. A subscription whose profile gives
    it an origin of its own is skipped here and logged once, because one Get
    carries one origin; a native path is reachable only by streaming.
@@ -135,11 +141,11 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
 A policy that names a mode chooses which of those rungs are tried. `mode:
 on_change` keeps the mode the profile gives each path, so counters still stream
 as SAMPLE, and skips the all-SAMPLE rung. `mode: sample` asks for SAMPLE on
-every path. Both still fall to Get, on a request the device refuses and also on
-a stream that ends before its first sync response or data, or that reports
-InvalidArgument or Unimplemented after its sync. The rung a target settled on is
-reported as its `mode` in `GET /api/v1/status` and as the `mode` attribute of
-that device's `gnmi.target_up` gauge.
+every path. Both still fall to Get, on a request the device refuses, on a stream
+that reports InvalidArgument or Unimplemented, and on one that ends with no error
+or sends nothing at all before its first sync response or data. The rung a
+target settled on is reported as its `mode` in `GET /api/v1/status` and as the
+`mode` attribute of that device's `gnmi.target_up` gauge.
 
 A target's `host` may name more than one address, as a CIDR prefix or an address
 range, and those are swept before anything is subscribed. A sweep probe is a
@@ -228,7 +234,7 @@ set on the command line rather than by a policy.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
-| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before its first sync response or data, or that reports InvalidArgument or Unimplemented after its sync, alike. |
+| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request, on a stream that reports InvalidArgument or Unimplemented, and on one that ends with no error or sends nothing at all before its first sync response or data. A stream that fails under any other code reconnects on the rung it holds. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
 | `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` sweep, `10000` path probe | How long one sweep probe waits for an address to answer Capabilities. Set, it also bounds a dialed session's own Capabilities call and each subscription-path probe, which are the calls it makes under a context carrying no deadline of its own; unset, the sweep waits 3 s and either of those 10 s. The sweep bounds its own probe and keeps that bound whatever this is set to. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |
@@ -404,6 +410,8 @@ subscriptions:
 - `leaf` is relative to `path` and may contain `/`, as `total/instant` does under
   a CPU's state. A `leaf` of `.` is the subscription path itself, for a
   subscription made directly to a leaf, and must then be the only metric in it.
+  A `leaf` may not carry a `[key=...]` predicate: it is matched by element name
+  alone, so a keyed list belongs in `path`, where an attribute promotes its key.
 - `name` is lower-case letters, digits and underscores, and is exported as
   `gnmi.<name>`. It must be unique within the resolved profile, and may not be
   one of the health metric names the backend registers for itself

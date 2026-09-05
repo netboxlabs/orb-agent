@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -184,6 +185,36 @@ type getServer struct {
 	// the request waits for its own cancellation, which is how a target that
 	// accepts a connection and then says nothing at all behaves.
 	capsBlocks bool
+	// blocksFirst holds a path's first Get and answers every later one, which
+	// is how a target that was busy under one subtree and then recovered
+	// behaves.
+	blocksFirst map[string]bool
+	// rejects answers a path with the status the target sets on it, for a
+	// refusal of a code other than the NotFound an unheld path gets.
+	rejects map[string]codes.Code
+	// mu guards gets, which the Get handler writes and a test reads.
+	mu sync.Mutex
+	// gets counts the requests made for each path, which is what tells a probe
+	// the session ran again from a verdict it answered out of its cache.
+	gets map[string]int
+}
+
+// countGet records one request for a path and reports how many there have been.
+func (g *getServer) countGet(path string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.gets == nil {
+		g.gets = map[string]int{}
+	}
+	g.gets[path]++
+	return g.gets[path]
+}
+
+// getsFor reports how many requests the server answered for one path.
+func (g *getServer) getsFor(path string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.gets[path]
 }
 
 // Capabilities answers the RPC that opens every session, with the empty
@@ -204,7 +235,11 @@ func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmipr
 	var notifications []*gnmiproto.Notification
 	for _, p := range req.GetPath() {
 		rendered := pathToString(p)
-		if g.blocks[rendered] {
+		asked := g.countGet(rendered)
+		if code, ok := g.rejects[rendered]; ok {
+			return nil, status.Errorf(code, "refused path %s", rendered)
+		}
+		if g.blocks[rendered] || (g.blocksFirst[rendered] && asked == 1) {
 			<-ctx.Done()
 			return nil, status.FromContextError(ctx.Err()).Err()
 		}
@@ -283,6 +318,21 @@ func (g *getServer) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	}
 	<-stream.Context().Done()
 	return stream.Context().Err()
+}
+
+// syncPaths is the paths a stream's sync response names, which is the
+// subscriptions the target ended up carrying.
+func syncPaths(t *testing.T, notes <-chan Notification) []string {
+	t.Helper()
+	select {
+	case n, ok := <-notes:
+		require.True(t, ok, "the stream delivers its sync response")
+		require.True(t, n.SyncDone, "the first notification is the sync response")
+		return n.Paths
+	case <-time.After(10 * time.Second):
+		t.Fatal("no sync response from the stream")
+		return nil
+	}
 }
 
 // A subscription is atomic on a strict target, so a path the target rejects is
@@ -439,4 +489,45 @@ func TestAProbeWithoutASpecTimeoutTakesThePackageDefault(t *testing.T) {
 	assert.Equal(t, DefaultProbeTimeout, (&gnmicSession{}).probeDeadline())
 	assert.Equal(t, 250*time.Millisecond, (&gnmicSession{probeTimeout: 250 * time.Millisecond}).probeDeadline(),
 		"a spec that named one is used as it stands")
+}
+
+// A probe that never reached a verdict is not one. The session remembers what
+// each path probe found so a rung change does not probe them all again, but a
+// probe that timed out, or found the target unavailable, says nothing about the
+// path it asked for: remembering that pruned the path for the life of the
+// session, and a stream that stayed up never carried it again. Only the codes a
+// target refuses a path under are a verdict worth keeping.
+func TestOnlyADefinitiveProbeRejectionIsRemembered(t *testing.T) {
+	const memory, busy, refused = "/system/memory/state", "/components/component[name=*]/state", "/interfaces/interface[name=*]/state/counters"
+	srv := &getServer{
+		holds:       map[string]bool{memory: true, busy: true},
+		blocksFirst: map[string]bool{busy: true},
+		rejects:     map[string]codes.Code{refused: codes.InvalidArgument},
+	}
+	addr := serveGet(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, err := (&GnmicDialer{}).Dial(ctx, TargetSpec{Host: addr, Insecure: true, ProbeTimeout: 100 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	subs := []Subscription{
+		{Path: memory, Mode: Sample, SampleIntervalMs: 1000},
+		{Path: busy, Mode: Sample, SampleIntervalMs: 1000},
+		{Path: refused, Mode: Sample, SampleIntervalMs: 1000},
+	}
+	notes, _, err := s.SubscribeMany(ctx, subs)
+	require.NoError(t, err)
+	assert.Equal(t, []string{memory}, syncPaths(t, notes),
+		"the busy path missed its probe deadline and the refused one was turned down")
+
+	// A rung change subscribes again on the same session, which is where a
+	// verdict remembered from the attempt before it is spent.
+	notes, _, err = s.SubscribeMany(ctx, subs)
+	require.NoError(t, err)
+	assert.Equal(t, []string{memory, busy}, syncPaths(t, notes),
+		"the path whose probe reached no verdict is probed again and carried")
+	assert.Equal(t, 1, srv.getsFor(memory), "a path the target answered is remembered, not probed again")
+	assert.Equal(t, 2, srv.getsFor(busy), "a probe that reached no verdict leaves nothing to answer from")
+	assert.Equal(t, 1, srv.getsFor(refused), "a path the target refused is remembered")
 }

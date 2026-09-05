@@ -26,15 +26,16 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/profiles"
 )
 
-// errEarlyStreamFailure marks a stream the target refused: one that ended
-// before its first sync response or data, or one that reported InvalidArgument
-// or Unimplemented after its sync. gnmic accepts the RPC and reports an
-// unsupported mode on the stream, so this is how a rejected mode looks; the
-// ladder moves on. A sync response is the target accepting the stream, so a
-// later fault of any other kind is a transport failure the same rung recovers
-// from: a subscription over a subtree with nothing in it sends a sync and no
-// data at all, and reading its drop as a refusal would walk the target off a
-// mode that works.
+// errEarlyStreamFailure marks a stream the target refused: one that reported
+// InvalidArgument or Unimplemented, and one that ended without an error or said
+// nothing at all before its first sync response or data. gnmic accepts the RPC
+// and reports an unsupported mode on the stream, so this is how a rejected mode
+// looks; the ladder moves on. A fault carrying any other code is a transport
+// failure the same rung recovers from, wherever on the stream it lands: an
+// Unavailable under the initial dump is the connection going rather than the
+// mode being refused, and a subscription over a subtree with nothing in it
+// sends a sync and no data at all, so reading either as a refusal would walk
+// the target off a mode that works.
 var errEarlyStreamFailure = errors.New("subscription refused")
 
 // Options is what a policy hands the collector for each target.
@@ -395,9 +396,10 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 }
 
 // consume applies notifications until the stream ends or errors. A stream that
-// ends before its first sync response or data is reported as an early failure,
-// and so is one that reports a mode rejection after its sync, and so is one
-// that sends nothing at all within the probe deadline.
+// reports a mode rejection is an early failure wherever it reports it, and so
+// is one that closes cleanly or sends nothing at all within the probe deadline
+// before its first sync response or data. Every other error is returned plain,
+// for the loop to reconnect through on the rung it holds.
 func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	productive := false
 	// synced is whether the stream answered the sync response that closes its
@@ -409,17 +411,25 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 	// series the dump refreshes arrives after it.
 	started := time.Now().UnixNano()
 	reconciled := false
+	// refused marks an attempt as the target turning this rung down, which is
+	// what sends the ladder on.
+	refused := func(err error) error {
+		return fmt.Errorf("%w: %v", errEarlyStreamFailure, err)
+	}
 	early := func(err error) error {
 		if productive {
 			return err
 		}
-		// A stream the target accepted is not refusing the mode by failing: only
-		// the codes it reports a rejection under send the ladder on, and every
-		// other fault is one the same rung reconnects through.
-		if synced && !modeRejection(err) {
+		// A stream that failed is not refusing the mode by failing, whether it
+		// had answered its sync or not: only the codes a target reports a
+		// rejection under send the ladder on, and every other fault is one the
+		// same rung reconnects through. An Unavailable during the initial dump
+		// used to advance the ladder here, which left a target forced onto
+		// on_change polling by Get until the process restarted.
+		if !modeRejection(err) {
 			return err
 		}
-		return fmt.Errorf("%w: %v", errEarlyStreamFailure, err)
+		return refused(err)
 	}
 	// reconcile withdraws, once per stream, the never-stale series of this
 	// target that the stream's initial dump did not restate: the sync response
@@ -477,7 +487,10 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		case <-ctx.Done():
 			return nil
 		case <-firstDue:
-			return early(errors.New("the stream sent nothing within the probe deadline"))
+			// The first notification stops this timer, so it fires only on a
+			// stream that answered nothing at all: no code to read, and a
+			// rejection the target never spoke.
+			return refused(errors.New("the stream sent nothing within the probe deadline"))
 		case err, ok := <-errs:
 			if ok && err != nil {
 				return early(err)
@@ -494,7 +507,15 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 					}
 				default:
 				}
-				return early(errors.New("stream closed"))
+				// A stream that ended with no error before it answered
+				// anything left no code to read either, and a target dropping a
+				// subscription it will not serve is what it looks like. Past
+				// the sync, or past its first data, it is the stream ending,
+				// which the same rung reopens.
+				if !synced && !productive {
+					return refused(errors.New("stream closed"))
+				}
+				return errors.New("stream closed")
 			}
 			if firstDue != nil {
 				firstTimer.Stop()

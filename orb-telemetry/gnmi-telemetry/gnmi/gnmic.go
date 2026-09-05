@@ -18,6 +18,8 @@ import (
 	"github.com/openconfig/gnmi/value"
 	gapi "github.com/openconfig/gnmic/pkg/api"
 	"github.com/openconfig/gnmic/pkg/api/target"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // subscriptionPrefix begins the gnmic-side name of every subscription attempt
@@ -159,6 +161,33 @@ func logPruned(logger *slog.Logger, sub Subscription, err error) {
 		logger = slog.Default()
 	}
 	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
+// logProbeFailed reports one subscription path left out of this attempt because
+// its probe never reached a verdict. A target refusing a path is routine, but a
+// probe that could not ask it is the connection faltering under a subscription
+// the profile expects to carry, so it is louder than a refusal and the next
+// attempt asks again.
+func logProbeFailed(logger *slog.Logger, sub Subscription, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("gnmi subscription path probe failed, retrying it on the next attempt",
+		"path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
+// definitiveProbeRejection reports whether a failed path probe is the target
+// saying it does not carry the path, rather than the probe failing to reach a
+// verdict about it. Only these codes answer the question the probe asked; a
+// timeout, an Unavailable or anything else is the call not arriving, and
+// remembering that as a refusal prunes the path for the life of the session.
+func definitiveProbeRejection(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.NotFound, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
 }
 
 // probeDeadline is how long one probe this session runs may take, the
@@ -513,9 +542,13 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 // the loop's case and lives as long as the policy: a target that answers
 // Capabilities and then never answers the Get would otherwise hold the probe
 // for ever, and there would be no stream, no ladder and no reconnect until the
-// policy was deleted. A probe that misses its deadline is a path this session
-// does not subscribe to, remembered for the session like any other verdict and
-// probed afresh by the next one.
+// policy was deleted.
+//
+// Only a refusal is remembered. A probe that missed its deadline, or found the
+// target unavailable, asked its question and got no answer, so the path is left
+// out of this attempt alone and the next SubscribeMany on this session probes
+// it again; caching that verdict pruned the path for the life of a session, and
+// a stream that never dropped never carried it again.
 func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscription) []Subscription {
 	if s.probed == nil {
 		s.probed = map[string]bool{}
@@ -532,9 +565,18 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 			cancelProbe()
 			s.origin = saved
 			ok = err == nil
-			s.probed[key] = ok
-			if !ok {
+			switch {
+			case ok:
+				s.probed[key] = true
+			case definitiveProbeRejection(err):
+				s.probed[key] = false
 				logPruned(s.logger, sub, err)
+			default:
+				// No verdict to remember: the path is left out of this attempt
+				// alone, and the next SubscribeMany on this session, which is a
+				// rung change, asks again. A reconnect opens a session of its
+				// own and probes everything afresh regardless.
+				logProbeFailed(s.logger, sub, err)
 			}
 		}
 		if ok {

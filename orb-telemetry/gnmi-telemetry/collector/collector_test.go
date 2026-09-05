@@ -1250,16 +1250,14 @@ func TestASyncClearsAPriorError(t *testing.T) {
 	sess := &gnmi.FakeSession{
 		Caps: &gnmi.CapabilitiesResult{},
 		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
-			// The first stream ends before any data, which spends the forced rung
-			// and leaves the loop reporting the Get refusal below it.
+			// The first stream ends with no error before any data, which spends
+			// the forced rung and leaves the loop reporting the Get refusal
+			// below it.
 			if attempts.Add(1) == 1 {
 				out := make(chan gnmi.Notification)
-				errs := make(chan error, 1)
-				go func() {
-					defer close(out)
-					defer close(errs)
-					errs <- errors.New("stream reset")
-				}()
+				errs := make(chan error)
+				close(out)
+				close(errs)
 				return out, errs, nil
 			}
 			select {
@@ -1701,6 +1699,86 @@ func TestAStreamThatNeverAnswersAdvancesTheLadder(t *testing.T) {
 		return len(st) == 1 && st[0].Mode == "get"
 	})
 	assert.Equal(t, int64(2), fallbacks(t, reader), "two silent streams: on_change to sample, sample to get")
+}
+
+// A stream that dropped before its sync response has said nothing about the
+// mode it was asked for. gnmic surfaces a transport failure the same way it
+// surfaces a refusal, so only the codes a target rejects a request under send
+// the ladder on: an Unavailable under the initial dump is the connection going,
+// and reading it as a refusal walked a forced on_change target onto SAMPLE, or
+// off the stream altogether, until the process restarted.
+func TestAPreSyncTransportErrorReconnectsOnTheSameRung(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			if attempts.Add(1) == 1 {
+				// The RPC is accepted and the connection goes under the initial
+				// dump: no sync response, no data, an Unavailable.
+				errs := make(chan error, 1)
+				errs <- status.Error(codes.Unavailable, "connection reset")
+				return make(chan gnmi.Notification), errs, nil
+			}
+			return streamOf(gnmi.Notification{SyncDone: true}, sample(1, time.Now().UnixNano()))(ctx, subs)
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Up && !st[0].LastNotification.IsZero()
+	})
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "on_change", st[0].Mode, "a stream that dropped before its sync reconnects on the rung it held")
+	onChange := false
+	for _, s := range sess.Subscriptions() {
+		if s.Mode == gnmi.OnChange {
+			onChange = true
+		}
+	}
+	assert.True(t, onChange, "the second request keeps the profile's own modes, not the all-SAMPLE rung")
+	assert.Equal(t, int64(0), fallbacks(t, reader), "a drop before the sync is no mode refusal, so no step down the ladder")
+}
+
+// A stream that ended with no error before it answered anything left no status
+// to read, and a target dropping a subscription it will not serve is what it
+// looks like, so the ladder moves on. This is the one pre-sync fault with no
+// code of its own, besides the stream that answers nothing at all.
+func TestAStreamThatClosesBeforeItAnswersAdvancesTheLadder(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		// The RPC is accepted and both channels close at once, with no
+		// notification and no error behind them.
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			out := make(chan gnmi.Notification)
+			errs := make(chan error)
+			close(out)
+			close(errs)
+			return out, errs, nil
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/memory/state/physical", Value: uint64(1)}}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "get"
+	})
+	// The status flips to get before the first poll, so only data proves polling.
+	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_physical"]; return ok })
+	assert.Equal(t, int64(2), fallbacks(t, reader), "two streams closed before they answered: on_change to sample, sample to get")
 }
 
 // A Get poll ran under the loop's context, which lives as long as the policy.
