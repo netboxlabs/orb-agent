@@ -38,6 +38,22 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata
 	return out
 }
 
+// fallbacks totals the gnmi.mode_fallback_total counter. testReader installs
+// the meter the metrics package hands its health counters out on, so the
+// ladder's own accounting arrives through the same manual reader as the series.
+func fallbacks(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	m, ok := collect(t, reader)["gnmi.mode_fallback_total"]
+	if !ok {
+		return 0
+	}
+	var total int64
+	for _, pt := range m.Data.(metricdata.Sum[int64]).DataPoints {
+		total += pt.Value
+	}
+	return total
+}
+
 func TestConvertValue(t *testing.T) {
 	gauge := profiles.Metric{Type: "gauge"}
 	enum := profiles.Metric{Type: "gauge", Enum: map[string]int64{"UP": 1, "DOWN": 0}}

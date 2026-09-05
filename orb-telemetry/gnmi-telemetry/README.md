@@ -241,7 +241,7 @@ the same field keeps its own value, an explicitly empty one included.
 | `tls` | block | the scope's | This target's TLS settings, as a whole block. |
 | `origin` | string | the scope's | This target's request origin. |
 | `mode` | `auto`, `on_change` or `sample` | the policy's | The delivery mode for this target alone. |
-| `profile` | profile name | auto-detect | Pins the metric profile instead of matching the vendor from Capabilities. An unknown name falls back to matching, with a warning. |
+| `profile` | profile name | auto-detect | Pins the metric profile instead of matching the NOS or vendor from Capabilities. An unknown name falls back to matching, with a warning. |
 
 A policy request body is capped at 1 MiB, and a larger one is rejected with HTTP
 413 before it is parsed. That ceiling is far above any policy this backend
@@ -324,7 +324,7 @@ Seven metrics describe the backend itself rather than a device:
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound. |
 | `gnmi.mode_fallback_total` | counter | none | Delivery-mode downgrades, one per step down the ladder. |
-| `gnmi.profile_fallback_total` | counter | none | Dial attempts whose vendor matched no overlay and used `_base`. One target counts once per attempt, so a device that reconnects counts again. |
+| `gnmi.profile_fallback_total` | counter | none | Dial attempts whose NOS or vendor matched no overlay and used `_base`. One target counts once per attempt, so a device that reconnects counts again. |
 
 `unmatched_path` is expected in small numbers: a subscription is to a subtree,
 so a device that serves more leaves under it than the profile names counts one

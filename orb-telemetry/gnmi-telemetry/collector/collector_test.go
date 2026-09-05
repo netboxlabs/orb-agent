@@ -209,6 +209,7 @@ func TestModeLadderOnSynchronousRejection(t *testing.T) {
 	// The status flips to get before the first poll, so only data proves polling.
 	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_physical"]; return ok })
 	assert.GreaterOrEqual(t, calls.Load(), int64(2), "on_change was refused, then sample, before polling")
+	assert.Equal(t, int64(2), fallbacks(t, reader), "two steps down the ladder: on_change to sample, sample to get")
 }
 
 func TestModeLadderOnAnEarlyStreamFailure(t *testing.T) {
@@ -312,6 +313,7 @@ func TestForcedModeFallsToGetOnAnEarlyStreamFailure(t *testing.T) {
 	// The status flips to get before the first poll, so only data proves polling.
 	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_physical"]; return ok })
 	assert.Equal(t, int64(1), calls.Load(), "a forced ladder has one rung, and the stream refusal spends it")
+	assert.Equal(t, int64(1), fallbacks(t, reader), "one step down the ladder: the forced rung to get")
 }
 
 func TestDeleteWithdrawsTheElementsSeries(t *testing.T) {

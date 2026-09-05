@@ -258,7 +258,8 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 		}
 		return err
 	}
-	metrics.GetModeFallbacks().Add(ctx, 1)
+	// Reaching here means every rung counted the step that left it, the last of
+	// them the step to Get, so the ladder is already fully accounted for.
 	l.update(func(s *TargetStatus) { s.Mode = "get"; s.Up = true })
 	// A target that rejected the subscription on the stream rather than on the
 	// RPC leaves a producer behind that retries its gRPC stream for the life of
@@ -305,7 +306,7 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 		if p, ok := c.profiles.Get(target.Profile); ok {
 			return p
 		}
-		c.logger.Warn("pinned profile not found, matching by vendor", "host", target.Host, "profile", target.Profile)
+		c.logger.Warn("pinned profile not found, matching by capabilities", "host", target.Host, "profile", target.Profile)
 	}
 	p := c.profiles.Match(profiles.MatchInput{Vendor: caps.Vendor, NOS: caps.NOS})
 	if p.Name == "_base" {
