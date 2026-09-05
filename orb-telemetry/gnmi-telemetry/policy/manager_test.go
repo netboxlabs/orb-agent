@@ -687,3 +687,27 @@ func TestStartPolicy_RejectsPolicyWithNoTargets(t *testing.T) {
 	require.ErrorContains(t, m.StartPolicy("policy-a", pol), "no targets")
 	assert.Empty(t, m.policies)
 }
+
+func TestParsePolicies_RejectsAnInlinePortOfZero(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: 10.0.0.1:0
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "inline port")
+}
+
+// The manager builds the default dialer, so it is the only place the sessions
+// it dials can be told which logger to raise their own events on.
+func TestNewManager_GivesTheDefaultDialerItsLogger(t *testing.T) {
+	m := NewManager(context.Background(), testLogger, Options{})
+	dialer, ok := m.dialer.(*gnmi.GnmicDialer)
+	require.True(t, ok, "a nil dialer defaults to the gnmic one")
+	assert.Same(t, testLogger, dialer.Logger)
+}

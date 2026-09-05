@@ -222,3 +222,25 @@ func TestParsePolicies_TrimsAnOversizedTargetIntoTheBudget(t *testing.T) {
 	assert.ErrorContains(t, err, "16777214")
 	assert.ErrorContains(t, err, "1024")
 }
+
+// The budget counts distinct addresses, not the sum of every entry's size.
+// Pinning a host inside a subnet to give it its own credentials is the
+// documented way to do that, and expandTargets collapses the pin onto the
+// address the subnet already produced, so charging the policy for both refused
+// a policy whose expansion lands exactly on the ceiling.
+//
+// Two /17 prefixes hold 32766 hosts apiece, since a prefix excludes its network
+// and broadcast addresses, so a four address range makes the union exactly
+// 65536. The two pinned hosts, one of them written with an inline port, take
+// the sum to 65538.
+func TestCheckPolicyExpansion_CountsDistinctAddresses(t *testing.T) {
+	atLimit := entries("10.0.0.0/17", "10.1.0.0/17", "192.0.2.0-3", "10.0.0.5", "10.1.0.9:6030")
+	assert.NoError(t, checkPolicyExpansion(atLimit))
+
+	// A hostname stands for one endpoint that no range can contain, so it is
+	// what takes this policy past the ceiling.
+	overByOne := append(atLimit, config.Target{Host: "router.example.com"})
+	err := checkPolicyExpansion(overByOne)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "65537")
+}

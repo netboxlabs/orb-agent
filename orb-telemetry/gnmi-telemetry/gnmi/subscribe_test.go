@@ -1,6 +1,9 @@
 package gnmi
 
 import (
+	"bytes"
+	"errors"
+	"log/slog"
 	"testing"
 
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
@@ -54,4 +57,27 @@ func TestMergeGetResultsKeepsTheLatestDeviceTimestamp(t *testing.T) {
 	assert.Equal(t, int64(9), merged.Timestamp, "the latest device time stamps the merged snapshot, and an unstamped notification does not lower it")
 	require.Len(t, merged.Updates, 3)
 	assert.Equal(t, []string{"/c"}, merged.Deletes)
+}
+
+// A pruned path is a routine device condition, so it belongs to whatever logger
+// the deployment configured: through the package-level slog it printed a text
+// line on stderr at info level even under --log-level error, and beside the JSON
+// stream everywhere else.
+func TestLogPrunedWritesToTheSessionsLogger(t *testing.T) {
+	var configured, fallback bytes.Buffer
+	saved := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&fallback, nil)))
+	t.Cleanup(func() { slog.SetDefault(saved) })
+
+	logPruned(slog.New(slog.NewTextHandler(&configured, nil)),
+		Subscription{Path: "/platform/component[name=*]/state/temperature", Origin: "openconfig"},
+		errors.New("unknown path"))
+
+	assert.Contains(t, configured.String(), "gnmi subscription path pruned")
+	assert.Contains(t, configured.String(), "/platform/component[name=*]/state/temperature")
+	assert.Empty(t, fallback.String(), "the configured logger receives it, not the default")
+
+	// A session dialed by a GnmicDialer with no logger of its own still logs.
+	logPruned(nil, Subscription{Path: "/x"}, errors.New("unknown path"))
+	assert.Contains(t, fallback.String(), "gnmi subscription path pruned")
 }

@@ -75,7 +75,7 @@ func splitEffectivePort(host string, field uint16) (bare string, port uint16, in
 	return strings.Trim(host, "[]"), resolvedPort(field), false
 }
 
-// checkInlinePort rejects an inline port that is not a number in range.
+// checkInlinePort rejects an inline port that is not a number from 1 to 65535.
 //
 // net.SplitHostPort accepts a service name, and Go's dialer resolves one through
 // /etc/services — net.LookupPort("tcp", "http") is 80 — so "10.0.0.1:http"
@@ -97,9 +97,13 @@ func checkInlinePort(host string) error {
 		// No inline port, or an IPv6 literal written without brackets.
 		return nil
 	}
-	if _, cerr := strconv.ParseUint(port, 10, 16); cerr != nil {
+	// Zero is refused here although the discovery copy of this check accepts it:
+	// splitEffectivePort would store 0 and resolvedPort would then send the
+	// target to the default port, so "10.0.0.1:0" reached a device on 9339 while
+	// the policy read as pinning a port.
+	if n, cerr := strconv.ParseUint(port, 10, 16); cerr != nil || n == 0 {
 		return fmt.Errorf(
-			"target %q: inline port %q must be a number between 0 and 65535", host, port,
+			"target %q: inline port %q must be a number between 1 and 65535", host, port,
 		)
 	}
 	return nil

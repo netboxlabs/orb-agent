@@ -31,3 +31,14 @@ func TestCheckInlinePortRejectsAServiceName(t *testing.T) {
 	assert.NoError(t, checkInlinePort("10.0.0.1:6030"))
 	assert.NoError(t, checkInlinePort("2001:db8::1"), "an unbracketed IPv6 literal is not an inline port")
 }
+
+// Port 0 parses as a number and is not one. splitEffectivePort would store it
+// and resolvedPort would then redirect the target to the default port, so
+// "10.0.0.1:0" reached a device on 9339 while the operator read it as a pin.
+func TestCheckInlinePortRejectsZero(t *testing.T) {
+	err := checkInlinePort("10.0.0.1:0")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "between 1 and 65535")
+
+	assert.NoError(t, checkInlinePort("10.0.0.1:1"))
+}

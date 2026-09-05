@@ -22,7 +22,11 @@ import (
 const subscriptionName = "default"
 
 // GnmicDialer implements Dialer using the gnmic library.
-type GnmicDialer struct{}
+type GnmicDialer struct {
+	// Logger receives the events a session raises on its own, such as a pruned
+	// subscription path. Nil leaves the session on slog.Default().
+	Logger *slog.Logger
+}
 
 // Dial creates a gnmic-backed Session connected to the given target.
 func (d *GnmicDialer) Dial(ctx context.Context, spec TargetSpec) (Session, error) {
@@ -65,7 +69,7 @@ func (d *GnmicDialer) Dial(ctx context.Context, spec TargetSpec) (Session, error
 	if err := tg.CreateGNMIClient(ctx); err != nil {
 		return nil, fmt.Errorf("gnmi dial: create client: %w", err)
 	}
-	return &gnmicSession{tg: tg, origin: spec.Origin}, nil
+	return &gnmicSession{tg: tg, origin: spec.Origin, logger: d.Logger}, nil
 }
 
 // withOrigin prefixes a gNMI request path with the session's origin
@@ -111,6 +115,22 @@ type gnmicSession struct {
 	// probed caches the per-subscription probe verdicts for SubscribeMany, keyed
 	// by origin + "|" + path; the value is whether the target accepted the path.
 	probed map[string]bool
+	// logger is the dialer's logger, carried so this session's own events reach
+	// the deployment's handler and level; nil means slog.Default().
+	logger *slog.Logger
+}
+
+// logPruned reports one subscription path the target refused.
+//
+// It goes through the session's logger so the configured level and handler
+// apply: the package-level slog this used printed a text line on stderr at info
+// level whatever the deployment asked for, which put a routine device condition
+// past --log-level error and beside a JSON stream rather than in it.
+func logPruned(logger *slog.Logger, sub Subscription, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
 }
 
 // acceptedPaths returns the subset of paths the target accepts, so one
@@ -417,7 +437,7 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 			ok = err == nil
 			s.probed[key] = ok
 			if !ok {
-				slog.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
+				logPruned(s.logger, sub, err)
 			}
 		}
 		if ok {
