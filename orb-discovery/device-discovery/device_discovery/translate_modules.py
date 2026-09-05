@@ -31,6 +31,13 @@ from device_discovery.proto_presence import blank_to_none
 
 logger = logging.getLogger(__name__)
 
+#: Manufacturer for a part the device could not name. Segregates guessed parts
+#: from genuine ones, because dcim.moduletype matches on (manufacturer, model):
+#: filed under the chassis vendor they would interleave with real parts and be
+#: unpickable later. The string matches _manufacturer_from_device's own
+#: fallback, which is correct -- both mean the same thing.
+UNIDENTIFIED_MANUFACTURER = "Unknown"
+
 
 def emit_modules_if_requested(
     data: dict[str, Any],
@@ -271,9 +278,16 @@ def _emit_bay_recursive(
     entities.append(Entity(module_bay=bay))
     _bump("module_bays_emitted", 1, {"vendor": manufacturer.name})
 
+    identified = module_data.get("identified", True)
+    module_manufacturer = (
+        manufacturer if identified else pb.Manufacturer(name=UNIDENTIFIED_MANUFACTURER)
+    )
+    # No `or "Unknown"` fallback: _validate_bay guarantees a non-blank model
+    # reaches here, and substituting a placeholder is what collapsed every
+    # unidentifiable part into a single ModuleType.
     module_type = ModuleType(
-        manufacturer=manufacturer,
-        model=module_data["model"] or "Unknown",
+        manufacturer=module_manufacturer,
+        model=module_data["model"],
     )
     module_kwargs: dict[str, Any] = {
         "device": device,
@@ -287,7 +301,11 @@ def _emit_bay_recursive(
     entities.append(Entity(module=module))
     _bump(
         "modules_emitted", 1,
-        {"vendor": manufacturer.name, "type": module_data["type"]},
+        {
+            "vendor": module_manufacturer.name,
+            "type": module_data["type"],
+            "identified": "true" if identified else "false",
+        },
     )
 
     # Map interfaces owned by THIS bay (top-level or sub) to this module.

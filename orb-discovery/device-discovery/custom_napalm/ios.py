@@ -653,9 +653,14 @@ _INVENTORY_VC_FRU_RE = re.compile(
 # Catalyst stacks emit — e.g. ``StackPort1/1`` (the inter-switch stack
 # cable port) — which then bogusly attached as transceiver sub-bays under
 # slot 1 in VC mode. Even with the narrow prefix list a paranoid second
-# gate is applied at the parse site: rows that DON'T classify as
-# transceiver via the PID are dropped, so a non-transceiver Cisco-prefix
-# row (rare but possible) doesn't materialize a wrong sub-bay.
+# gate is applied at the parse site, but only for a row the device DID
+# name a PID for: such a row that doesn't classify as transceiver via
+# that PID is dropped, so a non-transceiver Cisco-prefix row (rare but
+# possible) doesn't materialize a wrong sub-bay. A row with no PID (an
+# unidentified optic — serial and description, no part number) has no
+# PID to second-gate on and is typed transceiver unconditionally; the
+# ifname-shaped NAME matched above is the only signal available, and by
+# design it is trusted on its own for these rows.
 _INVENTORY_IFNAME_RE = re.compile(
     r"""
     ^
@@ -923,6 +928,14 @@ def _ios_claim_slot(
         claimed_slots.add((None, slot_match.group(1)))
 
 
+#: What IOS prints in the PID column for a part it cannot identify. Compared
+#: case-folded: the exact casing is not a documented contract, just what one
+#: 2960S image happened to print, and a release that wrote it differently would
+#: otherwise have the placeholder read as a real part number and the row
+#: dropped -- the very bug this exists to remove.
+_IOS_UNIDENTIFIED_PID = "unspecified"
+
+
 def _parse_inventory_rows(
     rows: list[dict],
     vc_mode: bool,
@@ -941,14 +954,16 @@ def _parse_inventory_rows(
 
     ``claimed_slots`` is every ``(member_key, slot)`` pair the RAW inventory
     names via ``Switch N Slot M``, ``Switch N FRU Uplink Module M`` or plain
-    ``Slot N`` — matched against ``name`` here, BEFORE the ``pid and sn``
-    usability filter below and before any type/classification filter, and
-    keyed exactly like ``bays_by_member``. A slot lands in this set even
-    when its own row turns out unusable (blank PID or serial); the caller
-    must then decline promoting any optic mapped to that slot, because the
-    slot's parent exists in hardware — this row simply failed to describe
-    it usably. Promoting the optic to a device-rooted bay in that case
-    would invent a chassis-level parent for hardware that already has one.
+    ``Slot N`` — matched against ``name`` here, BEFORE the ``sn`` usability
+    filter below (a blank PID no longer disqualifies a row; only a blank
+    serial does) and before any type/classification filter, and keyed
+    exactly like ``bays_by_member``. A slot lands in this set even when its
+    own row turns out unusable (blank serial, or a serial with neither a
+    PID nor a description to name the part); the caller must then decline
+    promoting any optic mapped to that slot, because the slot's parent
+    exists in hardware — this row simply failed to describe it usably.
+    Promoting the optic to a device-rooted bay in that case would invent a
+    chassis-level parent for hardware that already has one.
     """
     bays_by_member: dict[int | None, dict[str, _ModuleBay]] = {}
     trans_by_member: dict[int | None, dict[str, _ModuleEntry]] = {}
@@ -968,16 +983,24 @@ def _parse_inventory_rows(
         slot_match = _INVENTORY_SLOT_RE.match(name)
         _ios_claim_slot(claimed_slots, vc_slot, vc_fru, slot_match, vc_mode)
 
-        if not (pid and sn):
-            if sn and not pid and _INVENTORY_IFNAME_RE.match(name):
-                # An optic the device serialised but did not identify. NetBox
-                # requires a module type, and substituting the description or
-                # a placeholder would split one optic model across two types,
-                # so the row is skipped — but not silently.
-                logger.warning(
-                    "ios.get_modules: %s reports a transceiver serial with no "
-                    "PID; skipping (no model to emit)", name,
-                )
+        if not sn:
+            continue
+        # A row the device serialised but did not name. The description stands
+        # in for the model and `identified` records that it did, so translate
+        # can file it under a generic manufacturer rather than assert a brand
+        # the device never claimed. A row with neither is skipped: NetBox needs
+        # a model and there is nothing to call the part.
+        #
+        # `Unspecified` is a Cisco placeholder, not a model. Normalising it here
+        # rather than in the shared layer is deliberate: which strings are
+        # placeholders is vendor knowledge.
+        identified = bool(pid) and pid.casefold() != _IOS_UNIDENTIFIED_PID
+        model = pid if identified else descr
+        if not model:
+            logger.debug(
+                "ios.get_modules: %s has a serial but no PID and no description; "
+                "skipping (nothing to name the part)", name,
+            )
             continue
 
         # VC slot pattern (Switch N Slot M [role]) is tried regardless of
@@ -988,11 +1011,12 @@ def _parse_inventory_rows(
         if vc_slot:
             member_key = int(vc_slot.group(1)) if vc_mode else None
             slot = vc_slot.group(2)
-            mtype = _classify_slot_module(pid, vc_slot.group(3) or "")
+            mtype = _classify_slot_module(model, vc_slot.group(3) or "")
             bays_by_member.setdefault(member_key, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
-                    model=pid, serial=sn, type=mtype, description=descr,
+                    model=model, serial=sn, type=mtype, description=descr,
+                    identified=identified,
                 ),
             )
             continue
@@ -1000,14 +1024,20 @@ def _parse_inventory_rows(
         if vc_fru:
             member_key = int(vc_fru.group(1)) if vc_mode else None
             slot = vc_fru.group(2)
-            # FRU uplink modules have no role hint in NAME, so trust the
-            # PID classifier (linecard for non-transceiver Cisco PIDs).
+            # FRU uplink modules have no role hint in NAME, so classify from
+            # `model` alone (empty role hint) via the same
+            # transceiver-shaped-classification downgrade the slot branches
+            # use: for an unidentified row `model` is the raw device
+            # description, and a description that happens to start with a
+            # recognized MSA optic prefix must not silently type the bay
+            # transceiver, or it would vanish in linecards mode.
             bays_by_member.setdefault(member_key, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
-                    model=pid, serial=sn,
-                    type=classify_module_type_cisco_ios(pid),
+                    model=model, serial=sn,
+                    type=_classify_slot_module(model, ""),
                     description=descr,
+                    identified=identified,
                 ),
             )
             continue
@@ -1015,44 +1045,46 @@ def _parse_inventory_rows(
         if slot_match:
             # Plain "Slot N" row (no Switch prefix) — bucketed under None.
             slot = slot_match.group(1)
-            mtype = _classify_slot_module(pid, slot_match.group(2) or "")
+            mtype = _classify_slot_module(model, slot_match.group(2) or "")
             bays_by_member.setdefault(None, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
-                    model=pid, serial=sn, type=mtype, description=descr,
+                    model=model, serial=sn, type=mtype, description=descr,
+                    identified=identified,
                 ),
             )
             continue
 
         if _INVENTORY_IFNAME_RE.match(name):
-            # Transceiver row keyed by ifname. Second-gate by PID class:
-            # only rows whose PID classifies as transceiver actually
-            # become transceiver sub-bays. That drops two kinds of row:
-            # a non-transceiver Cisco-prefix row (e.g. a rare
-            # stack-hardware row that happens to use a real port prefix)
-            # that sneaked past the narrow ifname regex, and a placeholder
-            # the device substitutes for an optic it cannot identify (a
-            # 2960S reports "Unspecified"). Skipping both is right, since
-            # neither yields a model to emit, but from the outside a
-            # placeholder is indistinguishable from a bug -- so name the
-            # row and its PID rather than dropping it silently.
-            module_type = classify_module_type_cisco_ios(pid)
-            if module_type != "transceiver":
-                logger.warning(
-                    "ios.get_modules: %s reports PID %r, which is not a "
-                    "recognized transceiver model; skipping (no model to emit)",
-                    name, pid,
-                )
-                continue
+            # The row's NAME being an interface is the optic signal, not the
+            # PID. classify_module_type_cisco_ios returns "linecard" for both
+            # "" and "Unspecified", so deriving the type from the PID would
+            # file an unidentified optic as a linecard and let it survive
+            # linecards mode, where a transceiver is correctly dropped. Junos
+            # gates on its own NAME ("Xcvr") for the same reason.
+            #
+            # An identified row is still second-gated by PID class, which drops
+            # a non-transceiver row whose NAME sneaked past the narrow regex.
+            module_type = "transceiver"
+            if identified:
+                module_type = classify_module_type_cisco_ios(pid)
+                if module_type != "transceiver":
+                    logger.warning(
+                        "ios.get_modules: %s reports PID %r, which is not a "
+                        "recognized transceiver model; skipping",
+                        name, pid,
+                    )
+                    continue
             # In VC mode the leading integer of the ifname is the
             # member id; in standalone there is no member dimension
             # and the transceiver lives in the same None bucket as
             # its parent.
             member_for_transceiver = _interface_member_id(name) if vc_mode else None
             trans_by_member.setdefault(member_for_transceiver, {})[name] = _ModuleEntry(
-                model=pid, serial=sn,
+                model=model, serial=sn,
                 type=module_type,
                 description=descr,
+                identified=identified,
             )
     return bays_by_member, trans_by_member, claimed_slots
 

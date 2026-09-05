@@ -649,6 +649,10 @@ def test_metric_counters_invoked_when_enabled(monkeypatch) -> None:
     # Linecard emits with type=linecard; transceiver with type=transceiver.
     assert {m[2].get("type") for m in mod_counts} == {"linecard", "transceiver"}
     assert all(c[2].get("vendor") == "Cisco" for c in mod_counts + bay_counts)
+    # Both rows in this payload are identified (real PIDs), so the metric
+    # label must say so — a deleted "identified" bump would still pass every
+    # other assertion here.
+    assert all(m[2].get("identified") == "true" for m in mod_counts)
 
 
 def test_metric_counters_noop_when_disabled(monkeypatch) -> None:
@@ -968,3 +972,66 @@ def test_emit_vc_boolean_member_id_warn_dropped(caplog, monkeypatch) -> None:
     assert modules == []
     assert any("boolean" in r.getMessage() for r in caplog.records)
     assert (1, {"reason": "malformed"}) in counter_calls
+
+
+def test_unidentified_module_gets_the_generic_manufacturer():
+    """
+    Unidentified modules use the generic manufacturer to avoid collisions.
+
+    dcim.moduletype matches on (manufacturer, model) and nothing else, so the
+    manufacturer decides whether a described part lands segregated or filed
+    among the vendor's genuine parts. Cisco reports "Unspecified" precisely
+    when an optic is NOT Cisco-coded, so inheriting the chassis vendor would
+    assert a brand the device never claimed.
+    """
+    device = _make_device()
+    payload = {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/3", "position": "Te1/1/3",
+                    "module": {
+                        "model": "SFP-10GBase-CX1", "serial": "OPT3",
+                        "description": "SFP-10GBase-CX1", "type": "transceiver",
+                        "identified": False, "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+    entities: list = []
+
+    emit_modules_if_requested({"modules": payload}, Options(discover_modules="full"),
+                              {None: device}, entities)
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Unknown"
+    assert module.module_type.model == "SFP-10GBase-CX1"
+
+
+def test_identified_module_keeps_the_device_manufacturer():
+    """The suppression must not overreach: real parts stay with the vendor."""
+    device = _make_device(vendor="Cisco")
+    payload = {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/1", "position": "Te1/1/1",
+                    "module": {
+                        "model": "SFP-10G-SR", "serial": "OPT1",
+                        "description": "SFP-10GBase-SR", "type": "transceiver",
+                        "identified": True, "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+    entities: list = []
+
+    emit_modules_if_requested({"modules": payload}, Options(discover_modules="full"),
+                              {None: device}, entities)
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Cisco"
