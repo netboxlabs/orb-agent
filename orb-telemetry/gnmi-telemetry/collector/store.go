@@ -32,9 +32,9 @@ func attrKey(attrs []attribute.KeyValue) string {
 	return b.String()
 }
 
-// point is a series' last value: i for counters, f for gauges, the device
-// timestamp that set it, the age past which it is withheld from export, and
-// how many resets were seen.
+// point is a series' last value: i for counters, f for gauges, the local time
+// the update that set it arrived, the age past which it is withheld from
+// export, and how many resets were seen.
 type point struct {
 	i      int64
 	f      float64
@@ -59,7 +59,8 @@ func newStore(perMetricLimit int) *store {
 	return &store{limit: perMetricLimit, series: map[seriesKey]*point{}, perName: map[string]int{}}
 }
 
-// setCounter records a cumulative value; a value below the last is a reset.
+// setCounter records a cumulative value at its arrival time; a value below
+// the last is a reset.
 func (s *store) setCounter(k seriesKey, v int64, ts int64, maxAge time.Duration, attrs []attribute.KeyValue) bool {
 	return s.set(k, ts, maxAge, attrs, func(pt *point, fresh bool) {
 		if !fresh && v < pt.i {
@@ -69,7 +70,7 @@ func (s *store) setCounter(k seriesKey, v int64, ts int64, maxAge time.Duration,
 	})
 }
 
-// setGauge records the latest value.
+// setGauge records the latest value at its arrival time.
 func (s *store) setGauge(k seriesKey, v float64, ts int64, maxAge time.Duration, attrs []attribute.KeyValue) bool {
 	return s.set(k, ts, maxAge, attrs, func(pt *point, _ bool) { pt.f = v })
 }
@@ -112,13 +113,15 @@ func (s *store) get(k seriesKey) (point, bool) {
 	return *pt, true
 }
 
-// forEach visits every series of one metric whose device timestamp is within
-// its own maxAge of now; a zero timestamp or age is never withheld. A series
-// past its age is dropped as it is withheld, in the same pass: withholding it
-// alone would leave it holding a slot of the metric's bound forever, and a
-// device that renamed its interfaces would eventually refuse every new series.
-// Deleting during the range is defined behaviour in Go, and the write lock is
-// held for it; visit must not call back into the store.
+// forEach visits every series of one metric whose last update arrived within
+// its own maxAge of now. A series with no age is never withheld, which is how
+// a leaf the device streams on change keeps its last value until the device
+// deletes it. A series past its age is dropped as it is withheld, in the same
+// pass: withholding it alone would leave it holding a slot of the metric's
+// bound forever, and a device that renamed its interfaces would eventually
+// refuse every new series. Deleting during the range is defined behaviour in
+// Go, and the write lock is held for it; visit must not call back into the
+// store.
 func (s *store) forEach(metric string, now time.Time, visit func(seriesKey, point)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,7 +129,7 @@ func (s *store) forEach(metric string, now time.Time, visit func(seriesKey, poin
 		if k.metric != metric {
 			continue
 		}
-		if pt.ts != 0 && pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
+		if pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
 			delete(s.series, k)
 			s.perName[k.metric]--
 			continue

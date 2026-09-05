@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -94,13 +95,15 @@ func New(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger) 
 }
 
 // ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
-// has a live stream or poll, 0 while it reconnects.
+// has a live stream or poll, 0 while it reconnects. A collector built before
+// the meter exists registers nothing and keeps its once, so the first target
+// that arrives with a meter registers the gauge.
 func (c *Collector) ensureTargetUp() {
+	m := metrics.GetMeter()
+	if m == nil {
+		return
+	}
 	c.upOnce.Do(func() {
-		m := metrics.GetMeter()
-		if m == nil {
-			return
-		}
 		inst, err := m.Int64ObservableGauge("gnmi.target_up")
 		if err != nil {
 			c.logger.Error("failed to create target_up", "error", err)
@@ -241,7 +244,7 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 			continue
 		}
 		l.update(func(s *TargetStatus) { s.Mode = rung; s.Up = true })
-		err = c.consume(ctx, notes, errs, target, opts, profile, l)
+		err = c.consume(ctx, notes, errs, rung, target, opts, profile, l)
 		if errors.Is(err, errEarlyStreamFailure) && ctx.Err() == nil && opts.Mode != "on_change" && opts.Mode != "sample" {
 			metrics.GetModeFallbacks().Add(ctx, 1)
 			c.logger.Info("gnmi stream ended before data, trying the next mode", "host", target.Host, "mode", rung, "error", err)
@@ -251,6 +254,10 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 	}
 	metrics.GetModeFallbacks().Add(ctx, 1)
 	l.update(func(s *TargetStatus) { s.Mode = "get"; s.Up = true })
+	// A target that rejected the subscription on the stream rather than on the
+	// RPC leaves a producer behind that retries its gRPC stream for the life of
+	// the poll loop; tearing it down keeps the connection to the poll alone.
+	sess.StopSubscribe()
 	return c.poll(ctx, sess, subs, target, opts, profile, l)
 }
 
@@ -303,7 +310,7 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 
 // consume applies notifications until the stream ends or errors. A stream
 // that ends before its first notification is reported as an early failure.
-func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
+func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	productive := false
 	early := func(err error) error {
 		if productive {
@@ -338,7 +345,7 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 			}
 			productive = true
 			metrics.GetNotifications().Add(ctx, 1)
-			c.apply(ctx, n, target, opts, p)
+			c.apply(ctx, n, rung, target, opts, p)
 			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		}
 	}
@@ -356,6 +363,11 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		}
 		paths = append(paths, s.Path)
 	}
+	if len(paths) == 0 {
+		const reason = "nothing to poll: every profile subscription uses another origin"
+		c.logger.Warn(reason, "policy", opts.PolicyName, "host", target.Host, "profile", p.Name)
+		return errors.New(reason)
+	}
 	ticker := time.NewTicker(opts.MetricsInterval)
 	defer ticker.Stop()
 	for {
@@ -363,10 +375,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		if err != nil {
 			return err
 		}
-		if n.Timestamp == 0 {
-			n.Timestamp = time.Now().UnixNano()
-		}
-		c.apply(ctx, n, target, opts, p)
+		c.apply(ctx, n, "get", target, opts, p)
 		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		select {
 		case <-ctx.Done():
@@ -377,24 +386,28 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 }
 
 // apply matches every update to a profile metric and stores it; a delete
-// withdraws the series of the deleted element and everything under it.
-func (c *Collector) apply(ctx context.Context, n gnmi.Notification, target config.Target, opts Options, p *profiles.Profile) {
+// withdraws the series of the deleted element and everything under it. The
+// notification is stamped with its arrival here rather than with the device's
+// own timestamp: a device whose clock lags by more than the staleness window
+// would otherwise export nothing, silently.
+func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile) {
 	base := []attribute.KeyValue{attribute.String("device_ip", target.Host), attribute.String("policy", opts.PolicyName)}
 	if target.ID != "" {
 		base = append(base, attribute.String("netbox_id", target.ID))
 	}
-	ts := n.Timestamp
-	if ts == 0 {
-		ts = time.Now().UnixNano()
-	}
-	maxAge := staleAfterIntervals * opts.MetricsInterval
+	ts := time.Now().UnixNano()
+	updates := make([]gnmi.Update, 0, len(n.Updates))
 	for _, u := range n.Updates {
+		updates = append(updates, flattenUpdate(u)...)
+	}
+	for _, u := range updates {
 		sub, m, keys, ok := matchUpdate(p, u.Path)
 		if !ok {
 			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unmatched_path")))
 			continue
 		}
 		attrs := append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...)
+		maxAge := maxAgeFor(rung, sub, opts.MetricsInterval)
 		var stored bool
 		switch m.Type {
 		case "counter":
@@ -430,6 +443,44 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, target confi
 			c.store.deleteMatching(names, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
 		}
 	}
+}
+
+// flattenUpdate splits a container value into one update per scalar leaf,
+// keyed by the path the leaf sits at. A Get, and any target that serializes a
+// stream as JSON, answers with one update at the container path whose value
+// is a decoded object, while matching needs a path deeper than the
+// subscription's. A value that is not an object is one update as it stands: a
+// list is left whole so it is counted as an unconvertible value rather than
+// dropped without a trace. Keys are visited in order so one container always
+// yields the same sequence.
+func flattenUpdate(u gnmi.Update) []gnmi.Update {
+	fields, ok := u.Value.(map[string]any)
+	if !ok {
+		return []gnmi.Update{u}
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]gnmi.Update, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, flattenUpdate(gnmi.Update{Path: u.Path + "/" + k, Value: fields[k]})...)
+	}
+	return out
+}
+
+// maxAgeFor is the age past which a series is withheld from export and
+// evicted. A leaf the device streams on change only refreshes when it
+// changes, so its series carries no age; every other delivery refreshes at
+// the interval, so a gap of three of them means the device went quiet. The
+// rung decides it rather than the profile alone: the SAMPLE rung and Get
+// polling deliver an on_change path at the interval like any other.
+func maxAgeFor(rung string, sub *profiles.Subscription, interval time.Duration) time.Duration {
+	if rung == "on_change" && sub.Mode == "on_change" {
+		return 0
+	}
+	return staleAfterIntervals * interval
 }
 
 // matchUpdate finds the subscription and metric an update path names,

@@ -11,6 +11,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/gnmi"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/profiles"
 )
@@ -123,4 +124,20 @@ func TestExporterWithholdsStaleSeries(t *testing.T) {
 	require.True(t, stored, "the store accepted the write")
 	got := collect(t, reader)
 	assert.NotContains(t, got, "gnmi.cpu_utilization", "a series older than its age is withheld from export")
+}
+
+func TestFlattenUpdate(t *testing.T) {
+	scalar := gnmi.Update{Path: "/system/memory/state/physical", Value: uint64(1)}
+	assert.Equal(t, []gnmi.Update{scalar}, flattenUpdate(scalar), "a scalar update is already one leaf")
+
+	got := flattenUpdate(gnmi.Update{Path: "/system/memory/state", Value: map[string]any{
+		"physical": float64(1),
+		"counters": map[string]any{"used": float64(2)},
+		"slots":    []any{float64(1), float64(2)},
+	}})
+	assert.Equal(t, []gnmi.Update{
+		{Path: "/system/memory/state/counters/used", Value: float64(2)},
+		{Path: "/system/memory/state/physical", Value: float64(1)},
+		{Path: "/system/memory/state/slots", Value: []any{float64(1), float64(2)}},
+	}, got, "a nested container yields one update per scalar and leaves a list whole")
 }

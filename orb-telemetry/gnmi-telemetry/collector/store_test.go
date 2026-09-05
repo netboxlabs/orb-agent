@@ -100,3 +100,15 @@ func TestAttrKeyEscapesValues(t *testing.T) {
 	b := attrKey([]attribute.KeyValue{attribute.String("k", "a"), attribute.String("b", "c")})
 	assert.NotEqual(t, a, b)
 }
+
+func TestStoreSeriesWithNoAgeIsNeverStale(t *testing.T) {
+	s := newStore(10)
+	now := time.Unix(1000, 0)
+	k, attrs := series("g", "1", "p", "on-change")
+	require.True(t, s.setGauge(k, 1, now.Add(-time.Hour).UnixNano(), 0, attrs))
+	var seen int
+	s.forEach("g", now, func(seriesKey, point) { seen++ })
+	assert.Equal(t, 1, seen, "a series with no age is exported however old it is")
+	_, ok := s.get(k)
+	assert.True(t, ok, "and it is not evicted")
+}

@@ -140,6 +140,13 @@ func (f *FakeSession) StopSubscribe() {
 	f.StopSubscribes++
 }
 
+// Stops reports how many times StopSubscribe was called.
+func (f *FakeSession) Stops() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.StopSubscribes
+}
+
 // Close marks the session closed.
 func (f *FakeSession) Close() error {
 	f.mu.Lock()

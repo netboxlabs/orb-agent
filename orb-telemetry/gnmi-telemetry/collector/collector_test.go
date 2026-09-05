@@ -3,6 +3,9 @@ package collector
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/gnmi"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/profiles"
 )
 
@@ -408,4 +412,156 @@ func TestReconnectAfterStreamError(t *testing.T) {
 	require.Len(t, st, 1)
 	assert.Contains(t, st[0].LastError, "stream reset")
 	assert.Equal(t, "on_change", st[0].Mode, "a stream that delivered data keeps its mode on reconnect")
+}
+
+// An ON_CHANGE leaf refreshes only when it changes, so its series carries no
+// age. The SAMPLE counter in the same notification is withdrawn once the
+// stream goes quiet, which is what proves the gauge is treated differently.
+func TestOnChangeSeriesAreNeverStale(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: streamOf(gnmi.Notification{Timestamp: time.Now().UnixNano(), Updates: []gnmi.Update{
+			{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+			{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(3)},
+		}}),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		got := collect(t, reader)
+		_, gauge := got["gnmi.if_oper_status"]
+		_, counter := got["gnmi.if_in_octets"]
+		return gauge && counter
+	})
+	waitFor(t, 3*time.Second, func() bool {
+		m, ok := collect(t, reader)["gnmi.if_in_octets"]
+		return !ok || len(m.Data.(metricdata.Sum[int64]).DataPoints) == 0
+	})
+	g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+	require.True(t, ok, "the on_change gauge outlives the counter's age")
+	require.Len(t, g.DataPoints, 1)
+	assert.Equal(t, 1.0, g.DataPoints[0].Value)
+}
+
+// A device whose clock lags by more than the staleness window must not blank
+// itself: the window runs from arrival at the agent.
+func TestStalenessUsesArrivalTimeNotDeviceTime(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: streamOf(gnmi.Notification{
+			Timestamp: time.Now().Add(-2 * time.Second).UnixNano(),
+			Updates:   []gnmi.Update{{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(7)}},
+		}),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 200 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		m, ok := collect(t, reader)["gnmi.if_in_octets"]
+		return ok && len(m.Data.(metricdata.Sum[int64]).DataPoints) == 1
+	})
+}
+
+// The ladder reaches Get after a subscription the target rejected. A producer
+// rejected on the stream keeps retrying its gRPC stream for the life of the
+// poll loop unless the subscription is torn down first.
+func TestGetRungStopsTheRejectedSubscription(t *testing.T) {
+	testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/memory/state/physical", Value: uint64(1)}}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "get" && sess.Stops() >= 1
+	})
+}
+
+// A target without PROTO answers a Get with one update at the container path
+// whose value is a decoded JSON object. Matching needs a path deeper than the
+// subscription's, so the container has to be split into its leaves first.
+func TestGetContainerResultIsFlattenedToLeaves(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{
+			{Path: "/system/memory/state", Value: map[string]any{"physical": float64(4096), "reserved": "512"}},
+		}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		got := collect(t, reader)
+		_, physical := got["gnmi.memory_physical"]
+		_, reserved := got["gnmi.memory_reserved"]
+		return physical && reserved
+	})
+	got := collect(t, reader)
+	assert.Equal(t, 4096.0, got["gnmi.memory_physical"].Data.(metricdata.Gauge[float64]).DataPoints[0].Value)
+	assert.Equal(t, 512.0, got["gnmi.memory_reserved"].Data.(metricdata.Gauge[float64]).DataPoints[0].Value)
+}
+
+// A collector built before the meter exists must still register target_up:
+// the first CollectTarget that finds a meter registers it.
+func TestTargetUpRegistersWhenTheMeterArrivesLate(t *testing.T) {
+	metrics.ResetMeter()
+	sess := &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}, SubscribeManyFn: streamOf(sample(1, time.Now().UnixNano()))}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.ensureTargetUp()
+	reader := testReader(t)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.target_up"]; return ok })
+}
+
+// Every subscription of this profile carries an origin of its own, so Get
+// polling has no path it can ask for. It has to say so rather than call Get
+// with an empty path set on every tick.
+func TestGetRungWithNoPollablePathReportsIt(t *testing.T) {
+	testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "native_only.yaml"), []byte(
+		"match: {}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    metrics:\n      - {leaf: free, name: mem_free, type: gauge}\n"), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "native_only"})
+	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && strings.Contains(st[0].LastError, "nothing to poll")
+	})
 }

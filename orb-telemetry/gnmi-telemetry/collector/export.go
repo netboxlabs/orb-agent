@@ -15,8 +15,9 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/profiles"
 )
 
-// staleAfterIntervals is how many metrics_intervals without a notification
-// withhold a series from export.
+// staleAfterIntervals is how many metrics_intervals without an update
+// arriving withhold a series from export. It does not apply to a series the
+// device streams on change, which carries no age.
 const staleAfterIntervals = 3
 
 // gaugeValue converts an update value for a gauge metric: numbers as is,
@@ -116,8 +117,8 @@ func newExporter(st *store, logger *slog.Logger) *exporter {
 	}
 }
 
-// observeCounter stores a cumulative value with its staleness age and
-// ensures its instrument.
+// observeCounter stores a cumulative value with its arrival time and
+// staleness age, and ensures its instrument.
 func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) bool {
 	if !e.store.setCounter(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return false
@@ -126,8 +127,8 @@ func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue,
 	return true
 }
 
-// observeGauge stores a gauge value with its staleness age and ensures its
-// instrument.
+// observeGauge stores a gauge value with its arrival time and staleness age,
+// and ensures its instrument.
 func (e *exporter) observeGauge(name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) bool {
 	if !e.store.setGauge(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return false
