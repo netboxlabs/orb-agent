@@ -136,6 +136,10 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		{"unknown mode", Profile{Name: "x", Subscriptions: []Subscription{{Path: "/a", Mode: "target_defined", Metrics: []Metric{{Leaf: "l", Name: "n", Type: "gauge"}}}}}, `subscription "/a": mode "target_defined" is not sample or on_change`},
 		{"duplicate name", Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: "n", Type: "gauge"}, Metric{Leaf: "m", Name: "n", Type: "gauge"})}, `metric "n" is declared twice`},
 		{"bad name", Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: "In Octets", Type: "gauge"})}, `metric "In Octets": name must be lower-case letters, digits and underscores`},
+		// One leaf carries one value, and a match writes it to the first metric
+		// mapping the leaf and stops. A second metric on the same leaf is never
+		// exported, so the profile promises a series the collector never writes.
+		{"duplicate_leaf", Profile{Name: "x", Subscriptions: one(Metric{Leaf: "in-octets", Name: "a", Type: "counter"}, Metric{Leaf: "in-octets", Name: "b", Type: "gauge"})}, `subscription "/a": leaf in-octets is mapped twice`},
 		{"enum on counter", Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: "n", Type: "counter", Enum: map[string]int64{"UP": 1}})}, `metric "n": enum and bool apply to gauges only`},
 		{"no metrics", Profile{Name: "x", Subscriptions: []Subscription{{Path: "/a", Mode: "sample"}}}, `subscription "/a": no metrics`},
 		{"empty path", Profile{Name: "x", Subscriptions: []Subscription{{Path: "", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "n", Type: "gauge"}}}}}, `subscription 1: path is required`},

@@ -192,6 +192,12 @@ type getServer struct {
 	// rejects answers a path with the status the target sets on it, for a
 	// refusal of a code other than the NotFound an unheld path gets.
 	rejects map[string]codes.Code
+	// encodings is what Capabilities advertises and what Get accepts: a target
+	// that names its encodings refuses a request made in any other, which is
+	// what makes asking for one it never named a failure rather than a detail.
+	// Empty advertises none and accepts every request, as the servers that
+	// care about something else do.
+	encodings []gnmiproto.Encoding
 	// mu guards gets, which the Get handler writes and a test reads.
 	mu sync.Mutex
 	// gets counts the requests made for each path, which is what tells a probe
@@ -225,10 +231,24 @@ func (g *getServer) Capabilities(ctx context.Context, _ *gnmiproto.CapabilityReq
 		<-ctx.Done()
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
-	return &gnmiproto.CapabilityResponse{}, nil
+	return &gnmiproto.CapabilityResponse{SupportedEncodings: g.encodings}, nil
+}
+
+// advertises reports whether the target named this encoding, which is the only
+// kind of request it answers.
+func (g *getServer) advertises(enc gnmiproto.Encoding) bool {
+	for _, e := range g.encodings {
+		if e == enc {
+			return true
+		}
+	}
+	return false
 }
 
 func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+	if len(g.encodings) > 0 && !g.advertises(req.GetEncoding()) {
+		return nil, status.Errorf(codes.InvalidArgument, "encoding %s was not advertised", req.GetEncoding())
+	}
 	if len(req.GetPath()) > 1 && !g.multi {
 		return nil, status.Error(codes.Unimplemented, "one path per request")
 	}
@@ -366,9 +386,12 @@ func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
 // SubscribeMany, which lives as long as the policy does. A target that answers
 // Capabilities and then never answers the Get held that probe for ever: no
 // stream, no ladder, no reconnect, until the policy was deleted. Each probe
-// carries a deadline of its own, and a path that misses it is pruned like one
-// the target refused.
-func TestASubscriptionPathProbeThatNeverAnswersIsPruned(t *testing.T) {
+// carries a deadline of its own, and a path that misses it still goes into the
+// subscription: the probe asked and got no answer, so it is the stream that
+// decides. A target that truly does not model the path rejects it there, which
+// the ladder and the reconnect handle; one that was merely slow serves it,
+// where dropping it left a healthy partial stream never asking again.
+func TestASubscriptionPathProbeThatNeverAnswersKeepsThePath(t *testing.T) {
 	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
 	addr := serveGet(t, &getServer{
 		holds:  map[string]bool{memory: true, interfaces: true},
@@ -408,7 +431,7 @@ func TestASubscriptionPathProbeThatNeverAnswersIsPruned(t *testing.T) {
 	case n, ok := <-got.notes:
 		require.True(t, ok, "the stream delivers its sync response")
 		require.True(t, n.SyncDone, "the first notification is the sync response")
-		assert.Equal(t, []string{memory}, n.Paths, "the path that never answered its probe is pruned, the one that did is kept")
+		assert.Equal(t, []string{memory, interfaces}, n.Paths, "the path whose probe never answered is carried anyway, and the stream is what would reject it")
 	case <-time.After(10 * time.Second):
 		t.Fatal("no sync response from the stream")
 	}
@@ -496,7 +519,9 @@ func TestAProbeWithoutASpecTimeoutTakesThePackageDefault(t *testing.T) {
 // probe that timed out, or found the target unavailable, says nothing about the
 // path it asked for: remembering that pruned the path for the life of the
 // session, and a stream that stayed up never carried it again. Only the codes a
-// target refuses a path under are a verdict worth keeping.
+// target refuses a path under are a verdict worth keeping, and only such a
+// refusal takes the path out of the subscription; an inconclusive probe leaves
+// it in and probes it again next time.
 func TestOnlyADefinitiveProbeRejectionIsRemembered(t *testing.T) {
 	const memory, busy, refused = "/system/memory/state", "/components/component[name=*]/state", "/interfaces/interface[name=*]/state/counters"
 	srv := &getServer{
@@ -518,8 +543,8 @@ func TestOnlyADefinitiveProbeRejectionIsRemembered(t *testing.T) {
 	}
 	notes, _, err := s.SubscribeMany(ctx, subs)
 	require.NoError(t, err)
-	assert.Equal(t, []string{memory}, syncPaths(t, notes),
-		"the busy path missed its probe deadline and the refused one was turned down")
+	assert.Equal(t, []string{memory, busy}, syncPaths(t, notes),
+		"the busy path missed its probe deadline and is carried anyway; only the refused one was turned down")
 
 	// A rung change subscribes again on the same session, which is where a
 	// verdict remembered from the attempt before it is spent.
@@ -530,4 +555,50 @@ func TestOnlyADefinitiveProbeRejectionIsRemembered(t *testing.T) {
 	assert.Equal(t, 1, srv.getsFor(memory), "a path the target answered is remembered, not probed again")
 	assert.Equal(t, 2, srv.getsFor(busy), "a probe that reached no verdict leaves nothing to answer from")
 	assert.Equal(t, 1, srv.getsFor(refused), "a path the target refused is remembered")
+}
+
+// A Get is made in an encoding the target advertised. Asking a target that
+// named PROTO alone for JSON_IETF is a request it refuses, so every path probe
+// and the Get rung itself fail on it: a device that cannot stream reconnects
+// for ever rather than settling into a poll. JSON_IETF stays the preference
+// where it is offered, JSON next, and PROTO only when neither is, since the
+// first two carry a leaf's value unambiguously across targets.
+func TestTheGetEncodingIsOneTheTargetAdvertised(t *testing.T) {
+	for name, tc := range map[string]struct {
+		advertised []string
+		want       string
+	}{
+		"json_ietf and proto": {advertised: []string{"JSON_IETF", "PROTO"}, want: "json_ietf"},
+		"proto only":          {advertised: []string{"PROTO"}, want: "proto"},
+		"json only":           {advertised: []string{"JSON"}, want: "json"},
+		"proto ahead of json": {advertised: []string{"PROTO", "JSON"}, want: "json"},
+		"nothing usable":      {advertised: []string{"ASCII"}, want: "json_ietf"},
+		"none at all":         {advertised: nil, want: "json_ietf"},
+	} {
+		assert.Equal(t, tc.want, negotiateEncoding(tc.advertised), name)
+	}
+}
+
+// The poll a PROTO-only target answers. Capabilities negotiates the encoding
+// every later Get is made in, and a target that named PROTO alone turns down a
+// request in any other, which left such a device with no probe that could
+// succeed and no Get rung to fall to. A PROTO scalar reaches the caller as the
+// number the device sent, the same way one off a stream does.
+func TestAPROTOOnlyTargetAnswersItsGet(t *testing.T) {
+	const memory = "/system/memory/state"
+	s := getSession(t, &getServer{
+		holds:     map[string]bool{memory: true},
+		encodings: []gnmiproto.Encoding{gnmiproto.Encoding_PROTO},
+	})
+
+	caps, err := s.Capabilities(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"PROTO"}, caps.Encodings, "the target names PROTO and nothing else")
+
+	n, err := s.GetOnce(context.Background(), []string{memory})
+	require.NoError(t, err, "a PROTO-only target answers a Get made in PROTO")
+	assert.Equal(t, []string{memory}, n.Paths)
+	require.Len(t, n.Updates, 1)
+	assert.Equal(t, memory, n.Updates[0].Path)
+	assert.Equal(t, uint64(1), n.Updates[0].Value, "a PROTO scalar decodes to the number the target sent")
 }

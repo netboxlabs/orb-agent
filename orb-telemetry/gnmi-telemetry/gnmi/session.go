@@ -85,8 +85,10 @@ type Session interface {
 	// SubscribeMany opens one stream carrying every subscription with its own
 	// mode and origin. It tears down a previous subscription first, like
 	// Subscribe, and its channels close when ctx is cancelled or the stream
-	// ends. A path the target rejects on a Get probe is pruned, once per
-	// session; a target that rejects every probe gets the full request.
+	// ends. A path the target refuses on a Get probe is pruned, once per
+	// session; a probe that reached no verdict keeps its path, which the
+	// stream then decides on; a target that refuses every probe gets the full
+	// request.
 	SubscribeMany(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error)
 	// GetOnce performs a single gNMI Get over paths.
 	GetOnce(ctx context.Context, paths []string) (Notification, error)

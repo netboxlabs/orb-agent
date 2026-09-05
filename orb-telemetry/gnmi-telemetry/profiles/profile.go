@@ -106,10 +106,10 @@ var reservedMetrics = func() map[string]bool {
 // Validate checks the schema rules: a path and metrics per subscription, a
 // stream mode, metric types, unique lower-case names that no health metric of
 // the backend already owns, enum and bool only on gauges, a "." leaf alone in
-// its subscription, a leaf carrying no key predicate, an attribute that names a
-// key its own path carries on exactly one element and does not shadow the
-// collector's own names, and an attribute promoting every key the path
-// wildcards.
+// its subscription, a leaf carrying no key predicate and mapped by one metric
+// of its subscription, an attribute that names a key its own path carries on
+// exactly one element and does not shadow the collector's own names, and an
+// attribute promoting every key the path wildcards.
 func (p *Profile) Validate() error {
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
@@ -165,6 +165,12 @@ func (p *Profile) Validate() error {
 					p.Name, s.Path, key)
 			}
 		}
+		// A leaf carries one value, and a match writes it to the first metric
+		// mapping that leaf and stops, so a second metric on the same leaf is
+		// never exported and the profile promises a series nothing writes.
+		// Scoped to the subscription: the same leaf name under two paths is
+		// two different leaves.
+		leaves := make(map[string]bool, len(s.Metrics))
 		for _, m := range s.Metrics {
 			if m.Leaf == "" {
 				return fmt.Errorf("profile %s: subscription %q: a metric has no leaf", p.Name, s.Path)
@@ -181,6 +187,10 @@ func (p *Profile) Validate() error {
 				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key",
 					p.Name, s.Path, m.Name)
 			}
+			if leaves[m.Leaf] {
+				return fmt.Errorf("profile %s: subscription %q: leaf %s is mapped twice", p.Name, s.Path, m.Leaf)
+			}
+			leaves[m.Leaf] = true
 			if !metricName.MatchString(m.Name) {
 				return fmt.Errorf("profile %s: metric %q: name must be lower-case letters, digits and underscores", p.Name, m.Name)
 			}

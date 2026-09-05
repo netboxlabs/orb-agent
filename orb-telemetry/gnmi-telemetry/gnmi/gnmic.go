@@ -163,16 +163,16 @@ func logPruned(logger *slog.Logger, sub Subscription, err error) {
 	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
 }
 
-// logProbeFailed reports one subscription path left out of this attempt because
-// its probe never reached a verdict. A target refusing a path is routine, but a
-// probe that could not ask it is the connection faltering under a subscription
-// the profile expects to carry, so it is louder than a refusal and the next
-// attempt asks again.
-func logProbeFailed(logger *slog.Logger, sub Subscription, err error) {
+// logProbeInconclusive reports one subscription path whose probe never reached
+// a verdict. A target refusing a path is routine, but a probe that could not
+// ask it is the connection faltering under a subscription the profile expects
+// to carry, so it is louder than a refusal. The path stays in the request: the
+// probe learned nothing, so the stream is what decides.
+func logProbeInconclusive(logger *slog.Logger, sub Subscription, err error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	logger.Warn("gnmi subscription path probe failed, retrying it on the next attempt",
+	logger.Warn("gnmi subscription path probe inconclusive, keeping the path",
 		"path", sub.Path, "origin", sub.Origin, "error", err)
 }
 
@@ -257,23 +257,35 @@ func (s *gnmicSession) enc() string {
 	return "json_ietf"
 }
 
+// getEncodingPreference is the order a Get encoding is chosen in, from the
+// advertised name to the name the request carries: JSON_IETF is OpenConfig's
+// canonical encoding, JSON is what a target that offers only it names (e.g.
+// NX-OS), and PROTO is taken when neither is advertised. The first two carry a
+// leaf's value the same way across targets, so PROTO is last rather than
+// absent: it is what a PROTO-only target answers, and asking such a target for
+// anything else fails every path probe and the Get rung with it.
+var getEncodingPreference = []struct{ advertised, request string }{
+	{"JSON_IETF", "json_ietf"},
+	{"JSON", "json"},
+	{"PROTO", "proto"},
+}
+
 // negotiateEncoding picks the request encoding from the target's advertised
-// Capabilities encodings: prefer JSON_IETF (OpenConfig's canonical encoding),
-// fall back to JSON (e.g. NX-OS advertises JSON only), else default to json_ietf
-// as a best effort. decodeTypedValue handles both JSON_IETF and JSON responses,
-// so either negotiated value yields the same decoded shape downstream.
+// Capabilities encodings, in getEncodingPreference order and regardless of the
+// order the target listed them in, else json_ietf as a best effort when it
+// advertised nothing usable. decodeTypedValue handles a JSON_IETF, JSON and
+// PROTO response alike, and a Get response is converted by convertNotification
+// exactly as a stream response is, so any negotiated value yields the same
+// decoded shape downstream.
 func negotiateEncoding(advertised []string) string {
-	hasJSON := false
+	has := make(map[string]bool, len(advertised))
 	for _, e := range advertised {
-		switch strings.ToUpper(strings.TrimSpace(e)) {
-		case "JSON_IETF":
-			return "json_ietf"
-		case "JSON":
-			hasJSON = true
-		}
+		has[strings.ToUpper(strings.TrimSpace(e))] = true
 	}
-	if hasJSON {
-		return "json"
+	for _, pref := range getEncodingPreference {
+		if has[pref.advertised] {
+			return pref.request
+		}
 	}
 	return "json_ietf"
 }
@@ -544,11 +556,14 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 // for ever, and there would be no stream, no ladder and no reconnect until the
 // policy was deleted.
 //
-// Only a refusal is remembered. A probe that missed its deadline, or found the
-// target unavailable, asked its question and got no answer, so the path is left
-// out of this attempt alone and the next SubscribeMany on this session probes
-// it again; caching that verdict pruned the path for the life of a session, and
-// a stream that never dropped never carried it again.
+// Only a refusal prunes, and only a refusal is remembered. A probe that missed
+// its deadline, or found the target unavailable, asked its question and got no
+// answer, so it says nothing about the path: it stays in the subscription and
+// the stream decides. A target that truly does not model it rejects it there,
+// which the ladder and the reconnect handle, while a target that was merely
+// slow serves it, where dropping it left a healthy partial stream that never
+// asked for it again. Nothing is cached either, so the next SubscribeMany on
+// this session probes it afresh.
 func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscription) []Subscription {
 	if s.probed == nil {
 		s.probed = map[string]bool{}
@@ -572,11 +587,13 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 				s.probed[key] = false
 				logPruned(s.logger, sub, err)
 			default:
-				// No verdict to remember: the path is left out of this attempt
-				// alone, and the next SubscribeMany on this session, which is a
-				// rung change, asks again. A reconnect opens a session of its
-				// own and probes everything afresh regardless.
-				logProbeFailed(s.logger, sub, err)
+				// No verdict, so nothing to act on and nothing to remember: the
+				// path is subscribed as if it had never been probed, and the
+				// next SubscribeMany on this session, which is a rung change,
+				// probes it again. A reconnect opens a session of its own and
+				// probes everything afresh regardless.
+				logProbeInconclusive(s.logger, sub, err)
+				ok = true
 			}
 		}
 		if ok {

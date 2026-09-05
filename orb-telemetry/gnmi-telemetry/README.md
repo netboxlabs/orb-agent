@@ -87,9 +87,13 @@ select the profile unless the target pins one with `profile`, and the encodings
 the device advertises. Subscriptions are requested as PROTO when the device
 advertises it, because a target that serializes a stream as JSON emits a subtree
 per update rather than one flat leaf per update; when PROTO is absent, the
-negotiated Get encoding (JSON_IETF, or JSON for a device that offers only that)
-is used instead. Encodings the backend does not know are ignored rather than
-treated as a failure, since devices advertise private ones. Nothing the backend
+negotiated Get encoding is used instead. Gets, the path probes and the Get rung
+alike, ask for the first of JSON_IETF, JSON and PROTO the device advertised,
+whatever order it listed them in, and JSON_IETF when it advertised none of them:
+a device that named PROTO alone refuses a request in any other encoding, which
+left one that cannot stream reconnecting for ever instead of polling. Encodings
+the backend does not know are ignored rather than treated as a failure, since
+devices advertise private ones. Nothing the backend
 sends waits on a target indefinitely: the Capabilities call and each
 subscription-path probe are bounded by the probe timeout, a stream's first
 response is due within that same probe deadline, and each Get poll is bounded by
@@ -112,10 +116,14 @@ other path with it. Each probe is bounded, by `probe_timeout_ms` when the policy
 sets one and by ten seconds when it does not, so a target that answers
 Capabilities and then goes silent under one path costs that probe rather than
 the whole subscription. A verdict, accepted or refused, is remembered for the
-session, so a rung change does not probe it again; a probe that reached no verdict, one that missed
-its deadline or found the target unavailable, is not, so the path is left out of
-that attempt alone and probed again by the next subscribe on the session. A
-target that rejects every probe is sent the full set rather than nothing. The
+session, so a rung change does not probe it again. A probe that reached no
+verdict, one that missed its deadline or found the target unavailable, is
+neither remembered nor acted on: the path stays in the subscription and the
+stream decides, since a device that does not model it rejects it there, where
+the ladder and the reconnect handle it, and one that was merely slow serves it.
+Dropping such a path instead left a healthy partial stream that never asked for
+it again. A target that rejects every probe is sent the full set rather than
+nothing. The
 stream's sync response names the paths it ended up carrying, so a reconnect
 withdraws only the series of the subtrees that streamed: a pruned path restates
 nothing because it was never subscribed.
@@ -412,6 +420,9 @@ subscriptions:
   subscription made directly to a leaf, and must then be the only metric in it.
   A `leaf` may not carry a `[key=...]` predicate: it is matched by element name
   alone, so a keyed list belongs in `path`, where an attribute promotes its key.
+  One leaf maps to one metric within its subscription: an update carries a
+  single value and the first metric mapping the leaf takes it, so a second on
+  the same leaf would name a series nothing ever writes.
 - `name` is lower-case letters, digits and underscores, and is exported as
   `gnmi.<name>`. It must be unique within the resolved profile, and may not be
   one of the health metric names the backend registers for itself
