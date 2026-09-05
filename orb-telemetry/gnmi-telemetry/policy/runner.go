@@ -128,7 +128,10 @@ func (r *Runner) startTarget(t config.Target) {
 		return
 	}
 	t.Port = resolvedPort(t.Port)
-	err := r.collector.CollectTarget(r.ctx, t, collector.Options{MetricsInterval: r.interval, Mode: r.modeFor(t), PolicyName: r.name})
+	err := r.collector.CollectTarget(r.ctx, t, collector.Options{
+		MetricsInterval: r.interval, Mode: r.modeFor(t), PolicyName: r.name,
+		ProbeTimeout: r.policy.Config.ResolvedProbeTimeout(),
+	})
 	if err != nil {
 		r.logger.Warn("target not started", "policy", r.name, "host", t.Host, "error", err)
 	}

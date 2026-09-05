@@ -1,6 +1,9 @@
 package profiles
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // pathElem is one element of a gNMI path: its name and keys.
 type pathElem struct {
@@ -72,6 +75,24 @@ func pathKeyCounts(p string) map[string]int {
 			out[k]++
 		}
 	}
+	return out
+}
+
+// wildcardKeys is the key names a path wildcards, sorted so a subscription that
+// leaves two of them unpromoted always names the same one. A wildcard is what
+// makes one subscription cover a whole list, and the key's value is the only
+// thing that tells the elements apart: unless an attribute promotes it, every
+// element of the list writes one shared series.
+func wildcardKeys(p string) []string {
+	var out []string
+	for _, e := range parsePath(p) {
+		for k, v := range e.keys {
+			if v == "*" {
+				out = append(out, k)
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 

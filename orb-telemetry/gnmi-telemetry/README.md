@@ -101,8 +101,10 @@ The first subscribe on a session probes each of those paths first, with a
 one-path Get under that path's own origin, and leaves out the ones the target
 rejects, logging each with the error it gave. A subscription is atomic on a
 strict target, so one path the device does not carry would otherwise sink every
-other path with it. The verdicts are remembered for the session, and a target
-that rejects every probe is sent the full set rather than nothing. The stream's
+other path with it. Each probe is bounded by `probe_timeout_ms`, so a target
+that answers Capabilities and then goes silent under one path costs that probe
+rather than the whole subscription. The verdicts are remembered for the session,
+and a target that rejects every probe is sent the full set rather than nothing. The stream's
 sync response names the paths it ended up carrying, so a reconnect withdraws
 only the series of the subtrees that streamed: a pruned path restates nothing
 because it was never subscribed.
@@ -220,7 +222,7 @@ set on the command line rather than by a policy.
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
 | `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before its first sync response or data, or that reports InvalidArgument or Unimplemented after its sync, alike. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
-| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` | How long one sweep probe waits for an address to answer Capabilities. Zero takes the default. |
+| `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` | How long one sweep probe waits for an address to answer Capabilities, and how long one subscription-path probe waits for its Get. Zero takes the default. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |
 | `send_credentials_to_unverified_targets` | boolean | `false` | Permits a CIDR or range target to carry a password while TLS does not verify the server. |
 
@@ -410,8 +412,11 @@ subscriptions:
   `name` key of the matched path element and exports it as `interface_name`. The
   key named on the right must be one the subscription path carries, and must be
   unique along it: a key name two elements of the path share reports one value
-  for both attributes. The attribute name on the left may not be `device_ip`,
-  `policy` or `netbox_id`, which the collector sets itself.
+  for both attributes. Every key the path wildcards must be promoted by some
+  attribute, since the key value is the only thing telling the elements of the
+  list apart and an unpromoted one has them all write a single series. The
+  attribute name on the left may not be `device_ip`, `policy` or `netbox_id`,
+  which the collector sets itself.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own

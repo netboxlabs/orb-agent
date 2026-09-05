@@ -1,6 +1,9 @@
 package gnmi
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Update is a single normalized leaf update from a gNMI notification.
 // Path is the absolute OpenConfig path; Value is the decoded scalar/string.
@@ -116,4 +119,10 @@ type TargetSpec struct {
 	CAFile     string
 	CertFile   string
 	KeyFile    string
+	// ProbeTimeout bounds one subscription-path probe: the Get a session runs
+	// per path before it opens a stream. The probe would otherwise run under
+	// the caller's context, which lives as long as the policy, so a target that
+	// goes silent under one path would hold the subscription open for ever.
+	// Zero takes the package default.
+	ProbeTimeout time.Duration
 }

@@ -153,3 +153,28 @@ func TestRunnerStopWaitsForTheSweep(t *testing.T) {
 	defer spy.mu.Unlock()
 	assert.Equal(t, []string{"p"}, spy.forgot, "the policy is forgotten after the sweep ended")
 }
+
+// The path probes a session runs before it opens a stream are bounded by the
+// policy, not by the loop's own context, so the resolved probe timeout has to
+// reach the collector with the target it applies to.
+func TestRunnerHandsTheCollectorTheResolvedProbeTimeout(t *testing.T) {
+	start := func(cfg config.PolicyConfig) collector.Options {
+		spy := &spyCollector{}
+		cfg.MetricsInterval = intp(30)
+		r, err := NewRunner(context.Background(), quietLogger(), "p",
+			config.Policy{Config: cfg, Scope: config.Scope{Targets: []config.Target{{Host: "10.0.0.1"}}}},
+			spy, &gnmi.FakeDialer{})
+		require.NoError(t, err)
+		r.Start()
+		require.NoError(t, r.Stop())
+		spy.mu.Lock()
+		defer spy.mu.Unlock()
+		require.Len(t, spy.started, 1)
+		return spy.started[0]
+	}
+
+	assert.Equal(t, config.DefaultProbeTimeoutMs*time.Millisecond, start(config.PolicyConfig{}).ProbeTimeout,
+		"a policy that names no probe timeout hands over the default")
+	assert.Equal(t, 750*time.Millisecond, start(config.PolicyConfig{ProbeTimeoutMs: 750}).ProbeTimeout,
+		"a policy that names one hands over what it named")
+}

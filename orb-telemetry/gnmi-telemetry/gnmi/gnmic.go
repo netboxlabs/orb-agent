@@ -30,6 +30,12 @@ import (
 // to Get.
 const subscriptionPrefix = "gnmi-telemetry"
 
+// defaultProbeTimeout bounds one subscription-path probe when the dial spec
+// named none of its own. Ten seconds is long enough for a busy target to answer
+// a one-path Get and short enough that a silent path costs one probe rather
+// than the life of the policy.
+const defaultProbeTimeout = 10 * time.Second
+
 // GnmicDialer implements Dialer using the gnmic library.
 type GnmicDialer struct {
 	// Logger receives the events a session raises on its own, such as a pruned
@@ -78,7 +84,7 @@ func (d *GnmicDialer) Dial(ctx context.Context, spec TargetSpec) (Session, error
 	if err := tg.CreateGNMIClient(ctx); err != nil {
 		return nil, fmt.Errorf("gnmi dial: create client: %w", err)
 	}
-	return &gnmicSession{tg: tg, origin: spec.Origin, logger: d.Logger}, nil
+	return &gnmicSession{tg: tg, origin: spec.Origin, probeTimeout: spec.ProbeTimeout, logger: d.Logger}, nil
 }
 
 // withOrigin prefixes a gNMI request path with the session's origin
@@ -131,6 +137,9 @@ type gnmicSession struct {
 	// probed caches the per-subscription probe verdicts for SubscribeMany, keyed
 	// by origin + "|" + path; the value is whether the target accepted the path.
 	probed map[string]bool
+	// probeTimeout bounds each of those probes, from the dial spec; zero takes
+	// defaultProbeTimeout.
+	probeTimeout time.Duration
 	// logger is the dialer's logger, carried so this session's own events reach
 	// the deployment's handler and level; nil means slog.Default().
 	logger *slog.Logger
@@ -147,6 +156,15 @@ func logPruned(logger *slog.Logger, sub Subscription, err error) {
 		logger = slog.Default()
 	}
 	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
+// probeDeadline is how long one subscription-path probe may take: what the dial
+// spec asked for, or the package default when it asked for nothing.
+func (s *gnmicSession) probeDeadline() time.Duration {
+	if s.probeTimeout <= 0 {
+		return defaultProbeTimeout
+	}
+	return s.probeTimeout
 }
 
 // acceptedPaths returns the subset of paths the target accepts, so one
@@ -458,6 +476,14 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 // each pruned path is logged with its error. s.origin is swapped around the
 // probe; every session method runs on the caller's goroutine, so a caller
 // that used one session from two goroutines at once would break this.
+//
+// Each probe carries a deadline of its own rather than the caller's context,
+// which is the loop's and lives as long as the policy: a target that answers
+// Capabilities and then never answers the Get would otherwise hold the probe
+// for ever, and there would be no stream, no ladder and no reconnect until the
+// policy was deleted. A probe that misses its deadline is a path this session
+// does not subscribe to, remembered for the session like any other verdict and
+// probed afresh by the next one.
 func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscription) []Subscription {
 	if s.probed == nil {
 		s.probed = map[string]bool{}
@@ -469,7 +495,9 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 		if !seen {
 			saved := s.origin
 			s.origin = sub.Origin
-			_, err := s.getPaths(ctx, []string{sub.Path})
+			probeCtx, cancelProbe := context.WithTimeout(ctx, s.probeDeadline())
+			_, err := s.getPaths(probeCtx, []string{sub.Path})
+			cancelProbe()
 			s.origin = saved
 			ok = err == nil
 			s.probed[key] = ok

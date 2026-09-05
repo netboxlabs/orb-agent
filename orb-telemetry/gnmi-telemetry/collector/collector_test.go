@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -956,7 +957,7 @@ func TestGetRungWithNoPollablePathReportsIt(t *testing.T) {
 	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "native_only.yaml"), []byte(
-		"match: {}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    metrics:\n      - {leaf: free, name: mem_free, type: gauge}\n"), 0o600))
+		"match: {}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    attributes: {slot: slot}\n    metrics:\n      - {leaf: free, name: mem_free, type: gauge}\n"), 0o600))
 	profileStore, err := profiles.LoadProfiles(dir, nil)
 	require.NoError(t, err)
 	sess := &gnmi.FakeSession{
@@ -1668,4 +1669,44 @@ func TestASyncOnlyStreamKeepsItsModeOnALaterError(t *testing.T) {
 	}
 	assert.True(t, onChange, "the second request keeps the profile's own modes, not the all-SAMPLE rung")
 	assert.Equal(t, int64(0), fallbacks(t, reader), "a drop after the sync is no mode refusal, so no step down the ladder")
+}
+
+// specDialer records the spec of every dial, which the shared FakeDialer
+// discards.
+type specDialer struct {
+	sess *gnmi.FakeSession
+	mu   sync.Mutex
+	spec []gnmi.TargetSpec
+}
+
+func (d *specDialer) Dial(_ context.Context, spec gnmi.TargetSpec) (gnmi.Session, error) {
+	d.mu.Lock()
+	d.spec = append(d.spec, spec)
+	d.mu.Unlock()
+	return d.sess, nil
+}
+
+func (d *specDialer) specs() []gnmi.TargetSpec {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]gnmi.TargetSpec(nil), d.spec...)
+}
+
+// The session bounds each subscription-path probe by what the dial spec asked
+// for, and the policy is what decides that: a probe left to the loop's own
+// context outlives every reconnect the policy would otherwise make.
+func TestTheDialSpecCarriesThePolicysProbeTimeout(t *testing.T) {
+	testReader(t)
+	sess := &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}, SubscribeManyFn: streamOf(sample(1, time.Now().UnixNano()))}
+	dialer := &specDialer{sess: sess}
+	c := New(dialer, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{
+		MetricsInterval: time.Second, Mode: "auto", PolicyName: "p", ProbeTimeout: 1500 * time.Millisecond,
+	}))
+	waitFor(t, 3*time.Second, func() bool { return len(dialer.specs()) > 0 })
+	assert.Equal(t, 1500*time.Millisecond, dialer.specs()[0].ProbeTimeout, "the policy's probe timeout reaches the session that probes")
 }

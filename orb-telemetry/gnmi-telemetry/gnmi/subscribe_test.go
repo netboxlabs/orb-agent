@@ -171,20 +171,28 @@ func TestStopSubscribeStopsOnlyTheNameThisSessionRegistered(t *testing.T) {
 // getServer answers a gNMI Get for the paths it holds and fails for any other,
 // which is how a target behaves toward an optional subtree it does not model.
 // A multi-path request is refused outright when multi is false, the atomic
-// failure GetOnce recovers from one path at a time.
+// failure GetOnce recovers from one path at a time. A path in blocks is never
+// answered at all: the request waits for its own cancellation, which is how a
+// target that accepts a connection and then goes silent under one subtree
+// behaves.
 type getServer struct {
 	gnmiproto.UnimplementedGNMIServer
-	holds map[string]bool
-	multi bool
+	holds  map[string]bool
+	blocks map[string]bool
+	multi  bool
 }
 
-func (g *getServer) Get(_ context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
 	if len(req.GetPath()) > 1 && !g.multi {
 		return nil, status.Error(codes.Unimplemented, "one path per request")
 	}
 	var notifications []*gnmiproto.Notification
 	for _, p := range req.GetPath() {
 		rendered := pathToString(p)
+		if g.blocks[rendered] {
+			<-ctx.Done()
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
 		if !g.holds[rendered] {
 			return nil, status.Errorf(codes.NotFound, "unknown path %s", rendered)
 		}
@@ -198,9 +206,8 @@ func (g *getServer) Get(_ context.Context, req *gnmiproto.GetRequest) (*gnmiprot
 	return &gnmiproto.GetResponse{Notification: notifications}, nil
 }
 
-// getSession serves the given server on loopback and returns a session dialed
-// to it, the way GnmicDialer dials a plaintext target.
-func getSession(t *testing.T, srv *getServer) *gnmicSession {
+// serveGet serves the given server on loopback and returns its address.
+func serveGet(t *testing.T, srv *getServer) string {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -208,8 +215,14 @@ func getSession(t *testing.T, srv *getServer) *gnmicSession {
 	gnmiproto.RegisterGNMIServer(grpcServer, srv)
 	go func() { _ = grpcServer.Serve(ln) }()
 	t.Cleanup(grpcServer.Stop)
+	return ln.Addr().String()
+}
 
-	tg, err := gapi.NewTarget(gapi.Name("t"), gapi.Address(ln.Addr().String()), gapi.Insecure(true))
+// getSession serves the given server on loopback and returns a session dialed
+// to it, the way GnmicDialer dials a plaintext target.
+func getSession(t *testing.T, srv *getServer) *gnmicSession {
+	t.Helper()
+	tg, err := gapi.NewTarget(gapi.Name("t"), gapi.Address(serveGet(t, srv)), gapi.Insecure(true))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tg.Close() })
 	require.NoError(t, tg.CreateGNMIClient(context.Background()))
@@ -282,4 +295,65 @@ func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("no sync response from the stream")
 	}
+}
+
+// A path probe is a Get, and it ran under the context the loop hands
+// SubscribeMany, which lives as long as the policy does. A target that answers
+// Capabilities and then never answers the Get held that probe for ever: no
+// stream, no ladder, no reconnect, until the policy was deleted. Each probe
+// carries a deadline of its own, and a path that misses it is pruned like one
+// the target refused.
+func TestASubscriptionPathProbeThatNeverAnswersIsPruned(t *testing.T) {
+	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
+	addr := serveGet(t, &getServer{
+		holds:  map[string]bool{memory: true, interfaces: true},
+		blocks: map[string]bool{interfaces: true},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Dialed the way a target is, so the timeout travels the whole way: the
+	// policy's spec, the session it dials, and the probe that session runs.
+	s, err := (&GnmicDialer{}).Dial(ctx, TargetSpec{Host: addr, Insecure: true, ProbeTimeout: 100 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	type opened struct {
+		notes <-chan Notification
+		err   error
+	}
+	done := make(chan opened, 1)
+	go func() {
+		notes, _, err := s.SubscribeMany(ctx, []Subscription{
+			{Path: memory, Mode: Sample, SampleIntervalMs: 1000},
+			{Path: interfaces, Mode: Sample, SampleIntervalMs: 1000},
+		})
+		done <- opened{notes: notes, err: err}
+	}()
+
+	var got opened
+	select {
+	case got = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("SubscribeMany never returned: a probe of a silent path is unbounded")
+	}
+	require.NoError(t, got.err)
+
+	select {
+	case n, ok := <-got.notes:
+		require.True(t, ok, "the stream delivers its sync response")
+		require.True(t, n.SyncDone, "the first notification is the sync response")
+		assert.Equal(t, []string{memory}, n.Paths, "the path that never answered its probe is pruned, the one that did is kept")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no sync response from the stream")
+	}
+}
+
+// A spec that named no probe timeout takes the package default. Zero cannot be
+// used as the deadline itself: a context with a zero timeout is already expired,
+// which would prune every path of every subscription on sight.
+func TestAProbeWithoutASpecTimeoutTakesThePackageDefault(t *testing.T) {
+	assert.Equal(t, defaultProbeTimeout, (&gnmicSession{}).probeDeadline())
+	assert.Equal(t, 250*time.Millisecond, (&gnmicSession{probeTimeout: 250 * time.Millisecond}).probeDeadline(),
+		"a spec that named one is used as it stands")
 }

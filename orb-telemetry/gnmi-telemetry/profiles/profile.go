@@ -106,8 +106,9 @@ var reservedMetrics = func() map[string]bool {
 // Validate checks the schema rules: a path and metrics per subscription, a
 // stream mode, metric types, unique lower-case names that no health metric of
 // the backend already owns, enum and bool only on gauges, a "." leaf alone in
-// its subscription, and an attribute that names a key its own path carries on
-// exactly one element and does not shadow the collector's own names.
+// its subscription, an attribute that names a key its own path carries on
+// exactly one element and does not shadow the collector's own names, and an
+// attribute promoting every key the path wildcards.
 func (p *Profile) Validate() error {
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
@@ -146,6 +147,21 @@ func (p *Profile) Validate() error {
 				// and every series of the outer list would collapse onto one.
 				return fmt.Errorf("profile %s: subscription %q: attribute %s names key %s, which more than one element of the path carries; keys must be unique along the path",
 					p.Name, s.Path, attr, key)
+			}
+		}
+		// A wildcard key is what makes one subscription cover every element of
+		// a list, and its value is the only thing that tells the elements
+		// apart. With no attribute promoting it, every element writes the same
+		// series and each one silently overwrites the last. A literal key names
+		// a single element, so it needs nothing.
+		promoted := make(map[string]bool, len(s.Attributes))
+		for _, key := range s.Attributes {
+			promoted[key] = true
+		}
+		for _, key := range wildcardKeys(s.Path) {
+			if !promoted[key] {
+				return fmt.Errorf("profile %s: subscription %q: wildcard key %s must be promoted by an attribute, or every element shares one series",
+					p.Name, s.Path, key)
 			}
 		}
 		for _, m := range s.Metrics {

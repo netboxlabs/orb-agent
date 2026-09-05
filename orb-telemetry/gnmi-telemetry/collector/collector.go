@@ -42,6 +42,9 @@ type Options struct {
 	MetricsInterval time.Duration
 	Mode            string
 	PolicyName      string
+	// ProbeTimeout bounds one subscription-path probe on the session dialed for
+	// this target. Zero leaves the session on its own default.
+	ProbeTimeout time.Duration
 }
 
 // TargetStatus is one target's state for the API.
@@ -284,6 +287,7 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 		Host: net.JoinHostPort(target.Host, strconv.Itoa(int(target.Port))), Username: target.ResolvedUsername(), Password: target.ResolvedPassword(),
 		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: target.ResolvedOrigin(),
 		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
+		ProbeTimeout: opts.ProbeTimeout,
 	})
 	if err != nil {
 		return err

@@ -166,6 +166,14 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Attributes: map[string]string{"instance_name": "name", "interface_name": "name"},
 			Metrics:    []Metric{{Leaf: "state/counters/in-octets", Name: "n", Type: "counter"}},
 		}}}, `attribute instance_name names key name, which more than one element of the path carries; keys must be unique along the path`},
+		// A wildcard is what makes one subscription cover every element of a
+		// list, and the key value is the only thing telling the elements apart.
+		// Unpromoted, every interface writes the same series and each one
+		// overwrites the last.
+		{"wildcard_key_not_promoted", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
+			Metrics: []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
+		}}}, `wildcard key name must be promoted by an attribute, or every element shares one series`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -183,6 +191,15 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		Metrics:    []Metric{{Leaf: "state/counters/in-octets", Name: "n", Type: "counter"}},
 	}}}
 	assert.NoError(t, distinct.Validate(), "two nested lists keyed by different names are unambiguous")
+
+	// A literal key names one element, so there is nothing for an attribute to
+	// tell apart and the subscription needs none.
+	literal := Profile{Name: "x", Subscriptions: []Subscription{{
+		Path:    "/interfaces/interface[name=eth0]/state/counters",
+		Mode:    "sample",
+		Metrics: []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
+	}}}
+	assert.NoError(t, literal.Validate(), "a literal key selects one element, so it needs no attribute")
 }
 
 func TestInvalidOverrideKeepsTheBundledProfile(t *testing.T) {
