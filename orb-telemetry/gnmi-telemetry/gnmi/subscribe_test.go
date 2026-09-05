@@ -436,7 +436,7 @@ func TestACallerThatBoundedItsContextKeepsItsOwnDeadline(t *testing.T) {
 // used as the deadline itself: a context with a zero timeout is already expired,
 // which would prune every path of every subscription on sight.
 func TestAProbeWithoutASpecTimeoutTakesThePackageDefault(t *testing.T) {
-	assert.Equal(t, defaultProbeTimeout, (&gnmicSession{}).probeDeadline())
+	assert.Equal(t, DefaultProbeTimeout, (&gnmicSession{}).probeDeadline())
 	assert.Equal(t, 250*time.Millisecond, (&gnmicSession{probeTimeout: 250 * time.Millisecond}).probeDeadline(),
 		"a spec that named one is used as it stands")
 }

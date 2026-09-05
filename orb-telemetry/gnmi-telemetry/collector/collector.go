@@ -396,7 +396,8 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 
 // consume applies notifications until the stream ends or errors. A stream that
 // ends before its first sync response or data is reported as an early failure,
-// and so is one that reports a mode rejection after its sync.
+// and so is one that reports a mode rejection after its sync, and so is one
+// that sends nothing at all within the probe deadline.
 func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	productive := false
 	// synced is whether the stream answered the sync response that closes its
@@ -457,10 +458,26 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		// the attempt before it until something changed.
 		l.update(func(s *TargetStatus) { s.LastError = ""; s.Up = true })
 	}
+	// A target that accepts the RPC and then sends nothing leaves this select on
+	// the loop's context, which lives as long as the policy, while the subscribe
+	// that opened the stream has already marked the target Up: no data, no
+	// error to back off from and no reconnect. The stream's first response is
+	// due within the probe deadline, the bound the session gives a call of its
+	// own, and past it the attempt is an early failure like any other before the
+	// sync, so the ladder advances through it. The next attempt tears the stalled
+	// subscription down itself: SubscribeMany stops the session's active
+	// subscription at its start.
+	firstTimer := time.NewTimer(firstResponseDeadline(opts))
+	defer firstTimer.Stop()
+	// firstDue is that timer's channel until the first notification arrives, and
+	// nil after it: a stream that answered is bounded by nothing but the loop.
+	firstDue := firstTimer.C
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-firstDue:
+			return early(errors.New("the stream sent nothing within the probe deadline"))
 		case err, ok := <-errs:
 			if ok && err != nil {
 				return early(err)
@@ -479,6 +496,10 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 				}
 				return early(errors.New("stream closed"))
 			}
+			if firstDue != nil {
+				firstTimer.Stop()
+				firstDue = nil
+			}
 			if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
 				reconcile(n)
 				continue
@@ -490,6 +511,17 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		}
 	}
+}
+
+// firstResponseDeadline is how long a stream has to send its first response,
+// data or sync: what the policy gives one of the session's own probes, or the
+// gnmi package default when it named none, which is the deadline that session
+// would apply to a call of its own.
+func firstResponseDeadline(opts Options) time.Duration {
+	if opts.ProbeTimeout > 0 {
+		return opts.ProbeTimeout
+	}
+	return gnmi.DefaultProbeTimeout
 }
 
 // poll is the last rung: Get at the interval. The session's origin is the

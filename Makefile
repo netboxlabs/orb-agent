@@ -78,7 +78,7 @@ deps:
 .PHONY: work
 work:
 	@rm -f go.work go.work.sum
-	@GOWORK= go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery ./orb-telemetry/snmp-telemetry
+	@GOWORK= go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery ./orb-telemetry/snmp-telemetry ./orb-telemetry/gnmi-telemetry
 	@echo "go.work created (git-ignored). Use 'GOWORK=off' for single-module commands."
 
 agent_bin:

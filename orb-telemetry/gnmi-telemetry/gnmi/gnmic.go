@@ -30,12 +30,14 @@ import (
 // to Get.
 const subscriptionPrefix = "gnmi-telemetry"
 
-// defaultProbeTimeout bounds one probe a session runs under a caller's
+// DefaultProbeTimeout bounds one probe a session runs under a caller's
 // unbounded context, the Capabilities call that opens it and the Get it runs
 // per subscription path, when the dial spec named none of its own. Ten seconds
 // is long enough for a busy target to answer either and short enough that a
-// silent one costs a probe rather than the life of the policy.
-const defaultProbeTimeout = 10 * time.Second
+// silent one costs a probe rather than the life of the policy. It is exported
+// so a caller applying the same deadline to a call of its own, the collector
+// holding a stream's first response to it, reads the number from here.
+const DefaultProbeTimeout = 10 * time.Second
 
 // GnmicDialer implements Dialer using the gnmic library.
 type GnmicDialer struct {
@@ -139,7 +141,7 @@ type gnmicSession struct {
 	// by origin + "|" + path; the value is whether the target accepted the path.
 	probed map[string]bool
 	// probeTimeout bounds each of those probes, from the dial spec; zero takes
-	// defaultProbeTimeout.
+	// DefaultProbeTimeout.
 	probeTimeout time.Duration
 	// logger is the dialer's logger, carried so this session's own events reach
 	// the deployment's handler and level; nil means slog.Default().
@@ -164,7 +166,7 @@ func logPruned(logger *slog.Logger, sub Subscription, err error) {
 // asked for, or the package default when it asked for nothing.
 func (s *gnmicSession) probeDeadline() time.Duration {
 	if s.probeTimeout <= 0 {
-		return defaultProbeTimeout
+		return DefaultProbeTimeout
 	}
 	return s.probeTimeout
 }

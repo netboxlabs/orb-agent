@@ -91,7 +91,8 @@ negotiated Get encoding (JSON_IETF, or JSON for a device that offers only that)
 is used instead. Encodings the backend does not know are ignored rather than
 treated as a failure, since devices advertise private ones. Nothing the backend
 sends waits on a target indefinitely: the Capabilities call and each
-subscription-path probe are bounded by the probe timeout, and each Get poll by
+subscription-path probe are bounded by the probe timeout, a stream's first
+response is due within that same probe deadline, and each Get poll is bounded by
 `metrics_interval`, so a device that accepts the connection and then goes silent
 costs one call rather than the life of the policy. That bound applies to a call
 whose context carries no deadline of its own; a caller that already set one, the

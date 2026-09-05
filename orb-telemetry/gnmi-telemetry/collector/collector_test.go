@@ -1671,6 +1671,38 @@ func TestASyncOnlyStreamKeepsItsModeOnALaterError(t *testing.T) {
 	assert.Equal(t, int64(0), fallbacks(t, reader), "a drop after the sync is no mode refusal, so no step down the ladder")
 }
 
+// A stream the target accepted and then sent nothing on left consume waiting on
+// the loop's context, which lives as long as the policy, with the target marked
+// Up by the subscribe that opened it and no error to back off from. A stream's
+// first response is due within the probe deadline, the bound the session gives
+// a call of its own, and past it the attempt is an early failure like any other
+// before the sync: a stalled on_change attempt falls to sample, then to Get.
+func TestAStreamThatNeverAnswersAdvancesTheLadder(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		// The RPC is accepted and nothing follows it: two channels the target
+		// never writes to and never closes.
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			return make(chan gnmi.Notification), make(chan error), nil
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/memory/state/physical", Value: uint64(1)}}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{
+		MetricsInterval: time.Second, Mode: "auto", PolicyName: "p", ProbeTimeout: 100 * time.Millisecond,
+	}))
+	waitFor(t, 2*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "get"
+	})
+	assert.Equal(t, int64(2), fallbacks(t, reader), "two silent streams: on_change to sample, sample to get")
+}
+
 // A Get poll ran under the loop's context, which lives as long as the policy.
 // A target that stops replying without closing the connection held that poll
 // for ever: the loop stayed in it with Up still true, so the status reported a
