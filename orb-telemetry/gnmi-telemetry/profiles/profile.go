@@ -91,7 +91,8 @@ var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "net
 // Validate checks the schema rules: a path and metrics per subscription, a
 // stream mode, metric types, unique lower-case names, enum and bool only on
 // gauges, a "." leaf alone in its subscription, and an attribute that names a
-// key its own path carries and does not shadow the collector's own names.
+// key its own path carries on exactly one element and does not shadow the
+// collector's own names.
 func (p *Profile) Validate() error {
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
@@ -109,7 +110,7 @@ func (p *Profile) Validate() error {
 		// every series in silence, collapsing each element of the list onto
 		// one series. Sorted, so a subscription with two bad attributes always
 		// names the same one.
-		keys := pathKeys(s.Path)
+		keys := pathKeyCounts(s.Path)
 		attrs := make([]string, 0, len(s.Attributes))
 		for attr := range s.Attributes {
 			attrs = append(attrs, attr)
@@ -119,9 +120,17 @@ func (p *Profile) Validate() error {
 			if reservedAttributes[attr] {
 				return fmt.Errorf("profile %s: subscription %q: attribute %s is set by the collector", p.Name, s.Path, attr)
 			}
-			if _, ok := keys[s.Attributes[attr]]; !ok {
+			switch key := s.Attributes[attr]; {
+			case keys[key] == 0:
 				return fmt.Errorf("profile %s: subscription %q: attribute %s names key %s, which the path does not carry",
-					p.Name, s.Path, attr, s.Attributes[attr])
+					p.Name, s.Path, attr, key)
+			case keys[key] > 1:
+				// Two nested lists keyed alike, e.g. a network-instance and an
+				// interface both keyed name. One name cannot fill two attributes
+				// with different values, so both would carry the deeper list's
+				// and every series of the outer list would collapse onto one.
+				return fmt.Errorf("profile %s: subscription %q: attribute %s names key %s, which more than one element of the path carries; keys must be unique along the path",
+					p.Name, s.Path, attr, key)
 			}
 		}
 		for _, m := range s.Metrics {

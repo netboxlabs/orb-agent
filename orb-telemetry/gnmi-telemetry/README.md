@@ -388,9 +388,10 @@ subscriptions:
   reports one still reports its hardware OEM as the vendor.
 - `attributes` promotes path keys to attributes: `interface_name: name` reads the
   `name` key of the matched path element and exports it as `interface_name`. The
-  key named on the right must be one the subscription path carries, and the
-  attribute name on the left may not be `device_ip`, `policy` or `netbox_id`,
-  which the collector sets itself.
+  key named on the right must be one the subscription path carries, and must be
+  unique along it: a key name two elements of the path share reports one value
+  for both attributes. The attribute name on the left may not be `device_ip`,
+  `policy` or `netbox_id`, which the collector sets itself.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own

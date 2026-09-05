@@ -58,15 +58,18 @@ func parsePath(p string) []pathElem {
 	return elems
 }
 
-// pathKeys is the set of key names a path's elements carry, which is what a
-// subscription's attributes may name as their source: a key the path does not
-// carry is never reported by a match, so an attribute reading it would be
-// silently dropped from every series.
-func pathKeys(p string) map[string]struct{} {
-	out := map[string]struct{}{}
+// pathKeyCounts is how many of a path's elements carry each key name, which is
+// what a subscription's attributes may name as their source. A key the path does
+// not carry is never reported by a match, so an attribute reading it would be
+// silently dropped from every series. A key two elements carry is worse than
+// absent: matchElems reports keys in one flat map, so the deeper element's value
+// overwrites the shallower one and an attribute reading that name gets the wrong
+// list's value with nothing to show for it.
+func pathKeyCounts(p string) map[string]int {
+	out := map[string]int{}
 	for _, e := range parsePath(p) {
 		for k := range e.keys {
-			out[k] = struct{}{}
+			out[k]++
 		}
 	}
 	return out

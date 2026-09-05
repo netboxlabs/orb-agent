@@ -93,6 +93,21 @@ func (r *Runner) subscribeAfter(t config.Target, delay time.Duration) {
 	r.startTarget(t)
 }
 
+// launch marks a swept target subscribed and starts it in its own goroutine
+// after delay. The mark happens before the goroutine, since this is what
+// unsubscribed filters a rescan on: a target admitted here must not be probed
+// again.
+func (r *Runner) launch(t config.Target, delay time.Duration) {
+	r.mu.Lock()
+	r.subscribed[t.Host] = struct{}{}
+	r.mu.Unlock()
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.subscribeAfter(t, delay)
+	}()
+}
+
 // subscribe marks one explicit target and starts it, once.
 func (r *Runner) subscribe(t config.Target) {
 	r.mu.Lock()

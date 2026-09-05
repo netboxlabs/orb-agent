@@ -100,16 +100,7 @@ func (r *Runner) sweepOnce() {
 	}
 
 	for i, t := range admitted {
-		// Marked before the goroutine starts, since this is what unsubscribed
-		// filters a rescan on: a target admitted here must not be probed again.
-		r.mu.Lock()
-		r.subscribed[t.Host] = struct{}{}
-		r.mu.Unlock()
-		r.wg.Add(1)
-		go func(t config.Target, d time.Duration) {
-			defer r.wg.Done()
-			r.subscribeAfter(t, d)
-		}(t, time.Duration(i)*gap)
+		r.launch(t, time.Duration(i)*gap)
 	}
 }
 
@@ -129,8 +120,9 @@ func (r *Runner) unsubscribed(in []candidate) []candidate {
 	return out
 }
 
-// admitTargets expands, dedupes, and probes, returning the targets worth
-// subscribing to.
+// admitTargets expands, dedupes, and probes, returning the probed targets worth
+// subscribing to. Explicit candidates need no verdict, so it starts those
+// itself before the probe batch and they are not in what it returns.
 func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 	expanded, err := r.expandTargets()
 	if err != nil {
@@ -141,6 +133,28 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 	out.subscribed = out.scanned - len(expanded)
 	if len(expanded) == 0 {
 		return nil, out, nil
+	}
+
+	// An explicit candidate is never probed, so it has nothing to wait for.
+	// Starting it here rather than with the probed addresses is what keeps a
+	// policy that pins one device inside a range usable: the batch below runs
+	// to completion before it returns, and a /22 of silent addresses at the
+	// default probe timeout is tens of minutes of that. Counted apart from the
+	// probed addresses, exactly as before: it was never asked, so it cannot be
+	// reported as having answered.
+	if err := r.ctx.Err(); err != nil {
+		return nil, sweepOutcome{}, err
+	}
+	for _, c := range expanded {
+		if !c.explicit {
+			continue
+		}
+		// The operator named this device. Dropping it because it happens to be
+		// rebooting would regress the retry-forever behaviour a named host has
+		// always had, which is why it is started without a verdict. No jitter:
+		// there are as many of these as the operator wrote by hand.
+		out.explicit++
+		r.launch(c.target, 0)
 	}
 
 	// Probe concurrently: a dead address costs the full probeTimeout, so a /22
@@ -183,12 +197,7 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 
 	for i, c := range expanded {
 		if c.explicit {
-			// The operator named this device. Dropping it because it happens to
-			// be rebooting would regress the retry-forever behaviour a named
-			// host has always had. Counted apart from the probed addresses: it
-			// was never asked, so it cannot be reported as having answered.
-			admitted = append(admitted, c.target)
-			out.explicit++
+			// Already started above, before the batch.
 			continue
 		}
 		if !probed[i] {
@@ -207,7 +216,7 @@ func (r *Runner) admitTargets() ([]config.Target, sweepOutcome, error) {
 		}
 	}
 
-	out.admitted = len(admitted) - out.explicit
+	out.admitted = len(admitted)
 	out.rejected = rejected
 	out.exampleReason = reasonText(firstReason)
 

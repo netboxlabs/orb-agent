@@ -150,6 +150,14 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Attributes: map[string]string{"device_ip": "name"},
 			Metrics:    []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
 		}}}, `attribute device_ip is set by the collector`},
+		// Two nested lists keyed alike: a match reports one value per key name,
+		// so the inner element's wins and both attributes carry the interface
+		// name, collapsing every instance onto one series.
+		{"attribute_key_ambiguous", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/network-instances/network-instance[name=*]/interfaces/interface[name=*]", Mode: "sample",
+			Attributes: map[string]string{"instance_name": "name", "interface_name": "name"},
+			Metrics:    []Metric{{Leaf: "state/counters/in-octets", Name: "n", Type: "counter"}},
+		}}}, `attribute instance_name names key name, which more than one element of the path carries; keys must be unique along the path`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -160,6 +168,13 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 	}
 	empty := Profile{Name: "arista_eos", Extends: "_base", Match: Match{Vendor: "arista"}}
 	assert.NoError(t, empty.Validate(), "a placeholder overlay with no subscriptions is valid")
+
+	distinct := Profile{Name: "x", Subscriptions: []Subscription{{
+		Path: "/network-instances/network-instance[name=*]/interfaces/interface[id=*]", Mode: "sample",
+		Attributes: map[string]string{"instance_name": "name", "interface_id": "id"},
+		Metrics:    []Metric{{Leaf: "state/counters/in-octets", Name: "n", Type: "counter"}},
+	}}}
+	assert.NoError(t, distinct.Validate(), "two nested lists keyed by different names are unambiguous")
 }
 
 func TestInvalidOverrideKeepsTheBundledProfile(t *testing.T) {

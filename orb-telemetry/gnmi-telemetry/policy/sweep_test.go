@@ -350,3 +350,37 @@ func TestDedupeKeyIsTheCanonicalHost(t *testing.T) {
 	require.Equal(t, dedupeKey("2001:0db8::1"), dedupeKey("2001:db8::1"))
 	require.Equal(t, dedupeKey("SW1.example.net"), dedupeKey("sw1.example.net"))
 }
+
+// A policy that mixes a range with a named host must not make the named host
+// wait on the range. The explicit host is never probed, so holding it until the
+// probe batch finished delayed it by the batch's whole duration: 64 silent
+// addresses at the default probe timeout is tens of minutes before the one
+// device the operator wrote by hand is subscribed.
+func TestExplicitTargetStartsBeforeTheRangeProbes(t *testing.T) {
+	dialer := newPerHostDialer(nil)
+	// Every probe blocks until the test releases it, so no address in the range
+	// can be admitted while the assertion below runs.
+	dialer.blockOn = make(chan struct{})
+	spy := &spyCollector{}
+	policy := config.Policy{
+		Config: config.PolicyConfig{MetricsInterval: intp(10)},
+		Scope:  config.Scope{Targets: []config.Target{{Host: "10.0.0.0/24"}, {Host: "192.0.2.10"}}},
+	}
+	r, err := NewRunner(context.Background(), quietLogger(), "p1", policy, spy, dialer)
+	require.NoError(t, err)
+	r.Start()
+
+	require.Eventually(t, func() bool {
+		for _, h := range spy.startedHosts() {
+			if h == "192.0.2.10" {
+				return true
+			}
+		}
+		return false
+	}, time.Second, 10*time.Millisecond, "the named host starts while the range is still being probed")
+	require.Equal(t, []string{"192.0.2.10"}, spy.startedHosts(),
+		"no probed address answered yet, so the named host is the only one started")
+
+	close(dialer.blockOn)
+	require.NoError(t, r.Stop())
+}
