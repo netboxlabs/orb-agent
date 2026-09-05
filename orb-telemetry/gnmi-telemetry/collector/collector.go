@@ -371,6 +371,11 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		}
 		reconciled = true
 		c.store.evictBefore(baseAttrs(target, opts), started)
+		// A sync response is the stream saying its dump is complete, which is as
+		// good a sign of recovery as a value: a stream over a subtree with nothing
+		// in it carries no value at all, and the target would stand at the error of
+		// the attempt before it until something changed.
+		l.update(func(s *TargetStatus) { s.LastError = ""; s.Up = true })
 	}
 	for {
 		select {
@@ -426,12 +431,25 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 	}
 	ticker := time.NewTicker(opts.MetricsInterval)
 	defer ticker.Stop()
+	// The poll session's own start, against which its first snapshot is judged,
+	// the way a stream's initial dump is judged against the stream's start. A
+	// target that streamed on change, lost an element while it was disconnected
+	// and fell through to Get opens no stream to reconcile against, so the first
+	// snapshot is what withdraws the ageless series the earlier stream left: what
+	// the snapshot restates arrives after this and is aged as Get-delivered, so
+	// it survives, and what it omits goes.
+	started := time.Now().UnixNano()
+	reconciled := false
 	for {
 		n, err := sess.GetOnce(ctx, paths)
 		if err != nil {
 			return err
 		}
 		c.apply(ctx, n, "get", target, opts, p)
+		if !reconciled {
+			reconciled = true
+			c.store.evictBefore(baseAttrs(target, opts), started)
+		}
 		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		select {
 		case <-ctx.Done():

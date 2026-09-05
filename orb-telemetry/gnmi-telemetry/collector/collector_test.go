@@ -1103,3 +1103,126 @@ func TestCollectorsSharingASchemaRegistryRefuseADisagreeingSeries(t *testing.T) 
 	assert.Equal(t, "10.0.0.1", device.AsString(), "the series that defined the name is the one kept")
 	assert.Same(t, schemas, first.Schemas(), "the collector registers against the registry it was given")
 }
+
+// A target that streamed on change, lost an element while it was disconnected
+// and fell through to Get on reconnect opens no stream to reconcile against, so
+// the ageless point the earlier stream left would stand for ever. The first
+// complete Get snapshot says which elements the device still carries, the way a
+// stream's first sync response does, and reconciles on the same terms.
+func TestGetRungReconcilesAgelessSeries(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	// The ladder holds its refusals until the test has seen both series, so the
+	// window the eviction closes is not one the test has to catch between polls.
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			if attempts.Add(1) > 1 {
+				select {
+				case <-resume:
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				}
+				return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+			}
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				for _, n := range []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+					}},
+					{SyncDone: true},
+				} {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				errs <- errors.New("stream reset")
+			}()
+			return out, errs, nil
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{
+			{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+		}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A long interval keeps the polled restatement of e2 fresh for the whole
+	// test, so the one point left at the end is the reconcile's doing.
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		return ok && len(g.DataPoints) == 2
+	})
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	// The condition names the survivor, so it cannot pass on the instant before
+	// the snapshot restated e2 either.
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		name, has := g.DataPoints[0].Attributes.Value("interface_name")
+		return has && name.AsString() == "e2"
+	})
+}
+
+// A stream over a subtree with nothing in it answers the sync response and
+// nothing else. That is the stream saying its dump is complete, so it is as
+// good a sign of recovery as a value: without it the target stands at the error
+// of the attempt before for as long as the subtree stays empty.
+func TestASyncClearsAPriorError(t *testing.T) {
+	testReader(t)
+	var attempts atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			attempt := attempts.Add(1)
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				// The first stream ends before any data, which spends the forced
+				// rung and leaves the loop reporting the Get refusal below it.
+				if attempt == 1 {
+					errs <- errors.New("stream reset")
+					return
+				}
+				select {
+				case out <- gnmi.Notification{SyncDone: true}:
+				case <-ctx.Done():
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, errs, nil
+		},
+		GetErr: errors.New("get refused"),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "on_change", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && strings.Contains(st[0].LastError, "get refused")
+	})
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Up && st[0].LastError == ""
+	})
+}

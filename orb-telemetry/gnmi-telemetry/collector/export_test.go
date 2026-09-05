@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -132,6 +133,20 @@ func TestConvertValue(t *testing.T) {
 	i, ok = counterValue(counter, "0")
 	require.True(t, ok, "zero as a string is a cumulative count")
 	assert.Equal(t, int64(0), i)
+
+	// A target that serializes its updates as JSON hands every number over as a
+	// json.Number, which keeps the digits the device sent: a counter64 past 2^53
+	// rounds the moment it passes through a float64.
+	i, ok = counterValue(counter, json.Number("9007199254740993"))
+	require.True(t, ok, "a JSON number is a counter value")
+	assert.Equal(t, int64(9007199254740993), i)
+	_, ok = counterValue(counter, json.Number("1.5"))
+	assert.False(t, ok, "a non-integral JSON number is not a counter value")
+	f, ok = gaugeValue(gauge, json.Number("1.5"))
+	require.True(t, ok, "a JSON number is a gauge value")
+	assert.Equal(t, 1.5, f)
+	_, ok = counterValue(counter, json.Number("-1"))
+	assert.False(t, ok, "a negative JSON number is not a cumulative count")
 }
 
 func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {

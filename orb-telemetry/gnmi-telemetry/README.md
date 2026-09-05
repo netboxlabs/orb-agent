@@ -304,10 +304,11 @@ or the policy stops, and `gnmi.target_up` is what says whether the stream is
 still alive. A path the profile marks `on_change` is aged like any other when
 the target settled on the SAMPLE rung or on Get, since there it arrives at the
 interval. An ON_CHANGE series is also withdrawn when a reconnected stream's
-initial dump no longer includes it, whichever mode that stream settled on: an
-element removed while the stream was down is never deleted on the stream, so
-the dump the replacement opens with is what says which elements the device
-still carries.
+initial dump no longer includes it, whichever mode that stream settled on, or
+when the first Get snapshot of a target that fell through to polling no longer
+includes it: an element removed while the stream was down is never deleted on
+the stream, so the dump the replacement opens with is what says which elements
+the device still carries.
 
 Two other things withdraw a series: a delete notification, which withdraws the
 deleted element and everything under it, and stopping the policy, which

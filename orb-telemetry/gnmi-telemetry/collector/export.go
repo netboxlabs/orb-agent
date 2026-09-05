@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"math"
 	"strconv"
@@ -22,8 +23,9 @@ const staleAfterIntervals = 3
 
 // gaugeValue converts an update value for a gauge metric: numbers as is,
 // enum strings through the map, booleans to 1 and 0. A Get result is decoded
-// from JSON, so a number can arrive as a numeric string; it is parsed after
-// the enum lookup, which keeps an enum whose values are digits working.
+// from JSON, so a number arrives as a json.Number and a 64-bit YANG integer as
+// a numeric string; the string is parsed after the enum lookup, which keeps an
+// enum whose values are digits working.
 func gaugeValue(m profiles.Metric, v any) (float64, bool) {
 	switch x := v.(type) {
 	case uint64:
@@ -44,6 +46,11 @@ func gaugeValue(m profiles.Metric, v any) (float64, bool) {
 			return 1, true
 		}
 		return 0, true
+	case json.Number:
+		if f, err := x.Float64(); err == nil {
+			return f, true
+		}
+		return 0, false
 	case string:
 		if n, ok := m.Enum[x]; ok {
 			return float64(n), true
@@ -59,9 +66,10 @@ func gaugeValue(m profiles.Metric, v any) (float64, bool) {
 // counterValue converts an update value for a counter: integral, non-negative
 // and within int64. gNMI counters are counter64; a value past int64 is dropped
 // rather than wrapped into a false reset. A Get result is decoded from JSON,
-// which yields a float64 for every number and a string for every 64-bit
+// which yields a json.Number for every number and a string for every 64-bit
 // integer (RFC 7951), so both shapes are accepted here or the Get rung would
-// drop every counter it polls.
+// drop every counter it polls. The float64 a PROTO update carries is accepted
+// on the same terms.
 func counterValue(_ profiles.Metric, v any) (int64, bool) {
 	switch x := v.(type) {
 	case uint64:
@@ -84,6 +92,23 @@ func counterValue(_ profiles.Metric, v any) (int64, bool) {
 			return 0, false
 		}
 		return int64(x), true
+	case json.Number:
+		if n, err := x.Int64(); err == nil {
+			if n < 0 {
+				return 0, false
+			}
+			return n, true
+		}
+		// Int64 refuses a value past int64 and a value that is not whole alike;
+		// only the first of those is a count, and only up to int64, where a
+		// counter64 is dropped rather than wrapped into a false reset.
+		if n, err := strconv.ParseUint(x.String(), 10, 64); err == nil {
+			if n > math.MaxInt64 {
+				return 0, false
+			}
+			return int64(n), true
+		}
+		return 0, false
 	case string:
 		if n, err := strconv.ParseUint(x, 10, 64); err == nil {
 			if n > math.MaxInt64 {

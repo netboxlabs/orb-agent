@@ -2,6 +2,7 @@ package gnmi
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -25,6 +26,22 @@ func TestConvertNotificationKeepsTheDeviceTimestamp(t *testing.T) {
 	require.Len(t, n.Updates, 1)
 	assert.Equal(t, "/interfaces/interface[name=e1]/state/counters/in-octets", n.Updates[0].Path)
 	assert.Equal(t, uint64(1394), n.Updates[0].Value, "counters stay unsigned 64-bit")
+}
+
+// A JSON payload carries its numbers as digits, and a float64 holds only 53 of
+// them: a counter64 past that rounds on the way in, so 9007199254740993 would
+// be exported as 9007199254740992. The decoded number keeps the digits the
+// device sent, and the value converters read them.
+func TestJSONNumbersDecodeWithoutRounding(t *testing.T) {
+	for name, tv := range map[string]*gnmiproto.TypedValue{
+		"json_ietf": {Value: &gnmiproto.TypedValue_JsonIetfVal{JsonIetfVal: []byte("9007199254740993")}},
+		"json":      {Value: &gnmiproto.TypedValue_JsonVal{JsonVal: []byte("9007199254740993")}},
+	} {
+		decoded := decodeTypedValue(tv)
+		n, ok := decoded.(json.Number)
+		require.True(t, ok, "%s: a JSON number decodes as a json.Number, got %T", name, decoded)
+		assert.Equal(t, "9007199254740993", n.String(), name)
+	}
 }
 
 func TestBuildSubscribeRequestCarriesEachSubscriptionsModeAndOrigin(t *testing.T) {

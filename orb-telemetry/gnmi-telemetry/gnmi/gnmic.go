@@ -1,6 +1,7 @@
 package gnmi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -777,6 +778,22 @@ func joinPaths(prefix, path string) string {
 	return strings.TrimSuffix(prefix, "/") + "/" + strings.TrimPrefix(path, "/")
 }
 
+// decodeJSON decodes a JSON payload with its numbers left as json.Number, the
+// digits the device sent, rather than as float64, which holds 53 bits of them:
+// a counter64 past that rounds on the way in, and 9007199254740993 would be
+// exported as 9007199254740992. Consumers of a decoded value read a json.Number
+// alongside the shapes a PROTO update yields. It reports false for a payload
+// that is not JSON, which the caller keeps as the string it is.
+func decodeJSON(raw []byte) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
+		return nil, false
+	}
+	return decoded, true
+}
+
 // decodeTypedValue converts a *gnmi.TypedValue to a plain Go value.
 func decodeTypedValue(tv *gnmiproto.TypedValue) any {
 	if tv == nil {
@@ -798,14 +815,12 @@ func decodeTypedValue(tv *gnmiproto.TypedValue) any {
 	case *gnmiproto.TypedValue_AsciiVal:
 		return v.AsciiVal
 	case *gnmiproto.TypedValue_JsonIetfVal:
-		var decoded any
-		if err := json.Unmarshal(v.JsonIetfVal, &decoded); err == nil {
+		if decoded, ok := decodeJSON(v.JsonIetfVal); ok {
 			return decoded
 		}
 		return string(v.JsonIetfVal)
 	case *gnmiproto.TypedValue_JsonVal:
-		var decoded any
-		if err := json.Unmarshal(v.JsonVal, &decoded); err == nil {
+		if decoded, ok := decodeJSON(v.JsonVal); ok {
 			return decoded
 		}
 		return string(v.JsonVal)
