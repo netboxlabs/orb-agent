@@ -47,6 +47,9 @@ jobs:
           - dir: orb-telemetry/snmp-telemetry
             version: v2.11.4
             config: ../../.github/golangci.yaml
+          - dir: orb-telemetry/gnmi-telemetry
+            version: v2.11.4
+            config: ../../.github/golangci.yaml
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
