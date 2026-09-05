@@ -362,7 +362,10 @@ func syncPaths(t *testing.T, notes <-chan Notification) []string {
 // never streamed.
 func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
 	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
-	s := getSession(t, &getServer{holds: map[string]bool{memory: true}})
+	s := getSession(t, &getServer{
+		holds:   map[string]bool{memory: true},
+		rejects: map[string]codes.Code{interfaces: codes.InvalidArgument},
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -524,6 +527,10 @@ func TestAProbeWithoutASpecTimeoutTakesThePackageDefault(t *testing.T) {
 // it in and probes it again next time.
 func TestOnlyADefinitiveProbeRejectionIsRemembered(t *testing.T) {
 	const memory, busy, refused = "/system/memory/state", "/components/component[name=*]/state", "/interfaces/interface[name=*]/state/counters"
+	// A path the target models and holds nothing under yet, which is what a
+	// list with no entries in it looks like: the Get finds nothing there and
+	// answers NotFound, and the subscription over it is accepted all the same.
+	const empty = "/network-instances/network-instance[name=*]/state"
 	srv := &getServer{
 		holds:       map[string]bool{memory: true, busy: true},
 		blocksFirst: map[string]bool{busy: true},
@@ -539,21 +546,23 @@ func TestOnlyADefinitiveProbeRejectionIsRemembered(t *testing.T) {
 	subs := []Subscription{
 		{Path: memory, Mode: Sample, SampleIntervalMs: 1000},
 		{Path: busy, Mode: Sample, SampleIntervalMs: 1000},
+		{Path: empty, Mode: Sample, SampleIntervalMs: 1000},
 		{Path: refused, Mode: Sample, SampleIntervalMs: 1000},
 	}
 	notes, _, err := s.SubscribeMany(ctx, subs)
 	require.NoError(t, err)
-	assert.Equal(t, []string{memory, busy}, syncPaths(t, notes),
-		"the busy path missed its probe deadline and is carried anyway; only the refused one was turned down")
+	assert.Equal(t, []string{memory, busy, empty}, syncPaths(t, notes),
+		"the busy path missed its probe deadline and the empty one holds nothing yet, and both are carried anyway; only the refused one was turned down")
 
 	// A rung change subscribes again on the same session, which is where a
 	// verdict remembered from the attempt before it is spent.
 	notes, _, err = s.SubscribeMany(ctx, subs)
 	require.NoError(t, err)
-	assert.Equal(t, []string{memory, busy}, syncPaths(t, notes),
-		"the path whose probe reached no verdict is probed again and carried")
+	assert.Equal(t, []string{memory, busy, empty}, syncPaths(t, notes),
+		"the path whose probe reached no verdict is probed again and carried, and so is the one that holds nothing yet")
 	assert.Equal(t, 1, srv.getsFor(memory), "a path the target answered is remembered, not probed again")
 	assert.Equal(t, 2, srv.getsFor(busy), "a probe that reached no verdict leaves nothing to answer from")
+	assert.Equal(t, 2, srv.getsFor(empty), "a path that holds nothing yet is no verdict either, so it is asked again")
 	assert.Equal(t, 1, srv.getsFor(refused), "a path the target refused is remembered")
 }
 

@@ -95,10 +95,16 @@ left one that cannot stream reconnecting for ever instead of polling. Encodings
 the backend does not know are ignored rather than treated as a failure, since
 devices advertise private ones. Nothing the backend
 sends waits on a target indefinitely: the Capabilities call and each
-subscription-path probe are bounded by the probe timeout, a stream's first
-response is due within that same probe deadline, and each Get poll is bounded by
+subscription-path probe are bounded by the probe timeout, each notification of a
+stream's initial dump is due within that same probe deadline of the one before
+it until the sync response closes the dump, and each Get poll is bounded by
 `metrics_interval`, so a device that accepts the connection and then goes silent
-costs one call rather than the life of the policy. That bound applies to a call
+costs one call rather than the life of the policy. A dump sent in pieces is
+therefore not cut, and a stream that stalls partway through one, with no sync
+response to say the dump is complete, ends the attempt instead of holding the
+target up on a dump that never finished. Past the sync a stream is bounded by
+nothing but the policy, because a subscription with nothing to report is quiet
+by design. That bound applies to a call
 whose context carries no deadline of its own; a caller that already set one, the
 sweep below, keeps its own and the reading it draws from it.
 
@@ -122,7 +128,11 @@ neither remembered nor acted on: the path stays in the subscription and the
 stream decides, since a device that does not model it rejects it there, where
 the ladder and the reconnect handle it, and one that was merely slow serves it.
 Dropping such a path instead left a healthy partial stream that never asked for
-it again. A target that rejects every probe is sent the full set rather than
+it again. A probe answered NotFound keeps the path the same way: a device
+answers a Get that way for a path it models and holds nothing under, a list
+with no entries in it above all, while accepting a subscription over it, so
+pruning there kept an element created a moment later off the stream for the
+life of the session. Only InvalidArgument and Unimplemented prune. A target that rejects every probe is sent the full set rather than
 nothing. The
 stream's sync response names the paths it ended up carrying, so a reconnect
 withdraws only the series of the subtrees that streamed: a pruned path restates
@@ -139,7 +149,8 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
    so is one that ends with no error at all, or sends nothing at all within the
    probe deadline, before its first sync response or data. A stream that fails
    under any other code keeps the rung it held and reconnects on it, before the
-   sync response as well as after: an Unavailable during the initial dump is the
+   sync response as well as after, an initial dump that stalled after data
+   among them: an Unavailable during the initial dump is the
    connection going, not the mode being refused, and a subscription over an empty
    subtree sends a sync and no data at all.
 3. Get polling at `metrics_interval`, last. A subscription whose profile gives

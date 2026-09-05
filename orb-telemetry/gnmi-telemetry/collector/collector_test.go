@@ -1701,6 +1701,132 @@ func TestAStreamThatNeverAnswersAdvancesTheLadder(t *testing.T) {
 	assert.Equal(t, int64(2), fallbacks(t, reader), "two silent streams: on_change to sample, sample to get")
 }
 
+// A target that accepts the subscription, sends one update of its initial dump
+// and then goes quiet before the sync response is a stream nothing bounds: the
+// first notification used to take the deadline away, so the loop held the
+// target Up for ever, with no reconnect and no reconciliation, on a dump that
+// never completed. Until the sync closes the dump every notification is due
+// within the same probe deadline, and a dump that stalls past it is the stream
+// failing rather than the mode being refused, so the loop backs off and opens
+// another on the rung it holds.
+func TestADumpThatStallsBeforeItsSyncReconnects(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			if attempts.Add(1) > 1 {
+				return streamOf(gnmi.Notification{SyncDone: true}, sample(2, time.Now().UnixNano()))(ctx, subs)
+			}
+			// One update of the initial dump and then the target parks: no
+			// sync response, no error and no close.
+			out := make(chan gnmi.Notification)
+			go func() {
+				select {
+				case out <- sample(1, time.Now().UnixNano()):
+				case <-ctx.Done():
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, make(chan error), nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{
+		MetricsInterval: time.Second, Mode: "auto", PolicyName: "p", ProbeTimeout: 100 * time.Millisecond,
+	}))
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Up && !st[0].LastNotification.IsZero()
+	})
+	assert.GreaterOrEqual(t, reconnects(t, reader), int64(1), "the stalled dump ended the attempt, and the loop dialled the target again")
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "on_change", st[0].Mode, "a dump that stalled after data reconnects on the rung it held")
+	onChange := false
+	for _, s := range sess.Subscriptions() {
+		if s.Mode == gnmi.OnChange {
+			onChange = true
+		}
+	}
+	assert.True(t, onChange, "the second request keeps the profile's own modes, not the all-SAMPLE rung")
+	assert.Equal(t, int64(0), fallbacks(t, reader), "a dump that stalled after data is no mode refusal, so no step down the ladder")
+}
+
+// A target that sends its initial dump in pieces has not stalled: each piece is
+// due within the deadline of the one before it, not the whole dump within one,
+// so a dump slower than the deadline overall still arrives. The sync response
+// closes the dump and takes the deadline away for good, because a stream is
+// quiet after its dump by design, an on_change subscription above all: a
+// deadline left armed past the sync would cut a healthy stream at the first
+// quiet spell and reconnect for ever.
+func TestASlowDumpIsNotCutAndItsSyncEndsTheDeadline(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	synced := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			first := attempts.Add(1) == 1
+			out := make(chan gnmi.Notification)
+			go func() {
+				// Two updates 60 ms apart, each inside the 100 ms deadline and
+				// 120 ms in all, then the sync that closes the dump; after it
+				// the stream says nothing for longer than the deadline.
+				for _, n := range []gnmi.Notification{
+					sample(1, time.Now().UnixNano()),
+					sample(2, time.Now().UnixNano()),
+					{SyncDone: true},
+				} {
+					select {
+					case <-time.After(60 * time.Millisecond):
+					case <-ctx.Done():
+						return
+					}
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if first {
+					close(synced)
+				}
+				<-ctx.Done()
+			}()
+			return out, make(chan error), nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{
+		MetricsInterval: time.Second, Mode: "auto", PolicyName: "p", ProbeTimeout: 100 * time.Millisecond,
+	}))
+	select {
+	case <-synced:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the slow dump never reached its sync response")
+	}
+	// The quiet spell after the sync, longer than the deadline the dump ran
+	// under, which the stream survives because the sync disarmed it.
+	time.Sleep(300 * time.Millisecond)
+	assert.Equal(t, int64(1), attempts.Load(), "one stream carried the whole dump and stayed up through the quiet spell after it")
+	assert.Equal(t, int64(0), reconnects(t, reader), "a dump delivered in pieces and a quiet stream past its sync are no failure")
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.True(t, st[0].Up, "the stream that synced is still up")
+	assert.Equal(t, "on_change", st[0].Mode, "and still on the rung it opened on")
+}
+
 // A stream that dropped before its sync response has said nothing about the
 // mode it was asked for. gnmic surfaces a transport failure the same way it
 // surfaces a refusal, so only the codes a target rejects a request under send

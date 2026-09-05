@@ -399,7 +399,8 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 // reports a mode rejection before it has delivered data is an early failure, and so
 // is one that closes cleanly or sends nothing at all within the probe deadline
 // before its first sync response or data. Every other error is returned plain,
-// for the loop to reconnect through on the rung it holds.
+// for the loop to reconnect through on the rung it holds, an initial dump that
+// stalled after data and short of its sync response among them.
 func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	productive := false
 	// synced is whether the stream answered the sync response that closes its
@@ -471,25 +472,56 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 	// A target that accepts the RPC and then sends nothing leaves this select on
 	// the loop's context, which lives as long as the policy, while the subscribe
 	// that opened the stream has already marked the target Up: no data, no
-	// error to back off from and no reconnect. The stream's first response is
-	// due within the probe deadline, the bound the session gives a call of its
-	// own, and past it the attempt is an early failure like any other before the
-	// sync, so the ladder advances through it. The next attempt tears the stalled
-	// subscription down itself: SubscribeMany stops the session's active
-	// subscription at its start.
-	firstTimer := time.NewTimer(firstResponseDeadline(opts))
-	defer firstTimer.Stop()
-	// firstDue is that timer's channel until the first notification arrives, and
-	// nil after it: a stream that answered is bounded by nothing but the loop.
-	firstDue := firstTimer.C
+	// error to back off from and no reconnect. Every response of the initial
+	// dump is due within the probe deadline of the one before it, the bound the
+	// session gives a call of its own, and the sync response is what closes the
+	// dump and takes the deadline away. A stream that answers one update and
+	// then stalls short of its sync is as unbounded as one that answers
+	// nothing, and holds a target Up on a dump that never completed. The next
+	// attempt tears the stalled subscription down itself: SubscribeMany stops
+	// the session's active subscription at its start.
+	dumpDeadline := dumpResponseDeadline(opts)
+	dumpTimer := time.NewTimer(dumpDeadline)
+	defer dumpTimer.Stop()
+	// dumpDue is that timer's channel until the sync response, and nil after
+	// it: a stream that completed its dump is bounded by nothing but the loop,
+	// since a stream with nothing to report is quiet by design.
+	dumpDue := dumpTimer.C
+	// armDump puts the deadline in front of the next piece of the dump, or
+	// takes it away once the sync has closed the dump. Stopping a timer says
+	// nothing about a value already in its channel, which a bare Reset would
+	// leave there to expire a dump that is still arriving.
+	armDump := func() {
+		if dumpDue == nil {
+			return
+		}
+		if !dumpTimer.Stop() {
+			select {
+			case <-dumpTimer.C:
+			default:
+			}
+		}
+		if synced {
+			dumpDue = nil
+			return
+		}
+		dumpTimer.Reset(dumpDeadline)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-firstDue:
-			// The first notification stops this timer, so it fires only on a
-			// stream that answered nothing at all: no code to read, and a
-			// rejection the target never spoke.
+		case <-dumpDue:
+			// The sync response takes this timer away, so it fires on a stream
+			// still inside its initial dump. Before any data there is no code
+			// to read and a rejection the target never spoke, which the ladder
+			// advances through. After data the target accepted the mode and
+			// began serving it, so the rung is not what failed: the error is
+			// returned plain, for the loop to record, back off from and open
+			// another stream on the same rung.
+			if productive {
+				return errors.New("the initial dump stalled before its sync response")
+			}
 			return refused(errors.New("the stream sent nothing within the probe deadline"))
 		case err, ok := <-errs:
 			if ok && err != nil {
@@ -517,28 +549,26 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 				}
 				return errors.New("stream closed")
 			}
-			if firstDue != nil {
-				firstTimer.Stop()
-				firstDue = nil
-			}
 			if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
 				reconcile(n)
+				armDump()
 				continue
 			}
 			productive = true
 			metrics.GetNotifications().Add(ctx, 1)
 			c.apply(ctx, n, rung, target, opts, p)
 			reconcile(n)
+			armDump()
 			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		}
 	}
 }
 
-// firstResponseDeadline is how long a stream has to send its first response,
-// data or sync: what the policy gives one of the session's own probes, or the
-// gnmi package default when it named none, which is the deadline that session
-// would apply to a call of its own.
-func firstResponseDeadline(opts Options) time.Duration {
+// dumpResponseDeadline is how long a stream's initial dump has to send its
+// next response, data or sync: what the policy gives one of the session's own
+// probes, or the gnmi package default when it named none, which is the
+// deadline that session would apply to a call of its own.
+func dumpResponseDeadline(opts Options) time.Duration {
 	if opts.ProbeTimeout > 0 {
 		return opts.ProbeTimeout
 	}

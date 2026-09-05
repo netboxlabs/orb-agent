@@ -163,6 +163,18 @@ func logPruned(logger *slog.Logger, sub Subscription, err error) {
 	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
 }
 
+// logEmptySubtree reports one subscription path the target holds nothing under
+// yet. That is the routine answer for a list with no entries, and the path is
+// subscribed regardless, so it is quieter than a refusal and quieter still
+// than a probe that reached no verdict.
+func logEmptySubtree(logger *slog.Logger, sub Subscription, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Debug("gnmi subscription path holds nothing yet, keeping the path",
+		"path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
 // logProbeInconclusive reports one subscription path whose probe never reached
 // a verdict. A target refusing a path is routine, but a probe that could not
 // ask it is the connection faltering under a subscription the profile expects
@@ -177,17 +189,31 @@ func logProbeInconclusive(logger *slog.Logger, sub Subscription, err error) {
 }
 
 // definitiveProbeRejection reports whether a failed path probe is the target
-// saying it does not carry the path, rather than the probe failing to reach a
+// saying it does not model the path, rather than the probe failing to reach a
 // verdict about it. Only these codes answer the question the probe asked; a
 // timeout, an Unavailable or anything else is the call not arriving, and
 // remembering that as a refusal prunes the path for the life of the session.
+//
+// A NotFound is not among them. A target answers a Get that way for a path it
+// models and holds nothing under, a list with no entries in it above all, and
+// it accepts a subscription over that same path: reading it as a refusal
+// pruned the path for the session, so an element created a moment later never
+// streamed and was never collected.
 func definitiveProbeRejection(err error) bool {
 	switch status.Code(err) {
-	case codes.InvalidArgument, codes.NotFound, codes.Unimplemented:
+	case codes.InvalidArgument, codes.Unimplemented:
 		return true
 	default:
 		return false
 	}
+}
+
+// emptySubtree reports whether a failed path probe is the target answering that
+// it holds nothing under the path yet, which says nothing about whether it
+// carries the path: the subscription goes out with it, and the stream delivers
+// whatever appears there later.
+func emptySubtree(err error) bool {
+	return status.Code(err) == codes.NotFound
 }
 
 // probeDeadline is how long one probe this session runs may take, the
@@ -558,8 +584,9 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 //
 // Only a refusal prunes, and only a refusal is remembered. A probe that missed
 // its deadline, or found the target unavailable, asked its question and got no
-// answer, so it says nothing about the path: it stays in the subscription and
-// the stream decides. A target that truly does not model it rejects it there,
+// answer, and one that found nothing under the path learned what the target
+// holds rather than what it models; neither says the path is refused, so it
+// stays in the subscription and the stream decides. A target that truly does not model it rejects it there,
 // which the ladder and the reconnect handle, while a target that was merely
 // slow serves it, where dropping it left a healthy partial stream that never
 // asked for it again. Nothing is cached either, so the next SubscribeMany on
@@ -586,6 +613,13 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 			case definitiveProbeRejection(err):
 				s.probed[key] = false
 				logPruned(s.logger, sub, err)
+			case emptySubtree(err):
+				// The target holds nothing under the path yet, which is no
+				// verdict on the path itself and nothing to remember: an
+				// element created later belongs on the stream, and pruning
+				// here kept it off for the life of the session.
+				logEmptySubtree(s.logger, sub, err)
+				ok = true
 			default:
 				// No verdict, so nothing to act on and nothing to remember: the
 				// path is subscribed as if it had never been probed, and the
