@@ -346,6 +346,23 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		}
 		return fmt.Errorf("%w: %v", errEarlyStreamFailure, err)
 	}
+	// reconcile withdraws, once per stream, the never-stale series of this
+	// target that the stream's initial dump did not restate: the sync response
+	// is what says the dump is complete, and a series with no age is refreshed
+	// only when the device sends the leaf. It runs after the notification's own
+	// updates are applied, so a sync response carrying updates cannot evict a
+	// series it has just written and then write it again, losing a counter's
+	// reset bookkeeping and churning the budget. Every rung reconciles: a
+	// target that reconnects onto the SAMPLE rung restates the elements it
+	// still carries as aged points, and the ones it does not restate would
+	// otherwise keep the ageless point an earlier on_change stream left.
+	reconcile := func(n gnmi.Notification) {
+		if !n.SyncDone || reconciled {
+			return
+		}
+		reconciled = true
+		c.store.evictBefore(baseAttrs(target, opts), started)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -368,23 +385,14 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 				}
 				return early(errors.New("stream closed"))
 			}
-			if n.SyncDone && !reconciled {
-				reconciled = true
-				// The sync response says the initial dump is complete, so a
-				// never-stale series this stream did not restate is one the
-				// device no longer carries. Only the on_change rung leaves a
-				// series ageless; on the others every series is aged and goes
-				// quiet on its own.
-				if rung == "on_change" {
-					c.store.evictBefore(baseAttrs(target, opts), started)
-				}
-			}
 			if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
+				reconcile(n)
 				continue
 			}
 			productive = true
 			metrics.GetNotifications().Add(ctx, 1)
 			c.apply(ctx, n, rung, target, opts, p)
+			reconcile(n)
 			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		}
 	}
@@ -542,7 +550,9 @@ func leafName(key string) string {
 // rung decides it rather than the profile alone: the SAMPLE rung and Get
 // polling deliver an on_change path at the interval like any other. A series
 // with no age is withdrawn by a delete, by a reconnected stream whose initial
-// dump no longer carries it, by forgetting the policy, or by a replacement.
+// dump no longer carries it, by forgetting the policy, or by a replacement,
+// which is also how an ageless series left by an earlier stream is aged once
+// the target restates it on another rung.
 func maxAgeFor(rung string, sub *profiles.Subscription, interval time.Duration) time.Duration {
 	if rung == "on_change" && sub.Mode == "on_change" {
 		return 0

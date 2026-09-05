@@ -637,6 +637,193 @@ func TestReconnectReconcilesOnChangeSeries(t *testing.T) {
 	assert.Equal(t, "e1", iface.AsString(), "an aged series is withdrawn by its own age, not by the reconcile")
 }
 
+// pointFor reads one stored series of a metric, whatever attributes it
+// carries, which is where a counter's reset bookkeeping lives: it is not
+// exported, and it is what an evict-then-rewrite would quietly discard.
+func pointFor(c *Collector, metric string) (point, bool) {
+	c.store.mu.RLock()
+	defer c.store.mu.RUnlock()
+	for k, pt := range c.store.series {
+		if k.metric == metric {
+			return *pt, true
+		}
+	}
+	return point{}, false
+}
+
+// A sync response may carry updates of its own, and the Get producers build
+// exactly that. Reconciling before they are applied would evict the series the
+// same notification is about to write and then write it back as a new one,
+// losing what the store knows about it.
+func TestASyncCarryingUpdatesKeepsTheSeriesItRestates(t *testing.T) {
+	testReader(t)
+	dir := t.TempDir()
+	// An on_change counter, so the series is ageless and the reconcile is
+	// entitled to evict it, and so the loss has something to show: a reset.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/counters
+    mode: on_change
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: in-octets, name: if_in_octets, type: counter, unit: By}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	var attempts atomic.Int64
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{Vendor: "acme"},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			attempt := attempts.Add(1)
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			// The replacement stream answers with one notification that both
+			// restates the counter, lower than before, and closes the dump.
+			notes := []gnmi.Notification{{SyncDone: true, Updates: []gnmi.Update{
+				{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(20)},
+			}}}
+			if attempt == 1 {
+				notes = []gnmi.Notification{
+					{Updates: []gnmi.Update{{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(100)}}},
+					{SyncDone: true},
+				}
+			}
+			go func() {
+				defer close(out)
+				defer close(errs)
+				if attempt > 1 {
+					select {
+					case <-resume:
+					case <-ctx.Done():
+						return
+					}
+				}
+				for _, n := range notes {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if attempt == 1 {
+					errs <- errors.New("stream reset")
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, errs, nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "on_change", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		pt, ok := pointFor(c, "if_in_octets")
+		return ok && pt.i == 100 && pt.maxAge == 0
+	})
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	waitFor(t, 3*time.Second, func() bool {
+		pt, ok := pointFor(c, "if_in_octets")
+		return ok && pt.i == 20 && pt.resets == 1
+	})
+}
+
+// A target that streamed on change and comes back on the SAMPLE rung restates
+// every element it still carries, as an aged point this time. What it does not
+// restate is still holding the ageless point the earlier stream left, so the
+// reconcile has to run on whichever rung the replacement stream settled on.
+func TestRungChangeReconcilesOnChangeSeries(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			attempt := attempts.Add(1)
+			if attempt > 1 {
+				for _, sub := range subs {
+					if sub.Mode == gnmi.OnChange {
+						return nil, nil, status.Error(codes.InvalidArgument, "on_change not supported")
+					}
+				}
+			}
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			notes := []gnmi.Notification{
+				{Updates: []gnmi.Update{{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"}}},
+				{SyncDone: true},
+			}
+			if attempt == 1 {
+				notes = []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+					}},
+					{SyncDone: true},
+				}
+			}
+			go func() {
+				defer close(out)
+				defer close(errs)
+				if attempt > 1 {
+					select {
+					case <-resume:
+					case <-ctx.Done():
+						return
+					}
+				}
+				for _, n := range notes {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if attempt == 1 {
+					errs <- errors.New("stream reset")
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, errs, nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// A long interval keeps the sampled restatement of e2 fresh for the whole
+	// test, so the one point left at the end is the reconcile's doing.
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		return ok && len(g.DataPoints) == 2
+	})
+	// The refused on_change request spends one attempt, so the sample stream is
+	// the third.
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 3 })
+	close(resume)
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		name, has := g.DataPoints[0].Attributes.Value("interface_name")
+		return has && name.AsString() == "e2"
+	})
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "sample", st[0].Mode, "the replacement stream settled on another rung")
+}
+
 // A device whose clock lags by more than the staleness window must not blank
 // itself: the window runs from arrival at the agent.
 func TestStalenessUsesArrivalTimeNotDeviceTime(t *testing.T) {

@@ -113,6 +113,20 @@ func TestStoreSeriesWithNoAgeIsNeverStale(t *testing.T) {
 	assert.True(t, ok, "and it is not evicted")
 }
 
+// The reconcile leans on this: a target back on the SAMPLE rung restates an
+// element the on_change rung left ageless, and the restatement has to carry
+// the age away with it, or the series is never withheld again.
+func TestStoreRestatingASeriesReplacesItsAge(t *testing.T) {
+	s := newStore(10)
+	now := time.Unix(1000, 0)
+	k, attrs := series("g", "1", "p", "e1")
+	require.True(t, s.setGauge(k, 1, now.Add(-time.Hour).UnixNano(), 0, attrs))
+	require.True(t, s.setGauge(k, 2, now.UnixNano(), age, attrs))
+	pt, ok := s.get(k)
+	require.True(t, ok)
+	assert.Equal(t, age, pt.maxAge, "the restatement's age replaces the one the series had")
+}
+
 // The bound protects one SDK instrument per metric name, and every store in
 // the process writes to that instrument, so two stores have to count against
 // one allowance rather than one each.
