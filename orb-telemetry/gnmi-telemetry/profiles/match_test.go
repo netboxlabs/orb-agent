@@ -60,3 +60,20 @@ func TestMatchPrefixAndDepth(t *testing.T) {
 	assert.False(t, ok, "a path below the subscription is not a prefix of it")
 	assert.Equal(t, 4, Depth("/interfaces/interface[name=e1]/state/counters"))
 }
+
+// An update element matches a pattern element only when it carries exactly the
+// keys the pattern declares. A list written without its key would otherwise
+// match every element of that list, and since the pattern names no key there is
+// nothing for an attribute to promote, so every element writes one shared
+// series and each overwrites the last. Rejecting the match instead pushes the
+// operator to write the key, which the wildcard rule then makes them promote.
+func TestMatchRequiresExactlyThePatternsKeys(t *testing.T) {
+	_, ok := MatchPath("/interfaces/interface/state/counters", "/interfaces/interface[name=eth0]/state/counters")
+	assert.False(t, ok, "a keyless pattern element does not match a keyed update element")
+	_, ok = MatchPath("/interfaces/interface[name=*]/state", "/interfaces/interface[name=e1][index=0]/state")
+	assert.False(t, ok, "an update carrying a key the pattern does not declare is not a match")
+	_, _, ok = SplitLeaf("/interfaces/interface/state/counters", "/interfaces/interface[name=e1]/state/counters/in-octets")
+	assert.False(t, ok, "the leaf split holds the same rule")
+	_, ok = MatchPrefix("/interfaces/interface/state/counters", "/interfaces/interface[name=e1]")
+	assert.False(t, ok, "a delete of a keyed element is no prefix of a keyless pattern")
+}

@@ -103,14 +103,25 @@ var reservedMetrics = func() map[string]bool {
 	return out
 }()
 
-// Validate checks the schema rules: a path and metrics per subscription, a
-// stream mode, metric types, unique lower-case names that no health metric of
-// the backend already owns, enum and bool only on gauges, a "." leaf alone in
-// its subscription, a leaf carrying no key predicate and mapped by one metric
-// of its subscription, an attribute that names a key its own path carries on
-// exactly one element and does not shadow the collector's own names, and an
-// attribute promoting every key the path wildcards.
+// Validate checks the schema rules: at least one subscription, a path and
+// metrics per subscription, a stream mode, metric types, unique lower-case
+// names that no health metric of the backend already owns, enum and bool only
+// on gauges, a "." leaf alone in its subscription, a leaf carrying no key
+// predicate and mapped by one metric of its subscription, an attribute that
+// names a key its own path carries on exactly one element and does not shadow
+// the collector's own names, and an attribute promoting every key the path
+// wildcards.
+//
+// It reads a RESOLVED profile, which is what the loader validates: a
+// placeholder overlay states no subscriptions of its own but carries its
+// parent's by the time it gets here.
 func (p *Profile) Validate() error {
+	// A profile that resolves to no subscriptions asks its targets for nothing
+	// and exports nothing, while its match criteria still win it targets the
+	// profile below it would have served.
+	if len(p.Subscriptions) == 0 {
+		return fmt.Errorf("profile %s has no subscriptions", p.Name)
+	}
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
 		if s.Path == "" {

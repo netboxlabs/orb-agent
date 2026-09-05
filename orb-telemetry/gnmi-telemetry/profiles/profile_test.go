@@ -142,6 +142,10 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		{"duplicate_leaf", Profile{Name: "x", Subscriptions: one(Metric{Leaf: "in-octets", Name: "a", Type: "counter"}, Metric{Leaf: "in-octets", Name: "b", Type: "gauge"})}, `subscription "/a": leaf in-octets is mapped twice`},
 		{"enum on counter", Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: "n", Type: "counter", Enum: map[string]int64{"UP": 1}})}, `metric "n": enum and bool apply to gauges only`},
 		{"no metrics", Profile{Name: "x", Subscriptions: []Subscription{{Path: "/a", Mode: "sample"}}}, `subscription "/a": no metrics`},
+		// A profile that resolves to nothing to subscribe to has every target it
+		// wins open an empty subscription and export nothing, while outranking
+		// the profile that would have served it.
+		{"no_subscriptions", Profile{Name: "x"}, `profile x has no subscriptions`},
 		{"empty path", Profile{Name: "x", Subscriptions: []Subscription{{Path: "", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "n", Type: "gauge"}}}}}, `subscription 1: path is required`},
 		{"dot leaf with siblings", Profile{Name: "x", Subscriptions: one(Metric{Leaf: ".", Name: "a", Type: "gauge"}, Metric{Leaf: "l", Name: "b", Type: "gauge"})}, `subscription "/a": a "." leaf must be the only metric`},
 		// The backend registers gnmi.target_up itself, over its own loops, so a
@@ -195,8 +199,14 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.want)
 		})
 	}
-	empty := Profile{Name: "arista_eos", Extends: "_base", Match: Match{Vendor: "arista"}}
-	assert.NoError(t, empty.Validate(), "a placeholder overlay with no subscriptions is valid")
+	// A placeholder overlay states no subscriptions of its own, and is valid
+	// because it is validated after resolution, carrying its parent's.
+	store, err := LoadProfiles("", quiet())
+	require.NoError(t, err)
+	placeholder, ok := store.Get("arista_eos")
+	require.True(t, ok)
+	assert.NotEmpty(t, placeholder.Subscriptions, "the placeholder inherits its parent's subscriptions")
+	assert.NoError(t, placeholder.Validate(), "a resolved placeholder overlay is valid")
 
 	distinct := Profile{Name: "x", Subscriptions: []Subscription{{
 		Path: "/network-instances/network-instance[name=*]/interfaces/interface[id=*]", Mode: "sample",
@@ -404,4 +414,20 @@ subscriptions:
 	m := metricOf(srl, "memory_free_native")
 	require.NotNil(t, m)
 	assert.Equal(t, "gauge", m.Type, "the bundled definition stands")
+}
+
+// A profile with match criteria but nothing to subscribe to would win targets
+// away from the profile that could serve them and then export nothing at all,
+// so it is skipped like any other invalid override rather than loaded empty.
+func TestAnOverrideWithNoSubscriptionsIsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+match: {vendor: acme}
+`), 0o644))
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err, "an override with no subscriptions is skipped, not fatal")
+	assert.NotContains(t, store.Names(), "acme")
+	base, ok := store.Get("_base")
+	require.True(t, ok, "the bundled base still loads")
+	assert.NotEmpty(t, base.Subscriptions)
 }

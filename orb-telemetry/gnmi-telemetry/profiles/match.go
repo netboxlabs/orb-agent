@@ -99,6 +99,16 @@ func wildcardKeys(p string) []string {
 // matchElems matches a pattern's elements against a path's of equal length.
 // A pattern key value "*" accepts any value; a literal must match exactly;
 // every key the path carries is reported.
+//
+// An element matches only when it carries exactly the keys the pattern
+// declares, so a keyless pattern element matches a keyless update element
+// alone. Accepting the keys a pattern leaves out would have a list written
+// without its key match every element of that list, and since the pattern
+// names no key there is nothing an attribute could promote, so each element
+// would overwrite one shared series; validation cannot catch that, because the
+// key it would have to demand is absent from the pattern. Refusing the match
+// pushes the operator to write the key, which the wildcard rule then makes
+// them promote.
 func matchElems(pattern, path []pathElem) (map[string]string, bool) {
 	if len(pattern) != len(path) {
 		return nil, false
@@ -106,6 +116,12 @@ func matchElems(pattern, path []pathElem) (map[string]string, bool) {
 	keys := map[string]string{}
 	for i := range pattern {
 		if pattern[i].name != path[i].name {
+			return nil, false
+		}
+		// Every declared key is found on the path below, so equal counts make
+		// the two key sets equal and an update carrying an extra key is no
+		// longer a match.
+		if len(pattern[i].keys) != len(path[i].keys) {
 			return nil, false
 		}
 		for k, want := range pattern[i].keys {

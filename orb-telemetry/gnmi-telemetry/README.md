@@ -415,6 +415,11 @@ subscriptions:
   profile `_base`. There is no `name` key in the file.
 - `path` is the subscription, with `[key=*]` wildcards for keyed lists. `mode` is
   `sample` or `on_change` and decides what is asked of the device for that path.
+  A path element matches an update element only when the two carry the same
+  keys, so a list element must be written with its key: `/interfaces/interface`
+  matches nothing the device sends for `interface[name=eth0]`. Writing the key
+  is also what gives `attributes` something to promote, without which every
+  element of the list would share one series.
 - `leaf` is relative to `path` and may contain `/`, as `total/instant` does under
   a CPU's state. A `leaf` of `.` is the subscription path itself, for a
   subscription made directly to a leaf, and must then be the only metric in it.
@@ -453,6 +458,12 @@ An overlay names its parent with `extends` and inherits everything it does not
 restate. A subscription whose `path` equals one of the parent's replaces that
 one; any other path is added. An overlay that restates no `match` keeps its
 parent's match criteria.
+
+A profile must resolve to at least one subscription. A placeholder that states
+none of its own is fine, since it carries its parent's, but a profile that
+inherits nothing and declares nothing is rejected: its `match` criteria would
+still win it targets, and every one of them would subscribe to nothing and
+export nothing.
 
 Profile selection per target, in order: the target's `profile` if it names a
 loaded profile; else the profile whose `match.nos` equals the network OS from
