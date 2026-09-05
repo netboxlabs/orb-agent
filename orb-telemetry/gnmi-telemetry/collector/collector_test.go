@@ -1494,3 +1494,178 @@ subscriptions:
 	})
 	assert.Equal(t, 2, points("gnmi.if_oper_status"), "a path the snapshot never fetched withdraws nothing")
 }
+
+// A subscription is atomic, so the transport prunes a path the target rejects
+// and the stream that opens covers less than the profile. The sync response
+// names what the stream carries, and the reconciliation is bounded by it: an
+// ageless series under a pruned path is one no dump could restate, and evicting
+// it would blank a subtree on evidence the stream never gave.
+func TestSyncReconcilesOnlyAcceptedPaths(t *testing.T) {
+	reader := testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_streams.yaml"), []byte(`
+match: {}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/oper-status
+    mode: on_change
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: ., name: if_oper_status, type: gauge, enum: {UP: 1, DOWN: 0}}
+  - path: /platform/control[slot=*]/memory
+    mode: on_change
+    attributes: {slot: slot}
+    metrics:
+      - {leaf: free, name: control_memory_free, type: gauge, unit: By}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	const interfaces = "/interfaces/interface[name=*]/state/oper-status"
+	var attempts atomic.Int64
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			attempt := attempts.Add(1)
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			// The replacement stream carries the interfaces subscription alone,
+			// the memory path having been pruned, and its sync says so. It
+			// restates one of the two interfaces and holds.
+			notes := []gnmi.Notification{
+				{Updates: []gnmi.Update{{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"}}},
+				{SyncDone: true, Paths: []string{interfaces}},
+			}
+			if attempt == 1 {
+				notes = []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+						{Path: "/platform/control[slot=A]/memory/free", Value: uint64(10)},
+					}},
+					{SyncDone: true},
+				}
+			}
+			go func() {
+				defer close(out)
+				defer close(errs)
+				if attempt > 1 {
+					select {
+					case <-resume:
+					case <-ctx.Done():
+						return
+					}
+				}
+				for _, n := range notes {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				if attempt == 1 {
+					errs <- errors.New("stream reset")
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, errs, nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "two_streams"})
+	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+	points := func(name string) int {
+		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		if !ok {
+			return 0
+		}
+		return len(g.DataPoints)
+	}
+	waitFor(t, 3*time.Second, func() bool { return points("gnmi.if_oper_status") == 2 && points("gnmi.control_memory_free") == 1 })
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	// Under the path the sync names the omitted interface goes and the restated
+	// one stays; the series of the pruned subscription stands, no dump of it
+	// having ever arrived.
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		name, has := g.DataPoints[0].Attributes.Value("interface_name")
+		return has && name.AsString() == "e2"
+	})
+	assert.Equal(t, 1, points("gnmi.control_memory_free"), "a subscription the stream never carried withdraws nothing")
+}
+
+// A stream over a subtree the device carries nothing under answers its sync
+// response and sends no data at all. The sync is the target accepting the
+// stream, so a fault after it is a transport failure the same rung recovers
+// from: reading it as a mode refusal would walk a working on_change
+// subscription off the ladder the first time the connection dropped.
+func TestASyncOnlyStreamKeepsItsModeOnALaterError(t *testing.T) {
+	reader := testReader(t)
+	var attempts atomic.Int64
+	// The drop waits until the test has seen the mode the first stream settled
+	// on, so what the reconnect keeps is not a window the test has to catch.
+	drop := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			first := attempts.Add(1) == 1
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				select {
+				case out <- gnmi.Notification{SyncDone: true}:
+				case <-ctx.Done():
+					return
+				}
+				if !first {
+					<-ctx.Done()
+					return
+				}
+				select {
+				case <-drop:
+				case <-ctx.Done():
+					return
+				}
+				errs <- status.Error(codes.Unavailable, "connection reset")
+			}()
+			return out, errs, nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "on_change" && st[0].Up
+	})
+	close(drop)
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Up
+	})
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "on_change", st[0].Mode, "a stream that synced and then dropped reconnects on the rung it held")
+	onChange := false
+	for _, s := range sess.Subscriptions() {
+		if s.Mode == gnmi.OnChange {
+			onChange = true
+		}
+	}
+	assert.True(t, onChange, "the second request keeps the profile's own modes, not the all-SAMPLE rung")
+	assert.Equal(t, int64(0), fallbacks(t, reader), "a drop after the sync is no mode refusal, so no step down the ladder")
+}

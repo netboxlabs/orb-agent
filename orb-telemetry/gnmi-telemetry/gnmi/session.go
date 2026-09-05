@@ -18,12 +18,16 @@ type Notification struct {
 	// Timestamp is the device's notification time in nanoseconds since the
 	// Unix epoch, zero when the target sent none.
 	Timestamp int64
-	// Paths are the request paths a Get snapshot fetched: every path of a
-	// request the target answered whole, and only the ones that answered when
-	// the Get recovered path by path. It is transport-level, like Timestamp,
-	// and a subscription carries none. A caller that reconciles what a snapshot
-	// restates speaks only for these: a path whose Get failed is a path the
-	// snapshot says nothing about.
+	// Paths are the request paths this notification speaks for: on a Get
+	// snapshot, every path of a request the target answered whole and only the
+	// ones that answered when the Get recovered path by path; on a stream's
+	// sync response, the subscriptions the stream carries, which is fewer than
+	// the request when a path was pruned. It is transport-level, like
+	// Timestamp, and only a snapshot or a sync response carries it. A caller
+	// that reconciles what a dump restates speaks only for these: a path whose
+	// Get failed, or whose subscription never opened, is a path the dump says
+	// nothing about. Nil names no path in particular, and the caller then
+	// speaks for its whole request.
 	Paths []string
 }
 

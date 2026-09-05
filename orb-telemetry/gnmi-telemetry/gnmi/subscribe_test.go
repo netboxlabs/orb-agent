@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	gapi "github.com/openconfig/gnmic/pkg/api"
@@ -238,4 +239,47 @@ func TestGetOnceReportsThePathsItFetched(t *testing.T) {
 	none := getSession(t, &getServer{})
 	_, err = none.GetOnce(context.Background(), []string{memory, interfaces})
 	require.Error(t, err, "a target that answers nothing is a failure, not an empty snapshot")
+}
+
+// Subscribe answers with the sync response that closes a stream's initial dump
+// and then holds the stream open, the way a target behaves toward a
+// subscription it carries nothing under yet.
+func (g *getServer) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	if err := stream.Send(&gnmiproto.SubscribeResponse{
+		Response: &gnmiproto.SubscribeResponse_SyncResponse{SyncResponse: true},
+	}); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	return stream.Context().Err()
+}
+
+// A subscription is atomic on a strict target, so a path the target rejects is
+// pruned and the stream that opens carries less than the request asked for. The
+// sync response says which subscriptions it carries, because a caller
+// reconciling against the dump must not withdraw a series under a path that
+// never streamed.
+func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
+	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
+	s := getSession(t, &getServer{holds: map[string]bool{memory: true}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	notes, _, err := s.SubscribeMany(ctx, []Subscription{
+		{Path: memory, Mode: Sample, SampleIntervalMs: 1000},
+		{Path: interfaces, Mode: Sample, SampleIntervalMs: 1000},
+	})
+	require.NoError(t, err)
+
+	select {
+	case n, ok := <-notes:
+		require.True(t, ok, "the stream delivers its sync response")
+		require.True(t, n.SyncDone, "the first notification is the sync response")
+		assert.Equal(t, []string{memory}, n.Paths, "the sync names the subscriptions the stream carries, not the pruned one")
+	case <-time.After(10 * time.Second):
+		t.Fatal("no sync response from the stream")
+	}
 }

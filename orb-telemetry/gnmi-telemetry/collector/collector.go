@@ -17,6 +17,8 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/gnmi"
@@ -24,10 +26,16 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/profiles"
 )
 
-// errEarlyStreamFailure marks a stream that ended before its first
-// notification. gnmic accepts the RPC and reports an unsupported mode on the
-// stream, so this is how a rejected mode looks; the ladder moves on.
-var errEarlyStreamFailure = errors.New("subscription failed before any data")
+// errEarlyStreamFailure marks a stream the target refused: one that ended
+// before its first sync response or data, or one that reported InvalidArgument
+// or Unimplemented after its sync. gnmic accepts the RPC and reports an
+// unsupported mode on the stream, so this is how a rejected mode looks; the
+// ladder moves on. A sync response is the target accepting the stream, so a
+// later fault of any other kind is a transport failure the same rung recovers
+// from: a subscription over a subtree with nothing in it sends a sync and no
+// data at all, and reading its drop as a refusal would walk the target off a
+// mode that works.
+var errEarlyStreamFailure = errors.New("subscription refused")
 
 // Options is what a policy hands the collector for each target.
 type Options struct {
@@ -319,7 +327,7 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 		// the loop reopen the unsupported subscription for ever.
 		if errors.Is(err, errEarlyStreamFailure) && ctx.Err() == nil {
 			metrics.GetModeFallbacks().Add(ctx, 1)
-			c.logger.Info("gnmi stream ended before data, trying the next mode", "host", target.Host, "mode", rung, "error", err)
+			c.logger.Info("gnmi stream refused the mode, trying the next one", "host", target.Host, "mode", rung, "error", err)
 			continue
 		}
 		return err
@@ -381,16 +389,28 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 	return p
 }
 
-// consume applies notifications until the stream ends or errors. A stream
-// that ends before its first notification is reported as an early failure.
+// consume applies notifications until the stream ends or errors. A stream that
+// ends before its first sync response or data is reported as an early failure,
+// and so is one that reports a mode rejection after its sync.
 func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	productive := false
+	// synced is whether the stream answered the sync response that closes its
+	// initial dump, the target accepting the subscription: a stream over a
+	// subtree with nothing in it says that and nothing else, for as long as the
+	// subtree stays empty.
+	synced := false
 	// The stream's own start, against which its initial dump is judged: every
 	// series the dump refreshes arrives after it.
 	started := time.Now().UnixNano()
 	reconciled := false
 	early := func(err error) error {
 		if productive {
+			return err
+		}
+		// A stream the target accepted is not refusing the mode by failing: only
+		// the codes it reports a rejection under send the ladder on, and every
+		// other fault is one the same rung reconnects through.
+		if synced && !modeRejection(err) {
 			return err
 		}
 		return fmt.Errorf("%w: %v", errEarlyStreamFailure, err)
@@ -404,15 +424,28 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 	// reset bookkeeping and churning the budget. Every rung reconciles: a
 	// target that reconnects onto the SAMPLE rung restates the elements it
 	// still carries as aged points, and the ones it does not restate would
-	// otherwise keep the ageless point an earlier on_change stream left.
+	// otherwise keep the ageless point an earlier on_change stream left. It is
+	// also where the sync itself is noted, this being the one place every sync
+	// response passes through.
 	reconcile := func(n gnmi.Notification) {
-		if !n.SyncDone || reconciled {
+		if !n.SyncDone {
+			return
+		}
+		synced = true
+		if reconciled {
 			return
 		}
 		reconciled = true
-		// A stream subscribes to the whole profile, so its dump speaks for every
-		// metric in it.
-		c.store.evictBefore(nil, baseAttrs(target, opts), started)
+		// A stream carries the subscriptions the target accepted, which its sync
+		// names, and the dump speaks for those alone: a pruned path opened no
+		// stream, so nothing under it was ever restated and evicting there would
+		// blank a subtree the device still carries. A sync that names no path
+		// speaks for the whole profile, which is the stream carrying it whole.
+		var covered map[string]struct{}
+		if n.Paths != nil {
+			covered = polledMetrics(profileMetrics(p), n.Paths)
+		}
+		c.store.evictBefore(covered, baseAttrs(target, opts), started)
 		// A sync response is the stream saying its dump is complete, which is as
 		// good a sign of recovery as a value: a stream over a subtree with nothing
 		// in it carries no value at all, and the target would stand at the error of
@@ -459,6 +492,7 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 // logged once; a native overlay path is only reachable by streaming.
 func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Subscription, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	paths := make([]string, 0, len(subs))
+	byPath := profileMetrics(p)
 	// The metrics each path this poll asks for carries. A snapshot says nothing
 	// about a subtree the poll skipped, nor about one whose own Get failed, so
 	// the reconciliation below names the metrics of the paths the snapshot
@@ -470,14 +504,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 			continue
 		}
 		paths = append(paths, s.Path)
-		for i := range p.Subscriptions {
-			if p.Subscriptions[i].Path != s.Path {
-				continue
-			}
-			for j := range p.Subscriptions[i].Metrics {
-				metricsByPath[s.Path] = append(metricsByPath[s.Path], p.Subscriptions[i].Metrics[j].Name)
-			}
-		}
+		metricsByPath[s.Path] = byPath[s.Path]
 	}
 	if len(paths) == 0 {
 		const reason = "nothing to poll: every profile subscription uses another origin"
@@ -519,6 +546,34 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		case <-ticker.C:
 		}
 	}
+}
+
+// modeRejection reports whether an error raised on a stream is the target
+// refusing the delivery mode it was asked for. gnmic surfaces such a refusal
+// as the status the target set on the stream, and only these two codes say the
+// request itself is one this target will not serve; anything else, an
+// Unavailable above all, is the connection failing under a subscription the
+// target had already accepted.
+func modeRejection(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+// profileMetrics maps each subscription path of a profile to the metric names
+// it carries: what a dump over that path, streamed or polled, speaks for.
+func profileMetrics(p *profiles.Profile) map[string][]string {
+	out := make(map[string][]string, len(p.Subscriptions))
+	for i := range p.Subscriptions {
+		path := p.Subscriptions[i].Path
+		for j := range p.Subscriptions[i].Metrics {
+			out[path] = append(out[path], p.Subscriptions[i].Metrics[j].Name)
+		}
+	}
+	return out
 }
 
 // polledMetrics is the set of metric names carried by the given paths of one

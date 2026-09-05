@@ -102,16 +102,22 @@ one-path Get under that path's own origin, and leaves out the ones the target
 rejects, logging each with the error it gave. A subscription is atomic on a
 strict target, so one path the device does not carry would otherwise sink every
 other path with it. The verdicts are remembered for the session, and a target
-that rejects every probe is sent the full set rather than nothing.
+that rejects every probe is sent the full set rather than nothing. The stream's
+sync response names the paths it ended up carrying, so a reconnect withdraws
+only the series of the subtrees that streamed: a pruned path restates nothing
+because it was never subscribed.
 
 A device that refuses that request is not abandoned. The delivery mode walks a
 ladder, and each step down counts one `gnmi.mode_fallback_total`:
 
 1. The profile's own modes, with `on_change` paths streaming on change.
 2. Every path as SAMPLE at `metrics_interval`, which is where a device that
-   rejects ON_CHANGE lands. A stream that ends before it delivers anything is
+   rejects ON_CHANGE lands. A stream that ends before its first sync response or
+   data, or that reports InvalidArgument or Unimplemented after its sync, is
    read as a refusal too, since a device may accept the RPC and fail the
-   subscription on the stream.
+   subscription on the stream. A stream that answered its sync response and then
+   dropped for any other reason keeps the rung it held: a subscription over an
+   empty subtree sends a sync and no data at all.
 3. Get polling at `metrics_interval`, last. A subscription whose profile gives
    it an origin of its own is skipped here and logged once, because one Get
    carries one origin; a native path is reachable only by streaming.
@@ -120,7 +126,8 @@ A policy that names a mode chooses which of those rungs are tried. `mode:
 on_change` keeps the mode the profile gives each path, so counters still stream
 as SAMPLE, and skips the all-SAMPLE rung. `mode: sample` asks for SAMPLE on
 every path. Both still fall to Get, on a request the device refuses and also on
-a stream that ends before it delivers anything. The rung a target settled on is
+a stream that ends before its first sync response or data, or that reports
+InvalidArgument or Unimplemented after its sync. The rung a target settled on is
 reported as its `mode` in `GET /api/v1/status` and as the `mode` attribute of
 that device's `gnmi.target_up` gauge.
 
@@ -211,7 +218,7 @@ set on the command line rather than by a policy.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
-| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before any data alike. |
+| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before its first sync response or data, or that reports InvalidArgument or Unimplemented after its sync, alike. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
 | `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` | How long one sweep probe waits for an address to answer Capabilities. Zero takes the default. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |

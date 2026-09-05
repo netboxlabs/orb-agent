@@ -332,14 +332,20 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 		return nil, nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
 	}
 
-	return s.stream(ctx, req)
+	return s.stream(ctx, req, paths)
 }
 
 // stream drives one built SubscribeRequest: it opens the gnmic subscription,
 // owns the producer's context so Close() can stop it, and pumps responses into
 // the returned notification and error channels. Shared by Subscribe and
 // SubscribeMany, which differ only in how they build the request.
-func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeRequest) (<-chan Notification, <-chan error, error) {
+//
+// carried are the paths the request ended up subscribing to, which the sync
+// response reports: pruning leaves the stream covering less than the caller
+// asked for, and a caller reconciling against the dump speaks only for what the
+// stream carries.
+func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeRequest, carried []string) (<-chan Notification, <-chan error, error) {
+	carried = append([]string(nil), carried...)
 	// Own context for the producer so Close() can stop it independently of the
 	// caller's ctx lifetime.
 	subCtx, cancel := context.WithCancel(ctx)
@@ -385,7 +391,7 @@ func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeReque
 				}
 				if resp.GetSyncResponse() {
 					select {
-					case notes <- Notification{SyncDone: true}:
+					case notes <- Notification{SyncDone: true, Paths: carried}:
 					case <-subCtx.Done():
 						return
 					}
@@ -489,7 +495,17 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 	if err != nil {
 		return nil, nil, err
 	}
-	return s.stream(ctx, req)
+	return s.stream(ctx, req, subscribedPaths(subs))
+}
+
+// subscribedPaths is the path of every subscription in a list, the paths the
+// stream built from it carries.
+func subscribedPaths(subs []Subscription) []string {
+	out := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, sub.Path)
+	}
+	return out
 }
 
 // GetOnce performs a single gNMI Get over the given paths. The snapshot reports
