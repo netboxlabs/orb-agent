@@ -111,8 +111,8 @@ strict target, so one path the device does not carry would otherwise sink every
 other path with it. Each probe is bounded, by `probe_timeout_ms` when the policy
 sets one and by ten seconds when it does not, so a target that answers
 Capabilities and then goes silent under one path costs that probe rather than
-the whole subscription. A refusal is remembered for the session, so a rung
-change does not probe it again; a probe that reached no verdict, one that missed
+the whole subscription. A verdict, accepted or refused, is remembered for the
+session, so a rung change does not probe it again; a probe that reached no verdict, one that missed
 its deadline or found the target unavailable, is not, so the path is left out of
 that attempt alone and probed again by the next subscribe on the session. A
 target that rejects every probe is sent the full set rather than nothing. The
@@ -126,7 +126,7 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
 1. The profile's own modes, with `on_change` paths streaming on change.
 2. Every path as SAMPLE at `metrics_interval`, which is where a device that
    rejects ON_CHANGE lands. A stream that reports InvalidArgument or
-   Unimplemented is read as a refusal too, wherever on the stream it reports it,
+   Unimplemented is read as a refusal too, as long as the stream has not delivered data yet,
    since a device may accept the RPC and fail the subscription on the stream, and
    so is one that ends with no error at all, or sends nothing at all within the
    probe deadline, before its first sync response or data. A stream that fails

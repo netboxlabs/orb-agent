@@ -31,7 +31,7 @@ import (
 // nothing at all before its first sync response or data. gnmic accepts the RPC
 // and reports an unsupported mode on the stream, so this is how a rejected mode
 // looks; the ladder moves on. A fault carrying any other code is a transport
-// failure the same rung recovers from, wherever on the stream it lands: an
+// failure the same rung recovers from, before the sync and after it: an
 // Unavailable under the initial dump is the connection going rather than the
 // mode being refused, and a subscription over a subtree with nothing in it
 // sends a sync and no data at all, so reading either as a refusal would walk
@@ -396,7 +396,7 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 }
 
 // consume applies notifications until the stream ends or errors. A stream that
-// reports a mode rejection is an early failure wherever it reports it, and so
+// reports a mode rejection before it has delivered data is an early failure, and so
 // is one that closes cleanly or sends nothing at all within the probe deadline
 // before its first sync response or data. Every other error is returned plain,
 // for the loop to reconnect through on the rung it holds.
@@ -619,8 +619,8 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 // refusing the delivery mode it was asked for. gnmic surfaces such a refusal
 // as the status the target set on the stream, and only these two codes say the
 // request itself is one this target will not serve; anything else, an
-// Unavailable above all, is the connection failing under a subscription the
-// target had already accepted.
+// Unavailable above all, is the connection failing, before the sync or after
+// it, under a subscription the target did not refuse.
 func modeRejection(err error) bool {
 	switch status.Code(err) {
 	case codes.InvalidArgument, codes.Unimplemented:
