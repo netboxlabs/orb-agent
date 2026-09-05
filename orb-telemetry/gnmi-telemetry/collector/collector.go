@@ -175,10 +175,17 @@ func (c *Collector) run(ctx context.Context, target config.Target, opts Options,
 			metrics.GetReconnects().Add(ctx, 1)
 		}
 		first = false
+		noted := l.snapshot().LastNotification
 		err := c.runOnce(ctx, target, opts, l)
 		l.update(func(s *TargetStatus) { s.Up = false })
 		if ctx.Err() != nil {
 			return
+		}
+		if l.snapshot().LastNotification.After(noted) {
+			// An attempt that delivered data earns a fresh window: a target
+			// that failed twice at startup must not wait the cap after a day
+			// of healthy streaming.
+			backoff = c.backoffBase
 		}
 		if err != nil {
 			c.logger.Warn("gnmi target loop error", "policy", opts.PolicyName, "host", target.Host, "error", err)
@@ -224,13 +231,18 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 	for _, rung := range ladder {
 		notes, errs, err := sess.SubscribeMany(ctx, forceMode(subs, rung, intervalMs))
 		if err != nil {
+			// A cancelled context refuses every rung; counting that as a
+			// fallback would report a downgrade on every clean stop.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			metrics.GetModeFallbacks().Add(ctx, 1)
 			c.logger.Info("gnmi subscribe refused, trying the next mode", "host", target.Host, "mode", rung, "error", err)
 			continue
 		}
 		l.update(func(s *TargetStatus) { s.Mode = rung; s.Up = true })
 		err = c.consume(ctx, notes, errs, target, opts, profile, l)
-		if errors.Is(err, errEarlyStreamFailure) && opts.Mode != "on_change" && opts.Mode != "sample" {
+		if errors.Is(err, errEarlyStreamFailure) && ctx.Err() == nil && opts.Mode != "on_change" && opts.Mode != "sample" {
 			metrics.GetModeFallbacks().Add(ctx, 1)
 			c.logger.Info("gnmi stream ended before data, trying the next mode", "host", target.Host, "mode", rung, "error", err)
 			continue
@@ -411,7 +423,11 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, target confi
 			if !ok {
 				continue
 			}
-			c.store.deleteMatching(append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
+			names := make(map[string]struct{}, len(sub.Metrics))
+			for _, m := range sub.Metrics {
+				names[m.Name] = struct{}{}
+			}
+			c.store.deleteMatching(names, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
 		}
 	}
 }

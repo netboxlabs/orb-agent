@@ -58,7 +58,7 @@ func TestStoreForgetPolicyAndDeleteByAttributes(t *testing.T) {
 	assert.False(t, ok, "the policy's series is gone")
 	_, ok = s.get(k2)
 	assert.True(t, ok, "another policy's series stays")
-	s.deleteMatching([]attribute.KeyValue{attribute.String("policy", "p2"), attribute.String("interface_name", "a")})
+	s.deleteMatching(map[string]struct{}{"g": {}}, []attribute.KeyValue{attribute.String("policy", "p2"), attribute.String("interface_name", "a")})
 	_, ok = s.get(k2)
 	assert.False(t, ok, "a series carrying every named attribute is withdrawn")
 	_, ok = s.get(k3)
@@ -77,6 +77,22 @@ func TestStoreStalenessIsPerSeries(t *testing.T) {
 	var seen []string
 	s.forEach("g", now, func(k seriesKey, _ point) { seen = append(seen, k.attrs) })
 	assert.ElementsMatch(t, []string{kf.attrs, kl.attrs}, seen, "a series is withheld only past its own policy's age")
+	_, ok := s.get(ks)
+	assert.False(t, ok, "the series it withheld is dropped, not kept forever")
+}
+
+func TestStoreReclaimsStaleSeriesAtItsLimit(t *testing.T) {
+	s := newStore(2)
+	now := time.Unix(1000, 0)
+	kf, af := series("g", "1", "p", "fresh")
+	ks, as := series("g", "1", "p", "stale")
+	kn, an := series("g", "1", "p", "new")
+	require.True(t, s.setGauge(kf, 1, now.Add(-10*time.Second).UnixNano(), age, af))
+	require.True(t, s.setGauge(ks, 1, now.Add(-100*time.Second).UnixNano(), age, as))
+	require.False(t, s.setGauge(kn, 1, now.UnixNano(), age, an), "the metric is at its limit")
+	s.forEach("g", now, func(seriesKey, point) {})
+	assert.Len(t, s.series, 1, "the stale series is reclaimed, not only withheld")
+	assert.True(t, s.setGauge(kn, 1, now.UnixNano(), age, an), "the slot it freed takes a new series")
 }
 
 func TestAttrKeyEscapesValues(t *testing.T) {

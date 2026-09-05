@@ -62,6 +62,11 @@ func TestConvertValue(t *testing.T) {
 	assert.Equal(t, 1.0, f)
 	_, ok = gaugeValue(gauge, "text")
 	assert.False(t, ok)
+	// A Get result is decoded from JSON, which hands every number over as a
+	// float64 and every 64-bit YANG integer as a string (RFC 7951).
+	f, ok = gaugeValue(gauge, "1.25")
+	require.True(t, ok, "a numeric string is a gauge value")
+	assert.Equal(t, 1.25, f)
 
 	i, ok := counterValue(counter, uint64(1394))
 	require.True(t, ok)
@@ -73,6 +78,16 @@ func TestConvertValue(t *testing.T) {
 	assert.False(t, ok, "a counter must be integral")
 	_, ok = counterValue(counter, uint64(1<<63))
 	assert.False(t, ok, "a counter above int64 is dropped rather than wrapped")
+	i, ok = counterValue(counter, 100.0)
+	require.True(t, ok, "an integral float64 is a counter value")
+	assert.Equal(t, int64(100), i)
+	_, ok = counterValue(counter, -1.0)
+	assert.False(t, ok, "a negative float64 is not a cumulative count")
+	i, ok = counterValue(counter, "42")
+	require.True(t, ok, "a numeric string is a counter value")
+	assert.Equal(t, int64(42), i)
+	_, ok = counterValue(counter, "18446744073709551615")
+	assert.False(t, ok, "a string counter above int64 is dropped rather than wrapped")
 }
 
 func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {

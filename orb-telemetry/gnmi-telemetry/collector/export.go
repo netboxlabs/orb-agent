@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -19,7 +20,9 @@ import (
 const staleAfterIntervals = 3
 
 // gaugeValue converts an update value for a gauge metric: numbers as is,
-// enum strings through the map, booleans to 1 and 0.
+// enum strings through the map, booleans to 1 and 0. A Get result is decoded
+// from JSON, so a number can arrive as a numeric string; it is parsed after
+// the enum lookup, which keeps an enum whose values are digits working.
 func gaugeValue(m profiles.Metric, v any) (float64, bool) {
 	switch x := v.(type) {
 	case uint64:
@@ -44,14 +47,20 @@ func gaugeValue(m profiles.Metric, v any) (float64, bool) {
 		if n, ok := m.Enum[x]; ok {
 			return float64(n), true
 		}
+		if f, err := strconv.ParseFloat(x, 64); err == nil {
+			return f, true
+		}
 		return 0, false
 	}
 	return 0, false
 }
 
-// counterValue converts an update value for a counter: integral, within
-// int64. gNMI counters are counter64; a value past int64 is dropped rather
-// than wrapped into a false reset.
+// counterValue converts an update value for a counter: integral, non-negative
+// and within int64. gNMI counters are counter64; a value past int64 is dropped
+// rather than wrapped into a false reset. A Get result is decoded from JSON,
+// which yields a float64 for every number and a string for every 64-bit
+// integer (RFC 7951), so both shapes are accepted here or the Get rung would
+// drop every counter it polls.
 func counterValue(_ profiles.Metric, v any) (int64, bool) {
 	switch x := v.(type) {
 	case uint64:
@@ -63,6 +72,22 @@ func counterValue(_ profiles.Metric, v any) (int64, bool) {
 		return x, true
 	case int:
 		return int64(x), true
+	case float64:
+		if x < 0 || x != math.Trunc(x) || x >= math.MaxInt64 {
+			return 0, false
+		}
+		return int64(x), true
+	case string:
+		if n, err := strconv.ParseUint(x, 10, 64); err == nil {
+			if n > math.MaxInt64 {
+				return 0, false
+			}
+			return int64(n), true
+		}
+		if n, err := strconv.ParseInt(x, 10, 64); err == nil {
+			return n, true
+		}
+		return 0, false
 	}
 	return 0, false
 }
@@ -184,8 +209,8 @@ func (e *exporter) register(reg metric.Registration) {
 }
 
 // close unregisters every callback. Unregister waits for a running
-// collection, which takes the store's read lock, so it runs with no lock of
-// the exporter or the store held.
+// collection, which takes the store's lock, so it runs with no lock of the
+// exporter or the store held.
 func (e *exporter) close() {
 	e.mu.Lock()
 	e.closed = true

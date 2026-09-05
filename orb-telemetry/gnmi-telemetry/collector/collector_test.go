@@ -279,6 +279,41 @@ func TestDeleteWithdrawsTheElementsSeries(t *testing.T) {
 	})
 }
 
+// A container delete names an ancestor of several subscriptions and carries no
+// keys, so the series it withdraws are bounded by the metrics of the
+// subscriptions it matched, not by the target and policy alone.
+func TestContainerDeleteWithdrawsOnlyThatSubtree(t *testing.T) {
+	reader := testReader(t)
+	ts := time.Now().UnixNano()
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: streamOf(
+			gnmi.Notification{Timestamp: ts, Updates: []gnmi.Update{
+				{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(1)},
+				{Path: "/system/memory/state/physical", Value: uint64(16744919040)},
+			}},
+			gnmi.Notification{Timestamp: ts + 1, Deletes: []string{"/interfaces"}},
+		),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	// The condition holds only after the delete: the counter had a point until
+	// then, and it names the survivor, so it cannot pass between the two stores
+	// of the first notification either.
+	waitFor(t, 3*time.Second, func() bool {
+		got := collect(t, reader)
+		mem, ok := got["gnmi.memory_physical"]
+		if !ok || len(mem.Data.(metricdata.Gauge[float64]).DataPoints) != 1 {
+			return false
+		}
+		counters, ok := got["gnmi.if_in_octets"]
+		return !ok || len(counters.Data.(metricdata.Sum[int64]).DataPoints) == 0
+	})
+}
+
 func TestForgetPolicyStopsTheLoopAndWithdrawsSeries(t *testing.T) {
 	reader := testReader(t)
 	sess := &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}, SubscribeManyFn: streamOf(sample(1, time.Now().UnixNano()))}

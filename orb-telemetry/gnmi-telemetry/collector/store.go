@@ -113,15 +113,22 @@ func (s *store) get(k seriesKey) (point, bool) {
 }
 
 // forEach visits every series of one metric whose device timestamp is within
-// its own maxAge of now; a zero timestamp or age is never withheld.
+// its own maxAge of now; a zero timestamp or age is never withheld. A series
+// past its age is dropped as it is withheld, in the same pass: withholding it
+// alone would leave it holding a slot of the metric's bound forever, and a
+// device that renamed its interfaces would eventually refuse every new series.
+// Deleting during the range is defined behaviour in Go, and the write lock is
+// held for it; visit must not call back into the store.
 func (s *store) forEach(metric string, now time.Time, visit func(seriesKey, point)) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for k, pt := range s.series {
 		if k.metric != metric {
 			continue
 		}
 		if pt.ts != 0 && pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
+			delete(s.series, k)
+			s.perName[k.metric]--
 			continue
 		}
 		visit(k, *pt)
@@ -140,12 +147,19 @@ func (s *store) forgetPolicy(policy string) {
 	}
 }
 
-// deleteMatching withdraws every series carrying all the given attributes,
-// whatever else it carries: a deleted list element takes its metrics with it.
-func (s *store) deleteMatching(want []attribute.KeyValue) {
+// deleteMatching withdraws every series of one of the named metrics that
+// carries all the given attributes, whatever else it carries: a deleted list
+// element takes its metrics with it. The names bound the blast radius: a
+// delete of a container names an ancestor of several subscriptions and
+// carries no keys, so the attributes alone would match every series of the
+// device and policy, including subtrees the delete says nothing about.
+func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, pt := range s.series {
+		if _, ok := names[k.metric]; !ok {
+			continue
+		}
 		if hasAll(pt.attrs, want) {
 			delete(s.series, k)
 			s.perName[k.metric]--
