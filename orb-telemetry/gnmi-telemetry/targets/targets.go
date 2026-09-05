@@ -410,8 +410,11 @@ func Span(target string) (start, end uint32, enumerable bool, err error) {
 
 // UnionSize returns how many distinct addresses a set of spans covers.
 //
-// Spans must already be grouped by port by the caller: the same address at two
-// ports is two endpoints, so merging across ports would undercount.
+// Spans must already be grouped by whatever identity the caller deduplicates on,
+// or the count is lower than the number of endpoints. gnmi-discovery groups by
+// port, since the same address at two ports is two of its endpoints;
+// gnmi-telemetry merges across ports, since its identity is the host and a
+// policy subscribes to a device once.
 func UnionSize(spans [][2]uint32) uint64 {
 	if len(spans) == 0 {
 		return 0

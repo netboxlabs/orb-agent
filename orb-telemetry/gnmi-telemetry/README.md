@@ -144,10 +144,14 @@ explicitly. A single-host target is not covered by the rule: an operator who
 wrote one address chose the host the credential goes to.
 
 The address budget bounds the rest: one target may expand to 1024 addresses, and
-one policy's targets together to 65536. A host the backend cannot expand, such
-as a malformed prefix, is rejected and the whole policy fails to start rather
-than running with fewer targets than it names. Two explicit targets naming the
-same device are rejected as well: a policy subscribes to a device once.
+one policy's targets together to 65536 distinct addresses. Overlapping ranges
+are bounded on top of that: every entry is expanded before the results are
+deduplicated, and on every rescan tick, so a policy's targets may enumerate at
+most 131072 addresses per sweep however few devices they describe. A host the
+backend cannot expand, such as a malformed prefix, is rejected and the whole
+policy fails to start rather than running with fewer targets than it names. Two
+explicit targets naming the same device are rejected as well: a policy
+subscribes to a device once.
 
 ### Policy Configuration
 

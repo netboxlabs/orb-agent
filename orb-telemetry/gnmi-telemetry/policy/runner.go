@@ -55,7 +55,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		return nil, err
 	}
 	if dialer == nil {
-		dialer = &gnmi.GnmicDialer{}
+		// The logger travels with the dialer, so a session's own events reach
+		// this runner's handler and level rather than the package default.
+		dialer = &gnmi.GnmicDialer{Logger: logger}
 	}
 	rctx, cancel := context.WithCancel(context.WithValue(ctx, policyKey, name))
 	return &Runner{

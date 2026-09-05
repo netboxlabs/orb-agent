@@ -23,8 +23,22 @@ import (
 // 65536 is a guard against the pathological cases, not a recommended size.
 const maxPolicyAddresses = 65536
 
+// maxScanWork bounds how many addresses a policy's targets enumerate in total,
+// as opposed to how many distinct ones they describe. The two differ when
+// ranges overlap, because expandTargets expands every entry before it
+// deduplicates the results, and the sweep repeats that on every rescan tick.
+//
+// A policy may overlap its ranges up to twice its address budget before the
+// per-tick expansion cost is refused, which leaves room for a subnet plus the
+// hosts pinned inside it, or for nested prefixes carrying different
+// credentials, while refusing the degenerate case: thirty thousand overlapping
+// sub-/16 ranges describe fewer than 65536 distinct addresses and materialise
+// tens of millions of strings per sweep.
+const maxScanWork = 2 * maxPolicyAddresses
+
 // checkPolicyExpansion rejects a policy whose targets together cover more than
-// maxPolicyAddresses distinct addresses, counting without expanding.
+// maxPolicyAddresses distinct addresses, or whose entries enumerate more than
+// maxScanWork of them per sweep, both counted without expanding.
 //
 // The union, not the sum. Pinning a host inside a subnet to give it its own
 // credentials is the documented way to write that, and expandTargets collapses
@@ -51,7 +65,7 @@ const maxPolicyAddresses = 65536
 // would need 2^32 entries to overflow the uint64 total.
 func checkPolicyExpansion(entries []config.Target) error {
 	spans := make([][2]uint32, 0, len(entries))
-	var total uint64
+	var total, work uint64
 	for _, entry := range entries {
 		// The bare host, so a pinned target written "10.0.0.5:6030" merges into
 		// the subnet holding it instead of counting as an endpoint of its own.
@@ -62,13 +76,24 @@ func checkPolicyExpansion(entries []config.Target) error {
 		}
 		if !enumerable {
 			total++
+			work++
 			continue
 		}
 		spans = append(spans, [2]uint32{start, end})
+		work += uint64(end-start) + 1
 	}
 	total += targets.UnionSize(spans)
+	// The address cap is charged first: it is the bound an operator sizes a
+	// policy against, so a policy over both budgets is told the number that
+	// matters rather than the cost of getting there.
 	if total > maxPolicyAddresses {
 		return fmt.Errorf("policy targets expand to %d addresses in total, more than the limit of %d", total, maxPolicyAddresses)
+	}
+	if work > maxScanWork {
+		return fmt.Errorf(
+			"policy would enumerate %d addresses per sweep, more than the %d allowed; reduce overlapping ranges",
+			work, maxScanWork,
+		)
 	}
 	return nil
 }

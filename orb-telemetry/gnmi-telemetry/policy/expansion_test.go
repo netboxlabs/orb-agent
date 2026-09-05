@@ -244,3 +244,30 @@ func TestCheckPolicyExpansion_CountsDistinctAddresses(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "65537")
 }
+
+// equivalentSlash22s is n entries naming one /22. Their union is its 1022
+// hosts, and their sum is n times that: expandTargets expands every entry
+// before it deduplicates, so the sum is what a sweep materialises on each
+// rescan tick.
+func equivalentSlash22s(n int) []string {
+	hosts := make([]string, 0, n)
+	for range n {
+		hosts = append(hosts, "10.0.0.0/22")
+	}
+	return hosts
+}
+
+// The address cap bounds the subscriptions a policy ends up holding, not the
+// work it costs to find them. Overlapping ranges cost the sum while describing
+// the union, so a body of them passes the address cap and still enumerates
+// millions of addresses per tick.
+func TestCheckPolicyExpansion_BoundsTheSweepsEnumerationWork(t *testing.T) {
+	assert.NoError(t, checkPolicyExpansion(entries(equivalentSlash22s(128)...)),
+		"128 x 1022 is 130816, inside the work ceiling")
+
+	err := checkPolicyExpansion(entries(equivalentSlash22s(129)...))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "per sweep")
+	assert.ErrorContains(t, err, "131838")
+	assert.ErrorContains(t, err, "131072")
+}
