@@ -87,6 +87,15 @@ type Profile struct {
 
 var metricName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
+// maxMetricNameLen is the longest name the exporter can stand an instrument
+// for. The metric SDK refuses an instrument name longer than 255 characters
+// ("longer than 255 characters", sdk/metric.validateInstrumentName), and the
+// exporter creates every instrument under the name prefixed with "gnmi.", so
+// the profile's own name has that much less room. Nothing downstream reports
+// the refusal: instrument creation only logs, while the series goes on holding
+// a slot of the collector's budget for a name that is never exported.
+const maxMetricNameLen = 255 - len("gnmi.")
+
 // reservedAttributes are the attribute names the collector sets on every
 // series it writes. A profile that promotes a path key under one of them
 // would have the collector's value and its own on the same series.
@@ -132,12 +141,13 @@ func canonicalPath(p *gnmiproto.Path) string {
 // Validate checks the schema rules: at least one subscription, a path and
 // metrics per subscription, a path the request parser accepts and no two
 // subscriptions on one path, a stream mode, metric types, unique lower-case
-// names that no health metric of the backend already owns, enum and bool only
-// on gauges, a "." leaf alone in its subscription, a leaf carrying no key
-// predicate and mapped by one metric of its subscription, an attribute that
-// names a key its own path carries on exactly one element and does not shadow
-// the collector's own names, and an attribute promoting every key the path
-// wildcards.
+// names that no health metric of the backend already owns and are short enough
+// that the exporter's prefixed form stands as an instrument, enum and bool only
+// on gauges, a "." leaf alone in its subscription, a leaf carrying neither a
+// key predicate nor a module prefix and mapped by one metric of its
+// subscription, an attribute that names a key its own path carries on exactly
+// one element and does not shadow the collector's own names, and an attribute
+// promoting every key the path wildcards.
 //
 // It reads a RESOLVED profile, which is what the loader validates: a
 // placeholder overlay states no subscriptions of its own but carries its
@@ -251,6 +261,14 @@ func (p *Profile) Validate() error {
 				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key",
 					p.Name, s.Path, m.Name)
 			}
+			// The matcher drops a module prefix from every element of an
+			// incoming path, so it compares bare names and a leaf carrying one
+			// matches nothing: the metric is never exported, and every update
+			// under the subscription is counted as an unmatched path.
+			if strings.Contains(m.Leaf, ":") {
+				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf is written without a module prefix",
+					p.Name, s.Path, m.Name)
+			}
 			// A metric's full path is its subscription path plus its leaf, and
 			// that is the form the device's own update paths take. A leaf that
 			// makes the join unparseable can never be a path an update carries,
@@ -267,6 +285,10 @@ func (p *Profile) Validate() error {
 			leaves[m.Leaf] = true
 			if !metricName.MatchString(m.Name) {
 				return fmt.Errorf("profile %s: metric %q: name must be lower-case letters, digits and underscores", p.Name, m.Name)
+			}
+			if len(m.Name) > maxMetricNameLen {
+				return fmt.Errorf("profile %s: subscription %q: metric %s: name longer than %d characters",
+					p.Name, s.Path, m.Name, maxMetricNameLen)
 			}
 			if reservedMetrics[m.Name] {
 				return fmt.Errorf("profile %s: subscription %q: metric name %s is reserved for the backend's health metrics",

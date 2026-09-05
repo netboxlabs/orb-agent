@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -191,6 +192,24 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Attributes: map[string]string{"interface_name": "name"},
 			Metrics:    []Metric{{Leaf: "subinterfaces/subinterface[index=*]/state/counters/in-octets", Name: "n", Type: "counter"}},
 		}}}, `subscription "/interfaces/interface[name=*]/state": metric n: a leaf cannot carry a key predicate; put the keyed list in the subscription path and promote its key`},
+		// The matcher drops a module prefix from every element of an incoming
+		// path and compares bare names, so a qualified leaf matches nothing:
+		// the metric is never exported and every update under the subscription
+		// is counted as an unmatched path.
+		{"module_qualified_leaf", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
+			Attributes: map[string]string{"interface_name": "name"},
+			Metrics:    []Metric{{Leaf: "openconfig-interfaces:in-octets", Name: "n", Type: "counter"}},
+		}}}, `subscription "/interfaces/interface[name=*]/state/counters": metric n: a leaf is written without a module prefix`},
+		// The exporter prefixes every name with "gnmi.", and the SDK refuses an
+		// instrument name longer than 255 characters. Nothing downstream fails
+		// loudly: the instrument is not created, and the series still holds a
+		// budget slot for a name that is never exported.
+		{
+			"metric_name_too_long",
+			Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: strings.Repeat("a", 251), Type: "counter"})},
+			`name longer than 250 characters`,
+		},
 		// The matcher's parser reads an unbalanced bracket as a key part and
 		// carries on, but the parser the subscribe and Get builders use rejects
 		// the path, and one bad path fails the whole request: the profile would
@@ -268,6 +287,11 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		Metrics: []Metric{{Leaf: "in-octets", Name: "n", Type: "counter"}},
 	}}}
 	assert.NoError(t, literal.Validate(), "a literal key selects one element, so it needs no attribute")
+
+	// 250 characters plus the exporter's "gnmi." prefix is the 255 the SDK
+	// allows, so the longest name that can stand an instrument is accepted.
+	longest := Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: strings.Repeat("a", 250), Type: "counter"})}
+	assert.NoError(t, longest.Validate(), "a name whose prefixed form is exactly the SDK's limit is valid")
 }
 
 func TestInvalidOverrideKeepsTheBundledProfile(t *testing.T) {

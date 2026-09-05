@@ -433,11 +433,17 @@ subscriptions:
   subscription made directly to a leaf, and must then be the only metric in it.
   A `leaf` may not carry a `[key=...]` predicate: it is matched by element name
   alone, so a keyed list belongs in `path`, where an attribute promotes its key.
-  One leaf maps to one metric within its subscription: an update carries a
-  single value and the first metric mapping the leaf takes it, so a second on
-  the same leaf would name a series nothing ever writes.
+  A `leaf` is written as a bare name, never module-qualified: the matcher drops
+  the module prefix from every element of an incoming path, so a leaf written
+  `openconfig-interfaces:in-octets` would match nothing and each update under
+  the subscription would be counted as an unmatched path. One leaf maps to one
+  metric within its subscription: an update carries a single value and the first
+  metric mapping the leaf takes it, so a second on the same leaf would name a
+  series nothing ever writes.
 - `name` is lower-case letters, digits and underscores, and is exported as
-  `gnmi.<name>`. It must be unique within the resolved profile, and may not be
+  `gnmi.<name>`. It is at most 250 characters, because the metric SDK refuses an
+  instrument name longer than 255 and the exported name carries the `gnmi.`
+  prefix. It must be unique within the resolved profile, and may not be
   one of the health metric names the backend registers for itself
   (`targets_active`, `target_up`, `subscription_reconnects_total`,
   `notifications_total`, `updates_dropped_total`, `mode_fallback_total`,
