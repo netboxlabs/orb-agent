@@ -278,7 +278,7 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 			p, err := resolve(name, raw, map[string]bool{})
 			if err != nil {
 				// A semantically-bad profile (unresolved `extends` or an inheritance
-				// cycle) must not crash startup — skip and log it, like a bad parse.
+				// cycle) must not crash startup, skip and log it, like a bad parse.
 				// _base has no `extends` so it always resolves; the matcher still has
 				// its fallback. (Bundled profiles are expected to resolve; a failure
 				// there is a build bug, surfaced via this same log.)

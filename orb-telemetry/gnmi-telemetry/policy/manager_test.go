@@ -106,7 +106,7 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
-// validatePolicy — mode
+// validatePolicy: mode
 // ---------------------------------------------------------------------------
 
 // The collector accepts auto, on_change and sample. A mode it does not know
@@ -141,7 +141,7 @@ func TestValidate_AcceptsEveryKnownMode(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// validatePolicy — credentials on an unverified range
+// validatePolicy: credentials on an unverified range
 // ---------------------------------------------------------------------------
 
 // A sweep admits whatever answers on the port. Without TLS authenticating the
@@ -206,7 +206,7 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
-// validatePolicy — host shapes
+// validatePolicy: host shapes
 // ---------------------------------------------------------------------------
 
 // One port cannot describe a range of devices reached on different ones, and
@@ -342,12 +342,12 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
-// validatePolicy — one device, once
+// validatePolicy: one device, once
 // ---------------------------------------------------------------------------
 
 // A target's identity is the device. Everything below validation keys on the
-// bare host — the runner's subscribed map, the sweep's pre-marking, the
-// collector's loop — so a second entry for a host already named is silently
+// bare host, the runner's subscribed map, the sweep's pre-marking, the
+// collector's loop, so a second entry for a host already named is silently
 // dropped rather than refused. Keying those on the port instead would only move
 // the collision into the series store, where the two would share device_ip and
 // policy.
@@ -426,7 +426,7 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
-// validatePolicy — rescan_interval_ms
+// validatePolicy: rescan_interval_ms
 // ---------------------------------------------------------------------------
 
 // A rescan re-probes every unsubscribed address the policy names, so a tick a
@@ -448,7 +448,7 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
-// ParsePolicies — scope inheritance
+// ParsePolicies: scope inheritance
 // ---------------------------------------------------------------------------
 
 // Inheritance happens once, at parse time, so validation and the collector both
@@ -484,7 +484,7 @@ policies:
 }
 
 // ---------------------------------------------------------------------------
-// ParsePolicies — credential environment variables
+// ParsePolicies: credential environment variables
 // ---------------------------------------------------------------------------
 
 func TestParsePolicies_ResolvesAnAllowedScopePassword(t *testing.T) {

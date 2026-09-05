@@ -325,7 +325,7 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 		}
 		// An id survives only when the operator wrote the single address
 		// itself. Any CIDR or range form, /32 and 10.0.0.5-5 included, drops
-		// it — one device id cannot describe a range, and a /32 is still range
+		// it: one device id cannot describe a range, and a /32 is still range
 		// syntax.
 		literal := len(addrs) == 1 && addrs[0] == t.Host
 
