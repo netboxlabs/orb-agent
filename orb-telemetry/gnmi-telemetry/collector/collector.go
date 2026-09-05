@@ -11,6 +11,7 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -449,13 +450,13 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 // keyed by the path the leaf sits at. A Get, and any target that serializes a
 // stream as JSON, answers with one update at the container path whose value
 // is a decoded object, while matching needs a path deeper than the
-// subscription's. A value that is not an object is one update as it stands: a
-// list is left whole so it is counted as an unconvertible value rather than
-// dropped without a trace. Keys are visited in order so one container always
-// yields the same sequence.
+// subscription's. A value that is not an object, and an object with no fields,
+// is one update as it stands: a list or an empty container is left whole so it
+// reaches the drop accounting rather than disappearing without a trace. Keys
+// are visited in order so one container always yields the same sequence.
 func flattenUpdate(u gnmi.Update) []gnmi.Update {
 	fields, ok := u.Value.(map[string]any)
-	if !ok {
+	if !ok || len(fields) == 0 {
 		return []gnmi.Update{u}
 	}
 	keys := make([]string, 0, len(fields))
@@ -465,9 +466,20 @@ func flattenUpdate(u gnmi.Update) []gnmi.Update {
 	sort.Strings(keys)
 	out := make([]gnmi.Update, 0, len(keys))
 	for _, k := range keys {
-		out = append(out, flattenUpdate(gnmi.Update{Path: u.Path + "/" + k, Value: fields[k]})...)
+		out = append(out, flattenUpdate(gnmi.Update{Path: u.Path + "/" + leafName(k), Value: fields[k]})...)
 	}
 	return out
+}
+
+// leafName drops the YANG module a JSON_IETF payload qualifies a key with, so
+// "openconfig-system:state" names the same element as the profile's "state".
+// This is the rule the gnmi package applies to a path element, applied to the
+// keys of a decoded object.
+func leafName(key string) string {
+	if i := strings.LastIndexByte(key, ':'); i >= 0 {
+		return key[i+1:]
+	}
+	return key
 }
 
 // maxAgeFor is the age past which a series is withheld from export and

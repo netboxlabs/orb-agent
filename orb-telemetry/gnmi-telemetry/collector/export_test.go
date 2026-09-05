@@ -140,4 +140,16 @@ func TestFlattenUpdate(t *testing.T) {
 		{Path: "/system/memory/state/physical", Value: float64(1)},
 		{Path: "/system/memory/state/slots", Value: []any{float64(1), float64(2)}},
 	}, got, "a nested container yields one update per scalar and leaves a list whole")
+
+	// JSON_IETF qualifies a key with the YANG module that defines it, and the
+	// profile paths carry no qualifier.
+	qualified := flattenUpdate(gnmi.Update{Path: "/system/memory", Value: map[string]any{
+		"openconfig-system:state": map[string]any{"openconfig-system:physical": float64(1)},
+	}})
+	assert.Equal(t, []gnmi.Update{{Path: "/system/memory/state/physical", Value: float64(1)}}, qualified,
+		"a module qualifier is dropped from every key")
+
+	empty := gnmi.Update{Path: "/system/memory/state", Value: map[string]any{}}
+	assert.Equal(t, []gnmi.Update{empty}, flattenUpdate(empty),
+		"an empty container stays one update, so it is counted rather than dropped without a trace")
 }
