@@ -392,7 +392,7 @@ subscriptions:
   one of the health metric names the backend registers for itself
   (`targets_active`, `target_up`, `subscription_reconnects_total`,
   `notifications_total`, `updates_dropped_total`, `mode_fallback_total`,
-  `profile_fallback_total`), which one instrument each already exports.
+  `profile_fallback_total`), because the backend exports each of those itself.
 - `type` is `counter` or `gauge`. `unit` is a UCUM string handed to the
   instrument. `enum` and `bool` map non-numeric values and are valid on gauges
   only.

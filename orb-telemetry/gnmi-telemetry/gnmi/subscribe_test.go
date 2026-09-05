@@ -210,6 +210,7 @@ func getSession(t *testing.T, srv *getServer) *gnmicSession {
 
 	tg, err := gapi.NewTarget(gapi.Name("t"), gapi.Address(ln.Addr().String()), gapi.Insecure(true))
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = tg.Close() })
 	require.NoError(t, tg.CreateGNMIClient(context.Background()))
 	return &gnmicSession{tg: tg}
 }
