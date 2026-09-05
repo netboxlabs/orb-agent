@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
@@ -490,10 +492,15 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 	return s.stream(ctx, req)
 }
 
-// GetOnce performs a single gNMI Get over the given paths.
+// GetOnce performs a single gNMI Get over the given paths. The snapshot reports
+// the paths it fetched, which is every requested path only when the target
+// answered the request whole: the recovery below returns a partial snapshot as
+// success, and a caller reconciling against it must not speak for a path that
+// failed.
 func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
 	// Fast path: one Get for all paths — most targets handle a multi-path Get fine.
 	if n, err := s.getPaths(ctx, paths); err == nil {
+		n.Paths = append([]string(nil), paths...)
 		return n, nil
 	}
 	// A multi-path Get can fail ATOMICALLY when the target returns
@@ -514,6 +521,7 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 			continue
 		}
 		mergeGetResults(&result, n)
+		result.Paths = append(result.Paths, p)
 		got++
 	}
 	if got == 0 && lastErr != nil {
@@ -790,6 +798,12 @@ func joinPaths(prefix, path string) string {
 // "0x10" and two objects in a row are not one JSON value, and a prefix of them
 // is not what the device sent. Trailing space is not another value, so a
 // payload that ends in a newline still decodes.
+//
+// What says the payload ended is a second read that reaches EOF. More() answers
+// a different question, whether another element follows in the array or object
+// being parsed, so at the top level it is false for the closing bracket that
+// belongs to no value here: "123]" and "{}]" would each have decoded to their
+// own prefix.
 func decodeJSON(raw []byte) (any, bool) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
@@ -797,7 +811,8 @@ func decodeJSON(raw []byte) (any, bool) {
 	if err := dec.Decode(&decoded); err != nil {
 		return nil, false
 	}
-	if dec.More() {
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, false
 	}
 	return decoded, true

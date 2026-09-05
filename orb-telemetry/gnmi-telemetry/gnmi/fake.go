@@ -21,12 +21,17 @@ type FakeSession struct {
 	SampleReplay    time.Duration  // gap between SAMPLE re-sends (default 20ms)
 	StreamErr       error          // if set, sent on the error channel after replay (simulates a mid-stream drop)
 	GetResult       Notification
-	GetErr          error
-	ConfigBytes     []byte // returned by GetConfig
-	ConfigErr       error  // if set, GetConfig returns this error
-	ConfigGets      int    // count of GetConfig calls (test assertion)
-	Closed          bool
-	StopSubscribes  int // count of StopSubscribe calls (test assertion)
+	// GetPaths is what GetOnce reports as the paths its snapshot fetched. Nil
+	// means every path the caller asked for, which is what a target that
+	// answered the whole request returns; a test that wants a snapshot which
+	// only some paths answered names those.
+	GetPaths       []string
+	GetErr         error
+	ConfigBytes    []byte // returned by GetConfig
+	ConfigErr      error  // if set, GetConfig returns this error
+	ConfigGets     int    // count of GetConfig calls (test assertion)
+	Closed         bool
+	StopSubscribes int // count of StopSubscribe calls (test assertion)
 	// SubscribeManyFn answers SubscribeMany when set; nil falls back to Subscribe.
 	SubscribeManyFn func(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error)
 	// lastSubscriptions records the most recent SubscribeMany request.
@@ -120,9 +125,15 @@ func (f *FakeSession) Subscriptions() []Subscription {
 	return append([]Subscription(nil), f.lastSubscriptions...)
 }
 
-// GetOnce returns the scripted Get result.
-func (f *FakeSession) GetOnce(_ context.Context, _ []string) (Notification, error) {
-	return f.GetResult, f.GetErr
+// GetOnce returns the scripted Get result, reporting GetPaths as the paths it
+// fetched, or every requested path when the test named none.
+func (f *FakeSession) GetOnce(_ context.Context, paths []string) (Notification, error) {
+	n := f.GetResult
+	n.Paths = f.GetPaths
+	if n.Paths == nil {
+		n.Paths = append([]string(nil), paths...)
+	}
+	return n, f.GetErr
 }
 
 // GetConfig records the call and returns the scripted config bytes/error.

@@ -2,9 +2,11 @@ package gnmi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"strings"
 	"testing"
 
@@ -12,6 +14,9 @@ import (
 	gapi "github.com/openconfig/gnmic/pkg/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestConvertNotificationKeepsTheDeviceTimestamp(t *testing.T) {
@@ -46,7 +51,8 @@ func TestJSONNumbersDecodeWithoutRounding(t *testing.T) {
 
 // A decoder reads one value and stops where a whole-payload unmarshal refuses
 // what follows it, so a payload that is not one JSON value would have decoded to
-// its own prefix: "123garbage" would have been the number 123. The caller keeps
+// its own prefix: "123garbage" would have been the number 123, and "123]" the
+// same, since the bracket closes nothing the decoder opened. The caller keeps
 // such a payload as the string the device sent.
 func TestAPayloadThatIsNotOneJSONValueStaysAString(t *testing.T) {
 	for name, tc := range map[string]struct {
@@ -56,6 +62,9 @@ func TestAPayloadThatIsNotOneJSONValueStaysAString(t *testing.T) {
 		"trailing text":    {raw: "123garbage", want: "123garbage"},
 		"hex":              {raw: "0x10", want: "0x10"},
 		"two objects":      {raw: `{"a":1}{"b":2}`, want: `{"a":1}{"b":2}`},
+		"closing bracket":  {raw: "123]", want: "123]"},
+		"closed object":    {raw: "{}]", want: "{}]"},
+		"two numbers":      {raw: "123 456", want: "123 456"},
 		"number":           {raw: "123", want: json.Number("123")},
 		"trailing newline": {raw: "123\n", want: json.Number("123")},
 		"object":           {raw: `{"a":1}`, want: map[string]any{"a": json.Number("1")}},
@@ -156,4 +165,76 @@ func TestStopSubscribeStopsOnlyTheNameThisSessionRegistered(t *testing.T) {
 	s.StopSubscribe()
 	assert.Empty(t, s.subName, "the stopped attempt's name is released with it")
 	assert.NotPanics(t, s.StopSubscribe, "stopping again is a no-op")
+}
+
+// getServer answers a gNMI Get for the paths it holds and fails for any other,
+// which is how a target behaves toward an optional subtree it does not model.
+// A multi-path request is refused outright when multi is false, the atomic
+// failure GetOnce recovers from one path at a time.
+type getServer struct {
+	gnmiproto.UnimplementedGNMIServer
+	holds map[string]bool
+	multi bool
+}
+
+func (g *getServer) Get(_ context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+	if len(req.GetPath()) > 1 && !g.multi {
+		return nil, status.Error(codes.Unimplemented, "one path per request")
+	}
+	var notifications []*gnmiproto.Notification
+	for _, p := range req.GetPath() {
+		rendered := pathToString(p)
+		if !g.holds[rendered] {
+			return nil, status.Errorf(codes.NotFound, "unknown path %s", rendered)
+		}
+		notifications = append(notifications, &gnmiproto.Notification{
+			Update: []*gnmiproto.Update{{
+				Path: p,
+				Val:  &gnmiproto.TypedValue{Value: &gnmiproto.TypedValue_UintVal{UintVal: 1}},
+			}},
+		})
+	}
+	return &gnmiproto.GetResponse{Notification: notifications}, nil
+}
+
+// getSession serves the given server on loopback and returns a session dialed
+// to it, the way GnmicDialer dials a plaintext target.
+func getSession(t *testing.T, srv *getServer) *gnmicSession {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	grpcServer := grpc.NewServer()
+	gnmiproto.RegisterGNMIServer(grpcServer, srv)
+	go func() { _ = grpcServer.Serve(ln) }()
+	t.Cleanup(grpcServer.Stop)
+
+	tg, err := gapi.NewTarget(gapi.Name("t"), gapi.Address(ln.Addr().String()), gapi.Insecure(true))
+	require.NoError(t, err)
+	require.NoError(t, tg.CreateGNMIClient(context.Background()))
+	return &gnmicSession{tg: tg}
+}
+
+// A Get that recovers per path returns what it managed to fetch and calls that
+// success, so the snapshot alone cannot say which paths answered. It reports
+// them, because the caller reconciles the series of the paths a snapshot speaks
+// for and a path whose Get failed is one it says nothing about.
+func TestGetOnceReportsThePathsItFetched(t *testing.T) {
+	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
+
+	whole := getSession(t, &getServer{holds: map[string]bool{memory: true, interfaces: true}, multi: true})
+	n, err := whole.GetOnce(context.Background(), []string{memory, interfaces})
+	require.NoError(t, err)
+	assert.Equal(t, []string{memory, interfaces}, n.Paths, "a target that answered the whole request fetched every path")
+	assert.Len(t, n.Updates, 2)
+
+	partial := getSession(t, &getServer{holds: map[string]bool{memory: true}})
+	n, err = partial.GetOnce(context.Background(), []string{memory, interfaces})
+	require.NoError(t, err, "one unsupported path does not fail the snapshot")
+	assert.Equal(t, []string{memory}, n.Paths, "only the path that answered is reported as fetched")
+	require.Len(t, n.Updates, 1)
+	assert.Equal(t, memory, n.Updates[0].Path)
+
+	none := getSession(t, &getServer{})
+	_, err = none.GetOnce(context.Background(), []string{memory, interfaces})
+	require.Error(t, err, "a target that answers nothing is a failure, not an empty snapshot")
 }

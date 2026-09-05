@@ -1395,3 +1395,102 @@ subscriptions:
 		return has && name.AsString() == "e2" && points("gnmi.control_oper_state") == 1
 	})
 }
+
+// A Get that recovers path by path returns what answered and calls that
+// success. The first snapshot is what withdraws the ageless series an earlier
+// on_change stream left, so it must withdraw them only under the paths it
+// fetched: a path whose Get failed restates nothing because it was never read,
+// and evicting under it would take an element the device still carries.
+func TestGetRungReconcilesOnlyFetchedPaths(t *testing.T) {
+	reader := testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_paths.yaml"), []byte(`
+match: {}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/oper-status
+    mode: on_change
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: ., name: if_oper_status, type: gauge, enum: {UP: 1, DOWN: 0}}
+  - path: /platform/control[slot=*]/memory
+    mode: on_change
+    attributes: {slot: slot}
+    metrics:
+      - {leaf: free, name: control_memory_free, type: gauge, unit: By}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	var attempts atomic.Int64
+	resume := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			if attempts.Add(1) > 1 {
+				select {
+				case <-resume:
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				}
+				return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+			}
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				for _, n := range []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+						{Path: "/platform/control[slot=A]/memory/free", Value: uint64(10)},
+						{Path: "/platform/control[slot=B]/memory/free", Value: uint64(20)},
+					}},
+					{SyncDone: true},
+				} {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				errs <- errors.New("stream reset")
+			}()
+			return out, errs, nil
+		},
+		// The poll asks for both paths; the target answers only the memory one,
+		// so the snapshot restates slot A and says nothing at all about the
+		// interfaces.
+		GetPaths: []string{"/platform/control[slot=*]/memory"},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{
+			{Path: "/platform/control[slot=A]/memory/free", Value: uint64(10)},
+		}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "two_paths"})
+	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
+	points := func(name string) int {
+		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		if !ok {
+			return 0
+		}
+		return len(g.DataPoints)
+	}
+	waitFor(t, 3*time.Second, func() bool { return points("gnmi.if_oper_status") == 2 && points("gnmi.control_memory_free") == 2 })
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	// Under the fetched path the omitted element goes and the restated one
+	// stays; both interface series stand, the snapshot having never read them.
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.control_memory_free"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		slot, has := g.DataPoints[0].Attributes.Value("slot")
+		return has && slot.AsString() == "A"
+	})
+	assert.Equal(t, 2, points("gnmi.if_oper_status"), "a path the snapshot never fetched withdraws nothing")
+}

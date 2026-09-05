@@ -308,9 +308,10 @@ initial dump no longer includes it, whichever mode that stream settled on, or
 when the first Get snapshot of a target that fell through to polling no longer
 includes it: an element removed while the stream was down is never deleted on
 the stream, so the dump the replacement opens with is what says which elements
-the device still carries. A snapshot speaks only for the subscriptions Get
-polling can ask for, so the series of a subscription it skips for carrying an
-origin of its own are left where they are.
+the device still carries. A snapshot speaks only for the paths the snapshot
+fetched, so the series of a subscription Get polling skips for carrying an
+origin of its own, and those of a path whose own Get failed, are left where they
+are.
 
 Two other things withdraw a series: a delete notification, which withdraws the
 deleted element and everything under it, and stopping the policy, which
@@ -387,7 +388,11 @@ subscriptions:
   a CPU's state. A `leaf` of `.` is the subscription path itself, for a
   subscription made directly to a leaf, and must then be the only metric in it.
 - `name` is lower-case letters, digits and underscores, and is exported as
-  `gnmi.<name>`. It must be unique within the resolved profile.
+  `gnmi.<name>`. It must be unique within the resolved profile, and may not be
+  one of the health metric names the backend registers for itself
+  (`targets_active`, `target_up`, `subscription_reconnects_total`,
+  `notifications_total`, `updates_dropped_total`, `mode_fallback_total`,
+  `profile_fallback_total`), which one instrument each already exports.
 - `type` is `counter` or `gauge`. `unit` is a UCUM string handed to the
   instrument. `enum` and `bool` map non-numeric values and are valid on gauges
   only.

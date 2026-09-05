@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,6 +328,61 @@ func TestResetMeterClearsInstrumentCaches(t *testing.T) {
 
 	assert.True(t, hasMetric(t, secondReader, "x"), "the counter writes to the meter installed now")
 	assert.False(t, hasMetric(t, firstReader, "x"), "and not to the one it was reset away from")
+}
+
+// The reserved list and the instruments are one thing said twice: profile
+// validation refuses a metric name on the strength of HealthNames, so a health
+// metric missing from that list is one a profile may name, and the exporter
+// would then stand a second instrument of the profile's own kind beside it.
+// Driving every accessor this package owns through a reader is what says the
+// two agree, in both directions.
+//
+// target_up is registered by the collector, over its own target loops, so it is
+// absent here; it is named from this package's constant and the collector's own
+// test pins the name it registers.
+func TestHealthNamesAreTheInstrumentsThisPackageRegisters(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	SetMeterForTest(provider.Meter("test"))
+
+	ctx := context.Background()
+	GetTargetsActive().Add(ctx, 1)
+	GetReconnects().Add(ctx, 1)
+	GetNotifications().Add(ctx, 1)
+	GetUpdatesDropped().Add(ctx, 1)
+	GetModeFallbacks().Add(ctx, 1)
+	GetProfileFallbacks().Add(ctx, 1)
+
+	reserved := HealthNames()
+	assert.Contains(t, reserved, TargetUp, "the collector's own gauge is reserved with them")
+	for _, suffix := range reserved {
+		if suffix == TargetUp {
+			continue
+		}
+		assert.True(t, hasMetric(t, reader, "gnmi."+suffix),
+			"%s is reserved but no instrument of this package registers it", suffix)
+	}
+	for _, registered := range metricNames(t, reader) {
+		assert.Contains(t, reserved, strings.TrimPrefix(registered, "gnmi."),
+			"%s is registered by this package but not reserved, so a profile may name it", registered)
+	}
+}
+
+// metricNames lists the metrics the reader collects.
+func metricNames(t *testing.T, reader sdkmetric.Reader) []string {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	var out []string
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			out = append(out, m.Name)
+		}
+	}
+	return out
 }
 
 // hasMetric reports whether the reader collects a metric of the given name.

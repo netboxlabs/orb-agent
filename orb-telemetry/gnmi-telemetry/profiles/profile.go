@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
 )
 
 //go:embed all:gnmi-profiles
@@ -88,11 +90,24 @@ var metricName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // would have the collector's value and its own on the same series.
 var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "netbox_id": true}
 
+// reservedMetrics are the metric names the backend writes for its own health,
+// taken from the package that owns those instruments so the two cannot drift.
+// The exporter registers one instrument per metric name, so a profile metric
+// named after one of them would stand a second instrument, of whatever kind
+// the profile declared, beside the backend's own.
+var reservedMetrics = func() map[string]bool {
+	out := map[string]bool{}
+	for _, n := range metrics.HealthNames() {
+		out[n] = true
+	}
+	return out
+}()
+
 // Validate checks the schema rules: a path and metrics per subscription, a
-// stream mode, metric types, unique lower-case names, enum and bool only on
-// gauges, a "." leaf alone in its subscription, and an attribute that names a
-// key its own path carries on exactly one element and does not shadow the
-// collector's own names.
+// stream mode, metric types, unique lower-case names that no health metric of
+// the backend already owns, enum and bool only on gauges, a "." leaf alone in
+// its subscription, and an attribute that names a key its own path carries on
+// exactly one element and does not shadow the collector's own names.
 func (p *Profile) Validate() error {
 	seen := map[string]bool{}
 	for i, s := range p.Subscriptions {
@@ -142,6 +157,10 @@ func (p *Profile) Validate() error {
 			}
 			if !metricName.MatchString(m.Name) {
 				return fmt.Errorf("profile %s: metric %q: name must be lower-case letters, digits and underscores", p.Name, m.Name)
+			}
+			if reservedMetrics[m.Name] {
+				return fmt.Errorf("profile %s: subscription %q: metric name %s is reserved for the backend's health metrics",
+					p.Name, s.Path, m.Name)
 			}
 			if m.Type != "counter" && m.Type != "gauge" {
 				return fmt.Errorf("profile %s: metric %q: type %q is not counter or gauge", p.Name, m.Name, m.Type)

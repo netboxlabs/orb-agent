@@ -18,6 +18,13 @@ type Notification struct {
 	// Timestamp is the device's notification time in nanoseconds since the
 	// Unix epoch, zero when the target sent none.
 	Timestamp int64
+	// Paths are the request paths a Get snapshot fetched: every path of a
+	// request the target answered whole, and only the ones that answered when
+	// the Get recovered path by path. It is transport-level, like Timestamp,
+	// and a subscription carries none. A caller that reconciles what a snapshot
+	// restates speaks only for these: a path whose Get failed is a path the
+	// snapshot says nothing about.
+	Paths []string
 }
 
 // CapabilitiesResult is the subset of a gNMI Capabilities response we use.

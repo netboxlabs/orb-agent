@@ -129,8 +129,10 @@ func (c *Collector) Schemas() *Schemas { return c.schemas }
 
 // targetUpSeries is gnmi.target_up as the series budget names it. The budget
 // is keyed on the metric name the exporter prefixes with "gnmi.", so the gauge
-// draws on the same allowance a profile metric of that name would.
-const targetUpSeries = "target_up"
+// draws on the same allowance a profile metric of that name would. The name
+// comes from the package that lists the backend's health metrics, which is
+// what profile validation reserves, so no profile can name this gauge.
+const targetUpSeries = metrics.TargetUp
 
 // ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
 // has a live stream or poll, 0 while it reconnects. A collector built before
@@ -142,7 +144,7 @@ func (c *Collector) ensureTargetUp() {
 		return
 	}
 	c.upOnce.Do(func() {
-		inst, err := m.Int64ObservableGauge("gnmi.target_up")
+		inst, err := m.Int64ObservableGauge("gnmi." + targetUpSeries)
 		if err != nil {
 			c.logger.Error("failed to create target_up", "error", err)
 			return
@@ -457,10 +459,11 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 // logged once; a native overlay path is only reachable by streaming.
 func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Subscription, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
 	paths := make([]string, 0, len(subs))
-	// The metrics of the subscriptions this poll really asks for. A snapshot says
-	// nothing about a subtree the poll skipped, so the reconciliation below must
-	// leave that subtree's series where they are.
-	polled := map[string]struct{}{}
+	// The metrics each path this poll asks for carries. A snapshot says nothing
+	// about a subtree the poll skipped, nor about one whose own Get failed, so
+	// the reconciliation below names the metrics of the paths the snapshot
+	// actually fetched and leaves every other series where it is.
+	metricsByPath := make(map[string][]string, len(subs))
 	for _, s := range subs {
 		if s.Origin != target.ResolvedOrigin() {
 			c.logger.Info("gnmi get polling skips a subscription with its own origin", "host", target.Host, "path", s.Path)
@@ -472,7 +475,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 				continue
 			}
 			for j := range p.Subscriptions[i].Metrics {
-				polled[p.Subscriptions[i].Metrics[j].Name] = struct{}{}
+				metricsByPath[s.Path] = append(metricsByPath[s.Path], p.Subscriptions[i].Metrics[j].Name)
 			}
 		}
 	}
@@ -500,7 +503,14 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		c.apply(ctx, n, "get", target, opts, p)
 		if !reconciled {
 			reconciled = true
-			c.store.evictBefore(polled, baseAttrs(target, opts), started)
+			// A Get that recovers path by path returns what answered as a
+			// success, so what the snapshot speaks for is the paths it reports
+			// having fetched. A target that answered with none of them
+			// reconciles nothing: there is no path whose omission means the
+			// device dropped an element.
+			if polled := polledMetrics(metricsByPath, n.Paths); len(polled) > 0 {
+				c.store.evictBefore(polled, baseAttrs(target, opts), started)
+			}
 		}
 		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
 		select {
@@ -509,6 +519,18 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 		case <-ticker.C:
 		}
 	}
+}
+
+// polledMetrics is the set of metric names carried by the given paths of one
+// poll, the metrics a snapshot over those paths speaks for.
+func polledMetrics(metricsByPath map[string][]string, paths []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		for _, name := range metricsByPath[path] {
+			out[name] = struct{}{}
+		}
+	}
+	return out
 }
 
 // apply matches every update to a profile metric and stores it; a delete

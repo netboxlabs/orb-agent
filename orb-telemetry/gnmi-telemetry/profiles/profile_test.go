@@ -140,6 +140,14 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 		{"no metrics", Profile{Name: "x", Subscriptions: []Subscription{{Path: "/a", Mode: "sample"}}}, `subscription "/a": no metrics`},
 		{"empty path", Profile{Name: "x", Subscriptions: []Subscription{{Path: "", Mode: "sample", Metrics: []Metric{{Leaf: "l", Name: "n", Type: "gauge"}}}}}, `subscription 1: path is required`},
 		{"dot leaf with siblings", Profile{Name: "x", Subscriptions: one(Metric{Leaf: ".", Name: "a", Type: "gauge"}, Metric{Leaf: "l", Name: "b", Type: "gauge"})}, `subscription "/a": a "." leaf must be the only metric`},
+		// The backend registers gnmi.target_up itself, over its own loops, so a
+		// profile metric of that name would have the exporter register a second
+		// instrument of another kind under a name that is already taken.
+		{
+			"metric_name_reserved",
+			Profile{Name: "x", Subscriptions: one(Metric{Leaf: "l", Name: "target_up", Type: "gauge"})},
+			`metric name target_up is reserved for the backend's health metrics`,
+		},
 		{"attribute_key_absent", Profile{Name: "x", Subscriptions: []Subscription{{
 			Path: "/interfaces/interface[name=*]/state/counters", Mode: "sample",
 			Attributes: map[string]string{"interface_name": "ifname"},
