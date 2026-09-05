@@ -40,6 +40,21 @@ func TestBundledProfilesLoadAndValidate(t *testing.T) {
 	}
 }
 
+// A NOS is not a hardware manufacturer, so Capabilities never sets Vendor from
+// one and an overlay written for a NOS is unreachable unless the matcher reads
+// it. It carries no vendor criteria, so it must not answer a vendor either.
+func TestMatchPrefersTheNOS(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme_nos.yaml"), []byte(`
+extends: _base
+match: {nos: sonic}
+`), 0o644))
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err)
+	assert.Equal(t, "acme_nos", store.Match(MatchInput{NOS: "SONiC"}).Name, "the NOS selects its overlay, case-insensitively")
+	assert.Equal(t, "_base", store.Match(MatchInput{Vendor: "acme"}).Name, "a NOS overlay names no vendor, so no vendor selects it")
+}
+
 func TestOverlayReplacesBySubscriptionPathAndAddsNewOnes(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`

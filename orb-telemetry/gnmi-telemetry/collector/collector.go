@@ -246,7 +246,12 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 		}
 		l.update(func(s *TargetStatus) { s.Mode = rung; s.Up = true })
 		err = c.consume(ctx, notes, errs, rung, target, opts, profile, l)
-		if errors.Is(err, errEarlyStreamFailure) && ctx.Err() == nil && opts.Mode != "on_change" && opts.Mode != "sample" {
+		// A target that accepts the RPC and then rejects on the stream has
+		// refused this rung as surely as one that refuses the RPC, so it walks
+		// the ladder the same way. A forced mode holds one rung, and past it
+		// the only step left is Get; leaving the stream refusal out here made
+		// the loop reopen the unsupported subscription for ever.
+		if errors.Is(err, errEarlyStreamFailure) && ctx.Err() == nil {
 			metrics.GetModeFallbacks().Add(ctx, 1)
 			c.logger.Info("gnmi stream ended before data, trying the next mode", "host", target.Host, "mode", rung, "error", err)
 			continue
@@ -302,7 +307,7 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 		}
 		c.logger.Warn("pinned profile not found, matching by vendor", "host", target.Host, "profile", target.Profile)
 	}
-	p := c.profiles.Match(profiles.MatchInput{Vendor: caps.Vendor})
+	p := c.profiles.Match(profiles.MatchInput{Vendor: caps.Vendor, NOS: caps.NOS})
 	if p.Name == "_base" {
 		metrics.GetProfileFallbacks().Add(context.Background(), 1)
 	}
@@ -387,7 +392,8 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 }
 
 // apply matches every update to a profile metric and stores it; a delete
-// withdraws the series of the deleted element and everything under it. The
+// withdraws the series of the deleted element and everything under it, and a
+// delete of a single leaf withdraws that leaf's series alone. The
 // notification is stamped with its arrival here rather than with the device's
 // own timestamp: a device whose clock lags by more than the staleness window
 // would otherwise export nothing, silently.
@@ -442,6 +448,12 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 				names[m.Name] = struct{}{}
 			}
 			c.store.deleteMatching(names, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
+		}
+		// A leaf delete sits below every subscription rather than above one, so
+		// the prefix pass matched nothing. It names the same series an update
+		// to that path would write, and only that one.
+		if sub, m, keys, ok := matchUpdate(p, d); ok {
+			c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
 		}
 	}
 }

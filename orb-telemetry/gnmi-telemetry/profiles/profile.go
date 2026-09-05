@@ -16,17 +16,24 @@ import (
 //go:embed all:gnmi-profiles
 var embeddedProfiles embed.FS
 
-// Match holds the criteria that select a profile for a target. Only Vendor is
-// auto-detected today (from Capabilities). Model/OS matching would require a
-// /system/state read during selection (deferred); leaving those fields out keeps
-// the matcher honest — a criterion we never populate would silently never fire.
+// Match holds the criteria that select a profile for a target. Capabilities
+// auto-detects both of them: the hardware vendor, and the network OS when the
+// target names one. Model matching would require a /system/state read during
+// selection (deferred); leaving that field out keeps the matcher honest, since
+// a criterion we never populate would silently never fire.
 //
 // Vendor may be a single substring (e.g. "Arista") or a comma-separated list of
 // aliases matched ANY-of (e.g. "nvidia,cumulus,mellanox"). Aliases let one
 // overlay cover a vendor that reports different Organization strings across
 // releases; a single-value Vendor behaves exactly as a one-element alias list.
+//
+// NOS is one canonical network-OS name (e.g. "sonic"), compared whole and
+// case-insensitively rather than as a substring. A NOS is not a manufacturer,
+// so Capabilities never derives a vendor from one; matching on NOS is what
+// makes such an overlay reachable without pinning it per target.
 type Match struct {
 	Vendor string `yaml:"vendor,omitempty"`
+	NOS    string `yaml:"nos,omitempty"`
 }
 
 // vendorAliases splits a (possibly comma-separated) Match.Vendor into its
@@ -116,9 +123,13 @@ func (p *Profile) Validate() error {
 	return nil
 }
 
-// MatchInput is what we learn about a target from Capabilities.
+// MatchInput is what we learn about a target from Capabilities: the hardware
+// vendor, and the network OS when one was detected. They are independent, and a
+// target that reports a NOS commonly reports the OEM that built the hardware as
+// its vendor, so both are passed and the NOS is the stronger signal.
 type MatchInput struct {
 	Vendor string
+	NOS    string
 }
 
 // Store holds all loaded, fully-resolved profiles.
@@ -142,14 +153,18 @@ func (s *Store) Names() []string {
 	return names
 }
 
-// Match returns the matching profile, or _base when nothing matches. A profile
-// matches when ANY of its vendor aliases is a substring of the input vendor.
-// When more than one profile matches, the MOST SPECIFIC one wins, where
-// specificity is the length of the LONGEST alias that actually matched — so a
-// "Arista 7050" alias beats a generic "Arista", and within an alias list the
-// longest matched token sets the score. Ties are broken deterministically by
-// sorted profile name. (A single-value Match.Vendor scores by its own length,
-// preserving the prior behavior exactly.)
+// Match returns the matching profile, or _base when nothing matches. A detected
+// NOS is tried first: a profile whose match.nos equals it, whole and
+// case-insensitively, wins outright, because a NOS overlay describes the very
+// software serving the paths, while the vendor under it is only the OEM that
+// built the box. Failing that, a profile matches when ANY of its vendor aliases
+// is a substring of the input vendor. When more than one profile matches by
+// vendor, the MOST SPECIFIC one wins, where specificity is the length of the
+// LONGEST alias that actually matched, so an "Arista 7050" alias beats a
+// generic "Arista", and within an alias list the longest matched token sets the
+// score. Ties are broken deterministically by sorted profile name. (A
+// single-value Match.Vendor scores by its own length, preserving the prior
+// behavior exactly.)
 func (s *Store) Match(in MatchInput) *Profile {
 	names := make([]string, 0, len(s.profiles))
 	for name := range s.profiles {
@@ -158,6 +173,14 @@ func (s *Store) Match(in MatchInput) *Profile {
 		}
 	}
 	sort.Strings(names)
+	if nos := strings.ToLower(strings.TrimSpace(in.NOS)); nos != "" {
+		for _, name := range names {
+			p := s.profiles[name]
+			if strings.ToLower(strings.TrimSpace(p.Match.NOS)) == nos {
+				return p
+			}
+		}
+	}
 	vendor := strings.ToLower(in.Vendor)
 	var best *Profile
 	bestLen := 0
@@ -242,11 +265,12 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 				}
 				// A same-name override that doesn't restate `match` (the common
 				// "tweak only the leaf paths" case, typically `extends: _base`)
-				// inherits the bundled profile's vendor criteria — otherwise it
-				// becomes unmatchable and auto-detection silently falls back to
-				// _base, ignoring the override.
+				// inherits the bundled profile's criteria, otherwise it becomes
+				// unmatchable and auto-detection silently falls back to _base,
+				// ignoring the override. An override that states either
+				// criterion states them both.
 				name := strings.TrimSuffix(e.Name(), ".yaml")
-				if base, ok := bundled[name]; ok && raw[name].Match.Vendor == "" {
+				if base, ok := bundled[name]; ok && raw[name].Match.Vendor == "" && raw[name].Match.NOS == "" {
 					raw[name].Match = base.Match
 				}
 			}
@@ -388,7 +412,7 @@ func resolve(name string, raw map[string]*Profile, seen map[string]bool) (*Profi
 // subscriptions replaced by path and otherwise appended in the child's order.
 func merge(parent, child *Profile) *Profile {
 	out := &Profile{Name: child.Name, Extends: child.Extends, Match: parent.Match}
-	if child.Match.Vendor != "" {
+	if child.Match.Vendor != "" || child.Match.NOS != "" {
 		out.Match = child.Match
 	}
 	index := map[string]int{}

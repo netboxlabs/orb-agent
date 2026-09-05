@@ -157,6 +157,30 @@ func TestSrlOverlayUsesNativeOriginForItsSubscription(t *testing.T) {
 	assert.Equal(t, "", native.Origin)
 }
 
+// Capabilities reports a NOS without a vendor, so an overlay written for that
+// NOS is reachable only when selection passes the NOS along.
+func TestProfileSelectionUsesTheDetectedNOS(t *testing.T) {
+	testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme_nos.yaml"), []byte(
+		"extends: _base\nmatch: {nos: sonic}\n"), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	sess := &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{NOS: "SONiC"}, SubscribeManyFn: streamOf()}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Profile != ""
+	})
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "acme_nos", st[0].Profile)
+}
+
 func TestModeLadderOnSynchronousRejection(t *testing.T) {
 	reader := testReader(t)
 	var calls atomic.Int64
@@ -249,6 +273,47 @@ func TestForcedSampleNeverAsksOnChange(t *testing.T) {
 	}
 }
 
+// A forced mode has one rung, and a target that accepts the RPC then rejects
+// on the stream refuses that rung as surely as one that refuses it outright.
+// Both have to reach Get, or the loop reopens the unsupported stream for ever.
+func TestForcedModeFallsToGetOnAnEarlyStreamFailure(t *testing.T) {
+	reader := testReader(t)
+	var calls atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			calls.Add(1)
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				select {
+				case out <- gnmi.Notification{SyncDone: true}:
+				case <-ctx.Done():
+					return
+				}
+				errs <- status.Error(codes.InvalidArgument, "on_change not supported")
+			}()
+			return out, errs, nil
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/memory/state/physical", Value: uint64(1)}}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "on_change", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "get"
+	})
+	// The status flips to get before the first poll, so only data proves polling.
+	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_physical"]; return ok })
+	assert.Equal(t, int64(1), calls.Load(), "a forced ladder has one rung, and the stream refusal spends it")
+}
+
 func TestDeleteWithdrawsTheElementsSeries(t *testing.T) {
 	reader := testReader(t)
 	ts := time.Now().UnixNano()
@@ -280,6 +345,40 @@ func TestDeleteWithdrawsTheElementsSeries(t *testing.T) {
 		}
 		v, _ := pts[0].Attributes.Value("interface_name")
 		return v.AsString() == "e2"
+	})
+}
+
+// A delete of a single leaf sits below every subscription rather than above
+// one, so the prefix pass matches nothing and the series would stand until it
+// went stale, and for good if it streams on change.
+func TestLeafDeleteWithdrawsOnlyThatSeries(t *testing.T) {
+	reader := testReader(t)
+	ts := time.Now().UnixNano()
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: streamOf(
+			gnmi.Notification{Timestamp: ts, Updates: []gnmi.Update{
+				{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(1)},
+				{Path: "/interfaces/interface[name=e1]/state/counters/out-octets", Value: uint64(2)},
+			}},
+			gnmi.Notification{Timestamp: ts + 1, Deletes: []string{"/interfaces/interface[name=e1]/state/counters/in-octets"}},
+		),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	// The condition names the survivor, so it cannot pass on the instant
+	// between the two stores of the first notification.
+	waitFor(t, 3*time.Second, func() bool {
+		got := collect(t, reader)
+		out, ok := got["gnmi.if_out_octets"]
+		if !ok || len(out.Data.(metricdata.Sum[int64]).DataPoints) != 1 {
+			return false
+		}
+		in, ok := got["gnmi.if_in_octets"]
+		return !ok || len(in.Data.(metricdata.Sum[int64]).DataPoints) == 0
 	})
 }
 

@@ -4,14 +4,14 @@ Orb telemetry backend that subscribes to gNMI streaming telemetry from network
 devices under policies and exports what arrives as OTLP metrics.
 
 For each target the backend dials gNMI, asks the device for its Capabilities,
-selects a metric profile from the vendor it reports, and opens one subscription
-carrying every path that profile names. Each notification is matched back to the
-profile, converted, and written into a last-value store that observable
-instruments read on the export cadence. Every series carries `device_ip` and
-`policy` attributes, plus `netbox_id` when the target sets an `id` and whatever
-path keys its profile promotes, such as `interface_name`. Metrics are sent only
-when `--otel-endpoint` is set; without it, targets are still subscribed but
-nothing is exported.
+selects a metric profile from the vendor and network OS it reports, and opens
+one subscription carrying every path that profile names. Each notification is
+matched back to the profile, converted, and written into a last-value store that
+observable instruments read on the export cadence. Every series carries
+`device_ip` and `policy` attributes, plus `netbox_id` when the target sets an
+`id` and whatever path keys its profile promotes, such as `interface_name`.
+Metrics are sent only when `--otel-endpoint` is set; without it, targets are
+still subscribed but nothing is exported.
 
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
@@ -82,14 +82,14 @@ the backend sends outward, which is the part an operator has to reason about
 before pointing a policy at a subnet.
 
 Each target connection begins with a Capabilities RPC. Its answer supplies two
-things: the vendor string that selects the profile, unless the target pins one
-with `profile`, and the encodings the device advertises. Subscriptions are
-requested as PROTO when the device advertises it, because a target that
-serializes a stream as JSON emits a subtree per update rather than one flat leaf
-per update; when PROTO is absent, the negotiated Get encoding (JSON_IETF, or
-JSON for a device that offers only that) is used instead. Encodings the backend
-does not know are ignored rather than treated as a failure, since devices
-advertise private ones.
+things: the vendor string, and the network OS when the device names one, which
+select the profile unless the target pins one with `profile`, and the encodings
+the device advertises. Subscriptions are requested as PROTO when the device
+advertises it, because a target that serializes a stream as JSON emits a subtree
+per update rather than one flat leaf per update; when PROTO is absent, the
+negotiated Get encoding (JSON_IETF, or JSON for a device that offers only that)
+is used instead. Encodings the backend does not know are ignored rather than
+treated as a failure, since devices advertise private ones.
 
 Then one STREAM subscription per target carries every path of its profile in a
 single request, each path with the mode the profile gives it: `sample` paths at
@@ -119,9 +119,10 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
 A policy that names a mode chooses which of those rungs are tried. `mode:
 on_change` keeps the mode the profile gives each path, so counters still stream
 as SAMPLE, and skips the all-SAMPLE rung. `mode: sample` asks for SAMPLE on
-every path. Both still fall to Get. The rung a target settled on is reported as
-its `mode` in `GET /api/v1/status` and as the `mode` attribute of that device's
-`gnmi.target_up` gauge.
+every path. Both still fall to Get, on a request the device refuses and also on
+a stream that ends before it delivers anything. The rung a target settled on is
+reported as its `mode` in `GET /api/v1/status` and as the `mode` attribute of
+that device's `gnmi.target_up` gauge.
 
 A target's `host` may name more than one address, as a CIDR prefix or an address
 range, and those are swept before anything is subscribed. A sweep probe is a
@@ -206,7 +207,7 @@ set on the command line rather than by a policy.
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
 | `metrics_interval` | seconds, 1 to 31536000 | required | The SAMPLE cadence asked of the device, the Get polling interval on the last rung, and the basis of the staleness window. |
-| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get. |
+| `mode` | `auto`, `on_change` or `sample` | `auto` | Which rungs of the ladder above are tried. `auto` walks all three. `on_change` keeps the profile's own per-path modes and skips the all-SAMPLE rung; `sample` asks for SAMPLE on every path. Both still fall to Get, on a refused request and on a stream that ends before any data alike. |
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
 | `probe_timeout_ms` | milliseconds | `3000` | How long one sweep probe waits for an address to answer Capabilities. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be at least 60000 when set. |
@@ -339,7 +340,7 @@ are embedded into the binary at build time, so the backend runs with a working
 set out of the box.
 
 ```yaml
-match: {}                          # vendor aliases; empty matches nothing, _base is the fallback
+match: {}                          # nos, vendor aliases; empty matches nothing, _base is the fallback
 subscriptions:
   - path: /interfaces/interface[name=*]/state/counters
     mode: sample                   # sample | on_change
@@ -371,6 +372,9 @@ subscriptions:
 - `type` is `counter` or `gauge`. `unit` is a UCUM string handed to the
   instrument. `enum` and `bool` map non-numeric values and are valid on gauges
   only.
+- `match.nos` names one network OS, compared whole and case-insensitively, and
+  is tried ahead of `match.vendor`; a NOS is not a manufacturer, so a target that
+  reports one still reports its hardware OEM as the vendor.
 - `attributes` promotes path keys to attributes: `interface_name: name` reads the
   `name` key of the matched path element and exports it as `interface_name`.
 - `origin` may be set per subscription, and overrides the target's for that path
@@ -381,10 +385,11 @@ subscriptions:
 An overlay names its parent with `extends` and inherits everything it does not
 restate. A subscription whose `path` equals one of the parent's replaces that
 one; any other path is added. An overlay that restates no `match` keeps its
-parent's vendor criteria.
+parent's match criteria.
 
 Profile selection per target, in order: the target's `profile` if it names a
-loaded profile; else the vendor string from Capabilities matched against each
+loaded profile; else the profile whose `match.nos` equals the network OS from
+Capabilities; else the vendor string from Capabilities matched against each
 profile's `match.vendor` aliases, the longest matching alias winning; else
 `_base`, which also counts one `gnmi.profile_fallback_total`. The choice is
 reported per target in `GET /api/v1/status`.
