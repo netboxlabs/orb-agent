@@ -201,6 +201,11 @@ func TestValidateRejectsBadProfiles(t *testing.T) {
 			Attributes: map[string]string{"interface_name": "name"},
 			Metrics:    []Metric{{Leaf: "openconfig-interfaces:in-octets", Name: "n", Type: "counter"}},
 		}}}, `subscription "/interfaces/interface[name=*]/state/counters": metric n: a leaf is written without a module prefix`},
+		{"non_canonical_leaf", Profile{Name: "x", Subscriptions: []Subscription{{
+			Path: "/system/cpus/cpu[index=*]/state", Mode: "sample",
+			Attributes: map[string]string{"cpu_index": "index"},
+			Metrics:    []Metric{{Leaf: "total//instant", Name: "n", Type: "gauge"}},
+		}}}, `subscription "/system/cpus/cpu[index=*]/state": metric n: a leaf is written without a leading, trailing or repeated slash`},
 		// The exporter prefixes every name with "gnmi.", and the SDK refuses an
 		// instrument name longer than 255 characters. Nothing downstream fails
 		// loudly: the instrument is not created, and the series still holds a

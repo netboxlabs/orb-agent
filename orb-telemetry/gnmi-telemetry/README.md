@@ -446,6 +446,9 @@ subscriptions:
   alone, so a keyed list belongs in `path`, where an attribute promotes its key.
   A `path` is written with bare element names too; a module-qualified element
   is rejected at load for the same reason.
+  A `leaf` is written in its canonical form, with no leading, trailing or
+  repeated slash, because the matcher compares the canonical spelling of an
+  incoming path against the leaf as written.
   A `leaf` is written as a bare name, never module-qualified: the matcher drops
   the module prefix from every element of an incoming path, so a leaf written
   `openconfig-interfaces:in-octets` would match nothing and each update under

@@ -114,6 +114,18 @@ var reservedMetrics = func() map[string]bool {
 	return out
 }()
 
+// nonEmptySegments splits a relative leaf on "/" and drops the empty pieces a
+// leading, trailing or doubled slash leaves behind.
+func nonEmptySegments(leaf string) []string {
+	var out []string
+	for _, seg := range strings.Split(leaf, "/") {
+		if seg != "" {
+			out = append(out, seg)
+		}
+	}
+	return out
+}
+
 // canonicalPath renders a parsed path back to one spelling: the element names
 // joined by "/", each with its own keys appended in name order. Two spellings
 // the request parser reads alike, a trailing "/" for instance, render alike, so
@@ -275,6 +287,15 @@ func (p *Profile) Validate() error {
 			// under the subscription is counted as an unmatched path.
 			if strings.Contains(m.Leaf, ":") {
 				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf is written without a module prefix",
+					p.Name, s.Path, m.Name)
+			}
+			// The request parser drops empty elements, so a leaf written with a
+			// leading, trailing or doubled slash parses, but the matcher hands
+			// back the canonical spelling and compares it against the leaf as
+			// written, which never matches; the same slack would let two
+			// spellings of one leaf pass the duplicate check.
+			if m.Leaf != "." && m.Leaf != strings.Join(nonEmptySegments(m.Leaf), "/") {
+				return fmt.Errorf("profile %s: subscription %q: metric %s: a leaf is written without a leading, trailing or repeated slash",
 					p.Name, s.Path, m.Name)
 			}
 			// A metric's full path is its subscription path plus its leaf, and
