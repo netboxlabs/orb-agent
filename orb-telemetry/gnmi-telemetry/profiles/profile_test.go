@@ -734,6 +734,25 @@ subscriptions:
 	}
 }
 
+// A subscription origin carrying a colon or a slash cannot survive the
+// textual path the request builder parses, so the profile is refused.
+func TestASubscriptionOriginTheTextualPathCannotCarryIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+match: {vendor: acme}
+subscriptions:
+  - path: /system/memory/state
+    origin: "vendor:native"
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+`), 0o600))
+	store, err := LoadProfiles(dir, quiet())
+	if err == nil {
+		assert.Nil(t, store.profiles["acme"], "the file must not load as a profile")
+	}
+}
+
 // A multi-word alias is matched as a phrase: its words must appear in the
 // organization in that order, not merely each somewhere in it.
 func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {

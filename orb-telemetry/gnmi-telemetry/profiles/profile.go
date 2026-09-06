@@ -214,6 +214,12 @@ func (p *Profile) Validate() error {
 			return fmt.Errorf("profile %s: subscription %q is declared twice", p.Name, s.Path)
 		}
 		paths[canon] = true
+		// The origin travels in the textual path the request builder parses,
+		// where a colon ends it and a slash begins the path. The empty origin
+		// is legal: it addresses the target's native schema.
+		if s.Origin != nil && strings.ContainsAny(*s.Origin, ":/ \t") {
+			return fmt.Errorf("profile %s: subscription %q: origin %q must carry no colon, slash or whitespace", p.Name, s.Path, *s.Origin)
+		}
 		if s.Mode != "sample" && s.Mode != "on_change" {
 			return fmt.Errorf("profile %s: subscription %q: mode %q is not sample or on_change", p.Name, s.Path, s.Mode)
 		}
