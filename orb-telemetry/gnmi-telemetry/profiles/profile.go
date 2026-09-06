@@ -788,7 +788,7 @@ func resolve(name string, raw map[string]*Profile, seen map[string]bool) (*Profi
 	if err != nil {
 		return nil, err
 	}
-	return merge(parent, p), nil
+	return merge(parent, p)
 }
 
 // merge overlays child on parent: match from the child when set,
@@ -799,7 +799,12 @@ func resolve(name string, raw map[string]*Profile, seen map[string]bool) (*Profi
 // parent's path in another spelling, a trailing "/" for one, was appended
 // beside it, and validation then refused the whole profile as declaring the
 // path twice.
-func merge(parent, child *Profile) *Profile {
+//
+// A child declaring one path twice is refused here: the second entry would
+// take the replacement branch and overwrite the first, so the resolved profile
+// carried the last entry alone and validation, which sees only the resolved
+// profile, never saw the duplicate.
+func merge(parent, child *Profile) (*Profile, error) {
 	out := &Profile{Name: child.Name, Extends: child.Extends, Match: parent.Match}
 	if child.Match.Vendor != "" || child.Match.NOS != "" {
 		out.Match = child.Match
@@ -809,15 +814,21 @@ func merge(parent, child *Profile) *Profile {
 		index[mergeKey(s.Path)] = len(out.Subscriptions)
 		out.Subscriptions = append(out.Subscriptions, s)
 	}
+	declared := map[string]bool{}
 	for _, s := range child.Subscriptions {
-		if i, ok := index[mergeKey(s.Path)]; ok {
+		key := mergeKey(s.Path)
+		if declared[key] {
+			return nil, fmt.Errorf("profile %s: subscription %q is declared twice", child.Name, s.Path)
+		}
+		declared[key] = true
+		if i, ok := index[key]; ok {
 			out.Subscriptions[i] = s
 			continue
 		}
-		index[mergeKey(s.Path)] = len(out.Subscriptions)
+		index[key] = len(out.Subscriptions)
 		out.Subscriptions = append(out.Subscriptions, s)
 	}
-	return out
+	return out, nil
 }
 
 // mergeKey is the canonical spelling merge replaces subscriptions on. A path

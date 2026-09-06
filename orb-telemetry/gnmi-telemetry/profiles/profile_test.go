@@ -686,6 +686,29 @@ subscription:
 	}
 }
 
+// A child declaring one path twice is refused rather than resolved to its
+// last entry, which validation, seeing only the resolved profile, would pass.
+func TestAChildDeclaringAPathTwiceIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+subscriptions:
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+  - path: /system/memory/state/
+    mode: sample
+    metrics:
+      - {leaf: free, name: memory_free, type: gauge, unit: By}
+`), 0o600))
+	store, err := LoadProfiles(dir, quiet())
+	if err == nil {
+		assert.Nil(t, store.profiles["acme"], "the file must not load as a profile")
+	}
+}
+
 // A multi-word alias is matched as a phrase: its words must appear in the
 // organization in that order, not merely each somewhere in it.
 func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {
