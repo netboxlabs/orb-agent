@@ -578,14 +578,14 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 // subscription's origin explicitly, so the probes run together on one
 // session without touching its state.
 //
-// Each probe carries a deadline where the caller's context has none, which is
-// the loop's case and lives as long as the policy: a target that answers
-// Capabilities and then never answers the Get would otherwise hold the probe
-// for ever, and there would be no stream, no ladder and no reconnect until the
-// policy was deleted. The probes run concurrently, so the phase takes one
-// deadline at most rather than one per path: run one after another, a target
-// that hung on Get held every connection for the deadline times the number of
-// paths, seventy seconds for the bundled profile and minutes for a larger one.
+// The whole probe phase runs under one deadline where the caller's context
+// has none, which is the loop's case and lives as long as the policy: a
+// target that answers Capabilities and then never answers the Get would
+// otherwise hold the probe for ever, and there would be no stream, no ladder
+// and no reconnect until the policy was deleted. One deadline for the phase,
+// not one per probe: the probes run from a bounded pool, and a deadline per
+// probe let an unresponsive target cost one full deadline per batch of the
+// pool, minutes for a large profile, on every connection.
 //
 // Only a refusal prunes, and only a refusal is remembered. A probe that missed
 // its deadline, or found the target unavailable, asked its question and got no
@@ -610,11 +610,11 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 			unseen = append(unseen, i)
 		}
 	}
+	phaseCtx, cancelPhase := s.bounded(ctx)
+	defer cancelPhase()
 	runBounded(len(unseen), func(k int) {
 		i := unseen[k]
-		probeCtx, cancelProbe := s.bounded(ctx)
-		defer cancelProbe()
-		_, errs[i] = s.getPathsWithOrigin(probeCtx, subs[i].Origin, []string{subs[i].Path})
+		_, errs[i] = s.getPathsWithOrigin(phaseCtx, subs[i].Origin, []string{subs[i].Path})
 	})
 	kept := make([]Subscription, 0, len(subs))
 	for i, sub := range subs {

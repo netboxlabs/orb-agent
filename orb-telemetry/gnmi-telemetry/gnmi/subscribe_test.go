@@ -482,6 +482,26 @@ func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
 // decides. A target that truly does not model the path rejects it there, which
 // the ladder and the reconnect handle; one that was merely slow serves it,
 // where dropping it left a healthy partial stream never asking again.
+// One deadline bounds the whole probe phase: twenty paths a target never
+// answers are all probed inside one probe deadline, not one per batch of the
+// pool, and every path is kept since no probe reached a verdict.
+func TestTheProbePhaseRunsUnderOneDeadline(t *testing.T) {
+	holds, blocks := map[string]bool{}, map[string]bool{}
+	var subs []Subscription
+	for i := 0; i < 20; i++ {
+		p := fmt.Sprintf("/system/cpus/cpu[index=%d]/state", i)
+		holds[p], blocks[p] = true, true
+		subs = append(subs, Subscription{Path: p, Mode: OnChange})
+	}
+	s := getSession(t, &getServer{holds: holds, blocks: blocks})
+	s.probeTimeout = 300 * time.Millisecond
+	start := time.Now()
+	kept := s.acceptedSubscriptions(context.Background(), subs)
+	elapsed := time.Since(start)
+	assert.Len(t, kept, 20, "no verdict prunes nothing")
+	assert.Less(t, elapsed, 700*time.Millisecond, "the phase took one deadline, not one per batch")
+}
+
 // The fan-out is bounded: twenty paths are probed, and recovered, from at
 // most eight Gets in flight at once, so a large profile never
 // opens one RPC per path against a device.
