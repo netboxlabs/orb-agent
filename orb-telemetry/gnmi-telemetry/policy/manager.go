@@ -751,6 +751,12 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		if err := checkInlinePort(t.Host); err != nil {
 			return err
 		}
+		// The gnmic target splits its address on commas and dials each part,
+		// so a host carrying one was several devices under one name, with the
+		// credentials sent to hosts the policy never named.
+		if strings.Contains(t.Host, ",") {
+			return fmt.Errorf("target %q: a host cannot carry a comma", t.Host)
+		}
 		// An origin travels in the textual path the request builder parses,
 		// where a colon ends it and a slash begins the path: one carrying either
 		// was sent as an empty origin with bogus elements, against the wrong

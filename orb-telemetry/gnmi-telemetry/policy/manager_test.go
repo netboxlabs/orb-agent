@@ -1021,3 +1021,20 @@ policies:
 `))
 	require.NoError(t, err, "the empty origin addresses the native schema")
 }
+
+// A host carrying a comma is refused: the gnmic target would split it and
+// dial each part, several devices under one name.
+func TestParsePolicies_RejectsAHostWithAComma(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: router-a,router-b
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "comma")
+}
