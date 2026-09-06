@@ -227,3 +227,17 @@ func TestFlattenUpdate(t *testing.T) {
 	assert.Equal(t, []gnmi.Update{empty}, flattenUpdate(empty),
 		"an empty container stays one update, so it is counted rather than dropped without a trace")
 }
+
+// With the export disabled by flag there is no meter, no callback to read
+// the store and nothing to evict an aged series: an observation is not stored,
+// rather than held in memory until the budget fills.
+func TestObservationsAreNotStoredWithoutAMeter(t *testing.T) {
+	require.Nil(t, metrics.GetMeter(), "this test runs with the export disabled")
+	st := newStore(100)
+	e := newExporter(st, nil, nil)
+	assert.Equal(t, "", e.observeGauge("g", "", []attribute.KeyValue{attribute.String("device_ip", "h")}, 1, time.Now().UnixNano(), 0))
+	assert.Equal(t, "", e.observeCounter("c", "", []attribute.KeyValue{attribute.String("device_ip", "h")}, 1, time.Now().UnixNano(), 0))
+	st.mu.RLock()
+	defer st.mu.RUnlock()
+	assert.Empty(t, st.series, "nothing is stored when nothing can be exported")
+}

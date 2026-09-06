@@ -170,6 +170,9 @@ func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue,
 	if reason := e.ensureCounter(name, unit); reason != "" {
 		return reason
 	}
+	if !exporting() {
+		return ""
+	}
 	if !e.store.setCounter(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return dropSeriesLimit
 	}
@@ -182,10 +185,23 @@ func (e *exporter) observeGauge(name, unit string, attrs []attribute.KeyValue, v
 	if reason := e.ensureGauge(name, unit); reason != "" {
 		return reason
 	}
+	if !exporting() {
+		return ""
+	}
 	if !e.store.setGauge(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return dropSeriesLimit
 	}
 	return ""
+}
+
+// exporting reports whether a meter exists to read the store. Without one, the
+// export is disabled by flag, no callback is ever registered, and the
+// callback's pass is the only thing that evicts an aged series: a point
+// stored then would sit in memory until its metric's budget filled, with
+// nothing to export it. It is not stored, and not counted as dropped, since
+// nothing was lost that could have been exported.
+func exporting() bool {
+	return metrics.GetMeter() != nil
 }
 
 // admit consults the process registry for a metric name, logging the first
