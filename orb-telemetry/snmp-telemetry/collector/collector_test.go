@@ -2559,8 +2559,8 @@ func TestReservedTagName_NoBundledProfileDeclaresOne(t *testing.T) {
 	assert.Empty(t, reserved)
 	// The declarations scanned, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1273, device, "device-level tag declarations scanned")
-	assert.Equal(t, 4404, row, "row-level tag declarations scanned")
+	assert.Equal(t, 1282, device, "device-level tag declarations scanned")
+	assert.Equal(t, 4421, row, "row-level tag declarations scanned")
 }
 
 // TestCollectTarget_SameEndpointTwiceInOnePolicy covers a policy that targets
@@ -7077,9 +7077,9 @@ func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
 	assert.Empty(t, shadowed)
 	// The names compared, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1273, device, "device-level tag names scanned")
-	assert.Equal(t, 4404, row, "row-level tag names scanned")
-	assert.Equal(t, 1899, derived, "derived attribute names scanned")
+	assert.Equal(t, 1282, device, "device-level tag names scanned")
+	assert.Equal(t, 4420, row, "row-level tag names scanned")
+	assert.Equal(t, 1908, derived, "derived attribute names scanned")
 }
 
 // tagNameSet holds what a derived attribute could shadow. A tag under a
@@ -7792,6 +7792,7 @@ func TestReviewProfile_ConvertedBundledProfilesAreClean(t *testing.T) {
 	for _, rel := range []string{
 		"netscout/netscout-switch.yml",
 		"hpe/hpe-proliant.yml",
+		"chatsworth/chatsworth-pdu.yml",
 	} {
 		t.Run(rel, func(t *testing.T) {
 			var logs bytes.Buffer

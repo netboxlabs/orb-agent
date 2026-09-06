@@ -1,0 +1,468 @@
+# Converted from DataDog/integrations-core default_profiles/chatsworth_pdu.yaml
+# at c545ca5b168e1ccbffba82121cda46fa09459a46 (BSD-3-Clause, see ../LICENSE).
+# Conversion rules: ../PROVENANCE.md
+#
+# Chatsworth Products (CPI) eConnect PDUs, CPI-UNITY-MIB. The MIB carries a
+# legacy scalar block (30932.1.1) and the current tables (30932.1.10); both
+# are polled, as upstream does.
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid:
+  - 1.3.6.1.4.1.30932.*    # Chatsworth PDU
+
+# Device identity from the legacy block, applied to every series.
+metric_tags:
+  - tag: legacy_pdu_name
+    column:
+      OID: 1.3.6.1.4.1.30932.1.1.2.40.0
+      name: pduName
+  - tag: legacy_pdu_version
+    column:
+      OID: 1.3.6.1.4.1.30932.1.1.1.1.0
+      name: version
+  - tag: legacy_pdu_model
+    column:
+      OID: 1.3.6.1.4.1.30932.1.1.1.2.0
+      name: modelCode
+  - tag: legacy_pdu_macaddress
+    column:
+      OID: 1.3.6.1.4.1.30932.1.1.1.3.0
+      name: hwAddress
+
+metrics:
+  # --- Legacy block: PDU, sensors, lines ---
+  - MIB: CPI-UNITY-MIB
+    symbols:
+      # Role of the PDU in a daisy chain.
+      - OID: 1.3.6.1.4.1.30932.1.1.2.58.2.0
+        name: pduRole
+      # Whether the PDU is in service: inservice(0), outofservice(1).
+      - OID: 1.3.6.1.4.1.30932.1.1.2.58.12.0
+        name: outOfService
+        enum:
+          inservice: 0
+          outofservice: 1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.8.1.0
+        name: temperatureProbe1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.8.2.0
+        name: temperatureProbe2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.9.1.0
+        name: humidityProbe1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.9.2.0
+        name: humidityProbe2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.13.1.0
+        name: line1curr
+      - OID: 1.3.6.1.4.1.30932.1.1.3.13.2.0
+        name: line2curr
+      - OID: 1.3.6.1.4.1.30932.1.1.3.13.3.0
+        name: line3curr
+
+  # --- Legacy block: branches ---
+  - MIB: CPI-UNITY-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.30932.1.1.3.1.1.0
+        name: currentxy1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.1.2.0
+        name: currentyz1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.1.3.0
+        name: currentzx1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.1.4.0
+        name: currentxy2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.1.5.0
+        name: currentyz2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.1.6.0
+        name: currentzx2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.2.1.0
+        name: voltagexy1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.2.2.0
+        name: voltageyz1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.2.3.0
+        name: voltagezx1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.2.4.0
+        name: voltagexy2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.2.5.0
+        name: voltageyz2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.2.6.0
+        name: voltagezx2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.3.1.0
+        name: powerxy1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.3.2.0
+        name: poweryz1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.3.3.0
+        name: powerzx1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.3.4.0
+        name: powerxy2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.3.5.0
+        name: poweryz2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.3.6.0
+        name: powerzx2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.4.1.0
+        name: powerFactxy1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.4.2.0
+        name: powerFactyz1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.4.3.0
+        name: powerFactzx1
+      - OID: 1.3.6.1.4.1.30932.1.1.3.4.4.0
+        name: powerFactxy2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.4.5.0
+        name: powerFactyz2
+      - OID: 1.3.6.1.4.1.30932.1.1.3.4.6.0
+        name: powerFactzx2
+      # Accumulated energy, counters.
+      - OID: 1.3.6.1.4.1.30932.1.1.3.11.1.0
+        name: energyxy1s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.11.2.0
+        name: energyyz1s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.11.3.0
+        name: energyzx1s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.11.4.0
+        name: energyxy2s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.11.5.0
+        name: energyyz2s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.11.6.0
+        name: energyzx2s
+
+  # --- Legacy block: outlets ---
+  - MIB: CPI-UNITY-MIB
+    symbols:
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.1.0
+        name: outlet1Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.2.0
+        name: outlet2Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.3.0
+        name: outlet3Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.4.0
+        name: outlet4Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.5.0
+        name: outlet5Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.6.0
+        name: outlet6Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.7.0
+        name: outlet7Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.8.0
+        name: outlet8Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.9.0
+        name: outlet9Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.10.0
+        name: outlet10Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.11.0
+        name: outlet11Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.12.0
+        name: outlet12Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.13.0
+        name: outlet13Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.14.0
+        name: outlet14Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.15.0
+        name: outlet15Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.16.0
+        name: outlet16Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.17.0
+        name: outlet17Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.18.0
+        name: outlet18Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.19.0
+        name: outlet19Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.20.0
+        name: outlet20Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.21.0
+        name: outlet21Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.22.0
+        name: outlet22Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.23.0
+        name: outlet23Current
+      - OID: 1.3.6.1.4.1.30932.1.1.3.5.24.0
+        name: outlet24Current
+      # Accumulated outlet energy, counters.
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.1.0
+        name: receptacleEnergyoutlet1s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.2.0
+        name: receptacleEnergyoutlet2s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.3.0
+        name: receptacleEnergyoutlet3s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.4.0
+        name: receptacleEnergyoutlet4s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.5.0
+        name: receptacleEnergyoutlet5s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.6.0
+        name: receptacleEnergyoutlet6s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.7.0
+        name: receptacleEnergyoutlet7s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.8.0
+        name: receptacleEnergyoutlet8s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.9.0
+        name: receptacleEnergyoutlet9s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.10.0
+        name: receptacleEnergyoutlet10s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.11.0
+        name: receptacleEnergyoutlet11s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.12.0
+        name: receptacleEnergyoutlet12s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.13.0
+        name: receptacleEnergyoutlet13s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.14.0
+        name: receptacleEnergyoutlet14s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.15.0
+        name: receptacleEnergyoutlet15s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.16.0
+        name: receptacleEnergyoutlet16s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.17.0
+        name: receptacleEnergyoutlet17s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.18.0
+        name: receptacleEnergyoutlet18s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.19.0
+        name: receptacleEnergyoutlet19s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.20.0
+        name: receptacleEnergyoutlet20s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.21.0
+        name: receptacleEnergyoutlet21s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.22.0
+        name: receptacleEnergyoutlet22s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.23.0
+        name: receptacleEnergyoutlet23s
+      - OID: 1.3.6.1.4.1.30932.1.1.3.12.24.0
+        name: receptacleEnergyoutlet24s
+
+  # --- PDU table ---
+  - MIB: CPI-UNITY-MIB
+    table:
+      OID: 1.3.6.1.4.1.30932.1.10.1.2.10
+      name: cpiPduTable
+    symbols:
+      # Number of branches (breakers) in the PDU.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.8
+        name: cpiPduNumberBranches
+      # Number of outlets in the PDU.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.9
+        name: cpiPduNumberOutlets
+      # Whether the PDU is in service: inservice(0), outofservice(1).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.10
+        name: cpiPduOutOfService
+        enum:
+          inservice: 0
+          outofservice: 1
+      # Whether the PDU firmware is being upgraded: no(0), yes(1).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.12
+        name: cpiPduUpgrade
+        enum:
+          "no": 0
+          "yes": 1
+      # Role of the PDU in a daisy chain: secondary(0), primary(1), alternate(2).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.13
+        name: cpiPduChainRole
+        enum:
+          secondary: 0
+          primary: 1
+          alternate: 2
+      # Power in volt-amps for the entire PDU.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.16
+        name: cpiPduTotalPower
+    metric_tags:
+      - tag: pdu_macaddress
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.1
+          name: cpiPduMac
+      - tag: pdu_model
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.2
+          name: cpiPduModel
+      - tag: pdu_name
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.3
+          name: cpiPduName
+      # Firmware version of the PDU.
+      - tag: pdu_version
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.11
+          name: cpiPduVersion
+      - tag: pdu_ipaddress
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.14
+          name: cpiPduIp
+      - tag: pdu_cabinetid
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.17
+          name: cpiPduCabinetId
+
+  # --- Electronic locks ---
+  # Upstream declared this table twice: once with the three status columns as
+  # metrics, once as a presence row with the statuses mapped to names. The
+  # names are the enums here.
+  - MIB: CPI-UNITY-MIB
+    table:
+      OID: 1.3.6.1.4.1.30932.1.10.1.7.100
+      name: cpiEasTable
+    symbols:
+      # Electronic access control system: inactive(0), ready(1), error(2).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.7.100.1.3
+        name: cpiPduEasStatus
+        enum:
+          inactive: 0
+          ready: 1
+          error: 2
+      # Door sensor: closed(0), open(1).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.7.100.1.4
+        name: cpiPduDoorStatus
+        enum:
+          closed: 0
+          open: 1
+      # Lock: closed(0), open(1).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.7.100.1.5
+        name: cpiPduLockStatus
+        enum:
+          closed: 0
+          open: 1
+    metric_tags:
+      - tag: lock_id
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.7.100.1.2
+          name: cpiPduLockId
+          enum:
+            front: 1
+            rear: 2
+
+  # --- Sensors ---
+  - MIB: CPI-UNITY-MIB
+    table:
+      OID: 1.3.6.1.4.1.30932.1.10.1.5.10
+      name: cpiPduSensorTable
+    symbols:
+      # Sensor value: degrees Fahrenheit for temperature, percent for humidity.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.5.10.1.5
+        name: cpiPduSensorValue
+    metric_tags:
+      - tag: sensor_index
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.5.10.1.2
+          name: cpiPduSensorId
+      - tag: sensor_name
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.5.10.1.3
+          name: cpiPduSensorName
+      # Sensor type: temperature(1), humidity(2).
+      - tag: sensor_type
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.5.10.1.4
+          name: cpiPduSensorType
+          enum:
+            temperature: 1
+            humidity: 2
+
+  # --- Input lines ---
+  - MIB: CPI-UNITY-MIB
+    table:
+      OID: 1.3.6.1.4.1.30932.1.10.1.3.10
+      name: cpiPduLineTable
+    symbols:
+      # Current draw of the line in 1/100 amp.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.10.1.3
+        name: cpiPduLineCurrent
+    metric_tags:
+      - tag: line_id
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.3.10.1.2
+          name: cpiPduLineId
+
+  # --- Branches ---
+  # Upstream declared the energy column in a second copy of this table to
+  # force a counter type; it is one table here.
+  # The pdu_name join is declared twice because the PDU table is indexed by MAC
+  # address in two lengths on different firmware. Both transforms are applied
+  # and the later declaration wins when both resolve, so the longer, more
+  # specific one is declared second. See DataDog/integrations-core pull 7688.
+  - MIB: CPI-UNITY-MIB
+    table:
+      OID: 1.3.6.1.4.1.30932.1.10.1.3.110
+      name: cpiPduBranchTable
+    symbols:
+      # Current draw of the branch in 1/100 amp.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.3
+        name: cpiPduBranchCurrent
+      # Maximum current draw of the branch in 1/100 amp.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.4
+        name: cpiPduBranchMaxCurrent
+      # Voltage of the branch in 1/10 volt.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.5
+        name: cpiPduBranchVoltage
+      # Power of the branch in volt-amps.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.6
+        name: cpiPduBranchPower
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.7
+        name: cpiPduBranchPowerFactor
+      # Alarm status of the branch: noalarm(0), warning(1), alarm(2).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.8
+        name: cpiPduBranchStatus
+        enum:
+          noalarm: 0
+          warning: 1
+          alarm: 2
+      # Branch energy accumulated in decaVA-seconds; divide by 360 for VA-hours.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.9
+        name: cpiPduBranchEnergy
+    metric_tags:
+      - tag: branch_id
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.3.110.1.2
+          name: cpiPduBranchId
+      - tag: pdu_name
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.3
+          name: cpiPduName
+        table: cpiPduTable
+        index_transform:
+          - start: 1
+            end: 7
+      - tag: pdu_name
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.2.10.1.3
+          name: cpiPduName
+        table: cpiPduTable
+        index_transform:
+          - start: 1
+            end: 13
+
+  # --- Outlets ---
+  # Upstream declared the energy column in a second copy of this table to
+  # force a counter type; it is one table here.
+  - MIB: CPI-UNITY-MIB
+    table:
+      OID: 1.3.6.1.4.1.30932.1.10.1.4.10
+      name: cpiPduOutletTable
+    symbols:
+      # Current draw of the outlet in 1/100 amp.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.6
+        name: cpiPduOutletCurrent
+      # Voltage of the outlet in 1/10 volt.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.7
+        name: cpiPduOutletVoltage
+      # Power of the outlet in volt-amps.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.8
+        name: cpiPduOutletPower
+      # Alarm status of the outlet: noalarm(0), warning(1), alarm(2).
+      - OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.9
+        name: cpiPduOutletStatus
+        enum:
+          noalarm: 0
+          warning: 1
+          alarm: 2
+      # Outlet energy accumulated in decaWatt-seconds; divide by 360 for Watt-hours.
+      - OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.10
+        name: cpiPduOutletEnergy
+    metric_tags:
+      - tag: outlet_id
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.2
+          name: cpiPduOutletId
+      - tag: outlet_name
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.4
+          name: cpiPduOutletName
+      # Branch the outlet belongs to.
+      - tag: outlet_branchid
+        column:
+          OID: 1.3.6.1.4.1.30932.1.10.1.4.10.1.3
+          name: cpiPduOutletBranchId
