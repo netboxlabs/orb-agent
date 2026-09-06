@@ -241,3 +241,19 @@ func TestObservationsAreNotStoredWithoutAMeter(t *testing.T) {
 	defer st.mu.RUnlock()
 	assert.Empty(t, st.series, "nothing is stored when nothing can be exported")
 }
+
+// A schema claim lives as long as an exporter holds it: once the last
+// exporter writing a name has closed, another may register the name under
+// another kind or unit. While one still holds it, the disagreement is refused.
+func TestASchemaClaimIsReleasedWhenItsLastExporterCloses(t *testing.T) {
+	shared := NewSchemas()
+	first := newExporter(newStore(100), nil, shared)
+	second := newExporter(newStore(100), nil, shared)
+	require.Equal(t, "", first.admit("if_in_octets", kindCounter, "By"))
+	require.Equal(t, "", second.admit("if_in_octets", kindCounter, "By"), "an agreeing exporter holds the name too")
+	first.close()
+	third := newExporter(newStore(100), nil, shared)
+	assert.Equal(t, dropSchemaConflict, third.admit("if_in_octets", kindGauge, ""), "the second exporter still holds the claim")
+	second.close()
+	assert.Equal(t, "", third.admit("if_in_octets", kindGauge, ""), "with no holder left, the name is free to register anew")
+}

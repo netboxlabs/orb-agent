@@ -137,7 +137,10 @@ type exporter struct {
 	// schemas is the process-wide record of what each metric name is already
 	// exported as, so this exporter never creates an instrument another
 	// collector holds under the same name with a different kind or unit.
-	schemas  *Schemas
+	schemas *Schemas
+	// held is every name this exporter holds a schema claim on, released
+	// together when it closes.
+	held     map[string]bool
 	mu       sync.Mutex
 	closed   bool
 	counters map[string]metric.Int64ObservableCounter
@@ -209,7 +212,16 @@ func exporting() bool {
 // than once per update. It returns "" when the name is this exporter's to
 // write, or the reason to drop the observation.
 func (e *exporter) admit(name, kind, unit string) string {
-	held, first := e.schemas.admit(name, kind, unit)
+	e.mu.Lock()
+	if e.held == nil {
+		e.held = map[string]bool{}
+	}
+	already := e.held[name]
+	held, first := e.schemas.admit(name, kind, unit, !already)
+	if held == nil {
+		e.held[name] = true
+	}
+	e.mu.Unlock()
 	if held == nil {
 		return ""
 	}
@@ -313,8 +325,14 @@ func (e *exporter) close() {
 	e.closed = true
 	regs := e.regs
 	e.regs = nil
+	names := make([]string, 0, len(e.held))
+	for name := range e.held {
+		names = append(names, name)
+	}
+	e.held = nil
 	e.mu.Unlock()
 	for _, r := range regs {
 		_ = r.Unregister()
 	}
+	e.schemas.release(names)
 }
