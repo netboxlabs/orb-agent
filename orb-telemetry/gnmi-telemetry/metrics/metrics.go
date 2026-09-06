@@ -57,6 +57,45 @@ func providerOptions() []sdkmetric.Option {
 // joined by dots, none starting or ending with a hyphen.
 var dnsName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$`)
 
+// endpointURL parses a scheme-bearing endpoint and checks it: a hostname, a
+// port in range when one is written, and a scheme the exporter knows. A URL
+// without a port is given the OTLP gRPC default, 4317. Left to the resolver,
+// a missing port became 443 whatever the scheme, so a plaintext http:// or
+// grpc:// URL exported to a port nothing plaintext listens on.
+func endpointURL(endpoint string) (*url.URL, error) {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("otel endpoint %q is not a valid URL: %w", endpoint, err)
+	}
+	scheme := u.Scheme
+	// The parsed hostname, not the authority: "http://:4317" has an authority
+	// and no host, and gRPC reads the empty host as localhost.
+	if u.Hostname() == "" {
+		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
+	}
+	// A port written into the URL is held to the same range as the bare form's:
+	// the SDK keeps an out-of-range one and every export fails on it.
+	if port := u.Port(); port != "" {
+		if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
+			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", endpoint, port)
+		}
+	}
+	// Only the documented schemes reach the exporter. The SDK reads every
+	// scheme but https as plaintext, so a mistyped one such as "htps" would
+	// have exported in the clear, or failed every export, under a startup line
+	// reporting the URL as configured.
+	switch strings.ToLower(scheme) {
+	case "http", "https", "grpc", "grpcs":
+	default:
+		return nil, fmt.Errorf("otel endpoint %q: scheme %q is not http, https, grpc or grpcs", endpoint, scheme)
+	}
+
+	if u.Port() == "" {
+		u.Host = net.JoinHostPort(u.Hostname(), "4317")
+	}
+	return u, nil
+}
+
 // endpointOptions returns the otlpmetricgrpc options for the configured
 // endpoint: where to connect, and whether that connection is plaintext.
 //
@@ -105,31 +144,11 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 			otlpmetric.WithInsecure(),
 		}, nil
 	}
-	u, err := url.Parse(endpoint)
+	u, err := endpointURL(endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("otel endpoint %q is not a valid URL: %w", endpoint, err)
+		return nil, err
 	}
-	// The parsed hostname, not the authority: "http://:4317" has an authority
-	// and no host, and gRPC reads the empty host as localhost.
-	if u.Hostname() == "" {
-		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
-	}
-	// A port written into the URL is held to the same range as the bare form's:
-	// the SDK keeps an out-of-range one and every export fails on it.
-	if port := u.Port(); port != "" {
-		if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
-			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", endpoint, port)
-		}
-	}
-	// Only the documented schemes reach the exporter. The SDK reads every
-	// scheme but https as plaintext, so a mistyped one such as "htps" would
-	// have exported in the clear, or failed every export, under a startup line
-	// reporting the URL as configured.
-	switch strings.ToLower(scheme) {
-	case "http", "https", "grpc", "grpcs":
-	default:
-		return nil, fmt.Errorf("otel endpoint %q: scheme %q is not http, https, grpc or grpcs", endpoint, scheme)
-	}
+	endpoint = u.String()
 
 	// WithEndpointURL keys TLS off https alone and leaves every other scheme
 	// plaintext, which is right for http and grpc but not for grpcs. Give

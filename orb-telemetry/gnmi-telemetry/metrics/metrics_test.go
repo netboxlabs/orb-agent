@@ -200,6 +200,19 @@ func TestEndpointOptions_MalformedURLRejected(t *testing.T) {
 	assert.Error(t, err, "setup refuses the endpoint rather than exporting to the default")
 }
 
+// A URL without a port takes the OTLP gRPC default, whatever the scheme: the
+// resolver would otherwise supply 443 to a plaintext URL.
+func TestEndpointURLDefaultsThePort(t *testing.T) {
+	for _, endpoint := range []string{"http://collector.example", "grpc://collector.example", "https://collector.example", "grpcs://collector.example"} {
+		u, err := endpointURL(endpoint)
+		require.NoError(t, err, endpoint)
+		assert.Equal(t, "collector.example:4317", u.Host, endpoint)
+	}
+	u, err := endpointURL("http://collector.example:4318")
+	require.NoError(t, err)
+	assert.Equal(t, "collector.example:4318", u.Host, "a written port is kept")
+}
+
 // endpoint is supplied: the function should succeed and leave the meter nil.
 func TestSetupMetricsExport_EmptyEndpoint(t *testing.T) {
 	ResetMeter()
