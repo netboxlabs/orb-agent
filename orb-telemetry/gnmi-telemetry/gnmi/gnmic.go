@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unicode"
@@ -692,21 +693,35 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 	// surface an error when EVERY path fails (a genuine transport/auth problem).
 	var result Notification
 	result.SyncDone = true
+	// The per-path Gets run together under what remains of the deadline, so
+	// a path the target hangs on costs the others nothing, and each has the
+	// whole remainder rather than a share of it. Run one after another on
+	// equal shares, seven paths under a one-second interval left each about
+	// seventy milliseconds, and a target that answered a path in a hundred
+	// timed out on every one of them, on every poll.
+	type outcome struct {
+		n   Notification
+		err error
+	}
+	outcomes := make([]outcome, len(paths))
+	var wg sync.WaitGroup
+	for i, p := range paths {
+		wg.Add(1)
+		go func(i int, p string) {
+			defer wg.Done()
+			n, err := s.getPaths(ctx, []string{p})
+			outcomes[i] = outcome{n: n, err: err}
+		}(i, p)
+	}
+	wg.Wait()
 	got := 0
 	var lastErr error
 	for i, p := range paths {
-		// Each attempt takes an equal share of what remains for the paths
-		// still to try, so a path the target hangs on spends its share and no
-		// more. Sharing one context, a hanging first path ran it out and every
-		// later path failed unattempted, on every poll, in the same order.
-		attemptCtx, cancelAttempt := shareRemaining(ctx, len(paths)-i)
-		n, err := s.getPaths(attemptCtx, []string{p})
-		cancelAttempt()
-		if err != nil {
-			lastErr = err
+		if outcomes[i].err != nil {
+			lastErr = outcomes[i].err
 			continue
 		}
-		mergeGetResults(&result, n)
+		mergeGetResults(&result, outcomes[i].n)
 		result.Paths = append(result.Paths, p)
 		got++
 	}
@@ -717,7 +732,8 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 }
 
 // shareRemaining is ctx bounded to a 1/n share of what its deadline leaves,
-// or a plain cancellable child of it when it carries none.
+// or a plain cancellable child of it when it carries none. The whole request
+// takes half, leaving the other half for the per-path recovery.
 func shareRemaining(ctx context.Context, n int) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
 	if !ok || n < 1 {

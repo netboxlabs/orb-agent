@@ -185,6 +185,9 @@ type getServer struct {
 	// the request waits for its own cancellation, which is how a target that
 	// accepts a connection and then says nothing at all behaves.
 	capsBlocks bool
+	// delay is how long every answered request takes, which is how a target
+	// that is slow but answers behaves.
+	delay time.Duration
 	// multiBlocks holds every request for more than one path and answers the
 	// single-path ones, which is how a target that hangs on an aggregate
 	// request and answers path by path behaves.
@@ -274,6 +277,13 @@ func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmipr
 		if !g.holds[rendered] {
 			return nil, status.Errorf(codes.NotFound, "unknown path %s", rendered)
 		}
+		if g.delay > 0 {
+			select {
+			case <-time.After(g.delay):
+			case <-ctx.Done():
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+		}
 		notifications = append(notifications, &gnmiproto.Notification{
 			Update: []*gnmiproto.Update{{
 				Path: p,
@@ -332,16 +342,35 @@ func TestGetOnceReportsThePathsItFetched(t *testing.T) {
 	require.Error(t, err, "a target that answers nothing is a failure, not an empty snapshot")
 }
 
-// Each per-path attempt takes its own share of the deadline: a path the target
-// hangs on spends that share, and the paths after it are still attempted.
-func TestGetOnceGivesEachPathItsOwnShareOfTheDeadline(t *testing.T) {
+// The per-path recovery runs the paths together: a path the target hangs on
+// costs the others nothing, and the one that answers is fetched.
+func TestGetOnceRecoversTheOtherPathsBesideAHangingOne(t *testing.T) {
 	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
 	s := getSession(t, &getServer{holds: map[string]bool{interfaces: true}, blocks: map[string]bool{memory: true}})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	n, err := s.GetOnce(ctx, []string{memory, interfaces})
-	require.NoError(t, err, "the path after the hanging one is fetched within its own share")
+	require.NoError(t, err, "the path beside the hanging one is fetched")
 	assert.Equal(t, []string{interfaces}, n.Paths)
+}
+
+// The recovery Gets run concurrently under the whole remaining deadline, not
+// one after another on shares of it: four paths a slow target answers in a
+// hundred and fifty milliseconds each are all fetched inside four hundred,
+// where sequential shares of a hundred would have timed every one out.
+func TestGetOnceRecoversPathsConcurrently(t *testing.T) {
+	paths := []string{"/system/memory/state", "/system/cpus/cpu[index=*]/state", "/interfaces/interface[name=*]/state/counters", "/system/state/hostname"}
+	holds := map[string]bool{}
+	for _, p := range paths {
+		holds[p] = true
+	}
+	s := getSession(t, &getServer{holds: holds, delay: 150 * time.Millisecond})
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	n, err := s.GetOnce(ctx, paths)
+	require.NoError(t, err)
+	assert.Equal(t, paths, n.Paths, "every path is fetched, in the order asked")
+	assert.Len(t, n.Updates, len(paths))
 }
 
 // A bracket or a backslash in a key value is escaped in the rendered path, so
