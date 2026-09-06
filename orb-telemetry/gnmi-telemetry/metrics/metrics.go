@@ -73,6 +73,11 @@ func endpointURL(endpoint string) (*url.URL, error) {
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
 	}
+	// The same shape the bare form is held to: a URL parses with any host
+	// text, and one no resolver could look up would be retried for ever.
+	if h := u.Hostname(); net.ParseIP(h) == nil && !dnsName.MatchString(h) {
+		return nil, fmt.Errorf("otel endpoint %q: host %q is neither an IP address nor a DNS name", endpoint, h)
+	}
 	// A port written into the URL is held to the same range as the bare form's:
 	// the SDK keeps an out-of-range one and every export fails on it.
 	if port := u.Port(); port != "" {
