@@ -709,6 +709,31 @@ subscriptions:
 	}
 }
 
+// A file holding a second YAML document is refused: the second would load as
+// nothing, its settings silently without effect.
+func TestAProfileFileWithASecondDocumentIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+match: {vendor: acme}
+subscriptions:
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+---
+match: {vendor: acme}
+subscriptions:
+  - path: /system/cpu/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: cpu_used, type: gauge}
+`), 0o600))
+	store, err := LoadProfiles(dir, quiet())
+	if err == nil {
+		assert.Nil(t, store.profiles["acme"], "the file must not load as a profile")
+	}
+}
+
 // A multi-word alias is matched as a phrase: its words must appear in the
 // organization in that order, not merely each somewhere in it.
 func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {

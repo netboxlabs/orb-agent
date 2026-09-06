@@ -765,6 +765,11 @@ func addProfile(into map[string]*Profile, filename string, b []byte) error {
 	if err := dec.Decode(&p); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("parse profile %s: %w", filename, err)
 	}
+	// One document per file: a second one after "---" would otherwise load
+	// as nothing, its settings silently without effect.
+	if err := dec.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		return fmt.Errorf("parse profile %s: the file must hold one YAML document", filename)
+	}
 	p.Name = strings.TrimSuffix(filename, ".yaml")
 	into[p.Name] = &p
 	return nil
