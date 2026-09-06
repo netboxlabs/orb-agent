@@ -1599,10 +1599,11 @@ subscriptions:
 
 // A subscription is atomic, so the transport prunes a path the target rejects
 // and the stream that opens covers less than the profile. The sync response
-// names what the stream carries, and the reconciliation is bounded by it: an
-// ageless series under a pruned path is one no dump could restate, and evicting
-// it would blank a subtree on evidence the stream never gave.
-func TestSyncReconcilesOnlyAcceptedPaths(t *testing.T) {
+// names what the stream carries, and the reconciliation covers that and the
+// pruned path both: an ageless series under a pruned path is one no stream of
+// this session will ever restate, so it goes with the elements the dump
+// omitted rather than standing for ever on a value nothing can refresh.
+func TestSyncWithdrawsThePrunedPathsSeries(t *testing.T) {
 	reader := testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_streams.yaml"), []byte(`
@@ -1691,8 +1692,8 @@ subscriptions:
 	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
 	close(resume)
 	// Under the path the sync names the omitted interface goes and the restated
-	// one stays; the series of the pruned subscription stands, no dump of it
-	// having ever arrived.
+	// one stays; the series of the pruned subscription goes too, no stream of
+	// this session being able to restate it.
 	waitFor(t, 3*time.Second, func() bool {
 		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 		if !ok || len(g.DataPoints) != 1 {
@@ -1701,7 +1702,8 @@ subscriptions:
 		name, has := g.DataPoints[0].Attributes.Value("interface_name")
 		return has && name.AsString() == "e2"
 	})
-	assert.Equal(t, 1, points("gnmi.control_memory_free"), "a subscription the stream never carried withdraws nothing")
+	waitFor(t, 3*time.Second, func() bool { return points("gnmi.control_memory_free") == 0 })
+	assert.Equal(t, 0, points("gnmi.control_memory_free"), "a pruned subscription's series can never be refreshed and are withdrawn")
 }
 
 // A stream over a subtree the device carries nothing under answers its sync

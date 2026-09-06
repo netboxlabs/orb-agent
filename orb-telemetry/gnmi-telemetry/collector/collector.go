@@ -361,7 +361,7 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 			continue
 		}
 		l.update(func(s *TargetStatus) { s.Mode = rung; s.Up = true })
-		err = c.consume(ctx, notes, errs, rung, target, opts, profile, l)
+		err = c.consume(ctx, notes, errs, rung, target, opts, profile, subscriptionPaths(subs), l)
 		// A target that accepts the RPC and then rejects on the stream has
 		// refused this rung as surely as one that refuses the RPC, so it walks
 		// the ladder the same way. A forced mode holds one rung, and past it
@@ -402,6 +402,15 @@ func (c *Collector) subscriptions(p *profiles.Profile, target config.Target, opt
 	return out
 }
 
+// subscriptionPaths is the path of every subscription an attempt asks for.
+func subscriptionPaths(subs []gnmi.Subscription) []string {
+	out := make([]string, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, s.Path)
+	}
+	return out
+}
+
 // forceMode applies a ladder rung: "on_change" keeps the profile's modes,
 // "sample" makes every subscription SAMPLE at the interval.
 func forceMode(subs []gnmi.Subscription, rung string, intervalMs int) []gnmi.Subscription {
@@ -437,7 +446,7 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 // before its first sync response or data. Every other error is returned plain,
 // for the loop to reconnect through on the rung it holds, an initial dump that
 // stalled after data and short of its sync response among them.
-func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
+func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, requested []string, l *loop) error {
 	productive := false
 	// synced is whether the stream answered the sync response that closes its
 	// initial dump, the target accepting the subscription: a stream over a
@@ -489,14 +498,18 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 			return
 		}
 		reconciled = true
-		// A stream carries the subscriptions the target accepted, which its sync
-		// names, and the dump speaks for those alone: a pruned path opened no
-		// stream, so nothing under it was ever restated and evicting there would
-		// blank a subtree the device still carries. A sync that names no path
-		// speaks for the whole profile, which is the stream carrying it whole.
+		// The reconciliation covers every path this attempt asked for, the
+		// ones the target accepted, which the sync names, and the ones the
+		// probe pruned as definitively refused alike. A pruned path opened no
+		// stream, so nothing under it will be restated for as long as this
+		// session lives, and an ageless series left there would be exported for
+		// ever on a value no stream can refresh. Only a path never asked for,
+		// one with an origin of its own, is left alone. A sync that names no
+		// path speaks for the whole profile, which is the stream carrying it
+		// whole.
 		var covered map[string]struct{}
 		if n.Paths != nil {
-			covered = polledMetrics(profileMetrics(p), n.Paths)
+			covered = polledMetrics(profileMetrics(p), requested)
 		}
 		c.store.evictBefore(covered, baseAttrs(target, opts), started)
 		// A sync response is the stream saying its dump is complete, which is as
