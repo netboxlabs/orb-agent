@@ -2559,8 +2559,12 @@ func TestReservedTagName_NoBundledProfileDeclaresOne(t *testing.T) {
 	assert.Empty(t, reserved)
 	// The declarations scanned, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1282, device, "device-level tag declarations scanned")
-	assert.Equal(t, 4421, row, "row-level tag declarations scanned")
+	// The row count here counts declarations; the one in
+	// TestDerivedAttrNames_NoBundledProfileTagIsShadowed counts distinct
+	// names per entry. They differ by one because the bundled Chatsworth
+	// profile declares one join tag twice under different index transforms.
+	assert.Equal(t, 1287, device, "device-level tag declarations scanned")
+	assert.Equal(t, 4427, row, "row-level tag declarations scanned")
 }
 
 // TestCollectTarget_SameEndpointTwiceInOnePolicy covers a policy that targets
@@ -7077,9 +7081,9 @@ func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
 	assert.Empty(t, shadowed)
 	// The names compared, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1282, device, "device-level tag names scanned")
-	assert.Equal(t, 4420, row, "row-level tag names scanned")
-	assert.Equal(t, 1908, derived, "derived attribute names scanned")
+	assert.Equal(t, 1287, device, "device-level tag names scanned")
+	assert.Equal(t, 4426, row, "row-level tag names scanned")
+	assert.Equal(t, 1910, derived, "derived attribute names scanned")
 }
 
 // tagNameSet holds what a derived attribute could shadow. A tag under a

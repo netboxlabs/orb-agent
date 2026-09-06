@@ -459,7 +459,9 @@ this repository: devices converted from other profile libraries that Kentik
 has no profile for, and stubs that add sysObjectIDs to bundled Kentik profiles
 by extending them. Both load into one set, so an override addresses a file in
 either tree by its relative path, and a bare `extends` name resolves across
-both. Each tree carries its own `PROVENANCE.md` and `LICENSE`.
+both. Each tree carries its upstream `LICENSE`; the Kentik mirror is described
+in `profiles/PROVENANCE.md` and the second tree in
+`profiles/orb-profiles/PROVENANCE.md`.
 
 An override file's path must match the bundled file's path exactly, including
 its subdirectory. For example, overriding the bundled
