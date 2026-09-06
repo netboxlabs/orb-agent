@@ -1,0 +1,448 @@
+# Converted from DataDog/integrations-core default_profiles/hpe-proliant.yaml with
+# _hp-base.yaml, _hp-compaq-health.yaml and _hp-driver-stats.yaml inlined,
+# at c545ca5b168e1ccbffba82121cda46fa09459a46 (BSD-3-Clause, see ../LICENSE).
+# Conversion rules: ../PROVENANCE.md
+#
+# ProLiant servers running the HPE host agents. The iLO management processor
+# reports under 232.9.4 and is served by the bundled hp/hp-ilo.yml.
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - host-resources-mib.yml
+  - ip-mib.yml
+  - tcp-mib.yml
+  - udp-mib.yml
+
+provider: kentik-net-snmp
+
+sysobjectid:
+  - 1.3.6.1.4.1.232.*    # HPE ProLiant host agents
+
+# Device identity, applied to every series from the device.
+metric_tags:
+  # The product name, e.g. ProLiant BL35p G1
+  - column:
+      OID: 1.3.6.1.4.1.232.2.2.4.2.0
+      name: cpqSiProductName
+  # The serial number of the physical system unit
+  - column:
+      OID: 1.3.6.1.4.1.232.2.2.2.1.0
+      name: cpqSiSysSerialNum
+  # System ROM version, e.g. A03-03/01/2006
+  - column:
+      OID: 1.3.6.1.4.1.232.1.2.6.1.0
+      name: cpqSeSysRomVer
+  # The operating system name
+  - column:
+      OID: 1.3.6.1.4.1.232.11.2.2.1.0
+      name: cpqHoName
+  # The operating system release level
+  - column:
+      OID: 1.3.6.1.4.1.232.11.2.2.2.0
+      name: cpqHoVersion
+
+metrics:
+  # --- hpe-proliant.yaml ---
+
+  # Processors
+  - MIB: CPQSTDEQ-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.1.2.2.1
+      name: cpqSeCpuTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.2
+        name: cpqSeCpuSlot
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.4
+        name: cpqSeCpuSpeed
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.6
+        name: cpqSeCpuStatus
+        # Members as in the bundled hp/hp-ilo.yml, which reads the same column.
+        enum:
+          unknown: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+          disabled: 5
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.7
+        name: cpqSeCpuExtSpeed
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.15
+        name: cpqSeCpuCore
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.25
+        name: cpqSeCPUCoreMaxThreads
+      - OID: 1.3.6.1.4.1.232.1.2.2.1.1.27
+        name: cpqSeCpuPrimary
+    metric_tags:
+      - tag: cpu_index
+        column:
+          OID: 1.3.6.1.4.1.232.1.2.2.1.1.1
+          name: cpqSeCpuUnitIndex
+
+  # CPU utilisation
+  - MIB: CPQHOST-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.11.2.3.1
+      name: cpqHoCpuUtilTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.11.2.3.1.1.2
+        name: cpqHoCpuUtilMin
+      - OID: 1.3.6.1.4.1.232.11.2.3.1.1.3
+        name: cpqHoCpuUtilFiveMin
+      - OID: 1.3.6.1.4.1.232.11.2.3.1.1.4
+        name: cpqHoCpuUtilThirtyMin
+      - OID: 1.3.6.1.4.1.232.11.2.3.1.1.5
+        name: cpqHoCpuUtilHour
+    metric_tags:
+      - tag: cpu_unit_index
+        column:
+          OID: 1.3.6.1.4.1.232.11.2.3.1.1.1
+          name: cpqHoCpuUtilUnitIndex
+
+  # File systems
+  - MIB: CPQHOST-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.11.2.4.1
+      name: cpqHoFileSysTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.11.2.4.1.1.3
+        name: cpqHoFileSysSpaceTotal
+      - OID: 1.3.6.1.4.1.232.11.2.4.1.1.4
+        name: cpqHoFileSysSpaceUsed
+      - OID: 1.3.6.1.4.1.232.11.2.4.1.1.5
+        name: cpqHoFileSysPercentSpaceUsed
+      - OID: 1.3.6.1.4.1.232.11.2.4.1.1.6
+        name: cpqHoFileSysAllocUnitsTotal
+      - OID: 1.3.6.1.4.1.232.11.2.4.1.1.7
+        name: cpqHoFileSysAllocUnitsUsed
+      - OID: 1.3.6.1.4.1.232.11.2.4.1.1.8
+        name: cpqHoFileSysStatus
+    metric_tags:
+      - tag: file_sys_index
+        column:
+          OID: 1.3.6.1.4.1.232.11.2.4.1.1.1
+          name: cpqHoFileSysIndex
+
+  # Memory modules
+  - MIB: CPQSINFO-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.2.2.4.5
+      name: cpqSiMemModuleTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.3
+        name: cpqSiMemModuleSize
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.4
+        name: cpqSiMemModuleType
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.5
+        name: cpqSiMemModuleSpeed
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.6
+        name: cpqSiMemModuleTechnology
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.11
+        name: cpqSiMemModuleECCStatus
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.13
+        name: cpqSiMemModuleFrequency
+      - OID: 1.3.6.1.4.1.232.2.2.4.5.1.15
+        name: cpqSiMemModuleCellStatus
+    metric_tags:
+      - tag: mem_board_index
+        column:
+          OID: 1.3.6.1.4.1.232.2.2.4.5.1.1
+          name: cpqSiMemBoardIndex
+      - tag: mem_module_index
+        column:
+          OID: 1.3.6.1.4.1.232.2.2.4.5.1.2
+          name: cpqSiMemModuleIndex
+
+  # Physical network adapters
+  - MIB: CPQNIC-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.18.2.3.1
+      name: cpqNicIfPhysAdapterTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.18.2.3.1.1.13
+        name: cpqNicIfPhysAdapterState
+      - OID: 1.3.6.1.4.1.232.18.2.3.1.1.14
+        name: cpqNicIfPhysAdapterStatus
+    metric_tags:
+      - tag: adapter_mac_addr
+        column:
+          OID: 1.3.6.1.4.1.232.18.2.3.1.1.4
+          name: cpqNicIfPhysAdapterMACAddress
+          conversion: hwaddr
+      - tag: adapter_name
+        column:
+          OID: 1.3.6.1.4.1.232.18.2.3.1.1.39
+          name: cpqNicIfPhysAdapterName
+
+  # Drive array controllers
+  - MIB: CPQIDA-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.3.2.2.1
+      name: cpqDaCntlrTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.3.2.2.1.1.6
+        name: cpqDaCntlrCondition
+    metric_tags:
+      - tag: controller_index
+        column:
+          OID: 1.3.6.1.4.1.232.3.2.2.1.1.1
+          name: cpqDaCntlrIndex
+
+  # --- _hp-compaq-health.yaml ---
+  # Generic device health metrics for HP devices.
+  # https://support.hpe.com/hpsc/swd/public/detail?swItemId=MTX_53293d026fb147958b223069b6
+
+  - MIB: CPQHLTH-MIB
+    symbols:
+      # Total time the system has been in full operation.
+      - OID: 1.3.6.1.4.1.232.6.2.8.1.0
+        name: cpqHeSysUtilLifeTime
+      # EISA bus utilization as percentage of theoretical maximum during last minute.
+      - OID: 1.3.6.1.4.1.232.6.2.8.2.0
+        name: cpqHeSysUtilEisaBusMin
+      # Overall condition of the critical error log feature.
+      - OID: 1.3.6.1.4.1.232.6.2.2.2.0
+        name: cpqHeCritLogCondition
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Overall status of the correctable memory error log feature.
+      - OID: 1.3.6.1.4.1.232.6.2.3.1.0
+        name: cpqHeCorrMemLogStatus
+        enum:
+          other: 1
+          notSupported: 2
+          disabled: 3
+          enabled: 4
+      # Overall condition of the correctable memory error log feature.
+      - OID: 1.3.6.1.4.1.232.6.2.3.2.0
+        name: cpqHeCorrMemLogCondition
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Number of correctable memory errors that have occurred.
+      - OID: 1.3.6.1.4.1.232.6.2.3.3.0
+        name: cpqHeCorrMemTotalErrs
+      # Overall status of the ASR (Automatic Server Recovery) feature.
+      - OID: 1.3.6.1.4.1.232.6.2.5.1.0
+        name: cpqHeAsrStatus
+        enum:
+          other: 1
+          notAvailable: 2
+          disabled: 3
+          enabled: 4
+      # Whether the ASR timer passed the server Power-On Self-Test (POST).
+      - OID: 1.3.6.1.4.1.232.6.2.5.6.0
+        name: cpqHeAsrPost
+        enum:
+          other: 1
+          failed: 2
+          ok: 3
+      # Number of ASR reboots since the last manual reboot. -1 if not supported.
+      - OID: 1.3.6.1.4.1.232.6.2.5.10.0
+        name: cpqHeAsrRebootCount
+      # Overall condition of the ASR feature.
+      - OID: 1.3.6.1.4.1.232.6.2.5.17.0
+        name: cpqHeAsrCondition
+        enum:
+          other: 1
+          notAvailable: 2
+          disabled: 3
+          enabled: 4
+      # Status of the ASR network access feature.
+      - OID: 1.3.6.1.4.1.232.6.2.5.21.0
+        name: cpqHeAsrNetworkAccessStatus
+        enum:
+          other: 1
+          disabled: 2
+          enabled: 3
+      # Status of temperature sensors.
+      - OID: 1.3.6.1.4.1.232.6.2.6.3.0
+        name: cpqHeThermalTempStatus
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Status of system fans.
+      - OID: 1.3.6.1.4.1.232.6.2.6.4.0
+        name: cpqHeThermalSystemFanStatus
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Status of processor fans.
+      - OID: 1.3.6.1.4.1.232.6.2.6.5.0
+        name: cpqHeThermalCpuFanStatus
+        enum:
+          other: 1
+          ok: 2
+          failed: 4
+      # Current power meter reading in Watts.
+      - OID: 1.3.6.1.4.1.232.6.2.15.3.0
+        name: cpqHePowerMeterCurrReading
+      # Overall condition of the thermal environment.
+      - OID: 1.3.6.1.4.1.232.6.2.6.1.0
+        name: cpqHeThermalCondition
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Fault tolerant power supply status.
+      - OID: 1.3.6.1.4.1.232.6.2.9.2.0
+        name: cpqHeFltTolPwrSupplyStatus
+        enum:
+          other: 1
+          notSupported: 2
+          notInstalled: 3
+          installed: 4
+
+  # Temperature sensors
+  - MIB: CPQHLTH-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.6.2.6.8
+      name: cpqHeTemperatureTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.6.2.6.8.1.4
+        name: cpqHeTemperatureCelsius
+      - OID: 1.3.6.1.4.1.232.6.2.6.8.1.6
+        name: cpqHeTemperatureCondition
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+    metric_tags:
+      - tag: temperature_index
+        column:
+          OID: 1.3.6.1.4.1.232.6.2.6.8.1.2
+          name: cpqHeTemperatureIndex
+
+  # System batteries
+  - MIB: CPQHLTH-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.6.2.17.2
+      name: cpqHeSysBatteryTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.6.2.17.2.1.4
+        name: cpqHeSysBatteryCondition
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # 15 statuses are possible, see the MIB.
+      - OID: 1.3.6.1.4.1.232.6.2.17.2.1.5
+        name: cpqHeSysBatteryStatus
+    metric_tags:
+      - tag: battery_index
+        column:
+          OID: 1.3.6.1.4.1.232.6.2.17.2.1.2
+          name: cpqHeSysBatteryIndex
+
+  # Resilient memory modules
+  - MIB: CPQHLTH-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.6.2.14.13
+      name: cpqHeResMem2ModuleTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.6.2.14.13.1.20
+        name: cpqHeResMem2ModuleCondition
+    metric_tags:
+      - tag: mem_board_index
+        column:
+          OID: 1.3.6.1.4.1.232.6.2.14.13.1.15
+          name: cpqHeResMem2ModuleCellTablePtr
+
+  # Fault tolerant power supplies. Upstream declared this table twice, once
+  # deprecated and once with a presence row whose status mapping is the enum
+  # on cpqHeFltTolPowerSupplyStatus below.
+  - MIB: CPQHLTH-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.6.2.9.3
+      name: cpqHeFltTolPowerSupplyTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.6.2.9.3.1.5
+        name: cpqHeFltTolPowerSupplyStatus
+        enum:
+          no_error: 1
+          general_failure: 2
+          bist_failure: 3
+          fan_failure: 4
+          temp_failure: 5
+          interlock_open: 6
+          eprom_failed: 7
+          vref_failed: 8
+          dac_failed: 9
+          ram_test_failed: 10
+          voltage_channel_failed: 11
+          orringdiode_failed: 12
+          brown_out: 13
+          giveup_on_startup: 14
+          nvram_invalid: 15
+          calibration_table_invalid: 16
+          no_power_input: 17
+      - OID: 1.3.6.1.4.1.232.6.2.9.3.1.7
+        name: cpqHeFltTolPowerSupplyCapacityUsed
+      - OID: 1.3.6.1.4.1.232.6.2.9.3.1.8
+        name: cpqHeFltTolPowerSupplyCapacityMaximum
+    metric_tags:
+      - tag: chassis_num
+        column:
+          OID: 1.3.6.1.4.1.232.6.2.9.3.1.1
+          name: cpqHeFltTolPowerSupplyChassis
+      - tag: bay_num
+        column:
+          OID: 1.3.6.1.4.1.232.6.2.9.3.1.2
+          name: cpqHeFltTolPowerSupplyBay
+
+  # --- _hp-driver-stats.yaml ---
+  # Physical drives. Upstream split this table into a counter entry and a
+  # gauge entry; both are the same table and are declared once here.
+  - MIB: CPQIDA-MIB
+    table:
+      OID: 1.3.6.1.4.1.232.3.2.5.1
+      name: cpqDaPhyDrvTable
+    symbols:
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.6
+        name: cpqDaPhyDrvStatus
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.7
+        name: cpqDaPhyDrvFactReallocs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.8
+        name: cpqDaPhyDrvUsedReallocs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.9
+        name: cpqDaPhyDrvRefHours
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.16
+        name: cpqDaPhyDrvHardReadErrs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.17
+        name: cpqDaPhyDrvRecvReadErrs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.18
+        name: cpqDaPhyDrvHardWriteErrs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.19
+        name: cpqDaPhyDrvRecvWriteErrs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.20
+        name: cpqDaPhyDrvHSeekErrs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.21
+        name: cpqDaPhyDrvSeekErrs
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.22
+        name: cpqDaPhyDrvSpinupTime
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.45
+        name: cpqDaPhyDrvSize
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.57
+        name: cpqDaPhyDrvSmartStatus
+      - OID: 1.3.6.1.4.1.232.3.2.5.1.1.70
+        name: cpqDaPhyDrvCurrentTemperature
+    metric_tags:
+      - tag: drive_cntrl_idx
+        column:
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.1
+          name: cpqDaPhyDrvCntlrIndex
+      - tag: drive_index
+        column:
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.2
+          name: cpqDaPhyDrvIndex
