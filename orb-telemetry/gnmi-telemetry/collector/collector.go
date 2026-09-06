@@ -758,6 +758,37 @@ func polledMetrics(metricsByPath map[string][]string, paths []string) map[string
 func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile) {
 	base := baseAttrs(target, opts)
 	ts := time.Now().UnixNano()
+	// The deletes go first, as gNMI orders them within one notification: a
+	// target replacing a subtree sends the delete and the new values together,
+	// and applied the other way round the new values were stored and then
+	// withdrawn by the delete, with an on_change leaf never sent again.
+	// A delete is matched against the full path of every metric, the
+	// subscription path with the metric's leaf on the end, so one pass covers
+	// every level: an ancestor of the subscription matches all of its metrics,
+	// an exact leaf matches that metric alone, and a path in between, deeper
+	// than the subscription and shallower than a multi-element leaf, matches
+	// the metrics nested under it. Matching the subscription path alone left
+	// that middle ground to no pass at all, and the series stood until it went
+	// stale, which for an on_change series is for ever. No deepest-subscription
+	// preference is needed here: a full metric path names one series, so every
+	// subscription the delete matches has series the delete really covers.
+	for _, d := range n.Deletes {
+		for i := range p.Subscriptions {
+			sub := &p.Subscriptions[i]
+			for j := range sub.Metrics {
+				m := &sub.Metrics[j]
+				full := sub.Path
+				if m.Leaf != "." {
+					full = sub.Path + "/" + m.Leaf
+				}
+				keys, ok := profiles.MatchPrefix(full, d)
+				if !ok {
+					continue
+				}
+				c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
+			}
+		}
+	}
 	updates := make([]gnmi.Update, 0, len(n.Updates))
 	for _, u := range n.Updates {
 		updates = append(updates, flattenUpdate(u)...)
@@ -789,33 +820,6 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 		}
 		if dropped != "" {
 			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropped)))
-		}
-	}
-	// A delete is matched against the full path of every metric, the
-	// subscription path with the metric's leaf on the end, so one pass covers
-	// every level: an ancestor of the subscription matches all of its metrics,
-	// an exact leaf matches that metric alone, and a path in between, deeper
-	// than the subscription and shallower than a multi-element leaf, matches
-	// the metrics nested under it. Matching the subscription path alone left
-	// that middle ground to no pass at all, and the series stood until it went
-	// stale, which for an on_change series is for ever. No deepest-subscription
-	// preference is needed here: a full metric path names one series, so every
-	// subscription the delete matches has series the delete really covers.
-	for _, d := range n.Deletes {
-		for i := range p.Subscriptions {
-			sub := &p.Subscriptions[i]
-			for j := range sub.Metrics {
-				m := &sub.Metrics[j]
-				full := sub.Path
-				if m.Leaf != "." {
-					full = sub.Path + "/" + m.Leaf
-				}
-				keys, ok := profiles.MatchPrefix(full, d)
-				if !ok {
-					continue
-				}
-				c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
-			}
 		}
 	}
 }

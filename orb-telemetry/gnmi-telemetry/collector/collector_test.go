@@ -352,6 +352,49 @@ func TestDeleteWithdrawsTheElementsSeries(t *testing.T) {
 	})
 }
 
+// A notification carrying a delete and an update beneath it is a subtree
+// replaced: gNMI orders the delete first, so the update's series stands with
+// its new value rather than being stored and withdrawn in one pass.
+func TestADeleteAndAnUpdateInOneNotificationLeaveTheUpdate(t *testing.T) {
+	reader := testReader(t)
+	ts := time.Now().UnixNano()
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: streamOf(
+			gnmi.Notification{Timestamp: ts, Updates: []gnmi.Update{
+				{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(1)},
+				{Path: "/interfaces/interface[name=e2]/state/counters/in-octets", Value: uint64(2)},
+			}},
+			gnmi.Notification{
+				Timestamp: ts + 1,
+				Deletes:   []string{"/interfaces/interface[name=e1]"},
+				Updates:   []gnmi.Update{{Path: "/interfaces/interface[name=e1]/state/counters/in-octets", Value: uint64(5)}},
+			},
+		),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		m, ok := collect(t, reader)["gnmi.if_in_octets"]
+		if !ok {
+			return false
+		}
+		pts := m.Data.(metricdata.Sum[int64]).DataPoints
+		if len(pts) != 2 {
+			return false
+		}
+		for _, pt := range pts {
+			if v, _ := pt.Attributes.Value("interface_name"); v.AsString() == "e1" && pt.Value == 5 {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 // A delete of a single leaf sits below every subscription rather than above
 // one, so the prefix pass matches nothing and the series would stand until it
 // went stale, and for good if it streams on change.
