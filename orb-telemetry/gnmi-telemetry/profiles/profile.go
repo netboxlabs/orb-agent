@@ -598,6 +598,16 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 					continue
 				}
 				path := filepath.Join(overrideDir, e.Name())
+				// The directory was confined to the profiles root by the
+				// policy's validation; a file is read only where it resolves
+				// inside that directory, so a symlink pointing out of it does
+				// not load a profile from outside the root.
+				if inside, err := insideDir(overrideDir, path); err != nil || !inside {
+					if logger != nil {
+						logger.Warn("skipping a gNMI profile override that resolves outside profiles_dir", "file", path, "error", err)
+					}
+					continue
+				}
 				b, err := os.ReadFile(path)
 				if err != nil {
 					if logger != nil {
@@ -757,6 +767,24 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("bundled _base profile failed to load")
 	}
 	return &Store{profiles: resolved}, nil
+}
+
+// insideDir reports whether path, its symlinks resolved, sits inside dir, its
+// symlinks resolved.
+func insideDir(dir, path string) (bool, error) {
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false, err
+	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return false, err
+	}
+	rel, err := filepath.Rel(realDir, realPath)
+	if err != nil {
+		return false, err
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
 // addProfile decodes one profile file. Decoding refuses a field the schema

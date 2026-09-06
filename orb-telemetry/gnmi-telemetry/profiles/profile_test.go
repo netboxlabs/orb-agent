@@ -753,6 +753,36 @@ subscriptions:
 	}
 }
 
+// A profile file is read only where it resolves inside the profiles
+// directory: a symlink pointing outside it would load a profile from outside
+// the root the policy's validation confined the directory to.
+func TestAProfileSymlinkOutsideTheDirectoryIsSkipped(t *testing.T) {
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "acme.yaml"), []byte(`
+match: {vendor: acme}
+subscriptions:
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+`), 0o600))
+	dir := t.TempDir()
+	require.NoError(t, os.Symlink(filepath.Join(outside, "acme.yaml"), filepath.Join(dir, "acme.yaml")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inner.yaml"), []byte(`
+match: {vendor: inner}
+subscriptions:
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+`), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(dir, "inner.yaml"), filepath.Join(dir, "alias.yaml")))
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err)
+	assert.Nil(t, store.profiles["acme"], "a symlink out of the directory loads nothing")
+	assert.NotNil(t, store.profiles["alias"], "a symlink inside the directory is a file like any other")
+}
+
 // A multi-word alias is matched as a phrase: its words must appear in the
 // organization in that order, not merely each somewhere in it.
 func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {
