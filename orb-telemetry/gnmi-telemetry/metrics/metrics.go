@@ -85,6 +85,15 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 	if u.Host == "" {
 		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
 	}
+	// Only the documented schemes reach the exporter. The SDK reads every
+	// scheme but https as plaintext, so a mistyped one such as "htps" would
+	// have exported in the clear, or failed every export, under a startup line
+	// reporting the URL as configured.
+	switch strings.ToLower(scheme) {
+	case "http", "https", "grpc", "grpcs":
+	default:
+		return nil, fmt.Errorf("otel endpoint %q: scheme %q is not http, https, grpc or grpcs", endpoint, scheme)
+	}
 
 	// WithEndpointURL keys TLS off https alone and leaves every other scheme
 	// plaintext, which is right for http and grpc but not for grpcs. Give
