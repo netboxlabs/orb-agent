@@ -69,7 +69,9 @@ func firstBytes(t *testing.T, endpointFor func(addr string) string) []byte {
 		opened <- buf[:n]
 	}()
 
-	exp, err := otlpmetric.New(context.Background(), endpointOptions(endpointFor(ln.Addr().String()))...)
+	opts, err := endpointOptions(endpointFor(ln.Addr().String()))
+	require.NoError(t, err, "a well-formed endpoint is accepted")
+	exp, err := otlpmetric.New(context.Background(), opts...)
 	require.NoError(t, err, "exporter construction should never fail")
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -171,6 +173,21 @@ func TestEndpointOptions_TLSSchemes(t *testing.T) {
 }
 
 // TestSetupMetricsExport_EmptyEndpoint verifies the early-return path when no
+// A scheme-bearing endpoint that does not parse, or names no host, is refused
+// before the exporter is built. The SDK's URL option swallows the parse error
+// and falls back to its default endpoint, so accepting the value would export
+// to localhost while the startup line reported the mistyped URL.
+func TestEndpointOptions_MalformedURLRejected(t *testing.T) {
+	for _, endpoint := range []string{"http://%zz", "http://", "grpc:///path"} {
+		_, err := endpointOptions(endpoint)
+		assert.Error(t, err, endpoint)
+	}
+	_, err := endpointOptions("http://collector.example:4317")
+	assert.NoError(t, err)
+	err = SetupMetricsExport(context.Background(), slog.Default(), "http://%zz", 30)
+	assert.Error(t, err, "setup refuses the endpoint rather than exporting to the default")
+}
+
 // endpoint is supplied: the function should succeed and leave the meter nil.
 func TestSetupMetricsExport_EmptyEndpoint(t *testing.T) {
 	ResetMeter()

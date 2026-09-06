@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +62,13 @@ func providerOptions() []sdkmetric.Option {
 // own OTLP exporters. Applying the insecure option unconditionally would
 // override the scheme, send plaintext to a collector expecting TLS, and fail
 // every export.
-func endpointOptions(endpoint string) []otlpmetric.Option {
+//
+// A scheme-bearing endpoint is parsed here and refused when it does not parse
+// or names no host. WithEndpointURL does not return that failure: it logs the
+// parse error and keeps the SDK's default endpoint, so a mistyped URL let the
+// exporter start, the startup line report the URL as configured, and every
+// export go to localhost:4317.
+func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 	scheme, _, hasScheme := strings.Cut(endpoint, "://")
 	if !hasScheme {
 		// WithEndpoint expects a bare host:port and passes a trailing slash
@@ -69,7 +76,14 @@ func endpointOptions(endpoint string) []otlpmetric.Option {
 		return []otlpmetric.Option{
 			otlpmetric.WithEndpoint(strings.TrimRight(endpoint, "/")),
 			otlpmetric.WithInsecure(),
-		}
+		}, nil
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("otel endpoint %q is not a valid URL: %w", endpoint, err)
+	}
+	if u.Host == "" {
+		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
 	}
 
 	// WithEndpointURL keys TLS off https alone and leaves every other scheme
@@ -80,7 +94,7 @@ func endpointOptions(endpoint string) []otlpmetric.Option {
 	if strings.EqualFold(scheme, "grpcs") {
 		opts = append(opts, otlpmetric.WithTLSCredentials(credentials.NewTLS(nil)))
 	}
-	return opts
+	return opts, nil
 }
 
 // SetupMetricsExport configures the OTLP metrics exporter with a periodic reader.
@@ -112,7 +126,11 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 			config.MaxDurationSeconds, exportPeriodSeconds)
 	}
 
-	exporter, err := otlpmetric.New(ctx, endpointOptions(endpoint)...)
+	opts, err := endpointOptions(endpoint)
+	if err != nil {
+		return err
+	}
+	exporter, err := otlpmetric.New(ctx, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
