@@ -2559,8 +2559,8 @@ func TestReservedTagName_NoBundledProfileDeclaresOne(t *testing.T) {
 	assert.Empty(t, reserved)
 	// The declarations scanned, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1208, device, "device-level tag declarations scanned")
-	assert.Equal(t, 3708, row, "row-level tag declarations scanned")
+	assert.Equal(t, 1256, device, "device-level tag declarations scanned")
+	assert.Equal(t, 4370, row, "row-level tag declarations scanned")
 }
 
 // TestCollectTarget_SameEndpointTwiceInOnePolicy covers a policy that targets
@@ -7077,9 +7077,9 @@ func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
 	assert.Empty(t, shadowed)
 	// The names compared, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1208, device, "device-level tag names scanned")
-	assert.Equal(t, 3708, row, "row-level tag names scanned")
-	assert.Equal(t, 1641, derived, "derived attribute names scanned")
+	assert.Equal(t, 1256, device, "device-level tag names scanned")
+	assert.Equal(t, 4370, row, "row-level tag names scanned")
+	assert.Equal(t, 1879, derived, "derived attribute names scanned")
 }
 
 // tagNameSet holds what a derived attribute could shadow. A tag under a

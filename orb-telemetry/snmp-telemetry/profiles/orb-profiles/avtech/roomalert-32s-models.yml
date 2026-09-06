@@ -1,0 +1,13 @@
+# Model sysObjectID for the bundled avtech/roomalert-32s.yml profile, which claims
+# only the Avtech enterprise root (20916). DataDog/integrations-core
+# default_profiles/avtech-roomalert-32s.yaml at c545ca5b168e1ccbffba82121cda46fa09459a46
+# (BSD-3-Clause, see ../LICENSE) lists the Room Alert 32S under 20916.1.11.
+# Metrics are inherited from the Kentik profile; only the device list is added.
+---
+extends:
+  - roomalert-32s.yml
+
+provider: kentik-envir-sensor
+
+sysobjectid:
+  - 1.3.6.1.4.1.20916.1.11    # Avtech Room Alert 32S
