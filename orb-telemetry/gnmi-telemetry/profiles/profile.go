@@ -783,6 +783,12 @@ func resolve(name string, raw map[string]*Profile, seen map[string]bool) (*Profi
 
 // merge overlays child on parent: match from the child when set,
 // subscriptions replaced by path and otherwise appended in the child's order.
+//
+// Replacement is keyed on what a path parses to, as the duplicate check is,
+// not on the text the file wrote. Keyed on the text, a child restating a
+// parent's path in another spelling, a trailing "/" for one, was appended
+// beside it, and validation then refused the whole profile as declaring the
+// path twice.
 func merge(parent, child *Profile) *Profile {
 	out := &Profile{Name: child.Name, Extends: child.Extends, Match: parent.Match}
 	if child.Match.Vendor != "" || child.Match.NOS != "" {
@@ -790,16 +796,26 @@ func merge(parent, child *Profile) *Profile {
 	}
 	index := map[string]int{}
 	for _, s := range parent.Subscriptions {
-		index[s.Path] = len(out.Subscriptions)
+		index[mergeKey(s.Path)] = len(out.Subscriptions)
 		out.Subscriptions = append(out.Subscriptions, s)
 	}
 	for _, s := range child.Subscriptions {
-		if i, ok := index[s.Path]; ok {
+		if i, ok := index[mergeKey(s.Path)]; ok {
 			out.Subscriptions[i] = s
 			continue
 		}
-		index[s.Path] = len(out.Subscriptions)
+		index[mergeKey(s.Path)] = len(out.Subscriptions)
 		out.Subscriptions = append(out.Subscriptions, s)
 	}
 	return out
+}
+
+// mergeKey is the canonical spelling merge replaces subscriptions on. A path
+// the request parser refuses keeps its text, for validation to report.
+func mergeKey(path string) string {
+	gp, err := gpath.ParsePath(path)
+	if err != nil {
+		return path
+	}
+	return canonicalPath(gp)
 }

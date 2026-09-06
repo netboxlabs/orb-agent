@@ -622,6 +622,37 @@ match: {vendor: acme}
 		"an organization naming no overlay's vendor selects none of them")
 }
 
+// A child restating a parent's subscription path in another spelling replaces
+// it, as a child restating it verbatim does: the replacement is keyed on what
+// the path parses to, the way the duplicate check is.
+func TestAnOverlayReplacesAPathRestatedInAnotherSpelling(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+match: {vendor: acme}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/counters
+    mode: sample
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: in-octets, name: if_in_octets, type: counter, unit: By}
+`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme_site.yaml"), []byte(`
+extends: acme
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/counters/
+    mode: sample
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: out-octets, name: if_out_octets, type: counter, unit: By}
+`), 0o600))
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err, "the restated path is one subscription, not a duplicate")
+	site := store.profiles["acme_site"]
+	require.NotNil(t, site)
+	require.Len(t, site.Subscriptions, 1, "the child's subscription replaced the parent's")
+	assert.Equal(t, "if_out_octets", site.Subscriptions[0].Metrics[0].Name)
+}
+
 // A multi-word alias is matched as a phrase: its words must appear in the
 // organization in that order, not merely each somewhere in it.
 func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {
