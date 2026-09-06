@@ -80,11 +80,13 @@ func (r *Runner) sweepOnce() {
 		// Report and keep going. There is no path to failing the policy itself:
 		// the 201 has already returned and a runner holds no manager reference.
 		// Exiting here would also kill rescan and leave the policy permanently
-		// dead.
+		// dead. The status carries it instead.
 		r.logger.Error("sweep failed; no targets started",
 			"policy", r.name, "error", err)
+		r.recordSweep(outcome, err)
 		return
 	}
+	r.recordSweep(outcome, nil)
 
 	r.logger.Debug("sweep", "policy", r.name, "summary", outcome.summary(),
 		"unverified_credential_targets", r.unverifiedCredentialTargets())

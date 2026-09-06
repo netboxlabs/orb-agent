@@ -679,9 +679,26 @@ func (m *Manager) GetPolicyStatuses() []Status {
 				s.LastErrorAt = &at
 			}
 		}
+		// A sweep that left the policy with nothing to collect is the
+		// policy's own failure, reported the same way and ranked by the same
+		// instant against the targets' errors.
+		if msg, at := runner.SweepError(); msg != "" {
+			applySweepError(&s, latest, msg, at)
+		}
 		statuses = append(statuses, s)
 	}
 	return statuses
+}
+
+// applySweepError marks a status as failing with the sweep's message when no
+// target error is more recent than it.
+func applySweepError(s *Status, latest *collector.TargetStatus, msg string, at time.Time) {
+	s.Status = "running_with_errors"
+	if latest != nil && latest.LastErrorAt.After(at) {
+		return
+	}
+	s.LastError = &msg
+	s.LastErrorAt = &at
 }
 
 // normalizeTargetHosts trims surrounding whitespace from every target host, so
@@ -733,6 +750,14 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 		if err := checkInlinePort(t.Host); err != nil {
 			return err
+		}
+		// An origin travels in the textual path the request builder parses,
+		// where a colon ends it and a slash begins the path: one carrying either
+		// was sent as an empty origin with bogus elements, against the wrong
+		// schema, under an accepted policy. The empty origin itself is legal:
+		// it is how a target's native schema is addressed.
+		if o := t.ResolvedOrigin(); strings.ContainsAny(o, ":/ \t") {
+			return fmt.Errorf("target %s: origin %q must carry no colon, slash or whitespace", t.Host, o)
 		}
 		// A client certificate is a pair. The dialer's TLS helper loads one
 		// only when both halves are named, so a policy naming one was accepted

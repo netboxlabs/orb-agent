@@ -3,6 +3,7 @@ package policy
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -945,4 +946,78 @@ policies:
 `))
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "one YAML document")
+}
+
+// A sweep that admitted nothing, every probed address having refused, is the
+// policy's own failure: it is recorded on the runner and reported as
+// running_with_errors, ranked by its instant against the targets' errors, and
+// cleared by a sweep that admits.
+func TestASweepThatAdmitsNothingIsReportedInTheStatus(t *testing.T) {
+	r := &Runner{}
+	r.recordSweep(sweepOutcome{scanned: 4, rejected: 4, exampleReason: "connection refused"}, nil)
+	msg, at := r.SweepError()
+	require.Contains(t, msg, "no target admitted")
+	require.False(t, at.IsZero())
+
+	s := Status{Status: "running"}
+	applySweepError(&s, nil, msg, at)
+	assert.Equal(t, "running_with_errors", s.Status)
+	require.NotNil(t, s.LastError)
+	assert.Equal(t, msg, *s.LastError)
+
+	newer := &collector.TargetStatus{LastError: "dial failed", LastErrorAt: at.Add(time.Second)}
+	s = Status{Status: "running_with_errors", LastError: &newer.LastError, LastErrorAt: &newer.LastErrorAt}
+	applySweepError(&s, newer, msg, at)
+	assert.Equal(t, "dial failed", *s.LastError, "a more recent target error keeps the pair")
+
+	r.recordSweep(sweepOutcome{scanned: 4, admitted: 1, rejected: 3}, nil)
+	msg, _ = r.SweepError()
+	assert.Empty(t, msg, "a sweep that admits clears it")
+	r.recordSweep(sweepOutcome{}, errors.New("expansion failed"))
+	msg, _ = r.SweepError()
+	assert.Contains(t, msg, "sweep failed: expansion failed")
+}
+
+// An origin carrying a colon or a slash cannot survive the textual path the
+// request builder parses, so it is refused rather than sent as an empty origin
+// against the wrong schema.
+func TestParsePolicies_RejectsAnOriginTheTextualPathCannotCarry(t *testing.T) {
+	for _, origin := range []string{"vendor:model", "vendor/model", "open config"} {
+		m := newTestManager()
+		_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      origin: "` + origin + `"
+      targets:
+        - host: 10.0.0.1
+`))
+		require.Error(t, err, origin)
+		assert.ErrorContains(t, err, "origin", origin)
+	}
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      origin: vendor-native
+      targets:
+        - host: 10.0.0.1
+`))
+	require.NoError(t, err)
+	_, err = m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      origin: ""
+      targets:
+        - host: 10.0.0.1
+`))
+	require.NoError(t, err, "the empty origin addresses the native schema")
 }

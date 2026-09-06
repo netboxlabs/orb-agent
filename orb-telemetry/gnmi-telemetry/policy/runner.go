@@ -40,6 +40,38 @@ type Runner struct {
 	wg         sync.WaitGroup
 	mu         sync.Mutex
 	subscribed map[string]struct{}
+	// sweepErr is the outcome of the last sweep when it left the policy with
+	// nothing to collect: a failed expansion, or a range every address of
+	// which refused the probe. A policy of one CIDR whose every address was
+	// rejected used to report running with no targets and no error, for as
+	// long as it ran; this is what the status reports instead. Cleared by a
+	// sweep that admits or finds a live subscription.
+	sweepErr   string
+	sweepErrAt time.Time
+}
+
+// recordSweep keeps the outcome of a sweep that left the policy with nothing
+// to collect, and clears it when a sweep no longer does.
+func (r *Runner) recordSweep(outcome sweepOutcome, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case err != nil:
+		r.sweepErr, r.sweepErrAt = "sweep failed: "+err.Error(), time.Now()
+	case outcome.total() == 0 && outcome.rejected > 0:
+		r.sweepErr = fmt.Sprintf("no target admitted: %d probed address(es) did not answer, e.g. %s", outcome.rejected, outcome.exampleReason)
+		r.sweepErrAt = time.Now()
+	default:
+		r.sweepErr, r.sweepErrAt = "", time.Time{}
+	}
+}
+
+// SweepError is the last sweep outcome that left the policy with nothing to
+// collect, and when it was recorded; empty when the last sweep did not.
+func (r *Runner) SweepError() (string, time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.sweepErr, r.sweepErrAt
 }
 
 // NewRunner validates what the runner needs and builds it; nothing starts
