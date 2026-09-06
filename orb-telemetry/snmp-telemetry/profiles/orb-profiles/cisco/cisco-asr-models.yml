@@ -1,0 +1,35 @@
+# Additional ASR and ISR sysObjectIDs for the bundled cisco/cisco-asr.yml profile,
+# which is where Kentik lists both families.
+# IDs and model names from DataDog/integrations-core default_profiles/cisco-asr.yaml
+# and cisco-isr.yaml at c545ca5b168e1ccbffba82121cda46fa09459a46 (BSD-3-Clause, see ../LICENSE).
+# Metrics are inherited from the Kentik profile; only the device list is added.
+---
+extends:
+  - cisco-asr.yml
+
+provider: kentik-router
+
+sysobjectid:
+  # cisco-asr.yaml
+  - 1.3.6.1.4.1.9.1.1498    # ciscoASR9KMOD80SE
+  - 1.3.6.1.4.1.9.1.1499    # ciscoASR9KMOD80TR
+  - 1.3.6.1.4.1.9.1.1500    # ciscoASR9KMOD160SE
+  - 1.3.6.1.4.1.9.1.1501    # ciscoASR9KMOD160TR
+  - 1.3.6.1.4.1.9.1.1502    # ciscoASR9KMPA2X10GE
+  - 1.3.6.1.4.1.9.1.1503    # ciscoASR9KMPA4X10GE
+  - 1.3.6.1.4.1.9.1.1504    # ciscoASR9KMPA20X1GE
+  - 1.3.6.1.4.1.9.1.1505    # ciscoASR9KMPA1X40GE
+  - 1.3.6.1.4.1.9.1.1506    # ciscoASR9KMPA2X40GE
+  - 1.3.6.1.4.1.9.1.1818    # ciscoASR901S4SGFD
+  - 1.3.6.1.4.1.9.1.1819    # ciscoASR901S3SGFD
+  - 1.3.6.1.4.1.9.1.1820    # ciscoASR901S2SGFD
+  - 1.3.6.1.4.1.9.1.1821    # ciscoASR901S3SGFAH
+  - 1.3.6.1.4.1.9.1.1822    # ciscoASR901S2SGFAH
+  - 1.3.6.1.4.1.9.1.3075    # ciscoASR9903
+  - 1.3.6.1.4.1.9.1.3090    # ciscoASR9902
+  # cisco-isr.yaml
+  - 1.3.6.1.4.1.9.1.805     # ciscoISRWireless
+  - 1.3.6.1.4.1.9.1.1621    # cisco898EA
+  - 1.3.6.1.4.1.9.1.1627    # cisco896VAK9
+  - 1.3.6.1.4.1.9.1.2665    # ciscoISRAP1100ACME
+  - 1.3.6.1.4.1.9.1.2666    # ciscoISR4221X

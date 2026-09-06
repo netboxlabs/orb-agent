@@ -214,3 +214,76 @@ func TestOrbProfiles_LoadAndResolveWithoutWarnings(t *testing.T) {
 		}
 	}
 }
+
+// keptSymbols lists what a resolved, deduped profile will export: one entry
+// per surviving symbol, as exported metric name and the OID it reads.
+func keptSymbols(p *Profile) []string {
+	var out []string
+	for i := range p.Metrics {
+		m := &p.Metrics[i]
+		if m.Symbol != nil {
+			out = append(out, m.Symbol.MetricName()+"|"+m.Symbol.OID)
+		}
+		for j := range m.Symbols {
+			out = append(out, m.Symbols[j].MetricName()+"|"+m.Symbols[j].OID)
+		}
+	}
+	return out
+}
+
+// A stub adds sysObjectIDs to a Kentik family and inherits everything else, so
+// a device matched through it exports the same series as one matched by the
+// Kentik file directly.
+//
+// Counting entries is not enough. Every entry a stub carries is marked as
+// inherited, while the parent's own entries are not, and the metric-name
+// contest in dedup.go ranks an own declaration above an inherited one. A
+// parent whose own symbol beats an inherited one on that rule alone would
+// resolve differently through the stub, with the same entry count.
+func TestOrbProfiles_StubInheritsParentMetrics(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	cases := map[string]string{ // stub -> Kentik parent rel path
+		"cisco/cisco-catalyst-models.yml": "cisco/cisco-catalyst.yml",
+		"cisco/cisco-asr-models.yml":      "cisco/cisco-asr.yml",
+		"cisco/cisco-nexus-models.yml":    "cisco/cisco-nexus.yml",
+		"cisco/cisco-wlc-models.yml":      "cisco/cisco-wlc.yml",
+		"juniper/juniper-ex-models.yml":   "juniper/juniper-ex-switches.yml",
+		"juniper/juniper-mx-models.yml":   "juniper/juniper-mx-router.yml",
+		"juniper/juniper-srx-models.yml":  "juniper/juniper-srx-firewalls.yml",
+		"netapp/netapp-ontap-models.yml":  "netapp/netapp-cluster.yml",
+		"avtech/roomalert-32s-models.yml": "avtech/roomalert-32s.yml",
+	}
+	for stub, parent := range cases {
+		s, err := l.Resolve(stub)
+		require.NoError(t, err, stub)
+		p, err := l.Resolve(parent)
+		require.NoError(t, err, parent)
+		assert.ElementsMatch(t, keptSymbols(p), keptSymbols(s), "%s must export exactly what %s exports", stub, parent)
+		assert.Equal(t, p.Provider, s.Provider, "%s must carry its parent's provider", stub)
+		assert.NotEmpty(t, s.SysObjectID, stub)
+	}
+
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+	for oid, want := range map[string]string{
+		"1.3.6.1.4.1.9.1.150":          "cisco/cisco-catalyst-models.yml",
+		"1.3.6.1.4.1.9.1.3075":         "cisco/cisco-asr-models.yml",
+		"1.3.6.1.4.1.9.1.2666":         "cisco/cisco-asr-models.yml",
+		"1.3.6.1.4.1.9.1.1915":         "cisco/cisco-nexus-models.yml",
+		"1.3.6.1.4.1.9.1.3324":         "cisco/cisco-wlc-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.2.169": "juniper/juniper-ex-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.2.168": "juniper/juniper-mx-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.2.585": "juniper/juniper-srx-models.yml",
+		"1.3.6.1.4.1.789.2.99":         "netapp/netapp-ontap-models.yml",
+		"1.3.6.1.4.1.789.2.5":          "netapp/netapp-cluster.yml", // Kentik's exact still wins
+		"1.3.6.1.4.1.20916.1.11":       "avtech/roomalert-32s-models.yml",
+		"1.3.6.1.4.1.20916":            "avtech/roomalert-32s.yml", // Kentik's exact still wins
+	} {
+		got, ok := m.Match(oid)
+		require.True(t, ok, oid)
+		assert.Equal(t, want, got.RelPath, oid)
+	}
+}
