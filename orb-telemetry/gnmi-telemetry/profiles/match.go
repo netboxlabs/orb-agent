@@ -234,7 +234,36 @@ func MatchPrefix(subscriptionPath, deletedPath string) (map[string]string, bool)
 	if len(path) > len(pattern) {
 		return nil, false
 	}
-	return matchElems(pattern[:len(path)], path)
+	return matchDeleteElems(pattern[:len(path)], path)
+}
+
+// matchDeleteElems is matchElems for a delete: an element of the deleted path
+// that carries no key selects every instance of the keyed pattern element it
+// names, which is how a target deletes a whole list, and contributes no key.
+// An element that carries keys is held to the exact rule. Under the exact
+// rule alone, a delete of the list was refused against its keyed pattern and
+// withdrew none of the list's series, and an on_change one stood for ever.
+func matchDeleteElems(pattern, path []pathElem) (map[string]string, bool) {
+	if len(pattern) != len(path) {
+		return nil, false
+	}
+	keys := map[string]string{}
+	for i := range pattern {
+		if pattern[i].name != path[i].name {
+			return nil, false
+		}
+		if len(path[i].keys) == 0 {
+			continue
+		}
+		got, ok := matchElems(pattern[i:i+1], path[i:i+1])
+		if !ok {
+			return nil, false
+		}
+		for k, v := range got {
+			keys[k] = v
+		}
+	}
+	return keys, true
 }
 
 // Depth is the number of elements in a path.

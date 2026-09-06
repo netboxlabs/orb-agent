@@ -78,6 +78,21 @@ func TestSplitLeafRefusesAKeyedElementBelowTheSubscription(t *testing.T) {
 	assert.Equal(t, map[string]string{"name": "e1", "index": "0"}, keys)
 }
 
+// A delete of a keyed list written without its key deletes every instance: it
+// matches the keyed pattern element and carries no key, so the collector
+// withdraws every series under it. An element written with keys is held to
+// the exact rule, as an update is.
+func TestMatchPrefixReadsAKeylessElementAsTheWholeList(t *testing.T) {
+	keys, ok := MatchPrefix("/interfaces/interface[name=*]/state/counters", "/interfaces/interface")
+	require.True(t, ok, "the whole list is an ancestor of every instance's subscription")
+	assert.Empty(t, keys)
+	keys, ok = MatchPrefix("/interfaces/interface[name=*]/state/counters", "/interfaces/interface[name=e1]/state")
+	require.True(t, ok)
+	assert.Equal(t, map[string]string{"name": "e1"}, keys)
+	_, ok = MatchPrefix("/interfaces/interface[name=*]/state/counters", "/interfaces/interface[name=e1][type=x]")
+	assert.False(t, ok, "an element carrying a key the pattern does not declare is held to the exact rule")
+}
+
 func TestMatchPrefixAndDepth(t *testing.T) {
 	keys, ok := MatchPrefix("/interfaces/interface[name=*]/state/counters", "/interfaces/interface[name=e1]")
 	require.True(t, ok, "a deleted ancestor element matches the subscriptions under it")
