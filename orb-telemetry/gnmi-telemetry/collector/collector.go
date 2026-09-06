@@ -652,7 +652,12 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 	// the snapshot restates arrives after this and is aged as Get-delivered, so
 	// it survives, and what it omits goes.
 	started := time.Now().UnixNano()
-	reconciled := false
+	// Reconciled per path rather than once per poll session: a snapshot speaks
+	// only for the paths it fetched, and a path the target failed on the first
+	// poll and answered on a later one is reconciled by the first snapshot that
+	// carries it. One flag for the session left such a path's ageless series
+	// standing for as long as the poll ran.
+	reconciled := map[string]bool{}
 	for {
 		// Each Get carries a deadline of its own rather than the loop's
 		// context, which lives as long as the policy: a target that stops
@@ -668,16 +673,19 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 			return err
 		}
 		c.apply(ctx, n, "get", target, opts, p)
-		if !reconciled {
-			reconciled = true
-			// A Get that recovers path by path returns what answered as a
-			// success, so what the snapshot speaks for is the paths it reports
-			// having fetched. A target that answered with none of them
-			// reconciles nothing: there is no path whose omission means the
-			// device dropped an element.
-			if polled := polledMetrics(metricsByPath, n.Paths); len(polled) > 0 {
-				c.store.evictBefore(polled, baseAttrs(target, opts), started)
+		// A Get that recovers path by path returns what answered as a success,
+		// so what the snapshot speaks for is the paths it reports having
+		// fetched. A target that answered with none of them reconciles nothing:
+		// there is no path whose omission means the device dropped an element.
+		var fresh []string
+		for _, fetched := range n.Paths {
+			if !reconciled[fetched] {
+				reconciled[fetched] = true
+				fresh = append(fresh, fetched)
 			}
+		}
+		if polled := polledMetrics(metricsByPath, fresh); len(polled) > 0 {
+			c.store.evictBefore(polled, baseAttrs(target, opts), started)
 		}
 		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
 		select {

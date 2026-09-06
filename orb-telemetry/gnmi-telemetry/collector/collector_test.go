@@ -1494,6 +1494,109 @@ subscriptions:
 	assert.Equal(t, 2, points("gnmi.if_oper_status"), "a path the snapshot never fetched withdraws nothing")
 }
 
+// A path the first poll failed on and a later poll answered is reconciled by
+// the first snapshot that fetches it, not left to the one-shot reconciliation
+// of the first poll: an element that went while the target was disconnected
+// keeps its ageless series otherwise, for as long as the poll runs.
+func TestGetRungReconcilesAPathWhenItFirstRecovers(t *testing.T) {
+	reader := testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_paths.yaml"), []byte(`
+match: {}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/oper-status
+    mode: on_change
+    attributes: {interface_name: name}
+    metrics:
+      - {leaf: ., name: if_oper_status, type: gauge, enum: {UP: 1, DOWN: 0}}
+  - path: /platform/control[slot=*]/memory
+    mode: on_change
+    attributes: {slot: slot}
+    metrics:
+      - {leaf: free, name: control_memory_free, type: gauge, unit: By}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	var attempts, polls atomic.Int64
+	resume := make(chan struct{})
+	const memory, interfaces = "/platform/control[slot=*]/memory", "/interfaces/interface[name=*]/state/oper-status"
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			if attempts.Add(1) > 1 {
+				select {
+				case <-resume:
+				case <-ctx.Done():
+					return nil, nil, ctx.Err()
+				}
+				return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+			}
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				for _, n := range []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"},
+						{Path: "/interfaces/interface[name=e2]/state/oper-status", Value: "UP"},
+						{Path: "/platform/control[slot=A]/memory/free", Value: uint64(10)},
+					}},
+					{SyncDone: true},
+				} {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				errs <- errors.New("stream reset")
+			}()
+			return out, errs, nil
+		},
+		// The first poll answers only the memory path; every later one answers
+		// the interfaces too, and by then e2 is gone.
+		GetFn: func(_ context.Context, _ []string) (gnmi.Notification, error) {
+			n := gnmi.Notification{Paths: []string{memory}, Updates: []gnmi.Update{
+				{Path: "/platform/control[slot=A]/memory/free", Value: uint64(10)},
+			}}
+			if polls.Add(1) > 1 {
+				n.Paths = append(n.Paths, interfaces)
+				n.Updates = append(n.Updates, gnmi.Update{Path: "/interfaces/interface[name=e1]/state/oper-status", Value: "UP"})
+			}
+			return n, nil
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "two_paths"})
+	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
+	points := func(name string) int {
+		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		if !ok {
+			return 0
+		}
+		return len(g.DataPoints)
+	}
+	waitFor(t, 3*time.Second, func() bool { return points("gnmi.if_oper_status") == 2 && points("gnmi.control_memory_free") == 1 })
+	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
+	close(resume)
+	// The snapshot that first fetches the interfaces withdraws e2, the element
+	// it omits; e1, which it restates, stands.
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		if !ok || len(g.DataPoints) != 1 {
+			return false
+		}
+		name, has := g.DataPoints[0].Attributes.Value("interface_name")
+		return has && name.AsString() == "e1"
+	})
+	assert.Equal(t, 1, points("gnmi.control_memory_free"), "the path fetched from the first poll keeps its restated series")
+}
+
 // A subscription is atomic, so the transport prunes a path the target rejects
 // and the stream that opens covers less than the profile. The sync response
 // names what the stream carries, and the reconciliation is bounded by it: an

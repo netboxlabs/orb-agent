@@ -29,7 +29,10 @@ type FakeSession struct {
 	GetErr   error
 	// GetBlocks makes GetOnce wait for its context rather than answer, the way
 	// a target that stops replying without closing the connection behaves.
-	GetBlocks      bool
+	GetBlocks bool
+	// GetFn answers GetOnce when set, for a test whose target answers each
+	// poll differently; nil falls back to the scripted result above.
+	GetFn          func(ctx context.Context, paths []string) (Notification, error)
 	ConfigBytes    []byte // returned by GetConfig
 	ConfigErr      error  // if set, GetConfig returns this error
 	ConfigGets     int    // count of GetConfig calls (test assertion)
@@ -132,6 +135,9 @@ func (f *FakeSession) Subscriptions() []Subscription {
 // fetched, or every requested path when the test named none. A fake told to
 // block answers nothing at all, until its context ends.
 func (f *FakeSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
+	if f.GetFn != nil {
+		return f.GetFn(ctx, paths)
+	}
 	if f.GetBlocks {
 		<-ctx.Done()
 		return Notification{}, ctx.Err()
