@@ -649,7 +649,7 @@ func TestGetPolicyStatuses_ReportsTheCollectorsTargets(t *testing.T) {
 // one of its targets does, and it reports when that target recorded the
 // failure rather than when the status was read: an error nothing has
 // refreshed would otherwise look fresh on every poll.
-func TestGetPolicyStatuses_ReportsTheFirstTargetError(t *testing.T) {
+func TestGetPolicyStatuses_ReportsAFailingTargetsError(t *testing.T) {
 	recorded := time.Now().Add(-90 * time.Second)
 	c := &statusCollector{statuses: []collector.TargetStatus{
 		{Host: "10.0.0.1", Up: true},
@@ -668,8 +668,10 @@ func TestGetPolicyStatuses_ReportsTheFirstTargetError(t *testing.T) {
 
 // A policy failing on several targets answers when it last failed, which is
 // the most recent of the instants its targets recorded, whatever order they
-// are visited in.
-func TestGetPolicyStatuses_ReportsTheLatestTargetErrorTime(t *testing.T) {
+// are visited in. The message comes from that same target: a message read
+// from one target and an instant from another describe two failures and
+// belong to neither.
+func TestGetPolicyStatuses_ReportsTheLatestTargetErrorAsOnePair(t *testing.T) {
 	older := time.Now().Add(-10 * time.Minute)
 	newer := time.Now().Add(-time.Minute)
 	c := &statusCollector{statuses: []collector.TargetStatus{
@@ -682,6 +684,8 @@ func TestGetPolicyStatuses_ReportsTheLatestTargetErrorTime(t *testing.T) {
 	require.Len(t, statuses, 1)
 	require.NotNil(t, statuses[0].LastErrorAt)
 	assert.Equal(t, newer, *statuses[0].LastErrorAt, "the policy last failed when its most recent target error was recorded")
+	require.NotNil(t, statuses[0].LastError)
+	assert.Equal(t, "deadline exceeded", *statuses[0].LastError, "the message is the one recorded at that instant")
 }
 
 // ---------------------------------------------------------------------------

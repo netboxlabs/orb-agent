@@ -635,27 +635,31 @@ func (m *Manager) GetPolicyStatuses() []Status {
 		s := Status{Name: name, Status: "running", Targets: runner.TargetStatuses()}
 		// The runner keeps no error state of its own: a target's last error
 		// belongs to the collector loop driving it, so the policy's error is
-		// the first target reporting one and the instant is the latest any of
-		// its failing targets recorded, which is when this policy last failed.
-		// The read time used to stand in for that, which made an old and
-		// unchanged failure look fresh on every poll. The earliest would
-		// answer a different question, when the oldest unresolved failure
-		// began, and a target carrying an error the loop stamped no instant
-		// for contributes none rather than a zero time.
-		for _, target := range s.Targets {
+		// one of its targets', and both fields come from the same target or
+		// the pair describes two different failures. The one chosen is the
+		// target carrying the most recent instant: "when did this policy last
+		// fail" is how last_error_at reads, where the earliest would answer
+		// when the oldest unresolved failure began. The read time used to
+		// stand in for it, which made an old and unchanged failure look fresh
+		// on every poll. A failing target the loop stamped no instant for
+		// still reports its message and leaves the instant absent, rather
+		// than serializing a zero time.
+		var latest *collector.TargetStatus
+		for i := range s.Targets {
+			target := &s.Targets[i]
 			if target.LastError == "" {
 				continue
 			}
 			s.Status = "running_with_errors"
-			if s.LastError == nil {
-				msg := target.LastError
-				s.LastError = &msg
+			if latest == nil || target.LastErrorAt.After(latest.LastErrorAt) {
+				latest = target
 			}
-			if target.LastErrorAt.IsZero() {
-				continue
-			}
-			if s.LastErrorAt == nil || target.LastErrorAt.After(*s.LastErrorAt) {
-				at := target.LastErrorAt
+		}
+		if latest != nil {
+			msg := latest.LastError
+			s.LastError = &msg
+			if !latest.LastErrorAt.IsZero() {
+				at := latest.LastErrorAt
 				s.LastErrorAt = &at
 			}
 		}

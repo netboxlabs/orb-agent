@@ -311,8 +311,10 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 	// profile named is never restated and never evicted: it would stand
 	// exported for as long as the policy runs. Withdrawing the target's series
 	// here, before the new stream opens, is what retires them and gives their
-	// budget slots back. A firmware upgrade that changes the advertised NOS
-	// and a changed override both arrive this way.
+	// budget slots back. What reaches this path is the device advertising
+	// other capabilities than it did before, a firmware upgrade changing the
+	// NOS above all: the profile set is loaded once with the collector, and a
+	// re-applied policy forgets its series before it starts again.
 	if previous := l.snapshot().Profile; previous != "" && previous != profile.Name {
 		c.logger.Info("gnmi profile changed, withdrawing the target's series",
 			"policy", opts.PolicyName, "host", target.Host, "from", previous, "to", profile.Name)

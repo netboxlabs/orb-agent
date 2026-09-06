@@ -2025,8 +2025,13 @@ subscriptions:
 `), 0o600))
 	profileStore, err := profiles.LoadProfiles(dir, nil)
 	require.NoError(t, err)
-	// The replacement stream holds its dump until the test has seen the old
-	// profile's series exported.
+	// The first stream holds its error, and the replacement stream its dump,
+	// until the test has seen the old profile's series exported. Nothing
+	// bounds how long a series stays exported once the withdrawal is in
+	// place, so a first stream free to end on its own would race the test to
+	// the reader: the reconnect is a backoff away, and the series it retires
+	// would be gone before the first read.
+	reset := make(chan struct{})
 	resume := make(chan struct{})
 	acme := &gnmi.FakeSession{
 		Caps: &gnmi.CapabilitiesResult{Vendor: "acme"},
@@ -2046,6 +2051,11 @@ subscriptions:
 					case <-ctx.Done():
 						return
 					}
+				}
+				select {
+				case <-reset:
+				case <-ctx.Done():
+					return
 				}
 				errs <- errors.New("stream reset")
 			}()
@@ -2089,6 +2099,7 @@ subscriptions:
 		g, ok := collect(t, reader)["gnmi.acme_port_status"].Data.(metricdata.Gauge[float64])
 		return ok && len(g.DataPoints) == 1
 	})
+	close(reset)
 	waitFor(t, 3*time.Second, func() bool { return dialer.dialCount() >= 2 })
 	close(resume)
 	waitFor(t, 3*time.Second, func() bool {

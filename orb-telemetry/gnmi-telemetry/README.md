@@ -358,10 +358,10 @@ the device still carries. A snapshot speaks only for the paths the snapshot
 fetched, so the series of a subscription Get polling skips for carrying an
 origin of its own, and those of a path whose own Get failed, are left where they
 are. A reconnect that selects a different profile, because the device now
-advertises another NOS or because an override changed, withdraws every series of
-that target before the new stream opens: the new profile's dump speaks for its
-own paths alone, so a series of a metric only the old profile carried would be
-restated by nothing and reconciled away by nothing.
+advertises another NOS than it did before, withdraws every series of that target
+before the new stream opens: the new profile's dump speaks for its own paths
+alone, so a series of a metric only the old profile carried would be restated by
+nothing and reconciled away by nothing.
 
 Two other things withdraw a series: a delete notification, which withdraws the
 deleted element and everything under it, and stopping the policy, which
