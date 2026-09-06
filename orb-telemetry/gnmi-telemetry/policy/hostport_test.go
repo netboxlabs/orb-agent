@@ -30,6 +30,13 @@ func TestCheckInlinePortRejectsAServiceName(t *testing.T) {
 
 	assert.NoError(t, checkInlinePort("10.0.0.1:6030"))
 	assert.NoError(t, checkInlinePort("2001:db8::1"), "an unbracketed IPv6 literal is not an inline port")
+	assert.NoError(t, checkInlinePort("[2001:db8::1]"), "a bracketed IPv6 literal without a port")
+	assert.NoError(t, checkInlinePort("fe80::1%eth0"), "an IPv6 literal with a zone")
+	assert.NoError(t, checkInlinePort("2001:db8::/64"), "an IPv6 prefix")
+	assert.NoError(t, checkInlinePort("2001:db8::1-2001:db8::9"), "an IPv6 range")
+	assert.Error(t, checkInlinePort("a:b:c"),
+		"several colons that are not an IPv6 form would be dialled as [a:b:c]:port and never resolve")
+	assert.Error(t, checkInlinePort("[2001:db8::1"), "an unclosed bracket is not an IPv6 form")
 }
 
 // Port 0 parses as a number and is not one. splitEffectivePort would store it

@@ -94,7 +94,16 @@ func splitEffectivePort(host string, field uint16) (bare string, port uint16, in
 func checkInlinePort(host string) error {
 	_, port, err := net.SplitHostPort(host)
 	if err != nil {
-		// No inline port, or an IPv6 literal written without brackets.
+		// No inline port, or an IPv6 form written without brackets. A value with
+		// several colons that is not one, such as "a:b:c", used to pass here as
+		// bare IPv6: expansion then read it as a hostname and the dialer wrapped it
+		// in brackets, an address that could never resolve, so the policy was
+		// accepted and its target retried forever.
+		if strings.Count(host, ":") > 1 && !ipv6Form(host) {
+			return fmt.Errorf(
+				"target %q: is neither an IPv6 address, prefix or range nor a bracketed [host]:port", host,
+			)
+		}
 		return nil
 	}
 	// Zero is refused here although the discovery copy of this check accepts it:
@@ -107,6 +116,28 @@ func checkInlinePort(host string) error {
 		)
 	}
 	return nil
+}
+
+// ipv6Form reports whether h, brackets removed, is an IPv6 address (a zone
+// allowed), an IPv6 prefix, or a range of two IPv6 addresses.
+func ipv6Form(h string) bool {
+	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		h = h[1 : len(h)-1]
+	}
+	is6 := func(s string) bool {
+		addr, err := netip.ParseAddr(s)
+		return err == nil && addr.Is6()
+	}
+	if is6(h) {
+		return true
+	}
+	if prefix, err := netip.ParsePrefix(h); err == nil && prefix.Addr().Is6() {
+		return true
+	}
+	if base, end, ok := strings.Cut(h, "-"); ok && is6(base) && is6(end) {
+		return true
+	}
+	return false
 }
 
 // canonicalHost normalizes a bare host for comparison: an IP literal to the one
