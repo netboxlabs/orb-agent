@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"fmt"
 	"io/fs"
 	"path"
 	"strings"
@@ -216,16 +217,34 @@ func TestOrbProfiles_LoadAndResolveWithoutWarnings(t *testing.T) {
 }
 
 // keptSymbols lists what a resolved, deduped profile will export: one entry
-// per surviving symbol, as exported metric name and the OID it reads.
+// per surviving symbol, rendered with everything that shapes its series:
+// exported name, OID, poll period, conversion, rename tag, enum members, and
+// the tag names of the entry it sits in.
 func keptSymbols(p *Profile) []string {
 	var out []string
 	for i := range p.Metrics {
 		m := &p.Metrics[i]
+		tags := make([]string, 0, len(m.MetricTags))
+		for j := range m.MetricTags {
+			mt := &m.MetricTags[j]
+			name := mt.Tag
+			if col := mt.Column; col != nil && name == "" {
+				name = col.Name
+			}
+			if col := mt.Symbol; col != nil && name == "" {
+				name = col.Name
+			}
+			tags = append(tags, name)
+		}
+		render := func(s *Symbol) string {
+			return fmt.Sprintf("%s|%s|poll=%d|conv=%s|tag=%s|enum=%v|tags=%v",
+				s.MetricName(), s.OID, s.PollTimeSec, s.Conversion, s.Tag, s.Enum.Values, tags)
+		}
 		if m.Symbol != nil {
-			out = append(out, m.Symbol.MetricName()+"|"+m.Symbol.OID)
+			out = append(out, render(m.Symbol))
 		}
 		for j := range m.Symbols {
-			out = append(out, m.Symbols[j].MetricName()+"|"+m.Symbols[j].OID)
+			out = append(out, render(&m.Symbols[j]))
 		}
 	}
 	return out
@@ -248,6 +267,7 @@ func TestOrbProfiles_StubInheritsParentMetrics(t *testing.T) {
 		"cisco/cisco-catalyst-models.yml": "cisco/cisco-catalyst.yml",
 		"cisco/cisco-asr-models.yml":      "cisco/cisco-asr.yml",
 		"cisco/cisco-nexus-models.yml":    "cisco/cisco-nexus.yml",
+		"cisco/cisco-sb-models.yml":       "cisco/cisco-sb.yml",
 		"cisco/cisco-wlc-models.yml":      "cisco/cisco-wlc.yml",
 		"juniper/juniper-ex-models.yml":   "juniper/juniper-ex-switches.yml",
 		"juniper/juniper-mx-models.yml":   "juniper/juniper-mx-router.yml",
@@ -269,18 +289,26 @@ func TestOrbProfiles_StubInheritsParentMetrics(t *testing.T) {
 	require.NoError(t, err)
 	m := NewMatcher(all, silentLogger)
 	for oid, want := range map[string]string{
-		"1.3.6.1.4.1.9.1.150":          "cisco/cisco-catalyst-models.yml",
-		"1.3.6.1.4.1.9.1.3075":         "cisco/cisco-asr-models.yml",
-		"1.3.6.1.4.1.9.1.2666":         "cisco/cisco-asr-models.yml",
-		"1.3.6.1.4.1.9.1.1915":         "cisco/cisco-nexus-models.yml",
-		"1.3.6.1.4.1.9.1.3324":         "cisco/cisco-wlc-models.yml",
-		"1.3.6.1.4.1.2636.1.1.1.2.169": "juniper/juniper-ex-models.yml",
-		"1.3.6.1.4.1.2636.1.1.1.2.168": "juniper/juniper-mx-models.yml",
-		"1.3.6.1.4.1.2636.1.1.1.2.585": "juniper/juniper-srx-models.yml",
-		"1.3.6.1.4.1.789.2.99":         "netapp/netapp-ontap-models.yml",
-		"1.3.6.1.4.1.789.2.5":          "netapp/netapp-cluster.yml", // Kentik's exact still wins
-		"1.3.6.1.4.1.20916.1.11":       "avtech/roomalert-32s-models.yml",
-		"1.3.6.1.4.1.20916":            "avtech/roomalert-32s.yml", // Kentik's exact still wins
+		"1.3.6.1.4.1.9.1.150":            "cisco/cisco-catalyst-models.yml",
+		"1.3.6.1.4.1.9.1.2440":           "cisco/cisco-catalyst-models.yml",
+		"1.3.6.1.4.1.9.1.3075":           "cisco/cisco-asr-models.yml",
+		"1.3.6.1.4.1.9.1.2666":           "cisco/cisco-asr-models.yml",
+		"1.3.6.1.4.1.9.1.1189":           "cisco/cisco-asr.yml", // excluded on purpose; Kentik keeps routing it
+		"1.3.6.1.4.1.9.1.1915":           "cisco/cisco-nexus-models.yml",
+		"1.3.6.1.4.1.9.12.3.1.3.9999":    "cisco/cisco-nexus-models.yml",
+		"1.3.6.1.4.1.9.12.3.1.3.1062":    "cisco/cisco-ucs.yml", // Kentik's exact still wins under the new wildcard
+		"1.3.6.1.4.1.9.1.3210":           "cisco/cisco-sb-models.yml",
+		"1.3.6.1.4.1.9.6.1.88.26.1":      "cisco/cisco-sb.yml", // Kentik's exact still wins
+		"1.3.6.1.4.1.9.1.3324":           "cisco/cisco-wlc-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.2.169":   "juniper/juniper-ex-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.4.169.5": "juniper/juniper-ex-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.2.168":   "juniper/juniper-mx-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.4.168.1": "juniper/juniper-mx-models.yml",
+		"1.3.6.1.4.1.2636.1.1.1.2.585":   "juniper/juniper-srx-models.yml",
+		"1.3.6.1.4.1.789.2.99":           "netapp/netapp-ontap-models.yml",
+		"1.3.6.1.4.1.789.2.5":            "netapp/netapp-cluster.yml", // Kentik's exact still wins
+		"1.3.6.1.4.1.20916.1.11":         "avtech/roomalert-32s-models.yml",
+		"1.3.6.1.4.1.20916":              "avtech/roomalert-32s.yml", // Kentik's exact still wins
 	} {
 		got, ok := m.Match(oid)
 		require.True(t, ok, oid)
@@ -317,6 +345,7 @@ func TestOrbProfiles_ExactFileSet(t *testing.T) {
 		"cisco/cisco-asr-models.yml",
 		"cisco/cisco-catalyst-models.yml",
 		"cisco/cisco-nexus-models.yml",
+		"cisco/cisco-sb-models.yml",
 		"cisco/cisco-wlc-models.yml",
 		"hpe/hpe-proliant.yml",
 		"juniper/juniper-ex-models.yml",

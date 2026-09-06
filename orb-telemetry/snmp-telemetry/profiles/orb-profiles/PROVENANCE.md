@@ -61,11 +61,23 @@ and why `TestEnum_BundledMembersWithNoValue` lists the stub beside its parent.
 | `cisco/cisco-asr-models.yml` | `cisco-asr.yml` | `cisco-asr.yaml`, `cisco-isr.yaml` |
 | `cisco/cisco-catalyst-models.yml` | `cisco-catalyst.yml` | `cisco-catalyst.yaml` |
 | `cisco/cisco-nexus-models.yml` | `cisco-nexus.yml` | `cisco-nexus.yaml` |
+| `cisco/cisco-sb-models.yml` | `cisco-sb.yml` | `cisco-sb.yaml` |
 | `cisco/cisco-wlc-models.yml` | `cisco-wlc.yml` | `cisco-catalyst-wlc.yaml`, `cisco-legacy-wlc.yaml` |
 | `juniper/juniper-ex-models.yml` | `juniper-ex-switches.yml` | `juniper-ex.yaml` |
 | `juniper/juniper-mx-models.yml` | `juniper-mx-router.yml` | `juniper-mx.yaml` |
 | `juniper/juniper-srx-models.yml` | `juniper-srx-firewalls.yml` | `juniper-srx.yaml` |
 | `netapp/netapp-ontap-models.yml` | `netapp-cluster.yml` | `netapp.yaml` |
+
+Every sysObjectID an upstream family file lists that the bundled matcher would
+otherwise route to a generic catch-all is included, wildcards too. Five Cisco
+IDs the upstream Catalyst file lists are left out because Kentik already
+routes them to its ASR or CSR profile; stubs fill gaps and never reclassify.
+
+- `1.3.6.1.4.1.9.1.1189` (`cat2960xs48tsL`): routed to `cisco/cisco-asr.yml`.
+- `1.3.6.1.4.1.9.1.2819` (`ciscoC850012X`): routed to `cisco/cisco-asr.yml`.
+- `1.3.6.1.4.1.9.1.2961` (`ciscoC82001N4T`): routed to `cisco/cisco-asr.yml`.
+- `1.3.6.1.4.1.9.1.2989` (`ciscoC83001N1S6T`): routed to `cisco/cisco-asr.yml`.
+- `1.3.6.1.4.1.9.1.3004` (`ciscoC8000V`): routed to `cisco/cisco-csr.yml`.
 
 ## Rules every file follows
 
@@ -97,6 +109,8 @@ and why `TestEnum_BundledMembersWithNoValue` lists the stub beside its parent.
 | positional `index: N` tags | dropped; rows stay distinct by `row_index` |
 | one table declared twice to force a type | one entry |
 | `# NOTE: other(1), ok(2), ...` on a status symbol | `enum:` on that symbol, members from the comment |
+| status symbol with no upstream `mapping` or comment, but the same column enumerated in a bundled Kentik profile | `enum:` copied from that Kentik profile (hpe-proliant `cpqSeCpuStatus`, from `hp/hp-ilo.yml`) |
+| MAC address column with no upstream `format:` | `conversion: hwaddr` when the MIB types it as MacAddress (hpe-proliant `cpqNicIfPhysAdapterMACAddress`) |
 
 ## Maintenance
 
