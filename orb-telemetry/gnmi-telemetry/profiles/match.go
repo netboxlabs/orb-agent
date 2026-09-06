@@ -168,11 +168,18 @@ func SplitLeaf(subscriptionPath, updatePath string) (string, map[string]string, 
 // MatchPrefix reports whether deletedPath names an ancestor of, or exactly,
 // the subscription path, with the keys the deleted path carries. A delete
 // of a list element arrives as the element's path, shorter than every
-// subscription under it.
+// subscription under it. The empty path is the data-tree root, an ancestor
+// of everything: a delete of it matches every subscription with no keys, so
+// every series the subscription produced is withdrawn. Refusing it left an
+// on_change series, which never goes stale, exported until the next
+// reconnect.
 func MatchPrefix(subscriptionPath, deletedPath string) (map[string]string, bool) {
 	pattern := parsePath(subscriptionPath)
 	path := parsePath(deletedPath)
-	if len(path) == 0 || len(path) > len(pattern) {
+	if len(path) == 0 {
+		return nil, true
+	}
+	if len(path) > len(pattern) {
 		return nil, false
 	}
 	return matchElems(pattern[:len(path)], path)
