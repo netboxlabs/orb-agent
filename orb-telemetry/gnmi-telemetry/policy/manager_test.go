@@ -169,6 +169,49 @@ policies:
 	assert.ErrorContains(t, err, "send_credentials_to_unverified_targets")
 }
 
+// The rule covers every credential the dial would send, not the password
+// alone: a username by itself and a client certificate both reach whatever
+// the sweep admitted.
+func TestParsePolicies_RejectsAnyCredentialOnAnUnverifiedRange(t *testing.T) {
+	for name, scope := range map[string]string{
+		"username_only": `
+      username: admin
+      tls:
+        skip_verify: true`,
+		"client_certificate": `
+      tls:
+        skip_verify: true
+        cert: /etc/gnmi/client.crt
+        key: /etc/gnmi/client.key`,
+	} {
+		m := newTestManager()
+		_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:` + scope + `
+      targets:
+        - host: 10.0.0.0/24
+`))
+		require.Error(t, err, name)
+		assert.ErrorContains(t, err, "send_credentials_to_unverified_targets", name)
+	}
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      tls:
+        skip_verify: true
+      targets:
+        - host: 10.0.0.0/24
+`))
+	require.NoError(t, err, "a range with nothing to send is not gated")
+}
+
 func TestParsePolicies_AcceptsACredentialedRangeWhenTheOperatorOptsIn(t *testing.T) {
 	m := newTestManager()
 	_, err := m.ParsePolicies([]byte(`

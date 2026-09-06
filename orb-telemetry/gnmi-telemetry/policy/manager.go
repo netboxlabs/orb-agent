@@ -736,11 +736,14 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if n > targets.MaxExpand {
 				return fmt.Errorf("target %s expands to %d addresses, more than the %d one target may hold", t.Host, n, targets.MaxExpand)
 			}
-			if t.ResolvedPassword() != "" {
-				tls := t.ResolvedTLS()
-				if (tls.Insecure || tls.SkipVerify) && !policy.Config.SendCredentialsToUnverifiedTargets {
-					return fmt.Errorf("target %s: a range or CIDR carries a password while TLS does not verify the server; set send_credentials_to_unverified_targets to allow it", t.Host)
-				}
+			// Every credential is gated, not the password alone: the sweep
+			// withholds authentication and admits whatever answered, and the
+			// dial that follows sends the username, the password and the client
+			// certificate to it, so each of them is material an unrelated
+			// service in the range would receive.
+			tls := t.ResolvedTLS()
+			if carriesCredential(t) && (tls.Insecure || tls.SkipVerify) && !policy.Config.SendCredentialsToUnverifiedTargets {
+				return fmt.Errorf("target %s: a range or CIDR carries a credential while TLS does not verify the server; set send_credentials_to_unverified_targets to allow it", t.Host)
 			}
 		}
 	}
@@ -748,6 +751,13 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		return err
 	}
 	return checkPolicyExpansion(policy.Scope.Targets)
+}
+
+// carriesCredential reports whether a target would authenticate to whatever it
+// dials: a username, a password, or a client certificate or key.
+func carriesCredential(t config.Target) bool {
+	tls := t.ResolvedTLS()
+	return t.ResolvedUsername() != "" || t.ResolvedPassword() != "" || tls.CertFile != "" || tls.KeyFile != ""
 }
 
 // checkDuplicateTargets rejects two explicit targets naming one device.

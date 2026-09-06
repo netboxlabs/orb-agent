@@ -179,8 +179,9 @@ not subscribed to, so a device that comes up later is picked up; it is off by
 default and must be at least 60000 when set.
 
 The probe is what makes a wide target safe to write, and it is also why the
-credential rule exists: **a CIDR or range target that carries a password is
-rejected unless the policy's TLS block verifies the server, or the policy sets
+credential rule exists: **a CIDR or range target that carries a credential, a
+username, a password, or a client certificate, is rejected unless the policy's
+TLS block verifies the server, or the policy sets
 `send_credentials_to_unverified_targets: true`.** Without verification, the sweep
 admits whatever answered on the port, and an unrelated service inside the range
 would be handed the credential. Name a CA (and leave `skip_verify` and
@@ -260,7 +261,7 @@ set on the command line rather than by a policy.
 | `profiles_dir` | path | none | A profile overlay directory for this policy alone, in place of `--profiles-dir`. Resolved inside `--profiles-root`; rejected when that flag is unset. |
 | `probe_timeout_ms` | milliseconds, 0 to 31536000000 | `3000` sweep, `10000` path probe | How long one sweep probe waits for an address to answer Capabilities. Set, it also bounds a dialed session's own Capabilities call and each subscription-path probe, which are the calls it makes under a context carrying no deadline of its own; unset, the sweep waits 3 s and either of those 10 s. The sweep bounds its own probe and keeps that bound whatever this is set to. |
 | `rescan_interval_ms` | milliseconds | `0` (off) | How often addresses the policy is not subscribed to are probed again. Must be from 60000 to 31536000000 when set. |
-| `send_credentials_to_unverified_targets` | boolean | `false` | Permits a CIDR or range target to carry a password while TLS does not verify the server. |
+| `send_credentials_to_unverified_targets` | boolean | `false` | Permits a CIDR or range target to carry a credential while TLS does not verify the server. |
 
 #### `scope`
 
