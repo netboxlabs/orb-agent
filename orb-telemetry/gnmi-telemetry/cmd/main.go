@@ -165,9 +165,15 @@ func main() {
 
 	serverErrCh := srv.Start()
 
-	waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
+	err := waitForShutdown(rootCtx, logger, sigs, serverErrCh, func() {
 		shutdown(shutdownBudget, cancelFunc, srv, shutdownMetrics)
 	})
+	if err != nil {
+		// A process that never served, its port taken for one, exits failed
+		// once the sequence has run, so a supervisor that restarts failures
+		// alone does not read it as a clean stop and leave nothing collecting.
+		os.Exit(1)
+	}
 }
 
 // splitList reads a comma-separated flag value as its non-empty, trimmed
@@ -184,15 +190,18 @@ func splitList(value string) []string {
 }
 
 // waitForShutdown blocks until a stop signal or a server error asks the process
-// to stop, and returns only once the shutdown sequence has finished. Both paths
+// to stop, and returns only once the shutdown sequence has finished, with the
+// server error when that is what stopped it and nil for a signal. Both paths
 // go through one sync.Once: the sequence cancels the root context on its first
 // step, so a caller that released main on that cancellation would let the
 // process exit through the server stop and the final export.
-func waitForShutdown(rootCtx context.Context, logger *slog.Logger, sigs <-chan os.Signal, serverErrCh <-chan error, run func()) {
+func waitForShutdown(rootCtx context.Context, logger *slog.Logger, sigs <-chan os.Signal, serverErrCh <-chan error, run func()) error {
 	done := make(chan struct{})
 	var once sync.Once
-	trigger := func() {
+	var cause error
+	trigger := func(err error) {
 		once.Do(func() {
+			cause = err
 			run()
 			close(done)
 		})
@@ -205,15 +214,16 @@ func waitForShutdown(rootCtx context.Context, logger *slog.Logger, sigs <-chan o
 		case <-rootCtx.Done():
 			logger.Warn("main context cancelled")
 		}
-		trigger()
+		trigger(nil)
 	}()
 
 	go func() {
 		if err, ok := <-serverErrCh; ok && err != nil {
 			logger.Error(AppName+" server encountered an error", "error", err)
-			trigger()
+			trigger(err)
 		}
 	}()
 
 	<-done
+	return cause
 }

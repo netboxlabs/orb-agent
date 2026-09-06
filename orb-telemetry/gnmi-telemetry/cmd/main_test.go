@@ -262,7 +262,7 @@ func TestWaitForShutdownWaitsForTheSequenceToFinish(t *testing.T) {
 
 	returned := make(chan struct{})
 	go func() {
-		waitForShutdown(rootCtx, discardLogger(), nil, serverErrCh, run)
+		_ = waitForShutdown(rootCtx, discardLogger(), nil, serverErrCh, run)
 		close(returned)
 	}()
 
@@ -283,6 +283,21 @@ func TestWaitForShutdownWaitsForTheSequenceToFinish(t *testing.T) {
 
 // A stop signal and a server error can arrive together. The sequence stops the
 // server and flushes the meter provider, so it must run once.
+// The cause of the stop comes back to main: a server error, so the process can
+// exit failed for a supervisor that restarts failures alone, and nil for a
+// signal, which is a clean stop.
+func TestWaitForShutdownReportsTheServerError(t *testing.T) {
+	serverErrCh := make(chan error, 1)
+	serverErrCh <- errors.New("listen tcp: address already in use")
+	err := waitForShutdown(context.Background(), discardLogger(), nil, serverErrCh, func() {})
+	require.EqualError(t, err, "listen tcp: address already in use")
+
+	sigs := make(chan os.Signal, 1)
+	sigs <- syscall.SIGTERM
+	err = waitForShutdown(context.Background(), discardLogger(), sigs, make(chan error), func() {})
+	require.NoError(t, err, "a signal is a clean stop")
+}
+
 func TestWaitForShutdownRunsTheSequenceOnce(t *testing.T) {
 	rootCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -298,7 +313,7 @@ func TestWaitForShutdownRunsTheSequenceOnce(t *testing.T) {
 	serverErrCh := make(chan error, 1)
 	serverErrCh <- errors.New("listen tcp 127.0.0.1:8079: address already in use")
 
-	waitForShutdown(rootCtx, discardLogger(), sigs, serverErrCh, run)
+	_ = waitForShutdown(rootCtx, discardLogger(), sigs, serverErrCh, run)
 
 	assert.Never(t, func() bool { return runs.Load() > 1 }, 200*time.Millisecond, 10*time.Millisecond,
 		"the shutdown sequence ran more than once")
