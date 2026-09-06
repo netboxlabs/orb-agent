@@ -574,15 +574,18 @@ func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.Sub
 // and remembering the verdict. A subscription is atomic on a strict target,
 // so one bad path would sink the rest. Get is a proxy for Subscribe support:
 // a path a target streams but refuses to Get is pruned too, which is why
-// each pruned path is logged with its error. s.origin is swapped around the
-// probe; every session method runs on the caller's goroutine, so a caller
-// that used one session from two goroutines at once would break this.
+// each pruned path is logged with its error. Each probe carries its
+// subscription's origin explicitly, so the probes run together on one
+// session without touching its state.
 //
 // Each probe carries a deadline where the caller's context has none, which is
 // the loop's case and lives as long as the policy: a target that answers
 // Capabilities and then never answers the Get would otherwise hold the probe
 // for ever, and there would be no stream, no ladder and no reconnect until the
-// policy was deleted.
+// policy was deleted. The probes run concurrently, so the phase takes one
+// deadline at most rather than one per path: run one after another, a target
+// that hung on Get held every connection for the deadline times the number of
+// paths, seventy seconds for the bundled profile and minutes for a larger one.
 //
 // Only a refusal prunes, and only a refusal is remembered. A probe that missed
 // its deadline, or found the target unavailable, asked its question and got no
@@ -597,17 +600,30 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 	if s.probed == nil {
 		s.probed = map[string]bool{}
 	}
+	// The unseen subscriptions are probed together; their verdicts are read
+	// and remembered here, on the caller's goroutine, once every probe has
+	// returned.
+	errs := make([]error, len(subs))
+	var wg sync.WaitGroup
+	for i, sub := range subs {
+		if _, seen := s.probed[sub.Origin+"|"+sub.Path]; seen {
+			continue
+		}
+		wg.Add(1)
+		go func(i int, sub Subscription) {
+			defer wg.Done()
+			probeCtx, cancelProbe := s.bounded(ctx)
+			defer cancelProbe()
+			_, errs[i] = s.getPathsWithOrigin(probeCtx, sub.Origin, []string{sub.Path})
+		}(i, sub)
+	}
+	wg.Wait()
 	kept := make([]Subscription, 0, len(subs))
-	for _, sub := range subs {
+	for i, sub := range subs {
 		key := sub.Origin + "|" + sub.Path
 		ok, seen := s.probed[key]
 		if !seen {
-			saved := s.origin
-			s.origin = sub.Origin
-			probeCtx, cancelProbe := s.bounded(ctx)
-			_, err := s.getPaths(probeCtx, []string{sub.Path})
-			cancelProbe()
-			s.origin = saved
+			err := errs[i]
 			ok = err == nil
 			switch {
 			case ok:
@@ -767,15 +783,21 @@ func mergeGetResults(into *Notification, n Notification) {
 	}
 }
 
-// getPaths issues a single gNMI Get for the given paths and merges the response
-// notifications into one Notification.
+// getPaths issues a single gNMI Get for the given paths under the session's
+// origin and merges the response notifications into one Notification.
 func (s *gnmicSession) getPaths(ctx context.Context, paths []string) (Notification, error) {
+	return s.getPathsWithOrigin(ctx, s.origin, paths)
+}
+
+// getPathsWithOrigin is getPaths under an explicit origin, which is what a
+// subscription probe carries so that probes can run together.
+func (s *gnmicSession) getPathsWithOrigin(ctx context.Context, origin string, paths []string) (Notification, error) {
 	getOpts := []gapi.GNMIOption{
 		gapi.Encoding(s.enc()),
 		gapi.DataTypeALL(),
 	}
 	for _, p := range paths {
-		getOpts = append(getOpts, gapi.Path(withOrigin(s.origin, p)))
+		getOpts = append(getOpts, gapi.Path(withOrigin(origin, p)))
 	}
 	req, err := gapi.NewGetRequest(getOpts...)
 	if err != nil {

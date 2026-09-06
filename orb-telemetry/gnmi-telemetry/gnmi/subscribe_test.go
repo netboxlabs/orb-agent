@@ -469,6 +469,27 @@ func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
 // decides. A target that truly does not model the path rejects it there, which
 // the ladder and the reconnect handle; one that was merely slow serves it,
 // where dropping it left a healthy partial stream never asking again.
+// The subscription probes run together: four paths a slow target answers in
+// a hundred and fifty milliseconds each are probed inside one such wait, not
+// four, so a target that hangs on Get costs one deadline per connection
+// rather than one per path.
+func TestSubscriptionProbesRunConcurrently(t *testing.T) {
+	paths := []string{"/system/memory/state", "/system/cpus/cpu[index=*]/state", "/interfaces/interface[name=*]/state/counters", "/system/state/hostname"}
+	holds := map[string]bool{}
+	subs := make([]Subscription, 0, len(paths))
+	for _, p := range paths {
+		holds[p] = true
+		subs = append(subs, Subscription{Path: p, Mode: OnChange})
+	}
+	s := getSession(t, &getServer{holds: holds, delay: 150 * time.Millisecond})
+	s.probeTimeout = time.Second
+	start := time.Now()
+	kept := s.acceptedSubscriptions(context.Background(), subs)
+	elapsed := time.Since(start)
+	assert.Len(t, kept, len(paths), "every path is accepted")
+	assert.Less(t, elapsed, 450*time.Millisecond, "the probes ran together, not one after another")
+}
+
 func TestASubscriptionPathProbeThatNeverAnswersKeepsThePath(t *testing.T) {
 	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
 	addr := serveGet(t, &getServer{
