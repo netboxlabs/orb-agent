@@ -191,7 +191,12 @@ func MatchPath(pattern, path string) (map[string]string, bool) {
 
 // SplitLeaf matches the leading elements of updatePath against
 // subscriptionPath and returns the remainder as a "/"-joined leaf. The
-// update must extend the subscription path by at least one element.
+// update must extend the subscription path by at least one element, and no
+// element of the remainder may carry a key: a list below the subscription
+// path has entries the leaf cannot tell apart, since a leaf is written
+// without keys and an attribute promotes only the subscription path's, so
+// every entry would write the one series. Such an update matches nothing,
+// which is what tells the operator the list belongs in the subscription path.
 func SplitLeaf(subscriptionPath, updatePath string) (string, map[string]string, bool) {
 	pattern := parsePath(subscriptionPath)
 	path := parsePath(updatePath)
@@ -204,6 +209,9 @@ func SplitLeaf(subscriptionPath, updatePath string) (string, map[string]string, 
 	}
 	rest := make([]string, 0, len(path)-len(pattern))
 	for _, e := range path[len(pattern):] {
+		if len(e.keys) > 0 {
+			return "", nil, false
+		}
 		rest = append(rest, e.name)
 	}
 	return strings.Join(rest, "/"), keys, true

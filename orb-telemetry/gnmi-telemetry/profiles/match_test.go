@@ -64,6 +64,20 @@ func TestParsePathDecodesEscapedDelimitersInKeyValues(t *testing.T) {
 	assert.Equal(t, `a]/b[c\d`, keys["name"], "the attribute carries the value the device wrote")
 }
 
+// A keyed element below the subscription path is not a leaf: two entries of
+// that list would reduce to the same leaf name under the same attributes and
+// write one series. The update matches nothing instead.
+func TestSplitLeafRefusesAKeyedElementBelowTheSubscription(t *testing.T) {
+	_, _, ok := SplitLeaf("/interfaces/interface[name=*]",
+		"/interfaces/interface[name=e1]/subinterfaces/subinterface[index=0]/state/x")
+	assert.False(t, ok, "a list below the subscription path belongs in the subscription path")
+	leaf, keys, ok := SplitLeaf("/interfaces/interface[name=*]/subinterfaces/subinterface[index=*]",
+		"/interfaces/interface[name=e1]/subinterfaces/subinterface[index=0]/state/x")
+	require.True(t, ok, "written into the subscription path, the list is matched and its key promotable")
+	assert.Equal(t, "state/x", leaf)
+	assert.Equal(t, map[string]string{"name": "e1", "index": "0"}, keys)
+}
+
 func TestMatchPrefixAndDepth(t *testing.T) {
 	keys, ok := MatchPrefix("/interfaces/interface[name=*]/state/counters", "/interfaces/interface[name=e1]")
 	require.True(t, ok, "a deleted ancestor element matches the subscriptions under it")
