@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	gpath "github.com/openconfig/gnmi/path"
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
@@ -818,6 +819,19 @@ var nosCanonical = map[string]string{
 // nosTokenOrder fixes the NOS scan order (deterministic; map order is randomized).
 var nosTokenOrder = []string{"sonic"}
 
+// hasWord reports whether org, already lower-cased, carries tok as a whole
+// word: org is split on everything that is neither a letter nor a digit.
+func hasWord(org, tok string) bool {
+	for _, w := range strings.FieldsFunc(org, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if w == tok {
+			return true
+		}
+	}
+	return false
+}
+
 // mapCapabilities converts a raw gNMI CapabilityResponse to our CapabilitiesResult.
 func mapCapabilities(resp *gnmiproto.CapabilityResponse) *CapabilitiesResult {
 	result := &CapabilitiesResult{}
@@ -829,8 +843,13 @@ func mapCapabilities(resp *gnmiproto.CapabilityResponse) *CapabilitiesResult {
 	// first in the list. If nothing matches, Vendor stays "" — we deliberately do
 	// NOT fall back to models[0]'s raw Organization, which would surface noise
 	// like "OpenConfig working group" as a literal NetBox manufacturer. The
-	// profile Store.Match still works because each canonical token is a substring
-	// of itself (and of the overlay aliases).
+	// profile Store.Match still works because each canonical token is a word of
+	// itself (and of the overlay aliases).
+	//
+	// A token must be a whole word of the organization. Matched as a substring,
+	// "Francisco Networks" read as Cisco, and since the canonical vendor outranks
+	// the reported organizations in profile selection, a profile written for
+	// that organization lost to the cisco overlay.
 	bestIdx := len(vendorTokenOrder) // sentinel: no match yet
 	for _, m := range models {
 		org := strings.ToLower(m.GetOrganization())
@@ -838,7 +857,7 @@ func mapCapabilities(resp *gnmiproto.CapabilityResponse) *CapabilitiesResult {
 			if idx >= bestIdx {
 				break // no improvement possible
 			}
-			if strings.Contains(org, tok) {
+			if hasWord(org, tok) {
 				bestIdx = idx
 				result.Vendor = vendorCanonical[tok]
 				break
@@ -855,7 +874,7 @@ func mapCapabilities(resp *gnmiproto.CapabilityResponse) *CapabilitiesResult {
 			if idx >= nosIdx {
 				break
 			}
-			if strings.Contains(org, tok) {
+			if hasWord(org, tok) {
 				nosIdx = idx
 				result.NOS = nosCanonical[tok]
 				break

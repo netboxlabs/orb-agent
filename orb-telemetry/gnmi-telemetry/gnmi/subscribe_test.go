@@ -616,6 +616,25 @@ func TestAPROTOOnlyTargetAnswersItsGet(t *testing.T) {
 // any other, so a device of an unlisted vendor reports its name and the result
 // carries no vendor at all. Keeping the organizations it reported is what
 // leaves a profile written for that vendor something to be selected by.
+// A vendor or NOS token is a whole word of the organization, never a substring
+// of one: the canonical vendor outranks the reported organizations in profile
+// selection, so a substring match would hand a device to the wrong overlay.
+func TestCapabilitiesMatchesVendorTokensAsWholeWords(t *testing.T) {
+	got := mapCapabilities(&gnmiproto.CapabilityResponse{SupportedModels: []*gnmiproto.ModelData{
+		{Name: "acme-interfaces", Organization: "Francisco Networks"},
+		{Name: "acme-system", Organization: "Supersonic Labs"},
+	}})
+	assert.Empty(t, got.Vendor, "cisco inside Francisco is not the vendor")
+	assert.Empty(t, got.NOS, "sonic inside Supersonic is not the network OS")
+
+	got = mapCapabilities(&gnmiproto.CapabilityResponse{SupportedModels: []*gnmiproto.ModelData{
+		{Name: "vendor-interfaces", Organization: "Cisco Systems, Inc."},
+		{Name: "sonic-system", Organization: "SONiC"},
+	}})
+	assert.Equal(t, "Cisco", got.Vendor, "the token as a word of the organization")
+	assert.Equal(t, "SONiC", got.NOS, "the token as the whole organization")
+}
+
 func TestCapabilitiesKeepsTheOrganizationsTheTargetReported(t *testing.T) {
 	resp := &gnmiproto.CapabilityResponse{SupportedModels: []*gnmiproto.ModelData{
 		{Name: "acme-interfaces", Organization: " Acme Networks, Inc. "},
