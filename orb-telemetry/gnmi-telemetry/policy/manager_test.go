@@ -212,6 +212,45 @@ policies:
 	require.NoError(t, err, "a range with nothing to send is not gated")
 }
 
+// A client certificate is a pair: one half alone is refused rather than
+// dialled without, which the dialer would do silently.
+func TestParsePolicies_RejectsHalfAClientCertificatePair(t *testing.T) {
+	for name, tls := range map[string]string{
+		"cert_only": `
+        cert: /etc/gnmi/client.crt`,
+		"key_only": `
+        key: /etc/gnmi/client.key`,
+	} {
+		m := newTestManager()
+		_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      tls:` + tls + `
+      targets:
+        - host: 10.0.0.1
+`))
+		require.Error(t, err, name)
+		assert.ErrorContains(t, err, "cert and key must be set together", name)
+	}
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  test:
+    config:
+      metrics_interval: 30
+    scope:
+      tls:
+        cert: /etc/gnmi/client.crt
+        key: /etc/gnmi/client.key
+      targets:
+        - host: 10.0.0.1
+`))
+	require.NoError(t, err, "the whole pair is accepted")
+}
+
 func TestParsePolicies_AcceptsACredentialedRangeWhenTheOperatorOptsIn(t *testing.T) {
 	m := newTestManager()
 	_, err := m.ParsePolicies([]byte(`

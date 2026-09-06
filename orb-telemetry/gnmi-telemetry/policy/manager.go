@@ -718,6 +718,13 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		if err := checkInlinePort(t.Host); err != nil {
 			return err
 		}
+		// A client certificate is a pair. The dialer's TLS helper loads one
+		// only when both halves are named, so a policy naming one was accepted
+		// and dialled without it, and a target requiring mTLS refused every
+		// attempt under an accepted policy.
+		if tls := t.ResolvedTLS(); (tls.CertFile == "") != (tls.KeyFile == "") {
+			return fmt.Errorf("target %s: tls cert and key must be set together", t.Host)
+		}
 		bare, _, inline := splitEffectivePort(t.Host, t.Port)
 		// The blank check above reads the raw host, which ":9339" passes: the
 		// split then leaves an empty host with a valid port, ParsePolicies
