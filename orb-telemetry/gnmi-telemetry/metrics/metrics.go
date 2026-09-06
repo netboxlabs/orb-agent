@@ -103,6 +103,13 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
 	}
+	// A port written into the URL is held to the same range as the bare form's:
+	// the SDK keeps an out-of-range one and every export fails on it.
+	if port := u.Port(); port != "" {
+		if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
+			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", endpoint, port)
+		}
+	}
 	// Only the documented schemes reach the exporter. The SDK reads every
 	// scheme but https as plaintext, so a mistyped one such as "htps" would
 	// have exported in the clear, or failed every export, under a startup line
