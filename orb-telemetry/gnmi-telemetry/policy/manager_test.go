@@ -908,3 +908,15 @@ func TestAcquireCollector_SharesTheProcessBudgetAndSchemasAcrossProfileDirs(t *t
 	assert.Same(t, m.schemas, first.Schemas(), "a collector registers against the manager's schema registry")
 	assert.Same(t, first.Schemas(), second.Schemas(), "every collector the manager builds agrees on one schema per name")
 }
+
+// A profiles directory that is a regular file is refused: the loader would
+// read the failed listing as a warning and fall back to the bundled profiles,
+// accepting the policy with its overrides ignored.
+func TestAcquireCollectorRejectsAProfilesPathThatIsNotADirectory(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "profiles")
+	require.NoError(t, os.WriteFile(file, []byte("not a directory"), 0o600))
+	m := newTestManager()
+	_, err := m.acquireCollector(file)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not a directory")
+}

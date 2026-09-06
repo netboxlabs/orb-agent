@@ -160,8 +160,15 @@ func (m *Manager) acquireCollector(profilesDir string) (releasableCollector, err
 		return c.collector, nil
 	}
 	if profilesDir != "" {
-		if _, err := os.Stat(profilesDir); err != nil {
+		info, err := os.Stat(profilesDir)
+		if err != nil {
 			return nil, fmt.Errorf("profiles directory not found: %s", profilesDir)
+		}
+		// A regular file passes the stat, and the loader reads a failed
+		// directory listing as a warning and falls back to the bundled
+		// profiles, so the policy was accepted with its overrides ignored.
+		if !info.IsDir() {
+			return nil, fmt.Errorf("profiles directory is not a directory: %s", profilesDir)
 		}
 	}
 	store, err := profiles.LoadProfiles(profilesDir, m.logger)
