@@ -1,8 +1,11 @@
 package profiles
 
 import (
+	"bytes"
 	"embed"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -750,9 +753,16 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Store, error) {
 	return &Store{profiles: resolved}, nil
 }
 
+// addProfile decodes one profile file. Decoding refuses a field the schema
+// does not name: yaml.Unmarshal drops one silently, so a misspelled "unit"
+// exported the metric without its unit, and an overlay whose "subscriptions"
+// key was misspelled loaded as a bare copy of its parent, both looking like a
+// profile that loaded as written.
 func addProfile(into map[string]*Profile, filename string, b []byte) error {
 	var p Profile
-	if err := yaml.Unmarshal(b, &p); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(b))
+	dec.KnownFields(true)
+	if err := dec.Decode(&p); err != nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("parse profile %s: %w", filename, err)
 	}
 	p.Name = strings.TrimSuffix(filename, ".yaml")

@@ -653,6 +653,39 @@ subscriptions:
 	assert.Equal(t, "if_out_octets", site.Subscriptions[0].Metrics[0].Name)
 }
 
+// A field the schema does not name is refused rather than dropped: a
+// misspelled unit would otherwise export the metric without one, and a
+// misspelled subscriptions key would load an overlay as a bare copy of its
+// parent, each looking like a profile that loaded as written.
+func TestAProfileWithAnUnknownFieldIsRefused(t *testing.T) {
+	for name, body := range map[string]string{
+		"misspelled_unit": `
+match: {vendor: acme}
+subscriptions:
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unti: By}
+`,
+		"misspelled_subscriptions": `
+extends: _base
+match: {vendor: acme}
+subscription:
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+`,
+	} {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(body), 0o600))
+		store, err := LoadProfiles(dir, quiet())
+		if err == nil {
+			assert.Nil(t, store.profiles["acme"], "%s: the file must not load as a profile", name)
+		}
+	}
+}
+
 // A multi-word alias is matched as a phrase: its words must appear in the
 // organization in that order, not merely each somewhere in it.
 func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {
