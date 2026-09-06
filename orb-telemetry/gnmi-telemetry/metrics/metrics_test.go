@@ -188,11 +188,11 @@ func TestEndpointOptions_MalformedURLRejected(t *testing.T) {
 	}
 	_, err := endpointOptions("http://collector.example:4317")
 	assert.NoError(t, err)
-	for _, endpoint := range []string{"localhost:notaport", "collector/path", "/", ":4317", "localhost:0", "localhost"} {
+	for _, endpoint := range []string{"localhost:notaport", "collector/path", "/", ":4317", "localhost:0", "localhost", "collector/path:4317", "col lector:4317", "collector?x=1:4317", "-collector:4317"} {
 		_, err := endpointOptions(endpoint)
 		assert.Error(t, err, endpoint)
 	}
-	for _, endpoint := range []string{"localhost:4317", "[::1]:4317", "localhost:4317/"} {
+	for _, endpoint := range []string{"localhost:4317", "[::1]:4317", "localhost:4317/", "collector.example:4317", "10.0.0.1:4317", "otel-collector.monitoring.svc:4317"} {
 		_, err := endpointOptions(endpoint)
 		assert.NoError(t, err, endpoint)
 	}

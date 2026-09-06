@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,6 +53,10 @@ func providerOptions() []sdkmetric.Option {
 	return []sdkmetric.Option{sdkmetric.WithCardinalityLimit(CardinalityLimit)}
 }
 
+// dnsName is the shape of a hostname: labels of letters, digits and hyphens,
+// joined by dots, none starting or ending with a hyphen.
+var dnsName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*\.?$`)
+
 // endpointOptions returns the otlpmetricgrpc options for the configured
 // endpoint: where to connect, and whether that connection is plaintext.
 //
@@ -85,6 +90,12 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 		}
 		if host == "" {
 			return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
+		}
+		// The split only separates the fields: "collector/path:4317" splits
+		// into a host no resolver could look up, and the exporter would retry
+		// it for ever. The host is an IP literal or a DNS name.
+		if net.ParseIP(host) == nil && !dnsName.MatchString(host) {
+			return nil, fmt.Errorf("otel endpoint %q: host %q is neither an IP address nor a DNS name", endpoint, host)
 		}
 		if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
 			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", endpoint, port)
