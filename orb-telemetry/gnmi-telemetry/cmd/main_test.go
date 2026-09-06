@@ -23,9 +23,9 @@ import (
 )
 
 // stopFunc adapts a function to the stopper the shutdown sequence takes.
-type stopFunc func()
+type stopFunc func(ctx context.Context)
 
-func (f stopFunc) Stop() { f() }
+func (f stopFunc) Stop(ctx context.Context) { f(ctx) }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -47,7 +47,7 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 		errAtFlush error
 	)
 
-	shutdown(shutdownBudget, cancel, stopFunc(func() {
+	shutdown(shutdownBudget, cancel, stopFunc(func(context.Context) {
 		order = append(order, "stop")
 		errAtStop = rootCtx.Err()
 	}), func(time.Duration) {
@@ -66,8 +66,23 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 // before the runtime was cancelled and stopped.
 func TestShutdownLeavesHalfTheGraceAfterTheFlush(t *testing.T) {
 	var flushBudget time.Duration
-	shutdown(shutdownBudget, func() {}, stopFunc(func() {}), func(timeout time.Duration) { flushBudget = timeout })
+	shutdown(shutdownBudget, func() {}, stopFunc(func(context.Context) {}), func(timeout time.Duration) { flushBudget = timeout })
 	assert.Equal(t, shutdownBudget/2, flushBudget)
+}
+
+// The server stop runs under what the grace has left after the flush, not a
+// timer of its own: a flush that spent its half and a drain given a fresh
+// whole budget would together outlast the grace.
+func TestShutdownHandsTheServerStopTheRemainingGrace(t *testing.T) {
+	const budget = time.Second
+	var remaining time.Duration
+	shutdown(budget, func() {}, stopFunc(func(ctx context.Context) {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok, "the stop runs under a deadline")
+		remaining = time.Until(deadline)
+	}), func(time.Duration) { time.Sleep(100 * time.Millisecond) })
+	assert.Less(t, remaining, budget-50*time.Millisecond, "what the flush spent is gone from the stop's share")
+	assert.Greater(t, remaining, budget/2, "the stop keeps at least the half the flush could not spend")
 }
 
 // The flush runs on its own context, so a root context already cancelled when
@@ -211,7 +226,7 @@ func TestShutdownFlushesObservationsBeforeTheServerStopDropsThem(t *testing.T) {
 
 	// What stopping the server reaches: the callback is unregistered and the
 	// observations it reads are dropped.
-	stop := stopFunc(func() {
+	stop := stopFunc(func(context.Context) {
 		assert.NoError(t, reg.Unregister())
 		storeMu.Lock()
 		store = map[string]int64{}
@@ -346,7 +361,7 @@ func TestShutdownFlushesBeforeACancelledCollectionForgetsTheDevice(t *testing.T)
 		<-forgotten
 	}
 
-	shutdown(shutdownBudget, cancelRoot, stopFunc(func() {}), func(timeout time.Duration) { flushMetrics(logger, timeout) })
+	shutdown(shutdownBudget, cancelRoot, stopFunc(func(context.Context) {}), func(timeout time.Duration) { flushMetrics(logger, timeout) })
 
 	assert.Equal(t, []int64{7}, receiver.gaugeValues(metricName),
 		"the final export must carry the readings a cancelled target loop gives up")

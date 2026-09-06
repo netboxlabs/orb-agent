@@ -287,11 +287,12 @@ func (s *Server) deletePolicy(c *gin.Context) {
 	}
 }
 
-// Stop stops the gnmi-telemetry server
-func (s *Server) Stop() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
+// Stop stops the gnmi-telemetry server. The HTTP drain runs under the context
+// the caller passes, which is what the shutdown sequence has left of its grace
+// after the final export: a fresh timer of its own here let the drain run past
+// the grace the agent gives the process, and the kill landed before the policy
+// manager below was stopped.
+func (s *Server) Stop(ctx context.Context) {
 	if err := s.httpServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		s.logger.Error("shutting down HTTP server", "error", err)
 	}

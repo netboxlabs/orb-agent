@@ -40,7 +40,7 @@ const defaultHost = "localhost"
 
 // stopper is the part of the server the shutdown sequence uses.
 type stopper interface {
-	Stop()
+	Stop(ctx context.Context)
 }
 
 // shutdown unwinds the process in the order the export and the runners need.
@@ -73,14 +73,19 @@ type stopper interface {
 // still live. That is one cycle of freshness against the whole interval the
 // race could cost.
 //
-// The flush is bounded to half the budget. Under the whole of it, an exporter
-// that could not reach its collector ran the flush to the end of the grace,
-// and the kill arrived before the loops were cancelled and the policies
-// stopped: the process died with its subscriptions still open.
+// The whole sequence runs against one deadline, the budget from its start. The
+// flush is bounded to half of it, and the server stop is handed what is left:
+// under a whole budget for the flush and a fresh timer for the stop, an
+// exporter that could not reach its collector and a slow HTTP drain together
+// outlasted the grace, and the kill arrived before the loops were cancelled and
+// the policies stopped, with the subscriptions still open.
 func shutdown(budget time.Duration, cancelRoot context.CancelFunc, srv stopper, flush func(timeout time.Duration)) {
+	deadline := time.Now().Add(budget)
 	flush(budget / 2)
 	cancelRoot()
-	srv.Stop()
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	srv.Stop(ctx)
 }
 
 // flushMetrics exports whatever the meter provider still holds. It takes its

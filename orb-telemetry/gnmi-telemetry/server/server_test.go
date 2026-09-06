@@ -82,7 +82,7 @@ policies:
 	assert.Contains(t, w.Body.String(), `"my-policy"`)
 	assert.Contains(t, w.Body.String(), `"running"`)
 
-	srv.Stop()
+	srv.Stop(context.Background())
 }
 
 // The agent polls /status on a timer while the API is otherwise in use, so two
@@ -205,7 +205,7 @@ func TestCreatePolicy_RejectsBodyOverTheLimit(t *testing.T) {
 // The bound is off by one if it rejects a body of exactly the documented size.
 func TestCreatePolicy_AcceptsBodyAtTheLimit(t *testing.T) {
 	srv := newTestServer(t)
-	t.Cleanup(srv.Stop)
+	t.Cleanup(func() { srv.Stop(context.Background()) })
 
 	body := padPolicyTo(t, validPolicy(t), policyBodyLimit)
 	require.Len(t, body, policyBodyLimit)
@@ -338,7 +338,7 @@ func TestDeletePolicy_EveryAcceptedNameIsAddressable(t *testing.T) {
 		" padded ",
 	}
 	srv := newTestServer(t)
-	defer srv.Stop()
+	defer srv.Stop(context.Background())
 
 	for _, name := range names {
 		t.Run(name, func(t *testing.T) {
@@ -390,7 +390,7 @@ func TestCreatePolicy_RejectsANameNoRouteCanAddress(t *testing.T) {
 			require.Error(t, policy.ValidatePolicyName(tc.name), "the rule accepts a name this test calls unaddressable")
 
 			srv := newTestServer(t)
-			defer srv.Stop()
+			defer srv.Stop(context.Background())
 
 			w := postPolicy(t, srv, "application/x-yaml", namedPolicyBody(t, tc.name))
 			require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
@@ -406,7 +406,7 @@ func TestCreatePolicy_RejectsANameNoRouteCanAddress(t *testing.T) {
 // before the request is sent.
 func TestDeletePolicy_RefusedNamesDoNotAddressTheirPolicy(t *testing.T) {
 	srv := newTestServer(t)
-	defer srv.Stop()
+	defer srv.Stop(context.Background())
 
 	for _, tc := range []struct {
 		label string
@@ -465,7 +465,7 @@ func deletePolicy(t *testing.T, srv *server.Server, name string) *httptest.Respo
 // detach that removed the runner rather than from a lookup taken before it.
 func TestDeletePolicy_MissesAnUnknownNameAndDeletesAKnownOne(t *testing.T) {
 	srv := newTestServer(t)
-	defer srv.Stop()
+	defer srv.Stop(context.Background())
 
 	w := deletePolicy(t, srv, "absent")
 	require.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
@@ -490,7 +490,7 @@ func TestDeletePolicy_MissesAnUnknownNameAndDeletesAKnownOne(t *testing.T) {
 // deleted by a request that never saw it.
 func TestDeletePolicy_ConcurrentDeletesLeaveOneSuccess(t *testing.T) {
 	srv := newTestServer(t)
-	defer srv.Stop()
+	defer srv.Stop(context.Background())
 
 	require.Equal(t, http.StatusCreated, postPolicy(t, srv, "application/x-yaml", namedPolicyBody(t, "raced")).Code)
 
@@ -538,7 +538,7 @@ func TestDeletePolicy_ConcurrentDeletesLeaveOneSuccess(t *testing.T) {
 // policy may already be running.
 func TestCreatePolicy_RollsBackWhatItStarted(t *testing.T) {
 	srv := newTestServer(t)
-	defer srv.Stop()
+	defer srv.Stop(context.Background())
 
 	body := []byte(`
 policies:
