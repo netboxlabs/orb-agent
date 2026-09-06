@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -205,6 +207,9 @@ type getServer struct {
 	// Empty advertises none and accepts every request, as the servers that
 	// care about something else do.
 	encodings []gnmiproto.Encoding
+	// inflight counts the Gets being answered right now, and maxInflight the
+	// most there ever were at once, which is what shows a bounded fan-out.
+	inflight, maxInflight atomic.Int32
 	// mu guards gets, which the Get handler writes and a test reads.
 	mu sync.Mutex
 	// gets counts the requests made for each path, which is what tells a probe
@@ -253,6 +258,14 @@ func (g *getServer) advertises(enc gnmiproto.Encoding) bool {
 }
 
 func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+	cur := g.inflight.Add(1)
+	defer g.inflight.Add(-1)
+	for {
+		m := g.maxInflight.Load()
+		if cur <= m || g.maxInflight.CompareAndSwap(m, cur) {
+			break
+		}
+	}
 	if len(g.encodings) > 0 && !g.advertises(req.GetEncoding()) {
 		return nil, status.Errorf(codes.InvalidArgument, "encoding %s was not advertised", req.GetEncoding())
 	}
@@ -469,6 +482,34 @@ func TestSubscribeManySyncNamesTheAcceptedPaths(t *testing.T) {
 // decides. A target that truly does not model the path rejects it there, which
 // the ladder and the reconnect handle; one that was merely slow serves it,
 // where dropping it left a healthy partial stream never asking again.
+// The fan-out is bounded: twenty paths are probed, and recovered, from at
+// most eight Gets in flight at once, so a large profile never
+// opens one RPC per path against a device.
+func TestGetFanOutIsBounded(t *testing.T) {
+	holds := map[string]bool{}
+	var paths []string
+	var subs []Subscription
+	for i := 0; i < 20; i++ {
+		p := fmt.Sprintf("/system/cpus/cpu[index=%d]/state", i)
+		holds[p] = true
+		paths = append(paths, p)
+		subs = append(subs, Subscription{Path: p, Mode: OnChange})
+	}
+	srv := &getServer{holds: holds, delay: 30 * time.Millisecond}
+	s := getSession(t, srv)
+	s.probeTimeout = 5 * time.Second
+	kept := s.acceptedSubscriptions(context.Background(), subs)
+	assert.Len(t, kept, 20)
+	assert.LessOrEqual(t, srv.maxInflight.Load(), int32(8), "the probes are bounded")
+	srv.maxInflight.Store(0)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	n, err := s.GetOnce(ctx, paths)
+	require.NoError(t, err)
+	assert.Equal(t, paths, n.Paths)
+	assert.LessOrEqual(t, srv.maxInflight.Load(), int32(8), "the recovery is bounded")
+}
+
 // The subscription probes run together: four paths a slow target answers in
 // a hundred and fifty milliseconds each are probed inside one such wait, not
 // four, so a target that hangs on Get costs one deadline per connection

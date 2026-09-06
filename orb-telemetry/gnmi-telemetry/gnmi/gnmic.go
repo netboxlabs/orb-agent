@@ -604,20 +604,18 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 	// and remembered here, on the caller's goroutine, once every probe has
 	// returned.
 	errs := make([]error, len(subs))
-	var wg sync.WaitGroup
+	var unseen []int
 	for i, sub := range subs {
-		if _, seen := s.probed[sub.Origin+"|"+sub.Path]; seen {
-			continue
+		if _, seen := s.probed[sub.Origin+"|"+sub.Path]; !seen {
+			unseen = append(unseen, i)
 		}
-		wg.Add(1)
-		go func(i int, sub Subscription) {
-			defer wg.Done()
-			probeCtx, cancelProbe := s.bounded(ctx)
-			defer cancelProbe()
-			_, errs[i] = s.getPathsWithOrigin(probeCtx, sub.Origin, []string{sub.Path})
-		}(i, sub)
 	}
-	wg.Wait()
+	runBounded(len(unseen), func(k int) {
+		i := unseen[k]
+		probeCtx, cancelProbe := s.bounded(ctx)
+		defer cancelProbe()
+		_, errs[i] = s.getPathsWithOrigin(probeCtx, subs[i].Origin, []string{subs[i].Path})
+	})
 	kept := make([]Subscription, 0, len(subs))
 	for i, sub := range subs {
 		key := sub.Origin + "|" + sub.Path
@@ -720,16 +718,10 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 		err error
 	}
 	outcomes := make([]outcome, len(paths))
-	var wg sync.WaitGroup
-	for i, p := range paths {
-		wg.Add(1)
-		go func(i int, p string) {
-			defer wg.Done()
-			n, err := s.getPaths(ctx, []string{p})
-			outcomes[i] = outcome{n: n, err: err}
-		}(i, p)
-	}
-	wg.Wait()
+	runBounded(len(paths), func(i int) {
+		n, err := s.getPaths(ctx, []string{paths[i]})
+		outcomes[i] = outcome{n: n, err: err}
+	})
 	got := 0
 	var lastErr error
 	for i, p := range paths {
@@ -745,6 +737,37 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 		return Notification{}, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
 	}
 	return result, nil
+}
+
+// maxConcurrentGets bounds how many Gets one session has in flight at once,
+// in the subscription probes and the per-path recovery alike. Unbounded, a
+// profile of a thousand paths opened a thousand RPCs against one device at
+// every connection and every failed poll.
+const maxConcurrentGets = 8
+
+// runBounded calls fn for every index from 0 to n-1 from at most
+// maxConcurrentGets goroutines, and returns once every call has.
+func runBounded(n int, fn func(i int)) {
+	workers := min(n, maxConcurrentGets)
+	if workers <= 0 {
+		return
+	}
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				fn(i)
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		idx <- i
+	}
+	close(idx)
+	wg.Wait()
 }
 
 // shareRemaining is ctx bounded to a 1/n share of what its deadline leaves,
