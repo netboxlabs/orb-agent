@@ -185,6 +185,10 @@ type getServer struct {
 	// the request waits for its own cancellation, which is how a target that
 	// accepts a connection and then says nothing at all behaves.
 	capsBlocks bool
+	// multiBlocks holds every request for more than one path and answers the
+	// single-path ones, which is how a target that hangs on an aggregate
+	// request and answers path by path behaves.
+	multiBlocks bool
 	// blocksFirst holds a path's first Get and answers every later one, which
 	// is how a target that was busy under one subtree and then recovered
 	// behaves.
@@ -251,6 +255,10 @@ func (g *getServer) Get(ctx context.Context, req *gnmiproto.GetRequest) (*gnmipr
 	}
 	if len(req.GetPath()) > 1 && !g.multi {
 		return nil, status.Error(codes.Unimplemented, "one path per request")
+	}
+	if len(req.GetPath()) > 1 && g.multiBlocks {
+		<-ctx.Done()
+		return nil, status.FromContextError(ctx.Err()).Err()
 	}
 	var notifications []*gnmiproto.Notification
 	for _, p := range req.GetPath() {
@@ -322,6 +330,21 @@ func TestGetOnceReportsThePathsItFetched(t *testing.T) {
 	none := getSession(t, &getServer{})
 	_, err = none.GetOnce(context.Background(), []string{memory, interfaces})
 	require.Error(t, err, "a target that answers nothing is a failure, not an empty snapshot")
+}
+
+// The per-path recovery runs with a live deadline: the whole request takes
+// half of what the caller left, so a target that hangs on the aggregate request
+// and answers path by path is collected instead of failing every recovery on a
+// spent context.
+func TestGetOnceKeepsTimeForThePerPathRecovery(t *testing.T) {
+	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
+	s := getSession(t, &getServer{holds: map[string]bool{memory: true, interfaces: true}, multi: true, multiBlocks: true})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	n, err := s.GetOnce(ctx, []string{memory, interfaces})
+	require.NoError(t, err, "the paths answer one at a time within the half of the deadline the whole request left")
+	assert.Equal(t, []string{memory, interfaces}, n.Paths)
+	assert.Len(t, n.Updates, 2)
 }
 
 // Subscribe answers with the sync response that closes a stream's initial dump

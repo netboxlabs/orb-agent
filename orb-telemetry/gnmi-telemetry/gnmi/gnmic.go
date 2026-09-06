@@ -669,7 +669,17 @@ func subscribedPaths(subs []Subscription) []string {
 // failed.
 func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
 	// Fast path: one Get for all paths — most targets handle a multi-path Get fine.
-	if n, err := s.getPaths(ctx, paths); err == nil {
+	//
+	// The whole request runs under half of what the caller's deadline leaves,
+	// so the other half is still live for the recovery below. Under the whole
+	// deadline, a target that hangs on the aggregate request and answers path
+	// by path spent all of it here, and every per-path Get then failed at once
+	// on the spent context: the recovery never recovered, and the target
+	// reconnected for ever with nothing collected.
+	wholeCtx, cancelWhole := halfRemaining(ctx)
+	n, err := s.getPaths(wholeCtx, paths)
+	cancelWhole()
+	if err == nil {
 		n.Paths = append([]string(nil), paths...)
 		return n, nil
 	}
@@ -698,6 +708,16 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 		return Notification{}, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
 	}
 	return result, nil
+}
+
+// halfRemaining is ctx bounded to half of what its deadline leaves, or a plain
+// cancellable child of it when it carries none.
+func halfRemaining(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Until(deadline)/2)
 }
 
 // mergeGetResults folds one converted notification into a merged Get result:
