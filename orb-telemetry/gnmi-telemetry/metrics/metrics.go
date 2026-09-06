@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -72,9 +74,23 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 	scheme, _, hasScheme := strings.Cut(endpoint, "://")
 	if !hasScheme {
 		// WithEndpoint expects a bare host:port and passes a trailing slash
-		// through unnormalized, so strip it.
+		// through unnormalized, so strip it. The form is checked here: the
+		// gRPC connection opens lazily, so a value that is not host:port let
+		// the exporter build and every export retry an address that could
+		// never be dialled, under a startup line reporting it as configured.
+		bare := strings.TrimRight(endpoint, "/")
+		host, port, err := net.SplitHostPort(bare)
+		if err != nil {
+			return nil, fmt.Errorf("otel endpoint %q is neither host:port nor a URL with a scheme: %w", endpoint, err)
+		}
+		if host == "" {
+			return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
+		}
+		if n, perr := strconv.ParseUint(port, 10, 16); perr != nil || n == 0 {
+			return nil, fmt.Errorf("otel endpoint %q: port %q must be a number between 1 and 65535", endpoint, port)
+		}
 		return []otlpmetric.Option{
-			otlpmetric.WithEndpoint(strings.TrimRight(endpoint, "/")),
+			otlpmetric.WithEndpoint(bare),
 			otlpmetric.WithInsecure(),
 		}, nil
 	}

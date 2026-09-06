@@ -188,6 +188,14 @@ func TestEndpointOptions_MalformedURLRejected(t *testing.T) {
 	}
 	_, err := endpointOptions("http://collector.example:4317")
 	assert.NoError(t, err)
+	for _, endpoint := range []string{"localhost:notaport", "collector/path", "/", ":4317", "localhost:0", "localhost"} {
+		_, err := endpointOptions(endpoint)
+		assert.Error(t, err, endpoint)
+	}
+	for _, endpoint := range []string{"localhost:4317", "[::1]:4317", "localhost:4317/"} {
+		_, err := endpointOptions(endpoint)
+		assert.NoError(t, err, endpoint)
+	}
 	err = SetupMetricsExport(context.Background(), slog.Default(), "http://%zz", 30)
 	assert.Error(t, err, "setup refuses the endpoint rather than exporting to the default")
 }
