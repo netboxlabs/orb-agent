@@ -307,3 +307,23 @@ func TestOrbProfiles_ProliantDoesNotTakeILO(t *testing.T) {
 		assert.Equal(t, want, got.RelPath, oid)
 	}
 }
+
+// The tree's contents are a deliberate list. A file added without going
+// through this test was not reviewed for the invariants above.
+func TestOrbProfiles_ExactFileSet(t *testing.T) {
+	want := []string{
+		"avtech/roomalert-32s-models.yml",
+		"chatsworth/chatsworth-pdu.yml",
+		"cisco/cisco-asr-models.yml",
+		"cisco/cisco-catalyst-models.yml",
+		"cisco/cisco-nexus-models.yml",
+		"cisco/cisco-wlc-models.yml",
+		"hpe/hpe-proliant.yml",
+		"juniper/juniper-ex-models.yml",
+		"juniper/juniper-mx-models.yml",
+		"juniper/juniper-srx-models.yml",
+		"netapp/netapp-ontap-models.yml",
+		"netscout/netscout-switch.yml",
+	}
+	assert.ElementsMatch(t, want, orbFiles(t))
+}

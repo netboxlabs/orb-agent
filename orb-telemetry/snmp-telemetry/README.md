@@ -453,6 +453,14 @@ an additional directory on top of the bundled set. A file there replaces the
 bundled file at the same relative path, and every other bundled file stays
 available.
 
+Two trees are bundled. `profiles/snmp-profiles/` is a verbatim mirror of
+kentik/snmp-profiles. `profiles/orb-profiles/` holds profiles maintained in
+this repository: devices converted from other profile libraries that Kentik
+has no profile for, and stubs that add sysObjectIDs to bundled Kentik profiles
+by extending them. Both load into one set, so an override addresses a file in
+either tree by its relative path, and a bare `extends` name resolves across
+both. Each tree carries its own `PROVENANCE.md` and `LICENSE`.
+
 An override file's path must match the bundled file's path exactly, including
 its subdirectory. For example, overriding the bundled
 `_general/system-mib.yml` requires placing the replacement at
@@ -587,3 +595,8 @@ The bundled profiles are copied from
 [kentik/snmp-profiles](https://github.com/kentik/snmp-profiles) under the
 Apache 2.0 license. See [profiles/PROVENANCE.md](./profiles/PROVENANCE.md)
 for the exact upstream commit and sync process.
+
+The profiles under `profiles/orb-profiles/` are derived from
+[DataDog/integrations-core](https://github.com/DataDog/integrations-core)
+under the BSD-3-Clause license. See
+[profiles/orb-profiles/PROVENANCE.md](./profiles/orb-profiles/PROVENANCE.md).
