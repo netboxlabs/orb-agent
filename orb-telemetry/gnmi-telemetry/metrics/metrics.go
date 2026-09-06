@@ -98,7 +98,9 @@ func endpointOptions(endpoint string) ([]otlpmetric.Option, error) {
 	if err != nil {
 		return nil, fmt.Errorf("otel endpoint %q is not a valid URL: %w", endpoint, err)
 	}
-	if u.Host == "" {
+	// The parsed hostname, not the authority: "http://:4317" has an authority
+	// and no host, and gRPC reads the empty host as localhost.
+	if u.Hostname() == "" {
 		return nil, fmt.Errorf("otel endpoint %q names no host", endpoint)
 	}
 	// Only the documented schemes reach the exporter. The SDK reads every

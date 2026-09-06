@@ -178,7 +178,7 @@ func TestEndpointOptions_TLSSchemes(t *testing.T) {
 // and falls back to its default endpoint, so accepting the value would export
 // to localhost while the startup line reported the mistyped URL.
 func TestEndpointOptions_MalformedURLRejected(t *testing.T) {
-	for _, endpoint := range []string{"http://%zz", "http://", "grpc:///path", "htps://collector.example:4317", "ftp://collector.example:4317"} {
+	for _, endpoint := range []string{"http://%zz", "http://", "http://:4317", "grpc:///path", "htps://collector.example:4317", "ftp://collector.example:4317"} {
 		_, err := endpointOptions(endpoint)
 		assert.Error(t, err, endpoint)
 	}
