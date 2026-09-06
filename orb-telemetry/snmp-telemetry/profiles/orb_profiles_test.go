@@ -287,3 +287,23 @@ func TestOrbProfiles_StubInheritsParentMetrics(t *testing.T) {
 		assert.Equal(t, want, got.RelPath, oid)
 	}
 }
+
+// ProLiant host agents claim the whole HP enterprise subtree. Kentik's iLO
+// profile claims longer prefixes and exact IDs inside it, and must keep them.
+func TestOrbProfiles_ProliantDoesNotTakeILO(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+	for oid, want := range map[string]string{
+		"1.3.6.1.4.1.232.9.4.10": "hp/hp-ilo.yml",
+		"1.3.6.1.4.1.232.9.4.99": "hp/hp-ilo.yml",
+		"1.3.6.1.4.1.232.165.1":  "hpe/hpe-cambium.yml",
+		"1.3.6.1.4.1.232.1.2":    "hpe/hpe-proliant.yml",
+	} {
+		got, ok := m.Match(oid)
+		require.True(t, ok, oid)
+		assert.Equal(t, want, got.RelPath, oid)
+	}
+}
