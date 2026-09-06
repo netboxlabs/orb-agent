@@ -621,3 +621,21 @@ match: {vendor: acme}
 	assert.Equal(t, "_base", store.Match(MatchInput{Organizations: []string{"OpenConfig working group"}}).Name,
 		"an organization naming no overlay's vendor selects none of them")
 }
+
+// A multi-word alias is matched as a phrase: its words must appear in the
+// organization in that order, not merely each somewhere in it.
+func TestMatchReadsAMultiWordVendorAsAPhrase(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: "Acme Networks"}
+`), 0o600))
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err)
+	assert.Equal(t, "acme", store.Match(MatchInput{Organizations: []string{"Acme Networks, Inc."}}).Name,
+		"the two words appear in order")
+	assert.Equal(t, "_base", store.Match(MatchInput{Organizations: []string{"Networks by Acme"}}).Name,
+		"the same words out of order are not the phrase")
+	assert.Equal(t, "_base", store.Match(MatchInput{Organizations: []string{"Acme"}}).Name,
+		"half the phrase is not the phrase")
+}

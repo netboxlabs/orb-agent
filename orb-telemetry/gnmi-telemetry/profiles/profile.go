@@ -449,22 +449,37 @@ func (s *Store) Match(in MatchInput) *Profile {
 	return s.profiles["_base"]
 }
 
-// hasToken reports whether org carries token as one of its words, compared
-// case-insensitively. An organization is split on everything that is neither a
+// hasToken reports whether org carries token as a whole-word phrase, compared
+// case-insensitively: both sides are split on everything that is neither a
 // letter nor a digit, so the punctuation a device writes around its name is not
-// part of the word it is matched on.
+// part of what is matched, and a multi-word alias such as "acme networks" must
+// appear as those words in that order.
 func hasToken(org, token string) bool {
-	if token == "" {
+	want := words(token)
+	if len(want) == 0 {
 		return false
 	}
-	for _, word := range strings.FieldsFunc(org, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	}) {
-		if strings.EqualFold(word, token) {
+	have := words(org)
+	for i := 0; i+len(want) <= len(have); i++ {
+		match := true
+		for j := range want {
+			if !strings.EqualFold(have[i+j], want[j]) {
+				match = false
+				break
+			}
+		}
+		if match {
 			return true
 		}
 	}
 	return false
+}
+
+// words splits a string on everything that is neither a letter nor a digit.
+func words(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	})
 }
 
 // metricSchema is how one exported metric name reaches the SDK: the kind of
