@@ -920,3 +920,29 @@ func TestAcquireCollectorRejectsAProfilesPathThatIsNotADirectory(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "not a directory")
 }
+
+// A body holding more than one YAML document is refused: decoded as one
+// document, the second would be silently ignored and the request acknowledged
+// with only the first applied.
+func TestParsePolicies_RejectsASecondYAMLDocument(t *testing.T) {
+	m := newTestManager()
+	_, err := m.ParsePolicies([]byte(`
+policies:
+  first:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: 10.0.0.1
+---
+policies:
+  second:
+    config:
+      metrics_interval: 30
+    scope:
+      targets:
+        - host: 10.0.0.2
+`))
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "one YAML document")
+}

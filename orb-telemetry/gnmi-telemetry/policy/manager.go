@@ -1,9 +1,11 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"os"
@@ -213,8 +215,15 @@ func (m *Manager) releaseCollector(profilesDir string) {
 // ParsePolicies parses and validates policies from a YAML request body
 func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	var payload config.Policies
-	if err := yaml.Unmarshal(data, &payload); err != nil {
+	// Decoded as a stream and required to end after the first document:
+	// yaml.Unmarshal reads the first document alone, so a body carrying a
+	// second one after "---" was acknowledged with only the first applied.
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	if err := dec.Decode(&payload); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
+	}
+	if err := dec.Decode(new(struct{})); !errors.Is(err, io.EOF) {
+		return nil, errors.New("the request must hold one YAML document")
 	}
 	config.WarnUnknownPolicyKeys(data, m.logger)
 
