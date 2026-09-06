@@ -646,11 +646,14 @@ func TestGetPolicyStatuses_ReportsTheCollectorsTargets(t *testing.T) {
 }
 
 // The runner keeps no error state, so a policy reports as failing exactly when
-// one of its targets does.
+// one of its targets does, and it reports when that target recorded the
+// failure rather than when the status was read: an error nothing has
+// refreshed would otherwise look fresh on every poll.
 func TestGetPolicyStatuses_ReportsTheFirstTargetError(t *testing.T) {
+	recorded := time.Now().Add(-90 * time.Second)
 	c := &statusCollector{statuses: []collector.TargetStatus{
 		{Host: "10.0.0.1", Up: true},
-		{Host: "10.0.0.2", LastError: "connection refused"},
+		{Host: "10.0.0.2", LastError: "connection refused", LastErrorAt: recorded},
 	}}
 	m := managerWith(t, "policy1", c)
 
@@ -660,6 +663,25 @@ func TestGetPolicyStatuses_ReportsTheFirstTargetError(t *testing.T) {
 	require.NotNil(t, statuses[0].LastError)
 	assert.Equal(t, "connection refused", *statuses[0].LastError)
 	require.NotNil(t, statuses[0].LastErrorAt)
+	assert.Equal(t, recorded, *statuses[0].LastErrorAt, "the reported instant is the target's, not the read time")
+}
+
+// A policy failing on several targets answers when it last failed, which is
+// the most recent of the instants its targets recorded, whatever order they
+// are visited in.
+func TestGetPolicyStatuses_ReportsTheLatestTargetErrorTime(t *testing.T) {
+	older := time.Now().Add(-10 * time.Minute)
+	newer := time.Now().Add(-time.Minute)
+	c := &statusCollector{statuses: []collector.TargetStatus{
+		{Host: "10.0.0.1", LastError: "connection refused", LastErrorAt: older},
+		{Host: "10.0.0.2", LastError: "deadline exceeded", LastErrorAt: newer},
+	}}
+	m := managerWith(t, "policy1", c)
+
+	statuses := m.GetPolicyStatuses()
+	require.Len(t, statuses, 1)
+	require.NotNil(t, statuses[0].LastErrorAt)
+	assert.Equal(t, newer, *statuses[0].LastErrorAt, "the policy last failed when its most recent target error was recorded")
 }
 
 // ---------------------------------------------------------------------------

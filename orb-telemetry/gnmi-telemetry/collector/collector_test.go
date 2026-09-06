@@ -1982,3 +1982,152 @@ func TestTheDialSpecCarriesThePolicysProbeTimeout(t *testing.T) {
 	waitFor(t, 3*time.Second, func() bool { return len(dialer.specs()) > 0 })
 	assert.Equal(t, 1500*time.Millisecond, dialer.specs()[0].ProbeTimeout, "the policy's probe timeout reaches the session that probes")
 }
+
+// perDialCapsDialer hands the first dial one session and every later dial
+// another, so a reconnect can meet a target reporting other capabilities than
+// the dial before it: a firmware upgrade that changes the advertised NOS, or
+// an operator changing the override the target matches, looks like this.
+type perDialCapsDialer struct {
+	first, rest *gnmi.FakeSession
+	dials       atomic.Int64
+}
+
+func (d *perDialCapsDialer) Dial(_ context.Context, _ gnmi.TargetSpec) (gnmi.Session, error) {
+	if d.dials.Add(1) == 1 {
+		return d.first, nil
+	}
+	return d.rest, nil
+}
+
+func (d *perDialCapsDialer) dialCount() int64 { return d.dials.Load() }
+
+// A reconnect that selects another profile leaves the previous profile's
+// ageless series with nothing to withdraw them: the new stream's sync names
+// the paths it subscribed to, so the reconciliation is scoped to the metrics
+// of the profile streaming now and never reaches a metric only the old
+// profile carried. The profile change itself is what has to retire them.
+func TestAProfileChangeOnReconnectWithdrawsTheOldSeries(t *testing.T) {
+	reader := testReader(t)
+	dir := t.TempDir()
+	// A path and a metric name of its own, so nothing _base carries can
+	// withdraw the series and nothing _base exports can be mistaken for it.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+match: {vendor: acme}
+subscriptions:
+  - path: /acme/ports/port[name=*]/state/oper-status
+    mode: on_change
+    attributes: {port_name: name}
+    metrics:
+      - leaf: .
+        name: acme_port_status
+        type: gauge
+        enum: {UP: 1, DOWN: 0}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	// The replacement stream holds its dump until the test has seen the old
+	// profile's series exported.
+	resume := make(chan struct{})
+	acme := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{Vendor: "acme"},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				notes := []gnmi.Notification{
+					{Updates: []gnmi.Update{{Path: "/acme/ports/port[name=e1]/state/oper-status", Value: "UP"}}},
+					{SyncDone: true, Paths: []string{"/acme/ports/port[name=*]/state/oper-status"}},
+				}
+				for _, n := range notes {
+					select {
+					case out <- n:
+					case <-ctx.Done():
+						return
+					}
+				}
+				errs <- errors.New("stream reset")
+			}()
+			return out, errs, nil
+		},
+	}
+	base := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				select {
+				case <-resume:
+				case <-ctx.Done():
+					return
+				}
+				// The sync names the paths this stream carries, which is what a
+				// target answers, so the reconciliation speaks for the new
+				// profile's metrics alone.
+				select {
+				case out <- gnmi.Notification{SyncDone: true, Paths: []string{"/interfaces/interface[name=*]/state/oper-status"}}:
+				case <-ctx.Done():
+					return
+				}
+				<-ctx.Done()
+			}()
+			return out, errs, nil
+		},
+	}
+	dialer := &perDialCapsDialer{first: acme, rest: base}
+	c := New(dialer, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "on_change", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		g, ok := collect(t, reader)["gnmi.acme_port_status"].Data.(metricdata.Gauge[float64])
+		return ok && len(g.DataPoints) == 1
+	})
+	waitFor(t, 3*time.Second, func() bool { return dialer.dialCount() >= 2 })
+	close(resume)
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Profile == "_base"
+	})
+	waitFor(t, 3*time.Second, func() bool {
+		m, ok := collect(t, reader)["gnmi.acme_port_status"]
+		return !ok || len(m.Data.(metricdata.Gauge[float64]).DataPoints) == 0
+	})
+	_, held := pointFor(c, "acme_port_status")
+	assert.False(t, held, "the old profile's series is out of the store, not merely withheld")
+}
+
+// An error nothing has refreshed must not look newer on every poll: the
+// instant belongs to the loop that recorded the failure, not to the read.
+func TestALoopRecordsWhenItsErrorHappened(t *testing.T) {
+	testReader(t)
+	sess := &gnmi.FakeSession{CapsErr: errors.New("no capabilities")}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	// One failed attempt inside the test window, so a retry cannot restamp the
+	// instant between the two reads below.
+	c.backoffBase = time.Minute
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	before := time.Now()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].LastError != ""
+	})
+	first := c.TargetStatuses("p")
+	require.Len(t, first, 1)
+	at := first[0].LastErrorAt
+	assert.False(t, at.Before(before), "the error is stamped no earlier than the loop started")
+	assert.False(t, at.After(time.Now()), "the error is stamped no later than the read that found it")
+	time.Sleep(50 * time.Millisecond)
+	second := c.TargetStatuses("p")
+	require.Len(t, second, 1)
+	assert.Equal(t, at, second[0].LastErrorAt, "an unchanged failure keeps the instant it was recorded at")
+}

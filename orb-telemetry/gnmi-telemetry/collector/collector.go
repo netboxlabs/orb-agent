@@ -49,7 +49,10 @@ type Options struct {
 	ProbeTimeout time.Duration
 }
 
-// TargetStatus is one target's state for the API.
+// TargetStatus is one target's state for the API. LastErrorAt is when the
+// loop recorded LastError, not when the status was read: an error nothing has
+// refreshed keeps the instant it happened at, and the two fields are cleared
+// together the moment the target answers again.
 type TargetStatus struct {
 	Host             string    `json:"host"`
 	Mode             string    `json:"mode"`
@@ -57,6 +60,7 @@ type TargetStatus struct {
 	Up               bool      `json:"up"`
 	LastNotification time.Time `json:"last_notification"`
 	LastError        string    `json:"last_error,omitempty"`
+	LastErrorAt      time.Time `json:"last_error_at,omitzero"`
 }
 
 type loopKey struct{ policy, host string }
@@ -272,7 +276,7 @@ func (c *Collector) run(ctx context.Context, target config.Target, opts Options,
 		}
 		if err != nil {
 			c.logger.Warn("gnmi target loop error", "policy", opts.PolicyName, "host", target.Host, "error", err)
-			l.update(func(s *TargetStatus) { s.LastError = err.Error() })
+			l.update(func(s *TargetStatus) { s.LastError = err.Error(); s.LastErrorAt = time.Now() })
 		}
 		select {
 		case <-time.After(backoff):
@@ -301,6 +305,19 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 		return fmt.Errorf("capabilities: %w", err)
 	}
 	profile := c.selectProfile(target, caps)
+	// A target that comes back on another profile keeps nothing of the old
+	// one. The reconciliation a stream's sync response drives is scoped to the
+	// paths that stream carries, so a series of a metric only the previous
+	// profile named is never restated and never evicted: it would stand
+	// exported for as long as the policy runs. Withdrawing the target's series
+	// here, before the new stream opens, is what retires them and gives their
+	// budget slots back. A firmware upgrade that changes the advertised NOS
+	// and a changed override both arrive this way.
+	if previous := l.snapshot().Profile; previous != "" && previous != profile.Name {
+		c.logger.Info("gnmi profile changed, withdrawing the target's series",
+			"policy", opts.PolicyName, "host", target.Host, "from", previous, "to", profile.Name)
+		c.store.deleteMatching(nil, baseAttrs(target, opts))
+	}
 	l.update(func(s *TargetStatus) { s.Profile = profile.Name })
 
 	subs := c.subscriptions(profile, target, opts)
@@ -467,7 +484,7 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		// good a sign of recovery as a value: a stream over a subtree with nothing
 		// in it carries no value at all, and the target would stand at the error of
 		// the attempt before it until something changed.
-		l.update(func(s *TargetStatus) { s.LastError = ""; s.Up = true })
+		l.update(func(s *TargetStatus) { s.LastError = ""; s.LastErrorAt = time.Time{}; s.Up = true })
 	}
 	// A target that accepts the RPC and then sends nothing leaves this select on
 	// the loop's context, which lives as long as the policy, while the subscribe
@@ -559,7 +576,7 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 			c.apply(ctx, n, rung, target, opts, p)
 			reconcile(n)
 			armDump()
-			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
+			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
 		}
 	}
 }
@@ -636,7 +653,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 				c.store.evictBefore(polled, baseAttrs(target, opts), started)
 			}
 		}
-		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = "" })
+		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
 		select {
 		case <-ctx.Done():
 			return nil

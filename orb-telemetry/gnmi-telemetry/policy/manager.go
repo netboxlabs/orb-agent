@@ -635,19 +635,29 @@ func (m *Manager) GetPolicyStatuses() []Status {
 		s := Status{Name: name, Status: "running", Targets: runner.TargetStatuses()}
 		// The runner keeps no error state of its own: a target's last error
 		// belongs to the collector loop driving it, so the policy's error is
-		// the first target reporting one. The collector timestamps
-		// notifications rather than errors, so the read time is what stands in
-		// for when it happened, and says the error is current as of now.
+		// the first target reporting one and the instant is the latest any of
+		// its failing targets recorded, which is when this policy last failed.
+		// The read time used to stand in for that, which made an old and
+		// unchanged failure look fresh on every poll. The earliest would
+		// answer a different question, when the oldest unresolved failure
+		// began, and a target carrying an error the loop stamped no instant
+		// for contributes none rather than a zero time.
 		for _, target := range s.Targets {
 			if target.LastError == "" {
 				continue
 			}
-			msg := target.LastError
-			at := time.Now()
 			s.Status = "running_with_errors"
-			s.LastError = &msg
-			s.LastErrorAt = &at
-			break
+			if s.LastError == nil {
+				msg := target.LastError
+				s.LastError = &msg
+			}
+			if target.LastErrorAt.IsZero() {
+				continue
+			}
+			if s.LastErrorAt == nil || target.LastErrorAt.After(*s.LastErrorAt) {
+				at := target.LastErrorAt
+				s.LastErrorAt = &at
+			}
 		}
 		statuses = append(statuses, s)
 	}

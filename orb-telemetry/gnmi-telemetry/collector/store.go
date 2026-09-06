@@ -177,12 +177,18 @@ func (s *store) releaseAll() {
 // delete of a container names an ancestor of several subscriptions and
 // carries no keys, so the attributes alone would match every series of the
 // device and policy, including subtrees the delete says nothing about.
+//
+// A nil name set means every metric, as it does for evictBefore: a caller that
+// really is speaking for the whole of what the attributes select, such as a
+// target changing profile, names none.
 func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, pt := range s.series {
-		if _, ok := names[k.metric]; !ok {
-			continue
+		if names != nil {
+			if _, ok := names[k.metric]; !ok {
+				continue
+			}
 		}
 		if hasAll(pt.attrs, want) {
 			delete(s.series, k)
