@@ -50,6 +50,20 @@ func TestSplitLeaf(t *testing.T) {
 	assert.False(t, ok)
 }
 
+// The parser decodes the escapes the transport writes around a bracket or a
+// backslash in a key value: the bracket is part of the value, not a delimiter,
+// and the value matches with the escape removed.
+func TestParsePathDecodesEscapedDelimitersInKeyValues(t *testing.T) {
+	elems := parsePath(`/interfaces/interface[name=a\]/b\[c\\d]/state/counters`)
+	require.Len(t, elems, 4, "an escaped bracket does not close the key group, so the slash after it is part of the value")
+	assert.Equal(t, map[string]string{"name": `a]/b[c\d`}, elems[1].keys)
+	leaf, keys, ok := SplitLeaf("/interfaces/interface[name=*]/state/counters",
+		`/interfaces/interface[name=a\]/b\[c\\d]/state/counters/in-octets`)
+	require.True(t, ok)
+	assert.Equal(t, "in-octets", leaf)
+	assert.Equal(t, `a]/b[c\d`, keys["name"], "the attribute carries the value the device wrote")
+}
+
 func TestMatchPrefixAndDepth(t *testing.T) {
 	keys, ok := MatchPrefix("/interfaces/interface[name=*]/state/counters", "/interfaces/interface[name=e1]")
 	require.True(t, ok, "a deleted ancestor element matches the subscriptions under it")

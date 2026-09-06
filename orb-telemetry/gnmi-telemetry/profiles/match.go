@@ -35,16 +35,21 @@ func parsePath(p string) []pathElem {
 		}
 		e := pathElem{name: name}
 		if keyPart != "" {
-			e.keys = map[string]string{}
-			for _, kv := range strings.Split(strings.Trim(keyPart, "[]"), "][") {
-				k, v, _ := strings.Cut(kv, "=")
-				e.keys[k] = v
-			}
+			e.keys = parseKeys(keyPart)
 		}
 		elems = append(elems, e)
 	}
+	escaped := false
 	for _, r := range p {
 		switch {
+		case escaped:
+			// The character after a backslash is part of a key value whatever
+			// it is: a bracket there is not a delimiter.
+			cur.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+			cur.WriteRune(r)
 		case r == '[':
 			depth++
 			cur.WriteRune(r)
@@ -59,6 +64,45 @@ func parsePath(p string) []pathElem {
 	}
 	flush()
 	return elems
+}
+
+// parseKeys reads the "[k=v]" groups of one element. A backslash escapes the
+// character after it, which is how the transport renders a bracket or a
+// backslash inside a key value, and the escape is dropped so the value is the
+// one the device wrote. A group without "=" is a key with an empty value.
+func parseKeys(keyPart string) map[string]string {
+	keys := map[string]string{}
+	var k, v strings.Builder
+	inGroup, inValue, escaped := false, false, false
+	for _, r := range keyPart {
+		switch {
+		case escaped:
+			if inValue {
+				v.WriteRune(r)
+			} else {
+				k.WriteRune(r)
+			}
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case !inGroup:
+			if r == '[' {
+				inGroup, inValue = true, false
+				k.Reset()
+				v.Reset()
+			}
+		case r == ']':
+			keys[k.String()] = v.String()
+			inGroup, inValue = false, false
+		case !inValue && r == '=':
+			inValue = true
+		case inValue:
+			v.WriteRune(r)
+		default:
+			k.WriteRune(r)
+		}
+	}
+	return keys
 }
 
 // pathKeyCounts is how many of a path's elements carry each key name, which is

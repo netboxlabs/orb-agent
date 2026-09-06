@@ -676,7 +676,7 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 	// by path spent all of it here, and every per-path Get then failed at once
 	// on the spent context: the recovery never recovered, and the target
 	// reconnected for ever with nothing collected.
-	wholeCtx, cancelWhole := halfRemaining(ctx)
+	wholeCtx, cancelWhole := shareRemaining(ctx, 2)
 	n, err := s.getPaths(wholeCtx, paths)
 	cancelWhole()
 	if err == nil {
@@ -694,8 +694,14 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 	result.SyncDone = true
 	got := 0
 	var lastErr error
-	for _, p := range paths {
-		n, err := s.getPaths(ctx, []string{p})
+	for i, p := range paths {
+		// Each attempt takes an equal share of what remains for the paths
+		// still to try, so a path the target hangs on spends its share and no
+		// more. Sharing one context, a hanging first path ran it out and every
+		// later path failed unattempted, on every poll, in the same order.
+		attemptCtx, cancelAttempt := shareRemaining(ctx, len(paths)-i)
+		n, err := s.getPaths(attemptCtx, []string{p})
+		cancelAttempt()
 		if err != nil {
 			lastErr = err
 			continue
@@ -710,14 +716,26 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 	return result, nil
 }
 
-// halfRemaining is ctx bounded to half of what its deadline leaves, or a plain
-// cancellable child of it when it carries none.
-func halfRemaining(ctx context.Context) (context.Context, context.CancelFunc) {
+// shareRemaining is ctx bounded to a 1/n share of what its deadline leaves,
+// or a plain cancellable child of it when it carries none.
+func shareRemaining(ctx context.Context, n int) (context.Context, context.CancelFunc) {
 	deadline, ok := ctx.Deadline()
-	if !ok {
+	if !ok || n < 1 {
 		return context.WithCancel(ctx)
 	}
-	return context.WithTimeout(ctx, time.Until(deadline)/2)
+	return context.WithTimeout(ctx, time.Until(deadline)/time.Duration(n))
+}
+
+// keyValueEscaper escapes what would otherwise change the shape of a rendered
+// path: a bracket in a key value, which a list key such as an interface name
+// may carry, read as a key delimiter to the matcher, moved every element after
+// it and left the update unmatched. The matcher's parser decodes the same
+// escapes, and the value reaches a series attribute as the device wrote it.
+var keyValueEscaper = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`)
+
+// escapeKeyValue renders one key value for the path string.
+func escapeKeyValue(v string) string {
+	return keyValueEscaper.Replace(v)
 }
 
 // mergeGetResults folds one converted notification into a merged Get result:
@@ -978,7 +996,7 @@ func pathToString(p *gnmiproto.Path) string {
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				fmt.Fprintf(&b, "[%s=%s]", k, elem.GetKey()[k])
+				fmt.Fprintf(&b, "[%s=%s]", k, escapeKeyValue(elem.GetKey()[k]))
 			}
 		}
 	}

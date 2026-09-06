@@ -332,6 +332,29 @@ func TestGetOnceReportsThePathsItFetched(t *testing.T) {
 	require.Error(t, err, "a target that answers nothing is a failure, not an empty snapshot")
 }
 
+// Each per-path attempt takes its own share of the deadline: a path the target
+// hangs on spends that share, and the paths after it are still attempted.
+func TestGetOnceGivesEachPathItsOwnShareOfTheDeadline(t *testing.T) {
+	const memory, interfaces = "/system/memory/state", "/interfaces/interface[name=*]/state/counters"
+	s := getSession(t, &getServer{holds: map[string]bool{interfaces: true}, blocks: map[string]bool{memory: true}})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	n, err := s.GetOnce(ctx, []string{memory, interfaces})
+	require.NoError(t, err, "the path after the hanging one is fetched within its own share")
+	assert.Equal(t, []string{interfaces}, n.Paths)
+}
+
+// A bracket or a backslash in a key value is escaped in the rendered path, so
+// the matcher reads it as part of the value and not as a key delimiter.
+func TestPathToStringEscapesDelimitersInKeyValues(t *testing.T) {
+	p := &gnmiproto.Path{Elem: []*gnmiproto.PathElem{
+		{Name: "interfaces"},
+		{Name: "interface", Key: map[string]string{"name": `a]/b[c\d`}},
+		{Name: "state"},
+	}}
+	assert.Equal(t, `/interfaces/interface[name=a\]/b\[c\\d]/state`, pathToString(p))
+}
+
 // The per-path recovery runs with a live deadline: the whole request takes
 // half of what the caller left, so a target that hangs on the aggregate request
 // and answers path by path is collected instead of failing every recovery on a
