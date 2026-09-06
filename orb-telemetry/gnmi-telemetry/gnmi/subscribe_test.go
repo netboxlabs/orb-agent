@@ -611,3 +611,19 @@ func TestAPROTOOnlyTargetAnswersItsGet(t *testing.T) {
 	assert.Equal(t, memory, n.Updates[0].Path)
 	assert.Equal(t, uint64(1), n.Updates[0].Value, "a PROTO scalar decodes to the number the target sent")
 }
+
+// The vendor mapping knows a handful of organizations and derives nothing from
+// any other, so a device of an unlisted vendor reports its name and the result
+// carries no vendor at all. Keeping the organizations it reported is what
+// leaves a profile written for that vendor something to be selected by.
+func TestCapabilitiesKeepsTheOrganizationsTheTargetReported(t *testing.T) {
+	resp := &gnmiproto.CapabilityResponse{SupportedModels: []*gnmiproto.ModelData{
+		{Name: "acme-interfaces", Organization: " Acme Networks, Inc. "},
+		{Name: "acme-system", Organization: "Acme Networks, Inc."},
+		{Name: "openconfig-interfaces", Organization: "OpenConfig working group"},
+	}}
+	got := mapCapabilities(resp)
+	assert.Empty(t, got.Vendor, "an organization the mapping does not know sets no vendor")
+	assert.Equal(t, []string{"Acme Networks, Inc.", "OpenConfig working group"}, got.Organizations,
+		"every organization is kept as the target wrote it, trimmed, in order and once")
+}

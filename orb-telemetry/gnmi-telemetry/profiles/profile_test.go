@@ -603,3 +603,21 @@ match: {vendor: acme}
 	require.True(t, ok, "the bundled base still loads")
 	assert.NotEmpty(t, base.Subscriptions)
 }
+
+// Capabilities derives a vendor only for the organizations it maps, so a target
+// of any other vendor arrives with an empty vendor and the organization it
+// reported. An overlay written for that vendor has to be reachable from that,
+// or every such target falls to _base however plainly the device names itself.
+func TestMatchReadsTheOrganizationsTheTargetReported(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+`), 0o600))
+	store, err := LoadProfiles(dir, quiet())
+	require.NoError(t, err)
+	assert.Equal(t, "acme", store.Match(MatchInput{Organizations: []string{"Acme Networks, Inc."}}).Name,
+		"the overlay's vendor is a word of the organization the target reported")
+	assert.Equal(t, "_base", store.Match(MatchInput{Organizations: []string{"OpenConfig working group"}}).Name,
+		"an organization naming no overlay's vendor selects none of them")
+}

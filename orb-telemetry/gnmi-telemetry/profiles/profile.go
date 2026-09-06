@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	gpath "github.com/openconfig/gnmic/pkg/api/path"
@@ -345,6 +346,11 @@ func (p *Profile) Validate() error {
 type MatchInput struct {
 	Vendor string
 	NOS    string
+	// Organizations are the organization strings the target reported, as it
+	// wrote them. Capabilities derives Vendor only from the organizations it
+	// knows, so a target of any other vendor arrives here with an empty Vendor
+	// and these are what a profile written for it is matched on.
+	Organizations []string
 }
 
 // Store holds all loaded, fully-resolved profiles.
@@ -379,7 +385,10 @@ func (s *Store) Names() []string {
 // generic "Arista", and within an alias list the longest matched token sets the
 // score. Ties are broken deterministically by sorted profile name. (A
 // single-value Match.Vendor scores by its own length, preserving the prior
-// behavior exactly.)
+// behavior exactly.) Failing that, the organizations the target reported are
+// tried, so a vendor the capability mapping does not know still reaches the
+// overlay written for it; the first profile in sorted name order wins there.
+// _base is the fallback when no pass matched.
 func (s *Store) Match(in MatchInput) *Profile {
 	names := make([]string, 0, len(s.profiles))
 	for name := range s.profiles {
@@ -418,7 +427,44 @@ func (s *Store) Match(in MatchInput) *Profile {
 	if best != nil {
 		return best
 	}
+	// Capabilities derives a vendor only from the organizations it maps, so a
+	// device of any other vendor reaches here with nothing but the organization
+	// it reported, and an overlay carrying that vendor would never be selected:
+	// every such target streamed _base however plainly the device named itself.
+	// An alias is matched as a whole token of an organization rather than as a
+	// substring of one, because an organization is written for people ("Acme
+	// Networks, Inc.") and a substring of such a string says much less than a
+	// word of it. A multi-word alias is a token of nothing and is carried by
+	// the vendor pass above alone.
+	for _, name := range names {
+		p := s.profiles[name]
+		for _, alias := range p.Match.vendorAliases() {
+			for _, org := range in.Organizations {
+				if hasToken(org, alias) {
+					return p
+				}
+			}
+		}
+	}
 	return s.profiles["_base"]
+}
+
+// hasToken reports whether org carries token as one of its words, compared
+// case-insensitively. An organization is split on everything that is neither a
+// letter nor a digit, so the punctuation a device writes around its name is not
+// part of the word it is matched on.
+func hasToken(org, token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, word := range strings.FieldsFunc(org, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if strings.EqualFold(word, token) {
+			return true
+		}
+	}
+	return false
 }
 
 // metricSchema is how one exported metric name reaches the SDK: the kind of

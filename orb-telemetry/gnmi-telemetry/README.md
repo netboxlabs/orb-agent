@@ -390,7 +390,7 @@ Seven metrics describe the backend itself rather than a device:
 | --- | --- | --- | --- |
 | `gnmi.targets_active` | up-down counter | none | Targets with a running loop, across every policy. |
 | `gnmi.target_up` | gauge | `device_ip`, `policy`, `mode` | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
-| `gnmi.subscription_reconnects_total` | counter | none | Reconnects after a stream ended or failed. Backoff runs from one second to a thirty second cap, and resets after an attempt that delivered data. |
+| `gnmi.subscription_reconnects_total` | counter | none | Reconnects after a stream ended or failed. Backoff runs from one second to a thirty second cap, and resets after an attempt that served: one that delivered data, or one whose stream answered the sync response closing its initial dump, which is all a subscription over an empty subtree ever carries. |
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
 | `gnmi.mode_fallback_total` | counter | none | Delivery-mode downgrades, one per step down the ladder. |
@@ -506,7 +506,11 @@ export nothing.
 Profile selection per target, in order: the target's `profile` if it names a
 loaded profile; else the profile whose `match.nos` equals the network OS from
 Capabilities; else the vendor string from Capabilities matched against each
-profile's `match.vendor` aliases, the longest matching alias winning; else
+profile's `match.vendor` aliases, the longest matching alias winning; else the
+organizations the device reported to Capabilities, each `match.vendor` alias
+compared whole and case-insensitively against the words of one, the first
+profile in name order winning, which is what reaches an overlay written for a
+vendor the backend derives no vendor string from; else
 `_base`, which also counts one `gnmi.profile_fallback_total`. The choice is
 reported per target in `GET /api/v1/status`.
 

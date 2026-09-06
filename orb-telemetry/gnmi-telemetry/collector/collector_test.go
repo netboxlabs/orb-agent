@@ -2142,3 +2142,123 @@ func TestALoopRecordsWhenItsErrorHappened(t *testing.T) {
 	require.Len(t, second, 1)
 	assert.Equal(t, at, second[0].LastErrorAt, "an unchanged failure keeps the instant it was recorded at")
 }
+
+// The vendor Capabilities derives is empty for an organization its mapping does
+// not know, so a target of such a vendor reports the organization and nothing
+// else. The overlay written for it has to be selected from that, or the target
+// streams _base and none of the paths the overlay was written for.
+func TestATargetSelectsAnOverlayFromTheOrganizationItReported(t *testing.T) {
+	testReader(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme.yaml"), []byte(`
+extends: _base
+match: {vendor: acme}
+`), 0o600))
+	profileStore, err := profiles.LoadProfiles(dir, nil)
+	require.NoError(t, err)
+	sess := &gnmi.FakeSession{
+		Caps:            &gnmi.CapabilitiesResult{Organizations: []string{"Acme Networks, Inc."}},
+		SubscribeManyFn: streamOf(sample(1, time.Now().UnixNano())),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, profileStore, nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "on_change", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Profile != ""
+	})
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "acme", st[0].Profile, "the organization the target reported selected the overlay written for that vendor")
+}
+
+// failThenDialer refuses its first failures dials, which is what makes the
+// loop's backoff climb, and hands every later one the same session. It records
+// when each dial arrived, so the wait between two attempts, the climbed one and
+// the one after a stream that served, is observable from the test.
+type failThenDialer struct {
+	mu       sync.Mutex
+	at       []time.Time
+	failures int
+	sess     gnmi.Session
+}
+
+func (d *failThenDialer) Dial(_ context.Context, _ gnmi.TargetSpec) (gnmi.Session, error) {
+	d.mu.Lock()
+	d.at = append(d.at, time.Now())
+	n := len(d.at)
+	d.mu.Unlock()
+	if n <= d.failures {
+		return nil, errors.New("dial refused")
+	}
+	return d.sess, nil
+}
+
+func (d *failThenDialer) dials() []time.Time {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]time.Time(nil), d.at...)
+}
+
+// A stream over a subtree with nothing in it answers its sync response and no
+// data at all, and a target holding one is serving as surely as one sending
+// values. Read on the notification alone, such a target kept whatever backoff
+// earlier failures had climbed to: every later drop waited the cap, however
+// long the stream before it had been healthy.
+func TestACompletedSyncResetsTheBackoff(t *testing.T) {
+	testReader(t)
+	// Held until the test has seen the sync, so the error that ends the
+	// attempt cannot arrive before the sync it has to be judged against.
+	seen := make(chan struct{})
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, _ []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			out := make(chan gnmi.Notification)
+			errs := make(chan error, 1)
+			go func() {
+				defer close(out)
+				defer close(errs)
+				select {
+				case out <- gnmi.Notification{SyncDone: true}:
+				case <-ctx.Done():
+					return
+				}
+				select {
+				case <-seen:
+				case <-ctx.Done():
+					return
+				}
+				errs <- errors.New("stream reset")
+			}()
+			return out, errs, nil
+		},
+	}
+	// Five refused dials take the backoff from its base to thirty-two times it,
+	// far enough above the base that the wait after the stream that served says
+	// which of the two the loop chose.
+	dialer := &failThenDialer{failures: 5, sess: sess}
+	c := New(dialer, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "on_change", PolicyName: "p"}))
+
+	waitFor(t, 5*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && !st[0].LastSync.IsZero()
+	})
+	climbed := dialer.dials()
+	require.Len(t, climbed, 6, "the sixth dial is the first the dialer answered, and the five before it climbed the backoff")
+	assert.GreaterOrEqual(t, climbed[5].Sub(climbed[4]), 16*c.backoffBase,
+		"the backoff had climbed to thirty-two times its base by the last refused dial")
+
+	released := time.Now()
+	close(seen)
+	waitFor(t, 5*time.Second, func() bool { return len(dialer.dials()) >= 7 })
+	assert.Less(t, dialer.dials()[6].Sub(released), 10*c.backoffBase,
+		"the attempt that answered its sync reset the backoff, so the reconnect did not wait the climbed one")
+}

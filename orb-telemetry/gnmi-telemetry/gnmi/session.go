@@ -47,9 +47,15 @@ type CapabilitiesResult struct {
 	// A NOS is NOT a hardware manufacturer, so it never sets Vendor; it is used
 	// ONLY to bias profile selection (a Dell-built SONiC box selects the sonic
 	// overlay while its manufacturer still resolves to the hardware OEM, Dell).
-	NOS       string
-	Models    []string
-	Encodings []string
+	NOS string
+	// Organizations are the SupportedModel Organization strings the target
+	// reported, as it wrote them and in the order it listed them. Vendor is
+	// derived only from the organizations the mapping knows, so a target of any
+	// other vendor arrives with an empty Vendor and these are the only thing a
+	// profile written for that vendor has to match on.
+	Organizations []string
+	Models        []string
+	Encodings     []string
 }
 
 // Mode is a delivery mode.

@@ -862,6 +862,20 @@ func mapCapabilities(resp *gnmiproto.CapabilityResponse) *CapabilitiesResult {
 			}
 		}
 	}
+	// Every organization the target reported, kept whole beside the vendor the
+	// mapping derived from it: an organization outside vendorCanonical leaves
+	// Vendor empty, and a profile written for that vendor has nothing else to
+	// be selected by. Repeats are dropped, so a device naming one organization
+	// across fifty models reports it once.
+	seenOrg := map[string]bool{}
+	for _, m := range models {
+		org := strings.TrimSpace(m.GetOrganization())
+		if org == "" || seenOrg[org] {
+			continue
+		}
+		seenOrg[org] = true
+		result.Organizations = append(result.Organizations, org)
+	}
 	for _, m := range models {
 		result.Models = append(result.Models, m.GetName())
 	}

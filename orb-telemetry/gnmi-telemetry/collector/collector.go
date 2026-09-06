@@ -59,8 +59,13 @@ type TargetStatus struct {
 	Profile          string    `json:"profile"`
 	Up               bool      `json:"up"`
 	LastNotification time.Time `json:"last_notification"`
-	LastError        string    `json:"last_error,omitempty"`
-	LastErrorAt      time.Time `json:"last_error_at,omitzero"`
+	// LastSync is when a stream of this target last answered the sync response
+	// that closes its initial dump. It is activity of the same standing as a
+	// notification: a subscription over a subtree with nothing in it carries a
+	// sync and no data at all, for as long as the subtree stays empty.
+	LastSync    time.Time `json:"last_sync"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastErrorAt time.Time `json:"last_error_at,omitzero"`
 }
 
 type loopKey struct{ policy, host string }
@@ -262,16 +267,16 @@ func (c *Collector) run(ctx context.Context, target config.Target, opts Options,
 			metrics.GetReconnects().Add(ctx, 1)
 		}
 		first = false
-		noted := l.snapshot().LastNotification
+		active := lastActivity(l.snapshot())
 		err := c.runOnce(ctx, target, opts, l)
 		l.update(func(s *TargetStatus) { s.Up = false })
 		if ctx.Err() != nil {
 			return
 		}
-		if l.snapshot().LastNotification.After(noted) {
-			// An attempt that delivered data earns a fresh window: a target
-			// that failed twice at startup must not wait the cap after a day
-			// of healthy streaming.
+		if lastActivity(l.snapshot()).After(active) {
+			// An attempt that served earns a fresh window: a target that
+			// failed twice at startup must not wait the cap after a day of
+			// healthy streaming.
 			backoff = c.backoffBase
 		}
 		if err != nil {
@@ -285,6 +290,18 @@ func (c *Collector) run(ctx context.Context, target config.Target, opts Options,
 		}
 		backoff = time.Duration(math.Min(float64(backoff*2), float64(30*time.Second)))
 	}
+}
+
+// lastActivity is the later of the two things an attempt can show for itself:
+// a notification, and the sync response that closes a stream's initial dump. A
+// subscription over a subtree with nothing in it answers its sync and nothing
+// else, so reading the notification alone had a target of that shape wait the
+// climbed backoff after every drop, however long its stream had been healthy.
+func lastActivity(s TargetStatus) time.Time {
+	if s.LastSync.After(s.LastNotification) {
+		return s.LastSync
+	}
+	return s.LastNotification
 }
 
 func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Options, l *loop) error {
@@ -407,7 +424,7 @@ func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesR
 		}
 		c.logger.Warn("pinned profile not found, matching by capabilities", "host", target.Host, "profile", target.Profile)
 	}
-	p := c.profiles.Match(profiles.MatchInput{Vendor: caps.Vendor, NOS: caps.NOS})
+	p := c.profiles.Match(profiles.MatchInput{Vendor: caps.Vendor, NOS: caps.NOS, Organizations: caps.Organizations})
 	if p.Name == "_base" {
 		metrics.GetProfileFallbacks().Add(context.Background(), 1)
 	}
@@ -485,8 +502,15 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		// A sync response is the stream saying its dump is complete, which is as
 		// good a sign of recovery as a value: a stream over a subtree with nothing
 		// in it carries no value at all, and the target would stand at the error of
-		// the attempt before it until something changed.
-		l.update(func(s *TargetStatus) { s.LastError = ""; s.LastErrorAt = time.Time{}; s.Up = true })
+		// the attempt before it until something changed. Noting when it arrived is
+		// what lets the loop count the attempt as one that served, so a healthy
+		// stream of that shape backs off from its cap rather than waiting it.
+		l.update(func(s *TargetStatus) {
+			s.LastSync = time.Now()
+			s.LastError = ""
+			s.LastErrorAt = time.Time{}
+			s.Up = true
+		})
 	}
 	// A target that accepts the RPC and then sends nothing leaves this select on
 	// the loop's context, which lives as long as the policy, while the subscribe
