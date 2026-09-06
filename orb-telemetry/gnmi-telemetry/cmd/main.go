@@ -23,9 +23,10 @@ import (
 // AppName is the application name
 const AppName = "gnmi-telemetry"
 
-// shutdownBudget bounds the final export. The agent sends SIGTERM and
-// escalates to SIGKILL after a five-second grace, so the one step that spends
-// time before the process can exit is held inside that grace.
+// shutdownBudget is the grace the whole shutdown sequence has. The agent sends
+// SIGTERM and escalates to SIGKILL after a five-second grace, so everything
+// that spends time before the process can exit is held inside it: the final
+// export takes half, and the rest is left for the runners to unwind.
 const shutdownBudget = 5 * time.Second
 
 // defaultHost is the address the policy API binds unless --host says otherwise.
@@ -71,8 +72,13 @@ type stopper interface {
 // arrives between the two, and runs the flush's timeout while the streams are
 // still live. That is one cycle of freshness against the whole interval the
 // race could cost.
+//
+// The flush is bounded to half the budget. Under the whole of it, an exporter
+// that could not reach its collector ran the flush to the end of the grace,
+// and the kill arrived before the loops were cancelled and the policies
+// stopped: the process died with its subscriptions still open.
 func shutdown(budget time.Duration, cancelRoot context.CancelFunc, srv stopper, flush func(timeout time.Duration)) {
-	flush(budget)
+	flush(budget / 2)
 	cancelRoot()
 	srv.Stop()
 }

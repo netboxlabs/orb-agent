@@ -61,6 +61,15 @@ func TestShutdownCancelsRootBetweenTheFlushAndTheServerStop(t *testing.T) {
 	require.NoError(t, errAtFlush, "the root context must still be live during the final flush")
 }
 
+// The flush takes half the grace, not all of it: an exporter that cannot reach
+// its collector would otherwise spend the whole grace, and the kill would land
+// before the runtime was cancelled and stopped.
+func TestShutdownLeavesHalfTheGraceAfterTheFlush(t *testing.T) {
+	var flushBudget time.Duration
+	shutdown(shutdownBudget, func() {}, stopFunc(func() {}), func(timeout time.Duration) { flushBudget = timeout })
+	assert.Equal(t, shutdownBudget/2, flushBudget)
+}
+
 // The flush runs on its own context, so a root context already cancelled when
 // the shutdown sequence is entered does not cost the last export. Nothing
 // speaks gRPC on the listener, so the export fails; that it dials at all is the
