@@ -6,7 +6,9 @@ Adds three optional extension methods on top of upstream NAPALM Junos:
 
 - ``get_interfaces_vlans()``: per-interface VLAN classification from the
   ``<get-ethernet-switching-interface-information>`` RPC, tolerating both
-  ELS and non-ELS XML wrappers. v1 skips voice VLAN (Junos voip semantics
+  ELS and non-ELS XML wrappers, and from
+  ``<get-ethernet-switching-interface-details>`` where an ELS switch refuses
+  the first as a syntax error. v1 skips voice VLAN (Junos voip semantics
   differ from the Cisco family).
 - ``get_chassis_members()``: Virtual Chassis topology from the
   ``<get-virtual-chassis-information>`` RPC, returning the vendor-neutral
@@ -108,6 +110,94 @@ def _maybe_int(s: str) -> int | None:
         return int(s)
     except (TypeError, ValueError):
         return None
+
+
+def _physical_name(ifname: str) -> str:
+    """
+    Map a Junos logical unit 0 to its physical interface.
+
+    ELS reports switching per logical unit, ``xe-0/0/19.0``, while NetBox
+    carries switchport mode and VLANs on the port itself, which NAPALM
+    emits as ``xe-0/0/19`` beside the unit. Unit 0 is the port's one L2
+    unit, so it maps to the port; any other unit keeps its own name and
+    matches the logical interface NAPALM emits for it.
+    """
+    return ifname[:-2] if ifname.endswith(".0") else ifname
+
+
+def _els_details_rows(root) -> tuple[list[str], dict[str, str | None], dict[str, list[int]], dict[str, int | None]]:
+    """
+    Collect the interfaces and VLAN rows of an ELS ``show ethernet-switching interface`` reply.
+
+    Under ``<l2ng-l2ald-iff-interface-information>``, each routing instance
+    is an entry holding a run of entries: one with a non-empty
+    ``<l2iff-interface-name>`` opens an interface, and its own
+    ``<l2iff-interface-vlan-member-tagness>`` says what the port is; the
+    entries that follow with an empty name, or in the detail form the same
+    name, are its VLANs, each with ``<l2iff-interface-vlan-id>`` and its
+    tagness. Returns the interfaces in order, their modes, tagged VIDs and
+    untagged VID.
+    """
+    order: list[str] = []
+    modes: dict[str, str | None] = {}
+    tagged: dict[str, list[int]] = {}
+    untagged: dict[str, int | None] = {}
+
+    def open_interface(name: str) -> None:
+        if name not in modes:
+            order.append(name)
+            modes[name] = None
+            tagged[name] = []
+            untagged[name] = None
+
+    current: str | None = None
+    for elem in root.iter():
+        if _localname(elem) != "l2ng-l2ald-iff-interface-entry":
+            continue
+        name = _text(_find_child(elem, "l2iff-interface-name"))
+        vid = _maybe_int(_text(_find_child(elem, "l2iff-interface-vlan-id")))
+        tagness = _text(_find_child(elem, "l2iff-interface-vlan-member-tagness")).lower()
+        if vid is None:
+            if name:
+                current = _physical_name(name)
+                open_interface(current)
+                modes[current] = {"tagged": "trunk", "untagged": "access"}.get(tagness)
+            continue
+        owner = _physical_name(name) if name else current
+        if owner is None:
+            continue
+        open_interface(owner)
+        if tagness == "untagged":
+            untagged[owner] = vid
+        else:
+            tagged[owner].append(vid)
+    return order, modes, tagged, untagged
+
+
+def _els_details_to_switchports(root) -> dict[str, dict]:
+    """
+    Classify the interfaces of an ELS ``show ethernet-switching interface`` reply.
+
+    An interface with no VLAN rows, a management port for one, is left out.
+    A port whose own row named no mode is a trunk when it carries tagged
+    VLANs and access otherwise.
+    """
+    order, modes, tagged, untagged = _els_details_rows(root)
+    result: dict[str, dict] = {}
+    for ifname in order:
+        if not tagged[ifname] and untagged[ifname] is None:
+            continue
+        mode = modes[ifname] or ("trunk" if tagged[ifname] else "access")
+        info = SwitchportInfo(
+            enabled=True,
+            admin_mode=mode,
+            oper_mode=None,
+            access_vlan=untagged[ifname],
+            native_vlan=untagged[ifname],
+            allowed_vlans=sorted(tagged[ifname]),
+        )
+        result[ifname] = classify_switchport(info)
+    return result
 
 
 def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
@@ -1076,21 +1166,24 @@ class JunOSDriver(NapalmJunOSDriver):
         emit subtly-different XML and we'd rather skip VLAN ingest than fail
         the whole device.
         """
+        reply = None
         try:
             reply = self.device.rpc.get_ethernet_switching_interface_information()
         except Exception:
+            # An ELS switch refuses this RPC outright, as a syntax error: it
+            # is the normal state of such a switch, not a fault, and the
+            # fallback below is its path.
             logger.debug("Junos get-ethernet-switching-interface-information failed", exc_info=True)
-            return {}
-
-        if reply is None:
-            return {}
 
         # Wrapper element is <ethernet-switching-interface-information> (non-ELS)
         # or <l2ng-l2ald-iff-information> (ELS). Each <interface> child has the
         # same shape regardless of wrapper.
+        interfaces = _find_children(reply, "interface") if reply is not None else []
+        if not interfaces:
+            return self._interfaces_vlans_from_details()
         try:
             result: dict[str, dict] = {}
-            for intf in _find_children(reply, "interface"):
+            for intf in interfaces:
                 ifname = _text(_find_child(intf, "interface-name"))
                 if not ifname:
                     continue
@@ -1099,4 +1192,26 @@ class JunOSDriver(NapalmJunOSDriver):
             return result
         except Exception:
             logger.debug("Junos VLAN XML parse failed", exc_info=True)
+            return {}
+
+    def _interfaces_vlans_from_details(self) -> dict[str, dict]:
+        """
+        Per-interface VLAN config from ``<get-ethernet-switching-interface-details>``.
+
+        The RPC behind ``show ethernet-switching interface`` on ELS Junos,
+        answered where ``get-ethernet-switching-interface-information`` is a
+        syntax error. Best-effort like the caller: any failure returns an
+        empty dict rather than costing the device its discovery cycle.
+        """
+        try:
+            reply = self.device.rpc.get_ethernet_switching_interface_details()
+        except Exception:
+            logger.debug("Junos get-ethernet-switching-interface-details failed", exc_info=True)
+            return {}
+        if reply is None:
+            return {}
+        try:
+            return _els_details_to_switchports(reply)
+        except Exception:
+            logger.debug("Junos ELS details XML parse failed", exc_info=True)
             return {}

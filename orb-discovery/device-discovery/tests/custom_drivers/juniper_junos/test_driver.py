@@ -163,3 +163,68 @@ def test_chassis_members_unexpected_exception_logs_warning(caplog):
     assert warning_records[0].exc_info is not None and warning_records[0].exc_info[0] is RuntimeError, (
         "WARNING record must carry the traceback (exc_info) so operators can diagnose"
     )
+
+
+def test_interfaces_vlans_falls_back_to_the_details_rpc_when_the_first_is_a_syntax_error(caplog):
+    """
+    The details RPC answers where the first is a syntax error, and its rows are parsed.
+
+    An ELS Junos refuses get-ethernet-switching-interface-information outright
+    and answers get-ethernet-switching-interface-details with the nested entry
+    rows. The refusal is logged at DEBUG only, since it is the normal state of
+    such a switch.
+    """
+    from lxml import etree
+
+    fixture = (
+        Path(__file__).parent
+        / "mock_data"
+        / "test_get_interfaces_vlans"
+        / "els_details"
+        / "get-ethernet-switching-interface-details.xml"
+    )
+    driver = JunOSDriver.__new__(JunOSDriver)
+    driver.device = MagicMock()
+    driver.device.rpc.get_ethernet_switching_interface_information.side_effect = RpcError(
+        rsp="syntax error"
+    )
+    driver.device.rpc.get_ethernet_switching_interface_details.return_value = etree.fromstring(
+        fixture.read_bytes()
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.junos"):
+        result = driver.get_interfaces_vlans()
+
+    assert result["xe-0/0/19"] == {"mode": "trunk", "tagged": [665], "untagged": None}
+    assert result["xe-0/0/6"]["tagged"] == [156, 162, 166]
+    assert "em0" not in result and "em0.0" not in result, "an interface with no VLAN rows is skipped"
+    assert not any(r.levelno >= logging.WARNING for r in caplog.records)
+
+
+def test_details_walk_survives_an_xml_comment_in_the_reply():
+    """
+    A comment node in the details reply is skipped, not a reason to drop the result.
+
+    Real ncclient replies can carry comments and processing instructions,
+    whose tags are not strings; reading a name off one raised, the fallback
+    caught it, and every association of an otherwise valid reply was lost.
+    """
+    from lxml import etree
+
+    from custom_napalm.junos import _els_details_to_switchports
+
+    fixture = (
+        Path(__file__).parent
+        / "mock_data"
+        / "test_get_interfaces_vlans"
+        / "els_details"
+        / "get-ethernet-switching-interface-details.xml"
+    )
+    text = fixture.read_text(encoding="utf-8").replace(
+        "<l2iff-interface-name>xe-0/0/19.0</l2iff-interface-name>",
+        "<!-- a comment the switch left --><l2iff-interface-name>xe-0/0/19.0</l2iff-interface-name>",
+        1,
+    )
+    assert "<!--" in text
+    result = _els_details_to_switchports(etree.fromstring(text.encode("utf-8")))
+    assert result["xe-0/0/19"] == {"mode": "trunk", "tagged": [665], "untagged": None}

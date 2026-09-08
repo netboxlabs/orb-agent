@@ -1,0 +1,12 @@
+{
+  "xe-0/0/6": {
+    "mode": "trunk",
+    "tagged": [156, 162, 166],
+    "untagged": null
+  },
+  "xe-0/0/19": {
+    "mode": "trunk",
+    "tagged": [665],
+    "untagged": null
+  }
+}
