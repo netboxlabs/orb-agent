@@ -34,10 +34,11 @@ func TestCollectWalkKeepsRowsOutOfOrder(t *testing.T) {
 }
 
 // A repeated OID is the one way a walk without the ordering check can loop,
-// so it ends the table with the rows collected before it.
+// so it ends the table with the rows collected before it, reported the way a
+// truncation is: the table may be incomplete, and the caller should say so.
 func TestCollectWalkEndsTheTableOnARepeatedOID(t *testing.T) {
 	rows, err := collectWalk(context.Background(), feed(".1.3.6.1.2.1.2.2.1.2.1", ".1.3.6.1.2.1.2.2.1.2.2", ".1.3.6.1.2.1.2.2.1.2.1", ".1.3.6.1.2.1.2.2.1.2.3"), 1)
-	require.NoError(t, err)
+	assert.ErrorIs(t, err, ErrWalkRepeated)
 	assert.Len(t, rows, 2, "the walk stops at the repeat; nothing after it is read")
 }
 

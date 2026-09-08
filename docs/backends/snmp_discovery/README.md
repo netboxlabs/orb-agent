@@ -421,17 +421,15 @@ When the `discover_modules` policy option is enabled, snmp-discovery emits NetBo
 
 ## Walking the device
 
-Each table is walked on its own. A table the agent refuses is logged and
-skipped, and the target keeps everything the other tables returned; only a
-target that fails every table, or cannot be reached at all, fails the run. A
-timeout is different: it means the device stopped answering, and it fails the
-target at once rather than costing one timeout per remaining table. Rows an
-agent returns out of index order are kept: some agents serve a Q-BRIDGE or
-BRIDGE-MIB table with a later index before an earlier one, which no operator
-can correct from this side, so the walk does not require increasing OIDs. Two
-bounds stand in for the ordering check: an agent delivering an OID it already
-delivered ends the table with the rows collected before it, and a table ends
-at 500,000 rows, kept as collected and logged as truncated. The policy's
+Rows an agent returns out of index order are kept: some agents serve a
+Q-BRIDGE or BRIDGE-MIB table with a later index before an earlier one, which
+no operator can correct from this side, so the walk does not require
+increasing OIDs. Two bounds stand in for the ordering check, and each ends
+the table with the rows collected before it, kept and logged as a warning: an
+agent delivering an OID it already delivered, and a table reaching 500,000
+rows. A table the walk cannot finish for any other reason, the device going
+silent or answering with something other than SNMP, fails the target, as it
+always did. An SNMP error status ends a table without failing it. The policy's
 `timeout` bounds the whole walk: once it expires, the walk stops at the next
 row and the target fails.
 

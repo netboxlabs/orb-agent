@@ -800,36 +800,29 @@ func TestNewClientDoesNotCheckOIDOrdering(t *testing.T) {
 	}
 }
 
-// A table the agent fails does not cost the target: the host keeps walking
-// the other tables and returns what it collected, failing only when every
-// table failed.
-func TestSNMPHostKeepsGoingPastAFailedTable(t *testing.T) {
+// A table the walk cannot finish fails the target, as it always did: the
+// errors that reach here are transport and decode failures, a device whose
+// agent restarted or answered with something other than SNMP, and a device
+// missing the tables it lost is not a discovered device. Only an SNMP error
+// status, which ends the table without an error, and the two bounds below
+// leave a table short without failing the target.
+func TestSNMPHostFailsTheTargetOnAFailedTable(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	const good, bad = "1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.17.7.1.4.5.1.1"
 	mockWalker := &MockSNMP{}
 	mockWalker.On("Connect").Return(nil)
 	mockWalker.On("Close").Return(nil)
-	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil)
-	mockWalker.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("unknown error response"))
+	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil).Maybe()
+	mockWalker.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("error parsing SNMP packet version: unknown field type: ff"))
 	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return mockWalker, nil
 	}
 	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, factory)
 
 	oids, err := host.Walk(context.Background(), map[string]int{good: 1, bad: 1})
-	require.NoError(t, err, "one failed table does not fail the target")
-	assert.Len(t, oids, 1)
-	assert.Equal(t, "eth0", oids[good+".1"].Value)
-
-	allBad := &MockSNMP{}
-	allBad.On("Connect").Return(nil)
-	allBad.On("Close").Return(nil)
-	allBad.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("unknown error response"))
-	host = snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
-		return allBad, nil
-	})
-	_, err = host.Walk(context.Background(), map[string]int{bad: 1})
-	assert.Error(t, err, "every table failing fails the target")
+	require.Error(t, err, "a table the walk cannot finish fails the target")
+	assert.Contains(t, err.Error(), "unknown field type")
+	assert.Nil(t, oids, "nothing of a failed target is returned")
 }
 
 // A timeout is the device going silent, not a table the agent cannot serve:
@@ -866,6 +859,23 @@ func TestSNMPHostKeepsATruncatedTable(t *testing.T) {
 	oids, err := host.Walk(context.Background(), map[string]int{big: 1})
 	require.NoError(t, err)
 	assert.Equal(t, "3", oids[big+".1"].Value)
+}
+
+// A table that ended at a repeated OID is kept as collected, like a
+// truncated one: the repeat is a warning, not a failure of the target.
+func TestSNMPHostKeepsARepeatedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const looping = "1.3.6.1.2.1.17.4.3.1.2"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", looping, 1).Return(map[string]snmp.PDU{looping + ".1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 1}}, snmp.ErrWalkRepeated)
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	oids, err := host.Walk(context.Background(), map[string]int{looping: 1})
+	require.NoError(t, err)
+	assert.Equal(t, "3", oids[looping+".1"].Value)
 }
 
 // Once the policy's context has ended, the host starts no further table:

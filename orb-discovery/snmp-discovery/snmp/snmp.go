@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -74,22 +73,18 @@ func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.Obje
 		return nil, err
 	}
 
-	// Each table is walked on its own: one the agent fails is logged and
-	// skipped, and the target keeps everything the other tables returned.
-	// Returning on the first failure cost the whole target, device,
-	// interfaces and addresses included, for one table the agent could not
-	// serve. A timeout is not such a failure but the device going silent,
-	// and fails the target at once. Only a target that failed every table
-	// is failed otherwise.
+	// Each table is walked on its own so that a table ended short by one of
+	// the walk's bounds can be kept and reported. A table the walk cannot
+	// finish fails the target: what reaches here is a transport or decode
+	// failure, the device going silent or answering with something other
+	// than SNMP, and a device missing the tables it lost is not a
+	// discovered device.
 	output := make(mapping.ObjectIDValueMap)
-	var walked, failed int
-	var lastErr error
 	for objectID, identifierSize := range objectIDs {
 		if err := ctx.Err(); err != nil {
 			// The policy stopped waiting: no further table is started.
 			return nil, err
 		}
-		walked++
 		pdu, err := snmpClient.Walk(ctx, objectID, identifierSize)
 		switch {
 		case err == nil:
@@ -99,17 +94,11 @@ func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.Obje
 			return nil, err
 		case errors.Is(err, ErrWalkTruncated):
 			s.logger.Warn("table walk truncated at the row cap; keeping what was collected", "object_id", objectID, "rows", len(pdu))
-		case isTimeout(err):
-			// The device stopped answering: every remaining table would
-			// spend its own timeout the same way, and one is the target's
-			// whole verdict.
+		case errors.Is(err, ErrWalkRepeated):
+			s.logger.Warn("table walk ended at a repeated OID; keeping what was collected", "object_id", objectID, "rows", len(pdu))
+		default:
 			s.logger.Warn("error walking object ID", "object_id", objectID, "error", err)
 			return nil, err
-		default:
-			s.logger.Warn("error walking object ID; continuing with the other tables", "object_id", objectID, "error", err)
-			failed++
-			lastErr = err
-			continue
 		}
 		for k, value := range pdu {
 			s.logger.Debug("mapping PDU", "object_id", k, "value", value, "value_type", reflect.TypeOf(value.Value))
@@ -122,13 +111,6 @@ func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.Obje
 			s.logger.Debug("mapped PDU", "object_id", k, "value", value)
 		}
 	}
-	if walked > 0 && failed == walked {
-		return nil, lastErr
-	}
-	if failed > 0 {
-		s.logger.Warn("some tables could not be walked", "host", s.address, "failed", failed, "walked", walked)
-	}
-
 	return output, nil
 }
 
@@ -226,8 +208,11 @@ func (c *Client) Walk(ctx context.Context, objectIDs string, identifierSize int)
 	return collectWalk(ctx, func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
 }
 
-// errWalkRepeated ends a walk that delivered an OID it had already delivered.
-var errWalkRepeated = errors.New("walk repeated an OID")
+// ErrWalkRepeated is returned with the rows collected when a walk delivered
+// an OID it had already delivered, the one way a walk without the ordering
+// check can loop: the table is kept as collected and the repeat is
+// reported, since the rows after it were never read.
+var ErrWalkRepeated = errors.New("walk repeated an OID")
 
 // ErrWalkTruncated is returned with the rows collected when a table hit
 // maxWalkRows: the table is kept as collected and the truncation is
@@ -257,7 +242,7 @@ func collectWalk(ctx context.Context, walk func(fn gosnmp.WalkFunc) error, ident
 			return err
 		}
 		if _, seen := output[pdu.Name]; seen {
-			return errWalkRepeated
+			return ErrWalkRepeated
 		}
 		if len(output) >= maxWalkRows {
 			return ErrWalkTruncated
@@ -275,20 +260,12 @@ func collectWalk(ctx context.Context, walk func(fn gosnmp.WalkFunc) error, ident
 		return nil, ctxErr
 	}
 	switch {
-	case err == nil, errors.Is(err, errWalkRepeated):
+	case err == nil:
 		return output, nil
-	case errors.Is(err, ErrWalkTruncated):
-		return output, ErrWalkTruncated
+	case errors.Is(err, ErrWalkRepeated), errors.Is(err, ErrWalkTruncated):
+		return output, err
 	}
 	return nil, err
-}
-
-// isTimeout reports whether a walk failed because the device stopped
-// answering. gosnmp reports that as a plain "request timeout" error, and a
-// transport deadline reads the same way; neither is a table the agent could
-// not serve, so neither is skipped.
-func isTimeout(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "timeout")
 }
 
 // tolerantWalks is the gosnmp option that turns its OID ordering check off;
