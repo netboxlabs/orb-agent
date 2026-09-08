@@ -239,8 +239,12 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", o.apiProtocol, o.apiHost, o.apiPort, name)
-	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodDelete,
+	segment, err := backend.PolicyPathSegment(name)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", o.apiProtocol, o.apiHost, o.apiPort, segment)
+	err = backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "message")
 	if err != nil {
 		return err
