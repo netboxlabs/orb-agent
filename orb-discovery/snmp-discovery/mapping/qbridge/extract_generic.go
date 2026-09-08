@@ -67,10 +67,14 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			Enabled:           rows.IfAdminStatus[ifIndex] == 1,
 			BridgePortPresent: true,
 		}
-		if pvid, ok := rows.PortPvid[ifIndex]; ok {
+		pvid, bridged := rows.PortPvid[ifIndex]
+		if bridged && pvid > 0 {
+			// A PVID of 0 says the port has no untagged VLAN, which is how a
+			// trunk with every VLAN tagged reports; it is not a VLAN to
+			// classify on. The row's presence still says the port is bridged.
 			info.NativeVlan = intPtr(pvid)
 			info.AccessVlan = intPtr(pvid)
-		} else {
+		} else if !bridged {
 			// In bridge table but no PVID -> positive "not currently
 			// bridged" signal -> routed if ifType supports L3.
 			if isL3Capable(rows.IfTypes[ifIndex]) {
@@ -91,16 +95,23 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			info.AccessVlan = native
 		}
 
-		// Default mode hint: trunk if more than one egress VLAN, access if exactly one.
+		// Default mode hint, from the tagging evidence rather than from how
+		// many VLANs the port carries: one VLAN the port is untagged in, or
+		// that its PVID names when the device publishes no untagged table,
+		// is an access port; any VLAN the port is only tagged in makes it a
+		// trunk, however few there are. Counting VLANs read a trunk carrying
+		// one tagged VLAN as access, and with the PVID of 0 such a trunk
+		// reports, the port came out access with no VLAN at all.
 		// This is overridden by the Cisco overlay if vendor-specific intent rows exist.
 		switch {
+		case info.OperMode == OperRouted:
 		case isWildcard:
 			info.AdminMode = AdminTrunk
-		case len(allowed) >= 2:
-			info.AdminMode = AdminTrunk
-		case len(allowed) == 1 && info.OperMode != OperRouted:
+		case len(allowed) == 1 && info.AccessVlan != nil && *info.AccessVlan == allowed[0]:
 			info.AdminMode = AdminAccess
-		case len(allowed) == 0 && info.AccessVlan != nil && info.OperMode != OperRouted:
+		case len(allowed) >= 1:
+			info.AdminMode = AdminTrunk
+		case len(allowed) == 0 && info.AccessVlan != nil:
 			// PVID-only signal: switches like Arista EOS expose dot1qPvid but
 			// omit dot1qVlanStaticEgressPorts/UntaggedPorts. The PVID alone is
 			// sufficient — a port with a PVID participates in bridging, and the
@@ -172,11 +183,21 @@ func anyBridgePortInMask(mask []byte, bridgePorts []int) bool {
 	return false
 }
 
-// bridgePortInMask reports whether bit (port-1) is set MSB-first in mask.
-// Mirrors the convention in DecodePortMask but operates without a
-// translation table (caller already has the bridgePort number).
+// bridgePortInMask reports whether mask names bridgePort: as the ASCII port
+// list some platforms publish, when the value is one, and otherwise as the
+// bit (port-1), MSB-first, of the bitmap Q-BRIDGE defines. Mirrors the
+// convention in DecodePortMask but operates without a translation table
+// (caller already has the bridgePort number).
 func bridgePortInMask(mask []byte, bridgePort int) bool {
 	if bridgePort < 1 {
+		return false
+	}
+	if ports, ok := asciiPortList(mask); ok {
+		for _, p := range ports {
+			if p == bridgePort {
+				return true
+			}
+		}
 		return false
 	}
 	idx := (bridgePort - 1) / 8

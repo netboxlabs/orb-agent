@@ -170,3 +170,100 @@ func TestExtractGeneric_MultipleBridgePortsPerIfIndex(t *testing.T) {
 		t.Errorf("NativeVlan: got %v, want 50", info.NativeVlan)
 	}
 }
+
+// maskWithPorts builds a Q-BRIDGE port bitmap with the given bridge ports set,
+// MSB-first within each byte, sized to the highest port.
+func maskWithPorts(ports ...int) []byte {
+	maxPort := 0
+	for _, p := range ports {
+		if p > maxPort {
+			maxPort = p
+		}
+	}
+	mask := make([]byte, (maxPort+7)/8)
+	for _, p := range ports {
+		mask[(p-1)/8] |= 1 << (7 - (p-1)%8)
+	}
+	return mask
+}
+
+// A port carrying one VLAN it is not untagged in, with a PVID of 0, is a
+// trunk with that VLAN tagged: the count of VLANs says nothing about
+// tagging, and reading one VLAN as access took its VLAN from a PVID of 0,
+// which left the port access with no VLAN at all.
+func TestExtractGeneric_SingleTaggedVlanWithPvidZeroIsTrunk(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{4771: 606},
+		PortPvid:          map[int]int{606: 0},
+		VlanEgressPorts:   map[int][]byte{665: maskWithPorts(4771)},
+		VlanUntaggedPorts: map[int][]byte{665: {}},
+		IfAdminStatus:     map[int]int{606: 1},
+		IfTypes:           map[int]string{606: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	info, ok := got[606]
+	if !ok {
+		t.Fatal("ifIndex 606 missing from result")
+	}
+	if info.AdminMode != AdminTrunk {
+		t.Errorf("AdminMode: got %v, want AdminTrunk", info.AdminMode)
+	}
+	if len(info.AllowedVlans.Vids) != 1 || info.AllowedVlans.Vids[0] != 665 {
+		t.Errorf("AllowedVlans: got %v, want [665]", info.AllowedVlans.Vids)
+	}
+	if info.NativeVlan != nil || info.AccessVlan != nil {
+		t.Errorf("a PVID of 0 is no VLAN: native=%v access=%v", info.NativeVlan, info.AccessVlan)
+	}
+	c := Classify(*info)
+	if c.Mode != ModeTrunk || len(c.Tagged) != 1 || c.Tagged[0] != 665 || c.Untagged != nil {
+		t.Errorf("Classify: got %+v, want trunk tagged [665] untagged nil", c)
+	}
+}
+
+// A device that publishes no untagged table still reports an access port
+// through its PVID: one VLAN, and a PVID naming it, is access on that VLAN.
+func TestExtractGeneric_SingleVlanNamedByPvidWithoutUntaggedTableIsAccess(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{3: 103},
+		PortPvid:          map[int]int{103: 30},
+		VlanEgressPorts:   map[int][]byte{30: maskWithPorts(3)},
+		VlanUntaggedPorts: map[int][]byte{},
+		IfAdminStatus:     map[int]int{103: 1},
+		IfTypes:           map[int]string{103: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	info := got[103]
+	if info == nil || info.AdminMode != AdminAccess {
+		t.Fatalf("AdminMode: got %+v, want AdminAccess", info)
+	}
+	if c := Classify(*info); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 30 {
+		t.Errorf("Classify: got %+v, want access untagged 30", c)
+	}
+}
+
+// A port untagged in one VLAN and tagged in others is a trunk with that
+// VLAN native, whatever the PVID says.
+func TestExtractGeneric_UntaggedInOneTaggedInOthersIsTrunkWithNative(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{5: 105},
+		PortPvid:          map[int]int{105: 0},
+		VlanEgressPorts:   map[int][]byte{10: maskWithPorts(5), 20: maskWithPorts(5)},
+		VlanUntaggedPorts: map[int][]byte{10: maskWithPorts(5), 20: {}},
+		IfAdminStatus:     map[int]int{105: 1},
+		IfTypes:           map[int]string{105: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	c := Classify(*got[105])
+	if c.Mode != ModeTrunk || c.Untagged == nil || *c.Untagged != 10 || len(c.Tagged) != 1 || c.Tagged[0] != 20 {
+		t.Errorf("Classify: got %+v, want trunk native 10 tagged [20]", c)
+	}
+}

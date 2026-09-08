@@ -80,3 +80,28 @@ func TestDecodePortMask(t *testing.T) {
 		})
 	}
 }
+
+// Some platforms publish a Q-BRIDGE port list as the ASCII text of the bridge
+// port numbers, comma separated, rather than as a bitmap; a zero entry names
+// no port. Such a value names the ports it lists and no other.
+func TestBridgePortInMask_ASCIIPortList(t *testing.T) {
+	list := []byte("0,4097,4099")
+	for _, bp := range []int{4097, 4099} {
+		if !bridgePortInMask(list, bp) {
+			t.Errorf("bridge port %d is listed but not found", bp)
+		}
+	}
+	for _, bp := range []int{4098, 1, 48, 49, 52} {
+		if bridgePortInMask(list, bp) {
+			t.Errorf("bridge port %d is not listed but was found", bp)
+		}
+	}
+	if bridgePortInMask([]byte(""), 1) {
+		t.Error("an empty list names no port")
+	}
+	// A bitmap whose bytes happen to be digits is still a bitmap: 0x30 is
+	// ports 3 and 4 of its byte, and no digit list would be one byte long.
+	if !bridgePortInMask([]byte{0x30}, 3) || !bridgePortInMask([]byte{0x30}, 4) {
+		t.Error("a one-byte bitmap of 0x30 sets bits 3 and 4")
+	}
+}

@@ -1,6 +1,11 @@
 package qbridge
 
-import "errors"
+import (
+	"bytes"
+	"errors"
+	"strconv"
+	"strings"
+)
 
 // ErrMissingTranslation is returned by DecodePortMask when the
 // dot1dBasePortIfIndex table is empty/nil. Callers must treat this as
@@ -46,4 +51,36 @@ func DecodePortMask(octets []byte, basePortToIfIndex map[int]int) ([]int, error)
 		}
 	}
 	return out, nil
+}
+
+// asciiPortList reads a Q-BRIDGE port list published as text: the bridge
+// port numbers, comma separated, as some platforms emit dot1qVlanStaticEgressPorts
+// and dot1qVlanStaticUntaggedPorts by default in place of the bitmap the MIB
+// defines. Such a list always carries a comma, since the platforms that emit it
+// lead with a zero entry, and a zero names no port. A value without a comma is
+// read as the bitmap it almost certainly is: a short bitmap can be made of digit
+// bytes, and a port list of one number never appears without its leading zero.
+func asciiPortList(v []byte) ([]int, bool) {
+	if !bytes.Contains(v, []byte{','}) {
+		return nil, false
+	}
+	for _, b := range v {
+		if b != ',' && (b < '0' || b > '9') {
+			return nil, false
+		}
+	}
+	var ports []int
+	for _, field := range strings.Split(string(v), ",") {
+		if field == "" {
+			return nil, false
+		}
+		n, err := strconv.Atoi(field)
+		if err != nil {
+			return nil, false
+		}
+		if n > 0 {
+			ports = append(ports, n)
+		}
+	}
+	return ports, true
 }
