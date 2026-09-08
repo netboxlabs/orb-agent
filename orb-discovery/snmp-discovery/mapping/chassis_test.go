@@ -2242,6 +2242,46 @@ func TestMultiChassisWalk(t *testing.T) {
 		}))
 	})
 
+	t.Run("a nested subchassis is not a second device", func(t *testing.T) {
+		// A standalone modular device: a root chassis plus a chassis-class
+		// row nested under a module. extractInventory rejects the nested row
+		// and emits one device, so the target is unambiguous and its pin
+		// must survive. Two walks in the LibreNMS corpus have this shape.
+		oids := ObjectIDValueMap{
+			".1.3.6.1.2.1.47.1.1.1.1.4.1":  {Value: "0"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.1":  {Value: "3"},
+			".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0000000101"},
+			// Module under the root chassis.
+			".1.3.6.1.2.1.47.1.1.1.1.4.2": {Value: "1"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.2": {Value: "9"},
+			// Subchassis under the module, not under a stack container. It
+			// carries its own serial, so it is excluded for being nested
+			// rather than for being incomplete.
+			".1.3.6.1.2.1.47.1.1.1.1.4.3":  {Value: "2"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.3":  {Value: "3"},
+			".1.3.6.1.2.1.47.1.1.1.1.11.3": {Value: "SN0000000201"},
+		}
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		require.Len(t, extractInventory(oids, logger).Members, 1,
+			"precondition: the translator must see one member here")
+		assert.False(t, MultiChassisWalk(oids),
+			"a subchassis of one device must not withhold that target's netbox_id")
+	})
+
+	t.Run("chassis under a stack container is counted", func(t *testing.T) {
+		// The wrapped pattern: chassis rows hang off a class-11 stack
+		// container rather than the ENTITY-MIB root. Those are members.
+		oids := ObjectIDValueMap{
+			".1.3.6.1.2.1.47.1.1.1.1.4.1": {Value: "0"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.1": {Value: "11"},
+			".1.3.6.1.2.1.47.1.1.1.1.4.2": {Value: "1"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.2": {Value: "3"},
+			".1.3.6.1.2.1.47.1.1.1.1.4.3": {Value: "1"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.3": {Value: "3"},
+		}
+		assert.True(t, MultiChassisWalk(oids))
+	})
+
 	t.Run("non-chassis classes are not counted", func(t *testing.T) {
 		assert.False(t, MultiChassisWalk(ObjectIDValueMap{
 			// Stack container (11) plus a module (9): neither is a chassis.

@@ -1220,9 +1220,17 @@ func routeInterface(
 // act on a single-device assumption ask the walk rather than the emitted
 // entities.
 //
-// Counts the same rows extractInventory starts from, deliberately without
-// its containment and numbering filters: the question here is what the
-// device reported, not what could be modelled from it.
+// Applies extractInventory's containment filter and stops there. The two
+// filters answer different questions and only one of them belongs here:
+//
+//   - Containment ("is this row eligible to be a stack member at all?") is
+//     structural. A nested chassis under something that is not a stack
+//     container is a subchassis of one device, not a second device, and two
+//     walks in the LibreNMS corpus have that shape. Counting those would
+//     withhold the pin from a genuinely standalone target.
+//   - Numbering ("can the members be told apart?") is what refusal is about,
+//     and must NOT be applied. A walk whose members cannot be numbered still
+//     described several devices; that is the case this function exists for.
 func MultiChassisWalk(oids ObjectIDValueMap) bool {
 	seen := 0
 	for oid, v := range oids {
@@ -1230,6 +1238,11 @@ func MultiChassisWalk(oids ObjectIDValueMap) bool {
 			continue
 		}
 		if strings.TrimSpace(v.Value) != entPhysicalClassChassis {
+			continue
+		}
+		idx := strings.TrimPrefix(oid, oidEntPhysicalClass)
+		contained := trimSNMPString(oids[oidEntPhysicalContainedIn+idx].Value)
+		if contained != "0" && !isStackContainerParent(oids, contained) {
 			continue
 		}
 		seen++
