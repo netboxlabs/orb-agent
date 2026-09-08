@@ -419,6 +419,18 @@ When the `discover_modules` policy option is enabled, snmp-discovery emits NetBo
 
 **Supported vendors.** Module discovery works on any vendor that populates `entPhysicalTable` per RFC 6933 — see the [supported platforms page](./supported_platforms.md#modules--modulebays) for the platforms known-tested in v1.
 
+## Walking the device
+
+Each table is walked on its own. A table the agent fails, by timing out or by
+refusing the request, is logged and skipped, and the target keeps everything
+the other tables returned; only a target that fails every table, or cannot be
+reached at all, fails the run. Rows an agent returns out of index order are
+kept: some agents serve a Q-BRIDGE or BRIDGE-MIB table with a later index
+before an earlier one, which no operator can correct from this side, so the
+walk does not require increasing OIDs. The one way such a walk could loop is
+an agent delivering an OID it already delivered, and that ends the table with
+the rows collected before it.
+
 ## Device Model Lookup
 
 The `lookup_extensions_dir` config option points to a directory of YAML files that map SNMP `sysObjectID` OIDs to human-readable device model names. Without these files, snmp-discovery would ingest raw OIDs (for example `.1.3.6.1.4.1.9.1.489`) instead of recognizable model names (for example `catalyst2955C12`).
