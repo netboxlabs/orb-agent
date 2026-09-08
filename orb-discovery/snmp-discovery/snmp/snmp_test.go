@@ -908,3 +908,27 @@ func TestClientWalkReturnsWhenTheContextEndsMidRequest(t *testing.T) {
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 2*time.Second, "the walk returns at the context deadline, not after the SNMP timeout and retries")
 }
+
+// A cancellation with no deadline interrupts the request in flight too: the
+// backend's shutdown cancels the root context rather than letting a
+// deadline pass, and a blocked read must not hold it through the SNMP
+// timeout and its retries.
+func TestClientWalkReturnsWhenTheContextIsCancelledMidRequest(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	port := uint16(silent.LocalAddr().(*net.UDPAddr).Port)
+
+	client, err := snmp.NewClient("127.0.0.1", port, 2, 5*time.Second, &config.Authentication{ProtocolVersion: snmp.ProtocolVersion2c, Community: "public"}, logger)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect())
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = client.Walk(ctx, "1.3.6.1.2.1.2.2.1.2", 1)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second, "a cancellation interrupts the read in flight")
+}

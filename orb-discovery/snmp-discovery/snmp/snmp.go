@@ -207,6 +207,22 @@ func (c *Client) Walk(ctx context.Context, objectIDs string, identifierSize int)
 	// so a target that goes silent after the policy's deadline does not hold
 	// the walker through the SNMP timeout and its retries.
 	c.Context = ctx
+	// gosnmp puts only that deadline on the socket and looks at a
+	// cancellation between requests, so a read in flight when the context is
+	// cancelled with no deadline, as a shutdown does, would wait out the SNMP
+	// timeout. Moving the socket deadline to now returns that read at once,
+	// and gosnmp then reads the cancellation.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			if c.Conn != nil {
+				_ = c.Conn.SetDeadline(time.Now())
+			}
+		case <-stop:
+		}
+	}()
 	return collectWalk(ctx, func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
 }
 
