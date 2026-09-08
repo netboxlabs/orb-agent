@@ -103,9 +103,17 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			return nil, fmt.Errorf("ifIndex %d: %w", ifIndex, err)
 		}
 		info.AllowedVlans = AllowedVlans{Vids: allowed, IsWildcard: isWildcard}
-		if native != nil {
+		switch {
+		case native != nil:
 			info.NativeVlan = native
 			info.AccessVlan = native
+		case bridged && pvid > 0 && hasRow(rows.VlanUntaggedPorts, pvid):
+			// The device publishes an untagged row for the PVID's VLAN and
+			// leaves this port out of it: the port is tagged there, and the
+			// PVID names no untagged VLAN. The PVID stands in for the row
+			// only where the device publishes none.
+			info.NativeVlan = nil
+			info.AccessVlan = nil
 		}
 
 		// Default mode hint, from the tagging evidence rather than from how
@@ -121,6 +129,8 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		case isWildcard:
 			info.AdminMode = AdminTrunk
 		case len(allowed) == 1 && info.AccessVlan != nil && *info.AccessVlan == allowed[0]:
+			// Untagged in its one VLAN, or a PVID naming it where the device
+			// publishes no untagged row for it.
 			info.AdminMode = AdminAccess
 		case len(allowed) >= 1:
 			info.AdminMode = AdminTrunk
@@ -134,6 +144,12 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		out[ifIndex] = info
 	}
 	return out, nil
+}
+
+// hasRow reports whether the table carries a row for vid, empty or not.
+func hasRow(table map[int][]byte, vid int) bool {
+	_, ok := table[vid]
+	return ok
 }
 
 // membershipFromMasks scans the VlanEgressPorts/VlanUntaggedPorts maps

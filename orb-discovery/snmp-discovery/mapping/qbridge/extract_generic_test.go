@@ -296,3 +296,25 @@ func TestExtractGeneric_TextListsOnlyWhereTheVendorPublishesThem(t *testing.T) {
 		t.Errorf("with the vendor's word the list names the port: got %v", vids)
 	}
 }
+
+// A PVID naming the port's one VLAN stands in for the untagged table only
+// where the device publishes none for that VLAN: a row that exists and leaves
+// the port out says the port is tagged there, and the PVID does not override it.
+func TestExtractGeneric_UntaggedRowExcludingThePortOutranksThePvid(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{7: 107},
+		PortPvid:          map[int]int{107: 40},
+		VlanEgressPorts:   map[int][]byte{40: maskWithPorts(7)},
+		VlanUntaggedPorts: map[int][]byte{40: {0x00}},
+		IfAdminStatus:     map[int]int{107: 1},
+		IfTypes:           map[int]string{107: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	c := Classify(*got[107])
+	if c.Mode != ModeTrunk || len(c.Tagged) != 1 || c.Tagged[0] != 40 {
+		t.Errorf("Classify: got %+v, want trunk tagged [40]", c)
+	}
+}
