@@ -43,7 +43,7 @@ The provider does not eagerly authenticate at startup — the first secret fetch
 
 ## Usage
 
-To use a secret from Doppler in your policy configuration, use one of the two reference forms:
+To use a secret from Doppler in your policy configuration, use one of the two reference forms. In either form, `${secret://…}` may be used instead of `${doppler://…}` — see [Provider-agnostic secret references](./secret_references.md).
 
 ### Short form (uses agent defaults)
 

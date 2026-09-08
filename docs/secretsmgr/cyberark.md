@@ -60,7 +60,7 @@ The agent does not eagerly authenticate at startup — the first secret fetch is
 
 ## Usage
 
-The Orb Agent supports four reference shapes. Use whichever is most concise for your environment.
+The Orb Agent supports four reference shapes. Use whichever is most concise for your environment. In any of these forms, `${secret://…}` may be used instead of `${cyberark://…}` — see [Provider-agnostic secret references](./secret_references.md).
 
 > **Reserved characters.** The `/` character is reserved by the placeholder grammar and may not appear inside any AppID, Safe, Object, or Field name referenced from a placeholder. CyberArk itself permits a wider character set for these names; if your existing accounts use `/` in their identifiers, you must either rename them or open a follow-up issue requesting percent-escape (`%2F`) support.
 
