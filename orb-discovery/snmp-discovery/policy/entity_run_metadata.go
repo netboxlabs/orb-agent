@@ -26,6 +26,12 @@ import (
 //
 // TranslateAsStack emits the VirtualChassis and the member Devices together,
 // so either is sufficient to recognise one.
+//
+// The serial is captured from the master whether or not a stack was
+// recognised here, because the caller also withholds on a walk-derived
+// signal this function cannot see. On that path there is no VirtualChassis
+// to read the master's serial from, and it is the one field that identifies
+// the affected device in the log.
 func emittedStack(entities []diode.Entity) (string, bool) {
 	found := false
 	serial := ""
@@ -39,8 +45,17 @@ func emittedStack(entities []diode.Entity) (string, bool) {
 				}
 			}
 		case *diode.Device:
-			if v != nil && v.VcPosition != nil {
+			if v == nil {
+				continue
+			}
+			if v.VcPosition != nil {
 				found = true
+				continue
+			}
+			// The master: no member position, and on a refused stack the
+			// only Device emitted at all.
+			if v.Serial != nil && serial == "" {
+				serial = *v.Serial
 			}
 		}
 	}

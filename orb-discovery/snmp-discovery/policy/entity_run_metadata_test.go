@@ -297,7 +297,11 @@ func TestEmittedStack(t *testing.T) {
 			&diode.Interface{Name: stringPtr("Gi0/1")},
 		})
 		assert.False(t, isStack, "a device with no member position is not a stack")
-		assert.Empty(t, serial)
+		// The serial is still reported: it names the master, not the stack,
+		// and the caller reads it only when it decides to withhold. Nothing
+		// is withheld here because isStack is false and the walk carried one
+		// chassis.
+		assert.Equal(t, "FCW001", serial)
 	})
 
 	t.Run("empty batch", func(t *testing.T) {
@@ -331,4 +335,17 @@ func TestAnnotateDeviceWithSourceMatch_StackMasterWouldBeMislabelled(t *testing.
 	// Which is why recognition happens before annotation is reached.
 	_, isStack := emittedStack(entities)
 	assert.True(t, isStack, "the batch must be recognised as a stack so the runner withholds the id")
+}
+
+// TestEmittedStack_SerialFromRefusedStackMaster pins the log field on the
+// path that has no VirtualChassis to read it from. A refused stack emits
+// only a plain master, and the serial is what identifies which device
+// dropped its netbox_id, so a blank one there is a warning nobody can act
+// on.
+func TestEmittedStack_SerialFromRefusedStackMaster(t *testing.T) {
+	master := &diode.Device{Name: stringPtr("ambiguous-stack"), Serial: stringPtr("FCW2147L0K3")}
+
+	serial, isStack := emittedStack([]diode.Entity{master})
+	assert.False(t, isStack, "a refused stack emits nothing this function can recognise")
+	assert.Equal(t, "FCW2147L0K3", serial, "the master's serial must still reach the log line")
 }
