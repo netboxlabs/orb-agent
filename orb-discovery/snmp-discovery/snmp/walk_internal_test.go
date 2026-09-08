@@ -92,3 +92,13 @@ func TestCollectWalkStopsWhenTheContextEnds(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, 3, delivered, "the walk ends on the first row after the context ended")
 }
+
+// A walk that delivers no rows never reaches the row callback, so the
+// context is checked once the walk returns as well: a table that ended
+// empty after the deadline reports the context's error, not success.
+func TestCollectWalkChecksTheContextAfterAnEmptyWalk(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := collectWalk(ctx, func(gosnmp.WalkFunc) error { return nil }, 1)
+	require.ErrorIs(t, err, context.Canceled)
+}

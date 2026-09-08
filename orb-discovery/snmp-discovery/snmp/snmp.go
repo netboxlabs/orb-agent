@@ -85,6 +85,10 @@ func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.Obje
 	var walked, failed int
 	var lastErr error
 	for objectID, identifierSize := range objectIDs {
+		if err := ctx.Err(); err != nil {
+			// The policy stopped waiting: no further table is started.
+			return nil, err
+		}
 		walked++
 		pdu, err := snmpClient.Walk(ctx, objectID, identifierSize)
 		switch {
@@ -246,6 +250,10 @@ func collectWalk(ctx context.Context, walk func(fn gosnmp.WalkFunc) error, ident
 		}
 		return nil
 	})
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// A walk that delivered no rows never reached the callback above.
+		return nil, ctxErr
+	}
 	switch {
 	case err == nil, errors.Is(err, errWalkRepeated):
 		return output, nil

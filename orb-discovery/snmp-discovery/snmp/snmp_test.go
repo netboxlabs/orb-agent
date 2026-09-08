@@ -866,3 +866,21 @@ func TestSNMPHostKeepsATruncatedTable(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "3", oids[big+".1"].Value)
 }
+
+// Once the policy's context has ended, the host starts no further table:
+// the runner has stopped waiting, and every request from here would be
+// spent on a target nobody is listening for.
+func TestSNMPHostStartsNoTableAfterTheContextEnds(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := host.Walk(ctx, map[string]int{"1.3.6.1.2.1.2.2.1.2": 1})
+	require.ErrorIs(t, err, context.Canceled)
+	mockWalker.AssertNotCalled(t, "Walk", mock.Anything, mock.Anything, mock.Anything)
+}
