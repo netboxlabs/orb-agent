@@ -1,6 +1,7 @@
 package qbridge
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"testing"
@@ -78,5 +79,125 @@ func TestDecodePortMask(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// Some platforms publish a Q-BRIDGE port list as the ASCII text of the bridge
+// port numbers, comma separated, rather than as a bitmap. The host's lists are
+// read as text only when reading them as bitmaps is impossible: a listed port
+// beyond what a bitmap of that length could hold, or a bitmap reading that
+// names a bridge port the translation table does not know. A value that reads
+// both ways stays the bitmap the MIB defines.
+func TestListsAreText(t *testing.T) {
+	junosPorts := map[int]int{4097: 513, 4098: 520, 4099: 518}
+	smallPorts := map[int]int{}
+	for bp := 1; bp <= 24; bp++ {
+		smallPorts[bp] = 100 + bp
+	}
+	cases := []struct {
+		name      string
+		egress    map[int][]byte
+		untagged  map[int][]byte
+		basePorts map[int]int
+		want      bool
+	}{
+		{
+			name:      "a list naming a port no bitmap this long could hold",
+			egress:    map[int][]byte{23: []byte("0,4097,4099"), 4004: []byte("0,4097,4099,4098")},
+			untagged:  map[int][]byte{23: []byte(""), 4004: []byte("4098")},
+			basePorts: junosPorts,
+			want:      true,
+		},
+		{
+			name:      "a value that reads as a legal bitmap of known ports stays a bitmap",
+			egress:    map[int][]byte{10: {0x30, 0x2c, 0x31}},
+			untagged:  map[int][]byte{},
+			basePorts: smallPorts,
+			want:      false,
+		},
+		{
+			name:      "a short list whose bitmap reading names an unknown port is text",
+			egress:    map[int][]byte{10: []byte("0,1,2")},
+			untagged:  map[int][]byte{},
+			basePorts: map[int]int{1: 101, 2: 102},
+			want:      true,
+		},
+		{
+			name:      "one binary mask beside the lists means the host uses bitmaps",
+			egress:    map[int][]byte{23: []byte("0,4097"), 24: {0xff, 0x00}},
+			untagged:  map[int][]byte{},
+			basePorts: junosPorts,
+			want:      false,
+		},
+		{
+			name:      "a list naming a port the table lacks is still text when a port lies beyond any bitmap",
+			egress:    map[int][]byte{23: []byte("0,4097,4106")},
+			untagged:  map[int][]byte{},
+			basePorts: junosPorts,
+			want:      true,
+		},
+		{
+			name:      "a short list naming an unknown port, with the bitmap reading also naming one, stays a bitmap",
+			egress:    map[int][]byte{10: []byte("0,1,9")},
+			untagged:  map[int][]byte{},
+			basePorts: map[int]int{1: 101, 2: 102},
+			want:      false,
+		},
+		{
+			name:      "empty tables decide nothing",
+			egress:    map[int][]byte{1: {}},
+			untagged:  map[int][]byte{},
+			basePorts: junosPorts,
+			want:      false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := listsAreText(tc.egress, tc.untagged, tc.basePorts); got != tc.want {
+				t.Errorf("listsAreText: got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A host's text lists are decoded once, each into the bitmap the MIB defines,
+// so membership is then read bit by bit as on any other host; a zero entry
+// sets no bit and an empty list is an empty bitmap.
+func TestListsToBitmaps(t *testing.T) {
+	got := listsToBitmaps(map[int][]byte{
+		23:   []byte("0,4097,4099"),
+		4004: []byte("0,4097,4099,4098"),
+		1:    []byte(""),
+	})
+	want := map[int][]byte{
+		23:   maskWithPorts(4097, 4099),
+		4004: maskWithPorts(4097, 4098, 4099),
+		1:    {},
+	}
+	for vid, mask := range want {
+		if !bytes.Equal(got[vid], mask) {
+			t.Errorf("vid %d: got %x, want %x", vid, got[vid], mask)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %d rows, want %d", len(got), len(want))
+	}
+}
+
+// A text list names bridge ports, which the MIB bounds at 65535: a number
+// past that is not a port list, so it is never a size to allocate a bitmap
+// from, and a value carrying one keeps its bytes.
+func TestAsciiPortListBoundsThePortNumbers(t *testing.T) {
+	for _, v := range []string{"0,70000", "0,4097,9223372036854775807", "0,99999999999999999999"} {
+		if _, ok := asciiPortList([]byte(v)); ok {
+			t.Errorf("%q read as a port list", v)
+		}
+	}
+	got := listsToBitmaps(map[int][]byte{1: []byte("0,70000")})
+	if string(got[1]) != "0,70000" {
+		t.Errorf("a value that is not a list keeps its bytes: got %q", got[1])
+	}
+	if _, ok := asciiPortList([]byte("0,65535")); !ok {
+		t.Error("the highest bridge port is a port")
 	}
 }

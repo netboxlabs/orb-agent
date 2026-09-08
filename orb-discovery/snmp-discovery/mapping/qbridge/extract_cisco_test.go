@@ -104,3 +104,20 @@ func TestApplyCisco_PromotesUnknownToAccess(t *testing.T) {
 		t.Errorf("AccessVlan: got %v, want 30", info.AccessVlan)
 	}
 }
+
+// A trunk read from one tagged VLAN and nothing else is the weakest
+// inference the generic extractor makes; a Cisco access row for that port
+// is stronger, and turns it into an access port on the row's VLAN. A trunk
+// seen in several VLANs is not touched, as before.
+func TestApplyCisco_AccessRowOverridesATrunkInferredFromOneTaggedVlan(t *testing.T) {
+	weak := &SwitchportInfo{Enabled: true, BridgePortPresent: true, AdminMode: AdminTrunk, TrunkFromOneTaggedVlan: true, AllowedVlans: AllowedVlans{Vids: []int{10}}}
+	strong := &SwitchportInfo{Enabled: true, BridgePortPresent: true, AdminMode: AdminTrunk, AllowedVlans: AllowedVlans{Vids: []int{10, 20}}}
+	infos := map[int]*SwitchportInfo{101: weak, 102: strong}
+	ApplyCisco(infos, CiscoRows{MembershipAccessVlan: map[int]int{101: 10, 102: 10}})
+	if c := Classify(*weak); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 10 {
+		t.Errorf("weak trunk with an access row: got %+v, want access untagged 10", c)
+	}
+	if c := Classify(*strong); c.Mode != ModeTrunk || len(c.Tagged) != 2 {
+		t.Errorf("trunk in two VLANs with an access row: got %+v, want trunk tagged [10 20]", c)
+	}
+}
