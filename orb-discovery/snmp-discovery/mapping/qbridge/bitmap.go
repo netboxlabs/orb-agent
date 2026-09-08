@@ -1,7 +1,6 @@
 package qbridge
 
 import (
-	"bytes"
 	"errors"
 	"strconv"
 	"strings"
@@ -53,15 +52,14 @@ func DecodePortMask(octets []byte, basePortToIfIndex map[int]int) ([]int, error)
 	return out, nil
 }
 
-// asciiPortList reads a Q-BRIDGE port list published as text: the bridge
-// port numbers, comma separated, as some platforms emit dot1qVlanStaticEgressPorts
-// and dot1qVlanStaticUntaggedPorts by default in place of the bitmap the MIB
-// defines. Such a list always carries a comma, since the platforms that emit it
-// lead with a zero entry, and a zero names no port. A value without a comma is
-// read as the bitmap it almost certainly is: a short bitmap can be made of digit
-// bytes, and a port list of one number never appears without its leading zero.
+// asciiPortList reads a value as the text form of a port list: the bridge
+// port numbers, comma separated, as some platforms publish
+// dot1qVlanStaticEgressPorts and dot1qVlanStaticUntaggedPorts by default in
+// place of the bitmap the MIB defines. A zero entry names no port. Whether a
+// host's values are that text at all is decided by listsAreText; this only
+// says whether one value parses as it.
 func asciiPortList(v []byte) ([]int, bool) {
-	if !bytes.Contains(v, []byte{','}) {
+	if len(v) == 0 {
 		return nil, false
 	}
 	for _, b := range v {
@@ -83,4 +81,73 @@ func asciiPortList(v []byte) ([]int, bool) {
 		}
 	}
 	return ports, true
+}
+
+// listsAreText decides, once per host, whether its Q-BRIDGE port lists are the
+// text form. A bitmap may be made of digit and comma bytes, so parsing alone
+// cannot tell the two apart: the three bytes of "0,1" are a legal bitmap of
+// ports 3, 4, 11, 13, 14, 19, 20 and 24. The lists are text only when every
+// non-empty value parses as a list and reading them as bitmaps is impossible:
+// some list names a port beyond what a bitmap of its length can hold, or some
+// value read as a bitmap names a port the translation table does not have
+// while no list does. A host whose values read both ways keeps the bitmap the
+// MIB defines. A list naming a port the table lacks is not held against the
+// text reading on its own: devices list bridge ports they never map, as
+// bitmaps set bits for them, and both readers skip such a port.
+func listsAreText(egress, untagged map[int][]byte, basePortToIfIndex map[int]int) bool {
+	sawList, beyondBitmap, bitmapUnknown, listUnknown := false, false, false, false
+	for _, table := range []map[int][]byte{egress, untagged} {
+		for _, v := range table {
+			if len(v) == 0 {
+				continue
+			}
+			ports, ok := asciiPortList(v)
+			if !ok {
+				return false
+			}
+			sawList = true
+			for _, p := range ports {
+				if p > 8*len(v) {
+					beyondBitmap = true
+				}
+				if _, known := basePortToIfIndex[p]; !known {
+					listUnknown = true
+				}
+			}
+			if bitmapNamesUnknownPort(v, basePortToIfIndex) {
+				bitmapUnknown = true
+			}
+		}
+	}
+	return sawList && (beyondBitmap || (bitmapUnknown && !listUnknown))
+}
+
+// bitmapNamesUnknownPort reports whether v, read as a bitmap, sets a bit for a
+// bridge port the translation table does not know.
+func bitmapNamesUnknownPort(v []byte, basePortToIfIndex map[int]int) bool {
+	for byteIdx, b := range v {
+		for bit := 0; bit < 8; bit++ {
+			if b&(1<<(7-bit)) == 0 {
+				continue
+			}
+			if _, known := basePortToIfIndex[byteIdx*8+bit+1]; !known {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// bridgePortInList reports whether a text port list names bridgePort.
+func bridgePortInList(list []byte, bridgePort int) bool {
+	ports, ok := asciiPortList(list)
+	if !ok {
+		return false
+	}
+	for _, p := range ports {
+		if p == bridgePort {
+			return true
+		}
+	}
+	return false
 }

@@ -82,26 +82,95 @@ func TestDecodePortMask(t *testing.T) {
 }
 
 // Some platforms publish a Q-BRIDGE port list as the ASCII text of the bridge
-// port numbers, comma separated, rather than as a bitmap; a zero entry names
-// no port. Such a value names the ports it lists and no other.
-func TestBridgePortInMask_ASCIIPortList(t *testing.T) {
+// port numbers, comma separated, rather than as a bitmap. The host's lists are
+// read as text only when reading them as bitmaps is impossible: a listed port
+// beyond what a bitmap of that length could hold, or a bitmap reading that
+// names a bridge port the translation table does not know. A value that reads
+// both ways stays the bitmap the MIB defines.
+func TestListsAreText(t *testing.T) {
+	junosPorts := map[int]int{4097: 513, 4098: 520, 4099: 518}
+	smallPorts := map[int]int{}
+	for bp := 1; bp <= 24; bp++ {
+		smallPorts[bp] = 100 + bp
+	}
+	cases := []struct {
+		name      string
+		egress    map[int][]byte
+		untagged  map[int][]byte
+		basePorts map[int]int
+		want      bool
+	}{
+		{
+			name:      "a list naming a port no bitmap this long could hold",
+			egress:    map[int][]byte{23: []byte("0,4097,4099"), 4004: []byte("0,4097,4099,4098")},
+			untagged:  map[int][]byte{23: []byte(""), 4004: []byte("4098")},
+			basePorts: junosPorts,
+			want:      true,
+		},
+		{
+			name:      "a value that reads as a legal bitmap of known ports stays a bitmap",
+			egress:    map[int][]byte{10: {0x30, 0x2c, 0x31}},
+			untagged:  map[int][]byte{},
+			basePorts: smallPorts,
+			want:      false,
+		},
+		{
+			name:      "a short list whose bitmap reading names an unknown port is text",
+			egress:    map[int][]byte{10: []byte("0,1,2")},
+			untagged:  map[int][]byte{},
+			basePorts: map[int]int{1: 101, 2: 102},
+			want:      true,
+		},
+		{
+			name:      "one binary mask beside the lists means the host uses bitmaps",
+			egress:    map[int][]byte{23: []byte("0,4097"), 24: {0xff, 0x00}},
+			untagged:  map[int][]byte{},
+			basePorts: junosPorts,
+			want:      false,
+		},
+		{
+			name:      "a list naming a port the table lacks is still text when a port lies beyond any bitmap",
+			egress:    map[int][]byte{23: []byte("0,4097,4106")},
+			untagged:  map[int][]byte{},
+			basePorts: junosPorts,
+			want:      true,
+		},
+		{
+			name:      "a short list naming an unknown port, with the bitmap reading also naming one, stays a bitmap",
+			egress:    map[int][]byte{10: []byte("0,1,9")},
+			untagged:  map[int][]byte{},
+			basePorts: map[int]int{1: 101, 2: 102},
+			want:      false,
+		},
+		{
+			name:      "empty tables decide nothing",
+			egress:    map[int][]byte{1: {}},
+			untagged:  map[int][]byte{},
+			basePorts: junosPorts,
+			want:      false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := listsAreText(tc.egress, tc.untagged, tc.basePorts); got != tc.want {
+				t.Errorf("listsAreText: got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A port list read as text names the ports it lists and no other; a zero entry
+// names no port.
+func TestBridgePortInList(t *testing.T) {
 	list := []byte("0,4097,4099")
 	for _, bp := range []int{4097, 4099} {
-		if !bridgePortInMask(list, bp) {
+		if !bridgePortInList(list, bp) {
 			t.Errorf("bridge port %d is listed but not found", bp)
 		}
 	}
-	for _, bp := range []int{4098, 1, 48, 49, 52} {
-		if bridgePortInMask(list, bp) {
+	for _, bp := range []int{4098, 1, 48} {
+		if bridgePortInList(list, bp) {
 			t.Errorf("bridge port %d is not listed but was found", bp)
 		}
-	}
-	if bridgePortInMask([]byte(""), 1) {
-		t.Error("an empty list names no port")
-	}
-	// A bitmap whose bytes happen to be digits is still a bitmap: 0x30 is
-	// ports 3 and 4 of its byte, and no digit list would be one byte long.
-	if !bridgePortInMask([]byte{0x30}, 3) || !bridgePortInMask([]byte{0x30}, 4) {
-		t.Error("a one-byte bitmap of 0x30 sets bits 3 and 4")
 	}
 }

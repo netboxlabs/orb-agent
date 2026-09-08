@@ -16,7 +16,8 @@ import (
 // text reports, the shape a Junos QFX shows on its defaults: bridge ports
 // numbered from 4097, comma-separated port lists led by a zero entry, and a
 // PVID of 0 on the trunks. Two trunks carry six VLANs each and one access
-// port sits untagged in VLAN 4004.
+// port sits untagged in VLAN 4004. The lists also name bridge ports the
+// translation table never maps, as the real switch does.
 func captureRows() ObjectIDValueMap {
 	out := ObjectIDValueMap{}
 	put := func(oid, val string, t Asn1BER) { out[oid] = Value{Value: val, Type: t} }

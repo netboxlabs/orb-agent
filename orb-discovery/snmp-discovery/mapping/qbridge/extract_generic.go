@@ -61,6 +61,11 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// rows.BasePortToIfIndex directly would visit such ifIndices
 	// repeatedly with identical results (since membershipFromMasks
 	// unions all bridge ports for the ifIndex anyway), wasting work.
+	// Whether this host publishes its port lists as text is decided once,
+	// over every list it sent, so one value is never read one way and the
+	// next the other.
+	text := listsAreText(rows.VlanEgressPorts, rows.VlanUntaggedPorts, rows.BasePortToIfIndex)
+
 	out := make(map[int]*SwitchportInfo, len(ifIndexToBridge))
 	for ifIndex := range ifIndexToBridge {
 		info := &SwitchportInfo{
@@ -84,7 +89,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 
 		// Build allowed/native from membership masks.
 		allowed, isWildcard, native, err := membershipFromMasks(
-			ifIndex, ifIndexToBridge, rows.VlanEgressPorts, rows.VlanUntaggedPorts,
+			ifIndex, ifIndexToBridge, rows.VlanEgressPorts, rows.VlanUntaggedPorts, text,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("ifIndex %d: %w", ifIndex, err)
@@ -143,6 +148,7 @@ func membershipFromMasks(
 	ifIndex int,
 	ifIndexToBridge map[int][]int,
 	egress, untagged map[int][]byte,
+	text bool,
 ) ([]int, bool, *int, error) {
 	bridgePorts, ok := ifIndexToBridge[ifIndex]
 	if !ok || len(bridgePorts) == 0 {
@@ -153,7 +159,7 @@ func membershipFromMasks(
 		if vid < 1 || vid > 4094 {
 			continue
 		}
-		if !anyBridgePortInMask(mask, bridgePorts) {
+		if !anyBridgePortInMask(mask, bridgePorts, text) {
 			continue
 		}
 		allowed = append(allowed, vid)
@@ -161,7 +167,7 @@ func membershipFromMasks(
 	sort.Ints(allowed)
 	var nativeVid *int
 	for _, vid := range allowed {
-		if utg, ok := untagged[vid]; ok && anyBridgePortInMask(utg, bridgePorts) {
+		if utg, ok := untagged[vid]; ok && anyBridgePortInMask(utg, bridgePorts, text) {
 			v := vid
 			nativeVid = &v
 		}
@@ -172,10 +178,17 @@ func membershipFromMasks(
 	return allowed, false, nativeVid, nil
 }
 
-// anyBridgePortInMask reports whether any of the given bridge ports has
-// its bit set in mask.
-func anyBridgePortInMask(mask []byte, bridgePorts []int) bool {
+// anyBridgePortInMask reports whether any of the given bridge ports is
+// named by mask, read as a text list when the host publishes text and as a
+// bitmap otherwise.
+func anyBridgePortInMask(mask []byte, bridgePorts []int, text bool) bool {
 	for _, bp := range bridgePorts {
+		if text {
+			if bridgePortInList(mask, bp) {
+				return true
+			}
+			continue
+		}
 		if bridgePortInMask(mask, bp) {
 			return true
 		}
@@ -183,21 +196,11 @@ func anyBridgePortInMask(mask []byte, bridgePorts []int) bool {
 	return false
 }
 
-// bridgePortInMask reports whether mask names bridgePort: as the ASCII port
-// list some platforms publish, when the value is one, and otherwise as the
-// bit (port-1), MSB-first, of the bitmap Q-BRIDGE defines. Mirrors the
-// convention in DecodePortMask but operates without a translation table
-// (caller already has the bridgePort number).
+// bridgePortInMask reports whether bit (port-1) is set MSB-first in mask.
+// Mirrors the convention in DecodePortMask but operates without a
+// translation table (caller already has the bridgePort number).
 func bridgePortInMask(mask []byte, bridgePort int) bool {
 	if bridgePort < 1 {
-		return false
-	}
-	if ports, ok := asciiPortList(mask); ok {
-		for _, p := range ports {
-			if p == bridgePort {
-				return true
-			}
-		}
 		return false
 	}
 	idx := (bridgePort - 1) / 8
