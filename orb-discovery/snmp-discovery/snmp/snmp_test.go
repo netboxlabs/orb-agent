@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -883,4 +884,27 @@ func TestSNMPHostStartsNoTableAfterTheContextEnds(t *testing.T) {
 	_, err := host.Walk(ctx, map[string]int{"1.3.6.1.2.1.2.2.1.2": 1})
 	require.ErrorIs(t, err, context.Canceled)
 	mockWalker.AssertNotCalled(t, "Walk", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The walk's context bounds the request in flight as well: a target that
+// goes silent after the policy deadline passes does not hold the walker
+// through the SNMP timeout and its retries.
+func TestClientWalkReturnsWhenTheContextEndsMidRequest(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	port := uint16(silent.LocalAddr().(*net.UDPAddr).Port)
+
+	client, err := snmp.NewClient("127.0.0.1", port, 2, 5*time.Second, &config.Authentication{ProtocolVersion: snmp.ProtocolVersion2c, Community: "public"}, logger)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect())
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = client.Walk(ctx, "1.3.6.1.2.1.2.2.1.2", 1)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second, "the walk returns at the context deadline, not after the SNMP timeout and retries")
 }

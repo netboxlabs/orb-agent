@@ -203,6 +203,10 @@ func (c *Client) EngineDiscovered() bool {
 
 // Walk implements the Walker interface by walking the SNMP tree
 func (c *Client) Walk(ctx context.Context, objectIDs string, identifierSize int) (map[string]PDU, error) {
+	// gosnmp bounds every request in flight by the deadline of this context,
+	// so a target that goes silent after the policy's deadline does not hold
+	// the walker through the SNMP timeout and its retries.
+	c.Context = ctx
 	return collectWalk(ctx, func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
 }
 
