@@ -18,6 +18,7 @@
         { "scope": "snmp-discovery", "release": false },
         { "scope": "gnmi-discovery", "release": false },
         { "scope": "snmp-telemetry", "release": false },
+        { "scope": "gnmi-telemetry", "release": false },
         { "scope": "worker", "release": false },
         { "scope": "repo", "release": false },
         { "scope": "ci", "release": false },
