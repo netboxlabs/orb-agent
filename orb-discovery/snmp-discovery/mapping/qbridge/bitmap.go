@@ -52,12 +52,18 @@ func DecodePortMask(octets []byte, basePortToIfIndex map[int]int) ([]int, error)
 	return out, nil
 }
 
+// maxBridgePort is the highest bridge port number BRIDGE-MIB defines
+// (dot1dBasePort is an INTEGER in 1..65535). A text list naming a larger
+// number is not a port list, and nothing is ever sized from such a number.
+const maxBridgePort = 65535
+
 // asciiPortList reads a value as the text form of a port list: the bridge
 // port numbers, comma separated, as some platforms publish
 // dot1qVlanStaticEgressPorts and dot1qVlanStaticUntaggedPorts by default in
-// place of the bitmap the MIB defines. A zero entry names no port. Whether a
-// host's values are that text at all is decided by listsAreText; this only
-// says whether one value parses as it.
+// place of the bitmap the MIB defines. A zero entry names no port, and a
+// number past maxBridgePort makes the value not a list. Whether a host's
+// values are that text at all is decided by listsAreText; this only says
+// whether one value parses as it.
 func asciiPortList(v []byte) ([]int, bool) {
 	if len(v) == 0 {
 		return nil, false
@@ -73,7 +79,7 @@ func asciiPortList(v []byte) ([]int, bool) {
 			return nil, false
 		}
 		n, err := strconv.Atoi(field)
-		if err != nil {
+		if err != nil || n > maxBridgePort {
 			return nil, false
 		}
 		if n > 0 {

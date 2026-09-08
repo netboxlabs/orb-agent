@@ -183,3 +183,21 @@ func TestListsToBitmaps(t *testing.T) {
 		t.Errorf("got %d rows, want %d", len(got), len(want))
 	}
 }
+
+// A text list names bridge ports, which the MIB bounds at 65535: a number
+// past that is not a port list, so it is never a size to allocate a bitmap
+// from, and a value carrying one keeps its bytes.
+func TestAsciiPortListBoundsThePortNumbers(t *testing.T) {
+	for _, v := range []string{"0,70000", "0,4097,9223372036854775807", "0,99999999999999999999"} {
+		if _, ok := asciiPortList([]byte(v)); ok {
+			t.Errorf("%q read as a port list", v)
+		}
+	}
+	got := listsToBitmaps(map[int][]byte{1: []byte("0,70000")})
+	if string(got[1]) != "0,70000" {
+		t.Errorf("a value that is not a list keeps its bytes: got %q", got[1])
+	}
+	if _, ok := asciiPortList([]byte("0,65535")); !ok {
+		t.Error("the highest bridge port is a port")
+	}
+}
