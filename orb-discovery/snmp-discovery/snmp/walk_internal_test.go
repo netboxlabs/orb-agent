@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -26,7 +27,7 @@ func feed(names ...string) func(fn gosnmp.WalkFunc) error {
 // refused them ended the table and, with it, the target, for a quirk no
 // operator can correct from our side.
 func TestCollectWalkKeepsRowsOutOfOrder(t *testing.T) {
-	rows, err := collectWalk(feed(".1.3.6.1.2.1.17.7.1.4.5.1.1.18", ".1.3.6.1.2.1.17.7.1.4.5.1.1.48", ".1.3.6.1.2.1.17.7.1.4.5.1.1.19"), 1)
+	rows, err := collectWalk(context.Background(), feed(".1.3.6.1.2.1.17.7.1.4.5.1.1.18", ".1.3.6.1.2.1.17.7.1.4.5.1.1.48", ".1.3.6.1.2.1.17.7.1.4.5.1.1.19"), 1)
 	require.NoError(t, err)
 	assert.Len(t, rows, 3)
 	assert.Equal(t, 1, rows[".1.3.6.1.2.1.17.7.1.4.5.1.1.48"].IdentifierSize)
@@ -35,7 +36,7 @@ func TestCollectWalkKeepsRowsOutOfOrder(t *testing.T) {
 // A repeated OID is the one way a walk without the ordering check can loop,
 // so it ends the table with the rows collected before it.
 func TestCollectWalkEndsTheTableOnARepeatedOID(t *testing.T) {
-	rows, err := collectWalk(feed(".1.3.6.1.2.1.2.2.1.2.1", ".1.3.6.1.2.1.2.2.1.2.2", ".1.3.6.1.2.1.2.2.1.2.1", ".1.3.6.1.2.1.2.2.1.2.3"), 1)
+	rows, err := collectWalk(context.Background(), feed(".1.3.6.1.2.1.2.2.1.2.1", ".1.3.6.1.2.1.2.2.1.2.2", ".1.3.6.1.2.1.2.2.1.2.1", ".1.3.6.1.2.1.2.2.1.2.3"), 1)
 	require.NoError(t, err)
 	assert.Len(t, rows, 2, "the walk stops at the repeat; nothing after it is read")
 }
@@ -43,7 +44,7 @@ func TestCollectWalkEndsTheTableOnARepeatedOID(t *testing.T) {
 // Any other error the walk reports still fails the table.
 func TestCollectWalkReportsOtherErrors(t *testing.T) {
 	boom := errors.New("request timeout")
-	_, err := collectWalk(func(fn gosnmp.WalkFunc) error {
+	_, err := collectWalk(context.Background(), func(fn gosnmp.WalkFunc) error {
 		_ = fn(gosnmp.SnmpPDU{Name: ".1.3.6.1.2.1.2.2.1.2.1", Type: gosnmp.Integer, Value: 1})
 		return boom
 	}, 1)
@@ -64,7 +65,30 @@ func TestCollectWalkEndsTheTableAtTheRowCap(t *testing.T) {
 			}
 		}
 	}
-	rows, err := collectWalk(endless, 1)
+	rows, err := collectWalk(context.Background(), endless, 1)
 	require.ErrorIs(t, err, ErrWalkTruncated)
 	assert.Len(t, rows, maxWalkRows, "the rows collected before the cap are kept")
+}
+
+// The policy's context reaches the walk and ends it: a row delivered after
+// the context ended is not collected, and the table reports the context's
+// error, so a runaway agent costs at most the policy's timeout plus one
+// request, and the runner's timeout actually stops the walker.
+func TestCollectWalkStopsWhenTheContextEnds(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	delivered := 0
+	endless := func(fn gosnmp.WalkFunc) error {
+		for i := 2_000_000_000; ; i-- {
+			delivered++
+			if delivered == 3 {
+				cancel()
+			}
+			if err := fn(gosnmp.SnmpPDU{Name: fmt.Sprintf(".1.3.6.1.2.1.2.2.1.2.%d", i), Type: gosnmp.Integer, Value: 1}); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := collectWalk(ctx, endless, 1)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 3, delivered, "the walk ends on the first row after the context ended")
 }

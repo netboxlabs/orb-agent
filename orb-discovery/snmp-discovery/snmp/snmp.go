@@ -55,7 +55,7 @@ func NewHost(host string, port uint16, retries int, timeout time.Duration, authe
 }
 
 // Walk walks the SNMP host
-func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) {
+func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.ObjectIDValueMap, error) {
 	s.logger.Info("scanning", "host", s.address)
 
 	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.timeout, s.authentication, s.logger)
@@ -86,9 +86,13 @@ func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) 
 	var lastErr error
 	for objectID, identifierSize := range objectIDs {
 		walked++
-		pdu, err := snmpClient.Walk(objectID, identifierSize)
+		pdu, err := snmpClient.Walk(ctx, objectID, identifierSize)
 		switch {
 		case err == nil:
+		case ctx.Err() != nil:
+			// The policy's timeout ended the walk: nothing more is owed to
+			// this target, and the runner has stopped waiting for it.
+			return nil, err
 		case errors.Is(err, ErrWalkTruncated):
 			s.logger.Warn("table walk truncated at the row cap; keeping what was collected", "object_id", objectID, "rows", len(pdu))
 		case isTimeout(err):
@@ -194,8 +198,8 @@ func (c *Client) EngineDiscovered() bool {
 }
 
 // Walk implements the Walker interface by walking the SNMP tree
-func (c *Client) Walk(objectIDs string, identifierSize int) (map[string]PDU, error) {
-	return collectWalk(func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
+func (c *Client) Walk(ctx context.Context, objectIDs string, identifierSize int) (map[string]PDU, error) {
+	return collectWalk(ctx, func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
 }
 
 // errWalkRepeated ends a walk that delivered an OID it had already delivered.
@@ -213,16 +217,21 @@ var ErrWalkTruncated = errors.New("walk truncated at the row cap")
 // tens of megabytes rather than the process.
 const maxWalkRows = 500_000
 
-// collectWalk gathers the rows a walk delivers, keyed by OID. The ordering
+// collectWalk gathers the rows a walk delivers, keyed by OID, and ends the
+// walk once ctx ends, so the policy's timeout bounds the walk in time as the
+// row cap bounds it in size. The ordering
 // check gosnmp applies by default is off on every client, since an agent that
 // returns a table out of index order is a quirk no operator can correct and
 // the check cost the whole target; without it, the one way a walk can loop is
 // an agent delivering an OID it already delivered, and that ends the table
 // with the rows collected before it. Any other error the walk reports fails
 // the table.
-func collectWalk(walk func(fn gosnmp.WalkFunc) error, identifierSize int) (map[string]PDU, error) {
+func collectWalk(ctx context.Context, walk func(fn gosnmp.WalkFunc) error, identifierSize int) (map[string]PDU, error) {
 	output := make(map[string]PDU)
 	err := walk(func(pdu gosnmp.SnmpPDU) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, seen := output[pdu.Name]; seen {
 			return errWalkRepeated
 		}
@@ -402,7 +411,7 @@ func getPrivProtocol(privProtocol string) (gosnmp.SnmpV3PrivProtocol, error) {
 // It allows for connecting to SNMP devices, traversing ObjectID trees,
 // and properly closing connections when finished
 type Walker interface {
-	Walk(objectID string, identifierSize int) (map[string]PDU, error)
+	Walk(ctx context.Context, objectID string, identifierSize int) (map[string]PDU, error)
 	Connect() error
 	Close() error
 }

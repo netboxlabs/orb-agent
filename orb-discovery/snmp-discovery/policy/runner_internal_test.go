@@ -31,7 +31,7 @@ func (s *slowWalker) Connect() error {
 	return errors.New("unblocked")
 }
 
-func (s *slowWalker) Walk(_ string, _ int) (map[string]snmp.PDU, error) {
+func (s *slowWalker) Walk(_ context.Context, _ string, _ int) (map[string]snmp.PDU, error) {
 	return nil, nil
 }
 
@@ -52,7 +52,7 @@ func (t *testWalker) Connect() error {
 	return t.connectErr
 }
 
-func (t *testWalker) Walk(objectID string, identifierSize int) (map[string]snmp.PDU, error) {
+func (t *testWalker) Walk(_ context.Context, objectID string, identifierSize int) (map[string]snmp.PDU, error) {
 	t.walkCalled = true
 	t.walkOID = objectID
 	t.walkIdentifier = identifierSize
@@ -353,7 +353,7 @@ type staticWalker struct {
 
 func (w *staticWalker) Connect() error { return nil }
 func (w *staticWalker) Close() error   { return nil }
-func (w *staticWalker) Walk(oid string, _ int) (map[string]snmp.PDU, error) {
+func (w *staticWalker) Walk(_ context.Context, oid string, _ int) (map[string]snmp.PDU, error) {
 	if p, ok := w.pdus[oid]; ok {
 		return p, nil
 	}

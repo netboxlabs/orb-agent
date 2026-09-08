@@ -41,7 +41,7 @@ func (m *MockSNMP) Close() error {
 }
 
 // Walk implements Walker interface
-func (m *MockSNMP) Walk(oid string, identifierSize int) (map[string]snmp.PDU, error) {
+func (m *MockSNMP) Walk(_ context.Context, oid string, identifierSize int) (map[string]snmp.PDU, error) {
 	args := m.Called(oid, identifierSize)
 	return args.Get(0).(map[string]snmp.PDU), args.Error(1)
 }
@@ -90,7 +90,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(map[string]int{
+		oids, err := host.Walk(context.Background(), map[string]int{
 			ipAddressObjectID: 4,
 		})
 
@@ -121,7 +121,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.NoError(t, err)
@@ -147,7 +147,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(map[string]int{
+		oids, err := host.Walk(context.Background(), map[string]int{
 			ipAddressObjectID: 4,
 		})
 
@@ -169,7 +169,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -189,7 +189,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -218,7 +218,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.NoError(t, err)        // Walk should continue despite PDU mapping error
@@ -243,7 +243,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -815,7 +815,7 @@ func TestSNMPHostKeepsGoingPastAFailedTable(t *testing.T) {
 	}
 	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, factory)
 
-	oids, err := host.Walk(map[string]int{good: 1, bad: 1})
+	oids, err := host.Walk(context.Background(), map[string]int{good: 1, bad: 1})
 	require.NoError(t, err, "one failed table does not fail the target")
 	assert.Len(t, oids, 1)
 	assert.Equal(t, "eth0", oids[good+".1"].Value)
@@ -827,7 +827,7 @@ func TestSNMPHostKeepsGoingPastAFailedTable(t *testing.T) {
 	host = snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return allBad, nil
 	})
-	_, err = host.Walk(map[string]int{bad: 1})
+	_, err = host.Walk(context.Background(), map[string]int{bad: 1})
 	assert.Error(t, err, "every table failing fails the target")
 }
 
@@ -845,7 +845,7 @@ func TestSNMPHostFailsTheTargetOnATimeout(t *testing.T) {
 	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return mockWalker, nil
 	})
-	_, err := host.Walk(map[string]int{good: 1, silent: 1})
+	_, err := host.Walk(context.Background(), map[string]int{good: 1, silent: 1})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout")
 }
@@ -862,7 +862,7 @@ func TestSNMPHostKeepsATruncatedTable(t *testing.T) {
 	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return mockWalker, nil
 	})
-	oids, err := host.Walk(map[string]int{big: 1})
+	oids, err := host.Walk(context.Background(), map[string]int{big: 1})
 	require.NoError(t, err)
 	assert.Equal(t, "3", oids[big+".1"].Value)
 }

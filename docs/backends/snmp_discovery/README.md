@@ -431,7 +431,9 @@ BRIDGE-MIB table with a later index before an earlier one, which no operator
 can correct from this side, so the walk does not require increasing OIDs. Two
 bounds stand in for the ordering check: an agent delivering an OID it already
 delivered ends the table with the rows collected before it, and a table ends
-at 500,000 rows, kept as collected and logged as truncated.
+at 500,000 rows, kept as collected and logged as truncated. The policy's
+`timeout` bounds the whole walk: once it expires, the walk stops at the next
+row and the target fails.
 
 ## Device Model Lookup
 
