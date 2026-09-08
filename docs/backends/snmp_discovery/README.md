@@ -168,7 +168,7 @@ Each target in the `targets` list can include:
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
-| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range, and ignored when the target turns out to be a stack or HA pair (see [Stacks and netbox_id](#stacks-and-netbox_id)). |
 
 #### Subnet and range scanning
 
@@ -347,6 +347,18 @@ Master identity is pinned to the **lowest member id present**, regardless of liv
 **When the device contradicts itself.** A signal that is merely absent falls through to the next tier, and the ordinal fallback always yields ids. But a device that reports the *same* position on two chassis rows, or the same trailing number in two names, has asserted something impossible. If no other tier can resolve such a set, the stack is refused rather than guessed: no `VirtualChassis` and no member Devices are emitted, since inventing a numbering would put wrong `vc_position` values and wrong member Device names into NetBox.
 
 The master does still receive a serial in that case, taken from the lowest `entPhysicalIndex` chassis row. Note this is a different ordering from the lowest-member-id rule above, and necessarily so: a refused set has no member ids to pin to, and the row index is the only ordering that does not depend on the disputed numbering. Only the numbering was ambiguous — each chassis row's serial was unambiguous — so refusing the structure while dropping the serial would discard a fact the device reported plainly.
+
+### Stacks and netbox_id
+
+A target's `netbox_id` names one NetBox device. A stack does not answer as one device: querying any member's management address returns the whole stack, so the same walk describes several NetBox devices and nothing in it says which one the address belongs to. Management addresses are typically configured on an SVI, which is a logical interface of the stack rather than of a member, so `entAliasMappingTable` cannot resolve them either.
+
+**So a target's `netbox_id` is not applied when the target resolves to a stack**, and a warning naming the target and the master's serial is logged. Applying it would pin the emitted master to that id, which asserts the master is that device. Where it is not, `dcim.virtualchassis` matches on `master`, so NetBox is told the stack has a different master and a second virtual chassis is proposed, along with the IP reassignments that follow from it.
+
+The master still matches on `sysName` + site, `asset_tag`, or its primary IP, and those agree across every target of the same stack, which is what keeps re-runs upserting the existing chassis. Members match on `virtual_chassis` + `vc_position`, which is what identifies them; they never carried the target's `netbox_id` in any case.
+
+Note this also means `emit_device_name: false` has no alternative matcher to work with on a stack unless `asset_tag` is set, so the name is kept and a warning is logged, as documented for that option.
+
+**Target one address per stack.** Pointing separate targets at two members of the same stack discovers the same stack twice and cannot do what it appears to: each target would claim its own identity for the same master.
 
 **Member AssetTag is cleared.** Diode's highest-precedence matcher for `dcim.device` is `asset_tag` (unique). The master Device carries the policy `defaults.asset_tag` value if configured; member Devices have it explicitly cleared so multiple members do not collapse onto one NetBox row through a shared asset tag. Master / standalone AssetTag behaviour from `defaults.asset_tag` is unchanged. When the `discover_asset_tags` option is enabled, members instead receive their own per-row `entPhysicalAssetID` values — only the operator-supplied defaults tag is never replicated to members.
 

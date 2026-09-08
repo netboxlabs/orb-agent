@@ -439,7 +439,20 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	}
 
 	if target.NetboxID != nil {
-		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+		// Withheld rather than applied to the master: the address cannot be
+		// tied to one member of a stack, so pinning the master to it would
+		// assert an identity the walk does not support. See emittedStack.
+		// The master still matches on sysName + site, asset_tag or primary
+		// IP, and those agree across every target of the same stack, which
+		// is what stops a second virtual chassis being proposed.
+		if serial, isStack := emittedStack(entities); isStack {
+			r.logger.Warn("target resolved to a stack; netbox_id not applied",
+				"host", target.Host, "policy", policyName,
+				"netbox_id", *target.NetboxID, "master_serial", serial,
+				"detail", "a stack member's address is answered by the whole system, so the id cannot be tied to one member; remove netbox_id from this target and let the master match on its name")
+		} else {
+			annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+		}
 	}
 	// Resolve the master once; reused for name suppression and pruning.
 	currentDevice := mapping.CurrentDeviceFrom(entities)
