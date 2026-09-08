@@ -34,6 +34,14 @@ type GenericRows struct {
 	// keyed by ifIndex. Used to distinguish routed (membership-empty +
 	// L3-able ifType) from non-bridge entries.
 	IfTypes map[int]string
+
+	// TextPortLists says the device is of a vendor that publishes the port
+	// lists as text, comma-separated bridge port numbers, in place of the
+	// bitmap the MIB defines: Junos does by default. Only then are lists
+	// that read as text, and could not be bitmaps, read as text; a value of
+	// digit and comma bytes is a legal bitmap on any other platform, however
+	// it parses.
+	TextPortLists bool
 }
 
 // ExtractGeneric builds a per-ifIndex SwitchportInfo map from Q-BRIDGE
@@ -63,8 +71,8 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// unions all bridge ports for the ifIndex anyway), wasting work.
 	// Whether this host publishes its port lists as text is decided once,
 	// over every list it sent, so one value is never read one way and the
-	// next the other.
-	text := listsAreText(rows.VlanEgressPorts, rows.VlanUntaggedPorts, rows.BasePortToIfIndex)
+	// next the other, and only for a vendor known to publish text.
+	text := rows.TextPortLists && listsAreText(rows.VlanEgressPorts, rows.VlanUntaggedPorts, rows.BasePortToIfIndex)
 
 	out := make(map[int]*SwitchportInfo, len(ifIndexToBridge))
 	for ifIndex := range ifIndexToBridge {

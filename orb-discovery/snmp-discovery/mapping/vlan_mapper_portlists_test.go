@@ -21,6 +21,8 @@ import (
 func captureRows() ObjectIDValueMap {
 	out := ObjectIDValueMap{}
 	put := func(oid, val string, t Asn1BER) { out[oid] = Value{Value: val, Type: t} }
+	// sysObjectID under the Juniper enterprise, the vendor whose default is the text form.
+	put(".1.3.6.1.2.1.1.2.0", ".1.3.6.1.4.1.2636.1.1.1.4.82.5", ObjectIdentifier)
 	for bp, ifIndex := range map[string]string{"4097": "513", "4098": "520", "4099": "518"} {
 		put(".1.3.6.1.2.1.17.1.4.1.2."+bp, ifIndex, Integer)
 		put(".1.3.6.1.2.1.2.2.1.7."+ifIndex, "1", Integer)
@@ -147,4 +149,22 @@ func equalInts(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+// The same rows from a device of another vendor are read as bitmaps: text
+// lists are a Junos default, and a value of digit and comma bytes is a legal
+// bitmap anywhere else.
+func TestVlanMapper_PostMap_TextListsNeedTheVendor(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{513: "xe-0/0/0"})
+	rows := captureRows()
+	rows[".1.3.6.1.2.1.1.2.0"] = Value{Value: ".1.3.6.1.4.1.30065.1.3011.7050", Type: ObjectIdentifier}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if got := taggedVids(ifaces[513]); len(got) != 0 {
+		t.Errorf("xe-0/0/0 tagged: got %v, want none from a bitmap reading", got)
+	}
 }

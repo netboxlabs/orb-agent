@@ -267,3 +267,32 @@ func TestExtractGeneric_UntaggedInOneTaggedInOthersIsTrunkWithNative(t *testing.
 		t.Errorf("Classify: got %+v, want trunk native 10 tagged [20]", c)
 	}
 }
+
+// Text port lists are read only where the rows say the vendor publishes
+// them: a value of digit and comma bytes is a legal bitmap on any other
+// platform, however it parses, so without the vendor's word it stays one.
+func TestExtractGeneric_TextListsOnlyWhereTheVendorPublishesThem(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{4097: 513, 4099: 518},
+		PortPvid:          map[int]int{513: 0, 518: 0},
+		VlanEgressPorts:   map[int][]byte{23: []byte("0,4097,4099")},
+		VlanUntaggedPorts: map[int][]byte{23: []byte("")},
+		IfAdminStatus:     map[int]int{513: 1, 518: 1},
+		IfTypes:           map[int]string{513: "ethernetCsmacd", 518: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if vids := got[513].AllowedVlans.Vids; len(vids) != 0 {
+		t.Errorf("without the vendor's word the list is a bitmap naming no known port: got %v", vids)
+	}
+	rows.TextPortLists = true
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if vids := got[513].AllowedVlans.Vids; len(vids) != 1 || vids[0] != 23 {
+		t.Errorf("with the vendor's word the list names the port: got %v", vids)
+	}
+}
