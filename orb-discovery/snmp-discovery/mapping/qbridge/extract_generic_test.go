@@ -318,3 +318,29 @@ func TestExtractGeneric_UntaggedRowExcludingThePortOutranksThePvid(t *testing.T)
 		t.Errorf("Classify: got %+v, want trunk tagged [40]", c)
 	}
 }
+
+// A port with bridge membership is bridged, whatever the PVID table says: a
+// device that publishes egress rows for a port but no PVID row does not make
+// it routed. Membership in two VLANs is a trunk; only a port with no
+// membership at all falls to the routed inference.
+func TestExtractGeneric_MembershipOutranksTheRoutedInference(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 101, 2: 102},
+		PortPvid:          map[int]int{},
+		VlanEgressPorts:   map[int][]byte{10: maskWithPorts(1), 20: maskWithPorts(1)},
+		VlanUntaggedPorts: map[int][]byte{},
+		IfAdminStatus:     map[int]int{101: 1, 102: 1},
+		IfTypes:           map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	c := Classify(*got[101])
+	if c.Mode != ModeTrunk || len(c.Tagged) != 2 {
+		t.Errorf("port with membership: got %+v, want trunk tagged [10 20]", c)
+	}
+	if c := Classify(*got[102]); c.Mode != ModeRouted {
+		t.Errorf("port with no membership and no PVID: got %+v, want routed", c)
+	}
+}

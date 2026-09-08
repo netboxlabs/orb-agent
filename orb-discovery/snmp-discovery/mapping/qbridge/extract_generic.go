@@ -108,6 +108,12 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			return nil, fmt.Errorf("ifIndex %d: %w", ifIndex, err)
 		}
 		info.AllowedVlans = AllowedVlans{Vids: allowed, IsWildcard: isWildcard}
+		// Membership is the stronger evidence: a port the device places in a
+		// VLAN is bridged, however its PVID table reads. The routed inference
+		// from a missing PVID row stands only for a port with no membership.
+		if info.OperMode == OperRouted && (isWildcard || len(allowed) > 0) {
+			info.OperMode = OperUnknown
+		}
 		switch {
 		case native != nil:
 			info.NativeVlan = native
