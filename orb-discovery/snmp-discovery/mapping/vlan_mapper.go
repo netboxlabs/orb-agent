@@ -15,7 +15,11 @@ import (
 const (
 	oidDot1dBasePortIfIndex = ".1.3.6.1.2.1.17.1.4.1.2."
 	oidDot1qPvid            = ".1.3.6.1.2.1.17.7.1.4.5.1.1."
-	oidDot1qVlanStaticName  = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
+	oidSysObjectIDScalar    = ".1.3.6.1.2.1.1.2.0"
+	// juniperEnterprise is the sysObjectID prefix of the one vendor known to
+	// publish Q-BRIDGE port lists as text by default.
+	juniperEnterprise      = ".1.3.6.1.4.1.2636."
+	oidDot1qVlanStaticName = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
 	// CISCO-VTP-MIB vtpVlanName. Cisco IOS and IOS-XE do not implement
 	// dot1qVlanStaticName in the default SNMP context, so this is the only
 	// place their VLAN database is readable. Indexed by
@@ -342,6 +346,9 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		if ifx, ok := rows.BasePortToIfIndex[bp]; ok {
 			rows.PortPvid[ifx] = vid
 		}
+	}
+	if v, ok := all[oidSysObjectIDScalar]; ok {
+		rows.TextPortLists = strings.HasPrefix("."+strings.TrimPrefix(v.Value, "."), juniperEnterprise)
 	}
 	return rows
 }
