@@ -2,6 +2,7 @@ package snmp
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/gosnmp/gosnmp"
@@ -47,4 +48,23 @@ func TestCollectWalkReportsOtherErrors(t *testing.T) {
 		return boom
 	}, 1)
 	assert.ErrorIs(t, err, boom)
+}
+
+// A repeated OID is not the only shape of a runaway walk: an agent can hand
+// back a new, non-increasing OID on every request, and the ordering check
+// that would have ended it is off. A table therefore ends at a hard row cap,
+// with what was collected and the truncation reported, never failing.
+func TestCollectWalkEndsTheTableAtTheRowCap(t *testing.T) {
+	endless := func(fn gosnmp.WalkFunc) error {
+		// Every row a new OID, each below the one before, none repeated.
+		for i := 2_000_000_000; ; i-- {
+			name := fmt.Sprintf(".1.3.6.1.2.1.17.1.4.1.2.%d", i)
+			if err := fn(gosnmp.SnmpPDU{Name: name, Type: gosnmp.Integer, Value: 1}); err != nil {
+				return err
+			}
+		}
+	}
+	rows, err := collectWalk(endless, 1)
+	require.ErrorIs(t, err, ErrWalkTruncated)
+	assert.Len(t, rows, maxWalkRows, "the rows collected before the cap are kept")
 }

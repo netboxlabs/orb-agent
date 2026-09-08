@@ -809,7 +809,7 @@ func TestSNMPHostKeepsGoingPastAFailedTable(t *testing.T) {
 	mockWalker.On("Connect").Return(nil)
 	mockWalker.On("Close").Return(nil)
 	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil)
-	mockWalker.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("request timeout"))
+	mockWalker.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("unknown error response"))
 	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return mockWalker, nil
 	}
@@ -823,10 +823,46 @@ func TestSNMPHostKeepsGoingPastAFailedTable(t *testing.T) {
 	allBad := &MockSNMP{}
 	allBad.On("Connect").Return(nil)
 	allBad.On("Close").Return(nil)
-	allBad.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("request timeout"))
+	allBad.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("unknown error response"))
 	host = snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return allBad, nil
 	})
 	_, err = host.Walk(map[string]int{bad: 1})
 	assert.Error(t, err, "every table failing fails the target")
+}
+
+// A timeout is the device going silent, not a table the agent cannot serve:
+// it fails the target at once, whatever other tables remain, so a device that
+// stops answering costs one timeout rather than one per table.
+func TestSNMPHostFailsTheTargetOnATimeout(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const good, silent = "1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.17.7.1.4.5.1.1"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil).Maybe()
+	mockWalker.On("Walk", silent, 1).Return(map[string]snmp.PDU(nil), errors.New("request timeout (after 0 retries)"))
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	_, err := host.Walk(map[string]int{good: 1, silent: 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+}
+
+// A table that hit the row cap is kept as collected: the truncation is a
+// warning, not a failure of the table or the target.
+func TestSNMPHostKeepsATruncatedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const big = "1.3.6.1.2.1.17.4.3.1.2"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", big, 1).Return(map[string]snmp.PDU{big + ".1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 1}}, snmp.ErrWalkTruncated)
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	oids, err := host.Walk(map[string]int{big: 1})
+	require.NoError(t, err)
+	assert.Equal(t, "3", oids[big+".1"].Value)
 }
