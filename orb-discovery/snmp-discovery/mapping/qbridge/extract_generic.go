@@ -71,8 +71,13 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// unions all bridge ports for the ifIndex anyway), wasting work.
 	// Whether this host publishes its port lists as text is decided once,
 	// over every list it sent, so one value is never read one way and the
-	// next the other, and only for a vendor known to publish text.
-	text := rows.TextPortLists && listsAreText(rows.VlanEgressPorts, rows.VlanUntaggedPorts, rows.BasePortToIfIndex)
+	// next the other, and only for a vendor known to publish text. Text
+	// lists are decoded once into bitmaps here; everything below reads
+	// bitmaps.
+	egress, untagged := rows.VlanEgressPorts, rows.VlanUntaggedPorts
+	if rows.TextPortLists && listsAreText(egress, untagged, rows.BasePortToIfIndex) {
+		egress, untagged = listsToBitmaps(egress), listsToBitmaps(untagged)
+	}
 
 	out := make(map[int]*SwitchportInfo, len(ifIndexToBridge))
 	for ifIndex := range ifIndexToBridge {
@@ -97,7 +102,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 
 		// Build allowed/native from membership masks.
 		allowed, isWildcard, native, err := membershipFromMasks(
-			ifIndex, ifIndexToBridge, rows.VlanEgressPorts, rows.VlanUntaggedPorts, text,
+			ifIndex, ifIndexToBridge, egress, untagged,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("ifIndex %d: %w", ifIndex, err)
@@ -107,7 +112,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		case native != nil:
 			info.NativeVlan = native
 			info.AccessVlan = native
-		case bridged && pvid > 0 && hasRow(rows.VlanUntaggedPorts, pvid):
+		case bridged && pvid > 0 && hasRow(untagged, pvid):
 			// The device publishes an untagged row for the PVID's VLAN and
 			// leaves this port out of it: the port is tagged there, and the
 			// PVID names no untagged VLAN. The PVID stands in for the row
@@ -172,7 +177,6 @@ func membershipFromMasks(
 	ifIndex int,
 	ifIndexToBridge map[int][]int,
 	egress, untagged map[int][]byte,
-	text bool,
 ) ([]int, bool, *int, error) {
 	bridgePorts, ok := ifIndexToBridge[ifIndex]
 	if !ok || len(bridgePorts) == 0 {
@@ -183,7 +187,7 @@ func membershipFromMasks(
 		if vid < 1 || vid > 4094 {
 			continue
 		}
-		if !anyBridgePortInMask(mask, bridgePorts, text) {
+		if !anyBridgePortInMask(mask, bridgePorts) {
 			continue
 		}
 		allowed = append(allowed, vid)
@@ -191,7 +195,7 @@ func membershipFromMasks(
 	sort.Ints(allowed)
 	var nativeVid *int
 	for _, vid := range allowed {
-		if utg, ok := untagged[vid]; ok && anyBridgePortInMask(utg, bridgePorts, text) {
+		if utg, ok := untagged[vid]; ok && anyBridgePortInMask(utg, bridgePorts) {
 			v := vid
 			nativeVid = &v
 		}
@@ -202,17 +206,10 @@ func membershipFromMasks(
 	return allowed, false, nativeVid, nil
 }
 
-// anyBridgePortInMask reports whether any of the given bridge ports is
-// named by mask, read as a text list when the host publishes text and as a
-// bitmap otherwise.
-func anyBridgePortInMask(mask []byte, bridgePorts []int, text bool) bool {
+// anyBridgePortInMask reports whether any of the given bridge ports has
+// its bit set in mask.
+func anyBridgePortInMask(mask []byte, bridgePorts []int) bool {
 	for _, bp := range bridgePorts {
-		if text {
-			if bridgePortInList(mask, bp) {
-				return true
-			}
-			continue
-		}
 		if bridgePortInMask(mask, bp) {
 			return true
 		}

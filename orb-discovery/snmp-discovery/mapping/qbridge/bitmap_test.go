@@ -1,6 +1,7 @@
 package qbridge
 
 import (
+	"bytes"
 	"errors"
 	"reflect"
 	"testing"
@@ -159,18 +160,26 @@ func TestListsAreText(t *testing.T) {
 	}
 }
 
-// A port list read as text names the ports it lists and no other; a zero entry
-// names no port.
-func TestBridgePortInList(t *testing.T) {
-	list := []byte("0,4097,4099")
-	for _, bp := range []int{4097, 4099} {
-		if !bridgePortInList(list, bp) {
-			t.Errorf("bridge port %d is listed but not found", bp)
+// A host's text lists are decoded once, each into the bitmap the MIB defines,
+// so membership is then read bit by bit as on any other host; a zero entry
+// sets no bit and an empty list is an empty bitmap.
+func TestListsToBitmaps(t *testing.T) {
+	got := listsToBitmaps(map[int][]byte{
+		23:   []byte("0,4097,4099"),
+		4004: []byte("0,4097,4099,4098"),
+		1:    []byte(""),
+	})
+	want := map[int][]byte{
+		23:   maskWithPorts(4097, 4099),
+		4004: maskWithPorts(4097, 4098, 4099),
+		1:    {},
+	}
+	for vid, mask := range want {
+		if !bytes.Equal(got[vid], mask) {
+			t.Errorf("vid %d: got %x, want %x", vid, got[vid], mask)
 		}
 	}
-	for _, bp := range []int{4098, 1, 48} {
-		if bridgePortInList(list, bp) {
-			t.Errorf("bridge port %d is not listed but was found", bp)
-		}
+	if len(got) != len(want) {
+		t.Errorf("got %d rows, want %d", len(got), len(want))
 	}
 }

@@ -138,16 +138,33 @@ func bitmapNamesUnknownPort(v []byte, basePortToIfIndex map[int]int) bool {
 	return false
 }
 
-// bridgePortInList reports whether a text port list names bridgePort.
-func bridgePortInList(list []byte, bridgePort int) bool {
-	ports, ok := asciiPortList(list)
-	if !ok {
-		return false
-	}
-	for _, p := range ports {
-		if p == bridgePort {
-			return true
+// listsToBitmaps decodes a host's text port lists, each once, into the bitmaps
+// the MIB defines, so membership is then read bit by bit as on any other host
+// rather than by parsing the list again for every interface and VLAN pair. A
+// value that does not parse is kept as it is.
+func listsToBitmaps(table map[int][]byte) map[int][]byte {
+	out := make(map[int][]byte, len(table))
+	for vid, v := range table {
+		ports, ok := asciiPortList(v)
+		if !ok {
+			if len(v) == 0 {
+				out[vid] = []byte{}
+				continue
+			}
+			out[vid] = v
+			continue
 		}
+		maxPort := 0
+		for _, p := range ports {
+			if p > maxPort {
+				maxPort = p
+			}
+		}
+		mask := make([]byte, (maxPort+7)/8)
+		for _, p := range ports {
+			mask[(p-1)/8] |= 1 << (7 - (p-1)%8)
+		}
+		out[vid] = mask
 	}
-	return false
+	return out
 }
