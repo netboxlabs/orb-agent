@@ -3,7 +3,9 @@ package snmp_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -776,4 +778,55 @@ func TestClientEngineDiscoveredIsFalseForV2c(t *testing.T) {
 	}}
 
 	assert.False(t, client.EngineDiscovered())
+}
+
+// Every client is built with gosnmp's ordering check off: an agent that
+// returns a table out of index order is a quirk no operator can correct, and
+// the walk guards itself against the loop the check existed to prevent.
+func TestNewClientDoesNotCheckOIDOrdering(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, auth := range []*config.Authentication{
+		{ProtocolVersion: snmp.ProtocolVersion1, Community: "public"},
+		{ProtocolVersion: snmp.ProtocolVersion2c, Community: "public"},
+		{ProtocolVersion: snmp.ProtocolVersion3, Username: "u", AuthProtocol: "MD5", AuthPassphrase: "p", PrivProtocol: "AES", PrivPassphrase: "p"},
+	} {
+		client, err := snmp.NewClient("192.0.2.1", 161, 1, time.Second, auth, logger)
+		require.NoError(t, err, auth.ProtocolVersion)
+		c, ok := client.(*snmp.Client)
+		require.True(t, ok)
+		_, tolerant := c.AppOpts["c"]
+		assert.True(t, tolerant, "%s: the ordering check is off", auth.ProtocolVersion)
+	}
+}
+
+// A table the agent fails does not cost the target: the host keeps walking
+// the other tables and returns what it collected, failing only when every
+// table failed.
+func TestSNMPHostKeepsGoingPastAFailedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const good, bad = "1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.17.7.1.4.5.1.1"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil)
+	mockWalker.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("request timeout"))
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	}
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, factory)
+
+	oids, err := host.Walk(map[string]int{good: 1, bad: 1})
+	require.NoError(t, err, "one failed table does not fail the target")
+	assert.Len(t, oids, 1)
+	assert.Equal(t, "eth0", oids[good+".1"].Value)
+
+	allBad := &MockSNMP{}
+	allBad.On("Connect").Return(nil)
+	allBad.On("Close").Return(nil)
+	allBad.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("request timeout"))
+	host = snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return allBad, nil
+	})
+	_, err = host.Walk(map[string]int{bad: 1})
+	assert.Error(t, err, "every table failing fails the target")
 }

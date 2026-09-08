@@ -2,6 +2,7 @@ package snmp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -72,12 +73,22 @@ func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) 
 		return nil, err
 	}
 
+	// Each table is walked on its own: one the agent fails is logged and
+	// skipped, and the target keeps everything the other tables returned.
+	// Returning on the first failure cost the whole target, device,
+	// interfaces and addresses included, for one table the agent could not
+	// serve. Only a target that failed every table is failed.
 	output := make(mapping.ObjectIDValueMap)
+	var walked, failed int
+	var lastErr error
 	for objectID, identifierSize := range objectIDs {
+		walked++
 		pdu, err := snmpClient.Walk(objectID, identifierSize)
 		if err != nil {
-			s.logger.Warn("error walking object ID", "object_id", objectID, "error", err)
-			return nil, err
+			s.logger.Warn("error walking object ID; continuing with the other tables", "object_id", objectID, "error", err)
+			failed++
+			lastErr = err
+			continue
 		}
 		for k, value := range pdu {
 			s.logger.Debug("mapping PDU", "object_id", k, "value", value, "value_type", reflect.TypeOf(value.Value))
@@ -89,6 +100,12 @@ func (s *Host) Walk(objectIDs map[string]int) (mapping.ObjectIDValueMap, error) 
 			output[k] = value
 			s.logger.Debug("mapped PDU", "object_id", k, "value", value)
 		}
+	}
+	if walked > 0 && failed == walked {
+		return nil, lastErr
+	}
+	if failed > 0 {
+		s.logger.Warn("some tables could not be walked", "host", s.address, "failed", failed, "walked", walked)
 	}
 
 	return output, nil
@@ -165,20 +182,43 @@ func (c *Client) EngineDiscovered() bool {
 
 // Walk implements the Walker interface by walking the SNMP tree
 func (c *Client) Walk(objectIDs string, identifierSize int) (map[string]PDU, error) {
-	pdu, err := c.WalkAll(objectIDs)
-	if err != nil {
-		return nil, err
-	}
+	return collectWalk(func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
+}
+
+// errWalkRepeated ends a walk that delivered an OID it had already delivered.
+var errWalkRepeated = errors.New("walk repeated an OID")
+
+// collectWalk gathers the rows a walk delivers, keyed by OID. The ordering
+// check gosnmp applies by default is off on every client, since an agent that
+// returns a table out of index order is a quirk no operator can correct and
+// the check cost the whole target; without it, the one way a walk can loop is
+// an agent delivering an OID it already delivered, and that ends the table
+// with the rows collected before it. Any other error the walk reports fails
+// the table.
+func collectWalk(walk func(fn gosnmp.WalkFunc) error, identifierSize int) (map[string]PDU, error) {
 	output := make(map[string]PDU)
-	for _, pdu := range pdu {
+	err := walk(func(pdu gosnmp.SnmpPDU) error {
+		if _, seen := output[pdu.Name]; seen {
+			return errWalkRepeated
+		}
 		output[pdu.Name] = PDU{
 			Name:           pdu.Name,
 			Type:           pdu.Type,
 			Value:          pdu.Value,
 			IdentifierSize: identifierSize,
 		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errWalkRepeated) {
+		return nil, err
 	}
 	return output, nil
+}
+
+// tolerantWalks is the gosnmp option that turns its OID ordering check off;
+// collectWalk guards the loop the check existed to prevent.
+func tolerantWalks() map[string]any {
+	return map[string]any{"c": true}
 }
 
 // PDU is a struct that represents an SNMP PDU
@@ -220,6 +260,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Timeout:   timeout,
 				Retries:   retries,
 				Logger:    gosnmpLogger,
+				AppOpts:   tolerantWalks(),
 			},
 		}, nil
 	case ProtocolVersion2c:
@@ -232,6 +273,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				Timeout:   timeout,
 				Retries:   retries,
 				Logger:    gosnmpLogger,
+				AppOpts:   tolerantWalks(),
 			},
 		}, nil
 	case ProtocolVersion3:
@@ -263,6 +305,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 				SecurityModel: gosnmp.UserSecurityModel,
 				ContextName:   authentication.ContextName,
 				Logger:        gosnmpLogger,
+				AppOpts:       tolerantWalks(),
 				SecurityParameters: &gosnmp.UsmSecurityParameters{
 					UserName:                 authentication.Username,
 					AuthenticationProtocol:   authProtocol,
