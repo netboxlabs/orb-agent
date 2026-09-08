@@ -84,7 +84,7 @@ Drivers that implement `get_interfaces_vlans()` populate per-interface switching
 | `ios` | Supported (Cisco IOS, IOS-XE) |
 | `nxos` | Supported (Cisco NX-OS) — via NX-API JSON |
 | `nxos_ssh` | Supported (Cisco NX-OS) — via SSH + ntc-templates |
-| `junos` | Supported (Juniper Junos) — EX/QFX switching, handles ELS and non-ELS configurations |
+| `junos` | Supported (Juniper Junos) — EX/QFX switching, handles ELS and non-ELS configurations; interface VLAN associations come from `get-ethernet-switching-interface-information`, or from `get-ethernet-switching-interface-details` on ELS releases that refuse the former, with unit 0 mapped to its physical port |
 | `cisco_s300` | Supported (Cisco Small Business 300/350/550) |
 | `mellanox_mlnxos` | Supported (Mellanox MLNX-OS) — via SSH; hybrid mode collapses to trunk (native + tagged) |
 | `dell_sonic` | Supported (Dell Enterprise SONiC) — via SSH; parses `show interface switchport` |
