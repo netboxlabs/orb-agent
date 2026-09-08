@@ -152,7 +152,7 @@ def _els_details_rows(root) -> tuple[list[str], dict[str, str | None], dict[str,
 
     current: str | None = None
     for elem in root.iter():
-        if etree.QName(elem.tag).localname != "l2ng-l2ald-iff-interface-entry":
+        if _localname(elem) != "l2ng-l2ald-iff-interface-entry":
             continue
         name = _text(_find_child(elem, "l2iff-interface-name"))
         vid = _maybe_int(_text(_find_child(elem, "l2iff-interface-vlan-id")))
