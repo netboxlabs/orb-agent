@@ -1,0 +1,14 @@
+# Nokia SR Linux. OpenConfig memory has only physical and reserved here; the
+# native platform tree carries free and utilization.
+extends: _base
+match:
+  vendor: nokia
+subscriptions:
+  - path: /platform/control[slot=*]/memory
+    mode: sample
+    origin: ""
+    attributes:
+      slot: slot
+    metrics:
+      - {leaf: free, name: memory_free_native, type: gauge, unit: By}
+      - {leaf: utilization, name: memory_utilization, type: gauge, unit: "%"}
