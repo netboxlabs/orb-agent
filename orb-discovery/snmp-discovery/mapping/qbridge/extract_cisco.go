@@ -39,15 +39,23 @@ func ApplyCisco(infos map[int]*SwitchportInfo, rows CiscoRows) {
 		if !ok {
 			continue
 		}
-		if info.AdminMode == AdminTrunk {
+		if info.AdminMode == AdminTrunk && !info.TrunkFromOneTaggedVlan {
 			// vmMembership is non-trunk-only by spec; if extract_generic
-			// already classified this as trunk from membership masks, that
-			// wins over the Cisco overlay.
+			// already classified this as trunk from membership in several
+			// VLANs, that wins over the Cisco overlay.
 			continue
 		}
 		vid := CoerceVid(vlan)
 		if vid == nil {
 			continue
+		}
+		if info.TrunkFromOneTaggedVlan {
+			// A trunk inferred from one tagged VLAN alone is the weakest
+			// reading the generic extractor makes, and this row is positive
+			// access evidence for the port: the port is access on the row's
+			// VLAN.
+			info.AdminMode = AdminAccess
+			info.TrunkFromOneTaggedVlan = false
 		}
 		// vmVlan is a positive "this IS an access port on VID X" signal from
 		// CISCO-VLAN-MEMBERSHIP-MIB. It overrides:

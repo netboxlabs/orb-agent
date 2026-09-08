@@ -344,3 +344,27 @@ func TestExtractGeneric_MembershipOutranksTheRoutedInference(t *testing.T) {
 		t.Errorf("port with no membership and no PVID: got %+v, want routed", c)
 	}
 }
+
+// The extractor marks a trunk it inferred from one tagged VLAN alone, so a
+// vendor overlay with positive access evidence can override that inference
+// and no other.
+func TestExtractGeneric_MarksATrunkInferredFromOneTaggedVlan(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 101, 2: 102},
+		PortPvid:          map[int]int{101: 0, 102: 0},
+		VlanEgressPorts:   map[int][]byte{10: maskWithPorts(1, 2), 20: maskWithPorts(2)},
+		VlanUntaggedPorts: map[int][]byte{10: {}, 20: {}},
+		IfAdminStatus:     map[int]int{101: 1, 102: 1},
+		IfTypes:           map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !got[101].TrunkFromOneTaggedVlan {
+		t.Error("a trunk inferred from one tagged VLAN is marked")
+	}
+	if got[102].TrunkFromOneTaggedVlan {
+		t.Error("a trunk seen in two VLANs is not marked")
+	}
+}

@@ -81,14 +81,21 @@ type AllowedVlans struct {
 // extractor produces one SwitchportInfo per ifIndex. Classify consumes it
 // and returns Classification.
 type SwitchportInfo struct {
-	Enabled           bool
-	AdminMode         AdminMode
-	OperMode          OperMode
-	AccessVlan        *int
-	NativeVlan        *int
-	AllowedVlans      AllowedVlans
-	VoiceVlan         *int
-	BridgePortPresent bool
+	Enabled      bool
+	AdminMode    AdminMode
+	OperMode     OperMode
+	AccessVlan   *int
+	NativeVlan   *int
+	AllowedVlans AllowedVlans
+
+	// TrunkFromOneTaggedVlan marks a trunk the generic extractor inferred
+	// from the weakest evidence it accepts, one VLAN the port is tagged in
+	// and nothing else. A vendor overlay holding positive access evidence
+	// for the port may override that inference; a trunk seen in several
+	// VLANs it may not.
+	TrunkFromOneTaggedVlan bool
+	VoiceVlan              *int
+	BridgePortPresent      bool
 }
 
 // Classification is the per-interface output VlanMapper consumes to mutate

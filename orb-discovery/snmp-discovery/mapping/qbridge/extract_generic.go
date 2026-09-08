@@ -145,6 +145,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			info.AdminMode = AdminAccess
 		case len(allowed) >= 1:
 			info.AdminMode = AdminTrunk
+			info.TrunkFromOneTaggedVlan = len(allowed) == 1
 		case len(allowed) == 0 && info.AccessVlan != nil:
 			// PVID-only signal: switches like Arista EOS expose dot1qPvid but
 			// omit dot1qVlanStaticEgressPorts/UntaggedPorts. The PVID alone is
