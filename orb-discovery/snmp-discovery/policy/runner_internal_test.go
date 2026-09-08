@@ -1591,3 +1591,91 @@ func TestRunWithMetadata_RefusedStackWithheldNetboxID(t *testing.T) {
 	assert.False(t, hasSM,
 		"a walk describing several chassis must not pin its master, even when the stack could not be modelled")
 }
+
+// mgmtAddressPDUs is the ipAdEntTable half of a walk: one address bound to
+// ifIndex 1, which is the address these tests then target.
+func mgmtAddressPDUs(addr string) map[string]map[string]snmp.PDU {
+	return map[string]map[string]snmp.PDU{
+		"1.3.6.1.2.1.2.2.1.2": {
+			"1.3.6.1.2.1.2.2.1.2.1": {Value: "Vl12", Type: gosnmp.OctetString, IdentifierSize: 1},
+		},
+		"1.3.6.1.2.1.4.20.1.1": {
+			"1.3.6.1.2.1.4.20.1.1." + addr: {Value: addr, Type: gosnmp.IPAddress, IdentifierSize: 4},
+		},
+		"1.3.6.1.2.1.4.20.1.2": {
+			"1.3.6.1.2.1.4.20.1.2." + addr: {Value: 1, Type: gosnmp.Integer, IdentifierSize: 4},
+		},
+	}
+}
+
+// ipEntries adds the ipAdEntTable columns to the chassis mapping so a
+// primary IP can be assigned from the target address.
+func ipEntries() []config.MappingEntry {
+	return append(chassisEntries(), config.MappingEntry{
+		OID:            "1.3.6.1.2.1.4.20.1",
+		Entity:         "ipAddress",
+		Field:          "_id",
+		IdentifierSize: 4,
+		MappingEntries: []config.MappingEntry{
+			{OID: "1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+			{
+				OID: "1.3.6.1.2.1.4.20.1.2", Entity: "ipAddress", Field: "assignedObject",
+				Relationship: config.Relationship{Type: "interface"},
+			},
+		},
+	})
+}
+
+// walkerWith merges extra PDU tables into a base factory's walk.
+func walkerWith(base snmp.ClientFactory, extra map[string]map[string]snmp.PDU) snmp.ClientFactory {
+	w, _ := base("", 0, 0, 0, nil, nil)
+	sw := w.(*staticWalker)
+	merged := map[string]map[string]snmp.PDU{}
+	for root, rows := range sw.pdus {
+		merged[root] = rows
+	}
+	for root, rows := range extra {
+		merged[root] = rows
+	}
+	out := &staticWalker{pdus: merged}
+	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return out, nil
+	}
+}
+
+// TestQueryTarget_StackDoesNotClaimTargetAddressAsPrimaryIP is the second
+// route to the same misattribution.
+//
+// primary IP is a unique NetBox device matcher, ahead of name. Where the
+// polled address is a member's primary IP in NetBox, putting it on the
+// emitted master lets that master resolve to the member's row and be
+// treated as the chassis master, exactly as a mis-targeted netbox_id would.
+// The walk gives no grounds to say which member owns the address, so the
+// claim is not made.
+func TestQueryTarget_StackDoesNotClaimTargetAddressAsPrimaryIP(t *testing.T) {
+	runner := queryTargetRunner(walkerWith(stackWalkerFactory(), mgmtAddressPDUs("10.0.0.1")), ipEntries())
+	entities, hits, multiChassis, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	assert.True(t, multiChassis, "precondition: this walk must describe several chassis")
+
+	master := masterOf(entities)
+	require.NotNil(t, master)
+	assert.Nil(t, master.PrimaryIp4,
+		"a stack master must not claim the polled address: the walk cannot say which member owns it")
+	assert.Empty(t, hits, "no cycle-closer either, since nothing was claimed")
+}
+
+// TestQueryTarget_StandaloneStillClaimsTargetAddressAsPrimaryIP is the
+// control. The claim is withheld only where it cannot be supported; a
+// single-device target is unambiguous and must keep working.
+func TestQueryTarget_StandaloneStillClaimsTargetAddressAsPrimaryIP(t *testing.T) {
+	runner := queryTargetRunner(walkerWith(standaloneWalkerFactory(), mgmtAddressPDUs("10.0.0.1")), ipEntries())
+	entities, hits, multiChassis, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	assert.False(t, multiChassis, "precondition: this walk describes one chassis")
+
+	master := masterOf(entities)
+	require.NotNil(t, master)
+	require.NotNil(t, master.PrimaryIp4, "a standalone target must still get its primary IP")
+	assert.NotEmpty(t, hits, "and its cycle-closer")
+}

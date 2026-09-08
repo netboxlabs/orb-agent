@@ -912,7 +912,24 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 		}
 	}
 
-	m.assignPrimaryIP(currentDevice, uniqueEntities)
+	// The address the collector connected to is only the master's primary
+	// IP when the target is one device. A walk describing several chassis
+	// gives no grounds to say which member owns it, and primary IP is a
+	// unique NetBox device matcher, so asserting it on the master lets that
+	// master resolve to a member's row and be treated as the chassis
+	// master. That is the same misattribution the withheld netbox_id
+	// avoids, reached through a different matcher.
+	//
+	// Withheld rather than routed to the owning member: 48 of the 52
+	// addresses across the LibreNMS corpus's stacks sit on an SVI, which
+	// belongs to the stack rather than to any member, so routing resolves
+	// almost none of them and regresses the same cases anyway.
+	if MultiChassisWalk(objectIDs) {
+		m.logger.Debug("walk describes several chassis; not claiming the target address as the master's primary IP",
+			"target", m.targetHost)
+	} else {
+		m.assignPrimaryIP(currentDevice, uniqueEntities)
+	}
 
 	// Phase 2: PostMap pass. Mappers that need cross-row / cross-mapper
 	// context (e.g., VlanMapper which must see all *diode.Interface
