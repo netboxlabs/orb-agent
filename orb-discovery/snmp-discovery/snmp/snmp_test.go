@@ -3,8 +3,11 @@ package snmp_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"os"
 	"testing"
 	"time"
@@ -39,7 +42,7 @@ func (m *MockSNMP) Close() error {
 }
 
 // Walk implements Walker interface
-func (m *MockSNMP) Walk(oid string, identifierSize int) (map[string]snmp.PDU, error) {
+func (m *MockSNMP) Walk(_ context.Context, oid string, identifierSize int) (map[string]snmp.PDU, error) {
 	args := m.Called(oid, identifierSize)
 	return args.Get(0).(map[string]snmp.PDU), args.Error(1)
 }
@@ -88,7 +91,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(map[string]int{
+		oids, err := host.Walk(context.Background(), map[string]int{
 			ipAddressObjectID: 4,
 		})
 
@@ -119,7 +122,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.NoError(t, err)
@@ -145,7 +148,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(map[string]int{
+		oids, err := host.Walk(context.Background(), map[string]int{
 			ipAddressObjectID: 4,
 		})
 
@@ -167,7 +170,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -187,7 +190,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -216,7 +219,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.NoError(t, err)        // Walk should continue despite PDU mapping error
@@ -241,7 +244,7 @@ func TestSNMPHost(t *testing.T) {
 		host := snmp.NewHost("192.168.1.1", 161, 3, 1*time.Second, nil, logger, snmpClientFactory)
 
 		// Execute
-		oids, err := host.Walk(objectIDsToQuery)
+		oids, err := host.Walk(context.Background(), objectIDsToQuery)
 
 		// Assert
 		assert.Error(t, err)
@@ -776,4 +779,166 @@ func TestClientEngineDiscoveredIsFalseForV2c(t *testing.T) {
 	}}
 
 	assert.False(t, client.EngineDiscovered())
+}
+
+// Every client is built with gosnmp's ordering check off: an agent that
+// returns a table out of index order is a quirk no operator can correct, and
+// the walk guards itself against the loop the check existed to prevent.
+func TestNewClientDoesNotCheckOIDOrdering(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	for _, auth := range []*config.Authentication{
+		{ProtocolVersion: snmp.ProtocolVersion1, Community: "public"},
+		{ProtocolVersion: snmp.ProtocolVersion2c, Community: "public"},
+		{ProtocolVersion: snmp.ProtocolVersion3, Username: "u", AuthProtocol: "MD5", AuthPassphrase: "p", PrivProtocol: "AES", PrivPassphrase: "p"},
+	} {
+		client, err := snmp.NewClient("192.0.2.1", 161, 1, time.Second, auth, logger)
+		require.NoError(t, err, auth.ProtocolVersion)
+		c, ok := client.(*snmp.Client)
+		require.True(t, ok)
+		_, tolerant := c.AppOpts["c"]
+		assert.True(t, tolerant, "%s: the ordering check is off", auth.ProtocolVersion)
+	}
+}
+
+// A table the walk cannot finish fails the target, as it always did: the
+// errors that reach here are transport and decode failures, a device whose
+// agent restarted or answered with something other than SNMP, and a device
+// missing the tables it lost is not a discovered device. Only an SNMP error
+// status, which ends the table without an error, and the two bounds below
+// leave a table short without failing the target.
+func TestSNMPHostFailsTheTargetOnAFailedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const good, bad = "1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.17.7.1.4.5.1.1"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil).Maybe()
+	mockWalker.On("Walk", bad, 1).Return(map[string]snmp.PDU(nil), errors.New("error parsing SNMP packet version: unknown field type: ff"))
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	}
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, factory)
+
+	oids, err := host.Walk(context.Background(), map[string]int{good: 1, bad: 1})
+	require.Error(t, err, "a table the walk cannot finish fails the target")
+	assert.Contains(t, err.Error(), "unknown field type")
+	assert.Nil(t, oids, "nothing of a failed target is returned")
+}
+
+// A timeout is the device going silent, not a table the agent cannot serve:
+// it fails the target at once, whatever other tables remain, so a device that
+// stops answering costs one timeout rather than one per table.
+func TestSNMPHostFailsTheTargetOnATimeout(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const good, silent = "1.3.6.1.2.1.2.2.1.2", "1.3.6.1.2.1.17.7.1.4.5.1.1"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", good, 1).Return(map[string]snmp.PDU{good + ".1": {Value: "eth0", Type: gosnmp.OctetString, IdentifierSize: 1}}, nil).Maybe()
+	mockWalker.On("Walk", silent, 1).Return(map[string]snmp.PDU(nil), errors.New("request timeout (after 0 retries)"))
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	_, err := host.Walk(context.Background(), map[string]int{good: 1, silent: 1})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout")
+}
+
+// A table that hit the row cap is kept as collected: the truncation is a
+// warning, not a failure of the table or the target.
+func TestSNMPHostKeepsATruncatedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const big = "1.3.6.1.2.1.17.4.3.1.2"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", big, 1).Return(map[string]snmp.PDU{big + ".1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 1}}, snmp.ErrWalkTruncated)
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	oids, err := host.Walk(context.Background(), map[string]int{big: 1})
+	require.NoError(t, err)
+	assert.Equal(t, "3", oids[big+".1"].Value)
+}
+
+// A table that ended at a repeated OID is kept as collected, like a
+// truncated one: the repeat is a warning, not a failure of the target.
+func TestSNMPHostKeepsARepeatedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	const looping = "1.3.6.1.2.1.17.4.3.1.2"
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	mockWalker.On("Walk", looping, 1).Return(map[string]snmp.PDU{looping + ".1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 1}}, snmp.ErrWalkRepeated)
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	oids, err := host.Walk(context.Background(), map[string]int{looping: 1})
+	require.NoError(t, err)
+	assert.Equal(t, "3", oids[looping+".1"].Value)
+}
+
+// Once the policy's context has ended, the host starts no further table:
+// the runner has stopped waiting, and every request from here would be
+// spent on a target nobody is listening for.
+func TestSNMPHostStartsNoTableAfterTheContextEnds(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	mockWalker := &MockSNMP{}
+	mockWalker.On("Connect").Return(nil)
+	mockWalker.On("Close").Return(nil)
+	host := snmp.NewHost("192.0.2.1", 161, 1, time.Second, nil, logger, func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return mockWalker, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := host.Walk(ctx, map[string]int{"1.3.6.1.2.1.2.2.1.2": 1})
+	require.ErrorIs(t, err, context.Canceled)
+	mockWalker.AssertNotCalled(t, "Walk", mock.Anything, mock.Anything, mock.Anything)
+}
+
+// The walk's context bounds the request in flight as well: a target that
+// goes silent after the policy deadline passes does not hold the walker
+// through the SNMP timeout and its retries.
+func TestClientWalkReturnsWhenTheContextEndsMidRequest(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	port := uint16(silent.LocalAddr().(*net.UDPAddr).Port)
+
+	client, err := snmp.NewClient("127.0.0.1", port, 2, 5*time.Second, &config.Authentication{ProtocolVersion: snmp.ProtocolVersion2c, Community: "public"}, logger)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect())
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = client.Walk(ctx, "1.3.6.1.2.1.2.2.1.2", 1)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second, "the walk returns at the context deadline, not after the SNMP timeout and retries")
+}
+
+// A cancellation with no deadline interrupts the request in flight too: the
+// backend's shutdown cancels the root context rather than letting a
+// deadline pass, and a blocked read must not hold it through the SNMP
+// timeout and its retries.
+func TestClientWalkReturnsWhenTheContextIsCancelledMidRequest(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	port := uint16(silent.LocalAddr().(*net.UDPAddr).Port)
+
+	client, err := snmp.NewClient("127.0.0.1", port, 2, 5*time.Second, &config.Authentication{ProtocolVersion: snmp.ProtocolVersion2c, Community: "public"}, logger)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect())
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	start := time.Now()
+	_, err = client.Walk(ctx, "1.3.6.1.2.1.2.2.1.2", 1)
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), 2*time.Second, "a cancellation interrupts the read in flight")
 }

@@ -1,6 +1,7 @@
 package snmp
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -23,7 +24,7 @@ func (n *FakeSNMPWalker) Close() error {
 }
 
 // Walk implements Walker interface
-func (n *FakeSNMPWalker) Walk(oid string, _ int) (map[string]PDU, error) {
+func (n *FakeSNMPWalker) Walk(_ context.Context, oid string, _ int) (map[string]PDU, error) {
 	if oid == "1.3.6.1.2.1.4.20.1.1" {
 		return map[string]PDU{
 			"1.3.6.1.2.1.4.20.1.1": {Value: "192.168.1.1", Type: gosnmp.IPAddress},

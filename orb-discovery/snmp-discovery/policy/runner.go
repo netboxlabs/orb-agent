@@ -374,7 +374,7 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 		return false
 	}
 
-	_, err = snmpClient.Walk(defaultSNMPProbeOID, 0)
+	_, err = snmpClient.Walk(ctx, defaultSNMPProbeOID, 0)
 	if err == nil {
 		return true
 	}
@@ -576,7 +576,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// bounded by snmpTimeout (set on the SNMP client), so it is not a permanent leak.
 	resultCh := make(chan walkResult, 1)
 	go func() {
-		oids, err := host.Walk(genericOIDs)
+		oids, err := host.Walk(ctx, genericOIDs)
 		resultCh <- walkResult{oids, err}
 	}()
 
@@ -616,7 +616,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				"host", targetHost, "vendor", vendor, "oid_count", len(vendorOIDs))
 			vendorCh := make(chan walkResult, 1)
 			go func() {
-				out, err := host.Walk(vendorOIDs)
+				out, err := host.Walk(ctx, vendorOIDs)
 				vendorCh <- walkResult{out, err}
 			}()
 			select {
