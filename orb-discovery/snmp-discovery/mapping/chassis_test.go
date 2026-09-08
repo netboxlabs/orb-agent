@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -2198,4 +2199,54 @@ func TestCollectDescendantIDs_TerminatesOnContainmentCycle(t *testing.T) {
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
 	assert.NotPanics(t, func() { collectDescendantIDsFrom(members, oids, children) })
 	assert.Equal(t, []int{1}, members[0].DescendantIDs)
+}
+
+// TestMultiChassisWalk pins that the signal comes from what the device
+// reported, not from what could be modelled out of it. extractInventory
+// applies containment and numbering filters and can end up with no usable
+// members at all; this must still say the walk described several chassis,
+// because that is what makes a target's netbox_id unattributable.
+func TestMultiChassisWalk(t *testing.T) {
+	t.Run("two chassis rows", func(t *testing.T) {
+		assert.True(t, MultiChassisWalk(fixtureCisco3850TwoMemberStack()))
+	})
+
+	t.Run("numbering refused, still multi-chassis", func(t *testing.T) {
+		// Duplicate positive parentRelPos, uninformative names and no port
+		// descendants: every row is refused, so nothing can be modelled.
+		oids := ObjectIDValueMap{".1.3.6.1.2.1.1.5.0": {Value: "refused.example"}}
+		for _, m := range []struct{ idx, serial string }{
+			{"201001", "SN0000000201"},
+			{"101001", "SN0000000101"},
+		} {
+			oids[".1.3.6.1.2.1.47.1.1.1.1.4."+m.idx] = Value{Value: "0"}
+			oids[".1.3.6.1.2.1.47.1.1.1.1.5."+m.idx] = Value{Value: "3"}
+			oids[".1.3.6.1.2.1.47.1.1.1.1.6."+m.idx] = Value{Value: "1"}
+			oids[".1.3.6.1.2.1.47.1.1.1.1.7."+m.idx] = Value{Value: "Chassis"}
+			oids[".1.3.6.1.2.1.47.1.1.1.1.11."+m.idx] = Value{Value: m.serial}
+		}
+		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+		require.Empty(t, extractInventory(oids, logger).Members,
+			"precondition: the translator must refuse this walk")
+		assert.True(t, MultiChassisWalk(oids),
+			"a refused stack still described several chassis")
+	})
+
+	t.Run("single chassis row", func(t *testing.T) {
+		assert.False(t, MultiChassisWalk(fixtureSingleMemberWrappedStack()))
+	})
+
+	t.Run("no chassis rows", func(t *testing.T) {
+		assert.False(t, MultiChassisWalk(ObjectIDValueMap{
+			".1.3.6.1.2.1.1.5.0": {Value: "router-1"},
+		}))
+	})
+
+	t.Run("non-chassis classes are not counted", func(t *testing.T) {
+		assert.False(t, MultiChassisWalk(ObjectIDValueMap{
+			// Stack container (11) plus a module (9): neither is a chassis.
+			".1.3.6.1.2.1.47.1.1.1.1.5.1": {Value: "11"},
+			".1.3.6.1.2.1.47.1.1.1.1.5.2": {Value: "9"},
+		}))
+	})
 }

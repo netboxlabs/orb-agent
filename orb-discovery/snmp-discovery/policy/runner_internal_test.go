@@ -283,7 +283,7 @@ func TestQueryTargetContextAlreadyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.Canceled)
@@ -300,7 +300,7 @@ func TestQueryTargetContextTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -322,7 +322,7 @@ func TestQueryTargetWalkError(t *testing.T) {
 		return &testWalker{walkErr: walkErr}, nil
 	}, entries)
 
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, walkErr)
@@ -341,7 +341,7 @@ func TestQueryTargetSuccess(t *testing.T) {
 	}
 	runner := queryTargetRunner(snmp.NewFakeSNMPWalker, entries)
 
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	require.NoError(t, err)
 	assert.NotEmpty(t, entities)
 }
@@ -421,7 +421,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -585,7 +585,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 	// between scans.
 	t.Run("IPv4 target -> PrimaryIp4", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+		entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -606,7 +606,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 
 	t.Run("IPv6 target -> PrimaryIp6", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
+		entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -793,7 +793,7 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -937,7 +937,7 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, chassisEntries())
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -1012,7 +1012,7 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	// Use NetboxID=42 on the target so we can verify source_match on master.
 	netboxID := 42
 	target := config.Target{Host: "192.0.2.1", Port: 161, NetboxID: &netboxID}
-	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), target)
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -1510,4 +1510,84 @@ func TestRunWithMetadata_StandaloneKeepsNetboxID(t *testing.T) {
 	sm, ok := master.Metadata["source_match"].(diode.Metadata)
 	require.True(t, ok, "a standalone target must still be pinned by netbox_id")
 	assert.Equal(t, netboxID, sm["netbox_id"])
+}
+
+// refusedStackWalkerFactory serves a walk that reports two chassis rows and
+// then contradicts itself about how they are numbered: both claim
+// entPhysicalParentRelPos 1 and both are named "Chassis", with no port
+// descendants to number them from either. TranslateAsStack refuses to guess
+// a numbering it cannot derive, so it emits a plain master with a serial and
+// no virtual chassis or members at all.
+func refusedStackWalkerFactory() snmp.ClientFactory {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "ambiguous-stack", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1":    {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.4.1000": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1":    {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.5.1000": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			// The contradiction: the same position on both chassis rows.
+			"1.3.6.1.2.1.47.1.1.1.1.6": {
+				".1.3.6.1.2.1.47.1.1.1.1.6.1":    {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.6.1000": {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			// Uninformative names: no trailing integer to number them by.
+			"1.3.6.1.2.1.47.1.1.1.1.7": {
+				".1.3.6.1.2.1.47.1.1.1.1.7.1":    {Value: "Chassis", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.7.1000": {Value: "Chassis", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1":    {Value: "FCW2147L0K3", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.11.1000": {Value: "FCW2147L0K4", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+}
+
+// TestRunWithMetadata_RefusedStackWithheldNetboxID covers the case the
+// emitted entities cannot describe.
+//
+// When a device contradicts itself about member numbering, no virtual
+// chassis and no member Devices are emitted, so the batch is shaped exactly
+// like a standalone device. The walk still described several NetBox devices
+// though, and the target's netbox_id is no more attributable to one of them
+// than on a stack that translated cleanly: two targets would still point the
+// same master at two different rows. The signal therefore has to come from
+// the walk, not from what could be modelled out of it.
+func TestRunWithMetadata_RefusedStackWithheldNetboxID(t *testing.T) {
+	runner, client := runWithMetadataRunner(t, refusedStackWalkerFactory(), chassisEntries())
+	netboxID := 42
+	runner.runWithMetadata(config.Target{Host: "192.0.2.13", Port: 161, NetboxID: &netboxID}, "")
+
+	require.Equal(t, 1, client.ingested)
+	batch := client.lastBatch()
+	require.NotEmpty(t, batch)
+
+	// Precondition: this really is the refused path, not an ordinary stack.
+	// Without it the test could pass on the emittedStack branch and prove
+	// nothing about the walk-derived signal.
+	for _, e := range batch {
+		_, isVC := e.(*diode.VirtualChassis)
+		assert.False(t, isVC, "a refused stack must emit no virtual chassis")
+		if d, ok := e.(*diode.Device); ok {
+			assert.Nil(t, d.VcPosition, "a refused stack must emit no members")
+		}
+	}
+
+	master := masterOf(batch)
+	require.NotNil(t, master)
+	require.NotNil(t, master.Serial, "the master still carries the serial the device reported")
+
+	_, hasSM := master.Metadata["source_match"]
+	assert.False(t, hasSM,
+		"a walk describing several chassis must not pin its master, even when the stack could not be modelled")
 }

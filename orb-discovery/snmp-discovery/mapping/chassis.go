@@ -1207,3 +1207,35 @@ func routeInterface(
 	}
 	return id
 }
+
+// MultiChassisWalk reports whether the walk carried more than one
+// ENTITY-MIB chassis row, before any member-numbering validation.
+//
+// TranslateAsStack refuses to emit a virtual chassis when a device
+// contradicts itself about member numbering, and returns a plain master
+// Device with a serial and nothing else. That output is indistinguishable
+// from a genuine standalone device, but the walk still described several
+// NetBox devices, so a target's netbox_id is no more attributable to one
+// of them than on a stack that translated cleanly. Callers that must not
+// act on a single-device assumption ask the walk rather than the emitted
+// entities.
+//
+// Counts the same rows extractInventory starts from, deliberately without
+// its containment and numbering filters: the question here is what the
+// device reported, not what could be modelled from it.
+func MultiChassisWalk(oids ObjectIDValueMap) bool {
+	seen := 0
+	for oid, v := range oids {
+		if !strings.HasPrefix(oid, oidEntPhysicalClass) {
+			continue
+		}
+		if strings.TrimSpace(v.Value) != entPhysicalClassChassis {
+			continue
+		}
+		seen++
+		if seen > 1 {
+			return true
+		}
+	}
+	return false
+}
