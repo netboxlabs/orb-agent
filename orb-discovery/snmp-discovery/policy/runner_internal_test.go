@@ -1323,3 +1323,69 @@ func TestProbeAuthenticationBuildsARealClient(t *testing.T) {
 		})
 	}
 }
+
+// TestNewRunner_NormalizesStackMemberTemplate pins that the template is
+// vetted once when the policy is loaded, not per member per poll. A bad
+// template is an operator mistake to fix, and a warning repeated on every
+// scan of every stack is one nobody reads.
+//
+// It also pins that an unusable template never costs discovery: it falls
+// back to the shipped naming rather than failing the policy.
+func TestNewRunner_NormalizesStackMemberTemplate(t *testing.T) {
+	newRunner := func(t *testing.T, policyTmpl string, overrideTmpl *string) *Runner {
+		t.Helper()
+		target := config.Target{Host: "192.0.2.1", Port: 161}
+		if overrideTmpl != nil {
+			target.OverrideDefaults = &config.Defaults{StackMemberNameTemplate: *overrideTmpl}
+		}
+		pol := config.Policy{
+			Config: config.PolicyConfig{
+				Timeout:  120,
+				Defaults: config.Defaults{StackMemberNameTemplate: policyTmpl},
+			},
+			Scope: config.Scope{Targets: []config.Target{target}},
+		}
+		runner, err := NewRunner(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)),
+			"test-policy", pol, nil, snmp.NewFakeSNMPWalker, &config.Mapping{}, nil, nil, NewRunStore())
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = runner.Stop() })
+		return runner
+	}
+
+	t.Run("a usable template survives", func(t *testing.T) {
+		r := newRunner(t, "{name}-css{id}", nil)
+		assert.Equal(t, "{name}-css{id}", r.config.Defaults.StackMemberNameTemplate)
+	})
+
+	t.Run("an unusable one falls back", func(t *testing.T) {
+		r := newRunner(t, "{name}-{bogus}", nil)
+		assert.Equal(t, config.DefaultStackMemberTemplate, r.config.Defaults.StackMemberNameTemplate,
+			"a naming preference must not cost discovery")
+	})
+
+	t.Run("unset means the shipped naming", func(t *testing.T) {
+		r := newRunner(t, "", nil)
+		assert.Equal(t, config.DefaultStackMemberTemplate, r.config.Defaults.StackMemberNameTemplate)
+	})
+
+	t.Run("an override_defaults template is vetted too", func(t *testing.T) {
+		bad := "{id}-only"
+		r := newRunner(t, "{name}-css{id}", &bad)
+		require.NotNil(t, r.scope.Targets[0].OverrideDefaults)
+		assert.Equal(t, config.DefaultStackMemberTemplate,
+			r.scope.Targets[0].OverrideDefaults.StackMemberNameTemplate,
+			"a per-target template reaches the renderer the same way and needs the same vetting")
+
+		// And the merge still prefers the override over the policy value.
+		merged := config.MergeDefaults(&r.config.Defaults, r.scope.Targets[0].OverrideDefaults)
+		assert.Equal(t, config.DefaultStackMemberTemplate, merged.StackMemberNameTemplate)
+	})
+
+	t.Run("an unset override leaves the policy template in place", func(t *testing.T) {
+		empty := ""
+		r := newRunner(t, "{name}-css{id}", &empty)
+		merged := config.MergeDefaults(&r.config.Defaults, r.scope.Targets[0].OverrideDefaults)
+		assert.Equal(t, "{name}-css{id}", merged.StackMemberNameTemplate,
+			"an empty override must not clear the policy-level template")
+	})
+}
