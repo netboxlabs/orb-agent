@@ -23,9 +23,16 @@ var stackTemplateToken = regexp.MustCompile(`\{([^{}]*)\}`)
 // RenderStackMemberName renders a member name by bounded token replacement.
 //
 // Deliberately not a format string: an operator template is data, and the
-// only substitutions it can ask for are the two placeholders below. This
-// mirrors device-discovery's renderer, which avoids str.format for the same
-// reason, so a template that behaves one way there behaves the same here.
+// only substitutions it can ask for are the two placeholders below.
+//
+// Substitution is single-pass, so a value put in by one placeholder is never
+// itself expanded. device-discovery chains two str.replace calls instead,
+// which does re-expand: a stack whose sysName is the literal "{id}" renders
+// as "2-2" there and "{id}-2" here. Single-pass is the correct reading —
+// otherwise a device's own sysName can inject a placeholder — so the bug is
+// not copied for the sake of matching. The two agree for every name that
+// does not itself contain a placeholder token, which is the parity that
+// matters in practice.
 // An empty template means the caller expressed no preference, and is
 // resolved here rather than at each call site: this is the one point every
 // member name passes through, and a caller that forgot would otherwise emit

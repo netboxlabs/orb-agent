@@ -21,8 +21,10 @@ func TestRenderStackMemberName(t *testing.T) {
 	// Device, which NetBox could not match on at all.
 	assert.Equal(t, "core-sw-2", config.RenderStackMemberName("", "core-sw", 2))
 
-	// Substitution is textual and one-pass: a name that itself looks like a
-	// placeholder is data, not a template.
+	// Substitution is single-pass: a name that itself looks like a
+	// placeholder is data, not a template. This is the one input where this
+	// backend and device-discovery differ, deliberately — see the renderer's
+	// comment. device-discovery chains replaces and renders "2-2" here.
 	assert.Equal(t, "{id}-2", config.RenderStackMemberName("{name}-{id}", "{id}", 2),
 		"a substituted value is never itself expanded")
 }
