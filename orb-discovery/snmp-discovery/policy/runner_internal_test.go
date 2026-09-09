@@ -1643,32 +1643,35 @@ func walkerWith(base snmp.ClientFactory, extra map[string]map[string]snmp.PDU) s
 	}
 }
 
-// TestQueryTarget_StackDoesNotClaimTargetAddressAsPrimaryIP is the second
-// route to the same misattribution.
+// TestQueryTarget_StackClaimsTargetAddressAsMasterPrimaryIP pins a
+// deliberate assumption rather than something the walk establishes.
 //
-// primary IP is a unique NetBox device matcher, ahead of name. Where the
-// polled address is a member's primary IP in NetBox, putting it on the
-// emitted master lets that master resolve to the member's row and be
-// treated as the chassis master, exactly as a mis-targeted netbox_id would.
-// The walk gives no grounds to say which member owns the address, so the
-// claim is not made.
-func TestQueryTarget_StackDoesNotClaimTargetAddressAsPrimaryIP(t *testing.T) {
+// Management addresses sit on an SVI, which belongs to the stack rather
+// than to any member, so nothing in the walk says which member owns the
+// address we reached. It is attributed to the master anyway, because that
+// holds for how a stack is normally reached and refusing it would cost
+// every correctly-targeted stack its master's primary IP and matcher.
+//
+// The requirement that falls out -- target the member the stack is
+// mastered on, which is the lowest member id -- is documented. This test
+// exists so that assumption is visible in the code rather than implied by
+// its absence.
+func TestQueryTarget_StackClaimsTargetAddressAsMasterPrimaryIP(t *testing.T) {
 	runner := queryTargetRunner(walkerWith(stackWalkerFactory(), mgmtAddressPDUs("10.0.0.1")), ipEntries())
 	entities, hits, multiChassis, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
-	assert.True(t, multiChassis, "precondition: this walk must describe several chassis")
+	assert.True(t, multiChassis, "precondition: this walk describes several chassis")
 
 	master := masterOf(entities)
 	require.NotNil(t, master)
-	assert.Nil(t, master.PrimaryIp4,
-		"a stack master must not claim the polled address: the walk cannot say which member owns it")
-	assert.Empty(t, hits, "no cycle-closer either, since nothing was claimed")
+	require.NotNil(t, master.PrimaryIp4,
+		"the polled address is attributed to the master on a stack too")
+	assert.NotEmpty(t, hits, "and is recorded as the cycle-closer")
 }
 
-// TestQueryTarget_StandaloneStillClaimsTargetAddressAsPrimaryIP is the
-// control. The claim is withheld only where it cannot be supported; a
-// single-device target is unambiguous and must keep working.
-func TestQueryTarget_StandaloneStillClaimsTargetAddressAsPrimaryIP(t *testing.T) {
+// TestQueryTarget_StandaloneClaimsTargetAddressAsPrimaryIP is the
+// unambiguous case, unchanged by any of this.
+func TestQueryTarget_StandaloneClaimsTargetAddressAsPrimaryIP(t *testing.T) {
 	runner := queryTargetRunner(walkerWith(standaloneWalkerFactory(), mgmtAddressPDUs("10.0.0.1")), ipEntries())
 	entities, hits, multiChassis, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
@@ -1676,6 +1679,6 @@ func TestQueryTarget_StandaloneStillClaimsTargetAddressAsPrimaryIP(t *testing.T)
 
 	master := masterOf(entities)
 	require.NotNil(t, master)
-	require.NotNil(t, master.PrimaryIp4, "a standalone target must still get its primary IP")
-	assert.NotEmpty(t, hits, "and its cycle-closer")
+	require.NotNil(t, master.PrimaryIp4)
+	assert.NotEmpty(t, hits)
 }
