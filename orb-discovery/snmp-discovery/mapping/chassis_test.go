@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -432,7 +433,7 @@ func TestBuildMemberDevice_CarriesVcPositionAndMatcherBlock(t *testing.T) {
 	masterRef := buildMasterRef(master)
 	member := ChassisMember{ID: 2, Serial: "FCW2147L0K4", Model: "WS-C3850-12X"}
 
-	dev := buildMemberDevice(master, member, masterRef, "3850-stack")
+	dev := buildMemberDevice(master, member, masterRef, "3850-stack", "")
 
 	assert.Equal(t, "3850-stack-2", *dev.Name)
 	assert.Equal(t, "FCW2147L0K4", *dev.Serial)
@@ -472,7 +473,7 @@ func TestBuildMemberDevice_InheritsMasterLocation(t *testing.T) {
 	masterRef := buildMasterRef(master)
 	member := ChassisMember{ID: 2, Serial: "X", Model: "ModelB"}
 
-	dev := buildMemberDevice(master, member, masterRef, "stack")
+	dev := buildMemberDevice(master, member, masterRef, "stack", "")
 
 	require.NotNil(t, dev.Location, "members must inherit master.Location")
 	assert.Same(t, loc, dev.Location,
@@ -491,7 +492,7 @@ func TestBuildMemberDevice_FallsBackToMasterDeviceTypeWhenModelEmpty(t *testing.
 	masterRef := buildMasterRef(master)
 	member := ChassisMember{ID: 2, Serial: "X", Model: ""}
 
-	dev := buildMemberDevice(master, member, masterRef, "stack")
+	dev := buildMemberDevice(master, member, masterRef, "stack", "")
 	assert.Equal(t, "ModelA", *dev.DeviceType.Model,
 		"member device_type falls back to master when entPhysicalModelName is empty")
 }
@@ -507,7 +508,7 @@ func TestTranslateAsStack_StandaloneSetsSerialAndReturnsUnchangedShape(t *testin
 		".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "FOC0001"},
 	}
 
-	out := TranslateAsStack(entities, oids, nil, nil, logger)
+	out := TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	assert.Len(t, out, 2, "shape unchanged on standalone")
 	assert.Equal(t, "FOC0001", *master.Serial)
@@ -530,7 +531,7 @@ func TestTranslateAsStack_TwoMemberStackEmitsVCAndMember(t *testing.T) {
 	// No alias-table coverage in this fixture — ifName parsing drives routing.
 	ifIndexByIface := map[*diode.Interface]int{}
 
-	out := TranslateAsStack(entities, fixtureCisco3850TwoMemberStack(), ifIndexByIface, nil, logger)
+	out := TranslateAsStack(entities, fixtureCisco3850TwoMemberStack(), ifIndexByIface, nil, "", logger)
 
 	// master + VC + 1 member + 2 interfaces = 5
 	var vc *diode.VirtualChassis
@@ -595,7 +596,7 @@ func TestTranslateAsStack_CiscoStackWiseVirtual_EmitsVCAndMember(t *testing.T) {
 	entities := []diode.Entity{master, ifaceM1, ifaceM2}
 	ifIndexByIface := map[*diode.Interface]int{}
 
-	out := TranslateAsStack(entities, fixtureCiscoCat9400xStackWiseVirtual(), ifIndexByIface, nil, logger)
+	out := TranslateAsStack(entities, fixtureCiscoCat9400xStackWiseVirtual(), ifIndexByIface, nil, "", logger)
 
 	var vc *diode.VirtualChassis
 	var members []*diode.Device
@@ -658,7 +659,7 @@ func TestTranslateAsStack_DroppedMemberIfaceSkippedWithWarn(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.11.40": {Value: "S3"},
 	}
 
-	out := TranslateAsStack(entities, oids, nil, nil, logger)
+	out := TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	// Orphan (Gi2/0/1) is excluded.
 	for _, e := range out {
@@ -700,7 +701,7 @@ func TestTranslateAsStack_IPRoutedToMemberViaAssignedObject(t *testing.T) {
 	}
 	entities := []diode.Entity{master, memberIP}
 
-	out := TranslateAsStack(entities, fixtureCisco3850TwoMemberStack(), nil, nil, logger)
+	out := TranslateAsStack(entities, fixtureCisco3850TwoMemberStack(), nil, nil, "", logger)
 
 	// The IP survived and its nested Interface.Device now points at member-2.
 	var seenIP *diode.IPAddress
@@ -750,7 +751,7 @@ func TestTranslateAsStack_OrphanIPFiltered(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.11.40": {Value: "S3"},
 	}
 
-	out := TranslateAsStack(entities, oids, nil, nil, logger)
+	out := TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	for _, e := range out {
 		_, isIP := e.(*diode.IPAddress)
@@ -775,7 +776,7 @@ func TestTranslateAsStack_IndistinctChassisRowsResolvedByDescendants(t *testing.
 	memberIface := &diode.Interface{Name: strPtr("2/1/24"), Device: master}
 	entities := []diode.Entity{master, memberIface}
 
-	out := TranslateAsStack(entities, fixtureIndistinctChassisRowsStack(), nil, nil, logger)
+	out := TranslateAsStack(entities, fixtureIndistinctChassisRowsStack(), nil, nil, "", logger)
 
 	var members []*diode.Device
 	for _, e := range out {
@@ -834,7 +835,7 @@ func TestTranslateAsStack_SingleMemberWrappedStackSetsSerialOnly(t *testing.T) {
 	}
 	entities := []diode.Entity{master}
 
-	out := TranslateAsStack(entities, fixtureSingleMemberWrappedStack(), nil, nil, logger)
+	out := TranslateAsStack(entities, fixtureSingleMemberWrappedStack(), nil, nil, "", logger)
 
 	assert.Len(t, out, 1, "one chassis row emits no VirtualChassis")
 	assert.Equal(t, "SN0000000101", *master.Serial)
@@ -864,7 +865,7 @@ func TestTranslateAsStack_RefusedStackKeepsMasterSerialWithoutVirtualChassis(t *
 	master := &diode.Device{Name: strPtr("refused.example"), Site: &diode.Site{Name: strPtr("dc1")}}
 	entities := []diode.Entity{master}
 
-	out := TranslateAsStack(entities, oids, nil, nil, logger)
+	out := TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	assert.Len(t, out, 1, "refused stack emits no VirtualChassis and no member Devices")
 	require.NotNil(t, master.Serial, "the serial was never the ambiguous datum")
@@ -876,7 +877,7 @@ func TestTranslateAsStack_NoChassisRowsLeavesDeviceUntouched(t *testing.T) {
 	// may be invented here.
 	master := &diode.Device{Name: strPtr("plain.example"), Site: &diode.Site{Name: strPtr("dc1")}}
 	out := TranslateAsStack([]diode.Entity{master},
-		ObjectIDValueMap{".1.3.6.1.2.1.1.5.0": {Value: "plain.example"}}, nil, nil, slog.Default())
+		ObjectIDValueMap{".1.3.6.1.2.1.1.5.0": {Value: "plain.example"}}, nil, nil, "", slog.Default())
 	assert.Len(t, out, 1)
 	assert.Nil(t, master.Serial)
 }
@@ -896,7 +897,7 @@ func TestTranslateAsStack_IndistinctChassisRowsRouteViaAliasTable(t *testing.T) 
 	entities := []diode.Entity{master, memberIface}
 
 	out := TranslateAsStack(entities, fixtureIndistinctChassisRowsStack(),
-		map[*diode.Interface]int{memberIface: 101}, nil, logger)
+		map[*diode.Interface]int{memberIface: 101}, nil, "", logger)
 
 	assert.NotEmpty(t, out)
 	assert.Equal(t, "stack-indistinct.example-2", *memberIface.Device.Name)
@@ -915,7 +916,7 @@ func TestTranslateAsStack_JunosQFX_4MemberVC(t *testing.T) {
 	fpc2Iface := &diode.Interface{Name: strPtr("xe-2/0/0"), Device: master}
 	entities := []diode.Entity{master, fpc2Iface}
 
-	out := TranslateAsStack(entities, fixtureJunosQFX4MemberVC(), nil, nil, logger)
+	out := TranslateAsStack(entities, fixtureJunosQFX4MemberVC(), nil, nil, "", logger)
 
 	var members []*diode.Device
 	for _, e := range out {
@@ -1138,7 +1139,7 @@ func TestTranslateAsStack_Idempotent_ThroughFullMapperPipeline(t *testing.T) {
 		oids := build()
 		ents := mapper.MapObjectIDsToEntity(oids)
 		ifIdx := mapper.InterfacesByIfIndex()
-		return TranslateAsStack(ents, oids, ifIdx, nil, logger)
+		return TranslateAsStack(ents, oids, ifIdx, nil, "", logger)
 	}
 
 	a := run()
@@ -1215,7 +1216,7 @@ func TestTranslateAsStack_AliasTableDroppedMemberSkipsWithWarn(t *testing.T) {
 	}
 
 	warnLogger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	out := TranslateAsStack(entities, oids, ifIndexByIface, nil, warnLogger)
+	out := TranslateAsStack(entities, oids, ifIndexByIface, nil, "", warnLogger)
 
 	// droppedIface (Gi2/0/24, ifIndex 99 → dropped member 2) must be absent.
 	for _, e := range out {
@@ -1319,7 +1320,7 @@ func TestTranslateAsStack_StandaloneSetsAssetTag(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.15.1": {Value: "ASSET-STANDALONE"},
 	}
 
-	TranslateAsStack(entities, oids, nil, nil, logger)
+	TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	require.NotNil(t, master.AssetTag)
 	assert.Equal(t, "ASSET-STANDALONE", *master.AssetTag)
@@ -1336,7 +1337,7 @@ func TestTranslateAsStack_StandaloneDefaultsAssetTagWins(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.15.1": {Value: "WIRE-TAG"},
 	}
 
-	TranslateAsStack(entities, oids, nil, nil, logger)
+	TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	assert.Equal(t, "OPERATOR-TAG", *master.AssetTag,
 		"defaults.asset_tag must not be overwritten by entPhysicalAssetID")
@@ -1353,7 +1354,7 @@ func TestTranslateAsStack_StandaloneEmptyAssetTagLeavesUnset(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.15.1": {Value: "\x00\x00"},
 	}
 
-	TranslateAsStack(entities, oids, nil, nil, logger)
+	TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	assert.Nil(t, master.AssetTag, "NUL-only entPhysicalAssetID must leave AssetTag unset")
 }
@@ -1373,7 +1374,7 @@ func TestTranslateAsStack_StackPerMemberAssetTags(t *testing.T) {
 	oids[".1.3.6.1.2.1.47.1.1.1.1.15.1"] = Value{Value: "ASSET-M1"}
 	oids[".1.3.6.1.2.1.47.1.1.1.1.15.1000"] = Value{Value: "ASSET-M2"}
 
-	out := TranslateAsStack(entities, oids, map[*diode.Interface]int{}, nil, logger)
+	out := TranslateAsStack(entities, oids, map[*diode.Interface]int{}, nil, "", logger)
 
 	var members []*diode.Device
 	var vc *diode.VirtualChassis
@@ -1407,7 +1408,7 @@ func TestTranslateAsStack_StackDuplicateAssetTagsSuppressed(t *testing.T) {
 	oids[".1.3.6.1.2.1.47.1.1.1.1.15.1"] = Value{Value: "SAME"}
 	oids[".1.3.6.1.2.1.47.1.1.1.1.15.1000"] = Value{Value: "SAME"}
 
-	out := TranslateAsStack(entities, oids, map[*diode.Interface]int{}, nil, logger)
+	out := TranslateAsStack(entities, oids, map[*diode.Interface]int{}, nil, "", logger)
 
 	assert.Nil(t, master.AssetTag, "duplicate tag must be suppressed on master")
 	for _, e := range out {
@@ -1426,7 +1427,7 @@ func TestTranslateAsStack_StackMemberTagCollidingWithDefaultsSuppressed(t *testi
 	// the master -> must be suppressed to avoid matcher collision.
 	oids[".1.3.6.1.2.1.47.1.1.1.1.15.1000"] = Value{Value: "OPERATOR-TAG"}
 
-	out := TranslateAsStack(entities, oids, map[*diode.Interface]int{}, nil, logger)
+	out := TranslateAsStack(entities, oids, map[*diode.Interface]int{}, nil, "", logger)
 
 	assert.Equal(t, "OPERATOR-TAG", *master.AssetTag, "defaults tag preserved on master")
 	for _, e := range out {
@@ -1487,7 +1488,7 @@ func TestTranslateAsStack_StandaloneDefaultsTagAgreement(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.15.1": {Value: "OPERATOR-TAG"},
 	}
 
-	TranslateAsStack(entities, oids, nil, nil, logger)
+	TranslateAsStack(entities, oids, nil, nil, "", logger)
 
 	require.NotNil(t, master.AssetTag)
 	assert.Equal(t, "OPERATOR-TAG", *master.AssetTag,
@@ -1516,7 +1517,7 @@ func TestTranslateAsStack_ClaimRejectionSuppressesTag(t *testing.T) {
 		}
 		alwaysReject := func(_ string) bool { return false }
 
-		TranslateAsStack(entities, oids, nil, alwaysReject, logger)
+		TranslateAsStack(entities, oids, nil, alwaysReject, "", logger)
 
 		assert.Nil(t, master.AssetTag, "claimer returning false must suppress standalone tag")
 	})
@@ -1545,7 +1546,7 @@ func TestTranslateAsStack_ClaimRejectionSuppressesTag(t *testing.T) {
 		// Claimer allows ASSET-M1 but rejects ASSET-M2.
 		rejectM2 := func(tag string) bool { return tag != "ASSET-M2" }
 
-		out := TranslateAsStack(entities, oids, nil, rejectM2, logger)
+		out := TranslateAsStack(entities, oids, nil, rejectM2, "", logger)
 
 		// master (lowest id = 1) must carry ASSET-M1.
 		require.NotNil(t, master.AssetTag, "master tag must be set when claimer allows it")
@@ -1587,7 +1588,7 @@ func TestTranslateAsStack_DefaultsTagRegisteredWithClaimer(t *testing.T) {
 			return true
 		}
 
-		TranslateAsStack(entities, oids, nil, recorder, logger)
+		TranslateAsStack(entities, oids, nil, recorder, "", logger)
 
 		assert.Contains(t, claimed, "OPERATOR-TAG", "defaults tag must be registered with the claimer")
 		assert.Equal(t, "OPERATOR-TAG", *master.AssetTag, "defaults tag stays on the device")
@@ -1602,7 +1603,7 @@ func TestTranslateAsStack_DefaultsTagRegisteredWithClaimer(t *testing.T) {
 			return true
 		}
 
-		TranslateAsStack(entities, ObjectIDValueMap{}, nil, recorder, logger)
+		TranslateAsStack(entities, ObjectIDValueMap{}, nil, recorder, "", logger)
 
 		assert.Contains(t, claimed, "OPERATOR-TAG",
 			"defaults tag must be registered even when the device exposes no chassis rows")
@@ -1613,7 +1614,7 @@ func TestTranslateAsStack_DefaultsTagRegisteredWithClaimer(t *testing.T) {
 		entities := []diode.Entity{master}
 		alwaysReject := func(_ string) bool { return false }
 
-		TranslateAsStack(entities, ObjectIDValueMap{}, nil, alwaysReject, logger)
+		TranslateAsStack(entities, ObjectIDValueMap{}, nil, alwaysReject, "", logger)
 
 		assert.Equal(t, "OPERATOR-TAG", *master.AssetTag,
 			"operator-supplied defaults tag is never stripped; the claimer's warn covers the conflict")
@@ -1657,7 +1658,7 @@ func TestTranslateAsStack_ZeroBasedParentRelStack(t *testing.T) {
 	}
 	entities := []diode.Entity{master}
 
-	out := TranslateAsStack(entities, fixtureZeroBasedParentRelWrappedStack(), nil, nil, logger)
+	out := TranslateAsStack(entities, fixtureZeroBasedParentRelWrappedStack(), nil, nil, "", logger)
 
 	var vc *diode.VirtualChassis
 	var members []*diode.Device
@@ -2198,4 +2199,54 @@ func TestCollectDescendantIDs_TerminatesOnContainmentCycle(t *testing.T) {
 	members := []ChassisMember{{EntPhysicalIndex: "100"}, {EntPhysicalIndex: "200"}}
 	assert.NotPanics(t, func() { collectDescendantIDsFrom(members, oids, children) })
 	assert.Equal(t, []int{1}, members[0].DescendantIDs)
+}
+
+// TestTranslateAsStack_MemberNameTemplate covers the end the operator sees:
+// a custom template renames the member Devices and nothing else.
+//
+// The template is what lets discovery land on members an operator
+// pre-created under their own convention, since NetBox matches a member by
+// name + site ahead of virtual_chassis + vc_position.
+func TestTranslateAsStack_MemberNameTemplate(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	build := func(tmpl string) (master *diode.Device, members []*diode.Device, vc *diode.VirtualChassis) {
+		master = &diode.Device{Name: strPtr("3850-stack"), Site: &diode.Site{Name: strPtr("dc1")}}
+		out := TranslateAsStack([]diode.Entity{master}, fixtureCisco3850TwoMemberStack(), nil, nil, tmpl, logger)
+		for _, e := range out {
+			switch v := e.(type) {
+			case *diode.Device:
+				if v.VcPosition != nil {
+					members = append(members, v)
+				}
+			case *diode.VirtualChassis:
+				vc = v
+			}
+		}
+		return master, members, vc
+	}
+
+	t.Run("custom template renames members", func(t *testing.T) {
+		master, members, vc := build("{name}-css{id}")
+		require.Len(t, members, 1)
+		require.NotNil(t, members[0].Name)
+		assert.Equal(t, "3850-stack-css2", *members[0].Name)
+
+		// The master and the chassis keep the discovered name. Templating
+		// the master is device-discovery's behaviour, not this backend's,
+		// and changing it here would rename every existing stack master.
+		require.NotNil(t, master.Name)
+		assert.Equal(t, "3850-stack", *master.Name, "the master is not templated")
+		require.NotNil(t, vc)
+		require.NotNil(t, vc.Name)
+		assert.Equal(t, "3850-stack", *vc.Name, "nor is the virtual chassis")
+	})
+
+	t.Run("empty template keeps the shipped naming", func(t *testing.T) {
+		_, members, _ := build("")
+		require.Len(t, members, 1)
+		require.NotNil(t, members[0].Name)
+		assert.Equal(t, "3850-stack-2", *members[0].Name,
+			"an operator who sets nothing must see no change")
+	})
 }

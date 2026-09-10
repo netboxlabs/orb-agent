@@ -101,6 +101,20 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	runner.scope = policy.Scope
 	runner.config = policy.Config
 
+	// Normalised once per policy rather than per member per poll: a bad
+	// template is an operator mistake to fix, and a warning repeated on
+	// every scan of every stack is one nobody reads. Every consumer
+	// downstream then reads a template already known to be usable.
+	runner.config.Defaults.StackMemberNameTemplate = config.NormalizeStackMemberTemplate(
+		runner.config.Defaults.StackMemberNameTemplate, logger)
+	for i := range runner.scope.Targets {
+		od := runner.scope.Targets[i].OverrideDefaults
+		if od == nil || od.StackMemberNameTemplate == "" {
+			continue
+		}
+		od.StackMemberNameTemplate = config.NormalizeStackMemberTemplate(od.StackMemberNameTemplate, logger)
+	}
+
 	expandedTargetGroups := runner.expandTargetRanges(runner.scope.Targets)
 
 	for _, group := range expandedTargetGroups {
@@ -668,7 +682,8 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
-		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)), r.logger)
+		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
+		targetDefaults.StackMemberNameTemplate, r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path

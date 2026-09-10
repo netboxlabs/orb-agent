@@ -279,6 +279,9 @@ type Defaults struct {
 	VLAN                     VLANDefaults       `yaml:"vlan,omitempty"`
 	InterfacePatterns        []InterfacePattern `yaml:"interface_patterns,omitempty"`
 	InterfaceExcludePatterns []string           `yaml:"interface_exclude_patterns,omitempty"`
+	// StackMemberNameTemplate names non-master virtual-chassis members.
+	// Empty means DefaultStackMemberTemplate; see stack_naming.go.
+	StackMemberNameTemplate string `yaml:"stack_member_name_template,omitempty"`
 }
 
 // mergeVrfParameters overlays non-zero override fields onto dst in place.
@@ -322,6 +325,9 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.AssetTag != "" {
 		merged.AssetTag = overrideDefaults.AssetTag
+	}
+	if overrideDefaults.StackMemberNameTemplate != "" {
+		merged.StackMemberNameTemplate = overrideDefaults.StackMemberNameTemplate
 	}
 	mergeTenantParameters(&merged.Tenant, &overrideDefaults.Tenant)
 	if len(overrideDefaults.Tags) > 0 {
