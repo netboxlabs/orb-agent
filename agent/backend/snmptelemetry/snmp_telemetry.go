@@ -403,6 +403,7 @@ func (d *snmpTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "snmp-telemetry",
 		NameUnderscore: "snmp_telemetry",
 		Exec:           d.exec,

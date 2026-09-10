@@ -213,6 +213,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "snmp-discovery",
 		NameUnderscore: "snmp_discovery",
 		Exec:           d.exec,
