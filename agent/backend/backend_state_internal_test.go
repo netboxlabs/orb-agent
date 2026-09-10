@@ -1,0 +1,115 @@
+package backend
+
+import (
+	"log/slog"
+	"os"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
+)
+
+// countingBackend reports a fixed status and counts how often it is asked.
+type countingBackend struct {
+	Backend
+	status  RunningStatus
+	started time.Time
+	polls   atomic.Int32
+}
+
+func (c *countingBackend) GetInitialState() RunningStatus { return Running }
+func (c *countingBackend) GetStartTime() time.Time        { return c.started }
+func (c *countingBackend) GetRunningStatus() (RunningStatus, string, error) {
+	c.polls.Add(1)
+	return c.status, "", nil
+}
+
+// installTickSeam replaces newMonitorTicker with a fake that hands each call
+// its own unbuffered channel, recorded in order, so a test can drive ticks by
+// hand instead of waiting on a real ticker. The real seam is restored in
+// t.Cleanup; the returned pointer reflects channels recorded after the call.
+func installTickSeam(t *testing.T) *[]chan time.Time {
+	t.Helper()
+	orig := newMonitorTicker
+	channels := make([]chan time.Time, 0)
+	newMonitorTicker = func(_ time.Duration) (<-chan time.Time, func()) {
+		ch := make(chan time.Time)
+		channels = append(channels, ch)
+		return ch, func() {}
+	}
+	t.Cleanup(func() { newMonitorTicker = orig })
+	return &channels
+}
+
+func newTestManager(t *testing.T, restartChan chan string) *stateManager {
+	t.Helper()
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	return NewStateManager("fleet", logger, restartChan, repo).(*stateManager)
+}
+
+// sendTick delivers one tick on ch, failing the test if the monitor is not
+// ready to receive it.
+func sendTick(t *testing.T, ch chan time.Time) {
+	t.Helper()
+	select {
+	case ch <- time.Now():
+	case <-time.After(time.Second):
+		t.Fatal("monitor did not receive the tick in time")
+	}
+}
+
+// A monitor whose restart request cannot be delivered must not hold the
+// state lock while it waits: heartbeats read that lock, and a full channel
+// would freeze them. The request is dropped and logged instead.
+func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
+	channels := installTickSeam(t)
+	restartChan := make(chan string, 1)
+	restartChan <- "already-queued"
+	manager := newTestManager(t, restartChan)
+	be := &countingBackend{status: BackendError, started: time.Now().Add(-2 * MinRestartTime)}
+	manager.StartBackendMonitor("unhealthy", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	sendTick(t, tick)
+	// The second tick only arrives once the monitor has looped back to wait
+	// for it, which requires the first iteration's restart attempt to have
+	// returned; a monitor stuck holding the lock on the full channel would
+	// never get here.
+	sendTick(t, tick)
+
+	done := make(chan struct{})
+	go func() { manager.Get(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Get() blocked behind a monitor waiting on the restart channel")
+	}
+}
+
+// Each monitor gets its own tick source from newMonitorTicker, so adding a
+// backend does not slow the polling of the others.
+func TestEachMonitorHasItsOwnTickSource(t *testing.T) {
+	channels := installTickSeam(t)
+	manager := newTestManager(t, make(chan string, 10))
+	first := &countingBackend{status: Running, started: time.Now()}
+	second := &countingBackend{status: Running, started: time.Now()}
+	manager.StartBackendMonitor("first", first)
+	manager.StartBackendMonitor("second", second)
+
+	require.Len(t, *channels, 2, "each monitor must call newMonitorTicker for its own channel")
+	firstTicks, secondTicks := (*channels)[0], (*channels)[1]
+
+	for i := 0; i < 3; i++ {
+		sendTick(t, firstTicks)
+	}
+	sendTick(t, secondTicks)
+
+	require.Eventually(t, func() bool { return first.polls.Load() == 3 }, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool { return second.polls.Load() == 1 }, time.Second, time.Millisecond)
+}

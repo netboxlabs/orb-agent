@@ -16,6 +16,13 @@ const MinRestartTime = 5 * time.Minute
 // BackendMonitorInterval is the interval at which to monitor backends
 const BackendMonitorInterval = 10 * time.Second
 
+// newMonitorTicker is a seam for tests: production code gets a real ticker,
+// tests install a function that hands back a channel they control.
+var newMonitorTicker = func(interval time.Duration) (<-chan time.Time, func()) {
+	t := time.NewTicker(interval)
+	return t.C, t.Stop
+}
+
 // StateRetriever provides an interface for accessing backend state information
 type StateRetriever interface {
 	Get() map[string]*State
@@ -33,7 +40,6 @@ type StateManager interface {
 type stateManager struct {
 	backendState       map[string]*State
 	mu                 sync.RWMutex
-	ticker             *time.Ticker
 	logger             *slog.Logger
 	restartBackendChan chan string
 	policyRepo         policies.PolicyRepo
@@ -44,7 +50,6 @@ func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackend
 	if configMgrSupportsStateMonitoring(activeConfigMgr) {
 		return &stateManager{
 			backendState:       make(map[string]*State),
-			ticker:             time.NewTicker(BackendMonitorInterval),
 			logger:             logger,
 			restartBackendChan: restartBackendChan,
 			policyRepo:         policyRepo,
@@ -80,10 +85,16 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	}
 	manager.mu.Unlock()
 
+	ticks, stop := newMonitorTicker(BackendMonitorInterval)
 	go func() {
-		for range manager.ticker.C {
-			manager.mu.Lock()
+		defer stop()
+		for range ticks {
+			// The status call is an HTTP request for several backends, so it runs
+			// outside the lock; a RegisterError landing between this read and the
+			// write below is overwritten until the next tick, which is accepted.
 			backendStatus, errMsg, err := be.GetRunningStatus()
+			restart := false
+			manager.mu.Lock()
 			manager.backendState[name].Status = backendStatus
 			if backendStatus != Running {
 				if err != nil {
@@ -91,19 +102,28 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 				} else if errMsg != "" {
 					manager.backendState[name].LastError = errMsg
 				}
-
 				// status is not running so we have a current error
 				if time.Since(be.GetStartTime()) >= MinRestartTime {
-					manager.restartBackendChan <- name
-					if err != nil {
-						manager.logger.Error("failed to restart backend", "error", err, "backend", name)
-					}
+					restart = true
 				} else {
 					remainingSecondsUntilRestart := MinRestartTime - time.Since(be.GetStartTime())
-					manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart)
+					manager.logger.Info("waiting to attempt backend restart due to failed status", "remaining_secs", remainingSecondsUntilRestart, "backend", name)
 				}
 			}
 			manager.mu.Unlock()
+
+			if restart {
+				// Outside the lock, and never blocking: a consumer that has
+				// fallen behind must not freeze every reader of the state.
+				select {
+				case manager.restartBackendChan <- name:
+				default:
+					manager.logger.Debug("restart already queued for this backend, request dropped until the next tick", "backend", name)
+				}
+				if err != nil {
+					manager.logger.Error("failed to read backend status", "error", err, "backend", name)
+				}
+			}
 
 			// Poll policy status if backend supports it
 			if provider, ok := be.(PolicyStatusProvider); ok && manager.policyRepo != nil {
@@ -123,16 +143,22 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	}()
 }
 
-// RegisterError registers an error for a backend and updates its state
+// RegisterError records a failure on a backend's entry. A new entry is
+// stamped with the time, as before, since the failure is the first thing
+// known about the backend; an existing one keeps its restart count, time
+// and reason, which belong to RegisterRestart, so a failed retry does not
+// erase the restarts before it.
 func (manager *stateManager) RegisterError(name string, errMessage string) {
 	manager.logger.Error(errMessage, "backend", name)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	manager.backendState[name] = &State{
-		Status:        BackendError,
-		LastError:     errMessage,
-		LastRestartTS: time.Now(),
+	state, ok := manager.backendState[name]
+	if !ok {
+		state = &State{LastRestartTS: time.Now()}
+		manager.backendState[name] = state
 	}
+	state.Status = BackendError
+	state.LastError = errMessage
 }
 
 // RegisterRestart registers a restart event for a backend
