@@ -8,6 +8,24 @@ The network discovery backend uses [Diode Go SDK](https://github.com/netboxlabs/
 
 IP addresses support VRF, Tenant, Role, Description, Comments and Tags via `defaults`.
 
+The name a reverse lookup returns for an address becomes the IP's `dns_name`,
+lowercased. NetBox accepts only letters, digits, hyphens and underscores in a
+label. nmap, which does the lookup, prints an asterisk in place of any
+character it will not pass, a space inside a DNS label for instance, and lets
+a few others through that NetBox rejects; every such character becomes a
+hyphen, so a name nmap printed as `abc1234-vendor*model*unit.example.net`
+arrives as `abc1234-vendor-model-unit.example.net`. A name with no form
+NetBox accepts, one with an empty label, longer than 255 characters or left
+with no letter or digit, is left off; the address is still sent, and a
+`dns_name` NetBox already holds for it stays as it is. In either case the
+name as nmap gave it is kept under `hostnames` in the IP's comments, unless
+the policy sets `defaults.comments`, which the backend does not add to. A
+name that needed no change is not recorded, so this changes nothing in the
+comments of an IP whose name was already acceptable. Each run logs how many
+names it replaced or left off. A name that was already accepted with an
+asterisk, which NetBox allows as a leading wildcard label, changes on the
+next run, since nmap's asterisk never marks a wildcard.
+
 ## Configuration
 The `network_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
