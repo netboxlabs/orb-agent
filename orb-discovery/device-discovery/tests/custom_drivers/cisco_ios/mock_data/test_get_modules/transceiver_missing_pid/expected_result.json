@@ -12,11 +12,26 @@
             "type": "transceiver",
             "sub_bays": []
           }
+        },
+        {
+          "name": "TenGigabitEthernet1/0/7",
+          "position": "TenGigabitEthernet1/0/7",
+          "module": {
+            "model": "10/100/1000BaseTX SFP",
+            "serial": "OPT0003007",
+            "description": "10/100/1000BaseTX SFP",
+            "type": "transceiver",
+            "sub_bays": [],
+            "identified": false
+          }
         }
       ],
       "interfaces_by_bay": {
         "TenGigabitEthernet1/0/1": [
           "TenGigabitEthernet1/0/1"
+        ],
+        "TenGigabitEthernet1/0/7": [
+          "TenGigabitEthernet1/0/7"
         ]
       }
     }

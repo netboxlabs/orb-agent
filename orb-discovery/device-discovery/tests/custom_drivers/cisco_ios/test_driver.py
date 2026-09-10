@@ -555,21 +555,6 @@ class TestIOSDriver(BaseDriverTest):
         m2_slot1 = result["members"][2]["interfaces_by_bay"].get("1", [])
         assert "HundredGigabitEthernet2/1/0/1" in m2_slot1
 
-    def test_get_modules_warns_on_transceiver_with_no_pid(self, caplog) -> None:
-        """An unidentified optic is skipped, but says so."""
-        import logging
-
-        mock_dir = self.mock_data_root / "test_get_modules" / "transceiver_missing_pid"
-        driver = self._build_driver(mock_dir)
-
-        with caplog.at_level(logging.WARNING):
-            driver.get_modules()
-
-        assert any(
-            "Te1/0/7" in r.getMessage() and "no PID" in r.getMessage()
-            for r in caplog.records
-        ), "the skipped optic must be named in a warning"
-
     def test_get_modules_declines_promotion_onto_unusable_fru_row(self, caplog) -> None:
         """
         A claimed-but-unusable ``Switch N FRU Uplink Module M`` slot is not promoted.

@@ -351,15 +351,27 @@ resolves, and promote the rest with `orphan_optic_bay(ifname, optic)` (imported
 directly from `custom_napalm._modules`). Gate on "no bays AND no optics", never on
 "no bays" alone.
 
-**Promote only a row that is already a transceiver with BOTH a model and a serial.**
-This precondition is what keeps promotion safe, and it is not optional. It means the
-change is either a correct fix or a no-op on hardware you cannot sample — never a
-source of invented data. Do not promote a row carrying only a serial (a DOM / cage
-reading with no PID, for instance): `_modules._validate_bay` requires only a serial,
-so such a row would survive validation and land in NetBox as
+**Promote a row only when you can name the part.** A model and a serial is the
+straightforward case. A row the device serialised but did not identify — a blank PID,
+or a placeholder such as the `Unspecified` a 2960S prints — may still be promoted
+**if it carries a description**: set `identified=False` on the `ModuleEntry` and use
+the description as the model. `_modules._validate_bay` enforces that pairing, and
+translate files the result under a generic manufacturer so it stays distinguishable
+from genuinely identified parts. See "Modules the device cannot identify" in the
+backend README.
+
+**Do not promote a row carrying only a serial** — a DOM or cage reading with no PID
+*and* no description. `_validate_bay` requires only a serial, so before the
+`identified` flag existed such a row survived validation and landed in NetBox as
 `ModuleType(model="Unknown")`, collapsing every unidentified optic across every
-device into one bogus module type. A row the device serialised but did not identify
-should be skipped with a warning naming the interface, not guessed at.
+device into one bogus module type. That collapse is still the thing to avoid, and it
+is exactly why the description rather than a placeholder stands in for the model — a
+placeholder IS the collapse. A row with neither is skipped at debug: nothing can name
+it, and there is nothing an operator could act on.
+
+Relaxing a driver's filter is per-driver work gated on real device evidence, never a
+blanket change. Only `ios` is relaxed today; `identified` defaults to `True`, so every
+other driver keeps its `pid and sn` precondition unchanged.
 
 ## Mock fakes for structured-API drivers
 

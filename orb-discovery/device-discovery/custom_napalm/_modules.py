@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,19 @@ class ModuleEntry:
     type: ModuleType
     description: str = ""
     sub_bays: list[ModuleBay] = field(default_factory=list)
+    #: False when the device could not name the part and ``model`` carries its
+    #: description instead of a part number. The driver decides, because which
+    #: field substitutes for the model is vendor knowledge; ``_validate_bay``
+    #: enforces the pairing; translate reads it to pick the manufacturer.
+    #: Defaults True, so every driver that has not been relaxed is unchanged.
+    identified: bool = True
+    #: The part's own manufacturer, when the device reports one for the part
+    #: rather than for the chassis. An optic's EEPROM names its vendor even
+    #: where the chassis inventory does not, and that vendor is not the
+    #: switch's. Empty means "use the chassis vendor", which is every driver
+    #: today. translate reads it ahead of both the device's manufacturer and
+    #: the generic one.
+    manufacturer: str = ""
 
 
 @dataclass
@@ -174,6 +187,39 @@ def to_payload(members: dict[int | None, MemberModules]) -> dict | None:
     return {"members": out_members}
 
 
+def _log_blank_model_drop(bay: ModuleBay, sub_bays: list[dict]) -> None:
+    """
+    Say why a bay carrying no model was dropped, and what went down with it.
+
+    Three cases, deliberately at two different levels. A driver that claimed it
+    named the part and did not is a bug, so it is loud: the alternative is
+    translate substituting a placeholder, and every such part across a fleet
+    then collapsing into one ModuleType under the real vendor's name. A part
+    with neither a part number nor a description has nothing to call it, which
+    is correct to skip and not something an operator can act on -- so it stays
+    at debug, unless dropping it also discards usable sub-bays, which they
+    should be told about.
+    """
+    orphaned = f", taking {len(sub_bays)} usable sub-bay(s) with it" if sub_bays else ""
+    if bay.module.identified:
+        logger.warning(
+            "module bay dropped: identified module has no model%s",
+            orphaned,
+            extra={"bay_name": bay.name},
+        )
+    elif sub_bays:
+        logger.warning(
+            "module bay dropped: nothing to name the part%s",
+            orphaned,
+            extra={"bay_name": bay.name},
+        )
+    else:
+        logger.debug(
+            "module bay dropped: nothing to name the part",
+            extra={"bay_name": bay.name},
+        )
+
+
 def _validate_bay(bay: ModuleBay, *, depth: int) -> dict | None:
     """Recursively validate one ModuleBay. Returns serialized dict or None."""
     if depth > MAX_BAY_DEPTH:
@@ -197,21 +243,44 @@ def _validate_bay(bay: ModuleBay, *, depth: int) -> dict | None:
             extra={"bay_name": bay.name},
         )
         return None
+    # Children are validated before the parent's own model check so a drop can
+    # say how much usable hardware goes with it. A parent returning None takes
+    # its sub-bays along, and an identified optic beneath an unidentified
+    # linecard would otherwise disappear without trace.
     sub_bays: list[dict] = []
     for sub in bay.module.sub_bays:
         validated_sub = _validate_bay(sub, depth=depth + 1)
         if validated_sub is not None:
             sub_bays.append(validated_sub)
+    # Trimmed because the serial is: an untrimmed model let "   " pass as a
+    # real value and defeat both checks below.
+    model = (bay.module.model or "").strip()
+    if not model:
+        _log_blank_model_drop(bay, sub_bays)
+        return None
+    module: dict[str, Any] = {
+        "model": model,
+        "serial": serial,
+        "description": bay.module.description,
+        "type": bay.module.type,
+        "sub_bays": sub_bays,
+    }
+    # Serialized only when False, so the payload is byte-identical for every
+    # module any driver emits today. 132 expected_result.json fixtures across
+    # 17 drivers deep-compare this dict; an unconditional key would rewrite all
+    # of them for a flag that is True everywhere. It is an exception marker,
+    # and consumers read it as `.get("identified", True)`.
+    if not bay.module.identified:
+        module["identified"] = False
+    # Same reasoning as `identified`: absent unless a driver actually learned
+    # the part's own vendor, so the payload every other driver emits is
+    # unchanged and the fixtures that deep-compare it stay as they are.
+    if bay.module.manufacturer.strip():
+        module["manufacturer"] = bay.module.manufacturer.strip()
     return {
         "name": bay.name,
         "position": bay.position,
-        "module": {
-            "model": bay.module.model,
-            "serial": serial,
-            "description": bay.module.description,
-            "type": bay.module.type,
-            "sub_bays": sub_bays,
-        },
+        "module": module,
     }
 
 

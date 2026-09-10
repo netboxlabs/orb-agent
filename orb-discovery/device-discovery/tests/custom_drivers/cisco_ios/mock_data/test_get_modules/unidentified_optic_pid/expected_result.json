@@ -1,1 +1,25 @@
-null
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "GigabitEthernet1/0/25",
+          "position": "GigabitEthernet1/0/25",
+          "module": {
+            "model": "1000BaseSX SFP",
+            "serial": "OPT0081025",
+            "description": "1000BaseSX SFP",
+            "type": "transceiver",
+            "sub_bays": [],
+            "identified": false
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "GigabitEthernet1/0/25": [
+          "GigabitEthernet1/0/25"
+        ]
+      }
+    }
+  }
+}

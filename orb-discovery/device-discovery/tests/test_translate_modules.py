@@ -649,6 +649,10 @@ def test_metric_counters_invoked_when_enabled(monkeypatch) -> None:
     # Linecard emits with type=linecard; transceiver with type=transceiver.
     assert {m[2].get("type") for m in mod_counts} == {"linecard", "transceiver"}
     assert all(c[2].get("vendor") == "Cisco" for c in mod_counts + bay_counts)
+    # Both rows in this payload are identified (real PIDs), so the metric
+    # label must say so — a deleted "identified" bump would still pass every
+    # other assertion here.
+    assert all(m[2].get("identified") == "true" for m in mod_counts)
 
 
 def test_metric_counters_noop_when_disabled(monkeypatch) -> None:
@@ -968,3 +972,147 @@ def test_emit_vc_boolean_member_id_warn_dropped(caplog, monkeypatch) -> None:
     assert modules == []
     assert any("boolean" in r.getMessage() for r in caplog.records)
     assert (1, {"reason": "malformed"}) in counter_calls
+
+
+def test_unidentified_module_gets_the_generic_manufacturer():
+    """
+    Unidentified modules use the generic manufacturer to avoid collisions.
+
+    dcim.moduletype matches on (manufacturer, model) and nothing else, so the
+    manufacturer decides whether a described part lands segregated or filed
+    among the vendor's genuine parts. Cisco reports "Unspecified" precisely
+    when an optic is NOT Cisco-coded, so inheriting the chassis vendor would
+    assert a brand the device never claimed.
+    """
+    device = _make_device()
+    payload = {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/3", "position": "Te1/1/3",
+                    "module": {
+                        "model": "SFP-10GBase-CX1", "serial": "OPT3",
+                        "description": "SFP-10GBase-CX1", "type": "transceiver",
+                        "identified": False, "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+    entities: list = []
+
+    emit_modules_if_requested({"modules": payload}, Options(discover_modules="full"),
+                              {None: device}, entities)
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Unknown"
+    assert module.module_type.model == "SFP-10GBase-CX1"
+
+
+def test_identified_module_keeps_the_device_manufacturer():
+    """The suppression must not overreach: real parts stay with the vendor."""
+    device = _make_device(vendor="Cisco")
+    payload = {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/1", "position": "Te1/1/1",
+                    "module": {
+                        "model": "SFP-10G-SR", "serial": "OPT1",
+                        "description": "SFP-10GBase-SR", "type": "transceiver",
+                        "identified": True, "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+    entities: list = []
+
+    emit_modules_if_requested({"modules": payload}, Options(discover_modules="full"),
+                              {None: device}, entities)
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Cisco"
+
+
+def _optic_payload(module: dict) -> dict:
+    return {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/3", "position": "Te1/1/3", "module": module,
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+
+
+def test_part_manufacturer_outranks_the_device_vendor():
+    """
+    An optic that names its own maker is filed under that maker.
+
+    dcim.moduletype matches on (manufacturer, model). A third-party optic in a
+    Cisco switch reports its own vendor in its EEPROM, so filing it under
+    Cisco would put a part Cisco did not make into Cisco's catalog, where it
+    would sit among genuine Cisco ModuleTypes and be indistinguishable from
+    them.
+    """
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "FTRJ8519P1BNL-C3", "serial": "OPT3",
+            "description": "1000BaseSX SFP", "type": "transceiver",
+            "manufacturer": "CISCO-FINISAR", "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "CISCO-FINISAR"
+    assert module.module_type.model == "FTRJ8519P1BNL-C3"
+
+
+def test_part_manufacturer_outranks_the_generic_name_too():
+    """
+    Reading the EEPROM is what demotes the generic name to a last resort.
+
+    A row can arrive with a real vendor while still carrying identified=False
+    from the inventory parse; the vendor is the better answer and wins.
+    """
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "FTRJ8519P1BNL-C3", "serial": "OPT3",
+            "description": "1000BaseSX SFP", "type": "transceiver",
+            "manufacturer": "CISCO-FINISAR", "identified": False, "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "CISCO-FINISAR"
+
+
+def test_blank_part_manufacturer_falls_through():
+    """An empty value is not a vendor; it must not become one."""
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "SFP-10GBase-CX1", "serial": "OPT3",
+            "description": "SFP-10GBase-CX1", "type": "transceiver",
+            "manufacturer": "   ", "identified": False, "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Unknown"
