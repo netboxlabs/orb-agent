@@ -14,6 +14,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/gnmidiscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/gnmitelemetry"
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/opentelemetryinfinity"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
@@ -41,6 +42,7 @@ func init() {
 	opentelemetryinfinity.Register()
 	snmpdiscovery.Register()
 	snmptelemetry.Register()
+	gnmitelemetry.Register()
 	pktvisor.Register()
 	worker.Register()
 }

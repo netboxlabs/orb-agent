@@ -31,6 +31,10 @@ on:
         description: 'snmp-telemetry version to bundle (X.Y.Z).'
         required: true
         type: string
+      gnmi-telemetry-version:
+        description: 'gnmi-telemetry version to bundle (X.Y.Z).'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -129,7 +133,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.platform }},mode=max
-          no-cache-filters: python-builder,network-discovery,snmp-discovery,snmp-telemetry,pktvisor,otlpinf,final
+          no-cache-filters: python-builder,network-discovery,snmp-discovery,snmp-telemetry,gnmi-telemetry,pktvisor,otlpinf,final
           pull: true
           build-args: |
             GO_VERSION=${{ env.GO_VERSION }}
@@ -141,6 +145,7 @@ jobs:
             DEVICE_DISCOVERY_VERSION=${{ inputs.device-version }}
             WORKER_VERSION=${{ inputs.worker-version }}
             SNMP_TELEMETRY_VERSION=${{ inputs.telemetry-version }}
+            GNMI_TELEMETRY_VERSION=${{ inputs.gnmi-telemetry-version }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
       - name: Export digest
         run: |

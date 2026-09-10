@@ -102,6 +102,25 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -ldflags="-s -w" -trimpath -o /usr/local/bin/snmp-telemetry ./cmd/main.go
 
 ########################################################################
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-trixie AS gnmi-telemetry
+
+WORKDIR /src/gnmi-telemetry
+
+COPY orb-telemetry/gnmi-telemetry/ .
+
+ARG TARGETOS TARGETARCH
+# Stamp the backend version: its version package go:embeds version/BUILD_*.txt.
+ARG GNMI_TELEMETRY_VERSION=0.0.0
+ARG BUILD_COMMIT=unknown
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg \
+    echo "${GNMI_TELEMETRY_VERSION}" > version/BUILD_VERSION.txt && \
+    echo "${BUILD_COMMIT}" > version/BUILD_COMMIT.txt && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -ldflags="-s -w" -trimpath -o /usr/local/bin/gnmi-telemetry ./cmd/main.go
+
+########################################################################
 FROM netboxlabs/pktvisor:${PKTVISOR_TAG} AS pktvisor
 
 ########################################################################
@@ -188,6 +207,8 @@ COPY --from=snmp-discovery /usr/local/bin/snmp-discovery /usr/local/bin/snmp-dis
 COPY --from=gnmi-discovery /usr/local/bin/gnmi-discovery /usr/local/bin/gnmi-discovery
 
 COPY --from=snmp-telemetry /usr/local/bin/snmp-telemetry /usr/local/bin/snmp-telemetry
+
+COPY --from=gnmi-telemetry /usr/local/bin/gnmi-telemetry /usr/local/bin/gnmi-telemetry
 
 COPY --from=builder /build/orb-agent /usr/local/bin/orb-agent
 COPY --from=builder /src/orb-agent/agent/docker/orb-agent-entry.sh /usr/local/bin/orb-agent-entry.sh

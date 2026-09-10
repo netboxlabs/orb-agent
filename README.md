@@ -86,6 +86,7 @@ Observability backends focus on collecting and exporting rich telemetry from net
 - [pktvisor](./docs/backends/pktvisor.md)
 - [OpenTelemetry Infinity](./docs/backends/opentelemetry_infinity.md)
 - [SNMP Telemetry](./docs/backends/snmp_telemetry.md)
+- [gNMI Telemetry](./docs/backends/gnmi_telemetry.md)
 
 #### Common
 A special `common` subsection under `backends` defines configuration settings that are shared with all backends. Currently, it supports passing [diode](https://github.com/netboxlabs/diode) server settings and OpenTelemetry configuration to all backends.
@@ -131,6 +132,9 @@ orb:
     snmp_telemetry:
       snmp_telemetry_policy_1:
        # see docs/backends/snmp_telemetry.md
+    gnmi_telemetry:
+      gnmi_telemetry_policy_1:
+       # see docs/backends/gnmi_telemetry.md
  ```
 
 ## System Requirements

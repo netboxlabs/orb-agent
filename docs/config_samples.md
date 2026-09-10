@@ -655,6 +655,51 @@ docker run -p 162:162/udp \
     run -c "/opt/orb/snmp-telemetry-config.yaml"
 ```
 
+## gNMI Telemetry Backend
+
+The gNMI telemetry backend subscribes to streaming telemetry from network devices and exports the metrics over OTLP to the collector named in `common.otlp`. It ingests nothing into Diode. See the [backend documentation](backends/gnmi_telemetry.md) for every parameter.
+
+### Basic Configuration
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
+    gnmi_telemetry:
+      policy_env_vars: [GNMI_PASSWORD]
+  policies:
+    gnmi_telemetry:
+      core_metrics:
+        config:
+          metrics_interval: 30 # seconds, the SAMPLE cadence asked of the devices
+          # A CIDR target carries the credential to every address that answers,
+          # so with TLS not verifying the server the policy has to say so.
+          send_credentials_to_unverified_targets: true
+        scope:
+          username: "admin"
+          password: "${GNMI_PASSWORD}"
+          port: 57400
+          tls:
+            skip_verify: true # lab devices with self-signed certificates
+          targets:
+            - host: "192.168.1.0/24"
+```
+
+### Running the gNMI Telemetry Backend
+
+The backend opens no listener of its own toward the devices, so no port needs publishing; pass the environment variable the policy reads:
+
+```bash
+docker run \
+    -e GNMI_PASSWORD=admin-pass \
+    -v "/local/orb:/opt/orb/" \
+    netboxlabs/orb-agent:latest \
+    run -c "/opt/orb/gnmi-telemetry-config.yaml"
+```
+
 ## Diode Dry Run Mode
 
 The Orb Agent supports a diode dry run mode that allows you to test your configuration without sending data to the Diode server. This is useful for debugging and validating your configuration.
