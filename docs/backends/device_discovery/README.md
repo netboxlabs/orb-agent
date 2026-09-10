@@ -133,12 +133,29 @@ Some devices report a module with a serial number and a description but no part
 number. A Cisco C9200L does this for DAC cables, and a 2960S reports the literal
 placeholder `Unspecified` for an SFP whose vendor coding it does not recognise.
 
-These are recorded rather than dropped. The description is used as the module
-model, and the manufacturer is set to `Unknown` rather than the switch's own
-vendor, because the device has not told us who made the part and reporting
-`Unspecified` usually means it is *not* the chassis vendor's. Filing them under
-`Unknown` also keeps them findable: every module NetBox holds only a description
-for can be listed with a single manufacturer filter.
+These are recorded rather than dropped.
+
+**The optic's own EEPROM is asked first** (`ios` only). `show inventory` has no
+manufacturer field at all, but an SFP carries its vendor and part number in its
+EEPROM regardless of whether the switch recognises the coding, so
+`show idprom interface <ifname>` is run for each transceiver the inventory could
+not name. Where it answers with both, they become the module's manufacturer and
+model — a real part such as `CISCO-FINISAR` / `FTRJ8519P1BNL-C3` rather than a
+generic bucket. The cost is one command per *unnamed* optic, not per port, so a
+switch whose optics are all recognised issues none; the command is unavailable
+on some platforms and images, and a failure is not fatal.
+
+**Otherwise the description is used as the model**, and the manufacturer is set
+to `Unknown` rather than the switch's own vendor, because the device has not
+told us who made the part and reporting `Unspecified` usually means it is *not*
+the chassis vendor's. Filing them under `Unknown` also keeps them findable:
+every module NetBox holds only a description for can be listed with a single
+manufacturer filter.
+
+A part that names its own manufacturer is filed under that manufacturer even
+when the inventory row was unidentified. `dcim.moduletype` matches on
+`(manufacturer, model)`, so a third-party optic filed under the chassis vendor
+would put a part that vendor did not make into their catalog.
 
 A module with a serial but neither a part number nor a description is skipped,
 since NetBox requires a model and there would be nothing to call it.

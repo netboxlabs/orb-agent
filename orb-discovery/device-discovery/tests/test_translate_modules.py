@@ -1035,3 +1035,84 @@ def test_identified_module_keeps_the_device_manufacturer():
 
     module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
     assert module.module_type.manufacturer.name == "Cisco"
+
+
+def _optic_payload(module: dict) -> dict:
+    return {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/3", "position": "Te1/1/3", "module": module,
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+
+
+def test_part_manufacturer_outranks_the_device_vendor():
+    """
+    An optic that names its own maker is filed under that maker.
+
+    dcim.moduletype matches on (manufacturer, model). A third-party optic in a
+    Cisco switch reports its own vendor in its EEPROM, so filing it under
+    Cisco would put a part Cisco did not make into Cisco's catalog, where it
+    would sit among genuine Cisco ModuleTypes and be indistinguishable from
+    them.
+    """
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "FTRJ8519P1BNL-C3", "serial": "OPT3",
+            "description": "1000BaseSX SFP", "type": "transceiver",
+            "manufacturer": "CISCO-FINISAR", "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "CISCO-FINISAR"
+    assert module.module_type.model == "FTRJ8519P1BNL-C3"
+
+
+def test_part_manufacturer_outranks_the_generic_name_too():
+    """
+    Reading the EEPROM is what demotes the generic name to a last resort.
+
+    A row can arrive with a real vendor while still carrying identified=False
+    from the inventory parse; the vendor is the better answer and wins.
+    """
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "FTRJ8519P1BNL-C3", "serial": "OPT3",
+            "description": "1000BaseSX SFP", "type": "transceiver",
+            "manufacturer": "CISCO-FINISAR", "identified": False, "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "CISCO-FINISAR"
+
+
+def test_blank_part_manufacturer_falls_through():
+    """An empty value is not a vendor; it must not become one."""
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "SFP-10GBase-CX1", "serial": "OPT3",
+            "description": "SFP-10GBase-CX1", "type": "transceiver",
+            "manufacturer": "   ", "identified": False, "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Unknown"

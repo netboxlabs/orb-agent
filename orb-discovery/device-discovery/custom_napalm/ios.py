@@ -935,6 +935,87 @@ def _ios_claim_slot(
 #: dropped -- the very bug this exists to remove.
 _IOS_UNIDENTIFIED_PID = "unspecified"
 
+# `show idprom interface <ifname>` reads the optic's own EEPROM, which names
+# its vendor and part number even when `show inventory` reports neither. The
+# labels are fixed-width and colon-separated; values that are byte dumps
+# ("0x03 0x07 ...") rather than text are the encoded fields, which is why only
+# these two are read.
+# [ \t] rather than \s throughout: \s matches a newline, so a label with a
+# blank value would consume its own line break and capture the NEXT line as
+# the value -- an empty Vendor Name yielding "Vendor Part Number : ..." as
+# the manufacturer, which NetBox would then hold as a real vendor name.
+_IDPROM_VENDOR_RE = re.compile(
+    r"^[ \t]*Vendor Name[ \t]*:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE,
+)
+_IDPROM_PART_RE = re.compile(
+    r"^[ \t]*Vendor Part Number[ \t]*:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE,
+)
+
+
+def _parse_idprom(output: str) -> tuple[str, str]:
+    """
+    Return (vendor, part number) from `show idprom interface` output.
+
+    Either may be empty: an optic that reports one and not the other is not
+    usable here, since a part number needs a manufacturer to key a NetBox
+    ModuleType and a manufacturer alone names nothing. The caller decides.
+    """
+    if not output:
+        return "", ""
+    vendor = _IDPROM_VENDOR_RE.search(output)
+    part = _IDPROM_PART_RE.search(output)
+    return (
+        vendor.group(1).strip() if vendor else "",
+        part.group(1).strip() if part else "",
+    )
+
+
+def _ios_read_optic_eeprom(driver, transceivers_by_member) -> None:
+    """
+    Fill in vendor and part number for optics `show inventory` did not name.
+
+    Mutates the entries in place. Only rows already marked unidentified are
+    probed, so a switch whose optics are all recognised issues no extra
+    commands at all, and the cost is one command per optic the device could
+    not name rather than per port.
+
+    A failure here is never fatal: the command is not available on every
+    platform or image, and an optic that does not answer keeps the
+    description-derived model it already had.
+    """
+    targets = [
+        (member, ifname, entry)
+        for member, entries in transceivers_by_member.items()
+        for ifname, entry in entries.items()
+        if not entry.identified
+    ]
+    if not targets:
+        return
+    logger.debug(
+        "ios.get_modules: reading the EEPROM of %d optic(s) the inventory did not name",
+        len(targets),
+    )
+    for _member, ifname, entry in targets:
+        try:
+            out = driver.device.send_command(f"show idprom interface {ifname}")
+        except Exception as e:
+            logger.debug(
+                "ios.get_modules: show idprom interface %s failed: %s; "
+                "keeping the description as the model", ifname, e,
+            )
+            continue
+        vendor, part = _parse_idprom(out or "")
+        if not vendor or not part:
+            logger.debug(
+                "ios.get_modules: %s reported no usable vendor/part in its EEPROM "
+                "(vendor=%r part=%r); keeping the description as the model",
+                ifname, vendor, part,
+            )
+            continue
+        entry.model = part
+        entry.manufacturer = vendor
+        entry.identified = True
+
 
 def _parse_inventory_rows(
     rows: list[dict],
@@ -1262,6 +1343,10 @@ def _ios_get_modules_impl(driver) -> dict | None:
     bays_by_member, transceivers_by_member, claimed_slots = _parse_inventory_rows(
         inv_rows, vc_mode,
     )
+    # Ask the optics themselves about the ones the chassis inventory could not
+    # name. Runs before the emptiness check below on purpose: an upgrade here
+    # changes what those rows become, not whether they exist.
+    _ios_read_optic_eeprom(driver, transceivers_by_member)
     if not bays_by_member and not transceivers_by_member:
         # No aggregate warning here on purpose. A switch with no optics and no
         # cards reaches this line every cycle, and that is the correct answer,

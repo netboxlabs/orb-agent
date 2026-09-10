@@ -225,6 +225,27 @@ def _manufacturer_from_device(device: pb.Device) -> pb.Manufacturer:
     return pb.Manufacturer(name="Unknown")
 
 
+def _module_manufacturer(
+    module_data: dict, device_manufacturer: pb.Manufacturer, identified: bool,
+) -> pb.Manufacturer:
+    """
+    Choose a module's manufacturer: its own, then the device's, then generic.
+
+    A part that names its own manufacturer is the best answer available, and
+    it is not the device's: a third-party optic in a Cisco switch reports its
+    own maker, and filing it under Cisco would put a part Cisco did not make
+    into Cisco's catalog. Only a part nothing named at all reaches the generic
+    name, which keeps those rows findable in one filter instead of scattered
+    through a real vendor's.
+    """
+    part_manufacturer = (module_data.get("manufacturer") or "").strip()
+    if part_manufacturer:
+        return pb.Manufacturer(name=part_manufacturer)
+    if identified:
+        return device_manufacturer
+    return pb.Manufacturer(name=UNIDENTIFIED_MANUFACTURER)
+
+
 def _emit_bay_recursive(
     *,
     bay_data: dict,
@@ -279,9 +300,7 @@ def _emit_bay_recursive(
     _bump("module_bays_emitted", 1, {"vendor": manufacturer.name})
 
     identified = module_data.get("identified", True)
-    module_manufacturer = (
-        manufacturer if identified else pb.Manufacturer(name=UNIDENTIFIED_MANUFACTURER)
-    )
+    module_manufacturer = _module_manufacturer(module_data, manufacturer, identified)
     # No `or "Unknown"` fallback: _validate_bay guarantees a non-blank model
     # reaches here, and substituting a placeholder is what collapsed every
     # unidentifiable part into a single ModuleType.

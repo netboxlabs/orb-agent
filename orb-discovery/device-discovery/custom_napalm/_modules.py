@@ -68,6 +68,13 @@ class ModuleEntry:
     #: enforces the pairing; translate reads it to pick the manufacturer.
     #: Defaults True, so every driver that has not been relaxed is unchanged.
     identified: bool = True
+    #: The part's own manufacturer, when the device reports one for the part
+    #: rather than for the chassis. An optic's EEPROM names its vendor even
+    #: where the chassis inventory does not, and that vendor is not the
+    #: switch's. Empty means "use the chassis vendor", which is every driver
+    #: today. translate reads it ahead of both the device's manufacturer and
+    #: the generic one.
+    manufacturer: str = ""
 
 
 @dataclass
@@ -265,6 +272,11 @@ def _validate_bay(bay: ModuleBay, *, depth: int) -> dict | None:
     # and consumers read it as `.get("identified", True)`.
     if not bay.module.identified:
         module["identified"] = False
+    # Same reasoning as `identified`: absent unless a driver actually learned
+    # the part's own vendor, so the payload every other driver emits is
+    # unchanged and the fixtures that deep-compare it stay as they are.
+    if bay.module.manufacturer.strip():
+        module["manufacturer"] = bay.module.manufacturer.strip()
     return {
         "name": bay.name,
         "position": bay.position,

@@ -481,3 +481,56 @@ def test_unidentified_blank_model_warns_when_it_takes_sub_bays_with_it(caplog):
     assert any("1 usable" in m for m in warnings), (
         f"losing a usable sub-bay must warn, not stay at debug, got {warnings}"
     )
+
+
+def _vendor_bay(manufacturer: str) -> ModuleBay:
+    """A bay whose module names its own maker, as an optic's EEPROM does."""
+    return ModuleBay(
+        name="1", position="1",
+        module=ModuleEntry(
+            model="FTRJ8519P1BNL-C3", serial="SN1", type="transceiver",
+            description="1000BaseSX SFP", manufacturer=manufacturer,
+        ),
+    )
+
+
+def test_part_manufacturer_reaches_the_payload():
+    """
+    A vendor a driver learned must survive serialization.
+
+    This is the seam between the driver and translate: the driver can read an
+    optic's EEPROM and translate can prefer that vendor, and neither notices
+    if the value is dropped in between.
+    """
+    payload = to_payload(
+        {None: MemberModules(bays=[_vendor_bay("CISCO-FINISAR")], interfaces_by_bay={})}
+    )
+
+    assert payload is not None
+    module = payload["members"][None]["bays"][0]["module"]
+    assert module["manufacturer"] == "CISCO-FINISAR"
+
+
+def test_module_without_a_part_manufacturer_omits_the_key():
+    """
+    Absent unless a driver actually learned one, like the identified flag.
+
+    Every other driver's payload stays byte-identical, which is what keeps the
+    fixtures that deep-compare this dict from being rewritten wholesale.
+    """
+    payload = to_payload(
+        {None: MemberModules(bays=[_flagged_bay("GLC-SX-MMD")], interfaces_by_bay={})}
+    )
+
+    assert payload is not None
+    assert "manufacturer" not in payload["members"][None]["bays"][0]["module"]
+
+
+def test_blank_part_manufacturer_is_not_serialized():
+    """Whitespace is not a vendor name; it must not reach the payload."""
+    payload = to_payload(
+        {None: MemberModules(bays=[_vendor_bay("   ")], interfaces_by_bay={})}
+    )
+
+    assert payload is not None
+    assert "manufacturer" not in payload["members"][None]["bays"][0]["module"]
