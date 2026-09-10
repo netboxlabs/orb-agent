@@ -168,7 +168,7 @@ Each target in the `targets` list can include:
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
-| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range, and ignored when the target turns out to be a stack or HA pair (see [Stacks and netbox_id](#stacks-and-netbox_id)). |
 
 #### Subnet and range scanning
 
@@ -347,6 +347,26 @@ Master identity is pinned to the **lowest member id present**, regardless of liv
 **When the device contradicts itself.** A signal that is merely absent falls through to the next tier, and the ordinal fallback always yields ids. But a device that reports the *same* position on two chassis rows, or the same trailing number in two names, has asserted something impossible. If no other tier can resolve such a set, the stack is refused rather than guessed: no `VirtualChassis` and no member Devices are emitted, since inventing a numbering would put wrong `vc_position` values and wrong member Device names into NetBox.
 
 The master does still receive a serial in that case, taken from the lowest `entPhysicalIndex` chassis row. Note this is a different ordering from the lowest-member-id rule above, and necessarily so: a refused set has no member ids to pin to, and the row index is the only ordering that does not depend on the disputed numbering. Only the numbering was ambiguous — each chassis row's serial was unambiguous — so refusing the structure while dropping the serial would discard a fact the device reported plainly.
+
+### Stacks and netbox_id
+
+A target's `netbox_id` names one NetBox device. A stack does not answer as one device: querying any member's management address returns the whole stack, so the same walk describes several NetBox devices and nothing in it says which one the address belongs to. Management addresses are typically configured on an SVI, which is a logical interface of the stack rather than of a member, so `entAliasMappingTable` cannot resolve them either.
+
+**So a target's `netbox_id` is not applied when the walk reports more than one chassis**, and a warning naming the target and the master's serial is logged. This is read from the walk rather than from the emitted entities, so it also covers a stack whose member numbering was refused: no virtual chassis or members are emitted for one of those, but the walk still described several NetBox devices. Applying it would pin the emitted master to that id, which asserts the master is that device. Where it is not, `dcim.virtualchassis` matches on `master`, so NetBox is told the stack has a different master and a second virtual chassis is proposed, along with the IP reassignments that follow from it.
+
+**Target the member the stack is mastered on.** The address you point a target at is recorded as the master's `primary_ip4`/`primary_ip6`. On a stack that is an assumption rather than something the walk establishes: management addresses sit on an SVI, which belongs to the stack rather than to any member, so nothing reported says which member owns the address you reached. It is taken anyway, because it holds for how a stack is normally reached and refusing it would cost every correctly-targeted stack its master's primary IP.
+
+Point a target at another member's address and that address is written as the master's primary IP. Since `primary_ip4` is unique in NetBox and outranks the name, the master then resolves to *that member's* NetBox row and is written as the chassis master, which proposes a second virtual chassis and the IP reassignments that follow.
+
+**Which member is the master** is the one with the **lowest member id**, not whichever unit is currently active and not necessarily the device NetBox holds as the virtual chassis master. Orb pins it that way deliberately so identity survives a failover. Read it from `entPhysicalParentRelPos`, or from the member names Orb emits: the master is the one with no `-N` suffix, and `<name>-2`, `<name>-3` are the others. Where a stack has only one management address there is nothing to get wrong.
+
+The master matches on `sysName` + site, `asset_tag`, or its primary IP.
+
+**Pinning a stack's identity: use `asset_tag`, not `netbox_id`.** `defaults.asset_tag` is per policy rather than per target, so every target of the same stack stamps the same value on the master and they converge instead of diverging. It is also Diode's highest-precedence device matcher, and member Devices have it explicitly cleared so they do not collapse onto one row. It only *matches* an existing NetBox device if that device already carries the tag; otherwise the first run writes it.
+
+That route tags the master only, since members have `defaults.asset_tag` cleared to stop them collapsing onto one row. `discover_asset_tags` is the other route and does cover members, giving each its own tag from `entPhysicalAssetID`, which would identify a member without relying on `virtual_chassis` + `vc_position`. In practice do not count on it: **no stack in the reference corpus of 1,877 walks reports usable, distinct per-member asset tags**, and the controller behind this behaviour returns an empty string for every chassis row. Where a device does populate them, the existing duplicate and placeholder guards still apply. This is also what makes `emit_device_name: false` usable on a stack, since that option needs `source_match` or `asset_tag` to be present and `netbox_id` is no longer available here.
+
+**Target one address per stack.** Pointing separate targets at two members of the same stack discovers the same stack twice and cannot do what it appears to: each target would claim its own identity for the same master.
 
 **Member AssetTag is cleared.** Diode's highest-precedence matcher for `dcim.device` is `asset_tag` (unique). The master Device carries the policy `defaults.asset_tag` value if configured; member Devices have it explicitly cleared so multiple members do not collapse onto one NetBox row through a shared asset tag. Master / standalone AssetTag behaviour from `defaults.asset_tag` is unchanged. When the `discover_asset_tags` option is enabled, members instead receive their own per-row `entPhysicalAssetID` values — only the operator-supplied defaults tag is never replicated to members.
 

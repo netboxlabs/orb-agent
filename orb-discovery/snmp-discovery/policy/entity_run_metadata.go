@@ -6,6 +6,62 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 )
 
+// emittedStack reports whether this batch describes a multi-device stack,
+// returning the master's serial for the caller's log line.
+//
+// A target's netbox_id names one NetBox device, but a stack member's
+// management address is answered by the whole system: querying either
+// address of an HA pair returns both chassis, and nothing in ENTITY-MIB,
+// IF-MIB or IP-MIB ties an address to the chassis that owns it.
+// Management addresses sit on an SVI, which is a logical interface of the
+// pair rather than of a member, so entAliasMappingTable cannot resolve them
+// either — across 30 stacks in the LibreNMS corpus, 48 of 52 addresses have
+// no chassis at all, and no stack has two that resolve to different ones.
+//
+// So the pin cannot be checked against the member it was written for, and
+// applying it to the master anyway asserts that the master is that device.
+// When it is not, Diode is told the virtual chassis has a different master,
+// and since dcim.virtualchassis matches on master, NetBox is asked to build
+// a second chassis around it.
+//
+// TranslateAsStack emits the VirtualChassis and the member Devices together,
+// so either is sufficient to recognise one.
+//
+// The serial is captured from the master whether or not a stack was
+// recognised here, because the caller also withholds on a walk-derived
+// signal this function cannot see. On that path there is no VirtualChassis
+// to read the master's serial from, and it is the one field that identifies
+// the affected device in the log.
+func emittedStack(entities []diode.Entity) (string, bool) {
+	found := false
+	serial := ""
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.VirtualChassis:
+			if v != nil {
+				found = true
+				if v.Master != nil && v.Master.Serial != nil && serial == "" {
+					serial = *v.Master.Serial
+				}
+			}
+		case *diode.Device:
+			if v == nil {
+				continue
+			}
+			if v.VcPosition != nil {
+				found = true
+				continue
+			}
+			// The master: no member position, and on a refused stack the
+			// only Device emitted at all.
+			if v.Serial != nil && serial == "" {
+				serial = *v.Serial
+			}
+		}
+	}
+	return serial, found
+}
+
 // annotateDeviceWithSourceMatch sets source_match metadata on the *diode.Device
 // reachable from the entity batch — either at the top level, via Interface.Device,
 // or via IPAddress→Interface.Device. This covers the shapes produced by

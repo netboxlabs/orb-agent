@@ -912,6 +912,17 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 		}
 	}
 
+	// The address the collector connected to is taken as the master's
+	// primary IP on a stack as well as a standalone device. On a stack it
+	// is an assumption, not something the walk establishes: management
+	// addresses sit on an SVI, which belongs to the stack rather than to
+	// any member, so nothing says which member owns the one we reached.
+	//
+	// Taken anyway because the assumption holds for how a stack is
+	// normally reached, and refusing it costs every correctly-targeted
+	// stack its master's primary IP and a matcher along with it. The
+	// requirement it implies -- target the member the stack is mastered
+	// on -- is documented rather than guessed at.
 	m.assignPrimaryIP(currentDevice, uniqueEntities)
 
 	// Phase 2: PostMap pass. Mappers that need cross-row / cross-mapper

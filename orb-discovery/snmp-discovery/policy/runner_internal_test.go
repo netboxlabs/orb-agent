@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	diodepb "github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -281,7 +283,7 @@ func TestQueryTargetContextAlreadyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.Canceled)
@@ -298,7 +300,7 @@ func TestQueryTargetContextTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -320,7 +322,7 @@ func TestQueryTargetWalkError(t *testing.T) {
 		return &testWalker{walkErr: walkErr}, nil
 	}, entries)
 
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, walkErr)
@@ -339,7 +341,7 @@ func TestQueryTargetSuccess(t *testing.T) {
 	}
 	runner := queryTargetRunner(snmp.NewFakeSNMPWalker, entries)
 
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
 	require.NoError(t, err)
 	assert.NotEmpty(t, entities)
 }
@@ -419,7 +421,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -583,7 +585,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 	// between scans.
 	t.Run("IPv4 target -> PrimaryIp4", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+		entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -604,7 +606,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 
 	t.Run("IPv6 target -> PrimaryIp6", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
+		entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -791,7 +793,7 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -935,7 +937,7 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, chassisEntries())
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	entities, _, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -1010,13 +1012,17 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	// Use NetboxID=42 on the target so we can verify source_match on master.
 	netboxID := 42
 	target := config.Target{Host: "192.0.2.1", Port: 161, NetboxID: &netboxID}
-	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
+	entities, primaryHits, _, err := runner.queryTarget(context.Background(), target)
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
-	// Mirror production sequence: annotate, prune.
+	// Mirror production sequence: withhold-or-annotate, then prune. The
+	// guard is part of the sequence, so a copy of it that annotated
+	// unconditionally would assert a shape production no longer emits.
 	if target.NetboxID != nil {
-		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+		if _, isStack := emittedStack(entities); !isStack {
+			annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+		}
 	}
 	annotateEntitiesWithRunID(entities, "run-stack-123")
 	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
@@ -1053,10 +1059,12 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	assert.Nil(t, masterDev.VcPosition, "master has no VcPosition")
 	require.NotNil(t, masterDev.Serial)
 	assert.Equal(t, "FCW2147L0K3", *masterDev.Serial, "master Serial = lowest-id chassis serial")
-	require.NotNil(t, masterDev.Metadata)
-	sm, ok := masterDev.Metadata["source_match"].(diode.Metadata)
-	require.True(t, ok, "master must carry source_match")
-	assert.Equal(t, netboxID, sm["netbox_id"])
+	// The pin is withheld on a stack: either address is answered by the
+	// whole system, so the id cannot be tied to the member it names.
+	// TestRunWithMetadata_StackWithheldNetboxID covers that through the
+	// runner itself; here it only keeps this mirror honest.
+	_, masterSM := masterDev.Metadata["source_match"]
+	assert.False(t, masterSM, "a stack master must not be pinned to the target's netbox_id")
 
 	// Member Device assertions.
 	require.NotNil(t, memberDev, "member Device must be present")
@@ -1065,21 +1073,19 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	_, hasSM := memberDev.Metadata["source_match"]
 	assert.False(t, hasSM, "member must NOT carry source_match")
 
-	// VirtualChassis.Master source_match assertions (Fix 1):
-	// Both the top-level VC.Master ref AND the member's inline
-	// VirtualChassis.Master ref must carry source_match so Diode's
-	// unique_master matcher resolves consistently on reruns.
-	wantSM := diode.Metadata{"netbox_id": netboxID}
+	// The master ref is shared between the top-level VC and each member's
+	// inline VirtualChassis.Master, which is what makes Diode's
+	// unique_master matcher resolve consistently across reruns. That
+	// sharing is the invariant worth pinning here; neither copy carries
+	// source_match, for the reason above.
 	require.NotNil(t, vcEntity.Master, "VC.Master must be set")
-	vcMasterSM, vcMasterOK := vcEntity.Master.Metadata["source_match"].(diode.Metadata)
-	require.True(t, vcMasterOK, "VC.Master must carry source_match")
-	assert.Equal(t, wantSM, vcMasterSM, "VC.Master source_match must match netboxID")
-
 	require.NotNil(t, memberDev.VirtualChassis, "member.VirtualChassis must be set")
 	require.NotNil(t, memberDev.VirtualChassis.Master, "member.VirtualChassis.Master must be set")
-	memberMasterSM, memberMasterOK := memberDev.VirtualChassis.Master.Metadata["source_match"].(diode.Metadata)
-	require.True(t, memberMasterOK, "member.VirtualChassis.Master must carry source_match")
-	assert.Equal(t, wantSM, memberMasterSM, "member.VirtualChassis.Master source_match must match netboxID")
+	assert.Same(t, vcEntity.Master, memberDev.VirtualChassis.Master,
+		"both refs must be the same Device so unique_master resolves to one row")
+
+	_, vcMasterSM := vcEntity.Master.Metadata["source_match"]
+	assert.False(t, vcMasterSM, "VC.Master must not carry a withheld pin")
 
 	// Interface routing: exactly 2 interfaces, Gi1/0/1 → master, Gi2/0/1 → member.
 	assert.Len(t, ifaces, 2, "expect exactly 2 top-level interfaces: Gi1/0/1 (master) and Gi2/0/1 (member)")
@@ -1322,4 +1328,357 @@ func TestProbeAuthenticationBuildsARealClient(t *testing.T) {
 			require.NotNil(t, client)
 		})
 	}
+}
+
+// stackWalkerFactory serves the two-chassis walk used by the stack tests:
+// member 1 (parentRelPos 1) and member 2 (parentRelPos 2), each with its
+// own serial, plus one interface per member.
+func stackWalkerFactory() snmp.ClientFactory {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "3850-stack", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {Value: "Gi1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+				"1.3.6.1.2.1.2.2.1.2.2": {Value: "Gi2/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1":    {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.4.1000": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1":    {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.5.1000": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.6": {
+				".1.3.6.1.2.1.47.1.1.1.1.6.1":    {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.6.1000": {Value: 2, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1":    {Value: "FCW2147L0K3", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.11.1000": {Value: "FCW2147L0K4", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.13": {
+				".1.3.6.1.2.1.47.1.1.1.1.13.1":    {Value: "WS-C3850-48P", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.13.1000": {Value: "WS-C3850-48P", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+}
+
+// standaloneWalkerFactory is the same shape with a single chassis row, so
+// no virtual chassis is emitted and the target is unambiguous.
+func standaloneWalkerFactory() snmp.ClientFactory {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "3850-single", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {Value: "Gi1/0/1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.6": {
+				".1.3.6.1.2.1.47.1.1.1.1.6.1": {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "FCW2147L0K3", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.13": {
+				".1.3.6.1.2.1.47.1.1.1.1.13.1": {Value: "WS-C3850-48P", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+}
+
+// capturingDiodeClient records the entity batch handed to Ingest so a test
+// can assert on the payload the runner actually sends.
+type capturingDiodeClient struct {
+	mu       sync.Mutex
+	batches  [][]diode.Entity
+	ingested int
+}
+
+func (c *capturingDiodeClient) Close() error { return nil }
+
+func (c *capturingDiodeClient) Ingest(_ context.Context, entities []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.batches = append(c.batches, entities)
+	c.ingested++
+	return &diodepb.IngestResponse{}, nil
+}
+
+func (c *capturingDiodeClient) IngestProto(_ context.Context, _ []*diodepb.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	return &diodepb.IngestResponse{}, nil
+}
+
+func (c *capturingDiodeClient) lastBatch() []diode.Entity {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.batches) == 0 {
+		return nil
+	}
+	return c.batches[len(c.batches)-1]
+}
+
+// runWithMetadataRunner wires queryTargetRunner up with the pieces
+// runWithMetadata needs beyond queryTarget: a run store and an ingest
+// client to capture the payload.
+func runWithMetadataRunner(t *testing.T, factory snmp.ClientFactory, entries []config.MappingEntry) (*Runner, *capturingDiodeClient) {
+	t.Helper()
+	runner := queryTargetRunner(factory, entries)
+	client := &capturingDiodeClient{}
+	runner.client = client
+	runner.runStore = NewRunStore()
+	runner.timeout = 10 * time.Second
+	return runner, client
+}
+
+// masterOf returns the non-member Device from an ingested batch.
+func masterOf(entities []diode.Entity) *diode.Device {
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok && d.VcPosition == nil {
+			return d
+		}
+	}
+	return nil
+}
+
+// TestRunWithMetadata_StackWithheldNetboxID drives the real runner path,
+// not a hand-rolled copy of it.
+//
+// A target's netbox_id names one NetBox device, but either address of a
+// stack is answered by the whole system, so the id cannot be tied to the
+// member it was written for. Applying it to the master claims the master
+// is that device; when it is not, Diode is told the virtual chassis has a
+// different master and NetBox is asked to build a second one.
+//
+// The assertion is on the batch handed to Ingest, because that is the
+// payload NetBox acts on. Asserting on a locally-rebuilt sequence would
+// pass even if the runner stopped calling the guard.
+func TestRunWithMetadata_StackWithheldNetboxID(t *testing.T) {
+	runner, client := runWithMetadataRunner(t, stackWalkerFactory(), chassisEntries())
+	netboxID := 42
+	runner.runWithMetadata(config.Target{Host: "192.0.2.13", Port: 161, NetboxID: &netboxID}, "")
+
+	require.Equal(t, 1, client.ingested, "the walk must still be ingested; only the pin is withheld")
+	batch := client.lastBatch()
+	require.NotEmpty(t, batch)
+
+	master := masterOf(batch)
+	require.NotNil(t, master, "master Device must still be emitted")
+	require.NotNil(t, master.Serial)
+	assert.Equal(t, "FCW2147L0K3", *master.Serial, "the stack is still discovered in full")
+
+	_, hasSM := master.Metadata["source_match"]
+	assert.False(t, hasSM,
+		"a stack master must not be pinned to the target's netbox_id: the address cannot be tied to one member")
+
+	for _, e := range batch {
+		if vc, ok := e.(*diode.VirtualChassis); ok && vc.Master != nil {
+			_, vcSM := vc.Master.Metadata["source_match"]
+			assert.False(t, vcSM, "the virtual chassis master ref must not carry it either")
+		}
+	}
+}
+
+// TestRunWithMetadata_StandaloneKeepsNetboxID is the other half: the pin is
+// only withheld where it cannot be honoured. A single-device target is
+// unambiguous and must keep working exactly as before.
+func TestRunWithMetadata_StandaloneKeepsNetboxID(t *testing.T) {
+	runner, client := runWithMetadataRunner(t, standaloneWalkerFactory(), chassisEntries())
+	netboxID := 41
+	runner.runWithMetadata(config.Target{Host: "192.0.2.1", Port: 161, NetboxID: &netboxID}, "")
+
+	require.Equal(t, 1, client.ingested)
+	master := masterOf(client.lastBatch())
+	require.NotNil(t, master)
+
+	sm, ok := master.Metadata["source_match"].(diode.Metadata)
+	require.True(t, ok, "a standalone target must still be pinned by netbox_id")
+	assert.Equal(t, netboxID, sm["netbox_id"])
+}
+
+// refusedStackWalkerFactory serves a walk that reports two chassis rows and
+// then contradicts itself about how they are numbered: both claim
+// entPhysicalParentRelPos 1 and both are named "Chassis", with no port
+// descendants to number them from either. TranslateAsStack refuses to guess
+// a numbering it cannot derive, so it emits a plain master with a serial and
+// no virtual chassis or members at all.
+func refusedStackWalkerFactory() snmp.ClientFactory {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "ambiguous-stack", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1":    {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.4.1000": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1":    {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.5.1000": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			// The contradiction: the same position on both chassis rows.
+			"1.3.6.1.2.1.47.1.1.1.1.6": {
+				".1.3.6.1.2.1.47.1.1.1.1.6.1":    {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.6.1000": {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			// Uninformative names: no trailing integer to number them by.
+			"1.3.6.1.2.1.47.1.1.1.1.7": {
+				".1.3.6.1.2.1.47.1.1.1.1.7.1":    {Value: "Chassis", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.7.1000": {Value: "Chassis", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1":    {Value: "FCW2147L0K3", Type: gosnmp.OctetString, IdentifierSize: 2},
+				".1.3.6.1.2.1.47.1.1.1.1.11.1000": {Value: "FCW2147L0K4", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+}
+
+// TestRunWithMetadata_RefusedStackWithheldNetboxID covers the case the
+// emitted entities cannot describe.
+//
+// When a device contradicts itself about member numbering, no virtual
+// chassis and no member Devices are emitted, so the batch is shaped exactly
+// like a standalone device. The walk still described several NetBox devices
+// though, and the target's netbox_id is no more attributable to one of them
+// than on a stack that translated cleanly: two targets would still point the
+// same master at two different rows. The signal therefore has to come from
+// the walk, not from what could be modelled out of it.
+func TestRunWithMetadata_RefusedStackWithheldNetboxID(t *testing.T) {
+	runner, client := runWithMetadataRunner(t, refusedStackWalkerFactory(), chassisEntries())
+	netboxID := 42
+	runner.runWithMetadata(config.Target{Host: "192.0.2.13", Port: 161, NetboxID: &netboxID}, "")
+
+	require.Equal(t, 1, client.ingested)
+	batch := client.lastBatch()
+	require.NotEmpty(t, batch)
+
+	// Precondition: this really is the refused path, not an ordinary stack.
+	// Without it the test could pass on the emittedStack branch and prove
+	// nothing about the walk-derived signal.
+	for _, e := range batch {
+		_, isVC := e.(*diode.VirtualChassis)
+		assert.False(t, isVC, "a refused stack must emit no virtual chassis")
+		if d, ok := e.(*diode.Device); ok {
+			assert.Nil(t, d.VcPosition, "a refused stack must emit no members")
+		}
+	}
+
+	master := masterOf(batch)
+	require.NotNil(t, master)
+	require.NotNil(t, master.Serial, "the master still carries the serial the device reported")
+
+	_, hasSM := master.Metadata["source_match"]
+	assert.False(t, hasSM,
+		"a walk describing several chassis must not pin its master, even when the stack could not be modelled")
+}
+
+// mgmtAddressPDUs is the ipAdEntTable half of a walk: one address bound to
+// ifIndex 1, which is the address these tests then target.
+func mgmtAddressPDUs(addr string) map[string]map[string]snmp.PDU {
+	return map[string]map[string]snmp.PDU{
+		"1.3.6.1.2.1.2.2.1.2": {
+			"1.3.6.1.2.1.2.2.1.2.1": {Value: "Vl12", Type: gosnmp.OctetString, IdentifierSize: 1},
+		},
+		"1.3.6.1.2.1.4.20.1.1": {
+			"1.3.6.1.2.1.4.20.1.1." + addr: {Value: addr, Type: gosnmp.IPAddress, IdentifierSize: 4},
+		},
+		"1.3.6.1.2.1.4.20.1.2": {
+			"1.3.6.1.2.1.4.20.1.2." + addr: {Value: 1, Type: gosnmp.Integer, IdentifierSize: 4},
+		},
+	}
+}
+
+// ipEntries adds the ipAdEntTable columns to the chassis mapping so a
+// primary IP can be assigned from the target address.
+func ipEntries() []config.MappingEntry {
+	return append(chassisEntries(), config.MappingEntry{
+		OID:            "1.3.6.1.2.1.4.20.1",
+		Entity:         "ipAddress",
+		Field:          "_id",
+		IdentifierSize: 4,
+		MappingEntries: []config.MappingEntry{
+			{OID: "1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+			{
+				OID: "1.3.6.1.2.1.4.20.1.2", Entity: "ipAddress", Field: "assignedObject",
+				Relationship: config.Relationship{Type: "interface"},
+			},
+		},
+	})
+}
+
+// walkerWith merges extra PDU tables into a base factory's walk.
+func walkerWith(base snmp.ClientFactory, extra map[string]map[string]snmp.PDU) snmp.ClientFactory {
+	w, _ := base("", 0, 0, 0, nil, nil)
+	sw := w.(*staticWalker)
+	merged := map[string]map[string]snmp.PDU{}
+	for root, rows := range sw.pdus {
+		merged[root] = rows
+	}
+	for root, rows := range extra {
+		merged[root] = rows
+	}
+	out := &staticWalker{pdus: merged}
+	return func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return out, nil
+	}
+}
+
+// TestQueryTarget_StackClaimsTargetAddressAsMasterPrimaryIP pins a
+// deliberate assumption rather than something the walk establishes.
+//
+// Management addresses sit on an SVI, which belongs to the stack rather
+// than to any member, so nothing in the walk says which member owns the
+// address we reached. It is attributed to the master anyway, because that
+// holds for how a stack is normally reached and refusing it would cost
+// every correctly-targeted stack its master's primary IP and matcher.
+//
+// The requirement that falls out -- target the member the stack is
+// mastered on, which is the lowest member id -- is documented. This test
+// exists so that assumption is visible in the code rather than implied by
+// its absence.
+func TestQueryTarget_StackClaimsTargetAddressAsMasterPrimaryIP(t *testing.T) {
+	runner := queryTargetRunner(walkerWith(stackWalkerFactory(), mgmtAddressPDUs("10.0.0.1")), ipEntries())
+	entities, hits, multiChassis, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	assert.True(t, multiChassis, "precondition: this walk describes several chassis")
+
+	master := masterOf(entities)
+	require.NotNil(t, master)
+	require.NotNil(t, master.PrimaryIp4,
+		"the polled address is attributed to the master on a stack too")
+	assert.NotEmpty(t, hits, "and is recorded as the cycle-closer")
+}
+
+// TestQueryTarget_StandaloneClaimsTargetAddressAsPrimaryIP is the
+// unambiguous case, unchanged by any of this.
+func TestQueryTarget_StandaloneClaimsTargetAddressAsPrimaryIP(t *testing.T) {
+	runner := queryTargetRunner(walkerWith(standaloneWalkerFactory(), mgmtAddressPDUs("10.0.0.1")), ipEntries())
+	entities, hits, multiChassis, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	assert.False(t, multiChassis, "precondition: this walk describes one chassis")
+
+	master := masterOf(entities)
+	require.NotNil(t, master)
+	require.NotNil(t, master.PrimaryIp4)
+	assert.NotEmpty(t, hits)
 }

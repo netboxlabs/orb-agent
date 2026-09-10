@@ -1207,3 +1207,48 @@ func routeInterface(
 	}
 	return id
 }
+
+// MultiChassisWalk reports whether the walk carried more than one
+// ENTITY-MIB chassis row, before any member-numbering validation.
+//
+// TranslateAsStack refuses to emit a virtual chassis when a device
+// contradicts itself about member numbering, and returns a plain master
+// Device with a serial and nothing else. That output is indistinguishable
+// from a genuine standalone device, but the walk still described several
+// NetBox devices, so a target's netbox_id is no more attributable to one
+// of them than on a stack that translated cleanly. Callers that must not
+// act on a single-device assumption ask the walk rather than the emitted
+// entities.
+//
+// Applies extractInventory's containment filter and stops there. The two
+// filters answer different questions and only one of them belongs here:
+//
+//   - Containment ("is this row eligible to be a stack member at all?") is
+//     structural. A nested chassis under something that is not a stack
+//     container is a subchassis of one device, not a second device, and two
+//     walks in the LibreNMS corpus have that shape. Counting those would
+//     withhold the pin from a genuinely standalone target.
+//   - Numbering ("can the members be told apart?") is what refusal is about,
+//     and must NOT be applied. A walk whose members cannot be numbered still
+//     described several devices; that is the case this function exists for.
+func MultiChassisWalk(oids ObjectIDValueMap) bool {
+	seen := 0
+	for oid, v := range oids {
+		if !strings.HasPrefix(oid, oidEntPhysicalClass) {
+			continue
+		}
+		if strings.TrimSpace(v.Value) != entPhysicalClassChassis {
+			continue
+		}
+		idx := strings.TrimPrefix(oid, oidEntPhysicalClass)
+		contained := trimSNMPString(oids[oidEntPhysicalContainedIn+idx].Value)
+		if contained != "0" && !isStackContainerParent(oids, contained) {
+			continue
+		}
+		seen++
+		if seen > 1 {
+			return true
+		}
+	}
+	return false
+}

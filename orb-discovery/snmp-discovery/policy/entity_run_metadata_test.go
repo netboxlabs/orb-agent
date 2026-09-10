@@ -266,3 +266,86 @@ func int64Ptr(v int64) *int64 {
 func stringPtr(v string) *string {
 	return &v
 }
+
+// TestEmittedStack covers the recognition that decides whether a target's
+// netbox_id is applied. TranslateAsStack emits the VirtualChassis and the
+// member Devices together, so either alone must be enough: a batch that
+// carried only one of them and was read as standalone would let the pin
+// through on exactly the shape it must not.
+func TestEmittedStack(t *testing.T) {
+	two := int64(2)
+	masterRef := &diode.Device{Name: stringPtr("stack-1"), Serial: stringPtr("FCW2147L0K3")}
+
+	t.Run("virtual chassis alone", func(t *testing.T) {
+		serial, isStack := emittedStack([]diode.Entity{
+			&diode.VirtualChassis{Name: stringPtr("wlc"), Master: masterRef},
+		})
+		assert.True(t, isStack)
+		assert.Equal(t, "FCW2147L0K3", serial, "the master serial names the stack in the log line")
+	})
+
+	t.Run("member device alone", func(t *testing.T) {
+		_, isStack := emittedStack([]diode.Entity{
+			&diode.Device{Name: stringPtr("stack-1-2"), VcPosition: &two},
+		})
+		assert.True(t, isStack)
+	})
+
+	t.Run("standalone device", func(t *testing.T) {
+		serial, isStack := emittedStack([]diode.Entity{
+			&diode.Device{Name: stringPtr("sw1"), Serial: stringPtr("FCW001")},
+			&diode.Interface{Name: stringPtr("Gi0/1")},
+		})
+		assert.False(t, isStack, "a device with no member position is not a stack")
+		// The serial is still reported: it names the master, not the stack,
+		// and the caller reads it only when it decides to withhold. Nothing
+		// is withheld here because isStack is false and the walk carried one
+		// chassis.
+		assert.Equal(t, "FCW001", serial)
+	})
+
+	t.Run("empty batch", func(t *testing.T) {
+		_, isStack := emittedStack(nil)
+		assert.False(t, isStack)
+	})
+}
+
+// TestAnnotateDeviceWithSourceMatch_StackMasterWouldBeMislabelled is the
+// reported bug in miniature, and pins why the runner withholds the id
+// rather than relying on the member skip.
+//
+// Polling either address of an HA pair returns the whole pair, so both
+// targets emit the same master. The member skip protects members, but the
+// master is stamped with whichever target's id arrived, and on the target
+// that is not the master that id belongs to another NetBox device.
+func TestAnnotateDeviceWithSourceMatch_StackMasterWouldBeMislabelled(t *testing.T) {
+	two := int64(2)
+	master := &diode.Device{Name: stringPtr("stack-1"), Serial: stringPtr("FCW2147L0K3")}
+	member := &diode.Device{Name: stringPtr("stack-1-2"), Serial: stringPtr("FCW2147L0K4"), VcPosition: &two}
+	entities := []diode.Entity{master, member}
+
+	// 42 is the member's NetBox device, not the master's.
+	annotateDeviceWithSourceMatch(entities, 42)
+
+	assert.Equal(t, diode.Metadata{"netbox_id": 42}, master.Metadata["source_match"],
+		"annotation alone cannot tell the id was written for the other member")
+	_, hasSM := member.Metadata["source_match"]
+	assert.False(t, hasSM)
+
+	// Which is why recognition happens before annotation is reached.
+	_, isStack := emittedStack(entities)
+	assert.True(t, isStack, "the batch must be recognised as a stack so the runner withholds the id")
+}
+
+// TestEmittedStack_SerialFromRefusedStackMaster pins the log field on the
+// path that has no VirtualChassis to read it from. A refused stack emits
+// only a plain master, and the serial is what identifies which device
+// dropped its netbox_id, so a blank one there is a warning nobody can act
+// on.
+func TestEmittedStack_SerialFromRefusedStackMaster(t *testing.T) {
+	master := &diode.Device{Name: stringPtr("ambiguous-stack"), Serial: stringPtr("FCW2147L0K3")}
+
+	serial, isStack := emittedStack([]diode.Entity{master})
+	assert.False(t, isStack, "a refused stack emits nothing this function can recognise")
+	assert.Equal(t, "FCW2147L0K3", serial, "the master's serial must still reach the log line")
+}

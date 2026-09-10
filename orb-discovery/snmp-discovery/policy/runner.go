@@ -423,7 +423,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	entities, primaryHits, err := r.queryTarget(ctx, target)
+	entities, primaryHits, multiChassis, err := r.queryTarget(ctx, target)
 	if err != nil {
 		r.logger.Error("error querying target", "host", target.Host, "error", err, "policy", policyName)
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
@@ -439,7 +439,24 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	}
 
 	if target.NetboxID != nil {
-		annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+		// Withheld rather than applied to the master: the address cannot be
+		// tied to one member of a stack, so pinning the master to it would
+		// assert an identity the walk does not support. See emittedStack.
+		// The master still matches on sysName + site, asset_tag or primary
+		// IP, and those agree across every target of the same stack, which
+		// is what stops a second virtual chassis being proposed.
+		// multiChassis covers the stack whose numbering was refused: no
+		// virtual chassis or members are emitted for it, so the entity
+		// batch alone reads as a standalone device while the walk still
+		// described several.
+		if serial, isStack := emittedStack(entities); isStack || multiChassis {
+			r.logger.Warn("target resolved to a stack; netbox_id not applied",
+				"host", target.Host, "policy", policyName,
+				"netbox_id", *target.NetboxID, "master_serial", serial,
+				"detail", "a stack member's address is answered by the whole system, so the id cannot be tied to one member; remove netbox_id from this target and let the master match on its name")
+		} else {
+			annotateDeviceWithSourceMatch(entities, *target.NetboxID)
+		}
 	}
 	// Resolve the master once; reused for name suppression and pruning.
 	currentDevice := mapping.CurrentDeviceFrom(entities)
@@ -530,17 +547,27 @@ func (r *Runner) assetTagClaimer(targetID string) func(string) bool {
 // primary IP). The hits are returned by value — never stashed on the
 // shared Runner, which serves targets concurrently — so the caller can
 // thread them into PruneNestedRefs for this target only.
-func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
+// queryTarget returns the entity batch, the primary-IP cycle closers, and
+// whether the walk described more than one chassis. The last is read from
+// the walk rather than the entities because a stack whose numbering was
+// refused emits no virtual chassis and no members, yet still describes
+// several NetBox devices. See mapping.MultiChassisWalk.
+func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
+
+	// Accumulated across every walked host: a range target visits several,
+	// and one multi-chassis answer is enough to make the target's netbox_id
+	// unattributable.
+	multiChassis := false
 
 	targetDefaults := r.resolveTargetDefaults(target)
 
 	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, targetDefaults, r.config.Options)
 	if err != nil {
 		r.logger.Error("error creating mapping config", "error", err)
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	targetHost := strings.TrimSpace(target.Host)
 
@@ -590,7 +617,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 					attribute.String("error", ctx.Err().Error()),
 				))
 		}
-		return nil, nil, ctx.Err()
+		return nil, nil, false, ctx.Err()
 	case res := <-resultCh:
 		if res.err != nil {
 			r.logger.Warn("error crawling host", "host", targetHost, "error", res.err)
@@ -601,7 +628,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 						attribute.String("error", res.err.Error()),
 					))
 			}
-			return nil, nil, res.err
+			return nil, nil, false, res.err
 		}
 		oids = res.oids
 	}
@@ -634,7 +661,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 							attribute.String("error", ctx.Err().Error()),
 						))
 				}
-				return nil, nil, ctx.Err()
+				return nil, nil, false, ctx.Err()
 			case res := <-vendorCh:
 				if res.err != nil {
 					r.logger.Warn("phase 2 walk failed; continuing with generic only",
@@ -667,6 +694,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	entities := make([]diode.Entity, 0)
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()
+	multiChassis = multiChassis || mapping.MultiChassisWalk(oids)
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
 		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)), r.logger)
 
@@ -781,7 +809,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// Capture the per-target cycle-closer primary IP hits and return them
 	// by value so the caller can thread them into PruneNestedRefs without
 	// any shared Runner state (concurrency-safe).
-	return entities, mapper.PrimaryIPHits(), nil
+	return entities, mapper.PrimaryIPHits(), multiChassis, nil
 }
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {
