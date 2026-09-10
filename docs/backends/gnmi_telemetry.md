@@ -57,9 +57,11 @@ orb:
             - host: "192.168.1.1"
             - host: "192.168.1.2"
               id: "42"                     # exported as netbox_id
+            - host: "192.168.2.0/24"       # a CIDR prefix: every address that answers is subscribed
+            - host: "192.168.3.10-20"      # a range over the last octet
 ```
 
-A credential or a TLS file path may be read from the agent's environment as `${NAME}` only when `policy_env_vars` in the backend configuration names it; otherwise the policy is refused. A CIDR or range target may carry a credential only when TLS verifies the server, or when the policy sets `send_credentials_to_unverified_targets: true`.
+A target's `host` is one address or hostname, a CIDR prefix, or a range over the last octet; a prefix or range is swept, and each address that answers Capabilities gets a subscription of its own, while the ones that do not are probed again only when `config.rescan_interval_ms` is set. A credential or a TLS file path may be read from the agent's environment as `${NAME}` only when `policy_env_vars` in the backend configuration names it; otherwise the policy is refused. A CIDR or range target may carry a credential only when TLS verifies the server, as `tls.ca` does above, or when the policy sets `send_credentials_to_unverified_targets: true`.
 
 ### Delivery modes
 For each target the backend selects a metric profile from the vendor and network OS the device reports, and asks for the profile's paths in the mode the profile names: counters at the `metrics_interval` SAMPLE cadence, states ON_CHANGE. A device that refuses that request is asked for SAMPLE on every path, and one that refuses that too is polled with Get at the same interval. `config.mode` narrows the ladder: `on_change` keeps the profile's own modes and skips the all-SAMPLE rung, `sample` asks for SAMPLE on every path from the start; both still fall to Get. A target may set its own `mode`, and `profile` pins a metric profile instead of matching it from the device's Capabilities.
