@@ -510,3 +510,32 @@ func TestStartProcess_GivesUpWhenTheReadinessBudgetIsSpent(t *testing.T) {
 	assert.LessOrEqual(t, checks.Load(), int32(3), "attempt 0 sleeps nothing, attempt 1 sleeps the clamped budget, attempt 2 finds it spent")
 	assert.Equal(t, int32(1), fake.stopCalls.Load())
 }
+
+// A readiness check that completes successfully after the context was
+// cancelled must still stop the child: the check itself is not interrupted,
+// but its result arrives too late to matter, and the start must not report
+// success while leaving an unwanted process running.
+func TestStartProcess_StopsTheChildWhenCancelledDuringASuccessfulReadinessCheck(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 0
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	var checks atomic.Int32
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) {
+			checks.Add(1)
+			cancel()
+			return "1.2.3", nil
+		},
+		Ctx: ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(1), checks.Load(), "the readiness check ran once")
+	assert.Equal(t, int32(1), fake.stopCalls.Load())
+}

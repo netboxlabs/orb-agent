@@ -53,7 +53,9 @@ type StartSpec struct {
 	// and one that ends during the startup wait or a readiness backoff stops
 	// the child and returns the cancellation. A readiness check in flight is
 	// not interrupted, so a cancellation returns within one check's own
-	// timeout. Nil means the start cannot be cancelled, as before.
+	// timeout; the result of a check that completes after the cancellation is
+	// discarded and the child is stopped. Nil means the start cannot be
+	// cancelled, as before.
 	Ctx context.Context
 	// ReadinessBudget bounds the readiness phase after the startup wait: the
 	// loop never sleeps past it and gives up when it is spent, overshooting by
@@ -184,6 +186,9 @@ func StartProcess(spec StartSpec) error {
 		}
 		version, readinessErr = spec.ReadinessCheck()
 		if readinessErr == nil {
+			if ctx.Err() != nil {
+				return cancelled()
+			}
 			spec.Logger.Info(spec.NameDisplay+" readiness ok, got version", "version", version)
 			break
 		}
