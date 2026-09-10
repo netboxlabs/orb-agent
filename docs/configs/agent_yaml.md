@@ -148,7 +148,7 @@ Optional OpenTelemetry export for backend metrics.
 
 ### Backend keys
 
-Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends and `snmp_telemetry` accept optional `host` and `port` overrides.
+Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends, `snmp_telemetry` and `gnmi_telemetry` accept optional `host` and `port` overrides.
 
 | Key | Backend | Default port | Notes |
 |-----|---------|-------------|-------|
@@ -159,6 +159,7 @@ Each backend key enables that backend. An empty value (no sub-keys) uses all def
 | `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor.md) |
 | `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
 | `snmp_telemetry` | SNMP metrics and traps | 8078 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [SNMP Telemetry docs](../backends/snmp_telemetry.md) |
+| `gnmi_telemetry` | gNMI streaming telemetry metrics | 8079 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [gNMI Telemetry docs](../backends/gnmi_telemetry.md) |
 
 ---
 
@@ -204,6 +205,7 @@ For the full list of parameters per backend, see:
 - [Network Discovery](../backends/network_discovery.md)
 - [Worker](../backends/worker.md)
 - [SNMP Telemetry](../backends/snmp_telemetry.md)
+- [gNMI Telemetry](../backends/gnmi_telemetry.md)
 
 ---
 
@@ -357,6 +359,7 @@ Values can reference environment variables using `${VAR_NAME}` syntax. Resolutio
 | `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
 | `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, `context_name` | Go SNMP backend at policy execution |
 | `snmp_telemetry` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, only for variables named in `backends.snmp_telemetry.policy_env_vars`; unset refuses every reference | Go SNMP telemetry backend at policy execution |
+| `gnmi_telemetry` policy credentials | `username`, `password`, `tls.ca`, `tls.cert`, `tls.key`, only for variables named in `backends.gnmi_telemetry.policy_env_vars`; unset refuses every reference | Go gNMI telemetry backend at policy execution |
 
 ```yaml
 # Git config (resolved by Go agent)

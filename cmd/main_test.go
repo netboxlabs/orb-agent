@@ -83,3 +83,8 @@ func TestApplyConfigDebug_BothOnNoDuplicateAnnounce(t *testing.T) {
 func TestInitRegistersSnmpTelemetry(t *testing.T) {
 	assert.True(t, backend.HaveBackend("snmp_telemetry"))
 }
+
+// gnmi_telemetry ships in the image and is registered the same way.
+func TestInitRegistersGnmiTelemetry(t *testing.T) {
+	assert.True(t, backend.HaveBackend("gnmi_telemetry"))
+}
