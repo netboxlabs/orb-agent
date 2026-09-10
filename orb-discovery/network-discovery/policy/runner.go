@@ -333,6 +333,7 @@ func (r *Runner) run() {
 
 	// Track discovered hosts
 	processedEntries := make(map[string]bool)
+	var replacedHostnames, refusedHostnames int
 
 	defaultMask := "/32"
 	if r.config.Defaults.NetworkMask != nil && *r.config.Defaults.NetworkMask > 0 {
@@ -360,86 +361,18 @@ func (r *Runner) run() {
 		}
 		processedEntries[addr] = true
 
-		ip := &diode.IPAddress{
-			Address: diode.String(ipAddr),
+		ip, outcome := r.ipAddressEntity(host, ipAddr, addr, policyName)
+		switch outcome {
+		case hostnameReplaced:
+			replacedHostnames++
+		case hostnameRefused:
+			refusedHostnames++
 		}
-		if r.config.Defaults.Description != "" {
-			ip.Description = diode.String(r.config.Defaults.Description)
-		}
-		hasComments := false
-		if r.config.Defaults.Comments != "" {
-			hasComments = true
-			ip.Comments = diode.String(r.config.Defaults.Comments)
-		}
-		if r.config.Defaults.Vrf != "" {
-			vrf := &diode.VRF{Name: diode.String(r.config.Defaults.Vrf)}
-			if r.config.Defaults.Rd != "" {
-				vrf.Rd = diode.String(r.config.Defaults.Rd)
-			}
-			ip.Vrf = vrf
-		}
-		if r.config.Defaults.Tenant != "" {
-			ip.Tenant = &diode.Tenant{
-				Name: diode.String(r.config.Defaults.Tenant),
-			}
-		}
-		if r.config.Defaults.Role != "" {
-			ip.Role = diode.String(r.config.Defaults.Role)
-		}
-		if len(r.config.Defaults.Tags) > 0 {
-			var tags []*diode.Tag
-			for _, tag := range r.config.Defaults.Tags {
-				tags = append(tags, &diode.Tag{Name: diode.String(tag)})
-			}
-			ip.Tags = tags
-		}
-
-		if host.Hostnames != nil {
-			var fallbackHostname string
-			for _, hostname := range host.Hostnames {
-				fallbackHostname = strings.ToLower(hostname.Name)
-				if hostname.Type == "PTR" {
-					ip.DnsName = diode.String(strings.ToLower(hostname.Name))
-					break
-				}
-			}
-			if ip.DnsName == nil && fallbackHostname != "" {
-				ip.DnsName = diode.String(fallbackHostname)
-			}
-		}
-
-		if !hasComments {
-			var metadata config.HostMetadata
-
-			if host.ExtraPorts != nil {
-				metadata.ExtraPorts = make([]config.ExtraPort, len(host.ExtraPorts))
-				for i, extraPort := range host.ExtraPorts {
-					metadata.ExtraPorts[i] = config.ExtraPort{
-						State: extraPort.State,
-						Count: extraPort.Count,
-					}
-				}
-			}
-			if host.Ports != nil {
-				metadata.Ports = make([]config.Port, len(host.Ports))
-				for i, port := range host.Ports {
-					metadata.Ports[i] = config.Port{
-						Number:   int(port.ID),
-						Protocol: port.Protocol,
-						Service:  port.Service.Name,
-						State:    port.State.State,
-					}
-				}
-			}
-			data, err := json.Marshal(&metadata)
-			if err != nil {
-				r.logger.Error("error marshalling metadata", "error", err, "policy", policyName)
-			} else {
-				ip.Comments = diode.String(string(data))
-			}
-		}
-
 		entities = append(entities, ip)
+	}
+
+	if replacedHostnames > 0 || refusedHostnames > 0 {
+		r.logger.Info("reverse hostnames NetBox would not accept as dns_name", "replaced", replacedHostnames, "refused", refusedHostnames, "policy", policyName)
 	}
 
 	annotateEntitiesWithRunID(entities, run.ID)
@@ -478,4 +411,76 @@ func (r *Runner) Stop() error {
 		rMetric.Add(r.ctx, -1)
 	}
 	return r.scheduler.Shutdown()
+}
+
+// ipAddressEntity builds the IP address entity for one scanned host.
+func (r *Runner) ipAddressEntity(host nmap.Host, ipAddr, addr, policyName string) (*diode.IPAddress, hostnameOutcome) {
+	ip := &diode.IPAddress{
+		Address: diode.String(ipAddr),
+	}
+	if r.config.Defaults.Description != "" {
+		ip.Description = diode.String(r.config.Defaults.Description)
+	}
+	hasComments := false
+	if r.config.Defaults.Comments != "" {
+		hasComments = true
+		ip.Comments = diode.String(r.config.Defaults.Comments)
+	}
+	if r.config.Defaults.Vrf != "" {
+		vrf := &diode.VRF{Name: diode.String(r.config.Defaults.Vrf)}
+		if r.config.Defaults.Rd != "" {
+			vrf.Rd = diode.String(r.config.Defaults.Rd)
+		}
+		ip.Vrf = vrf
+	}
+	if r.config.Defaults.Tenant != "" {
+		ip.Tenant = &diode.Tenant{
+			Name: diode.String(r.config.Defaults.Tenant),
+		}
+	}
+	if r.config.Defaults.Role != "" {
+		ip.Role = diode.String(r.config.Defaults.Role)
+	}
+	if len(r.config.Defaults.Tags) > 0 {
+		var tags []*diode.Tag
+		for _, tag := range r.config.Defaults.Tags {
+			tags = append(tags, &diode.Tag{Name: diode.String(tag)})
+		}
+		ip.Tags = tags
+	}
+
+	canRecord := !hasComments
+	outcome, recordedHostnames := r.applyHostname(ip, host.Hostnames, addr, policyName, canRecord)
+
+	if !hasComments {
+		metadata := config.HostMetadata{Hostnames: recordedHostnames}
+
+		if host.ExtraPorts != nil {
+			metadata.ExtraPorts = make([]config.ExtraPort, len(host.ExtraPorts))
+			for i, extraPort := range host.ExtraPorts {
+				metadata.ExtraPorts[i] = config.ExtraPort{
+					State: extraPort.State,
+					Count: extraPort.Count,
+				}
+			}
+		}
+		if host.Ports != nil {
+			metadata.Ports = make([]config.Port, len(host.Ports))
+			for i, port := range host.Ports {
+				metadata.Ports[i] = config.Port{
+					Number:   int(port.ID),
+					Protocol: port.Protocol,
+					Service:  port.Service.Name,
+					State:    port.State.State,
+				}
+			}
+		}
+		data, err := json.Marshal(&metadata)
+		if err != nil {
+			r.logger.Error("error marshalling metadata", "error", err, "policy", policyName)
+		} else {
+			ip.Comments = diode.String(string(data))
+		}
+	}
+	return ip, outcome
 }
