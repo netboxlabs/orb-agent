@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/backend/snmptelemetry"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
@@ -35,6 +36,29 @@ func (m *mockConfigManager) Stop(_ context.Context) error {
 	}
 	m.stopCalled = true
 	return nil
+}
+
+// Every bundled backend is registered; only the ones this agent started are
+// in its backends map. A restart asked for a registered backend the agent
+// never started, which has no process, logger or arguments, is refused
+// rather than reached for.
+func TestRestartBackendRefusesABackendTheAgentDidNotStart(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	snmptelemetry.Register()
+	require.True(t, backend.HaveBackend("snmp_telemetry"))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{},
+		policyManager:       &mockPolicyManager{repo: repo},
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+	}
+
+	var restartErr error
+	require.NotPanics(t, func() { restartErr = a.RestartBackend(context.Background(), "snmp_telemetry", "test") })
+	require.Error(t, restartErr)
+	assert.Contains(t, restartErr.Error(), "not started by this agent")
 }
 
 func TestAgentStop_DelegatesToConfigManagerStop(t *testing.T) {
@@ -113,7 +137,7 @@ func (m *mockPolicyManager) ApplyBackendPolicies(_ backend.Backend) error {
 	return nil
 }
 
-func (m *mockPolicyManager) RemoveBackendPolicies(_ backend.Backend, _ bool) error {
+func (m *mockPolicyManager) RemoveBackendPolicies(_ string, _ backend.Backend, _ bool) error {
 	return nil
 }
 

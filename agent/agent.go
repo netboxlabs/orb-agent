@@ -611,8 +611,11 @@ func (a *orbAgent) shutdownOTLP() {
 }
 
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
-	if !backend.HaveBackend(name) {
-		return errors.New("specified backend does not exist: " + name)
+	// Every bundled backend is registered; only the ones this agent started
+	// are in a.backends, and only those have a process to restart.
+	be, ok := a.backends[name]
+	if !ok {
+		return errors.New("backend is not started by this agent: " + name)
 	}
 
 	// Serialize concurrent Stop+Start sequences for the same backend across
@@ -621,11 +624,10 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	restartMu.Lock()
 	defer restartMu.Unlock()
 
-	be := a.backends[name]
 	a.logger.Info("restarting backend", "backend", name, "reason", reason)
 	a.backendStateManager.RegisterRestart(name, reason)
 	a.logger.Info("removing policies", "backend", name)
-	if err := a.policyManager.RemoveBackendPolicies(be, true); err != nil {
+	if err := a.policyManager.RemoveBackendPolicies(name, be, true); err != nil {
 		a.logger.Error("failed to remove policies", "backend", name, "error", err)
 	}
 	var beConfig map[string]any

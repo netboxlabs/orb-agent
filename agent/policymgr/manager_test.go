@@ -459,7 +459,7 @@ func TestRemoveBackendPolicies(t *testing.T) {
 	mockBe.On("RemovePolicy", mock.Anything).Return(nil).Times(3)
 
 	// Test non-permanent removal (only marks policies as unknown)
-	err = mgr.RemoveBackendPolicies(mockBe, false)
+	err = mgr.RemoveBackendPolicies("testbackend", mockBe, false)
 	require.NoError(t, err)
 
 	// Verify policies are still there but with state Unknown
@@ -472,7 +472,7 @@ func TestRemoveBackendPolicies(t *testing.T) {
 
 	// Test permanent removal
 	mockBe.On("RemovePolicy", mock.Anything).Return(nil).Times(3)
-	err = mgr.RemoveBackendPolicies(mockBe, true)
+	err = mgr.RemoveBackendPolicies("testbackend", mockBe, true)
 	require.NoError(t, err)
 
 	// Verify policies are gone
@@ -732,6 +732,7 @@ func TestRemovePolicy_BackendRemoveError(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "be_remove_err"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("be_remove_err", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -772,6 +773,7 @@ func TestRemovePolicyDataset_GetError(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "be_dataset_get_err"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("be_dataset_get_err", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -789,6 +791,7 @@ func TestRemovePolicyDataset_RemovePolicyError(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "be_dataset_rm_err"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("be_dataset_rm_err", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -819,6 +822,131 @@ func TestRemovePolicyDataset_RemovePolicyError(t *testing.T) {
 	assert.Empty(t, state)
 }
 
+// A restart removes the policies of the backend being restarted and no
+// other's: the repo holds every backend's policies, and removing them all
+// left the agent with nothing applied until the next full list from fleet.
+func TestRemoveBackendPoliciesLeavesOtherBackendsAlone(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	restarted := &mockBackend{name: "restarted_backend"}
+	restarted.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	other := &mockBackend{name: "other_backend"}
+	other.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("restarted_backend", restarted)
+	backend.Register("other_backend", other)
+
+	restarted.On("ApplyPolicy", mock.Anything, false).Return(nil)
+	other.On("ApplyPolicy", mock.Anything, false).Return(nil)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	for _, be := range []string{"restarted_backend", "other_backend"} {
+		payload := config.PolicyPayload{Action: "manage", ID: "policy-" + be, Name: "Policy " + be, Backend: be, Version: 1, Data: map[string]any{}, DatasetID: "ds-" + be}
+		secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+		mgr.ManagePolicy(payload)
+	}
+	restarted.On("RemovePolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "policy-restarted_backend" })).Return(nil).Once()
+
+	require.NoError(t, mgr.RemoveBackendPolicies("restarted_backend", restarted, true))
+
+	other.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	restarted.AssertExpectations(t)
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1)
+	assert.Equal(t, "policy-other_backend", state[0].ID)
+}
+
+func policyIDs(state []policies.PolicyData) []string {
+	ids := make([]string, 0, len(state))
+	for _, p := range state {
+		ids = append(ids, p.ID)
+	}
+	return ids
+}
+
+// A remove for a backend the agent never started has no process to ask and
+// no logger to log the call with, so the policy leaves the agent's repo
+// without the call, as an expected condition rather than an error.
+func TestRemovePolicyDoesNotCallABackendThatIsNotRunning(t *testing.T) {
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	secretsMgr := new(mockSecretsManager)
+	cold := &mockBackend{name: "cold_backend"}
+	cold.On("GetRunningStatus").Return(backend.Unknown, "backend not started yet", nil)
+	backend.Register("cold_backend", cold)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	payload := config.PolicyPayload{Action: "manage", ID: "policy-cold", Name: "Cold Policy", Backend: "cold_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-cold"}
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+	mgr.ManagePolicy(payload)
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	require.Contains(t, policyIDs(state), "policy-cold", "the policy is kept as failed to apply")
+
+	require.NoError(t, mgr.RemovePolicy("policy-cold", "Cold Policy", "cold_backend"))
+
+	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.NotContains(t, policyIDs(state), "policy-cold")
+	assert.NotContains(t, logs.String(), "level=ERROR", "an expected condition is not an error")
+	assert.Contains(t, logs.String(), "treating policy as already removed")
+
+	// The dataset path removes through the same gate.
+	mgr.ManagePolicy(payload)
+	mgr.RemovePolicyDataset("policy-cold", "ds-cold", cold)
+	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	state, err = mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.NotContains(t, policyIDs(state), "policy-cold")
+}
+
+// A backend that was started is asked whatever its state: a live process
+// whose status probe timed out may still hold the policy, and skipping it
+// would drop the agent's record while the policy kept running.
+func TestRemovePolicyStillAsksABackendWhoseStatusProbeFailed(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	flaky := &mockBackend{name: "flaky_backend"}
+	flaky.On("GetRunningStatus").Return(backend.BackendError, "process running, REST API unavailable", errors.New("timeout"))
+	backend.Register("flaky_backend", flaky)
+	flaky.On("RemovePolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "policy-flaky" })).Return(nil).Once()
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	payload := config.PolicyPayload{Action: "manage", ID: "policy-flaky", Name: "Flaky Policy", Backend: "flaky_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-flaky"}
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+	mgr.ManagePolicy(payload)
+
+	require.NoError(t, mgr.RemovePolicy("policy-flaky", "Flaky Policy", "flaky_backend"))
+
+	flaky.AssertExpectations(t)
+}
+
+// A restart's removals go through the same gate as a single remove: a
+// backend the agent never started is not asked, and its records still leave.
+func TestRemoveBackendPoliciesDoesNotCallABackendThatWasNeverStarted(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	cold := &mockBackend{name: "cold_restart_backend"}
+	cold.On("GetRunningStatus").Return(backend.Unknown, "backend not started yet", nil)
+	backend.Register("cold_restart_backend", cold)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	payload := config.PolicyPayload{Action: "manage", ID: "policy-cold-restart", Name: "Cold Restart Policy", Backend: "cold_restart_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds-cold-restart"}
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil)
+	mgr.ManagePolicy(payload)
+
+	require.NoError(t, mgr.RemoveBackendPolicies("cold_restart_backend", cold, true))
+
+	cold.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	assert.NotContains(t, policyIDs(state), "policy-cold-restart")
+}
+
 func TestRemoveBackendPolicies_Permanently(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)
@@ -826,6 +954,7 @@ func TestRemoveBackendPolicies_Permanently(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "be_perm_remove"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("be_perm_remove", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -843,7 +972,7 @@ func TestRemoveBackendPolicies_Permanently(t *testing.T) {
 
 	mockBe.On("RemovePolicy", mock.Anything).Return(nil)
 
-	err = mgr.RemoveBackendPolicies(mockBe, true)
+	err = mgr.RemoveBackendPolicies("be_perm_remove", mockBe, true)
 	require.NoError(t, err)
 
 	state, err := mgr.GetPolicyState()
@@ -858,6 +987,7 @@ func TestRemoveBackendPolicies_NotPermanently(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "be_nonperm_remove"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("be_nonperm_remove", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -875,7 +1005,7 @@ func TestRemoveBackendPolicies_NotPermanently(t *testing.T) {
 
 	mockBe.On("RemovePolicy", mock.Anything).Return(nil)
 
-	err = mgr.RemoveBackendPolicies(mockBe, false)
+	err = mgr.RemoveBackendPolicies("be_nonperm_remove", mockBe, false)
 	require.NoError(t, err)
 
 	// Policies still exist but state is Unknown
@@ -1249,6 +1379,7 @@ func TestRemoveBackendPolicies_BackendError_Permanently(t *testing.T) {
 	cfg := config.Config{}
 
 	mockBe := &mockBackend{name: "be_perm_err"}
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("be_perm_err", mockBe)
 
 	mgr, err := policymgr.New(logger, secretsMgr, cfg)
@@ -1265,7 +1396,7 @@ func TestRemoveBackendPolicies_BackendError_Permanently(t *testing.T) {
 	// Backend errors on remove — should still proceed
 	mockBe.On("RemovePolicy", mock.Anything).Return(errors.New("backend error"))
 
-	err = mgr.RemoveBackendPolicies(mockBe, true)
+	err = mgr.RemoveBackendPolicies("be_perm_err", mockBe, true)
 	require.NoError(t, err)
 
 	state, err := mgr.GetPolicyState()

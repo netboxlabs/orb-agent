@@ -49,7 +49,7 @@ func (m *mockPolicyManager) ApplyBackendPolicies(be backend.Backend) error {
 	return args.Error(0)
 }
 
-func (m *mockPolicyManager) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+func (m *mockPolicyManager) RemoveBackendPolicies(_ string, be backend.Backend, permanently bool) error {
 	args := m.Called(be, permanently)
 	return args.Error(0)
 }
