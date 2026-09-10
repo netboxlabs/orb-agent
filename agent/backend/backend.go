@@ -145,7 +145,6 @@ func GetBackend(name string) Backend {
 	return registry[name]
 }
 
-// RestartAll restarts all backends
 // RestartAll resets every backend the agent has started. Every bundled
 // backend is registered, but only the ones the agent's configuration names
 // are configured and started; one that was never started has no process,
