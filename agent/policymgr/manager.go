@@ -1,6 +1,7 @@
 package policymgr
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,7 +20,7 @@ type PolicyManager interface {
 	RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend)
 	GetPolicyState() ([]policies.PolicyData, error)
 	GetRepo() policies.PolicyRepo
-	ApplyBackendPolicies(name string, be backend.Backend) error
+	ApplyBackendPolicies(ctx context.Context, name string, be backend.Backend) error
 	RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error
 	RemovePolicy(policyID string, policyName string, beName string) error
 	SetStarter(starter BackendStarter)
@@ -106,6 +107,10 @@ func (a *policyManager) SetStarter(starter BackendStarter) {
 	a.starter = starter
 }
 
+// ReasonBackendStarting is the operator-facing reason stored on a policy
+// whose apply was deferred because the starter reported the backend starting.
+const ReasonBackendStarting = "backend starting"
+
 // backendReady consults the starter for the policy's backend. It returns
 // true when the apply may proceed; otherwise it has set the policy's state
 // and reason and the caller persists the record.
@@ -121,7 +126,7 @@ func (a *policyManager) backendReady(name string, pd *policies.PolicyData) bool 
 		return false
 	case state == StartStarting:
 		pd.State = policies.FailedToApply
-		pd.BackendErr = "backend starting"
+		pd.BackendErr = ReasonBackendStarting
 		return false
 	}
 	return true
@@ -541,14 +546,30 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // policy failed; that per-policy check is a second GetRunningStatus call,
 // an HTTP round trip for every policy in the loop, and is not redundant
 // with the gate above, so do not remove either thinking the other covers it.
-func (a *policyManager) ApplyBackendPolicies(name string, be backend.Backend) error {
+//
+// The context is checked before every policy, not only once on entry: a
+// caller whose shutdown begins mid-loop must stop launching further HTTP
+// calls, including one-shot policies, rather than run the whole backlog
+// because the loop was already past the first check. A cancellation ends
+// the loop and is returned, leaving whatever policies were not yet reached
+// as they were (most often unknown) for a later replay to pick up.
+//
+// A record already Running is skipped: every restart marks a backend's
+// policies unknown before stopping it, and a manage that lands while a
+// restart is in flight is stored failed to apply rather than running, so a
+// running record can only reflect this same process's own prior apply.
+// Skipping it is what lets a restart's second pass, taken after its mutex is
+// released to pick up anything that arrived in the window between the first
+// pass and the unlock, run safely alongside (or after) the first without
+// applying a policy twice.
+func (a *policyManager) ApplyBackendPolicies(ctx context.Context, name string, be backend.Backend) error {
 	mu := a.applyLock(name)
 	mu.Lock()
 	defer mu.Unlock()
-	return a.applyBackendPoliciesLocked(name, be)
+	return a.applyBackendPoliciesLocked(ctx, name, be)
 }
 
-func (a *policyManager) applyBackendPoliciesLocked(name string, be backend.Backend) error {
+func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name string, be backend.Backend) error {
 	if state, detail, err := be.GetRunningStatus(); state != backend.Running || err != nil {
 		a.logger.Warn("backend is not running; its policies are left for its next start",
 			"backend", name, "backend_state", state.String(), "detail", detail, "error", err)
@@ -561,6 +582,13 @@ func (a *policyManager) applyBackendPoliciesLocked(name string, be backend.Backe
 	}
 	for _, policy := range plcies {
 		if policy.Backend != name {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			a.logger.Info("shutting down; remaining backend policies left unknown", "backend", name, "error", err)
+			return err
+		}
+		if policy.State == policies.Running {
 			continue
 		}
 		a.applyStoredPolicy(&policy, be)

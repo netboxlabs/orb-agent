@@ -518,7 +518,7 @@ func TestApplyBackendPoliciesAppliesOnlyThatBackendsPoliciesWithSolvedSecrets(t 
 	// the assertions below instead of panicking inside testify
 	mine.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	require.NoError(t, mgr.ApplyBackendPolicies("applier_mine", mine))
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "applier_mine", mine))
 
 	mine.AssertExpectations(t)
 	secretsMgr.AssertExpectations(t)
@@ -549,7 +549,7 @@ func TestApplyBackendPoliciesLeavesPoliciesWhenTheBackendIsNotRunning(t *testing
 	require.NoError(t, err)
 	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "flaky-1", Name: "Flaky One", Backend: "applier_flaky", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
 
-	err = mgr.ApplyBackendPolicies("applier_flaky", flaky)
+	err = mgr.ApplyBackendPolicies(context.Background(), "applier_flaky", flaky)
 
 	require.ErrorIs(t, err, policymgr.ErrBackendNotRunning)
 	flaky.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
@@ -579,7 +579,7 @@ func TestApplyBackendPoliciesFailsOnlyThePolicyWhoseSecretsCannotBeSolved(t *tes
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "sec-good" }), true).Return(nil).Once()
 	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe() // after the specific one, see the first test
 
-	require.NoError(t, mgr.ApplyBackendPolicies("applier_secrets", be))
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "applier_secrets", be))
 
 	be.AssertExpectations(t)
 	secretsMgr.AssertExpectations(t)
@@ -611,7 +611,7 @@ func TestApplyBackendPoliciesFailsOnlyThePolicyTheBackendRejects(t *testing.T) {
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "be-good" }), true).Return(nil).Once()
 	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "be-bad" }), true).Return(errors.New("failed to apply")).Once()
 
-	require.NoError(t, mgr.ApplyBackendPolicies("applier_backend_fail", be))
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "applier_backend_fail", be))
 
 	be.AssertExpectations(t)
 	secretsMgr.AssertExpectations(t)
@@ -620,6 +620,80 @@ func TestApplyBackendPoliciesFailsOnlyThePolicyTheBackendRejects(t *testing.T) {
 	assert.Equal(t, policies.Running, good.State)
 	assert.Equal(t, policies.FailedToApply, bad.State)
 	assert.Equal(t, "failed to apply", bad.BackendErr)
+}
+
+// A context cancelled partway through the loop stops the replay before the
+// next policy: the one already applied keeps its outcome, the one never
+// reached stays unknown, and the call reports the cancellation so the caller
+// knows the remaining policies were left untouched rather than applied.
+func TestApplyBackendPoliciesStopsWhenTheContextIsCancelledMidLoop(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "midloop_backend"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "first", Name: "first", Backend: "midloop_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "second", Name: "second", Backend: "midloop_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+
+	// GetAll iterates a map, so which record is applied first is not fixed;
+	// whichever one is, its own ApplyPolicy call cancels the context, and the
+	// assertions below check the outcome by state rather than by ID.
+	ctx, cancel := context.WithCancel(context.Background())
+	be.On("ApplyPolicy", mock.Anything, true).
+		Run(func(_ mock.Arguments) { cancel() }).
+		Return(nil).Once()
+
+	err = mgr.ApplyBackendPolicies(ctx, "midloop_backend", be)
+
+	require.ErrorIs(t, err, context.Canceled)
+	be.AssertExpectations(t) // exactly one ApplyPolicy call: a second would panic on the exhausted expectation
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	var running, unknown int
+	for _, pd := range state {
+		switch pd.State {
+		case policies.Running:
+			running++
+		case policies.Unknown:
+			unknown++
+		}
+	}
+	assert.Equal(t, 1, running, "the policy reached before the cancellation was applied")
+	assert.Equal(t, 1, unknown, "the policy never reached stays as it was")
+}
+
+// A record already Running reflects the current process: every restart marks
+// a backend's policies unknown before stopping it, and a manage during a
+// restart is stored failed to apply rather than running, so a running record
+// can only have been applied by this same process already. Skipping it is
+// what lets the replay run more than once (the restart's second pass, after
+// the mutex is released) without applying a policy twice.
+func TestApplyBackendPoliciesSkipsPoliciesAlreadyRunning(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "skip_running_backend"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "already-running", Name: "already-running", Backend: "skip_running_backend", Version: 1, Data: map[string]any{}, State: policies.Running}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "not-yet", Name: "not-yet", Backend: "skip_running_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "not-yet" }), true).Return(nil).Once()
+
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "skip_running_backend", be))
+
+	be.AssertExpectations(t) // the running record calling ApplyPolicy again would panic on the exhausted expectation
+	alreadyRunning, err := repo.Get("already-running")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, alreadyRunning.State)
+	notYet, err := repo.Get("not-yet")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, notYet.State)
 }
 
 // The state monitor calls repo.UpdateRuns for a policy at any time and does
@@ -643,7 +717,7 @@ func TestApplyBackendPoliciesKeepsRunUpdatesWrittenDuringTheApply(t *testing.T) 
 		}).
 		Return(nil).Once()
 
-	require.NoError(t, mgr.ApplyBackendPolicies("applier_runs", be))
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "applier_runs", be))
 
 	be.AssertExpectations(t)
 	stored, err := repo.Get("runs-1")
@@ -1872,7 +1946,7 @@ func TestManagePolicyWaitsForAnApplierHoldingTheBackendsMutex(t *testing.T) {
 	secretsMgr.On("SolvePolicySecrets", incoming).Return(incoming, nil).Maybe()
 
 	applierDone := make(chan struct{})
-	go func() { _ = mgr.ApplyBackendPolicies("mutex_backend", be); close(applierDone) }()
+	go func() { _ = mgr.ApplyBackendPolicies(context.Background(), "mutex_backend", be); close(applierDone) }()
 	waitFor(t, be.entered, "the applier reaching the backend") // it now holds the mutex inside ApplyPolicy
 
 	manageDone := make(chan struct{})
@@ -1908,7 +1982,10 @@ func TestManageOfTheSamePolicyIsNotLostUnderAConcurrentApplier(t *testing.T) {
 	newer := config.PolicyPayload{Action: "manage", ID: "same", Name: "Same", Backend: "same_policy_backend", Version: 2, Data: map[string]any{}}
 
 	applierDone := make(chan struct{})
-	go func() { _ = mgr.ApplyBackendPolicies("same_policy_backend", be); close(applierDone) }()
+	go func() {
+		_ = mgr.ApplyBackendPolicies(context.Background(), "same_policy_backend", be)
+		close(applierDone)
+	}()
 	waitFor(t, be.entered, "the applier reaching the backend")
 
 	manageDone := make(chan struct{})
@@ -1998,7 +2075,7 @@ func TestPoliciesChangedDoesNotResurrectARemovedPolicy(t *testing.T) {
 	backend.Register("resurrect_backend", be)
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "victim", Name: "Victim", Backend: "resurrect_backend", Version: 1, Data: map[string]any{}, State: policies.Running}))
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "victim", Name: "Victim", Backend: "resurrect_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
 
 	// the applier holds the mutex; the refresh queues behind it having read
 	// nothing yet, and a remove that also queues behind it lands first.
@@ -2006,7 +2083,10 @@ func TestPoliciesChangedDoesNotResurrectARemovedPolicy(t *testing.T) {
 	// a lost sleep race here fails the appliedVersions assertion below
 	// cleanly rather than panicking on an unregistered call.
 	applierDone := make(chan struct{})
-	go func() { _ = mgr.ApplyBackendPolicies("resurrect_backend", be); close(applierDone) }()
+	go func() {
+		_ = mgr.ApplyBackendPolicies(context.Background(), "resurrect_backend", be)
+		close(applierDone)
+	}()
 	waitFor(t, be.entered, "the applier reaching the backend")
 	removeDone := make(chan struct{})
 	go func() { _ = mgr.RemovePolicy("victim", "Victim", "resurrect_backend"); close(removeDone) }()
