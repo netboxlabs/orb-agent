@@ -194,9 +194,18 @@ def _parse_interfaces_detail(output: str) -> list[dict]:
 #   v6:   0 R 111     1500 enabled  111 bridge
 #   v7:   0 R Huis    1500 enabled   10 bridge
 
+# An interface comment is printed as a ";;; text" line between the index
+# and flags and the row itself, which then starts on the next line:
+#
+#    0 R  ;;; uplink
+#         vlan10   1500 enabled   10 ether1
+#
+# The optional comment group below accepts that layout so a commented VLAN
+# interface is not skipped.
 _VLAN_ROW_RE = re.compile(
     r"^\s*\d+\s+"             # row index
     r"(?:[A-Z]+\s+)?"         # optional flags (R, X, D, I, H, RH, … — must be followed by whitespace)
+    r"(?:;;;[^\n]*\n\s*)?"    # optional interface comment line preceding the row
     r"(?P<name>\S+)\s+"       # VLAN name
     r"\d+\s+"                 # MTU (ignored)
     r"\S+\s+"                 # ARP setting (ignored)
