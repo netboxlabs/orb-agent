@@ -353,6 +353,37 @@ func TestRestartBackendDoesNotReapplyAfterShutdownBegan(t *testing.T) {
 	}, events, "shutdown already began, so the policies must stay unknown rather than be reapplied")
 }
 
+// Stop cancels the dispatcher and the file-driven restart contexts, then
+// takes each backend's restart mutex to stop it, and only cancels the agent
+// context at the end, after every backend is stopped. A health or fleet
+// restart that already holds the restart mutex when Stop begins therefore
+// still sees a live context when it reaches the re-apply: ctx.Err() alone
+// would not catch it, so the stopping flag does.
+func TestRestartBackendDoesNotReapplyOnceStopBegan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+	}
+	a.stopping.Store(true)
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, []string{
+		"remove:snmp_discovery:permanently=false",
+		"configure",
+		"reset",
+	}, events, "Stop already began, so the policies must stay unknown rather than be reapplied")
+}
+
 // A restart holds the restart mutex across the whole sequence, so the
 // starter reports a backend as starting for as long as a restart of it is in
 // flight, and running again the instant the mutex is free.

@@ -516,8 +516,7 @@ func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Back
 			}
 		} else {
 			plcy.State = policies.Unknown
-			err = a.repo.Update(plcy)
-			if err != nil {
+			if err := a.persistApplyOutcome(plcy); err != nil {
 				return err
 			}
 		}
@@ -572,10 +571,11 @@ func (a *policyManager) applyBackendPoliciesLocked(name string, be backend.Backe
 	return nil
 }
 
-// persistApplyOutcome writes a policy back after an apply without discarding
-// the run updates the state monitor may have written while the backend was
-// being called: only the apply outcome (state, reason, data, rename) comes
-// from the snapshot; the runs are re-read from the store.
+// persistApplyOutcome writes a policy back after an apply or a removal that
+// keeps the record, without discarding the run updates the state monitor may
+// have written while the backend was being called: only the apply outcome
+// (state, reason, data, rename) comes from the snapshot; the runs are
+// re-read from the store.
 func (a *policyManager) persistApplyOutcome(policy policies.PolicyData) error {
 	if latest, err := a.repo.Get(policy.ID); err == nil {
 		policy.Runs = latest.Runs

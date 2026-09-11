@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -92,6 +93,13 @@ type orbAgent struct {
 	// health-driven restart for the same backend can interleave Stop/Start
 	// operations.
 	backendRestartMu sync.Map // name -> *sync.Mutex
+
+	// stopping is set to true as the first statement of Stop. The agent
+	// context is only cancelled at the end of Stop, after every backend is
+	// stopped, so a restart already holding a backend's restart mutex when
+	// Stop begins still sees a live context; this flag is what it observes
+	// instead.
+	stopping atomic.Bool
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -308,8 +316,13 @@ func (a *orbAgent) backendRestartLock(name string) *sync.Mutex {
 // restart. A failure is logged, not returned: the policies stay marked unknown
 // for the next successful restart. Once the context is done the agent is
 // shutting down and no new work is launched; the policies stay unknown.
+//
+// The agent context is cancelled only at the end of Stop, after every
+// backend has been stopped, so a restart that already holds a backend's
+// restart mutex when Stop begins still sees a live context here. The
+// stopping flag is what that in-flight restart observes instead.
 func (a *orbAgent) reapplyBackendPolicies(ctx context.Context, name string, be backend.Backend) {
-	if err := ctx.Err(); err != nil {
+	if err := ctx.Err(); err != nil || a.stopping.Load() {
 		a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", err)
 		return
 	}
@@ -576,6 +589,7 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {
+	a.stopping.Store(true)
 	a.logger.Info("routine call for stop agent", "routine", ctx.Value(routineKey))
 	// Cancel the restart dispatcher first so it cannot fire a restart after we
 	// begin stopping backends. The dispatcher's select loop respects cancellation

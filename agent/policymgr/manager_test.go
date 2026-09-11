@@ -686,6 +686,39 @@ func TestSecretsRefreshKeepsRunUpdatesWrittenDuringTheApply(t *testing.T) {
 	assert.Equal(t, "run-2", stored.Runs[0].ID)
 }
 
+// Same as TestApplyBackendPoliciesKeepsRunUpdatesWrittenDuringTheApply, for
+// the non-permanent removal path: the write-back after RemovePolicy must
+// carry forward any run the state monitor wrote while the backend call was
+// in flight, not overwrite it with the pre-removal snapshot.
+func TestRemoveBackendPoliciesKeepsRunUpdatesWrittenDuringTheRemoval(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	secretsMgr.On("RegisterUpdatePoliciesCallback", mock.Anything).Return()
+	be := &mockBackend{name: "remover_runs"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("remover_runs", be)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "runs-3", Name: "Runs Three", Backend: "remover_runs", Version: 1, Data: map[string]any{}, State: policies.Running}))
+
+	be.On("RemovePolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "runs-3" })).
+		Run(func(_ mock.Arguments) {
+			require.NoError(t, repo.UpdateRuns("Runs Three", []policies.RunData{{ID: "run-3", Status: "running"}}))
+		}).
+		Return(nil).Once()
+
+	require.NoError(t, mgr.RemoveBackendPolicies("remover_runs", be, false))
+
+	be.AssertExpectations(t)
+	stored, err := repo.Get("runs-3")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Unknown, stored.State)
+	require.Len(t, stored.Runs, 1, "the run written during the removal must not be discarded by the write-back")
+	assert.Equal(t, "run-3", stored.Runs[0].ID)
+}
+
 func TestPoliciesChanged(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)
