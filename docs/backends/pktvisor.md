@@ -15,7 +15,7 @@ Orb writes a temporary pktvisor configuration file on startup based on the `orb.
 Pktvisor ships with the Orb agent container image. If you run Orb on a bare host, ensure the `pktvisord` binary is in `$PATH` or adjust your deployment accordingly.
 
 ### Exporting pktvisor metrics
-`pktvisord` can stream OpenTelemetry HTTP metrics directly to a collector. Configure the shared backend section to point Orb Agent at your collector endpoint:
+`pktvisord` can stream OpenTelemetry HTTP metrics directly to a collector. Configure the shared backend section to point Orb Agent at your collector endpoint. In fleet mode this is automatic: the agent's local OTLP bridge listens on HTTP too (`otlp_bridge_http_port`, default 4318) and `common.otlp.http` is pointed at it, so pktvisor metrics reach Fleet alongside the other backends.
 
 ```yaml
 orb:

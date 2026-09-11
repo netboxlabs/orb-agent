@@ -258,6 +258,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 						ClientID:           "test_client_id",
 						ClientSecret:       "test_client_secret",
 						OTLPBridgeGRPCPort: &ephemeralPort,
+						OTLPBridgeHTTPPort: &ephemeralPort,
 					},
 				},
 			},
@@ -1237,6 +1238,7 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 						ClientID:           "test_client",
 						ClientSecret:       "test_secret",
 						OTLPBridgeGRPCPort: &ephemeralPort,
+						OTLPBridgeHTTPPort: &ephemeralPort,
 					},
 				},
 			},
@@ -1688,4 +1690,16 @@ func TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock(t *testing.T) 
 
 	assert.ErrorIs(t, mgr.connCtx.Err(), context.Canceled,
 		"connCtx should be cancelled after Stop() completes")
+}
+
+func TestFleetOTLPPorts_Defaults(t *testing.T) {
+	var cfg config.Config
+	assert.Equal(t, 4317, fleetOTLPGRPCPort(cfg))
+	assert.Equal(t, 4318, fleetOTLPHTTPPort(cfg))
+
+	grpcPort, httpPort := 4337, 4338
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &grpcPort
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &httpPort
+	assert.Equal(t, 4337, fleetOTLPGRPCPort(cfg))
+	assert.Equal(t, 4338, fleetOTLPHTTPPort(cfg))
 }

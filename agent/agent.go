@@ -458,7 +458,13 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		if a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
 			grpcPort = *a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
 		}
+		// Same for the HTTP listener, which pktvisor (OTLP/HTTP only) uses.
+		httpPort := 4318
+		if a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort != nil {
+			httpPort = *a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort
+		}
 		otlpBridgeEndpoint := fmt.Sprintf("grpc://localhost:%d", grpcPort)
+		otlpBridgeHTTPEndpoint := fmt.Sprintf("http://localhost:%d", httpPort)
 		if commonBackend, exists := a.config.OrbAgent.Backends["common"]; exists {
 			if commonMap, ok := commonBackend.(map[string]any); ok {
 				if otlpSection, ok := commonMap["otlp"].(map[string]any); ok {
@@ -466,15 +472,20 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 					if grpcURL != "" {
 						a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", grpcURL)
 					}
+					httpURL, _ := otlpSection["http"].(string)
+					if httpURL != "" {
+						a.logger.Warn("Overriding OTLP HTTP URL for fleet config manager", "url", httpURL)
+					}
 					otlpSection["grpc"] = otlpBridgeEndpoint
-					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
-
+					otlpSection["http"] = otlpBridgeHTTPEndpoint
+					a.logger.Info("auto-configured OTLP URLs for fleet config manager", "grpc", otlpBridgeEndpoint, "http", otlpBridgeHTTPEndpoint)
 				} else {
 					// otlp section doesn't exist, create it
 					commonMap["otlp"] = map[string]any{
 						"grpc": otlpBridgeEndpoint,
+						"http": otlpBridgeHTTPEndpoint,
 					}
-					a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
+					a.logger.Info("auto-configured OTLP URLs for fleet config manager", "grpc", otlpBridgeEndpoint, "http", otlpBridgeHTTPEndpoint)
 				}
 			}
 		} else {
@@ -482,9 +493,10 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 			a.config.OrbAgent.Backends["common"] = map[string]any{
 				"otlp": map[string]any{
 					"grpc": otlpBridgeEndpoint,
+					"http": otlpBridgeHTTPEndpoint,
 				},
 			}
-			a.logger.Info("auto-configured OTLP gRPC URL for fleet config manager", "url", otlpBridgeEndpoint)
+			a.logger.Info("auto-configured OTLP URLs for fleet config manager", "grpc", otlpBridgeEndpoint, "http", otlpBridgeHTTPEndpoint)
 		}
 	}
 

@@ -93,18 +93,29 @@ func fleetOTLPGRPCPort(cfg config.Config) int {
 	return grpcPort
 }
 
-// StartOTLPBridge starts the local OTLP gRPC bridge so backends can export
-// telemetry before the MQTT connection is established. Safe to call once;
-// subsequent calls are no-ops when the bridge is already running.
+func fleetOTLPHTTPPort(cfg config.Config) int {
+	httpPort := 4318
+	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort != nil {
+		httpPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort
+	}
+	return httpPort
+}
+
+// StartOTLPBridge starts the local OTLP bridge (gRPC and HTTP listeners) so
+// backends can export telemetry before the MQTT connection is established.
+// Safe to call once; subsequent calls are no-ops when the bridge is already
+// running.
 func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg config.Config) error {
 	if fleetManager.otlpBridge != nil {
 		return nil
 	}
 
 	grpcPort := fleetOTLPGRPCPort(cfg)
+	httpPort := fleetOTLPHTTPPort(cfg)
 	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr: fmt.Sprintf(":%d", grpcPort),
-		Encoding:   "json",
+		ListenAddr:     fmt.Sprintf(":%d", grpcPort),
+		HTTPListenAddr: fmt.Sprintf(":%d", httpPort),
+		Encoding:       "json",
 	}
 
 	var err error
@@ -115,9 +126,9 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 	if err := fleetManager.otlpBridge.Start(ctx); err != nil {
 		_ = fleetManager.otlpBridge.Stop(ctx)
 		fleetManager.otlpBridge = nil
-		return fmt.Errorf("failed to start OTLP bridge on port %d: %w", grpcPort, err)
+		return fmt.Errorf("failed to start OTLP bridge (grpc port %d, http port %d): %w", grpcPort, httpPort, err)
 	}
-	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort))
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort))
 	return nil
 }
 
