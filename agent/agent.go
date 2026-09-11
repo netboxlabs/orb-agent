@@ -306,8 +306,13 @@ func (a *orbAgent) backendRestartLock(name string) *sync.Mutex {
 
 // reapplyBackendPolicies hands the backend its own policies again after a
 // restart. A failure is logged, not returned: the policies stay marked unknown
-// for the next successful restart.
-func (a *orbAgent) reapplyBackendPolicies(name string, be backend.Backend) {
+// for the next successful restart. Once the context is done the agent is
+// shutting down and no new work is launched; the policies stay unknown.
+func (a *orbAgent) reapplyBackendPolicies(ctx context.Context, name string, be backend.Backend) {
+	if err := ctx.Err(); err != nil {
+		a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", err)
+		return
+	}
 	if err := a.policyManager.ApplyBackendPolicies(name, be); err != nil {
 		a.logger.Error("backend policies left unapplied after restart; they stay unknown until the next successful restart",
 			"backend", name, "error", err)
@@ -375,7 +380,7 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 	startErr := be.Start(runCtx, runCancel)
 	if startErr == nil {
 		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
-		a.reapplyBackendPolicies(backendName, be)
+		a.reapplyBackendPolicies(ctx, backendName, be)
 		return
 	}
 	a.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", backendName, "error", startErr)
@@ -405,7 +410,7 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		return
 	}
 	a.logger.Info("filesmgr: backend restarted with rolled-back binary", "backend", backendName, "binary", binaryName)
-	a.reapplyBackendPolicies(backendName, be)
+	a.reapplyBackendPolicies(ctx, backendName, be)
 }
 
 // restartDispatcher runs as a background goroutine and drains pendingRestarts
@@ -694,12 +699,12 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 			// The backend was never stopped, so it is still running with
 			// nothing applied; hand its policies back rather than leave
 			// them unknown for a restart that may not come again soon.
-			a.reapplyBackendPolicies(name, be)
+			a.reapplyBackendPolicies(ctx, name, be)
 			return errors.New("backend not found: " + name)
 		}
 	}
 	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon, a.filesManager); err != nil {
-		a.reapplyBackendPolicies(name, be)
+		a.reapplyBackendPolicies(ctx, name, be)
 		return err
 	}
 	a.logger.Info("resetting backend", "backend", name)
@@ -712,7 +717,7 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 		// The policies stay marked unknown; the next successful restart applies them.
 		return nil
 	}
-	a.reapplyBackendPolicies(name, be)
+	a.reapplyBackendPolicies(ctx, name, be)
 	return nil
 }
 

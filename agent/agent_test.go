@@ -321,6 +321,38 @@ func TestRestartBackendReappliesPoliciesEndToEnd(t *testing.T) {
 	assert.Equal(t, int32(3), be.applied[0].Version)
 }
 
+// A Start (file-driven or otherwise) that is already blocked on the restart
+// mutex when Stop cancels the agent context can still succeed once the
+// mutex is free, but by then the agent is shutting down: the reset succeeds
+// and the policies stay marked unknown rather than being handed back to a
+// backend about to be torn down.
+func TestRestartBackendDoesNotReapplyAfterShutdownBegan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.NoError(t, a.RestartBackend(ctx, "snmp_discovery", "test"))
+
+	assert.Equal(t, []string{
+		"remove:snmp_discovery:permanently=false",
+		"configure",
+		"reset",
+	}, events, "shutdown already began, so the policies must stay unknown rather than be reapplied")
+}
+
 // A restart holds the restart mutex across the whole sequence, so the
 // starter reports a backend as starting for as long as a restart of it is in
 // flight, and running again the instant the mutex is free.
@@ -577,6 +609,33 @@ func TestRestartBackendWithFilesmgrRollback_DoesNotReapplyWithoutAManagedBinary(
 		"stop",
 		"start",
 	}, events)
+}
+
+// A Start that succeeds after the agent context was already cancelled before
+// the call (Stop ran while this restart was blocked on the restart mutex)
+// must not hand the policies back: the agent is shutting down.
+func TestRestartBackendWithFilesmgrRollbackDoesNotReapplyAfterShutdownBegan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	events := []string{}
+	pm := &mockPolicyManager{events: &events}
+	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, binaryName: "orb-worker"}
+	a := &orbAgent{
+		logger:        logger,
+		backends:      map[string]backend.Backend{"worker": be},
+		policyManager: pm,
+		filesManager:  &mockFilesManager{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	a.restartBackendWithFilesmgrRollback(ctx, "worker")
+
+	assert.Equal(t, []string{
+		"remove:worker:permanently=false",
+		"stop",
+		"start",
+	}, events, "shutdown already began, so the policies must stay unknown rather than be reapplied")
 }
 
 // mockFilesManager implements filesmgr.Manager for testing (no-op)

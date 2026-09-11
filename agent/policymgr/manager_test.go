@@ -622,6 +622,70 @@ func TestApplyBackendPoliciesFailsOnlyThePolicyTheBackendRejects(t *testing.T) {
 	assert.Equal(t, "failed to apply", bad.BackendErr)
 }
 
+// The state monitor calls repo.UpdateRuns for a policy at any time and does
+// not take the backend's apply mutex, so a run it writes while an apply's
+// HTTP call to the backend is in flight must survive the write-back that
+// follows the apply.
+func TestApplyBackendPoliciesKeepsRunUpdatesWrittenDuringTheApply(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "applier_runs"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "runs-1", Name: "Runs One", Backend: "applier_runs", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "runs-1" }), true).
+		Run(func(_ mock.Arguments) {
+			require.NoError(t, repo.UpdateRuns("Runs One", []policies.RunData{{ID: "run-1", Status: "running"}}))
+		}).
+		Return(nil).Once()
+
+	require.NoError(t, mgr.ApplyBackendPolicies("applier_runs", be))
+
+	be.AssertExpectations(t)
+	stored, err := repo.Get("runs-1")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	require.Len(t, stored.Runs, 1, "the run written during the apply must not be discarded by the write-back")
+	assert.Equal(t, "run-1", stored.Runs[0].ID)
+}
+
+// Same as above, through the secrets-refresh path (refreshPolicyLocked)
+// instead of the applier: a run written mid-apply must survive that
+// write-back too.
+func TestSecretsRefreshKeepsRunUpdatesWrittenDuringTheApply(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	be := &mockBackend{name: "refresher_runs"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("refresher_runs", be)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "runs-2", Name: "Runs Two", Backend: "refresher_runs", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+
+	solved := config.PolicyPayload{ID: "runs-2", Name: "Runs Two", Backend: "refresher_runs", Version: 1, Data: map[string]any{}}
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "runs-2" })).Return(solved, nil)
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "runs-2" }), true).
+		Run(func(_ mock.Arguments) {
+			require.NoError(t, repo.UpdateRuns("Runs Two", []policies.RunData{{ID: "run-2", Status: "running"}}))
+		}).
+		Return(nil).Once()
+
+	secretsMgr.TriggerCallbacks(map[string]bool{"runs-2": true})
+
+	be.AssertExpectations(t)
+	stored, err := repo.Get("runs-2")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	require.Len(t, stored.Runs, 1, "the run written during the apply must not be discarded by the write-back")
+	assert.Equal(t, "run-2", stored.Runs[0].ID)
+}
+
 func TestPoliciesChanged(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)

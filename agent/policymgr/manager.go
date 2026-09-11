@@ -565,11 +565,22 @@ func (a *policyManager) applyBackendPoliciesLocked(name string, be backend.Backe
 			continue
 		}
 		a.applyStoredPolicy(&policy, be)
-		if err := a.repo.Update(policy); err != nil {
+		if err := a.persistApplyOutcome(policy); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// persistApplyOutcome writes a policy back after an apply without discarding
+// the run updates the state monitor may have written while the backend was
+// being called: only the apply outcome (state, reason, data, rename) comes
+// from the snapshot; the runs are re-read from the store.
+func (a *policyManager) persistApplyOutcome(policy policies.PolicyData) error {
+	if latest, err := a.repo.Get(policy.ID); err == nil {
+		policy.Runs = latest.Runs
+	}
+	return a.repo.Update(policy)
 }
 
 // applyStoredPolicy applies a policy the repo already holds to its backend:
@@ -646,7 +657,7 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 	} else if a.backendReady(policy.Backend, &policy) {
 		a.applyStoredPolicy(&policy, backend.GetBackend(policy.Backend))
 	}
-	if err := a.repo.Update(policy); err != nil {
+	if err := a.persistApplyOutcome(policy); err != nil {
 		a.logger.Error("got error in update last status", "error", err)
 	}
 }
