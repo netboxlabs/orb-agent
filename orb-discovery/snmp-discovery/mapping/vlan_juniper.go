@@ -187,11 +187,16 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		// A dropped row leaves no VLAN entity, so anything still naming that
 		// VID would have VlanMapper fabricate a "VLAN<vid>" placeholder for it
 		// — and Diode PATCHes, so the placeholder would rename the operator's
-		// VLAN in NetBox. Nothing can name this one: the only other reference
-		// is dot1qPvid, gated by the same CoerceVid. The gates above exist so
-		// that every row we cannot resolve for any OTHER reason abandons the
-		// translation entirely rather than dropping a row whose VID something
-		// else still names.
+		// VLAN in NetBox. Nothing can name this one. The only other reference
+		// to a VID is dot1qPvid, and the Q-BRIDGE reader discards a PVID of 0
+		// as "bridged, nothing untagged" before it can reach a VLAN lookup —
+		// note that is the reader's own zero test rather than CoerceVid, which
+		// only sees the value later, inside the classifier. Both layers reject
+		// it; the first is what makes this drop safe.
+		//
+		// The gates above exist so that every row we cannot resolve for any
+		// OTHER reason abandons the translation entirely rather than dropping a
+		// row whose VID something else still names.
 		vid := qbridge.CoerceVid(tagByIndex[index])
 		if vid == nil {
 			dropped++
@@ -207,7 +212,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 			"rows", dropped, "reason", "tag outside 1-4094, which is how Junos reports an untagged bridge domain")
 	}
 	if unnameable > 0 {
-		logger.Warn("vlan: dropped Juniper PVIDs the rekeyed VLAN catalog cannot name",
+		logger.Warn("vlan: reported Juniper PVIDs the rekeyed VLAN catalog cannot name as 0",
 			"ports", unnameable,
 			"reason", "this device numbers VLANs internally, so a PVID naming no known tag cannot be told from an internal index; fabricating a VLAN for it would rename the operator's VLAN of that number")
 	}
@@ -327,6 +332,15 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 func ambiguousStaticTag(staticIndices map[int]struct{}, tagByIndex map[int]int) (tag, claimants int, ambiguous bool) {
 	count := map[int]int{}
 	for index := range staticIndices {
+		// Tags no row will be rewritten TO are not contested. Junos reports an
+		// untagged bridge domain with tag 0 and a switch may have more than
+		// one, which would otherwise refuse the whole device over rows that are
+		// both dropped a few lines later — a refusal that buys nothing, since
+		// there is no VLAN for the two to be confused about. Same reasoning as
+		// scoping this to the static rows at all.
+		if qbridge.CoerceVid(tagByIndex[index]) == nil {
+			continue
+		}
 		count[tagByIndex[index]]++
 	}
 	for t, n := range count {
@@ -417,14 +431,19 @@ const (
 // the gate exists to prevent, so a cut name is evidence of nothing and the
 // rekey still needs a full agreement somewhere on the device.
 //
-// The comparison is made on the raw names as well as the stripped ones,
-// because a truncation can land in the middle of the ELS "+<tag>" suffix,
-// leaving one side strippable and the other not.
+// Agreement is judged on the stripped names, which subsumes raw equality. The
+// truncation test below uses the raw ones, because a cut can land in the middle
+// of the ELS "+<tag>" suffix and leave one side strippable and the other not.
+//
+// Length is a proxy for "was cut", and an imperfect one: a name cut at the
+// bound whose last octet is whitespace arrives shorter, since device strings
+// are trimmed before they reach here, and is then read as a plain
+// disagreement. It is the signal available.
 func compareVlanNames(static, enterprise string, tag int) nameVerdict {
 	if stripVlanNameTagSuffix(static, tag) == stripVlanNameTagSuffix(enterprise, tag) {
 		return namesAgree
 	}
-	if len(static) == dot1qVlanStaticNameMax && strings.HasPrefix(enterprise, static) {
+	if len(static) >= dot1qVlanStaticNameMax && strings.HasPrefix(enterprise, static) {
 		return namesInconclusive
 	}
 	return namesDisagree

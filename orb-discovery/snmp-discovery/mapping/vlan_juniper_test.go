@@ -548,6 +548,11 @@ func TestJuniperRekey_DoesNotRenameAnOperatorVlanThroughAPvid(t *testing.T) {
 // index 24's row land on 32 and then be read again as index 32.
 func TestResolveJuniperVlanIndices_DoesNotMutateTheWalk(t *testing.T) {
 	in := internalIndexWalk()
+	// Includes a PVID the catalog cannot name, so the one path that ASSIGNS to
+	// a walked value is covered. The map holds values rather than pointers, so
+	// the range variable is a copy — but that is a property of a type
+	// declaration elsewhere, and this is the test that would notice it change.
+	in[oidDot1qPvid+"5"] = Value{Value: "17"}
 	before := make(ObjectIDValueMap, len(in))
 	for k, v := range in {
 		before[k] = v
@@ -945,6 +950,26 @@ func TestVlanNamesByVid_StripsTheSuffixOnlyWhenTheDeviceIsConsistent(t *testing.
 	if got[100] != "office" || got[300] != "+300" {
 		t.Errorf("a suffix-only name must not veto the convention, got %v", got)
 	}
+
+	// A name that sits ON the bound and STILL ends in its own id cannot have
+	// had a suffix cut off — the suffix is right there. It is evidence of the
+	// convention, and discarding it is the device-wide rename in mirror image:
+	// with only one other conforming VLAN the device drops below the count and
+	// stripping switches off for all of them, then back on when any unrelated
+	// VLAN is added.
+	onBound := "aaaaaaaaaaaaaaaaaaaaaaaaaaa+1234"
+	if len(onBound) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must sit exactly on the bound, got %d", len(onBound))
+	}
+	twoVlans := vlanNamesByVid(juniper(map[int]string{100: "office+100", 1234: onBound}))
+	threeVlans := vlanNamesByVid(juniper(map[int]string{100: "office+100", 1234: onBound, 200: "eng+200"}))
+	if twoVlans[100] != "office" {
+		t.Errorf("a conforming name on the bound is still evidence, got %q", twoVlans[100])
+	}
+	if twoVlans[100] != threeVlans[100] {
+		t.Errorf("adding an unrelated VLAN renamed an existing one: %q then %q — every ingest rewrites NetBox",
+			twoVlans[100], threeVlans[100])
+	}
 }
 
 // TestResolveJuniperVlanIndices_OnlyActsOnJuniper keeps the reasoning local to
@@ -972,5 +997,36 @@ func TestResolveJuniperVlanIndices_OnlyActsOnJuniper(t *testing.T) {
 	delete(in, oidSysObjectIDScalar)
 	if out = ResolveJuniperVlanIndices(in, testLogger()); !reflect.DeepEqual(out, in) {
 		t.Error("an unidentified device must not be rekeyed either")
+	}
+}
+
+// TestResolveJuniperVlanIndices_IgnoresAmbiguityAmongTagsItWillDrop keeps the
+// ambiguity gate to tags a row could actually be rewritten to.
+//
+// Junos reports an untagged bridge domain with tag 0 and a switch may have
+// more than one. Both rows are dropped moments later, so there is no VLAN for
+// the two to be confused about — refusing the device over them would abandon
+// every other VLAN on it and buy nothing.
+func TestResolveJuniperVlanIndices_IgnoresAmbiguityAmongTagsItWillDrop(t *testing.T) {
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
+		oidJnxExVlanName + "17":       {Value: "MGMT"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		// Two untagged bridge domains, both reported at tag 0.
+		oidDot1qVlanStaticName + "30": {Value: "DOMAIN_A"},
+		oidJnxExVlanName + "30":       {Value: "DOMAIN_A"},
+		oidJnxExVlanTag + "30":        {Value: "0"},
+		oidDot1qVlanStaticName + "31": {Value: "DOMAIN_B"},
+		oidJnxExVlanName + "31":       {Value: "DOMAIN_B"},
+		oidJnxExVlanTag + "31":        {Value: "0"},
+	}, testLogger())
+
+	if got := out[oidDot1qVlanStaticName+"156"].Value; got != "MGMT" {
+		t.Errorf("two rows sharing a tag that neither will be rewritten to must not refuse the device, got %q", got)
+	}
+	if _, ok := out[oidDot1qVlanStaticName+"0"]; ok {
+		t.Error("tag 0 is still not a VLAN ID")
 	}
 }
