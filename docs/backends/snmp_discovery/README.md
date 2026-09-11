@@ -180,11 +180,9 @@ Every *other* unresolvable row abandons the translation for the whole device ins
 - **SVI-derived VLANs are not translated.** That resolver takes the tag from the interface name, which carries the real one. It does not fire on Junos in any case: it refuses a name containing a dot, and Junos names its SVIs `vlan.156` / `irb.156`.
 - **Platforms without the enterprise table are untouched, and silently.** Other Junos switches key the static table by the tag already and answer these OIDs with `No Such Object`. They are correct as they are, so an absent enterprise table means no translation rather than a refusal, and no log line on every poll.
 
-##### Limitation
+##### Limitation: the ELS name suffix
 
-On Junos ELS the VLAN name reaches NetBox as the operator configured it, with the `+<tag>` suffix the switch appends stripped. A VLAN whose configured name genuinely ends in `+<its own tag>` is indistinguishable from the device's own decoration and loses that suffix.
-
-**Junos ELS name suffix.** ELS reports a bridge domain as `<name>+<tag>`, so a VLAN called `VL156` arrives as `VL156+156`. The suffix is removed only when the number equals that VLAN's own ID, and only on Juniper, so an operator's own naming such as `BroadbandMgmt_702` is untouched. A Juniper VLAN genuinely named `site+100` whose ID is 100 would be shortened to `site`; nothing in the data distinguishes that from the device's own convention.
+ELS reports a bridge domain as `<name>+<tag>`, so a VLAN called `office` arrives as `office+100`. The suffix is removed only when the number equals that VLAN's own ID, and only on Juniper, so a name that merely contains a plus and a number — `site+200` on VLAN 100, say — is untouched. A Juniper VLAN genuinely named `site+100` whose ID is 100 is shortened to `site`: nothing in the data distinguishes that from the device's own convention.
 
 ##### VLAN Group Map
 Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:

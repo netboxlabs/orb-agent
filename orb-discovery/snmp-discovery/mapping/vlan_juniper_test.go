@@ -484,7 +484,7 @@ func TestStripVlanNameTagSuffix(t *testing.T) {
 	}{
 		{"VL156+156", 156, "VL156"},
 		{"default+1", 1, "default"},
-		{"BroadbandMgmt_702", 702, "BroadbandMgmt_702"},
+		{"office_100", 100, "office_100"},
 		{"VL156+157", 156, "VL156+157"},
 		{"a+b+10", 10, "a+b"},
 		{"+156", 156, "+156"},
