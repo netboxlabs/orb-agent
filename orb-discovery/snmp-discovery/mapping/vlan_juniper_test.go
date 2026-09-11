@@ -1249,3 +1249,80 @@ func TestResolveJuniperVlanIndices_RefusesWhenOnlyDroppedRowsCorroborate(t *test
 		t.Errorf("the refusal must say the evidence is missing, got %q", logged.String())
 	}
 }
+
+// TestResolveJuniperVlanIndices_RefusesWhenBothColumnsAreCutToTheSamePrefix
+// closes the case where truncation defeats the name gate from both sides at
+// once, which is the maximal-harm outcome the gate exists to prevent.
+//
+// Bounding dot1qVlanStaticName at 32 octets is RFC 4363. jnxExVlanName carrying
+// no such bound is an assumption the captures cannot confirm, since every name
+// on them is short. If some Junos build bounds it too, a device with structured
+// names ("<site>-<building>-<floor>-vlanNNN") has both columns cut to the same
+// 32 octets — so the names arrive EQUAL, never reach the length test, and count
+// as full agreement.
+//
+// The device here already keys its static table by the tag and needs no rekey.
+// Its tags are also valid enterprise indices, so coverage passes; its tags are
+// distinct, so ambiguity passes. Without the symmetric check, every VLAN is
+// re-emitted carrying another VLAN's name, ports and row status, silently.
+func TestResolveJuniperVlanIndices_RefusesWhenBothColumnsAreCutToTheSamePrefix(t *testing.T) {
+	const shared = "campus-west-building12-floor3-vl" // exactly the column bound
+	if len(shared) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must sit exactly on the bound, got %d", len(shared))
+	}
+	in := ObjectIDValueMap{oidSysObjectIDScalar: {Value: jnxSysObjectID}}
+	// Static table keyed by tag; enterprise table keyed by index, rotated one
+	// place so every row describes a different VLAN than the static row it
+	// shares a key with.
+	tags := []int{100, 101, 102, 103}
+	for i, tag := range tags {
+		key := strconv.Itoa(tag)
+		in[oidDot1qVlanStaticName+key] = Value{Value: shared}
+		in[oidDot1qVlanStaticEgressPorts+key] = Value{Value: "ports-of-" + key}
+		in[oidJnxExVlanName+key] = Value{Value: shared}
+		in[oidJnxExVlanTag+key] = Value{Value: strconv.Itoa(tags[(i+1)%len(tags)])}
+	}
+
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("names that may both be truncations must not corroborate, got %v", out)
+	}
+	for i, tag := range tags {
+		key := strconv.Itoa(tag)
+		if got, want := out[oidDot1qVlanStaticEgressPorts+key].Value, "ports-of-"+key; got != want {
+			t.Errorf("VLAN %d carries another VLAN's ports: %q, want %q", tags[i], got, want)
+		}
+	}
+	if !strings.Contains(logged.String(), "nothing corroborates") {
+		t.Errorf("the refusal must say the evidence is missing, got %q", logged.String())
+	}
+}
+
+// TestCompareVlanNames_TruncationIsAskedSymmetrically pins the verdict table
+// directly, since the whole-device tests above exercise only some of it.
+func TestCompareVlanNames_TruncationIsAskedSymmetrically(t *testing.T) {
+	onBound := "campus-west-building12-floor3-vl"
+	if len(onBound) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must sit on the bound, got %d", len(onBound))
+	}
+	for _, tc := range []struct {
+		what               string
+		static, enterprise string
+		want               nameVerdict
+	}{
+		{"both short and equal", "MGMT", "MGMT", namesAgree},
+		{"both short and different", "MGMT", "USERS", namesDisagree},
+		{"static cut, enterprise continues it", onBound, onBound + "an-alpha", namesInconclusive},
+		{"enterprise cut, static continues it", onBound + "an-alpha", onBound, namesInconclusive},
+		{"both cut to the same octets", onBound, onBound, namesInconclusive},
+		{"one cut, surviving prefixes differ", onBound, "MGMT", namesDisagree},
+		{"longer than the bound, so not a cut", onBound + "x", onBound + "y", namesDisagree},
+		{"the ELS suffix, short", "office+100", "office", namesAgree},
+	} {
+		if got := compareVlanNames(tc.static, tc.enterprise, 100); got != tc.want {
+			t.Errorf("%s: compareVlanNames(%q, %q) = %v, want %v", tc.what, tc.static, tc.enterprise, got, tc.want)
+		}
+	}
+}
