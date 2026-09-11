@@ -96,6 +96,24 @@ type orbAgent struct {
 
 var _ Agent = (*orbAgent)(nil)
 
+// restartStarter tells the policy manager whether a backend can take a
+// policy now. Every backend is started at agent start, so the only reason
+// to say no is a restart in flight: the restart mutex is held across the
+// removal, the stop or reset, and the re-apply, and a policy stored as
+// "backend starting" meanwhile is applied exactly once by that re-apply
+// instead of landing on a process about to be reset or being replayed after
+// it. TryLock never blocks, so the restart-before-apply lock order holds.
+type restartStarter struct{ agent *orbAgent }
+
+func (s restartStarter) EnsureStarted(name string) (policymgr.StartState, error) {
+	mu := s.agent.backendRestartLock(name)
+	if !mu.TryLock() {
+		return policymgr.StartStarting, nil
+	}
+	mu.Unlock()
+	return policymgr.StartRunning, nil
+}
+
 // New creates a new agent
 func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	sm, err := secretsmgr.New(logger, c.OrbAgent.SecretsManager)
@@ -122,7 +140,7 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	// runtime context supplied in Agent.Start.
 	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager, fm)
 
-	return &orbAgent{
+	a := &orbAgent{
 		logger:              logger,
 		config:              c,
 		debug:               debug,
@@ -132,7 +150,9 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 		backendStateManager: backendStateManager,
 		filesManager:        fm,
 		restartBackendChan:  restartBackendChan,
-	}, nil
+	}
+	pm.SetStarter(restartStarter{agent: a})
+	return a, nil
 }
 
 func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[string]any, labels map[string]string) (err error) {

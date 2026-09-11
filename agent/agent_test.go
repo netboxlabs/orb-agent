@@ -321,6 +321,163 @@ func TestRestartBackendReappliesPoliciesEndToEnd(t *testing.T) {
 	assert.Equal(t, int32(3), be.applied[0].Version)
 }
 
+// A restart holds the restart mutex across the whole sequence, so the
+// starter reports a backend as starting for as long as a restart of it is in
+// flight, and running again the instant the mutex is free.
+func TestRestartStarterReportsStartingWhileARestartHoldsTheMutex(t *testing.T) {
+	a := &orbAgent{}
+	starter := restartStarter{agent: a}
+
+	mu := a.backendRestartLock("snmp_discovery")
+	mu.Lock()
+
+	state, err := starter.EnsureStarted("snmp_discovery")
+	require.NoError(t, err)
+	assert.Equal(t, policymgr.StartStarting, state, "a restart holds the mutex, so the starter must report starting")
+
+	mu.Unlock()
+
+	state, err = starter.EnsureStarted("snmp_discovery")
+	require.NoError(t, err)
+	assert.Equal(t, policymgr.StartRunning, state, "no restart is in flight, so the starter must report running")
+
+	require.True(t, a.backendRestartLock("snmp_discovery").TryLock(), "the mutex must be free after EnsureStarted reports running")
+	a.backendRestartLock("snmp_discovery").Unlock()
+}
+
+// blockingResetBackend signals entry into FullReset on a channel and waits on
+// a release channel before returning, so a test can deliver a policy while a
+// restart is blocked inside the reset.
+type blockingResetBackend struct {
+	restartableBackend
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingResetBackend) FullReset(context.Context) error {
+	*b.events = append(*b.events, "reset")
+	close(b.entered)
+	<-b.release
+	return nil
+}
+
+// A policy delivered while a restart is in flight for its backend is stored
+// failed to apply with the reason the starter gives, is never handed to the
+// backend, and is applied exactly once, by the restart's own re-apply, once
+// the restart finishes. This is the window RestartBackend documents between
+// FullReset returning and the re-apply taking the policy manager's mutex.
+func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	pm, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+
+	events := []string{}
+	be := &blockingResetBackend{
+		restartableBackend: restartableBackend{events: &events},
+		entered:            make(chan struct{}),
+		release:            make(chan struct{}),
+	}
+	backend.Register("snmp_discovery", be)
+
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
+		config:              config.Config{},
+	}
+	// Installed the same way agent.New installs it: after the orbAgent is
+	// built, before any goroutine can reach the policy manager.
+	pm.SetStarter(restartStarter{agent: a})
+
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+	}()
+
+	select {
+	case <-be.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the restart to enter FullReset")
+	}
+
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "during-restart",
+		Name:      "during-restart-policy",
+		Backend:   "snmp_discovery",
+		DatasetID: "dataset-1",
+		Version:   1,
+		Data:      map[string]any{"k": "v"},
+	}
+	pm.ManagePolicy(payload)
+
+	stored, err := pm.GetRepo().Get("during-restart")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, stored.State, "a manage during the restart must not apply")
+	assert.Equal(t, "backend starting", stored.BackendErr)
+	assert.Empty(t, be.applied, "the backend must not receive the policy while the restart is in flight")
+
+	close(be.release)
+
+	select {
+	case restartErr := <-restartDone:
+		require.NoError(t, restartErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for RestartBackend to return")
+	}
+
+	stored, err = pm.GetRepo().Get("during-restart")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State, "the re-apply after the restart must apply the policy stored while it was in flight")
+	require.Len(t, be.applied, 1, "the backend must receive the policy exactly once")
+	assert.Equal(t, "during-restart", be.applied[0].ID)
+	assert.Contains(t, events, "apply-policy:during-restart:update=true")
+}
+
+// Outside a restart, a manage applies the way it always has: the starter
+// reports the backend running and the policy is applied once.
+func TestManageOutsideARestartAppliesAsToday(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	pm, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+
+	events := []string{}
+	be := &restartableBackend{events: &events}
+	backend.Register("snmp_discovery", be)
+
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
+		config:              config.Config{},
+	}
+	pm.SetStarter(restartStarter{agent: a})
+
+	payload := config.PolicyPayload{
+		Action:    "manage",
+		ID:        "outside-restart",
+		Name:      "outside-restart-policy",
+		Backend:   "snmp_discovery",
+		DatasetID: "dataset-1",
+		Version:   1,
+		Data:      map[string]any{"k": "v"},
+	}
+	pm.ManagePolicy(payload)
+
+	stored, err := pm.GetRepo().Get("outside-restart")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	require.Len(t, be.applied, 1)
+	assert.Equal(t, "outside-restart", be.applied[0].ID)
+	assert.Contains(t, events, "apply-policy:outside-restart:update=false")
+}
+
 // filesmgrRestartBackend records, into the shared slice, the Stop/Start calls
 // a filesmgr-driven restart makes. startFailures controls how many of the
 // first calls to Start return an error before Start starts succeeding; a
