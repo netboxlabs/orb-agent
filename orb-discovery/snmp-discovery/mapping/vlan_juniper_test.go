@@ -32,16 +32,19 @@ func capturingLogger() (*slog.Logger, *bytes.Buffer) {
 	return slog.New(slog.NewTextHandler(&buf, nil)), &buf
 }
 
-// internalIndexWalk is the EX4550 shape, with the index and tag spaces
-// deliberately overlapping the way the real capture does: index 24 resolves
-// to tag 32 while index 32 exists in its own right and resolves to 666. A
-// rewrite done in place rather than into a fresh map would corrupt that and
-// leave a fixture of disjoint values intact.
+// internalIndexWalk is the pre-ELS shape: a static table keyed by internal
+// index, with an enterprise table naming and tagging every row.
 //
-// Values are taken from the reporter's capture: index 17 is VL156 at tag 156,
-// index 31 is the default bridge domain at tag 0. Both VLAN tables carry the
-// same name for each index, which is how the real device answers and what the
-// corroboration gate requires.
+// Two properties come from the reported capture — an index that is not its own
+// tag, and one bridge domain reported at tag 0 — and both tables carrying the
+// same name per index is how that device answers, which is what the
+// corroboration gate reads.
+//
+// The index and tag spaces are made to OVERLAP here, which the capture does not
+// do: index 24 resolves to tag 32 while index 32 exists in its own right. That
+// is constructed deliberately, because a rewrite done in place rather than into
+// a fresh map would corrupt exactly that shape and leave a fixture of disjoint
+// values intact.
 func internalIndexWalk() ObjectIDValueMap {
 	return ObjectIDValueMap{
 		oidSysObjectIDScalar: {Value: jnxSysObjectID},
@@ -433,21 +436,106 @@ func TestResolveJuniperVlanIndices_RefusesOnAPartialEnterpriseTable(t *testing.T
 	}
 }
 
-func TestResolveJuniperVlanIndices_LeavesPvidsAlone(t *testing.T) {
+func TestResolveJuniperVlanIndices_LeavesAResolvabledPvidAlone(t *testing.T) {
 	// The reported device carries real tags in dot1qPvid while its static
-	// table carries indices. Translating PVIDs would look up a tag as though
-	// it were an index, which is wrong whenever the two spaces collide.
+	// table carries indices. A PVID that names a tag the rekey resolved is
+	// already correct and must survive verbatim: translating it would look up
+	// a tag as though it were an index.
 	in := internalIndexWalk()
-	in[oidDot1qPvid+"536"] = Value{Value: "888"}
-	in[oidDot1qPvid+"5"] = Value{Value: "17"}
+	in[oidDot1qPvid+"536"] = Value{Value: "156"}
+	in[oidDot1qPvid+"537"] = Value{Value: "0"}
 
 	out := ResolveJuniperVlanIndices(in, testLogger())
 
-	if got := out[oidDot1qPvid+"536"].Value; got != "888" {
-		t.Errorf("PVID 888 is already a tag and must not be translated, got %q", got)
+	for _, port := range []string{"536", "537"} {
+		if got, want := out[oidDot1qPvid+port].Value, in[oidDot1qPvid+port].Value; got != want {
+			t.Errorf("PVID on port %s names a resolved tag and must not be touched: got %q, want %q", port, got, want)
+		}
 	}
-	if got := out[oidDot1qPvid+"5"].Value; got != "17" {
-		t.Errorf("PVID 17 must survive verbatim even though 17 is a valid index, got %q", got)
+}
+
+// TestResolveJuniperVlanIndices_DropsAPvidTheCatalogCannotName is a regression
+// test for a corruption path the rekey itself opens.
+//
+// RFC 4363 types dot1qPvid as VlanIndex, the same convention as
+// dot1qVlanIndex, so a device that numbers VLANs internally may report PVIDs
+// in that same internal space — and an internal number is an in-range small
+// integer that no range check can tell from a tag. Left alone, such a PVID
+// names a VID the rekeyed catalog no longer holds, VlanMapper fabricates a
+// "VLAN<vid>" placeholder for it, and Diode PATCHes that over the name of
+// whatever real VLAN the operator has at that number.
+//
+// Before the rekey the same PVID matched its static row and no placeholder was
+// created, so this is a hazard the fix introduces rather than one it inherits.
+func TestResolveJuniperVlanIndices_DropsAPvidTheCatalogCannotName(t *testing.T) {
+	in := internalIndexWalk()
+	// 17 is an internal index on this device, and is not any VLAN's tag.
+	in[oidDot1qPvid+"5"] = Value{Value: "17"}
+	// Unparseable: it can name no VID, so it can fabricate nothing, and
+	// discarding it would only hide a malformed agent.
+	in[oidDot1qPvid+"6"] = Value{Value: "No Such Instance"}
+
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if _, ok := out[oidDot1qPvid+"5"]; ok {
+		t.Error("a PVID naming no resolved tag must not survive: it cannot be told from an internal index")
+	}
+	if got := out[oidDot1qPvid+"6"].Value; got != "No Such Instance" {
+		t.Errorf("an unparseable PVID names nothing and must be left alone, got %q", got)
+	}
+	if !strings.Contains(logged.String(), "ports=1") {
+		t.Errorf("the drop must be reported, got %q", logged.String())
+	}
+}
+
+// TestJuniperRekey_DoesNotRenameAnOperatorVlanThroughAPvid proves the same
+// thing end to end, through the path that does the damage.
+//
+// Without the PVID guard this emits a VLAN with vid 17 named "VLAN17" and
+// binds the port to it. Diode applies partial updates, so that renames the
+// operator's real VLAN 17 and attaches a port to a VLAN the agent invented.
+func TestJuniperRekey_DoesNotRenameAnOperatorVlanThroughAPvid(t *testing.T) {
+	logger := testLogger()
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "ge-0/0/0"})
+
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+		// Internal indices 17 and 20, resolving to tags 156 and 200.
+		oidDot1qVlanStaticName + "17":        {Value: "NAME17"},
+		oidDot1qVlanStaticEgressPorts + "17": {Value: "\x80"},
+		oidDot1qVlanStaticName + "20":        {Value: "NAME20"},
+		oidJnxExVlanName + "17":              {Value: "NAME17"},
+		oidJnxExVlanTag + "17":               {Value: "156"},
+		oidJnxExVlanName + "20":              {Value: "NAME20"},
+		oidJnxExVlanTag + "20":               {Value: "200"},
+		// Bridge port 1 is ifIndex 101, and its PVID is reported in the
+		// device's internal space rather than as a tag.
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidDot1qPvid + "1":            {Value: "17"},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	got := vm.PostMap(ResolveJuniperVlanIndices(in, logger), registry, &config.Defaults{})
+
+	for _, e := range got {
+		v, ok := e.(*diode.VLAN)
+		if !ok || v == nil || v.Vid == nil {
+			continue
+		}
+		if *v.Vid == 17 {
+			name := ""
+			if v.Name != nil {
+				name = *v.Name
+			}
+			t.Errorf("a VLAN was invented at the internal index: vid 17 named %q", name)
+		}
+	}
+	if u := ifaces[101].UntaggedVlan; u != nil && u.Vid != nil && *u.Vid == 17 {
+		t.Error("the port was bound to a VLAN the agent invented")
 	}
 }
 
@@ -515,7 +603,12 @@ func TestVlanNamesByVid_StripsTheSuffixOnlyForJuniper(t *testing.T) {
 		{"enterprise arc that merely starts the same", ".1.3.6.1.4.1.26361.1", "VL156+156"},
 		{"no sysObjectID at all", "", "VL156+156"},
 	} {
-		all := ObjectIDValueMap{oidDot1qVlanStaticName + "156": {Value: "VL156+156"}}
+		// Two decorated VLANs, so the device-convention gate is satisfied and
+		// the vendor gate is the only thing under test here.
+		all := ObjectIDValueMap{
+			oidDot1qVlanStaticName + "156": {Value: "VL156+156"},
+			oidDot1qVlanStaticName + "162": {Value: "VL162+162"},
+		}
 		if tc.sysObject != "" {
 			all[oidSysObjectIDScalar] = Value{Value: tc.sysObject}
 		}
@@ -591,6 +684,95 @@ func TestVlanMapper_PostMap_DoesNotNormaliseAgain(t *testing.T) {
 	if strings.Contains(logged.String(), "Juniper VLAN") {
 		t.Errorf("PostMap must not log about the translation, got %q", logged.String())
 	}
+
+	// A translating fixture logs nothing to begin with, so the assertion above
+	// could not fail on its own. Run a REFUSING one through the same path: the
+	// refusal is the message that would appear twice per target if PostMap
+	// normalised as well, which is the whole point of the single call.
+	refusing := internalIndexWalk()
+	delete(refusing, oidJnxExVlanTag+"32")
+	delete(refusing, oidJnxExVlanName+"32")
+
+	direct, directLog := capturingLogger()
+	if ResolveJuniperVlanIndices(refusing, direct); !strings.Contains(directLog.String(), "not translating Juniper VLAN indices") {
+		t.Fatalf("fixture does not refuse, so this test proves nothing: %q", directLog.String())
+	}
+
+	viaMapper, mapperLog := capturingLogger()
+	NewVlanMapper(viaMapper, config.Options{}).PostMap(refusing, NewEntityRegistry(slog.Default()), &config.Defaults{})
+	if strings.Contains(mapperLog.String(), "not translating Juniper VLAN indices") {
+		t.Errorf("PostMap repeated the runner's refusal; it would be logged twice per target: %q", mapperLog.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_ToleratesATruncatedStaticName keeps one long
+// VLAN name from disabling the fix for a whole switch.
+//
+// RFC 4363 bounds dot1qVlanStaticName at 32 characters; JUNIPER-VLAN-MIB does
+// not bound jnxExVlanName. A VLAN named past 32 characters therefore arrives
+// truncated in one table and whole in the other, which a strict comparison
+// reads as the device denying that the two rows describe the same VLAN. Junos
+// names routinely run that long.
+func TestResolveJuniperVlanIndices_ToleratesATruncatedStaticName(t *testing.T) {
+	const long = "a-deliberately-long-vlan-name-that-exceeds-the-column"
+	if len(long) <= dot1qVlanStaticNameMax {
+		t.Fatalf("fixture name is not long enough to truncate: %d", len(long))
+	}
+
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17": {Value: long[:dot1qVlanStaticNameMax]},
+		oidJnxExVlanName + "17":       {Value: long},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+	}, testLogger())
+
+	if got := out[oidDot1qVlanStaticName+"156"].Value; got != long[:dot1qVlanStaticNameMax] {
+		t.Errorf("a name truncated by its own column bound is not a disagreement, got %q", got)
+	}
+
+	// The tolerance is scoped to the bound: a short name that merely starts
+	// the same is still a different VLAN, and must still refuse.
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
+		oidJnxExVlanName + "17":       {Value: "MGMT-UPLINK"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+	}
+	if got := ResolveJuniperVlanIndices(in, testLogger()); !reflect.DeepEqual(got, in) {
+		t.Error("a short name that is merely a prefix of another must still disagree")
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenOnlyAnIndexEqualToItsTagAgrees
+// covers the coincidence the name gate exists to catch.
+//
+// A row whose index equals its tag reads identically whether the static table
+// is keyed by index or by tag, so it cannot discriminate between them — and it
+// is the row most devices have: VLAN 1, named "default", at index 1. Counting
+// it would hand the rekey a free pass on exactly one coincidence.
+func TestResolveJuniperVlanIndices_RefusesWhenOnlyAnIndexEqualToItsTagAgrees(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// The undiscriminating row: index 1, tag 1, same name in both.
+		oidDot1qVlanStaticName + "1": {Value: "default"},
+		oidJnxExVlanName + "1":       {Value: "default"},
+		oidJnxExVlanTag + "1":        {Value: "1"},
+
+		// Every other row is described but unnamed by the enterprise table,
+		// so nothing else corroborates.
+		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a row that cannot discriminate must not carry the rekey, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "nothing corroborates") {
+		t.Errorf("the refusal must say the evidence is missing, got %q", logged.String())
+	}
 }
 
 // TestShippedPolicyWalksTheJuniperVlanTable pins the wiring rather than the
@@ -614,5 +796,48 @@ func TestShippedPolicyWalksTheJuniperVlanTable(t *testing.T) {
 		if _, ok := cfg.GenericObjectIDs()[column]; ok {
 			t.Errorf("%s must not be walked on every host", column)
 		}
+	}
+}
+
+// TestVlanNamesByVid_StripsTheSuffixOnlyWhenTheDeviceIsConsistent gates a
+// rename against the device's own convention.
+//
+// Stripping rewrites VLAN names in NetBox, which Diode PATCHes over whatever
+// the operator has there, so it is held to the same bar as the rekey: evidence,
+// not plausibility. A switch that decorates one bridge domain decorates all of
+// them, while operator naming is not uniform — so one VLAN an operator called
+// "site+100" must not make the agent shorten it, nor drag every other VLAN on
+// that switch through a rename with it.
+func TestVlanNamesByVid_StripsTheSuffixOnlyWhenTheDeviceIsConsistent(t *testing.T) {
+	juniper := func(names map[int]string) ObjectIDValueMap {
+		all := ObjectIDValueMap{oidSysObjectIDScalar: {Value: jnxSysObjectID}}
+		for vid, name := range names {
+			all[oidDot1qVlanStaticName+strconv.Itoa(vid)] = Value{Value: name}
+		}
+		return all
+	}
+
+	// The measured ELS shape: every name carries its own tag.
+	got := vlanNamesByVid(juniper(map[int]string{1: "default+1", 156: "VL156+156", 162: "VL162+162"}))
+	for vid, want := range map[int]string{1: "default", 156: "VL156", 162: "VL162"} {
+		if got[vid] != want {
+			t.Errorf("a device-wide convention must be stripped: vid %d = %q, want %q", vid, got[vid], want)
+		}
+	}
+
+	// One operator-named VLAN among plain ones. Nothing is a convention here,
+	// so nothing is renamed — including the VLAN that looks decorated.
+	mixed := map[int]string{100: "site+100", 200: "USERS", 300: "MGMT"}
+	got = vlanNamesByVid(juniper(mixed))
+	for vid, want := range mixed {
+		if got[vid] != want {
+			t.Errorf("operator naming must survive: vid %d = %q, want %q", vid, got[vid], want)
+		}
+	}
+
+	// A single decorated VLAN is still not a convention: with nothing to
+	// compare it against, the device has said nothing.
+	if got = vlanNamesByVid(juniper(map[int]string{100: "site+100"})); got[100] != "site+100" {
+		t.Errorf("one VLAN is not evidence of a convention, got %q", got[100])
 	}
 }

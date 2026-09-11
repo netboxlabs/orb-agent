@@ -8,12 +8,17 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping/qbridge"
 )
 
-// JUNIPER-VLAN-MIB jnxExVlanTable columns. Walked only on Juniper, and absent
-// on the Junos platforms that index dot1qVlanStaticTable by the tag already.
+// JUNIPER-VLAN-MIB jnxExVlanTable columns. Walked only on Juniper.
 //
 // jnxExVlanTag carries the real 802.1Q tag of a VLAN the switch indexes
 // internally. jnxExVlanName carries the same name dot1qVlanStaticName does,
 // and is what lets the two tables be checked against each other.
+//
+// Absent on the Junos platforms measured that index dot1qVlanStaticTable by the
+// tag already. Whether that holds across every Junos build is not established,
+// which is why nothing here treats the table's presence as proof of anything:
+// a platform that publishes both is refused by the name gate rather than
+// mis-rekeyed.
 const (
 	oidJnxExVlanName = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.2."
 	oidJnxExVlanTag  = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5."
@@ -70,13 +75,25 @@ var dot1qVlanStaticColumns = []string{
 //     inequality is it denying the premise.
 //
 // Failing any of them returns the input untouched, with a warning naming which
-// one and why. The device then reports internal indices as VLAN IDs, which is
-// the bug this fixes — but an unrepaired VLAN an operator can see in a log is
-// recoverable, and a VLAN silently re-identified as a different one is not.
+// one and why. That is not a no-write path: ingest still happens and the device
+// still reports internal indices as VLAN IDs, so refusing preserves the status
+// quo write rather than avoiding one. It is the right trade anyway, because the
+// alternative is not silence but a different write — an unrepaired VLAN an
+// operator can see in a log is recoverable, and a VLAN silently re-identified
+// as a different one is not.
 //
 // Returned untouched and silently when there is no enterprise table at all:
 // that is every non-Juniper device and the Junos platforms whose indices are
 // already tags, which are correct as they are.
+//
+// A refusal warns on every poll, and deliberately so, even though the dropped
+// tag-0 row below is demoted to Debug for firing every poll. The two are not
+// the same event. Tag 0 is how a healthy switch reports an untagged bridge
+// domain: nothing is wrong and there is nothing to do, so a recurring warning
+// would be noise. A refusal says this device's VLAN IDs are wrong in NetBox
+// and the agent cannot fix them, which stays true and stays actionable until
+// someone acts on it. Logging that once and falling silent would hide an
+// unresolved problem from whoever reads the logs next.
 func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) ObjectIDValueMap {
 	staticIndices := staticVlanIndices(all)
 	if len(staticIndices) == 0 {
@@ -113,9 +130,22 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		return all
 	}
 
+	resolved := make(map[int]struct{}, len(tagByIndex))
+	for _, tag := range tagByIndex {
+		resolved[tag] = struct{}{}
+	}
+
 	out := make(ObjectIDValueMap, len(all))
-	dropped := 0
+	dropped, unnameable := 0, 0
 	for oid, v := range all {
+		if strings.HasPrefix(oid, oidDot1qPvid) {
+			if pvidIsUnnameable(v.Value, resolved) {
+				unnameable++
+				continue
+			}
+			out[oid] = v
+			continue
+		}
 		col, index, ok := splitStaticVlanOID(oid)
 		if !ok {
 			out[oid] = v
@@ -147,7 +177,48 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		logger.Debug("vlan: dropped Juniper static-table rows whose tag is not a VLAN ID",
 			"rows", dropped, "reason", "tag outside 1-4094, which is how Junos reports an untagged bridge domain")
 	}
+	if unnameable > 0 {
+		logger.Warn("vlan: dropped Juniper PVIDs the rekeyed VLAN catalog cannot name",
+			"ports", unnameable,
+			"reason", "this device numbers VLANs internally, so a PVID naming no known tag cannot be told from an internal index; fabricating a VLAN for it would rename the operator's VLAN of that number")
+	}
 	return out
+}
+
+// pvidIsUnnameable reports whether a dot1qPvid value must be discarded because
+// nothing on a rekeyed device can say which VLAN it means.
+//
+// This is the hazard the rekey itself introduces, and it is not the same
+// question as whether the value is in range. RFC 4363 types dot1qPvid as
+// VlanIndex — the same convention as dot1qVlanIndex — so an agent that answers
+// dot1qVlanIndex with an internal number is being self-consistent if it
+// answers dot1qPvid the same way, and an internal number is a perfectly
+// in-range small integer that qbridge.CoerceVid cannot distinguish from a tag.
+//
+// Left alone, such a PVID names a VID that the rekeyed catalog no longer holds,
+// and VlanMapper fabricates a "VLAN<vid>" placeholder for it — which Diode
+// PATCHes over the name of whatever real VLAN the operator has at that number,
+// and binds a port to it. Before the rekey that PVID matched its static row and
+// no placeholder was created, so this is a corruption path the rekey opens
+// rather than one it inherits.
+//
+// Translating it instead is not available: a value absent from the tag set
+// could be an internal index, or the tag of a VLAN with no static row, and
+// nothing distinguishes them. So the port loses its untagged VLAN, which under
+// Diode's partial updates leaves whatever NetBox already holds untouched.
+//
+// A value that will not parse is kept: it can name no VID, so it can fabricate
+// nothing, and discarding it would only hide a malformed agent.
+//
+// On the reported switch this drops nothing — every PVID there is a resolved
+// tag — which is why it costs the fix's own device nothing.
+func pvidIsUnnameable(value string, resolvedTags map[int]struct{}) bool {
+	pvid, ok := atoi(trimSNMPString(value))
+	if !ok {
+		return false
+	}
+	_, known := resolvedTags[pvid]
+	return !known
 }
 
 // staticVlanIndices collects the distinct VlanIndex values dot1qVlanStaticTable
@@ -237,12 +308,25 @@ func ambiguousStaticTag(staticIndices map[int]struct{}, tagByIndex map[int]int) 
 	return tag, claimants, ambiguous
 }
 
+// dot1qVlanStaticNameMax is the SIZE bound RFC 4363 puts on
+// dot1qVlanStaticName. jnxExVlanName carries no such bound, so a longer name
+// reaches the two tables truncated in one and whole in the other.
+const dot1qVlanStaticNameMax = 32
+
 // corroborateVlanNames asks the device whether the two tables describe the same
 // VLANs, by comparing the name each gives for one index.
 //
 // Only indices carrying a name in both tables are counted; the rest are
 // evidence of nothing either way. The ELS "+<tag>" suffix is stripped from both
 // sides first, since only one table may carry it.
+//
+// An index whose tag EQUALS it is not counted as agreement. Such a row reads
+// the same whether the static table is keyed by index or by tag, so it cannot
+// discriminate between the two hypotheses this gate exists to decide — and the
+// row most likely to be shaped that way is the one most devices have, VLAN 1
+// named "default" at index 1. Letting it corroborate would hand the rekey a
+// free pass on the single coincidence the gate is for. It costs the reported
+// device nothing: none of its 39 indices equals its tag.
 //
 // firstDisagreement is the lowest disagreeing index, so the warning names the
 // same VLAN on every poll.
@@ -261,23 +345,49 @@ func corroborateVlanNames(all ObjectIDValueMap, staticIndices map[int]struct{}, 
 			continue
 		}
 		tag := tagByIndex[index]
-		if stripVlanNameTagSuffix(static, tag) == stripVlanNameTagSuffix(enterprise, tag) {
-			agreed++
+		if !vlanNamesAgree(stripVlanNameTagSuffix(static, tag), stripVlanNameTagSuffix(enterprise, tag)) {
+			if disagreed == 0 || index < firstDisagreement {
+				firstDisagreement = index
+			}
+			disagreed++
 			continue
 		}
-		if disagreed == 0 || index < firstDisagreement {
-			firstDisagreement = index
+		if index != tag {
+			agreed++
 		}
-		disagreed++
 	}
 	return agreed, disagreed, firstDisagreement
 }
 
+// vlanNamesAgree compares the two tables' names for one VLAN, allowing for the
+// standard column being narrower than the enterprise one.
+//
+// RFC 4363 bounds dot1qVlanStaticName at 32 characters and JUNIPER-VLAN-MIB
+// does not bound jnxExVlanName, so a VLAN named past 32 characters arrives
+// truncated in one table and whole in the other. Read as a disagreement that
+// would disable the fix for the entire switch over one long name, which Junos
+// names routinely are — and silently, since the operator sees only a warning
+// naming a VLAN whose name looks correct to them.
+//
+// A prefix relation at the narrower column's bound is therefore agreement, not
+// disagreement. Shorter names still have to match outright, so a genuinely
+// different name on a short VLAN is caught exactly as before.
+func vlanNamesAgree(static, enterprise string) bool {
+	if static == enterprise {
+		return true
+	}
+	shorter, longer := static, enterprise
+	if len(longer) < len(shorter) {
+		shorter, longer = longer, shorter
+	}
+	return len(shorter) >= dot1qVlanStaticNameMax && strings.HasPrefix(longer, shorter)
+}
+
 // splitStaticVlanOID splits a dot1qVlanStaticTable OID into its column prefix
 // and its VlanIndex. Reports false for anything else, including the other
-// Q-BRIDGE tables: dot1qPvid carries a VLAN value rather than a VLAN index in
-// its OID, and on the reported switches that value is already the real tag, so
-// putting it through this translation would read a tag as an index.
+// Q-BRIDGE tables: dot1qPvid is indexed by bridge port and carries its VLAN as
+// the VALUE, so it holds no VlanIndex to rekey. What its value needs is a
+// different question, handled by pvidIsUnnameable.
 func splitStaticVlanOID(oid string) (column string, index int, ok bool) {
 	for _, col := range dot1qVlanStaticColumns {
 		if !strings.HasPrefix(oid, col) {

@@ -456,7 +456,7 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 		}
 	}
 	names := mergeVLANNames(rows)
-	if !isJuniper(all) {
+	if !isJuniper(all) || !everyNameCarriesItsTagSuffix(names) {
 		return names
 	}
 	// Junos ELS reports a bridge domain as "<name>+<tag>", so the VLAN an
@@ -466,6 +466,40 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 		names[vid] = stripVlanNameTagSuffix(name, vid)
 	}
 	return names
+}
+
+// everyNameCarriesItsTagSuffix reports whether EVERY named VLAN on the device
+// ends in "+<its own id>".
+//
+// Stripping renames VLANs in NetBox, which Diode PATCHes over whatever the
+// operator has there, so it needs evidence rather than plausibility — the same
+// bar the index rekey is held to. A device convention is uniform: the switch
+// that decorates one bridge domain decorates all of them. Operator naming is
+// not, so a single VLAN an operator happened to call "site+100" no longer
+// makes the agent shorten it, and no longer drags every other VLAN on that
+// switch through a rename with it.
+//
+// A single named VLAN is not a convention: one sample cannot separate the
+// device decorating a bridge domain from an operator naming a VLAN, and it is
+// vacuously uniform. Two is the smallest number that can disagree. The cost is
+// a switch holding exactly one VLAN keeping a name it would otherwise lose the
+// suffix from, which corrects itself as soon as a second VLAN exists; the cost
+// of the other choice is renaming an operator's VLAN on no evidence at all.
+//
+// Measured: on the reported ELS switch 5 of 5 names carry the suffix, and on
+// the pre-ELS switch 0 of 39 do. Neither is a borderline case.
+func everyNameCarriesItsTagSuffix(names map[int]string) bool {
+	named := 0
+	for vid, name := range names {
+		if name == "" {
+			continue
+		}
+		if stripVlanNameTagSuffix(name, vid) == name {
+			return false
+		}
+		named++
+	}
+	return named > 1
 }
 
 // mergeVLANNames resolves one name per VID from the collected name rows.

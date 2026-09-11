@@ -397,9 +397,11 @@ Presence of the enterprise table is not on its own evidence that the static tabl
 
 1. **The enterprise table resolves every static row to a readable tag.** Partial coverage means the two tables are keyed in different spaces, or the walk was truncated — a table that ends early arrives short but non-empty, and rekeying on it would silently delete every row past the cut.
 2. **No two static rows claim the same tag.** Nothing available says which row owns it.
-3. **The two tables agree on at least one VLAN's name, and disagree about none.** `jnxExVlanName` and `dot1qVlanStaticName` are generated from one configuration, so equality at an index is the device confirming both rows describe the same VLAN. This is the check that catches a tag-keyed static table whose keys happen to also be valid enterprise indices, where counting rows alone is satisfied and every VLAN would otherwise be re-emitted under a stranger's ID. The ELS `+<tag>` name suffix is ignored on both sides.
+3. **The two tables agree on at least one VLAN's name, and disagree about none.** `jnxExVlanName` and `dot1qVlanStaticName` are generated from one configuration, so equality at an index is the device confirming both rows describe the same VLAN. This is the check that catches a tag-keyed static table whose keys happen to also be valid enterprise indices, where counting rows alone is satisfied and every VLAN would otherwise be re-emitted under a stranger's ID.
 
-Failing any of them leaves the walk untouched and logs a warning naming which one and why. The device then reports internal indices as VLAN IDs — the unfixed bug — but an unrepaired VLAN an operator can see in a log is recoverable, and a VLAN silently re-identified as a different one is not.
+   Two details make that check mean what it says. A row whose index **equals** its tag does not count as agreement: it reads the same under either hypothesis, so it cannot discriminate, and it is the row most devices have (VLAN 1, named `default`, at index 1). And because RFC 4363 bounds `dot1qVlanStaticName` at 32 characters while `jnxExVlanName` is unbounded, a name longer than that arrives truncated in one table and whole in the other; a prefix relation at that bound is read as agreement rather than as a contradiction, so one long VLAN name cannot disable the fix for a whole switch. The ELS `+<tag>` suffix is ignored on both sides.
+
+Failing any of them leaves the walk untouched and logs a warning naming which one and why. This is not a "do nothing" path: ingest still happens and the device still reports internal indices as VLAN IDs, so refusing preserves the status quo write rather than avoiding one. It is still the right trade, because the alternative is not silence but a *different* write: an unrepaired VLAN an operator can see in a log is recoverable, and a VLAN silently re-identified as a different one is not.
 
 ### Rows that are dropped, and rows that abandon the translation
 
@@ -407,15 +409,29 @@ A tag outside 1-4094 drops just that row. Junos reports an untagged bridge domai
 
 Every *other* unresolvable row abandons the translation for the whole device instead of being dropped. Dropping such a row would leave no VLAN entity while `dot1qPvid` still named that VID, and `create_unknown_vlans` would then fabricate a `VLAN<vid>` placeholder for it — which, under Diode's PATCH semantics, renames the operator's real VLAN in NetBox.
 
+### PVIDs the rekeyed catalog cannot name
+
+RFC 4363 types `dot1qPvid` as `VlanIndex`, the same convention as `dot1qVlanIndex`. A device that numbers VLANs internally may therefore report PVIDs in that same internal space, and an internal number is an in-range small integer that no range check can tell from a tag.
+
+After a rekey, a PVID naming no resolved tag is dropped for that port. It cannot be translated — the value could be an internal index, or the tag of a VLAN with no static row, and nothing distinguishes them — and it cannot be left alone, because a placeholder VLAN would then be fabricated under that number and PATCHed over the operator's real VLAN. The port loses its untagged VLAN instead, which under partial updates leaves whatever NetBox already holds untouched. On the reported switch this drops nothing: every PVID there is a resolved tag.
+
 ### Deliberately left alone
 
 - **`dot1qPvid` is not translated.** On the affected platforms it already carries the real tag while the static table carries indices, so translating it would read a tag as though it were an index.
 - **SVI-derived VLANs are not translated.** That resolver takes the tag from the interface name, which carries the real one. It does not fire on Junos in any case: it refuses a name containing a dot, and Junos names its SVIs `vlan.156` / `irb.156`.
 - **Platforms without the enterprise table are untouched, and silently.** Other Junos switches key the static table by the tag already and answer these OIDs with `No Such Object`. They are correct as they are, so an absent enterprise table means no translation rather than a refusal, and no log line on every poll.
 
-### Limitation: the ELS name suffix
+### The ELS name suffix
 
-ELS reports a bridge domain as `<name>+<tag>`, so a VLAN called `office` arrives as `office+100`. The suffix is removed only when the number equals that VLAN's own ID, and only on Juniper, so a name that merely contains a plus and a number — `site+200` on VLAN 100, say — is untouched. A Juniper VLAN genuinely named `site+100` whose ID is 100 is shortened to `site`: nothing in the data distinguishes that from the device's own convention.
+ELS reports a bridge domain as `<name>+<tag>`, so a VLAN called `office` on VLAN 100 arrives as `office+100`. Removing that suffix rewrites the VLAN's name in NetBox, so it is held to the same bar as the rekey: the suffix is stripped only when **every** named VLAN on the device carries its own ID that way, and only on Juniper.
+
+A device convention is uniform — a switch that decorates one bridge domain decorates all of them — while operator naming is not, so one VLAN an operator happened to call `site+100` neither gets shortened nor drags the rest of the switch through a rename with it. A device with a single named VLAN is not treated as evidence of a convention either, since one sample cannot distinguish the two.
+
+**Limitation:** on a switch where the convention does hold, a VLAN the operator genuinely named `<something>+<its own ID>` is indistinguishable from the device's decoration and loses the suffix.
+
+### Upgrading a switch that was already discovered
+
+A device discovered before this change has its VLANs in NetBox under internal indices, and interfaces referencing them. Diode applies partial updates, so nothing removes those: after the upgrade the correctly-numbered VLANs appear alongside the old index-numbered ones, and an interface whose VLAN was dropped (the tag-0 bridge domain, or a PVID the catalog cannot name) keeps the reference NetBox already has rather than having it cleared. **The stale index-numbered VLANs and the interface references to them have to be removed by hand.** This is the same PATCH-semantics limitation noted at the top of this document for switchports converted to routed interfaces.
 
 ## VRFs
 
