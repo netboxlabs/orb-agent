@@ -64,7 +64,18 @@ var dot1qVlanStaticColumns = []string{
 // without coordinating.
 func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) ObjectIDValueMap {
 	tagByIndex, described := juniperVlanTags(all, logger)
+	// No table at all: the QFX and every non-Juniper device. Nothing is
+	// wrong, so nothing is said.
 	if len(described) == 0 {
+		return all
+	}
+	// A table that answered with nothing usable is a different thing, and
+	// the reported bug is about to reappear untranslated. Say so, because an
+	// operator cannot act on it otherwise, and leave the walk alone rather
+	// than deleting rows on the strength of a table nobody could read.
+	if len(tagByIndex) == 0 {
+		logger.Warn("vlan: the Juniper VLAN tag table was walked but no row was usable; VLAN IDs will be the device's internal indices",
+			"rows", len(described), "reason", "no jnxExVlanTag value parsed to a usable tag")
 		return all
 	}
 	// Coverage is checked against every index the table DESCRIBED, including
@@ -151,6 +162,7 @@ func staticIndicesNotIn(all ObjectIDValueMap, described map[int]struct{}) (missi
 // ResolveJuniperVlanIndices for why they answer different questions.
 func juniperVlanTags(all ObjectIDValueMap, logger *slog.Logger) (map[int]int, map[int]struct{}) {
 	indicesByTag := map[int][]int{}
+	described := map[int]struct{}{}
 	for oid, v := range all {
 		if !strings.HasPrefix(oid, oidJnxExVlanTag) {
 			continue
@@ -159,6 +171,12 @@ func juniperVlanTags(all ObjectIDValueMap, logger *slog.Logger) (map[int]int, ma
 		if !ok {
 			continue
 		}
+		// Described the moment the table has a row for the index, whatever
+		// the value turns out to be. A row whose tag will not parse is one
+		// VLAN nobody can resolve, not evidence that the table is keyed in a
+		// different space, and treating it as the latter would abandon the
+		// translation for every other VLAN on the device.
+		described[index] = struct{}{}
 		tag, ok := atoi(trimSNMPString(v.Value))
 		if !ok {
 			continue
@@ -167,11 +185,7 @@ func juniperVlanTags(all ObjectIDValueMap, logger *slog.Logger) (map[int]int, ma
 	}
 
 	out := map[int]int{}
-	described := map[int]struct{}{}
 	for tag, indices := range indicesByTag {
-		for _, i := range indices {
-			described[i] = struct{}{}
-		}
 		if len(indices) > 1 {
 			logger.Warn("vlan: refusing an ambiguous Juniper VLAN tag",
 				"tag", tag, "claimed_by_indices", len(indices),
