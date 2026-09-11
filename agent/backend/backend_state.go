@@ -53,6 +53,12 @@ type stateManager struct {
 	restartBackendChan chan string
 	policyRepo         policies.PolicyRepo
 	tick               TickSource
+	// queued tracks, per backend, whether a restart request for it is
+	// currently sitting in restartBackendChan. It caps each backend at one
+	// slot: without it, repeated ticks from a handful of unhealthy backends
+	// could fill every slot with the same names and starve a backend whose
+	// request never fits.
+	queued map[string]bool
 }
 
 // NewStateManager creates a new StateManager with the given logger and restart channel.
@@ -65,6 +71,7 @@ func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackend
 			logger:             logger,
 			restartBackendChan: restartBackendChan,
 			policyRepo:         policyRepo,
+			queued:             make(map[string]bool),
 			tick: func(d time.Duration) (<-chan time.Time, func()) {
 				t := time.NewTicker(d)
 				return t.C, t.Stop
@@ -133,12 +140,24 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 			manager.mu.Unlock()
 
 			if restart {
-				// Outside the lock, and never blocking: a consumer that has
-				// fallen behind must not freeze every reader of the state.
-				select {
-				case manager.restartBackendChan <- name:
-				default:
-					manager.logger.Debug("restart already queued for this backend, request dropped until the next tick", "backend", name)
+				manager.mu.Lock()
+				alreadyQueued := manager.queued[name]
+				if !alreadyQueued {
+					manager.queued[name] = true
+				}
+				manager.mu.Unlock()
+
+				if !alreadyQueued {
+					// Outside the lock, and never blocking: a consumer that has
+					// fallen behind must not freeze every reader of the state.
+					select {
+					case manager.restartBackendChan <- name:
+					default:
+						manager.mu.Lock()
+						manager.queued[name] = false
+						manager.mu.Unlock()
+						manager.logger.Warn("restart queue full, request kept for the next tick", "backend", name)
+					}
 				}
 				if err != nil {
 					manager.logger.Error("failed to read backend status", "error", err, "backend", name)
@@ -181,10 +200,13 @@ func (manager *stateManager) RegisterError(name string, errMessage string) {
 	state.LastError = errMessage
 }
 
-// RegisterRestart registers a restart event for a backend
+// RegisterRestart registers a restart event for a backend. It is the first
+// thing RestartBackend calls, so clearing the queue slot here marks the
+// request as taken: the monitor may queue another one on its next tick.
 func (manager *stateManager) RegisterRestart(name string, reason string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	manager.queued[name] = false
 	// A restart can be asked for before the monitor registered the backend.
 	if manager.backendState[name] == nil {
 		manager.backendState[name] = &State{Status: Unknown}

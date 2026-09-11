@@ -85,6 +85,55 @@ func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
 	}
 }
 
+// A backend holds at most one slot in the restart queue: repeated ticks
+// while a request is still pending must not enqueue it again, since a name
+// with no dedup would let a handful of unhealthy backends fill every slot
+// and starve one whose request never fits.
+func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan)
+	be := &countingBackend{status: BackendError, started: time.Now().Add(-2 * MinRestartTime)}
+	manager.StartBackendMonitor("unhealthy", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	sendTick(t, tick)
+	sendTick(t, tick)
+	sendTick(t, tick)
+	require.Len(t, restartChan, 1)
+
+	manager.RegisterRestart("unhealthy", "taken")
+	sendTick(t, tick)
+	require.Eventually(t, func() bool { return len(restartChan) == 2 }, time.Second, time.Millisecond,
+		"RegisterRestart must release the slot so the next tick can queue again")
+}
+
+// A restart request that did not fit in a full queue must not be considered
+// queued: the monitor has to retry it on a later tick instead of dropping it
+// for good.
+func TestMonitorKeepsARequestThatDidNotFit(t *testing.T) {
+	restartChan := make(chan string, 1)
+	restartChan <- "other"
+	manager, channels := newTestManager(t, restartChan)
+	be := &countingBackend{status: BackendError, started: time.Now().Add(-2 * MinRestartTime)}
+	manager.StartBackendMonitor("unhealthy", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	sendTick(t, tick)
+	require.Eventually(t, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		return !manager.queued["unhealthy"]
+	}, time.Second, time.Millisecond, "a request that did not fit must be released so the next tick retries it")
+	require.Len(t, restartChan, 1)
+	require.Equal(t, "other", <-restartChan)
+
+	sendTick(t, tick)
+	require.Eventually(t, func() bool { return len(restartChan) == 1 }, time.Second, time.Millisecond)
+	require.Equal(t, "unhealthy", <-restartChan)
+}
+
 // Each monitor gets its own tick source, so adding a backend does not slow
 // the polling of the others.
 func TestEachMonitorHasItsOwnTickSource(t *testing.T) {
