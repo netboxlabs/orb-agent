@@ -665,35 +665,48 @@ func TestApplyBackendPoliciesStopsWhenTheContextIsCancelledMidLoop(t *testing.T)
 	assert.Equal(t, 1, unknown, "the policy never reached stays as it was")
 }
 
-// A record already Running reflects the current process: every restart marks
-// a backend's policies unknown before stopping it, and a manage during a
-// restart is stored failed to apply rather than running, so a running record
-// can only have been applied by this same process already. Skipping it is
-// what lets the replay run more than once (the restart's second pass, after
-// the mutex is released) without applying a policy twice.
-func TestApplyBackendPoliciesSkipsPoliciesAlreadyRunning(t *testing.T) {
+// A replay must hand the backend only the records a restart deferred: one
+// marked unknown, one marked offline while the process was down, and one
+// stored failed to apply because the starter reported the backend starting.
+// A record already Running reflects this process's own prior apply, and a
+// record failed for any other reason failed in this same replay or in a
+// manage this process already answered; applying either again could run a
+// one-shot policy twice.
+func TestApplyBackendPoliciesAppliesOnlyWhatTheRestartDeferred(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := &mockSecretsManager{passthrough: true}
-	be := &mockBackend{name: "skip_running_backend"}
+	be := &mockBackend{name: "deferred_backend"}
 	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
 	repo := mgr.GetRepo()
-	require.NoError(t, repo.Update(policies.PolicyData{ID: "already-running", Name: "already-running", Backend: "skip_running_backend", Version: 1, Data: map[string]any{}, State: policies.Running}))
-	require.NoError(t, repo.Update(policies.PolicyData{ID: "not-yet", Name: "not-yet", Backend: "skip_running_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "unknown", Name: "unknown", Backend: "deferred_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "offline", Name: "offline", Backend: "deferred_backend", Version: 1, Data: map[string]any{}, State: policies.Offline}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "starting", Name: "starting", Backend: "deferred_backend", Version: 1, Data: map[string]any{}, State: policies.FailedToApply, BackendErr: policymgr.ReasonBackendStarting}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "failed", Name: "failed", Backend: "deferred_backend", Version: 1, Data: map[string]any{}, State: policies.FailedToApply, BackendErr: "failed to apply"}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "already-running", Name: "already-running", Backend: "deferred_backend", Version: 1, Data: map[string]any{}, State: policies.Running}))
 
-	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "not-yet" }), true).Return(nil).Once()
+	applied := []string{"unknown", "offline", "starting"}
+	for _, id := range applied {
+		be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == id }), true).Return(nil).Once()
+	}
 
-	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "skip_running_backend", be))
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "deferred_backend", be))
 
-	be.AssertExpectations(t) // the running record calling ApplyPolicy again would panic on the exhausted expectation
+	be.AssertExpectations(t) // the failed and already-running records calling ApplyPolicy again would panic on the exhausted expectations
+	for _, id := range applied {
+		stored, err := repo.Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, policies.Running, stored.State, "id %s must be applied by the replay", id)
+	}
+	failed, err := repo.Get("failed")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, failed.State, "a failure this process already answered is not replayed")
+	assert.Equal(t, "failed to apply", failed.BackendErr)
 	alreadyRunning, err := repo.Get("already-running")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, alreadyRunning.State)
-	notYet, err := repo.Get("not-yet")
-	require.NoError(t, err)
-	assert.Equal(t, policies.Running, notYet.State)
 }
 
 // The state monitor calls repo.UpdateRuns for a policy at any time and does

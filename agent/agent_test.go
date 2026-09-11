@@ -351,6 +351,53 @@ func TestRestartBackendReappliesPoliciesEndToEnd(t *testing.T) {
 	assert.Equal(t, int32(3), be.applied[0].Version)
 }
 
+// failOnceApplyBackend fails the first ApplyPolicy call and succeeds on any
+// call after, recording how many times it was called, so a test can prove a
+// replay's second pass does not retry a policy its first pass already
+// answered.
+type failOnceApplyBackend struct {
+	restartableBackend
+	calls int
+}
+
+func (f *failOnceApplyBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy bool) error {
+	f.calls++
+	if f.calls == 1 {
+		return errors.New("apply timed out")
+	}
+	return f.restartableBackend.ApplyPolicy(pd, updatePolicy)
+}
+
+// End to end with the real policy manager: a policy the first replay pass
+// fails to apply is stored failed to apply with the backend's own reason,
+// and the second pass, taken after the restart mutex is released, must not
+// hand it to the backend again.
+func TestRestartBackendSecondPassDoesNotRetryAPolicyTheFirstPassFailed(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	pm, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+	events := []string{}
+	be := &failOnceApplyBackend{restartableBackend: restartableBackend{events: &events}}
+	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "flaky", Name: "Flaky", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
+		config:              config.Config{},
+	}
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	stored, err := pm.GetRepo().Get("flaky")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	assert.Equal(t, "apply timed out", stored.BackendErr)
+	assert.Equal(t, 1, be.calls, "the second pass must not retry a policy the first pass already failed")
+}
+
 // A Start (file-driven or otherwise) that is already blocked on the restart
 // mutex when Stop cancels the agent context can still succeed once the
 // mutex is free, but by then the agent is shutting down: the reset succeeds

@@ -554,14 +554,16 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // the loop and is returned, leaving whatever policies were not yet reached
 // as they were (most often unknown) for a later replay to pick up.
 //
-// A record already Running is skipped: every restart marks a backend's
-// policies unknown before stopping it, and a manage that lands while a
-// restart is in flight is stored failed to apply rather than running, so a
-// running record can only reflect this same process's own prior apply.
-// Skipping it is what lets a restart's second pass, taken after its mutex is
-// released to pick up anything that arrived in the window between the first
-// pass and the unlock, run safely alongside (or after) the first without
-// applying a policy twice.
+// Only a record deferredByRestart is applied: one marked unknown, one
+// marked offline while the process was down, or one stored failed to apply
+// because the starter reported the backend starting. A record already
+// Running reflects this process's own prior apply, and a record failed for
+// any other reason failed in this same replay or in a manage this process
+// already answered; applying either again could run a one-shot policy
+// twice. Excluding both is what lets a restart's second pass, taken after
+// its mutex is released to pick up anything that arrived in the window
+// between the first pass and the unlock, run safely alongside (or after)
+// the first without applying a policy twice.
 func (a *policyManager) ApplyBackendPolicies(ctx context.Context, name string, be backend.Backend) error {
 	mu := a.applyLock(name)
 	mu.Lock()
@@ -588,7 +590,7 @@ func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name str
 			a.logger.Info("shutting down; remaining backend policies left unknown", "backend", name, "error", err)
 			return err
 		}
-		if policy.State == policies.Running {
+		if !deferredByRestart(policy) {
 			continue
 		}
 		a.applyStoredPolicy(&policy, be)
@@ -597,6 +599,24 @@ func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name str
 		}
 	}
 	return nil
+}
+
+// deferredByRestart reports whether a replay must hand this record to the
+// backend: a record the restart marked unknown, one the state monitor marked
+// offline while the previous process was down, or one stored as starting
+// because a manage arrived while the restart was in flight. A running record
+// reflects this process's own apply, and a record that failed for any other
+// reason failed in this same replay or in a manage this process already
+// answered; applying either again could run a one-shot policy twice.
+func deferredByRestart(policy policies.PolicyData) bool {
+	switch policy.State {
+	case policies.Unknown, policies.Offline:
+		return true
+	case policies.FailedToApply:
+		return policy.BackendErr == ReasonBackendStarting
+	default:
+		return false
+	}
 }
 
 // persistApplyOutcome writes a policy back after an apply or a removal that
