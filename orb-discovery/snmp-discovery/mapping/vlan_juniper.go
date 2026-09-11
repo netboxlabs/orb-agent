@@ -251,6 +251,15 @@ func pvidIsUnnameable(value string, resolvedTags map[int]struct{}) bool {
 	if !ok {
 		return false
 	}
+	// 0 is the device saying "bridged, nothing untagged", which is how every
+	// all-tagged trunk reports. It names no VLAN, so it can fabricate none, and
+	// it is already the value this function would write. Short-circuited so a
+	// switch with no untagged bridge domain — whose tag 0 is therefore not in
+	// the resolved set — does not warn on every poll about ports that lost
+	// nothing.
+	if pvid == 0 {
+		return false
+	}
 	_, known := resolvedTags[pvid]
 	return !known
 }
@@ -387,7 +396,17 @@ func corroborateVlanNames(all ObjectIDValueMap, staticIndices map[int]struct{}, 
 		if static == "" {
 			continue
 		}
+		// Rows that will be dropped rather than rewritten are evidence of
+		// nothing, the same way they are not contested for ambiguity. Without
+		// this, a device can be rekeyed where every corroborating row is
+		// discarded moments later — and the index != tag exclusion below, which
+		// exists to deny the rekey a free pass on "VLAN 1 named default at
+		// index 1", misses that very row on a box whose default bridge domain
+		// is untagged, since its tag is 0 and 1 != 0.
 		tag := tagByIndex[index]
+		if qbridge.CoerceVid(tag) == nil {
+			continue
+		}
 		switch compareVlanNames(static, enterprise, tag) {
 		case namesDisagree:
 			if disagreed == 0 || index < firstDisagreement {
@@ -435,15 +454,21 @@ const (
 // truncation test below uses the raw ones, because a cut can land in the middle
 // of the ELS "+<tag>" suffix and leave one side strippable and the other not.
 //
-// Length is a proxy for "was cut", and an imperfect one: a name cut at the
-// bound whose last octet is whitespace arrives shorter, since device strings
-// are trimmed before they reach here, and is then read as a plain
-// disagreement. It is the signal available.
+// Length ON the bound is the proxy for "was cut", and it is deliberately an
+// equality rather than a minimum: a name LONGER than the bound is proof that
+// this agent does not cut at the bound, which falsifies the premise exactly
+// where a minimum would apply it.
+//
+// The proxy is imperfect in the other direction. Device strings are trimmed
+// before they reach here, and that strips NUL bytes anywhere as well as
+// surrounding whitespace — so a name cut at the bound whose last octet is the
+// NUL many agents pad with arrives at 31 and is read as a plain disagreement.
+// It is the signal available.
 func compareVlanNames(static, enterprise string, tag int) nameVerdict {
 	if stripVlanNameTagSuffix(static, tag) == stripVlanNameTagSuffix(enterprise, tag) {
 		return namesAgree
 	}
-	if len(static) >= dot1qVlanStaticNameMax && strings.HasPrefix(enterprise, static) {
+	if len(static) == dot1qVlanStaticNameMax && strings.HasPrefix(enterprise, static) {
 		return namesInconclusive
 	}
 	return namesDisagree

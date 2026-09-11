@@ -479,12 +479,18 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 // makes the agent shorten it, and no longer drags every other VLAN on that
 // switch through a rename with it.
 //
-// A single named VLAN is not a convention: one sample cannot separate the
-// device decorating a bridge domain from an operator naming a VLAN, and it is
-// vacuously uniform. Two is the smallest number that can disagree. The cost is
-// a switch holding exactly one VLAN keeping a name it would otherwise lose the
-// suffix from, which corrects itself as soon as a second VLAN exists; the cost
-// of the other choice is renaming an operator's VLAN on no evidence at all.
+// One conforming name is enough, and requiring two was worse. The count can
+// only ever include names short enough to read, so on a switch whose names
+// mostly run past the column bound it is a count of the few short ones — and a
+// hard threshold sitting in a small number flaps: deleting one short-named VLAN
+// pushed an eleven-VLAN switch below it and renamed a DIFFERENT VLAN on the
+// next ingest, then renamed it back. A rename of operator data that recurs is
+// worse than the case the threshold guarded, which is a device holding exactly
+// one readable conforming name and nothing contradicting it.
+//
+// The discriminating work is done by the veto above, not by the count: any
+// readable name WITHOUT the suffix means the device has no such convention.
+// The count only establishes that something was actually observed.
 //
 // Measured: on the reported ELS switch 5 of 5 names carry the suffix, and on
 // the pre-ELS switch 0 of 39 do. Neither is a borderline case.
@@ -517,16 +523,19 @@ func everyNameCarriesItsTagSuffix(names map[int]string) bool {
 		// into a device-wide rename of every OTHER VLAN on the switch, back and
 		// forth as that VLAN is configured and removed.
 		//
-		// Length is a proxy for "was cut", and an imperfect one: a name cut at
-		// the bound whose last octet is whitespace arrives shorter, because
-		// device strings are trimmed before they reach here. It is the signal
-		// available, and it errs toward leaving names alone.
-		if len(name) >= dot1qVlanStaticNameMax {
+		// Length ON the bound is the proxy for "was cut", deliberately an
+		// equality: a name LONGER than the bound proves this agent does not cut
+		// at the bound, so it cannot have lost a suffix that way, and it is the
+		// strongest counter-evidence a device offers. The proxy is imperfect in
+		// the other direction — trimming strips NUL padding as well as
+		// whitespace, so a name cut at the bound with a NUL terminator arrives
+		// at 31 and reads as a genuine absence.
+		if len(name) == dot1qVlanStaticNameMax {
 			continue
 		}
 		return false
 	}
-	return named > 1
+	return named > 0
 }
 
 // mergeVLANNames resolves one name per VID from the collected name rows.

@@ -396,7 +396,7 @@ RFC 4363 defines `dot1qVlanIndex` as "the VLAN-ID **or other identifier** referr
 Presence of the enterprise table is not on its own evidence that the static table is index-keyed: the two are independent properties of a Junos build. A device that publishes the enterprise table while already keying the static table by the tag would have every row rewritten to some other VLAN's ID — so the bar is evidence, not plausibility, and all three of these must hold.
 
 1. **The enterprise table resolves every static row to a readable tag.** Partial coverage means the two tables are keyed in different spaces, or the walk was truncated — a table that ends early arrives short but non-empty, and rekeying on it would silently delete every row past the cut.
-2. **No two static rows claim the same tag.** Nothing available says which row owns it.
+2. **No two static rows claim the same tag**, counting only tags in 1-4094. Nothing available says which row owns a contested tag. Tags outside that range are excluded because no row is rewritten to them anyway — a switch may have several untagged bridge domains, all reported at tag 0, and refusing over those would abandon every other VLAN on the device for nothing.
 3. **The two tables agree on at least one VLAN's name, and disagree about none.** `jnxExVlanName` and `dot1qVlanStaticName` are generated from one configuration, so equality at an index is the device confirming both rows describe the same VLAN. This is the check that catches a tag-keyed static table whose keys happen to also be valid enterprise indices, where counting rows alone is satisfied and every VLAN would otherwise be re-emitted under a stranger's ID.
 
    Two details make that check mean what it says. A row whose index **equals** its tag does not count as agreement: it reads the same under either hypothesis, so it cannot discriminate, and it is the row most devices have (VLAN 1, named `default`, at index 1).
@@ -407,7 +407,7 @@ Failing any of them leaves the walk untouched and logs a warning naming which on
 
 ### Rows that are dropped, and rows that abandon the translation
 
-A tag outside 1-4094 drops just that row. Junos reports an untagged bridge domain with tag 0, so a healthy switch has one on every poll; the row is safe to drop because nothing else can name it, `dot1qPvid` being gated by the same range check.
+A tag outside 1-4094 drops just that row. Junos reports an untagged bridge domain with tag 0, so a healthy switch has one or more on every poll; the row is safe to drop because nothing else can name it. The only other reference to a VID is `dot1qPvid`, and the Q-BRIDGE reader's own zero test discards a PVID of 0 as "bridged, nothing untagged" before it can reach a VLAN lookup — the VLAN-ID range check applies later still, inside the classifier. Both layers reject it; the first is what makes the drop safe.
 
 Every *other* unresolvable row abandons the translation for the whole device instead of being dropped. Dropping such a row would leave no VLAN entity while `dot1qPvid` still named that VID, and `create_unknown_vlans` would then fabricate a `VLAN<vid>` placeholder for it — which, under Diode's PATCH semantics, renames the operator's real VLAN in NetBox.
 
@@ -433,9 +433,9 @@ ELS reports a bridge domain as `<name>+<tag>`, so a VLAN called `office` on VLAN
 
 A device convention is uniform — a switch that decorates one bridge domain decorates all of them — while operator naming is not, so one VLAN an operator happened to call `site+100` neither gets shortened nor drags the rest of the switch through a rename with it. A device with a single named VLAN is not treated as evidence of a convention either, since one sample cannot distinguish the two.
 
-Two kinds of name are excluded from that test rather than counted against it: one whose length sits exactly on the 32-octet bound, because its suffix may have been truncated away, and one that is *nothing but* the suffix, which the strip deliberately preserves. Without those exclusions, configuring a single long-named VLAN would rename every other VLAN on the switch, and deleting it would rename them back.
+Whether a name *carries* the suffix is asked first, and its length never overrides that: a suffix still visible cannot have been cut off, so such a name is evidence however long it is, and a name that is *nothing but* the suffix counts as carrying it. Length matters only for a name that does **not** carry the suffix, and only at exactly the 32-octet bound, where the suffix may have been cut away — such a name is set aside rather than counted against the convention. A name *longer* than the bound proves the agent does not cut there at all, so its missing suffix is real counter-evidence.
 
-**The trade this makes:** because the verdict is per device, a VLAN whose name genuinely breaks the convention switches stripping off for all of them. That is deliberate — deciding per VLAN is what would let an operator's `site+100` be silently shortened — but it does mean one VLAN can change the names of the others.
+**The trade this makes:** because the verdict is per device, a VLAN whose name genuinely breaks the convention switches stripping off for all of them. That is deliberate — deciding per VLAN is what would let an operator's `site+100` be silently shortened — but it does mean such a VLAN changes the names of the others. Every other case is held to the property that **no VLAN's presence changes another VLAN's name**, which the tests search exhaustively rather than sample: without it, one configuration change would rewrite operator data on every ingest, and reverting it would rewrite it back.
 
 **Limitation:** on a switch where the convention does hold, a VLAN the operator genuinely named `<something>+<its own ID>` is indistinguishable from the device's decoration and loses the suffix.
 

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -923,10 +924,11 @@ func TestVlanNamesByVid_StripsTheSuffixOnlyWhenTheDeviceIsConsistent(t *testing.
 		}
 	}
 
-	// A single decorated VLAN is still not a convention: with nothing to
-	// compare it against, the device has said nothing.
-	if got = vlanNamesByVid(juniper(map[int]string{100: "site+100"})); got[100] != "site+100" {
-		t.Errorf("one VLAN is not evidence of a convention, got %q", got[100])
+	// One conforming name is enough. Requiring two made the verdict depend on
+	// how many SHORT names the switch happens to have, which flaps — see the
+	// exhaustive test below.
+	if got = vlanNamesByVid(juniper(map[int]string{100: "site+100"})); got[100] != "site" {
+		t.Errorf("one conforming name and nothing contradicting it is a convention, got %q", got[100])
 	}
 
 	// A name the 32-octet column cut short lost its suffix on the wire. It is
@@ -1028,5 +1030,99 @@ func TestResolveJuniperVlanIndices_IgnoresAmbiguityAmongTagsItWillDrop(t *testin
 	}
 	if _, ok := out[oidDot1qVlanStaticName+"0"]; ok {
 		t.Error("tag 0 is still not a VLAN ID")
+	}
+}
+
+// TestVlanNamesByVid_NoVlanChangesAnotherVlansName is the property that matters
+// more than any single case here, checked exhaustively rather than asserted.
+//
+// The suffix strip renames VLANs in NetBox, and Diode PATCHes names on the
+// vid+group matcher. So if adding or removing one VLAN can change what a
+// DIFFERENT VLAN is called, every ingest after that configuration change
+// rewrites operator data — and reverting the change rewrites it back. Two
+// separate versions of this gate shipped with exactly that defect, in opposite
+// directions, which is why this is a search rather than an example.
+//
+// The one deliberate exception is a name that DENIES the convention: one with
+// no suffix that cannot have lost one to the column bound. That is the device
+// telling us it has no such convention, and it is allowed to turn stripping off
+// for the switch. Those are held in contradicting, and the search covers device
+// states that contain them while not counting their arrival as a violation.
+func TestVlanNamesByVid_NoVlanChangesAnotherVlansName(t *testing.T) {
+	onBound := "aaaaaaaaaaaaaaaaaaaaaaaaaaa+1234"   // conforming, exactly at the bound
+	cutSuffix := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb+1" // a cut "+1234", also at the bound
+	if len(onBound) != dot1qVlanStaticNameMax || len(cutSuffix) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixtures must sit on the bound: %d, %d", len(onBound), len(cutSuffix))
+	}
+	// Names that are evidence FOR the convention, or evidence of nothing.
+	neutral := map[int]string{
+		100:  "office+100", // conforming, short
+		200:  "eng+200",    // conforming, short
+		300:  "+300",       // nothing but the suffix
+		400:  "",           // unnamed
+		1234: onBound,      // conforming, on the bound
+		1235: cutSuffix,    // suffix cut away by the bound: unreadable either way
+	}
+	// Names that deny the convention. A short one could not have been cut; a
+	// long one proves the agent does not cut at the bound at all, so it could
+	// not have been cut either. Both legitimately veto.
+	contradicting := map[int]string{
+		500:  "plain",
+		1236: "a-name-far-longer-than-the-column-bound",
+	}
+
+	pool := map[int]string{}
+	for vid, name := range neutral {
+		pool[vid] = name
+	}
+	for vid, name := range contradicting {
+		pool[vid] = name
+	}
+
+	names := func(vids map[int]struct{}) map[int]string {
+		all := ObjectIDValueMap{oidSysObjectIDScalar: {Value: jnxSysObjectID}}
+		for vid := range vids {
+			all[oidDot1qVlanStaticName+strconv.Itoa(vid)] = Value{Value: pool[vid]}
+		}
+		return vlanNamesByVid(all)
+	}
+
+	keys := make([]int, 0, len(pool))
+	for vid := range pool {
+		keys = append(keys, vid)
+	}
+	sort.Ints(keys)
+	additions := make([]int, 0, len(neutral))
+	for vid := range neutral {
+		additions = append(additions, vid)
+	}
+	sort.Ints(additions)
+
+	// Every subset of the pool, and every non-contradicting VLAN that could be
+	// added to it.
+	for mask := 0; mask < 1<<len(keys); mask++ {
+		state := map[int]struct{}{}
+		for i, vid := range keys {
+			if mask&(1<<i) != 0 {
+				state[vid] = struct{}{}
+			}
+		}
+		before := names(state)
+
+		for _, added := range additions {
+			if _, present := state[added]; present {
+				continue
+			}
+			state[added] = struct{}{}
+			after := names(state)
+			delete(state, added)
+
+			for vid, was := range before {
+				if now := after[vid]; now != was {
+					t.Fatalf("adding VLAN %d renamed VLAN %d: %q -> %q (state %v)",
+						added, vid, was, now, state)
+				}
+			}
+		}
 	}
 }
