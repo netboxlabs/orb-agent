@@ -319,7 +319,7 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 			Description: "auto-discovered",
 			Tags:        []string{"vlan-tag"},
 			Tenant:      "NetOps",
-			Group:       "campus-vlans",
+			Group:       config.VLANGroupParameters{Name: "campus-vlans"},
 		},
 	}
 
@@ -460,7 +460,7 @@ func TestApplyVLANDefaults_GroupScopeSite_WhenSiteDefined(t *testing.T) {
 	v := &diode.VLAN{}
 	defaults := &config.Defaults{
 		Site: "NYC",
-		VLAN: config.VLANDefaults{Group: "Lab VLAN Group"},
+		VLAN: config.VLANDefaults{Group: config.VLANGroupParameters{Name: "Lab VLAN Group"}},
 	}
 
 	applyVLANDefaults(v, defaults)
@@ -490,7 +490,7 @@ func TestApplyVLANDefaults_GroupScopeSite_WhenSiteUndefined(t *testing.T) {
 	v := &diode.VLAN{}
 	defaults := &config.Defaults{
 		Site: "undefined",
-		VLAN: config.VLANDefaults{Group: "campus-vlans"},
+		VLAN: config.VLANDefaults{Group: config.VLANGroupParameters{Name: "campus-vlans"}},
 	}
 
 	applyVLANDefaults(v, defaults)
@@ -515,7 +515,7 @@ func TestApplyVLANDefaults_GroupScopeSite_WhenSiteUndefined(t *testing.T) {
 func TestApplyVLANDefaults_GroupNoScopeSite_WhenSiteEmpty(t *testing.T) {
 	v := &diode.VLAN{}
 	defaults := &config.Defaults{
-		VLAN: config.VLANDefaults{Group: "campus-vlans"},
+		VLAN: config.VLANDefaults{Group: config.VLANGroupParameters{Name: "campus-vlans"}},
 	}
 
 	applyVLANDefaults(v, defaults)
@@ -824,4 +824,91 @@ func TestEmitVLANs_Dot1qWinsOverVtpForTheSameVid(t *testing.T) {
 	ents := m.emitVLANs(oids, nil)
 	require.Len(t, ents, 1)
 	assert.Equal(t, "from-dot1q", *ents[0].(*diode.VLAN).Name)
+}
+
+// applyVLANDefaults: the map form of vlan.group picks the scope NetBox
+// attaches the group to. An explicit scope wins over defaults.site; a map
+// without one falls back to defaults.site like the string form.
+func TestApplyVLANDefaults_GroupExplicitScope(t *testing.T) {
+	tests := []struct {
+		name  string
+		group config.VLANGroupParameters
+		check func(t *testing.T, scope any)
+	}{
+		{"site group", config.VLANGroupParameters{Name: "g", ScopeSiteGroup: "Brussels"}, func(t *testing.T, scope any) {
+			sg, ok := scope.(*diode.SiteGroup)
+			if !ok {
+				t.Fatalf("scope: got %T, want *diode.SiteGroup", scope)
+			}
+			if sg.Name == nil || *sg.Name != "Brussels" {
+				t.Errorf("SiteGroup.Name: got %v, want Brussels", sg.Name)
+			}
+		}},
+		{"region", config.VLANGroupParameters{Name: "g", ScopeRegion: "Benelux"}, func(t *testing.T, scope any) {
+			r, ok := scope.(*diode.Region)
+			if !ok {
+				t.Fatalf("scope: got %T, want *diode.Region", scope)
+			}
+			if r.Name == nil || *r.Name != "Benelux" {
+				t.Errorf("Region.Name: got %v, want Benelux", r.Name)
+			}
+		}},
+		{"explicit site overrides defaults.site", config.VLANGroupParameters{Name: "g", ScopeSite: "other"}, func(t *testing.T, scope any) {
+			s, ok := scope.(*diode.Site)
+			if !ok {
+				t.Fatalf("scope: got %T, want *diode.Site", scope)
+			}
+			if s.Name == nil || *s.Name != "other" {
+				t.Errorf("Site.Name: got %v, want other", s.Name)
+			}
+		}},
+		{"location carries defaults.site", config.VLANGroupParameters{Name: "g", ScopeLocation: "Floor 2"}, func(t *testing.T, scope any) {
+			l, ok := scope.(*diode.Location)
+			if !ok {
+				t.Fatalf("scope: got %T, want *diode.Location", scope)
+			}
+			if l.Name == nil || *l.Name != "Floor 2" {
+				t.Errorf("Location.Name: got %v, want Floor 2", l.Name)
+			}
+			if l.Site == nil || l.Site.Name == nil || *l.Site.Name != "NYC" {
+				t.Errorf("Location.Site: got %v, want NYC", l.Site)
+			}
+		}},
+		{"map without scope falls back to defaults.site", config.VLANGroupParameters{Name: "g"}, func(t *testing.T, scope any) {
+			s, ok := scope.(*diode.Site)
+			if !ok {
+				t.Fatalf("scope: got %T, want *diode.Site", scope)
+			}
+			if s.Name == nil || *s.Name != "NYC" {
+				t.Errorf("Site.Name: got %v, want NYC", s.Name)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			v := &diode.VLAN{}
+			applyVLANDefaults(v, &config.Defaults{Site: "NYC", VLAN: config.VLANDefaults{Group: tt.group}})
+			if v.Group == nil {
+				t.Fatal("Group: got nil, want non-nil")
+			}
+			if v.Group.Slug == nil || *v.Group.Slug != "g" {
+				t.Errorf("Group.Slug: got %v, want g", v.Group.Slug)
+			}
+			tt.check(t, v.Group.Scope)
+		})
+	}
+}
+
+// A location scope with no site anywhere is still emitted; NetBox rejects
+// it rather than the agent guessing a site.
+func TestApplyVLANDefaults_GroupLocationWithoutSite(t *testing.T) {
+	v := &diode.VLAN{}
+	applyVLANDefaults(v, &config.Defaults{VLAN: config.VLANDefaults{Group: config.VLANGroupParameters{Name: "g", ScopeLocation: "Floor 2"}}})
+	l, ok := v.Group.Scope.(*diode.Location)
+	if !ok {
+		t.Fatalf("scope: got %T, want *diode.Location", v.Group.Scope)
+	}
+	if l.Site != nil {
+		t.Errorf("Location.Site: got %v, want nil", l.Site)
+	}
 }

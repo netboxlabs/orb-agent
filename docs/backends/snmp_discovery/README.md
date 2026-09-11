@@ -139,7 +139,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | vlan    | map  | VLAN-specific defaults  |
 | ├─ description | string  | VLAN description |
 | ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ip_address` defaults pattern. |
-| ├─ group | string | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
+| ├─ group | string \| map | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see the [VLAN group map](#vlan-group-map) below). In a per-target `override_defaults`, the group replaces the policy value as a whole |
 | ├─ tenant | string | VLAN tenant |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
 
@@ -153,6 +153,28 @@ The top-level `tenant` default accepts either a bare string (tenant name) or a m
 | description | string  | Tenant description |
 | comments | string  | Tenant comments |
 | tags | list  | Tenant tags |
+
+##### VLAN Group Map
+Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
+
+```yaml
+defaults:
+  site: "mysite01"
+  vlan:
+    group:
+      name: "Brussels VLAN Group"
+      scope_site_group: "Brussels"
+```
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | string | VLAN group name (required in the map form) |
+| scope_site | string | Scope the group to this site instead of `defaults.site` |
+| scope_site_group | string | Scope the group to a site group |
+| scope_region | string | Scope the group to a region |
+| scope_location | string | Scope the group to a location. Locations are unique per site in NetBox, so `defaults.site` is sent with it |
+
+Only one `scope_*` may be set; a map with none behaves like the bare name. Rack and cluster scopes are not supported.
 
 ### Scope Section
 | Parameter | Type | Required | Description |

@@ -507,7 +507,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 		VLAN: VLANDefaults{
 			Description: "policy desc",
 			Tags:        []string{"policy-tag"},
-			Group:       "policy-group",
+			Group:       VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"},
 			Tenant:      "policy-tenant",
 			Status:      "active",
 		},
@@ -523,7 +523,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 
 	assert.Equal(t, "override desc", merged.VLAN.Description)
 	assert.Equal(t, []string{"override-tag"}, merged.VLAN.Tags)
-	assert.Equal(t, "policy-group", merged.VLAN.Group, "Group should be preserved from policy")
+	assert.Equal(t, VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"}, merged.VLAN.Group, "Group should be preserved from policy")
 	assert.Equal(t, "override-tenant", merged.VLAN.Tenant)
 	assert.Equal(t, "active", merged.VLAN.Status, "Status should be preserved from policy")
 }
@@ -932,4 +932,78 @@ func TestPrefixVlanMode(t *testing.T) {
 	nonsense := "nonsense"
 	assert.Equal(t, "off", (&Options{EmitPrefixVlan: &nonsense}).PrefixVlanMode(),
 		"an unrecognised value must fail closed, never guess")
+}
+
+func TestMergeDefaults_VLANGroupReplacedWhole(t *testing.T) {
+	policy := &Defaults{
+		VLAN: VLANDefaults{Group: VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"}},
+	}
+	override := &Defaults{
+		VLAN: VLANDefaults{Group: VLANGroupParameters{Name: "override-group"}},
+	}
+	merged := MergeDefaults(policy, override)
+
+	assert.Equal(t, VLANGroupParameters{Name: "override-group"}, merged.VLAN.Group,
+		"an override group replaces the whole value; the policy scope must not leak in")
+}
+
+func TestVLANGroupParameters_UnmarshalScalar(t *testing.T) {
+	var d VLANDefaults
+	require.NoError(t, yaml.Unmarshal([]byte("group: campus-vlans\n"), &d))
+	assert.Equal(t, VLANGroupParameters{Name: "campus-vlans"}, d.Group)
+}
+
+func TestVLANGroupParameters_UnmarshalMapping(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want VLANGroupParameters
+	}{
+		{
+			"site group", "group:\n  name: Brussels VLAN Group\n  scope_site_group: Brussels\n",
+			VLANGroupParameters{Name: "Brussels VLAN Group", ScopeSiteGroup: "Brussels"},
+		},
+		{"site", "group:\n  name: g\n  scope_site: s\n", VLANGroupParameters{Name: "g", ScopeSite: "s"}},
+		{"region", "group:\n  name: g\n  scope_region: r\n", VLANGroupParameters{Name: "g", ScopeRegion: "r"}},
+		{"location", "group:\n  name: g\n  scope_location: l\n", VLANGroupParameters{Name: "g", ScopeLocation: "l"}},
+		{"no scope", "group:\n  name: g\n", VLANGroupParameters{Name: "g"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d VLANDefaults
+			require.NoError(t, yaml.Unmarshal([]byte(tt.yaml), &d))
+			assert.Equal(t, tt.want, d.Group)
+		})
+	}
+}
+
+func TestVLANGroupParameters_UnmarshalErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"two scopes", "group:\n  name: g\n  scope_site: s\n  scope_site_group: sg\n", "only one scope"},
+		{"missing name", "group:\n  scope_site_group: sg\n", "name is required"},
+		{"unknown key", "group:\n  name: g\n  scope_regoin: r\n", "unknown key scope_regoin"},
+		{"bad kind", "group:\n  - g\n", "expected string or mapping"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d VLANDefaults
+			err := yaml.Unmarshal([]byte(tt.yaml), &d)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+func TestVLANGroupParameters_UnmarshalNullAndReceiverReset(t *testing.T) {
+	d := VLANDefaults{Group: VLANGroupParameters{Name: "stale", ScopeRegion: "stale"}}
+	require.NoError(t, yaml.Unmarshal([]byte("group: fresh\n"), &d))
+	assert.Equal(t, VLANGroupParameters{Name: "fresh"}, d.Group, "scalar form must clear a stale scope")
+
+	var fresh VLANDefaults
+	require.NoError(t, yaml.Unmarshal([]byte("group: null\n"), &fresh))
+	assert.Equal(t, VLANGroupParameters{}, fresh.Group)
 }
