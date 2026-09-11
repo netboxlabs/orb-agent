@@ -491,7 +491,25 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 func everyNameCarriesItsTagSuffix(names map[int]string) bool {
 	named := 0
 	for vid, name := range names {
+		// No name is evidence of nothing.
 		if name == "" {
+			continue
+		}
+		// Nor is a name the standard column cut short. RFC 4363 bounds it at
+		// 32 octets, so a name plus its suffix that runs past that arrives
+		// with the suffix truncated — and reading that as the convention being
+		// broken would turn one long VLAN name into a device-wide rename of
+		// every OTHER VLAN on the switch, back and forth as that VLAN is
+		// configured and removed.
+		if len(name) == dot1qVlanStaticNameMax {
+			continue
+		}
+		// A name that is nothing BUT the suffix carries it. stripVlanNameTagSuffix
+		// deliberately leaves that one alone, since removing it would leave the
+		// VLAN nameless, and counting it as counter-evidence would let it veto
+		// the convention for the whole device.
+		if name == "+"+strconv.Itoa(vid) {
+			named++
 			continue
 		}
 		if stripVlanNameTagSuffix(name, vid) == name {

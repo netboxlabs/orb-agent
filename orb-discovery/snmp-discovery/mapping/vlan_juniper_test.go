@@ -478,8 +478,11 @@ func TestResolveJuniperVlanIndices_DropsAPvidTheCatalogCannotName(t *testing.T) 
 	logger, logged := capturingLogger()
 	out := ResolveJuniperVlanIndices(in, logger)
 
-	if _, ok := out[oidDot1qPvid+"5"]; ok {
-		t.Error("a PVID naming no resolved tag must not survive: it cannot be told from an internal index")
+	// Zeroed rather than removed: the row's presence is what tells the
+	// Q-BRIDGE reader the port is bridged at all, and 0 is the device's own
+	// way of saying bridged with no untagged VLAN.
+	if got, ok := out[oidDot1qPvid+"5"]; !ok || got.Value != "0" {
+		t.Errorf("a PVID naming no resolved tag must be zeroed, not removed: got %q, present=%v", got.Value, ok)
 	}
 	if got := out[oidDot1qPvid+"6"].Value; got != "No Such Instance" {
 		t.Errorf("an unparseable PVID names nothing and must be left alone, got %q", got)
@@ -708,11 +711,10 @@ func TestVlanMapper_PostMap_DoesNotNormaliseAgain(t *testing.T) {
 // TestResolveJuniperVlanIndices_ToleratesATruncatedStaticName keeps one long
 // VLAN name from disabling the fix for a whole switch.
 //
-// RFC 4363 bounds dot1qVlanStaticName at 32 characters; JUNIPER-VLAN-MIB does
-// not bound jnxExVlanName. A VLAN named past 32 characters therefore arrives
-// truncated in one table and whole in the other, which a strict comparison
-// reads as the device denying that the two rows describe the same VLAN. Junos
-// names routinely run that long.
+// RFC 4363 bounds dot1qVlanStaticName at 32 octets; JUNIPER-VLAN-MIB does not
+// bound jnxExVlanName. A VLAN named past that arrives cut in one table and
+// whole in the other, which a strict comparison reads as the device denying
+// that the two rows describe the same VLAN. Junos names routinely run long.
 func TestResolveJuniperVlanIndices_ToleratesATruncatedStaticName(t *testing.T) {
 	const long = "a-deliberately-long-vlan-name-that-exceeds-the-column"
 	if len(long) <= dot1qVlanStaticNameMax {
@@ -720,18 +722,24 @@ func TestResolveJuniperVlanIndices_ToleratesATruncatedStaticName(t *testing.T) {
 	}
 
 	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
-		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
 		oidDot1qVlanStaticName + "17": {Value: long[:dot1qVlanStaticNameMax]},
 		oidJnxExVlanName + "17":       {Value: long},
 		oidJnxExVlanTag + "17":        {Value: "156"},
+		// A second VLAN whose name fits, so the device still corroborates
+		// somewhere. The long name must not veto the switch.
+		oidDot1qVlanStaticName + "20": {Value: "MGMT"},
+		oidJnxExVlanName + "20":       {Value: "MGMT"},
+		oidJnxExVlanTag + "20":        {Value: "200"},
 	}, testLogger())
 
 	if got := out[oidDot1qVlanStaticName+"156"].Value; got != long[:dot1qVlanStaticNameMax] {
-		t.Errorf("a name truncated by its own column bound is not a disagreement, got %q", got)
+		t.Errorf("a name cut by its own column bound must not veto the rekey, got %q", got)
 	}
 
 	// The tolerance is scoped to the bound: a short name that merely starts
-	// the same is still a different VLAN, and must still refuse.
+	// the same is a different VLAN, and must still refuse.
 	in := ObjectIDValueMap{
 		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
 		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
@@ -740,6 +748,81 @@ func TestResolveJuniperVlanIndices_ToleratesATruncatedStaticName(t *testing.T) {
 	}
 	if got := ResolveJuniperVlanIndices(in, testLogger()); !reflect.DeepEqual(got, in) {
 		t.Error("a short name that is merely a prefix of another must still disagree")
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenOnlyTruncatedNamesMatch closes the
+// other half of the truncation problem, which matters more than the first.
+//
+// Two VLANs on one switch sharing a 32-octet prefix is ordinary under
+// structured naming, and once the standard column cuts them they are
+// indistinguishable. If a cut name counted as agreement, a device whose static
+// table is ALREADY tag-keyed could satisfy the gate on nothing but prefixes and
+// have every VLAN re-emitted under a stranger's ID — the exact catastrophe the
+// name gate exists to prevent. A cut name is therefore evidence of nothing, and
+// the rekey still needs one full agreement somewhere.
+func TestResolveJuniperVlanIndices_RefusesWhenOnlyTruncatedNamesMatch(t *testing.T) {
+	const prefix = "campus-west-building12-floor3-vl" // exactly the column bound
+	if len(prefix) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixture prefix must sit exactly on the bound, got %d", len(prefix))
+	}
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// A tag-keyed static table: these keys are VLAN IDs already.
+		oidDot1qVlanStaticName + "100": {Value: prefix},
+		oidDot1qVlanStaticName + "200": {Value: prefix},
+		// An enterprise table keyed by index, describing different VLANs whose
+		// names merely share that prefix.
+		oidJnxExVlanName + "100": {Value: prefix + "an-alpha"},
+		oidJnxExVlanTag + "100":  {Value: "300"},
+		oidJnxExVlanName + "200": {Value: prefix + "an-beta"},
+		oidJnxExVlanTag + "200":  {Value: "400"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("prefixes alone must not carry the rekey, got %v", out)
+	}
+	for _, mustNotExist := range []string{oidDot1qVlanStaticName + "300", oidDot1qVlanStaticName + "400"} {
+		if _, ok := out[mustNotExist]; ok {
+			t.Errorf("%s: a VLAN was re-identified on the strength of a shared prefix", mustNotExist)
+		}
+	}
+	if !strings.Contains(logged.String(), "nothing corroborates") {
+		t.Errorf("the refusal must say the evidence is missing, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_DropsAPvidNamingAnEnterpriseOnlyTag covers the
+// gap between "the enterprise table mentions this tag" and "the emitted catalog
+// holds this VLAN".
+//
+// Gate 1 requires the enterprise table to cover the static rows, not the
+// reverse, so it may describe VLANs with no static row — which is what a
+// protocol-learned bridge domain looks like. Such a tag names nothing in the
+// catalog, so a PVID for it fabricates a placeholder exactly as an internal
+// index would.
+func TestResolveJuniperVlanIndices_DropsAPvidNamingAnEnterpriseOnlyTag(t *testing.T) {
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
+		oidJnxExVlanName + "17":       {Value: "MGMT"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		// Described by the enterprise table, absent from the static table.
+		oidJnxExVlanName + "20": {Value: "LEARNED"},
+		oidJnxExVlanTag + "20":  {Value: "900"},
+
+		oidDot1qPvid + "1": {Value: "900"},
+		oidDot1qPvid + "2": {Value: "156"},
+	}, testLogger())
+
+	if got := out[oidDot1qPvid+"1"].Value; got != "0" {
+		t.Errorf("a PVID naming a VLAN the catalog does not hold must be zeroed, got %q", got)
+	}
+	if got := out[oidDot1qPvid+"2"].Value; got != "156" {
+		t.Errorf("a PVID naming a catalog VLAN must survive, got %q", got)
 	}
 }
 
@@ -839,5 +922,27 @@ func TestVlanNamesByVid_StripsTheSuffixOnlyWhenTheDeviceIsConsistent(t *testing.
 	// compare it against, the device has said nothing.
 	if got = vlanNamesByVid(juniper(map[int]string{100: "site+100"})); got[100] != "site+100" {
 		t.Errorf("one VLAN is not evidence of a convention, got %q", got[100])
+	}
+
+	// A name the 32-octet column cut short lost its suffix on the wire. It is
+	// evidence of nothing, and must not veto the convention for every other
+	// VLAN on the switch — otherwise configuring one long-named VLAN renames
+	// all the others, and deleting it renames them back.
+	cut := "operator-chosen-vlan-name-here+1" // exactly the column bound
+	if len(cut) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must sit exactly on the bound, got %d", len(cut))
+	}
+	got = vlanNamesByVid(juniper(map[int]string{100: "office+100", 200: "eng+200", 1234: cut}))
+	for vid, want := range map[int]string{100: "office", 200: "eng", 1234: cut} {
+		if got[vid] != want {
+			t.Errorf("a truncated name must not flip the convention: vid %d = %q, want %q", vid, got[vid], want)
+		}
+	}
+
+	// A name that is nothing but the suffix is kept whole by the strip, and
+	// must count as carrying the convention rather than as breaking it.
+	got = vlanNamesByVid(juniper(map[int]string{100: "office+100", 300: "+300"}))
+	if got[100] != "office" || got[300] != "+300" {
+		t.Errorf("a suffix-only name must not veto the convention, got %v", got)
 	}
 }

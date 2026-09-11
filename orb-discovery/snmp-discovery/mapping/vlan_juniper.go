@@ -24,9 +24,12 @@ const (
 	oidJnxExVlanTag  = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5."
 )
 
-// dot1qVlanStaticColumns are the columns of dot1qVlanStaticTable, all of them
-// keyed by the same VlanIndex. Rekeying one and not the others would pair a
-// VLAN's name with another VLAN's ports.
+// dot1qVlanStaticColumns are the columns of dot1qVlanStaticTable this backend
+// walks, every one of them keyed by the same VlanIndex. Rekeying one and not
+// the others would pair a VLAN's name with another VLAN's ports, so this list
+// and the table's entry in the shipped policy have to stay in step.
+// dot1qVlanForbiddenEgressPorts is the table's remaining column and is not
+// walked, so no row of it ever arrives to be rekeyed.
 var dot1qVlanStaticColumns = []string{
 	oidDot1qVlanStaticName,
 	oidDot1qVlanStaticEgressPorts,
@@ -95,6 +98,13 @@ var dot1qVlanStaticColumns = []string{
 // someone acts on it. Logging that once and falling silent would hide an
 // unresolved problem from whoever reads the logs next.
 func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) ObjectIDValueMap {
+	// The enterprise columns are vendor-scoped in the shipped policy, so only a
+	// Juniper target walks them. Checked here too rather than relying on that:
+	// the reasoning below is about how Junos numbers VLANs, and it should not
+	// be a policy edit away from running against another vendor's OIDs.
+	if !isJuniper(all) {
+		return all
+	}
 	staticIndices := staticVlanIndices(all)
 	if len(staticIndices) == 0 {
 		return all
@@ -130,9 +140,19 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		return all
 	}
 
-	resolved := make(map[int]struct{}, len(tagByIndex))
-	for _, tag := range tagByIndex {
-		resolved[tag] = struct{}{}
+	// The tags of the rows actually being rekeyed — the catalog this device
+	// will report. NOT every tag the enterprise table mentions: gate 1 only
+	// requires that table to cover the static rows, so it may describe VLANs
+	// with no static row (a protocol-learned bridge domain looks exactly like
+	// that). Such a tag names no VLAN in the emitted catalog, so keeping a
+	// PVID for it fabricates the placeholder this guard exists to prevent.
+	//
+	// Built from the raw tags rather than the coerced VIDs, so the untagged
+	// bridge domain's tag 0 stays in the set: a PVID of 0 must survive, since
+	// the Q-BRIDGE reader takes it as "bridged, nothing untagged".
+	resolved := make(map[int]struct{}, len(staticIndices))
+	for index := range staticIndices {
+		resolved[tagByIndex[index]] = struct{}{}
 	}
 
 	out := make(ObjectIDValueMap, len(all))
@@ -140,6 +160,15 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 	for oid, v := range all {
 		if strings.HasPrefix(oid, oidDot1qPvid) {
 			if pvidIsUnnameable(v.Value, resolved) {
+				// Zeroed rather than removed. The row's PRESENCE is what tells
+				// the Q-BRIDGE reader this port is bridged at all; deleting it
+				// would make an L3-capable port classify as routed, turning
+				// "nothing is known about this port" into a positive claim
+				// about it. A PVID of 0 is already the device's own way of
+				// saying bridged with no untagged VLAN, which is exactly what
+				// is true here.
+				v.Value = "0"
+				out[oid] = v
 				unnameable++
 				continue
 			}
@@ -345,42 +374,60 @@ func corroborateVlanNames(all ObjectIDValueMap, staticIndices map[int]struct{}, 
 			continue
 		}
 		tag := tagByIndex[index]
-		if !vlanNamesAgree(stripVlanNameTagSuffix(static, tag), stripVlanNameTagSuffix(enterprise, tag)) {
+		switch compareVlanNames(static, enterprise, tag) {
+		case namesDisagree:
 			if disagreed == 0 || index < firstDisagreement {
 				firstDisagreement = index
 			}
 			disagreed++
-			continue
-		}
-		if index != tag {
-			agreed++
+		case namesAgree:
+			if index != tag {
+				agreed++
+			}
+		case namesInconclusive:
 		}
 	}
 	return agreed, disagreed, firstDisagreement
 }
 
-// vlanNamesAgree compares the two tables' names for one VLAN, allowing for the
-// standard column being narrower than the enterprise one.
+// nameVerdict is what one VLAN's two names say about the tables' keying.
+type nameVerdict int
+
+const (
+	namesAgree nameVerdict = iota
+	namesDisagree
+	// namesInconclusive is the name the standard column cut short. It neither
+	// corroborates nor contradicts, and must be counted as neither.
+	namesInconclusive
+)
+
+// compareVlanNames asks what the two tables' names for one row are evidence of.
 //
-// RFC 4363 bounds dot1qVlanStaticName at 32 characters and JUNIPER-VLAN-MIB
-// does not bound jnxExVlanName, so a VLAN named past 32 characters arrives
-// truncated in one table and whole in the other. Read as a disagreement that
-// would disable the fix for the entire switch over one long name, which Junos
-// names routinely are — and silently, since the operator sees only a warning
-// naming a VLAN whose name looks correct to them.
+// RFC 4363 bounds dot1qVlanStaticName at 32 octets and JUNIPER-VLAN-MIB does
+// not bound jnxExVlanName, so a VLAN named past that arrives cut in one table
+// and whole in the other. Reading that as a contradiction would disable the fix
+// for an entire switch over one long name, which Junos names routinely are.
 //
-// A prefix relation at the narrower column's bound is therefore agreement, not
-// disagreement. Shorter names still have to match outright, so a genuinely
-// different name on a short VLAN is caught exactly as before.
-func vlanNamesAgree(static, enterprise string) bool {
-	if static == enterprise {
-		return true
+// But a cut name cannot corroborate either, and that half matters more. Two
+// different VLANs on one switch sharing a 32-octet prefix is ordinary under
+// structured naming ("<site>-<building>-<floor>-vlanNNN"), and once cut they
+// are indistinguishable — so treating a prefix match as agreement would let a
+// device whose static table is ALREADY tag-keyed satisfy the gate and have
+// every VLAN re-emitted under a stranger's ID. That is the exact catastrophe
+// the gate exists to prevent, so a cut name is evidence of nothing and the
+// rekey still needs a full agreement somewhere on the device.
+//
+// The comparison is made on the raw names as well as the stripped ones,
+// because a truncation can land in the middle of the ELS "+<tag>" suffix,
+// leaving one side strippable and the other not.
+func compareVlanNames(static, enterprise string, tag int) nameVerdict {
+	if stripVlanNameTagSuffix(static, tag) == stripVlanNameTagSuffix(enterprise, tag) {
+		return namesAgree
 	}
-	shorter, longer := static, enterprise
-	if len(longer) < len(shorter) {
-		shorter, longer = longer, shorter
+	if len(static) == dot1qVlanStaticNameMax && strings.HasPrefix(enterprise, static) {
+		return namesInconclusive
 	}
-	return len(shorter) >= dot1qVlanStaticNameMax && strings.HasPrefix(longer, shorter)
+	return namesDisagree
 }
 
 // splitStaticVlanOID splits a dot1qVlanStaticTable OID into its column prefix
