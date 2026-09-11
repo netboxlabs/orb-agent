@@ -220,6 +220,19 @@ entries:
         entity: "interface_vlan"
         field: "pvid"
 
+  # JUNIPER-VLAN-MIB jnxExVlanTable — the real 802.1Q tag of a VLAN the switch
+  # indexes internally. Some Junos platforms key dot1qVlanStaticTable by an
+  # internal number rather than the VLAN ID, which RFC 4363 permits; without
+  # this column those VLANs reach NetBox under an ID the operator never
+  # configured. Absent on the Junos platforms already keyed by the tag, and
+  # the handling passes those through untouched.
+  - oid: ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5"
+    entity: "vlan"
+    field: "juniperVlanTag"
+    identifier_size: 1
+    vendor: "juniper"
+    description: "JUNIPER-VLAN-MIB jnxExVlanTag (internal VLAN index to 802.1Q tag)"
+
   # CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable — non-trunk access VLAN per ifIndex.
   - oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1"
     entity: "interface_vlan"

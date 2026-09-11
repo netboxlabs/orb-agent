@@ -89,6 +89,11 @@ func (m *VlanMapper) PostMap(
 	registry *EntityRegistry,
 	defaults *config.Defaults,
 ) []diode.Entity {
+	// Normalise before anything reads the walked rows. On the Junos platforms
+	// that index dot1qVlanStaticTable internally, every consumer below would
+	// otherwise read an internal number as a VLAN ID. A no-op everywhere else.
+	allObjectIDs = resolveJuniperVlanIndices(allObjectIDs, m.logger)
+
 	gen := m.buildGenericRows(allObjectIDs)
 	if len(gen.BasePortToIfIndex) == 0 {
 		// No bridge port table — refuse Interface mutation. Still emit
@@ -449,7 +454,17 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 			rows = append(rows, vlanNameRow{oid: oid, value: v.Value})
 		}
 	}
-	return mergeVLANNames(rows)
+	names := mergeVLANNames(rows)
+	if !isJuniper(all) {
+		return names
+	}
+	// Junos ELS reports a bridge domain as "<name>+<tag>", so the VLAN an
+	// operator calls VL156 arrives as VL156+156. Scoped to Juniper because a
+	// plus and a number in another vendor's name is just a name.
+	for vid, name := range names {
+		names[vid] = stripVlanNameTagSuffix(name, vid)
+	}
+	return names
 }
 
 // mergeVLANNames resolves one name per VID from the collected name rows.

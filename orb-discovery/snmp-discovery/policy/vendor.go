@@ -31,6 +31,12 @@ var defaultVendorMatchers = []VendorMatcher{
 			".1.3.6.1.4.1.29671.", // Meraki (Cisco-acquired; distinct enterprise)
 		},
 	},
+	{
+		Vendor: "juniper",
+		SysObjectIDPrefixes: []string{
+			".1.3.6.1.4.1.2636.", // Juniper Networks
+		},
+	},
 	// Future vendors append here.
 }
 
