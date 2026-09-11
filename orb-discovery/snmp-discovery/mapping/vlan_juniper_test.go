@@ -946,3 +946,31 @@ func TestVlanNamesByVid_StripsTheSuffixOnlyWhenTheDeviceIsConsistent(t *testing.
 		t.Errorf("a suffix-only name must not veto the convention, got %v", got)
 	}
 }
+
+// TestResolveJuniperVlanIndices_OnlyActsOnJuniper keeps the reasoning local to
+// the vendor it is about.
+//
+// The enterprise columns are vendor-scoped in the shipped policy, so in
+// practice only a Juniper target walks them — but that is a property of a YAML
+// file, and everything this function concludes is about how Junos numbers
+// VLANs. Without the check, a policy edit that widened the scope would silently
+// point the rekey at another vendor's OIDs.
+func TestResolveJuniperVlanIndices_OnlyActsOnJuniper(t *testing.T) {
+	in := internalIndexWalk()
+	in[oidSysObjectIDScalar] = Value{Value: ciscoSysObjID}
+
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a non-Juniper walk must not be rekeyed, got %v", out)
+	}
+	if logged.Len() != 0 {
+		t.Errorf("nothing is wrong with another vendor's device, so nothing is said: %q", logged.String())
+	}
+	// And with no sysObjectID at all, which is the same absence of evidence.
+	delete(in, oidSysObjectIDScalar)
+	if out = ResolveJuniperVlanIndices(in, testLogger()); !reflect.DeepEqual(out, in) {
+		t.Error("an unidentified device must not be rekeyed either")
+	}
+}
