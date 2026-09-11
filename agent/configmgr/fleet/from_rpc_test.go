@@ -30,8 +30,8 @@ func (m *mockPolicyManager) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManager) GetPolicyState() ([]policies.PolicyData, error) {
@@ -241,7 +241,7 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 					Backend: "test_backend_dispatch",
 				}, nil)
 				m.On("GetRepo").Return(mockRepo)
-				m.On("RemovePolicyDataset", "policy1", "dataset1", mock.Anything).Return()
+				m.On("RemovePolicyDataset", "policy1", "dataset1", "test_backend_dispatch", mock.Anything).Return()
 			},
 			expectedError:         false,
 			expectedPolicyMgrCall: true,
@@ -1020,8 +1020,8 @@ func TestMessageHandlers_handleAgentGroupRemoval_RemovesDatasetsWhenGroupsRemain
 	// Setup mock expectations
 	mockPMgr.On("GetRepo").Return(mockRepo)
 	mockRepo.On("GetAll").Return(existingPolicies, nil)
-	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", mock.Anything).Return()
-	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset2", mock.Anything).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", "pktvisor", mock.Anything).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset2", "pktvisor", mock.Anything).Return()
 
 	// Create group removal payload
 	groupRemoval := messages.GroupRemovedRPCPayload{
@@ -1269,7 +1269,7 @@ func TestMessageHandlers_handleDatasetRemoval_Success(t *testing.T) {
 		Name:    "Test Policy",
 		Backend: "test_backend",
 	}, nil)
-	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", mockBe).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", "test_backend", mockBe).Return()
 
 	// Create dataset removal payload
 	datasetRemoval := messages.DatasetRemovedRPCPayload{
@@ -1309,7 +1309,7 @@ func TestMessageHandlers_handleDatasetRemoval_PolicyRetrievalFails(t *testing.T)
 	handlers.handleDatasetRemoval(datasetRemoval)
 
 	// Assert - should return early without calling RemovePolicyDataset
-	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything)
+	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPMgr.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
@@ -1342,7 +1342,7 @@ func TestMessageHandlers_handleDatasetRemoval_BackendNotFound(t *testing.T) {
 	handlers.handleDatasetRemoval(datasetRemoval)
 
 	// Assert - should return early without calling RemovePolicyDataset
-	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything)
+	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPMgr.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }

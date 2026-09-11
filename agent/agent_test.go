@@ -123,8 +123,8 @@ type mockPolicyManager struct {
 	repo policies.PolicyRepo
 }
 
-func (m *mockPolicyManager) ManagePolicy(_ config.PolicyPayload)                       {}
-func (m *mockPolicyManager) RemovePolicyDataset(_ string, _ string, _ backend.Backend) {}
+func (m *mockPolicyManager) ManagePolicy(_ config.PolicyPayload)                                 {}
+func (m *mockPolicyManager) RemovePolicyDataset(_ string, _ string, _ string, _ backend.Backend) {}
 func (m *mockPolicyManager) GetPolicyState() ([]policies.PolicyData, error) {
 	return nil, nil
 }

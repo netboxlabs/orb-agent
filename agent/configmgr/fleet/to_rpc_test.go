@@ -28,8 +28,8 @@ func (m *mockPolicyManagerForToRPC) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForToRPC) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForToRPC) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForToRPC) GetPolicyState() ([]policies.PolicyData, error) {

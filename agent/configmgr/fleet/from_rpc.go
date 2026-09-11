@@ -248,7 +248,7 @@ func (messaging *Messaging) handleAgentGroupRemoval(rpc messages.GroupRemovedRPC
 		} else {
 			for _, datasetID := range rpc.Datasets {
 				if backend.HaveBackend(policy.Backend) {
-					messaging.policyManager.RemovePolicyDataset(policy.ID, datasetID, backend.GetBackend(policy.Backend))
+					messaging.policyManager.RemovePolicyDataset(policy.ID, datasetID, policy.Backend, backend.GetBackend(policy.Backend))
 				}
 			}
 		}
@@ -267,7 +267,7 @@ func (messaging *Messaging) handleDatasetRemoval(rpc messages.DatasetRemovedRPCP
 		return
 	}
 	be := backend.GetBackend(policy.Backend)
-	messaging.policyManager.RemovePolicyDataset(rpc.PolicyID, rpc.DatasetID, be)
+	messaging.policyManager.RemovePolicyDataset(rpc.PolicyID, rpc.DatasetID, policy.Backend, be)
 }
 
 func (messaging *Messaging) handleAgentReset(ctx context.Context, payload messages.AgentResetRPCPayload) {

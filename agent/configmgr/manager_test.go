@@ -27,8 +27,8 @@ func (m *mockPolicyManager) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManager) GetPolicyState() ([]policies.PolicyData, error) {

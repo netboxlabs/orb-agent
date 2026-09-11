@@ -35,8 +35,8 @@ func (m *mockPolicyManagerForFleet) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForFleet) GetPolicyState() ([]policies.PolicyData, error) {

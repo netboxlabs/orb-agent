@@ -43,7 +43,8 @@ type testPolicyManagerWithRepo struct {
 
 func (t *testPolicyManagerWithRepo) ManagePolicy(_ config.PolicyPayload) {}
 
-func (t *testPolicyManagerWithRepo) RemovePolicyDataset(_ string, _ string, _ backend.Backend) {}
+func (t *testPolicyManagerWithRepo) RemovePolicyDataset(_ string, _ string, _ string, _ backend.Backend) {
+}
 
 func (t *testPolicyManagerWithRepo) GetPolicyState() ([]policies.PolicyData, error) {
 	return t.repo.GetAll()
@@ -82,8 +83,8 @@ func (m *mockPolicyManagerForHeartbeat) ManagePolicy(payload config.PolicyPayloa
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForHeartbeat) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForHeartbeat) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForHeartbeat) GetPolicyState() ([]policies.PolicyData, error) {

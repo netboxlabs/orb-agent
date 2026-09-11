@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -15,7 +16,7 @@ import (
 // PolicyManager is the interface for managing policies
 type PolicyManager interface {
 	ManagePolicy(payload config.PolicyPayload)
-	RemovePolicyDataset(policyID string, datasetID string, be backend.Backend)
+	RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend)
 	GetPolicyState() ([]policies.PolicyData, error)
 	GetRepo() policies.PolicyRepo
 	ApplyBackendPolicies(name string, be backend.Backend) error
@@ -25,12 +26,33 @@ type PolicyManager interface {
 
 var _ PolicyManager = (*policyManager)(nil)
 
+// policyManager keeps the agent's policies and applies them to backends.
+//
+// One mutex per backend name serialises every operation on that backend's
+// policies: a manage, a remove, a dataset removal, a whole-backend removal
+// and the applier. Each exported operation is a locking wrapper over an
+// unexported body, and the bodies call each other, so nothing re-enters a
+// mutex. Lock order: the agent's per-backend restart mutex is taken before
+// this one; this mutex is taken before any supervisor entry mutex when both
+// are needed, never the reverse; the repo's own lock is innermost and never
+// held across a call out.
 type policyManager struct {
 	logger *slog.Logger
 	config config.Config
 
 	repo    policies.PolicyRepo
 	secrets secretsmgr.Manager
+
+	applyMu sync.Map // backend name -> *sync.Mutex
+}
+
+// applyLock returns the mutex serialising every policy operation on one
+// backend. Entries are never deleted, same race rationale as the agent's
+// backendRestartLock.
+func (a *policyManager) applyLock(backendName string) *sync.Mutex {
+	v, _ := a.applyMu.LoadOrStore(backendName, &sync.Mutex{})
+	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
+	return mu
 }
 
 // New creates a new instance of PolicyManager
@@ -52,7 +74,60 @@ func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
 	return a.repo.GetAll()
 }
 
+// ManagePolicy serialises the manage or remove under the mutex of the
+// backend the stored record names. The key is read before the lock and
+// checked again under it: a record created, removed or re-created meanwhile
+// changes the key, and the wrapper starts over on the right mutex. A manage
+// that names a backend other than the stored one is refused with the record
+// untouched, since the two backends' mutexes could otherwise leave the
+// policy running on both with nothing left to remove the old copy.
 func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
+	for {
+		key, ok := a.policyLockKey(payload)
+		if !ok {
+			return
+		}
+		if a.manageUnderLock(key, payload) {
+			return
+		}
+	}
+}
+
+// manageUnderLock runs the manage under key's mutex, reporting whether the
+// operation is finished; false means the key changed and the caller retries.
+func (a *policyManager) manageUnderLock(key string, payload config.PolicyPayload) bool {
+	mu := a.applyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
+	current, ok := a.policyLockKey(payload)
+	if !ok {
+		return true
+	}
+	if current != key {
+		return false
+	}
+	a.managePolicyLocked(payload)
+	return true
+}
+
+// policyLockKey returns the backend whose mutex an operation on this payload
+// must hold: the stored record's backend when there is one, else the
+// payload's. A manage that would move the policy to another backend is
+// refused here (ok false) and logged.
+func (a *policyManager) policyLockKey(payload config.PolicyPayload) (string, bool) {
+	stored, err := a.repo.Get(payload.ID)
+	if err != nil || stored.Backend == "" {
+		return payload.Backend, true
+	}
+	if payload.Action == "manage" && stored.Backend != payload.Backend {
+		a.logger.Warn("policy names a different backend than the one it runs on; ignoring",
+			"policy_id", payload.ID, "policy_name", payload.Name, "stored_backend", stored.Backend, "backend", payload.Backend)
+		return "", false
+	}
+	return stored.Backend, true
+}
+
+func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 	a.logger.Info("managing agent policy from core",
 		"action", payload.Action,
 		"name", payload.Name,
@@ -168,7 +243,7 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 		}
 		return
 	case "remove":
-		err := a.RemovePolicy(payload.ID, payload.Name, payload.Backend)
+		err := a.removePolicyLocked(payload.ID, payload.Name, payload.Backend)
 		if err != nil {
 			a.logger.Error("policy failed to be removed", "policy_id", payload.ID, "policy_name", payload.Name, "error", err)
 		}
@@ -178,7 +253,26 @@ func (a *policyManager) ManagePolicy(payload config.PolicyPayload) {
 	}
 }
 
+// RemovePolicy removes a policy under the mutex of the backend the stored
+// record names (the argument when there is no record), so a remove naming
+// the wrong backend cannot run beside a manage on the right one. The key is
+// a best-effort read; the body re-reads the record under the lock, and a
+// remove is idempotent, so no re-validation loop is needed. Every caller is
+// expected to pass the backend the repo already names for this policy; a
+// caller passing a different name breaks the mutex invariant this wrapper
+// exists to enforce.
 func (a *policyManager) RemovePolicy(policyID string, policyName string, beName string) error {
+	key := beName
+	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" {
+		key = stored.Backend
+	}
+	mu := a.applyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
+	return a.removePolicyLocked(policyID, policyName, beName)
+}
+
+func (a *policyManager) removePolicyLocked(policyID string, policyName string, beName string) error {
 	pd := policies.PolicyData{
 		ID:   policyID,
 		Name: policyName,
@@ -221,7 +315,24 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 	return nil
 }
 
-func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
+// RemovePolicyDataset removes a dataset under the mutex of the backend the
+// stored record names, with the caller's name as the fallback; both callers
+// read the name from the repo right before calling. Every caller is expected
+// to pass the backend the repo already names for this policy; a caller
+// passing a different name breaks the mutex invariant this wrapper exists to
+// enforce.
+func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	key := beName
+	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" {
+		key = stored.Backend
+	}
+	mu := a.applyLock(key)
+	mu.Lock()
+	defer mu.Unlock()
+	a.removePolicyDatasetLocked(policyID, datasetID, be)
+}
+
+func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID string, be backend.Backend) {
 	policyData, err := a.repo.Get(policyID)
 	if err != nil {
 		a.logger.Warn("failed to retrieve policy data", "policy_id", policyID, "policy_name", policyData.Name, "error", err)
@@ -323,6 +434,13 @@ func removeFromBackend(be backend.Backend, pd policies.PolicyData) error {
 // own: the repo holds every backend's policies, and a restart of one backend
 // must not take the others' with it.
 func (a *policyManager) RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error {
+	mu := a.applyLock(name)
+	mu.Lock()
+	defer mu.Unlock()
+	return a.removeBackendPoliciesLocked(name, be, permanently)
+}
+
+func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Backend, permanently bool) error {
 	plcies, err := a.repo.GetAll()
 	if err != nil {
 		a.logger.Error("failed to retrieve list of policies", "error", err)
@@ -369,6 +487,13 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // stops mid-loop is caught by applyPolicy's own check, which does stamp the
 // policy failed.
 func (a *policyManager) ApplyBackendPolicies(name string, be backend.Backend) error {
+	mu := a.applyLock(name)
+	mu.Lock()
+	defer mu.Unlock()
+	return a.applyBackendPoliciesLocked(name, be)
+}
+
+func (a *policyManager) applyBackendPoliciesLocked(name string, be backend.Backend) error {
 	if state, detail, err := be.GetRunningStatus(); state != backend.Running || err != nil {
 		a.logger.Warn("backend is not running; its policies are left for its next start",
 			"backend", name, "backend_state", state.String(), "detail", detail, "error", err)
@@ -421,44 +546,52 @@ func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
 			a.logger.Error("failed to get policy", "error", err)
 			continue
 		}
-		if !valid {
-			if err := a.RemovePolicy(policy.ID, policy.Name, policy.Backend); err != nil {
-				a.logger.Error("failed to remove policy", "error", err)
-			}
-			continue
-		}
-		if !backend.HaveBackend(policy.Backend) {
-			a.logger.Warn("policy failed to apply because backend is not available", "policy_id", policy.ID, "policy_name", policy.Name)
-			policy.State = policies.FailedToApply
-			policy.BackendErr = "backend not available"
-		} else {
-			payload := config.PolicyPayload{
-				ID:   policy.ID,
-				Name: policy.Name,
-				Data: policy.Data,
-			}
-			newPayload, err := a.secrets.SolvePolicySecrets(payload)
-			if err != nil {
-				a.logger.Error("failed to solve secrets", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
-				policy.State = policies.FailedToApply
-				policy.BackendErr = secretsFailureReason(err)
-			} else {
-				policy.Data = newPayload.Data
-				be := backend.GetBackend(policy.Backend)
-				a.applyPolicy(payload, be, &policy, true)
-				policy.Data = payload.Data
-			}
-		}
+		a.refreshPolicy(policy.Backend, id, valid)
+	}
+}
 
-		if policy.State == policies.Running {
-			// see ManagePolicy: persisted PreviousPolicyData means "rename pending"
-			// (and the same swallowed-remove caveat about the old-name delete)
-			policy.PreviousPolicyData = nil
-		}
+// refreshPolicy re-applies or removes one policy after a secrets change,
+// under its backend's mutex. The record is re-read under the lock: the
+// pre-lock read only chose the mutex, and a remove that landed meanwhile
+// must not be undone by a stale copy.
+func (a *policyManager) refreshPolicy(backendName, id string, valid bool) {
+	mu := a.applyLock(backendName)
+	mu.Lock()
+	defer mu.Unlock()
+	a.refreshPolicyLocked(backendName, id, valid)
+}
 
-		if err = a.repo.Update(policy); err != nil {
-			a.logger.Error("got error in update last status", "error", err)
+// refreshPolicyLocked re-reads the record under backendName's mutex and bails
+// if it no longer names backendName: a remove followed by a re-create on
+// another backend between the pre-lock read that chose the mutex and this
+// re-read would otherwise apply the policy to a different backend than the
+// one whose mutex is held.
+func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) {
+	policy, err := a.repo.Get(id)
+	if err != nil {
+		a.logger.Info("policy changed by the secrets provider is no longer stored, skipping", "policy_id", id)
+		return
+	}
+	if policy.Backend != backendName {
+		a.logger.Info("policy moved backends since the secrets change, skipping",
+			"policy_id", id, "locked_backend", backendName, "backend", policy.Backend)
+		return
+	}
+	if !valid {
+		if err := a.removePolicyLocked(policy.ID, policy.Name, policy.Backend); err != nil {
+			a.logger.Error("failed to remove policy", "error", err)
 		}
+		return
+	}
+	if !backend.HaveBackend(policy.Backend) {
+		a.logger.Warn("policy failed to apply because backend is not available", "policy_id", policy.ID, "policy_name", policy.Name)
+		policy.State = policies.FailedToApply
+		policy.BackendErr = "backend not available"
+	} else {
+		a.applyStoredPolicy(&policy, backend.GetBackend(policy.Backend))
+	}
+	if err := a.repo.Update(policy); err != nil {
+		a.logger.Error("got error in update last status", "error", err)
 	}
 }
 
