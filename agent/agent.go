@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -93,6 +94,14 @@ type orbAgent struct {
 	// operations.
 	backendRestartMu sync.Map // name -> *sync.Mutex
 
+	// restarting marks, per backend name, a restart in flight: set after the
+	// restart mutex is taken and cleared right before the restart's replay,
+	// still under that mutex. restartStarter answers from it, so a manage
+	// arriving while it is set is stored as starting for the replay to apply,
+	// and one arriving after the clear applies directly to a backend that is
+	// up. Entries are never deleted, same rationale as backendRestartMu.
+	restarting sync.Map // name -> *atomic.Bool
+
 	// stopCancel is called as the first statement of Stop. The agent context
 	// is only cancelled at the end of Stop, after every backend is stopped,
 	// so a restart already holding a backend's restart mutex when Stop
@@ -105,19 +114,18 @@ var _ Agent = (*orbAgent)(nil)
 
 // restartStarter tells the policy manager whether a backend can take a
 // policy now. Every backend is started at agent start, so the only reason
-// to say no is a restart in flight: the restart mutex is held across the
-// removal, the stop or reset, and the re-apply, and a policy stored as
-// "backend starting" meanwhile is applied exactly once by that re-apply
-// instead of landing on a process about to be reset or being replayed after
-// it. TryLock never blocks, so the restart-before-apply lock order holds.
+// to say no is a restart in flight: the restarting marker is set once the
+// restart mutex is taken, before the removal, and cleared right before the
+// restart's single replay, still under that mutex. A policy stored as
+// "backend starting" while the marker is set is applied exactly once by
+// that replay instead of landing on a process about to be reset or being
+// replayed after it.
 type restartStarter struct{ agent *orbAgent }
 
 func (s restartStarter) EnsureStarted(name string) (policymgr.StartState, error) {
-	mu := s.agent.backendRestartLock(name)
-	if !mu.TryLock() {
+	if s.agent.restartingFlag(name).Load() {
 		return policymgr.StartStarting, nil
 	}
-	mu.Unlock()
 	return policymgr.StartRunning, nil
 }
 
@@ -314,6 +322,16 @@ func (a *orbAgent) backendRestartLock(name string) *sync.Mutex {
 	return mu
 }
 
+// restartingFlag returns the per-backend marker restartStarter and a restart
+// each consult to tell whether a restart of that backend is currently in
+// flight. Entries are never deleted, same race rationale as
+// backendRestartLock.
+func (a *orbAgent) restartingFlag(name string) *atomic.Bool {
+	v, _ := a.restarting.LoadOrStore(name, &atomic.Bool{})
+	flag, _ := v.(*atomic.Bool) // LoadOrStore stored a *atomic.Bool; assertion cannot fail.
+	return flag
+}
+
 // reapplyBackendPolicies hands the backend its own policies again after a
 // restart. A failure is logged, not returned: the policies stay marked unknown
 // for the next successful restart. Once the context is done the agent is
@@ -363,40 +381,28 @@ func (a *orbAgent) reapplyBackendPolicies(ctx context.Context, name string, be b
 // no infinite loop.
 //
 // Like RestartBackend, it marks the backend's policies unknown before Stop
-// and re-applies them after each Start that succeeds (the first attempt and
-// the rollback retry). restartBackendWithFilesmgrRollbackLocked does that
-// first pass while still holding the restart mutex, so the lock order
-// RestartBackend documents (the restart mutex before the policy manager's
-// apply mutex) holds here too; this function then takes a second pass, with
-// the mutex released, for whatever the policy manager's applier stored
-// failed to apply as "starting" in the window between that first pass and
-// the unlock (a manage that lands there sees the mutex still held, since
-// restartStarter answers from the same mutex). The applier itself skips
-// anything already Running, so a policy the first pass already applied is
-// never applied twice by the second.
+// and re-applies them once, after whichever Start succeeds (the first
+// attempt or the rollback retry), under the same restart mutex and
+// restarting marker: the mutex is taken before the policy manager's apply
+// mutex, never after, and the marker clears right before that re-apply, so a
+// manage arriving before the clear is stored as starting for the re-apply to
+// pick up, and one arriving after applies directly to the backend, which is
+// up by then.
 func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backendName string) {
-	restarted, be := a.restartBackendWithFilesmgrRollbackLocked(ctx, backendName)
-	if restarted {
-		a.reapplyBackendPolicies(ctx, backendName, be)
-	}
-}
-
-// restartBackendWithFilesmgrRollbackLocked holds backendName's restart mutex
-// for the whole Stop, Start (and, on failure, rollback and retry) sequence,
-// including the first re-apply pass on a successful Start. It reports
-// whether Start came back up (either attempt), which is what tells the
-// caller a second re-apply pass, with the mutex released, is needed.
-func (a *orbAgent) restartBackendWithFilesmgrRollbackLocked(ctx context.Context, backendName string) (restarted bool, be backend.Backend) {
 	// Serialize concurrent Stop+Start sequences for the same backend across
 	// both restart paths (file-driven and health/fleet-driven).
 	restartMu := a.backendRestartLock(backendName)
 	restartMu.Lock()
 	defer restartMu.Unlock()
 
+	flag := a.restartingFlag(backendName)
+	flag.Store(true)
+	defer flag.Store(false) // every exit, so a failed restart does not leave manages deferred
+
 	be, ok := a.backends[backendName]
 	if !ok {
 		a.logger.Warn("filesmgr: backend not registered for restart", "backend", backendName)
-		return false, nil
+		return
 	}
 	binaryName := ""
 	if mb, ok := be.(backend.ManagedBinary); ok {
@@ -436,18 +442,19 @@ func (a *orbAgent) restartBackendWithFilesmgrRollbackLocked(ctx context.Context,
 	startErr := be.Start(runCtx, runCancel)
 	if startErr == nil {
 		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
+		flag.Store(false)
 		a.reapplyBackendPolicies(ctx, backendName, be)
-		return true, be
+		return
 	}
 	a.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", backendName, "error", startErr)
 
 	if binaryName == "" {
 		a.logger.Error("filesmgr: cannot roll back, backend declares no managed binary", "backend", backendName)
-		return false, be
+		return
 	}
 	if err := a.filesManager.Rollback(ctx, binaryName); err != nil {
 		a.logger.Error("filesmgr: rollback failed", "backend", backendName, "binary", binaryName, "error", err)
-		return false, be
+		return
 	}
 
 	// Retry Start with the rolled-back binary — fresh context derived from ctx again.
@@ -463,11 +470,11 @@ func (a *orbAgent) restartBackendWithFilesmgrRollbackLocked(ctx context.Context,
 
 	if err := be.Start(runCtx2, runCancel2); err != nil {
 		a.logger.Error("filesmgr: backend Start failed even after rollback", "backend", backendName, "error", err)
-		return false, be
+		return
 	}
 	a.logger.Info("filesmgr: backend restarted with rolled-back binary", "backend", backendName, "binary", binaryName)
+	flag.Store(false)
 	a.reapplyBackendPolicies(ctx, backendName, be)
-	return true, be
 }
 
 // restartDispatcher runs as a background goroutine and drains pendingRestarts
@@ -732,16 +739,14 @@ func (a *orbAgent) shutdownOTLP() {
 // Configure failure), or leaves the policies marked unknown for the next
 // successful restart if the reset itself failed.
 //
-// restartBackendLocked does all of that while holding the per-backend
-// restart mutex, so it is taken before the policy manager's apply mutex,
-// never after. Whenever it took a first re-apply pass (the backend is up,
-// after a successful reset or because it was never stopped), this function
-// takes a second pass with the mutex released, for whatever landed as
-// "starting" between the first pass and the unlock: a manage arriving in
-// that window still sees the mutex held, since restartStarter answers from
-// it too, and is stored failed to apply rather than running. The policy
-// manager's applier skips anything already Running, so the first pass's own
-// work is never repeated by the second.
+// The whole sequence runs under the backend's restart mutex, taken before
+// the policy manager's apply mutex, never after. The restarting marker is
+// set right after the mutex is taken and cleared right before the single
+// re-apply at the end, still under the mutex: a manage arriving before the
+// clear is stored as starting for that re-apply to pick up, and one arriving
+// after applies directly to the backend, which is up by then; the re-apply
+// itself skips anything already Running, so neither path ever applies a
+// policy twice.
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
 	// Every bundled backend is registered; only the ones this agent started
 	// are in a.backends, and only those have a process to restart.
@@ -750,26 +755,15 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 		return errors.New("backend is not started by this agent: " + name)
 	}
 
-	replayed, err := a.restartBackendLocked(ctx, name, reason, be)
-	if replayed {
-		a.reapplyBackendPolicies(ctx, name, be)
-	}
-	return err
-}
-
-// restartBackendLocked holds name's restart mutex for the removal, Configure
-// and FullReset sequence, including the first re-apply pass whenever the
-// backend is up at the end: after a successful reset, or because it was
-// never stopped (Configure never reached, or itself failed) and still runs
-// its previous configuration. It reports whether that first pass ran, which
-// is what tells the caller a second pass, with the mutex released, is
-// needed; only a failed reset leaves the policies unknown with no pass.
-func (a *orbAgent) restartBackendLocked(ctx context.Context, name string, reason string, be backend.Backend) (replayed bool, err error) {
 	// Serialize concurrent Stop+Start sequences for the same backend across
 	// both restart paths (file-driven and health/fleet-driven).
 	restartMu := a.backendRestartLock(name)
 	restartMu.Lock()
 	defer restartMu.Unlock()
+
+	flag := a.restartingFlag(name)
+	flag.Store(true)
+	defer flag.Store(false) // every exit, so a failed restart does not leave manages deferred
 
 	a.logger.Info("restarting backend", "backend", name, "reason", reason)
 	a.backendStateManager.RegisterRestart(name, reason)
@@ -785,13 +779,15 @@ func (a *orbAgent) restartBackendLocked(ctx context.Context, name string, reason
 			// The backend was never stopped, so it is still running with
 			// nothing applied; hand its policies back rather than leave
 			// them unknown for a restart that may not come again soon.
+			flag.Store(false)
 			a.reapplyBackendPolicies(ctx, name, be)
-			return true, errors.New("backend not found: " + name)
+			return errors.New("backend not found: " + name)
 		}
 	}
 	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon, a.filesManager); err != nil {
+		flag.Store(false)
 		a.reapplyBackendPolicies(ctx, name, be)
-		return true, err
+		return err
 	}
 	a.logger.Info("resetting backend", "backend", name)
 
@@ -801,10 +797,11 @@ func (a *orbAgent) restartBackendLocked(ctx context.Context, name string, reason
 	if err := be.FullReset(ctx); err != nil {
 		a.backendStateManager.RegisterError(name, fmt.Sprintf("failed to reset backend: %v", err))
 		// The policies stay marked unknown; the next successful restart applies them.
-		return false, nil
+		return nil
 	}
+	flag.Store(false)
 	a.reapplyBackendPolicies(ctx, name, be)
-	return true, nil
+	return nil
 }
 
 func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {

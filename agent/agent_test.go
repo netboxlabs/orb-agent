@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,11 +128,9 @@ type mockPolicyManager struct {
 	repo   policies.PolicyRepo
 	events *[]string // shared with the backend stub so one slice records the order
 
-	// agent, when set, makes ApplyBackendPolicies record whether the
-	// backend's restart mutex is held at call time (see ApplyBackendPolicies
-	// below), for tests asserting a restart's second re-apply pass runs only
-	// after the mutex is released. Left nil, and so checked before use, by
-	// tests that do not care.
+	// agent, when set, makes ApplyBackendPolicies record whether a restart of
+	// the backend is in flight at call time (see ApplyBackendPolicies below).
+	// Left nil, and so checked before use, by tests that do not care.
 	agent *orbAgent
 }
 
@@ -152,25 +151,16 @@ func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 }
 
 // ApplyBackendPolicies records a plain "apply:<name>" event, unless agent is
-// set: then it records whether the backend's restart mutex was held at call
-// time, as "apply:<name>:locked" or "apply:<name>:unlocked", so a test can
-// tell a restart's first (locked) re-apply pass from its second (unlocked,
-// taken after the mutex is released) one.
+// set: then it records whether a restart of the backend is in flight at call
+// time, as "apply:<name>:restarting=<bool>", so a test can tell the replay
+// (restarting=false, since the marker clears before it runs) from a manage
+// that lands while a restart holds the marker.
 func (m *mockPolicyManager) ApplyBackendPolicies(_ context.Context, name string, _ backend.Backend) error {
 	if m.agent == nil {
 		m.record("apply:" + name)
 		return nil
 	}
-	mu := m.agent.backendRestartLock(name)
-	held := !mu.TryLock()
-	if !held {
-		mu.Unlock()
-	}
-	state := "unlocked"
-	if held {
-		state = "locked"
-	}
-	m.record(fmt.Sprintf("apply:%s:%s", name, state))
+	m.record(fmt.Sprintf("apply:%s:restarting=%t", name, m.agent.restartingFlag(name).Load()))
 	return nil
 }
 
@@ -233,9 +223,8 @@ func (f *failingConfigureBackend) Configure(*slog.Logger, policies.PolicyRepo, m
 
 // A restart keeps the backend's policies and re-applies them once the
 // backend is back: they are marked unknown for the restart, not deleted,
-// and applied after the reset, once while the restart mutex is still held
-// and once more after it is released, to pick up anything that landed as
-// "starting" in between.
+// and applied once, after the reset, while the restart mutex is still held
+// and the restarting marker has just cleared.
 func TestRestartBackendReappliesItsOwnPolicies(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	repo, err := policies.NewMemRepo()
@@ -258,9 +247,8 @@ func TestRestartBackendReappliesItsOwnPolicies(t *testing.T) {
 		"remove:snmp_discovery:permanently=false",
 		"configure",
 		"reset",
-		"apply:snmp_discovery:locked",
-		"apply:snmp_discovery:unlocked",
-	}, events, "policies kept, removed before the reset, applied once under the restart mutex and once more after it releases")
+		"apply:snmp_discovery:restarting=false",
+	}, events, "policies kept, removed before the reset, applied once with the restarting marker already cleared")
 }
 
 // A reset that fails leaves the policies marked for the next restart and
@@ -315,8 +303,7 @@ func TestRestartBackendReappliesPoliciesWhenConfigureFails(t *testing.T) {
 		"remove:snmp_discovery:permanently=false",
 		"configure",
 		"apply:snmp_discovery",
-		"apply:snmp_discovery",
-	}, events, "the backend never stopped, so the removed policies are reapplied immediately, then once more with the mutex released")
+	}, events, "the backend never stopped, so the removed policies are reapplied immediately")
 }
 
 // End to end with the real policy manager: a policy the backend ran before
@@ -353,8 +340,7 @@ func TestRestartBackendReappliesPoliciesEndToEnd(t *testing.T) {
 
 // failOnceApplyBackend fails the first ApplyPolicy call and succeeds on any
 // call after, recording how many times it was called, so a test can prove a
-// replay's second pass does not retry a policy its first pass already
-// answered.
+// replay does not retry a policy it already failed to apply.
 type failOnceApplyBackend struct {
 	restartableBackend
 	calls int
@@ -368,11 +354,10 @@ func (f *failOnceApplyBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy 
 	return f.restartableBackend.ApplyPolicy(pd, updatePolicy)
 }
 
-// End to end with the real policy manager: a policy the first replay pass
-// fails to apply is stored failed to apply with the backend's own reason,
-// and the second pass, taken after the restart mutex is released, must not
-// hand it to the backend again.
-func TestRestartBackendSecondPassDoesNotRetryAPolicyTheFirstPassFailed(t *testing.T) {
+// End to end with the real policy manager: a policy the replay fails to
+// apply is stored failed to apply with the backend's own reason, and is not
+// retried within the same replay.
+func TestRestartBackendDoesNotRetryAPolicyItFailed(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
 	require.NoError(t, err)
@@ -395,7 +380,7 @@ func TestRestartBackendSecondPassDoesNotRetryAPolicyTheFirstPassFailed(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, policies.FailedToApply, stored.State)
 	assert.Equal(t, "apply timed out", stored.BackendErr)
-	assert.Equal(t, 1, be.calls, "the second pass must not retry a policy the first pass already failed")
+	assert.Equal(t, 1, be.calls, "the replay must not retry a policy it already failed to apply")
 }
 
 // A Start (file-driven or otherwise) that is already blocked on the restart
@@ -524,28 +509,24 @@ func TestRestartBackendStopsReplayingWhenStopBeginsMidLoop(t *testing.T) {
 	assert.Equal(t, 1, unknown, "the policy the replay never reached stays as it was")
 }
 
-// A restart holds the restart mutex across the whole sequence, so the
-// starter reports a backend as starting for as long as a restart of it is in
-// flight, and running again the instant the mutex is free.
-func TestRestartStarterReportsStartingWhileARestartHoldsTheMutex(t *testing.T) {
+// A restart sets the restarting marker for the whole sequence, so the
+// starter reports a backend as starting for as long as the marker is set,
+// and running again the instant it clears.
+func TestRestartStarterReportsStartingWhileTheMarkerIsSet(t *testing.T) {
 	a := &orbAgent{}
 	starter := restartStarter{agent: a}
 
-	mu := a.backendRestartLock("snmp_discovery")
-	mu.Lock()
+	a.restartingFlag("snmp_discovery").Store(true)
 
 	state, err := starter.EnsureStarted("snmp_discovery")
 	require.NoError(t, err)
-	assert.Equal(t, policymgr.StartStarting, state, "a restart holds the mutex, so the starter must report starting")
+	assert.Equal(t, policymgr.StartStarting, state, "the marker is set, so the starter must report starting")
 
-	mu.Unlock()
+	a.restartingFlag("snmp_discovery").Store(false)
 
 	state, err = starter.EnsureStarted("snmp_discovery")
 	require.NoError(t, err)
-	assert.Equal(t, policymgr.StartRunning, state, "no restart is in flight, so the starter must report running")
-
-	require.True(t, a.backendRestartLock("snmp_discovery").TryLock(), "the mutex must be free after EnsureStarted reports running")
-	a.backendRestartLock("snmp_discovery").Unlock()
+	assert.Equal(t, policymgr.StartRunning, state, "the marker is clear, so the starter must report running")
 }
 
 // blockingResetBackend signals entry into FullReset on a channel and waits on
@@ -642,10 +623,9 @@ func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
 
 // windowStampingBackend writes a policy record directly to the repo from
 // within FullReset, stamped the way the starter stamps a manage that lands
-// while a restart holds the backend's restart mutex: failed to apply with
-// the "backend starting" reason. This stands in for the window Finding B
-// closes (a manage landing between the restart's first replay and the
-// mutex unlock) without needing to choreograph the real race.
+// while the restarting marker is set: failed to apply with the "backend
+// starting" reason. This stands in for a manage landing during the restart
+// without needing to choreograph the real race.
 type windowStampingBackend struct {
 	restartableBackend
 	repo policies.PolicyRepo
@@ -667,10 +647,9 @@ func (w *windowStampingBackend) FullReset(ctx context.Context) error {
 }
 
 // End to end with the real policy manager: a policy stamped failed to apply
-// with the starter's "backend starting" reason, the way one landing in the
-// window RestartBackend documents (between the first replay and the restart
-// mutex releasing) is stamped, is healed by the restart's own replay and
-// ends Running, applied exactly once even though two replay passes run.
+// with the starter's "backend starting" reason, the way one landing while
+// the restarting marker is set is stamped, is healed by the restart's own
+// single replay and ends Running, applied exactly once.
 // TestManageDuringARestartIsAppliedExactlyOnce proves the same "exactly
 // once" outcome through the real concurrent race; this test isolates the
 // running-skip's role in it.
@@ -706,7 +685,200 @@ func TestRestartBackendHealsAPolicyStampedBackendStartingDuringTheRestart(t *tes
 			appliedCount++
 		}
 	}
-	assert.Equal(t, 1, appliedCount, "applied exactly once, even though two replay passes ran")
+	assert.Equal(t, 1, appliedCount, "applied exactly once by the replay")
+}
+
+// blockingApplyBackend blocks the first call to ApplyPolicy on a channel,
+// signalling entry so a test can deliver a manage while that call is in
+// flight, then waits for release before returning. Any later call (a manage
+// applied directly once the backend is up) proceeds unblocked.
+type blockingApplyBackend struct {
+	restartableBackend
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingApplyBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy bool) error {
+	b.once.Do(func() {
+		close(b.entered)
+		<-b.release
+	})
+	return b.restartableBackend.ApplyPolicy(pd, updatePolicy)
+}
+
+// A manage delivered while the restart's replay is itself inside an apply
+// call (the restarting marker has already cleared, since the replay only
+// starts after the clear) waits on the apply mutex the replay holds and,
+// once it is free, applies directly to the backend, which is up; it is
+// never stored as starting and never replayed.
+func TestManageArrivingDuringTheReplayAppliesDirectlyOnce(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	pm, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+
+	events := []string{}
+	be := &blockingApplyBackend{
+		restartableBackend: restartableBackend{events: &events},
+		entered:            make(chan struct{}),
+		release:            make(chan struct{}),
+	}
+	backend.Register("snmp_discovery", be)
+
+	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "seeded", Name: "seeded", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
+		config:              config.Config{},
+	}
+	pm.SetStarter(restartStarter{agent: a})
+
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+	}()
+
+	select {
+	case <-be.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the replay to enter its apply call")
+	}
+
+	manageDone := make(chan struct{})
+	go func() {
+		defer close(manageDone)
+		pm.ManagePolicy(config.PolicyPayload{
+			Action:    "manage",
+			ID:        "during-replay",
+			Name:      "during-replay-policy",
+			Backend:   "snmp_discovery",
+			DatasetID: "dataset-1",
+			Version:   1,
+			Data:      map[string]any{"k": "v"},
+		})
+	}()
+
+	close(be.release)
+
+	select {
+	case restartErr := <-restartDone:
+		require.NoError(t, restartErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for RestartBackend to return")
+	}
+
+	select {
+	case <-manageDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the manage to finish")
+	}
+
+	stored, err := pm.GetRepo().Get("during-replay")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State, "a manage arriving during the replay must apply directly")
+
+	var directApplies int
+	for _, applied := range be.applied {
+		if applied.ID == "during-replay" {
+			directApplies++
+		}
+	}
+	assert.Equal(t, 1, directApplies, "the manage must be applied exactly once")
+	assert.Contains(t, events, "apply-policy:during-replay:update=false",
+		"a direct manage uses the plain apply form, not the replay's remove-then-apply form")
+
+	seededStored, err := pm.GetRepo().Get("seeded")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, seededStored.State)
+	var seededApplies int
+	for _, applied := range be.applied {
+		if applied.ID == "seeded" {
+			seededApplies++
+		}
+	}
+	assert.Equal(t, 1, seededApplies, "the seeded policy was applied exactly once by the replay")
+}
+
+// yieldingResetBackend sleeps briefly inside FullReset, widening the window
+// in which a second, concurrent restart of the same backend can attempt to
+// take the restart mutex while the first is still inside it.
+type yieldingResetBackend struct {
+	restartableBackend
+}
+
+func (y *yieldingResetBackend) FullReset(ctx context.Context) error {
+	time.Sleep(20 * time.Millisecond)
+	return y.restartableBackend.FullReset(ctx)
+}
+
+// Two restarts of the same backend issued at once are serialized by the
+// restart mutex: each removes the policy, resets, and replays it, so it
+// ends Running and was handed to the backend exactly twice, once per
+// restart, never lost to an interleaving between them.
+func TestBackToBackRestartsDoNotLoseAPolicy(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	pm, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+
+	events := []string{}
+	be := &yieldingResetBackend{restartableBackend: restartableBackend{events: &events}}
+	backend.Register("snmp_discovery", be)
+
+	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "seeded", Name: "seeded", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
+		config:              config.Config{},
+	}
+	pm.SetStarter(restartStarter{agent: a})
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+		}()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for both restarts to finish")
+	}
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	stored, err := pm.GetRepo().Get("seeded")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+
+	var applies int
+	for _, applied := range be.applied {
+		if applied.ID == "seeded" {
+			applies++
+		}
+	}
+	assert.Equal(t, 2, applies, "each restart replays the policy once")
 }
 
 // Outside a restart, a manage applies the way it always has: the starter
@@ -779,8 +951,8 @@ func (r *filesmgrRestartBackend) Start(context.Context, context.CancelFunc) erro
 
 // A filesmgr-driven restart brackets its Stop/Start sequence the same way
 // RestartBackend does: policies are marked unknown before Stop and handed
-// back to the backend once Start succeeds, once while the restart mutex is
-// still held and once more after it is released.
+// back to the backend once, after Start succeeds, while the restart mutex is
+// still held and the restarting marker has just cleared.
 func TestRestartBackendWithFilesmgrRollback_ReappliesPoliciesAfterSuccessfulStart(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	events := []string{}
@@ -800,14 +972,13 @@ func TestRestartBackendWithFilesmgrRollback_ReappliesPoliciesAfterSuccessfulStar
 		"remove:worker:permanently=false",
 		"stop",
 		"start",
-		"apply:worker:locked",
-		"apply:worker:unlocked",
+		"apply:worker:restarting=false",
 	}, events)
 }
 
 // A Start that fails, then succeeds after a rollback, is re-applied exactly
-// once under the restart mutex, after the retry rather than the failed first
-// attempt, and once more after the mutex is released.
+// once, after the retry rather than the failed first attempt, with the
+// restart mutex still held and the restarting marker already cleared.
 func TestRestartBackendWithFilesmgrRollback_ReappliesPoliciesAfterRollbackRetry(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	events := []string{}
@@ -828,9 +999,8 @@ func TestRestartBackendWithFilesmgrRollback_ReappliesPoliciesAfterRollbackRetry(
 		"stop",
 		"start",
 		"start",
-		"apply:worker:locked",
-		"apply:worker:unlocked",
-	}, events, "apply runs exactly once under the mutex, after the successful retry, and once more after the mutex releases")
+		"apply:worker:restarting=false",
+	}, events, "apply runs exactly once, after the successful retry")
 }
 
 // A Start that fails on a backend with no managed binary name cannot roll

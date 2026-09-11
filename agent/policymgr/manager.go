@@ -560,10 +560,10 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // Running reflects this process's own prior apply, and a record failed for
 // any other reason failed in this same replay or in a manage this process
 // already answered; applying either again could run a one-shot policy
-// twice. Excluding both is what lets a restart's second pass, taken after
-// its mutex is released to pick up anything that arrived in the window
-// between the first pass and the unlock, run safely alongside (or after)
-// the first without applying a policy twice.
+// twice. Excluding both is what lets a manage that lands directly on the
+// backend, once the restart's marker has cleared, coexist safely with the
+// replay racing for the same apply mutex: whichever gets in first is not
+// re-applied by the other.
 func (a *policyManager) ApplyBackendPolicies(ctx context.Context, name string, be backend.Backend) error {
 	mu := a.applyLock(name)
 	mu.Lock()
