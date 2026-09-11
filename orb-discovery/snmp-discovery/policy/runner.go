@@ -768,7 +768,13 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// target pays nothing (no ifName/ifDescr rescan) when it's off.
 	var sviVlanByIfIndex map[int]*diode.VLAN
 	if r.config.Options.PrefixVlanMode() != "off" {
-		sviVlanByIfIndex = mapping.ResolveSviVlans(oids, entitiesForTarget, r.logger)
+		// Normalised the same way VlanMapper normalised it, so the VLAN IDs
+		// this resolver reads are the ones the VLAN entities were emitted
+		// under. Without it a Junos device with internal indices would have
+		// the resolver keyed on indices while the entities are keyed on
+		// tags. Idempotent, so a device needing no translation pays nothing.
+		sviVlanByIfIndex = mapping.ResolveSviVlans(
+			mapping.ResolveJuniperVlanIndices(oids, r.logger), entitiesForTarget, r.logger)
 	}
 
 	// Prefix derivation (default on, opt-out via emit_prefixes: false):

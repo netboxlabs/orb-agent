@@ -92,7 +92,7 @@ func (m *VlanMapper) PostMap(
 	// Normalise before anything reads the walked rows. On the Junos platforms
 	// that index dot1qVlanStaticTable internally, every consumer below would
 	// otherwise read an internal number as a VLAN ID. A no-op everywhere else.
-	allObjectIDs = resolveJuniperVlanIndices(allObjectIDs, m.logger)
+	allObjectIDs = ResolveJuniperVlanIndices(allObjectIDs, m.logger)
 
 	gen := m.buildGenericRows(allObjectIDs)
 	if len(gen.BasePortToIfIndex) == 0 {
@@ -373,9 +373,9 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			rows.PortPvid[ifx] = vid
 		}
 	}
-	if v, ok := all[oidSysObjectIDScalar]; ok {
-		rows.TextPortLists = strings.HasPrefix("."+strings.TrimPrefix(v.Value, "."), juniperEnterprise)
-	}
+	// Same sysObjectID test the VLAN index translation uses, so a padded or
+	// dot-prefixed value cannot make one fire and not the other.
+	rows.TextPortLists = isJuniper(all)
 	return rows
 }
 
