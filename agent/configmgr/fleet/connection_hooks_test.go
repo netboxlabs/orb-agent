@@ -12,6 +12,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // minimal policy manager impl for constructor
@@ -24,6 +25,7 @@ func (noopPM) GetRepo() policies.PolicyRepo                                     
 func (noopPM) ApplyBackendPolicies(_ string, _ backend.Backend) error              { return nil }
 func (noopPM) RemoveBackendPolicies(_ string, _ backend.Backend, _ bool) error     { return nil }
 func (noopPM) RemovePolicy(_ string, _ string, _ string) error                     { return nil }
+func (noopPM) SetStarter(_ policymgr.BackendStarter)                               {}
 
 type noopBackendState struct{}
 

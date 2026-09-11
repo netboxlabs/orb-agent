@@ -22,6 +22,26 @@ type PolicyManager interface {
 	ApplyBackendPolicies(name string, be backend.Backend) error
 	RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error
 	RemovePolicy(policyID string, policyName string, beName string) error
+	SetStarter(starter BackendStarter)
+}
+
+// StartState is what a BackendStarter reports for a backend.
+type StartState int
+
+const (
+	// StartRunning means the backend is running and can take a policy now.
+	StartRunning StartState = iota
+	// StartStarting means a start is in flight or was just launched; the
+	// policy is stored and applied by the starter's applier once the
+	// backend is running.
+	StartStarting
+)
+
+// BackendStarter starts a backend on demand for a policy that needs it. The
+// supervisor implements it; until one is set, every backend is assumed to be
+// started at agent start, as before.
+type BackendStarter interface {
+	EnsureStarted(name string) (StartState, error)
 }
 
 var _ PolicyManager = (*policyManager)(nil)
@@ -42,6 +62,7 @@ type policyManager struct {
 
 	repo    policies.PolicyRepo
 	secrets secretsmgr.Manager
+	starter BackendStarter
 
 	applyMu sync.Map // backend name -> *sync.Mutex
 }
@@ -72,6 +93,33 @@ func (a *policyManager) GetRepo() policies.PolicyRepo {
 
 func (a *policyManager) GetPolicyState() ([]policies.PolicyData, error) {
 	return a.repo.GetAll()
+}
+
+// SetStarter installs the starter consulted before a policy is applied. It
+// is called once, after construction, before any policy can arrive.
+func (a *policyManager) SetStarter(starter BackendStarter) {
+	a.starter = starter
+}
+
+// backendReady consults the starter for the policy's backend. It returns
+// true when the apply may proceed; otherwise it has set the policy's state
+// and reason and the caller persists the record.
+func (a *policyManager) backendReady(name string, pd *policies.PolicyData) bool {
+	if a.starter == nil {
+		return true
+	}
+	state, err := a.starter.EnsureStarted(name)
+	switch {
+	case err != nil:
+		pd.State = policies.FailedToApply
+		pd.BackendErr = err.Error()
+		return false
+	case state == StartStarting:
+		pd.State = policies.FailedToApply
+		pd.BackendErr = "backend starting"
+		return false
+	}
+	return true
 }
 
 // ManagePolicy serialises the manage or remove under the mutex of the
@@ -207,7 +255,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			a.logger.Warn("policy failed to apply because backend is not available", "policy_id", payload.ID, "policy_name", payload.Name)
 			pd.State = policies.FailedToApply
 			pd.BackendErr = "backend not available"
-		} else {
+		} else if a.backendReady(payload.Backend, &pd) {
 			// attempt to apply the policy to the backend. status of policy application (running/failed) is maintained there.
 			be := backend.GetBackend(payload.Backend)
 			newPayload, err := a.secrets.SolvePolicySecrets(payload)
@@ -587,7 +635,7 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 		a.logger.Warn("policy failed to apply because backend is not available", "policy_id", policy.ID, "policy_name", policy.Name)
 		policy.State = policies.FailedToApply
 		policy.BackendErr = "backend not available"
-	} else {
+	} else if a.backendReady(policy.Backend, &policy) {
 		a.applyStoredPolicy(&policy, backend.GetBackend(policy.Backend))
 	}
 	if err := a.repo.Update(policy); err != nil {

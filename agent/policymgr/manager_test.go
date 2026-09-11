@@ -1961,3 +1961,108 @@ func TestRefreshPolicySkipsAPolicyMovedToAnotherBackendWhileQueued(t *testing.T)
 	require.NoError(t, err)
 	assert.Equal(t, "moved_to_backend", stored.Backend, "the refresh must not act on a policy that moved to another backend while queued")
 }
+
+// fakeStarter answers EnsureStarted with a fixed state or error and counts
+// the calls.
+type fakeStarter struct {
+	state policymgr.StartState
+	err   error
+	calls []string
+}
+
+func (f *fakeStarter) EnsureStarted(name string) (policymgr.StartState, error) {
+	f.calls = append(f.calls, name)
+	return f.state, f.err
+}
+
+// A backend the starter reports as starting does not receive the policy
+// yet: it is stored as failed to apply with "backend starting", the reason
+// the supervisor's applier will replace once the backend is running.
+func TestManagePolicyStoresAPolicyForABackendThatIsStarting(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "starter_backend"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	backend.Register("starter_backend", be)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	starter := &fakeStarter{state: policymgr.StartStarting}
+	mgr.SetStarter(starter)
+	payload := config.PolicyPayload{Action: "manage", ID: "starting-1", Name: "Starting", Backend: "starter_backend", Version: 1, Data: map[string]any{}, DatasetID: "ds"}
+
+	mgr.ManagePolicy(payload)
+
+	assert.Equal(t, []string{"starter_backend"}, starter.calls)
+	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err := mgr.GetRepo().Get("starting-1")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	assert.Equal(t, "backend starting", stored.BackendErr)
+	assert.Equal(t, map[string]bool{"ds": true}, stored.Datasets, "the dataset bookkeeping is persisted with the record")
+}
+
+// A starter that reports the backend running changes nothing: the policy is
+// applied as it is today.
+func TestManagePolicyAppliesWhenTheStarterReportsRunning(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	be := &mockBackend{name: "starter_running"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	backend.Register("starter_running", be)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	mgr.SetStarter(&fakeStarter{state: policymgr.StartRunning})
+	payload := config.PolicyPayload{Action: "manage", ID: "running-1", Name: "Running", Backend: "starter_running", Version: 1, Data: map[string]any{}, DatasetID: "ds"}
+	secretsMgr.On("SolvePolicySecrets", payload).Return(payload, nil).Once()
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "running-1" }), false).Return(nil).Once()
+
+	mgr.ManagePolicy(payload)
+
+	be.AssertExpectations(t)
+	stored, _ := mgr.GetRepo().Get("running-1")
+	assert.Equal(t, policies.Running, stored.State)
+}
+
+// A starter that cannot start the backend fails the policy with its reason.
+func TestManagePolicyStoresTheStartersError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "starter_failing"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	backend.Register("starter_failing", be)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	mgr.SetStarter(&fakeStarter{err: errors.New("binary not found")})
+
+	mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "failing-1", Name: "Failing", Backend: "starter_failing", Version: 1, Data: map[string]any{}, DatasetID: "ds"})
+
+	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, _ := mgr.GetRepo().Get("failing-1")
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	assert.Equal(t, "binary not found", stored.BackendErr)
+}
+
+// The secrets refresh consults the starter the same way.
+func TestPoliciesChangedConsultsTheStarter(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "starter_refresh"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	backend.Register("starter_refresh", be)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "refresh-1", Name: "Refresh", Backend: "starter_refresh", Version: 1, Data: map[string]any{}, State: policies.Running}))
+	starter := &fakeStarter{state: policymgr.StartStarting}
+	mgr.SetStarter(starter)
+
+	secretsMgr.TriggerCallbacks(map[string]bool{"refresh-1": true})
+
+	assert.Equal(t, []string{"starter_refresh"}, starter.calls)
+	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, _ := mgr.GetRepo().Get("refresh-1")
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	assert.Equal(t, "backend starting", stored.BackendErr)
+}

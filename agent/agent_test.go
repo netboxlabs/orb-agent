@@ -16,6 +16,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockConfigManager implements configmgr.Manager for testing Stop delegation
@@ -144,6 +145,8 @@ func (m *mockPolicyManager) RemoveBackendPolicies(_ string, _ backend.Backend, _
 func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 	return nil
 }
+
+func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
 // mockFilesManager implements filesmgr.Manager for testing (no-op)
 type mockFilesManager struct{}

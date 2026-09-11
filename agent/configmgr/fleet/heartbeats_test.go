@@ -62,6 +62,8 @@ func (t *testPolicyManagerWithRepo) RemoveBackendPolicies(_ string, _ backend.Ba
 
 func (t *testPolicyManagerWithRepo) RemovePolicy(_ string, _ string, _ string) error { return nil }
 
+func (t *testPolicyManagerWithRepo) SetStarter(_ policymgr.BackendStarter) {}
+
 var _ policymgr.PolicyManager = (*testPolicyManagerWithRepo)(nil)
 
 // mockPublishFunc is a testify mock for the publish function
@@ -111,6 +113,8 @@ func (m *mockPolicyManagerForHeartbeat) RemovePolicy(policyID string, policyName
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManagerForHeartbeat) SetStarter(_ policymgr.BackendStarter) {}
 
 // Test helper to create a heartbeater instance for testing
 func createTestHeartbeater() *heartbeater {

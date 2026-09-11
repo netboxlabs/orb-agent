@@ -19,6 +19,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockPolicyManager implements the PolicyManager interface for testing
@@ -58,6 +59,8 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
 // mockPolicyRepo implements the PolicyRepo interface for testing
 type mockPolicyRepo struct {
