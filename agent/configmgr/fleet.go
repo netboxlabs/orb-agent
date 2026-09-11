@@ -98,19 +98,20 @@ func fleetOTLPGRPCPort(cfg config.Config) int {
 
 // fleetOTLPBindHost returns the host both bridge listeners bind to. Backends
 // always dial localhost (agent.go rewrites common.otlp.* to localhost:<port>),
-// so only "" / an unspecified address (all interfaces) or a loopback address
-// can work; anything else would listen where nothing dials and lose telemetry
-// silently, so it is rejected at start-up.
+// which resolves to 127.0.0.1 or ::1, so only "" / an unspecified address (all
+// interfaces) or exactly those two loopback addresses can work; anything else
+// (including other 127/8 addresses) would listen where nothing dials and lose
+// telemetry silently, so it is rejected at start-up.
 func fleetOTLPBindHost(cfg config.Config) (string, error) {
 	host := strings.TrimSpace(cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost)
 	if host == "" || strings.EqualFold(host, "localhost") {
 		return host, nil
 	}
 	ip := net.ParseIP(host)
-	if ip != nil && (ip.IsUnspecified() || ip.IsLoopback()) {
+	if ip != nil && (ip.IsUnspecified() || ip.Equal(net.IPv4(127, 0, 0, 1)) || ip.Equal(net.IPv6loopback)) {
 		return host, nil
 	}
-	return "", fmt.Errorf("otlp_bridge_bind_host %q must be empty, an unspecified address (0.0.0.0, ::) or a loopback address: backends always dial localhost", host)
+	return "", fmt.Errorf("otlp_bridge_bind_host %q must be empty, an unspecified address (0.0.0.0, ::), 127.0.0.1 or ::1: backends always dial localhost", host)
 }
 
 func fleetOTLPHTTPPort(cfg config.Config) int {

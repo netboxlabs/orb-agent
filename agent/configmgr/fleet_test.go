@@ -1733,7 +1733,7 @@ func TestFleetOTLPBindHost_Validation(t *testing.T) {
 		_, err := fleetOTLPBindHost(cfg)
 		assert.NoError(t, err, "%q must be accepted", ok)
 	}
-	for _, bad := range []string{"10.0.0.5", "192.168.1.1", "example.com", "agent.internal"} {
+	for _, bad := range []string{"10.0.0.5", "192.168.1.1", "example.com", "agent.internal", "127.0.0.2", "[::1]"} {
 		var cfg config.Config
 		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = bad
 		_, err := fleetOTLPBindHost(cfg)
