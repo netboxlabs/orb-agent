@@ -139,6 +139,10 @@ func (manager *stateManager) RegisterError(name string, errMessage string) {
 func (manager *stateManager) RegisterRestart(name string, reason string) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
+	// A restart can be asked for before the monitor registered the backend.
+	if manager.backendState[name] == nil {
+		manager.backendState[name] = &State{Status: Unknown}
+	}
 	manager.backendState[name].RestartCount++
 	manager.backendState[name].LastRestartTS = time.Now()
 	manager.backendState[name].LastRestartReason = reason

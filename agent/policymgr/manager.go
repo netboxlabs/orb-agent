@@ -19,7 +19,7 @@ type PolicyManager interface {
 	GetPolicyState() ([]policies.PolicyData, error)
 	GetRepo() policies.PolicyRepo
 	ApplyBackendPolicies(be backend.Backend) error
-	RemoveBackendPolicies(be backend.Backend, permanently bool) error
+	RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error
 	RemovePolicy(policyID string, policyName string, beName string) error
 }
 
@@ -192,10 +192,11 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 		return errors.New("policy remove for a backend we do not have, ignoring")
 	}
 	be := backend.GetBackend(beName)
-	err := be.RemovePolicy(pd)
+	err := removeFromBackend(be, pd)
 	if err != nil {
 		var httpErr *backend.HTTPError
-		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+		switch {
+		case errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound:
 			// Expected for run-once policies the backend already dropped after
 			// completion: the desired state (policy absent) is reached, so this
 			// is a no-op. Kept at WARN (not DEBUG) because a 404 here can also
@@ -203,7 +204,12 @@ func (a *policyManager) RemovePolicy(policyID string, policyName string, beName 
 			// under another name on the backend.
 			a.logger.Warn("policy not present on backend at removal; treating as already removed",
 				"policy_id", policyID, "policy_name", pd.Name, "error", err)
-		} else {
+		case errors.Is(err, errBackendNeverStarted):
+			// The agent never started the backend, so nothing runs the policy:
+			// the desired state is reached the same way.
+			a.logger.Warn("backend never started; treating policy as already removed",
+				"policy_id", policyID, "policy_name", pd.Name, "backend", beName)
+		default:
 			a.logger.Error("backend remove policy failed: will still remove from PolicyManager", "policy_id", policyID, "error", err)
 		}
 	}
@@ -228,7 +234,7 @@ func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, b
 	}
 	if removePolicy {
 		// Remove policy via http request
-		err := be.RemovePolicy(policyData)
+		err := removeFromBackend(be, policyData)
 		if err != nil {
 			a.logger.Warn("policy failed to remove", "policy_id", policyID, "policy_name", policyData.Name, "error", err)
 		}
@@ -294,7 +300,29 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	}
 }
 
-func (a *policyManager) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+// errBackendNeverStarted stands in for a call to a backend the agent never
+// started; callers treat it like a backend that answered the policy is not
+// there.
+var errBackendNeverStarted = errors.New("backend never started; nothing to remove from")
+
+// removeFromBackend asks the backend to remove a policy, unless the agent
+// never started it. Every bundled backend is registered, but only the ones
+// the configuration names are configured and started; one never started has
+// no process to ask and no logger to log the call with. A backend that was
+// started is asked whatever its state, since a live process whose status
+// probe timed out may still hold the policy, and the request's own timeout
+// bounds the wait.
+func removeFromBackend(be backend.Backend, pd policies.PolicyData) error {
+	if state, _, _ := be.GetRunningStatus(); state == backend.Unknown {
+		return errBackendNeverStarted
+	}
+	return be.RemovePolicy(pd)
+}
+
+// RemoveBackendPolicies removes the named backend's policies, and only its
+// own: the repo holds every backend's policies, and a restart of one backend
+// must not take the others' with it.
+func (a *policyManager) RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error {
 	plcies, err := a.repo.GetAll()
 	if err != nil {
 		a.logger.Error("failed to retrieve list of policies", "error", err)
@@ -302,7 +330,10 @@ func (a *policyManager) RemoveBackendPolicies(be backend.Backend, permanently bo
 	}
 
 	for _, plcy := range plcies {
-		err := be.RemovePolicy(plcy)
+		if plcy.Backend != name {
+			continue
+		}
+		err := removeFromBackend(be, plcy)
 		if err != nil {
 			a.logger.Error("failed to remove policy from backend", "policy_id", plcy.ID, "policy_name", plcy.Name, "error", err)
 			// note we continue here: even if the backend failed to remove, we update our policy repo to remove it

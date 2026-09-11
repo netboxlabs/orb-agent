@@ -53,7 +53,7 @@ func (t *testPolicyManagerWithRepo) GetRepo() policies.PolicyRepo { return t.rep
 
 func (t *testPolicyManagerWithRepo) ApplyBackendPolicies(_ backend.Backend) error { return nil }
 
-func (t *testPolicyManagerWithRepo) RemoveBackendPolicies(_ backend.Backend, _ bool) error {
+func (t *testPolicyManagerWithRepo) RemoveBackendPolicies(_ string, _ backend.Backend, _ bool) error {
 	return nil
 }
 
@@ -99,7 +99,7 @@ func (m *mockPolicyManagerForHeartbeat) ApplyBackendPolicies(be backend.Backend)
 	return args.Error(0)
 }
 
-func (m *mockPolicyManagerForHeartbeat) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+func (m *mockPolicyManagerForHeartbeat) RemoveBackendPolicies(_ string, be backend.Backend, permanently bool) error {
 	args := m.Called(be, permanently)
 	return args.Error(0)
 }

@@ -87,6 +87,23 @@ func TestBackendStateManager_RegisterRestart(t *testing.T) {
 	assert.False(t, state[backendName].LastRestartTS.IsZero())
 }
 
+// A restart can be requested for a backend the monitor never registered, a
+// backend the agent restarts before its monitor ran; the record is created
+// rather than dereferenced.
+func TestBackendStateManager_RegisterRestart_UnmonitoredBackend(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	manager := backend.NewStateManager("fleet", logger, make(chan string, 5), repo)
+
+	require.NotPanics(t, func() { manager.RegisterRestart("never-monitored", "operator request") })
+
+	state := manager.Get()
+	require.Contains(t, state, "never-monitored")
+	assert.Equal(t, int64(1), state["never-monitored"].RestartCount)
+	assert.Equal(t, "operator request", state["never-monitored"].LastRestartReason)
+}
+
 func TestBackendStateManager_RegisterRestart_MultipleRestarts(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))

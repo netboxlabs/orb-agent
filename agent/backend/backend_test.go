@@ -110,8 +110,11 @@ func TestRestartAll_MultipleBackendsSuccess(t *testing.T) {
 
 	// Register test backends
 	backend.Register("test_backend_restart_1", mockBe1)
+	mockBe1.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("test_backend_restart_2", mockBe2)
+	mockBe2.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("test_backend_restart_3", mockBe3)
+	mockBe3.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
 	// Setup expectations - all succeed
 	mockBe1.On("FullReset", ctx).Return(nil)
@@ -138,8 +141,11 @@ func TestRestartAll_OneBackendFails(t *testing.T) {
 
 	// Register test backends
 	backend.Register("test_backend_fail_1", mockBe1)
+	mockBe1.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("test_backend_fail_2", mockBe2)
+	mockBe2.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("test_backend_fail_3", mockBe3)
+	mockBe3.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
 	expectedErr := errors.New("backend reset failed")
 
@@ -169,8 +175,11 @@ func TestRestartAll_MultipleBackendsFail(t *testing.T) {
 
 	// Register test backends
 	backend.Register("test_backend_multifail_1", mockBe1)
+	mockBe1.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("test_backend_multifail_2", mockBe2)
+	mockBe2.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 	backend.Register("test_backend_multifail_3", mockBe3)
+	mockBe3.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
 	err1 := errors.New("backend 1 reset failed")
 	err2 := errors.New("backend 2 reset failed")
@@ -193,6 +202,27 @@ func TestRestartAll_MultipleBackendsFail(t *testing.T) {
 	mockBe3.AssertExpectations(t)
 }
 
+// A registered backend the agent never started, one absent from its
+// configuration, has no process, logger or arguments; a fleet full reset
+// walks the whole registry and must leave it alone rather than start it.
+func TestRestartAll_SkipsABackendTheAgentNeverStarted(t *testing.T) {
+	ctx := context.Background()
+	started := &mockBackend{}
+	cold := &mockBackend{}
+	backend.Register("test_backend_started", started)
+	backend.Register("test_backend_cold", cold)
+	started.On("GetRunningStatus").Return(backend.Running, "", nil)
+	started.On("FullReset", ctx).Return(nil)
+	cold.On("GetRunningStatus").Return(backend.Unknown, "backend not started yet", nil)
+
+	// The registry is shared with the other tests' mocks, some of which fail
+	// their reset on purpose, so only these two are asserted on.
+	_ = backend.RestartAll(ctx)
+
+	started.AssertExpectations(t)
+	cold.AssertNotCalled(t, "FullReset", ctx)
+}
+
 func TestBackendRegistry_GetList(t *testing.T) {
 	// Test that GetList returns registered backends
 	list := backend.GetList()
@@ -205,6 +235,7 @@ func TestBackendRegistry_HaveBackend(t *testing.T) {
 	// Arrange
 	mockBe := &mockBackend{}
 	backend.Register("test_backend_exists", mockBe)
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
 	// Act & Assert
 	assert.True(t, backend.HaveBackend("test_backend_exists"))
@@ -215,6 +246,7 @@ func TestBackendRegistry_GetBackend(t *testing.T) {
 	// Arrange
 	mockBe := &mockBackend{}
 	backend.Register("test_backend_get", mockBe)
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
 	// Act
 	retrievedBackend := backend.GetBackend("test_backend_get")
