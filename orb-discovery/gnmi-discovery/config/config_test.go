@@ -233,18 +233,18 @@ func TestMergeDefaults(t *testing.T) {
 }
 
 func TestMergeDefaultsVlan(t *testing.T) {
-	policy := &Defaults{Site: "NYC", Vlan: VlanDefaults{Group: "g1", Tenant: "t1", Role: "r1", Tags: []string{"a"}, Description: "d1"}}
+	policy := &Defaults{Site: "NYC", Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, Tenant: "t1", Role: "r1", Tags: []string{"a"}, Description: "d1"}}
 	// nil override -> clone preserves vlan
 	got := MergeDefaults(policy, nil)
-	require.Equal(t, "g1", got.Vlan.Group)
+	require.Equal(t, VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, got.Vlan.Group)
 	require.Equal(t, "t1", got.Vlan.Tenant)
 	// override wins on non-empty fields, preserves the rest
-	override := &Defaults{Vlan: VlanDefaults{Group: "g2", Role: "r2"}}
+	override := &Defaults{Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g2"}, Role: "r2"}}
 	got = MergeDefaults(policy, override)
-	require.Equal(t, "g2", got.Vlan.Group)       // overridden
-	require.Equal(t, "r2", got.Vlan.Role)        // overridden
-	require.Equal(t, "t1", got.Vlan.Tenant)      // preserved
-	require.Equal(t, "d1", got.Vlan.Description) // preserved
+	require.Equal(t, VlanGroupParameters{Name: "g2"}, got.Vlan.Group) // replaced whole: no policy scope leaks in
+	require.Equal(t, "r2", got.Vlan.Role)                             // overridden
+	require.Equal(t, "t1", got.Vlan.Tenant)                           // preserved
+	require.Equal(t, "d1", got.Vlan.Description)                      // preserved
 
 	// no-alias contract: mutating the merged Vlan.Tags must not touch the source
 	// (mirrors the existing Device.Tags/Interface.Tags non-alias assertions).
@@ -319,4 +319,59 @@ func TestResolvedOrigin(t *testing.T) {
 	require.Equal(t, "", Target{Origin: &empty}.ResolvedOrigin(), "explicit empty stays origin-less")
 	oc := "oc"
 	require.Equal(t, "oc", Target{Origin: &oc}.ResolvedOrigin())
+}
+
+func TestVlanGroupParametersUnmarshal(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want VlanGroupParameters
+	}{
+		{"scalar", "group: campus-vlans\n", VlanGroupParameters{Name: "campus-vlans"}},
+		{
+			"site group", "group:\n  name: Brussels VLAN Group\n  scope_site_group: Brussels\n",
+			VlanGroupParameters{Name: "Brussels VLAN Group", ScopeSiteGroup: "Brussels"},
+		},
+		{"site", "group:\n  name: g\n  scope_site: s\n", VlanGroupParameters{Name: "g", ScopeSite: "s"}},
+		{"region", "group:\n  name: g\n  scope_region: r\n", VlanGroupParameters{Name: "g", ScopeRegion: "r"}},
+		{"location", "group:\n  name: g\n  scope_location: l\n", VlanGroupParameters{Name: "g", ScopeLocation: "l"}},
+		{"no scope", "group:\n  name: g\n", VlanGroupParameters{Name: "g"}},
+		{"null", "group: null\n", VlanGroupParameters{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d VlanDefaults
+			require.NoError(t, yaml.Unmarshal([]byte(tt.yaml), &d))
+			require.Equal(t, tt.want, d.Group)
+		})
+	}
+}
+
+func TestVlanGroupParametersUnmarshalErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"two scopes", "group:\n  name: g\n  scope_site: s\n  scope_site_group: sg\n", "only one scope"},
+		{"missing name", "group:\n  scope_site_group: sg\n", "name is required"},
+		{"unknown key", "group:\n  name: g\n  scope_sitegroup: sg\n", "unknown key scope_sitegroup"},
+		{"bad kind", "group:\n  - g\n", "expected string or mapping"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d VlanDefaults
+			err := yaml.Unmarshal([]byte(tt.yaml), &d)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tt.want)
+		})
+	}
+}
+
+// Re-decoding a scalar into a receiver that held the map form must drop the
+// old scope, or a target override would inherit a scope it never named.
+func TestVlanGroupParametersUnmarshalResetsReceiver(t *testing.T) {
+	d := VlanDefaults{Group: VlanGroupParameters{Name: "stale", ScopeRegion: "stale"}}
+	require.NoError(t, yaml.Unmarshal([]byte("group: fresh\n"), &d))
+	require.Equal(t, VlanGroupParameters{Name: "fresh"}, d.Group)
 }
