@@ -275,7 +275,9 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 				pd.BackendErr = secretsFailureReason(err)
 			} else {
 				pd.Data = newPayload.Data
-				a.applyPolicy(payload, be, &pd, updatePolicy)
+				// A manage answers its caller through the stored state below,
+				// not a return value; the record is stamped either way.
+				_ = a.applyPolicy(payload, be, &pd, updatePolicy)
 				pd.Data = payload.Data
 			}
 		}
@@ -415,7 +417,16 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 	}
 }
 
-func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) {
+// applyPolicy returns ErrBackendNotRunning when its own running-gate probe
+// refuses the apply, after stamping the record FailedToApply the same as
+// today; every other path (name refused, backend rejected the apply,
+// success) stamps the record itself and returns nil. managePolicyLocked and
+// refreshPolicyLocked ignore the return: a manage or a refresh answers its
+// caller through the stored state, not a return value, and the record is
+// already stamped either way. applyBackendPoliciesLocked is the one caller
+// that acts on it, to stop a replay instead of persisting the probe's
+// failure and losing the record from the next one.
+func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Backend, pd *policies.PolicyData, updatePolicy bool) error {
 	// A name the agent cannot address over a backend's API is refused before
 	// the policy is created rather than when it is removed. Removal is the
 	// wrong place to find out: RemovePolicy discards the local record even
@@ -428,7 +439,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 			"policy_id", payload.ID, "policy_name", payload.Name, "backend", pd.Backend, "error", err)
 		pd.State = policies.FailedToApply
 		pd.BackendErr = err.Error()
-		return
+		return nil
 	}
 
 	state, detail, err := be.GetRunningStatus()
@@ -452,7 +463,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 			"detail", detail,
 			"error", err,
 		)
-		return
+		return fmt.Errorf("%w: %s", ErrBackendNotRunning, pd.Backend)
 	}
 
 	err = be.ApplyPolicy(*pd, updatePolicy)
@@ -467,6 +478,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		pd.State = policies.Running
 		pd.BackendErr = ""
 	}
+	return nil
 }
 
 // errBackendNeverStarted stands in for a call to a backend the agent never
@@ -542,10 +554,14 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // against a name the backend already runs. It gates on the backend running
 // before it touches anything: a backend that does not answer at that moment
 // keeps its policies untouched and the caller learns why. A backend that
-// stops mid-loop is caught by applyPolicy's own check, which does stamp the
-// policy failed; that per-policy check is a second GetRunningStatus call,
-// an HTTP round trip for every policy in the loop, and is not redundant
-// with the gate above, so do not remove either thinking the other covers it.
+// stops mid-loop is caught by applyPolicy's own check, a second
+// GetRunningStatus call, an HTTP round trip for every policy in the loop,
+// and not redundant with the gate above, so do not remove either thinking
+// the other covers it. Both the entry gate and this per-policy probe map to
+// ErrBackendNotRunning; unlike the entry gate, the per-policy probe leaves
+// its record unpersisted rather than stamped failed, so the record it was
+// checking, and every record not yet reached, stay deferred for the
+// caller's retry instead of being excluded from the next replay.
 //
 // The context is checked before every policy, not only once on entry: a
 // caller whose shutdown begins mid-loop must stop launching further HTTP
@@ -593,7 +609,15 @@ func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name str
 		if !deferredByRestart(policy) {
 			continue
 		}
-		a.applyStoredPolicy(&policy, be)
+		if err := a.applyStoredPolicy(&policy, be); errors.Is(err, ErrBackendNotRunning) {
+			// The backend stopped answering mid-replay. This record is left
+			// exactly as it was read (still deferred), the rest of the loop
+			// is not attempted, and the caller's retry picks them all up;
+			// the records already applied are running and are skipped then.
+			a.logger.Warn("backend stopped answering mid-replay; leaving the remaining policies for a retry",
+				"backend", name, "policy_id", policy.ID, "policy_name", policy.Name)
+			return fmt.Errorf("%w: %s", ErrBackendNotRunning, name)
+		}
 		if err := a.persistApplyOutcome(policy); err != nil {
 			return err
 		}
@@ -632,8 +656,11 @@ func (a *policyManager) persistApplyOutcome(policy policies.PolicyData) error {
 // applyStoredPolicy applies a policy the repo already holds to its backend:
 // secrets are solved for the call, the policy is applied with updatePolicy
 // true, the unsolved data is put back for the caller to persist, and a
-// successful apply clears a pending rename. The caller persists the record.
-func (a *policyManager) applyStoredPolicy(policy *policies.PolicyData, be backend.Backend) {
+// successful apply clears a pending rename. The caller persists the record,
+// except when the returned error matches ErrBackendNotRunning: that record is
+// left exactly as it was stamped by applyPolicy's own running-gate probe, for
+// the caller to leave unpersisted (still deferred) rather than write back.
+func (a *policyManager) applyStoredPolicy(policy *policies.PolicyData, be backend.Backend) error {
 	payload := config.PolicyPayload{ID: policy.ID, Name: policy.Name, Backend: policy.Backend, Version: policy.Version, Data: policy.Data}
 	solved, err := a.secrets.SolvePolicySecrets(payload)
 	if err != nil {
@@ -642,7 +669,7 @@ func (a *policyManager) applyStoredPolicy(policy *policies.PolicyData, be backen
 		policy.BackendErr = secretsFailureReason(err)
 	} else {
 		policy.Data = solved.Data
-		a.applyPolicy(payload, be, policy, true)
+		err = a.applyPolicy(payload, be, policy, true)
 		policy.Data = payload.Data
 	}
 	if policy.State == policies.Running {
@@ -650,6 +677,7 @@ func (a *policyManager) applyStoredPolicy(policy *policies.PolicyData, be backen
 		// succeeded, which backends do not confirm (swallowed remove error)
 		policy.PreviousPolicyData = nil
 	}
+	return err
 }
 
 func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
@@ -701,7 +729,9 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 		policy.State = policies.FailedToApply
 		policy.BackendErr = "backend not available"
 	} else if a.backendReady(policy.Backend, &policy) {
-		a.applyStoredPolicy(&policy, backend.GetBackend(policy.Backend))
+		// A refresh answers its caller through the stored state below, not a
+		// return value; the record is stamped either way.
+		_ = a.applyStoredPolicy(&policy, backend.GetBackend(policy.Backend))
 	}
 	if err := a.persistApplyOutcome(policy); err != nil {
 		a.logger.Error("got error in update last status", "error", err)

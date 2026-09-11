@@ -709,6 +709,61 @@ func TestApplyBackendPoliciesAppliesOnlyWhatTheRestartDeferred(t *testing.T) {
 	assert.Equal(t, policies.Running, alreadyRunning.State)
 }
 
+// A replay's per-policy probe (applyPolicy's own GetRunningStatus call, not
+// the loop's entry gate) can fail transiently while the backend is still
+// settling. That must stop the loop and leave the record it was checking, and
+// everything after it, exactly as read, rather than stamping the record
+// failed and letting the loop press on: a record stamped failed is excluded
+// from the next replay by deferredByRestart, so the policy would stay absent
+// until another delivery or restart.
+//
+// GetAll iterates a map, so which of the three records the loop reaches
+// first is not fixed. The mock is scripted by call order instead of by
+// policy identity: entry gate succeeds, the probe for whichever record is
+// reached first succeeds, and the probe for whichever is reached second
+// fails. The assertions below check outcomes by count rather than by ID, the
+// same way TestApplyBackendPoliciesStopsWhenTheContextIsCancelledMidLoop
+// does for the same reason.
+func TestApplyBackendPoliciesLeavesAPolicyDeferredWhenTheBackendStopsAnsweringMidReplay(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "midreplay_backend"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Once()                                           // entry gate
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Once()                                           // first record reached
+	be.On("GetRunningStatus").Return(backend.BackendError, "process running, REST API unavailable", nil).Once() // second record reached
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "p1", Backend: "midreplay_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p2", Name: "p2", Backend: "midreplay_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p3", Name: "p3", Backend: "midreplay_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+
+	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Once()
+
+	err = mgr.ApplyBackendPolicies(context.Background(), "midreplay_backend", be)
+
+	require.ErrorIs(t, err, policymgr.ErrBackendNotRunning)
+	be.AssertExpectations(t) // a second ApplyPolicy call, or a fourth GetRunningStatus call, would panic on the exhausted expectations
+
+	state, err := mgr.GetPolicyState()
+	require.NoError(t, err)
+	var running, unknown int
+	for _, pd := range state {
+		switch pd.State {
+		case policies.Running:
+			running++
+		case policies.Unknown:
+			unknown++
+			assert.Empty(t, pd.BackendErr, "a record the loop never reached, or left as read after the probe refused, must not carry a failure reason")
+		default:
+			t.Fatalf("unexpected state %v for policy %s", pd.State, pd.ID)
+		}
+	}
+	assert.Equal(t, 1, running, "the record reached before the probe refused was applied")
+	assert.Equal(t, 2, unknown, "the record the probe refused, and the one never reached, are left for the caller's retry")
+}
+
 // The state monitor calls repo.UpdateRuns for a policy at any time and does
 // not take the backend's apply mutex, so a run it writes while an apply's
 // HTTP call to the backend is in flight must survive the write-back that
