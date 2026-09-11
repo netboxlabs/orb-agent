@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Literal
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
@@ -110,8 +110,12 @@ class VlanGroupParameters(BaseModel):
     VLAN group discovered VLANs are attached to, and the NetBox object it is scoped to.
 
     At most one ``scope_*`` may be set. With none, the group is scoped to
-    ``defaults.site``, as a bare group name is.
+    ``defaults.site``, as a bare group name is. Unknown keys are rejected: a
+    misspelled scope would otherwise fall back to a site-scoped group that
+    then persists in NetBox.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     scope_site: str | None = Field(default=None, description="Scope the group to this site")

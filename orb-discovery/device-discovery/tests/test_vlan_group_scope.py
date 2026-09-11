@@ -31,6 +31,12 @@ def test_group_map_rejects_two_scopes():
         )
 
 
+def test_group_map_rejects_unknown_key():
+    """A misspelled scope key is rejected instead of silently falling back to a site scope."""
+    with pytest.raises(ValidationError, match="scope_regoin"):
+        VlanParameters.model_validate({"group": {"name": "g", "scope_regoin": "r"}})
+
+
 def test_group_map_requires_name():
     """The map form needs a name."""
     with pytest.raises(ValidationError, match="name"):
