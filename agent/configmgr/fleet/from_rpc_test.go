@@ -87,6 +87,11 @@ func (m *mockPolicyRepo) Update(data policies.PolicyData) error {
 	return args.Error(0)
 }
 
+func (m *mockPolicyRepo) UpdateKeepingRuns(data policies.PolicyData) error {
+	args := m.Called(data)
+	return args.Error(0)
+}
+
 func (m *mockPolicyRepo) GetAll() ([]policies.PolicyData, error) {
 	args := m.Called()
 	if args.Get(0) == nil {

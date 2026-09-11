@@ -396,6 +396,97 @@ func TestUpdateRenamingPolicy(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestUpdateKeepingRunsKeepsTheStoredRuns(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "test-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{
+		{ID: "run-1", Status: "running"},
+	}))
+
+	// Snapshot taken before the run update above landed: new State, no Runs.
+	snapshot := pd
+	snapshot.State = policies.Running
+
+	require.NoError(t, repo.UpdateKeepingRuns(snapshot))
+
+	got, err := repo.Get("test-id")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, got.State)
+	require.Len(t, got.Runs, 1)
+	assert.Equal(t, "run-1", got.Runs[0].ID)
+
+	// A second, unrelated write-back must not have kept these stale Runs
+	// as the snapshot's own value: nothing else changes.
+	assert.Equal(t, "test-policy", got.Name)
+}
+
+func TestUpdateKeepingRunsCreatesUnknownID(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "new-id",
+		Name:     "new-policy",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Unknown,
+	}
+
+	require.NoError(t, repo.UpdateKeepingRuns(pd))
+
+	got, err := repo.Get("new-id")
+	require.NoError(t, err)
+	assert.Equal(t, "new-policy", got.Name)
+
+	byName, err := repo.GetByName("new-policy")
+	require.NoError(t, err)
+	assert.Equal(t, "new-id", byName.ID)
+}
+
+func TestUpdateKeepingRunsRenamesThePolicy(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	pd := policies.PolicyData{
+		ID:       "test-id",
+		Name:     "old-name",
+		Backend:  "test-backend",
+		Version:  1,
+		Datasets: map[string]bool{"dataset1": true},
+		GroupIDs: map[string]bool{"group1": true},
+		Data:     map[string]any{"key": "value"},
+		State:    policies.Unknown,
+	}
+	require.NoError(t, repo.Update(pd))
+
+	renamed := pd
+	renamed.Name = "new-name"
+	require.NoError(t, repo.UpdateKeepingRuns(renamed))
+
+	_, err = repo.GetByName("old-name")
+	assert.Error(t, err)
+
+	got, err := repo.GetByName("new-name")
+	require.NoError(t, err)
+	assert.Equal(t, "test-id", got.ID)
+}
+
 func TestUpdateRuns(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)

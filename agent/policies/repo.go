@@ -16,6 +16,11 @@ type PolicyRepo interface {
 	Get(policyID string) (PolicyData, error)
 	Remove(policyID string) error
 	Update(data PolicyData) error
+	// UpdateKeepingRuns replaces the stored record with data but keeps the
+	// runs the store already holds, in one locked operation, so a run update
+	// written while the caller held its snapshot is not discarded. A record
+	// that does not exist yet is stored as given.
+	UpdateKeepingRuns(data PolicyData) error
 	GetAll() ([]PolicyData, error)
 	GetByName(policyName string) (PolicyData, error)
 	EnsureDataset(policyID string, datasetID string) error
@@ -115,6 +120,26 @@ func (p *policyMemRepo) Remove(policyID string) error {
 func (p *policyMemRepo) Update(data PolicyData) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.storeLocked(data)
+	return nil
+}
+
+// UpdateKeepingRuns replaces the stored record with data but keeps the runs
+// already held for that ID, merging under the same lock used to store it so
+// a concurrent run update is never discarded between a read and this write.
+func (p *policyMemRepo) UpdateKeepingRuns(data PolicyData) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if existing, ok := p.db[data.ID]; ok {
+		data.Runs = existing.Runs
+	}
+	p.storeLocked(data)
+	return nil
+}
+
+// storeLocked writes data into the db and name map, clearing any prior name
+// mapping for data.ID. The caller must hold p.mu.
+func (p *policyMemRepo) storeLocked(data PolicyData) {
 	policy, ok := p.db[data.ID]
 	if ok {
 		// existed, clear old map
@@ -122,7 +147,6 @@ func (p *policyMemRepo) Update(data PolicyData) error {
 	}
 	p.db[data.ID] = data
 	p.nameMap[data.Name] = data.ID
-	return nil
 }
 
 func (p *policyMemRepo) GetAll() (ret []PolicyData, err error) {

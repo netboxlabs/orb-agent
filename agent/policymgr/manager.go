@@ -574,13 +574,11 @@ func (a *policyManager) applyBackendPoliciesLocked(name string, be backend.Backe
 // persistApplyOutcome writes a policy back after an apply or a removal that
 // keeps the record, without discarding the run updates the state monitor may
 // have written while the backend was being called: only the apply outcome
-// (state, reason, data, rename) comes from the snapshot; the runs are
-// re-read from the store.
+// (state, reason, data, rename) comes from the snapshot; the store merges in
+// the runs it already holds under its own lock, so a run update written
+// while the caller held its snapshot is not lost between a read and a write.
 func (a *policyManager) persistApplyOutcome(policy policies.PolicyData) error {
-	if latest, err := a.repo.Get(policy.ID); err == nil {
-		policy.Runs = latest.Runs
-	}
-	return a.repo.Update(policy)
+	return a.repo.UpdateKeepingRuns(policy)
 }
 
 // applyStoredPolicy applies a policy the repo already holds to its backend:
