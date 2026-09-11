@@ -447,3 +447,115 @@ class TestJunosSwitchportModeFallback:
         d.get_vlans = lambda: (calls.append(1), {})[1]
         d.get_interfaces_vlans()
         assert calls == [], "a walk with no named member must not fetch the table at all"
+
+    def test_an_all_member_is_a_trunk_even_with_no_mode_element(self):
+        """
+        A member named ``all`` makes a trunk.
+
+        ``vlan members all`` is only configurable under ``port-mode trunk``, so
+        the member named ``all`` is a trunk-only construct. Reading the mode off
+        membership has to count it, or the one shape that says trunk loudest is
+        the one that still reports routed.
+        """
+        xml = """
+        <interface>
+          <interface-name>xe-0/0/40.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>all</interface-vlan-name>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml)
+
+        assert d.get_interfaces_vlans()["xe-0/0/40.0"]["mode"] == "trunk-all"
+
+    def test_a_native_vlan_id_makes_a_single_untagged_member_a_trunk(self):
+        """
+        A native VLAN id makes a single untagged member a trunk.
+
+        A native VLAN is only meaningful on a trunk, so it decides the one case
+        inference otherwise gets wrong: a trunk whose only member is untagged.
+        Without this the port is reported as access, which is not a missing
+        association but an affirmatively wrong one.
+        """
+        xml = """
+        <interface>
+          <interface-name>xe-0/0/41.0</interface-name>
+          <interface-native-vlan-id>99</interface-native-vlan-id>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VL99</interface-vlan-name>
+              <interface-vlan-member-tagid>99</interface-vlan-member-tagid>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml)
+
+        assert d.get_interfaces_vlans()["xe-0/0/41.0"] == {
+            "mode": "trunk",
+            "tagged": [],
+            "untagged": 99,
+        }
+
+    def test_a_vid_outside_the_dot1q_range_is_not_membership(self):
+        """
+        A VID outside 1-4094 is not membership.
+
+        A member carrying tagid 0 must not make the port look like it has an
+        untagged VLAN. Counting it would infer access and then drop the VID,
+        writing mode=access to NetBox with no VLAN to go with it, where the
+        honest answer is that the port has no usable membership at all.
+        """
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/44.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>bogus</interface-vlan-name>
+              <interface-vlan-member-tagid>0</interface-vlan-member-tagid>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml)
+
+        assert d.get_interfaces_vlans()["ge-0/0/44.0"]["mode"] == "routed"
+
+    def test_the_vlan_table_may_key_on_strings(self):
+        """
+        The VLAN table may key on strings.
+
+        PyEZ tables key on the reply's ``vlan-tag`` text, so ``get_vlans()``
+        hands back string keys on the switch_style tables this driver meets.
+        """
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/9.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VOICE</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml, vlans={"30": {"name": "VOICE"}, "40": {"name": "DATA"}})
+
+        assert d.get_interfaces_vlans()["ge-0/0/9.0"]["untagged"] == 30
+
+    def test_a_name_resolving_outside_the_dot1q_range_is_refused(self):
+        """A table entry out of range names no VLAN that NetBox could hold."""
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/9.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>ODD</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml, vlans={9999: {"name": "ODD"}})
+
+        assert d.get_interfaces_vlans()["ge-0/0/9.0"]["mode"] == "routed"

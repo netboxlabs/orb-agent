@@ -61,7 +61,7 @@ from custom_napalm._modules import (
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
 )
-from custom_napalm._vlan import SwitchportInfo, classify_switchport
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, coerce_vid
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,10 @@ def _vlan_name_resolver(driver):
     Junos reports a member either by tag id or by name alone. A name can only be
     turned into an id by asking the device's own VLAN table, which costs an RPC,
     so the table is fetched the first time a nameless member is actually seen and
-    not at all on the devices that never report one.
+    not at all on the devices that never report one. Once per call, that is: the
+    runner asks get_vlans for its own reasons just before this, and napalm does
+    not memoize it, so a device reporting any nameless member does pay for a
+    second round trip.
 
     **Matched exactly, never case-folded.** On a measured EX4550 the VLAN table
     holds ``MGMT`` at tag 20, while ``me0.0`` reports a member named ``mgmt``:
@@ -283,9 +286,14 @@ def _members_to_vids(member_list, resolve_vlan_name) -> tuple[int | None, list[i
         if name.lower() == "all":
             has_all_member = True
             continue
-        vid = _maybe_int(_text(_find_child(m, "interface-vlan-member-tagid")))
+        # coerce_vid, not _maybe_int, so a value outside 1-4094 is refused here
+        # rather than counted as membership and dropped later. The difference is
+        # not cosmetic: a member with tagid 0 would otherwise make the port look
+        # like it has an untagged VLAN, infer access from that, and write
+        # mode=access to NetBox with no VLAN to go with it.
+        vid = coerce_vid(_text(_find_child(m, "interface-vlan-member-tagid")))
         if vid is None and resolve_vlan_name is not None:
-            vid = resolve_vlan_name(name)
+            vid = coerce_vid(resolve_vlan_name(name))
         if vid is None:
             # Nothing names this member: either the table has no VLAN called
             # that, or it has several. Warn so operators see the association go
@@ -313,9 +321,12 @@ def _interface_to_switchport_info(intf_elem, resolve_vlan_name=None) -> Switchpo
     VLAN membership is in ``<interface-vlan-member-list>`` containing
     ``<interface-vlan-member>`` entries with
     ``<interface-vlan-member-tagid>`` and
-    ``<interface-vlan-member-tagness>`` ("tagged"|"untagged"). Members
-    with only a name (no tagid) are dropped with a warning log — VLAN-name
-    resolution against ``self.get_vlans()`` is out-of-scope for v1.
+    ``<interface-vlan-member-tagness>`` ("tagged"|"untagged"). A member with
+    only a name is put to ``resolve_vlan_name`` when the caller supplies one,
+    and dropped with a warning when nothing names it.
+
+    Where the reply carries no mode element at all, the mode is read off the
+    membership; see the comment on that branch for which signals decide it.
     """
     # Mode — read whichever element is present
     mode_text = (
@@ -346,11 +357,21 @@ def _interface_to_switchport_info(intf_elem, resolve_vlan_name=None) -> Switchpo
     #
     # Checked against that device's own detailed reply, which does carry the
     # mode: 11 of its 11 classifiable interfaces agree, none disagree. Inference
-    # is still the fallback rather than the rule, because a trunk that happens
-    # to carry only an untagged member reads as access, and the mode element
-    # says so outright.
-    if admin is None and (tagged_vids or untagged_vid is not None):
-        admin = "trunk" if tagged_vids else "access"
+    # is still the fallback rather than the rule, because a trunk carrying only
+    # an untagged member and no other trunk signal reads as access, and the mode
+    # element says so outright.
+    #
+    # Three things make a trunk here, not one. A member the port carries tagged
+    # is the obvious one. A member named "all" is a trunk-only construct, since
+    # "vlan members all" is only configurable under "port-mode trunk". And a
+    # native VLAN id is only meaningful on a trunk, which is what makes it the
+    # deciding signal for a port whose single member is untagged: without it
+    # that port is access, with it the untagged member is the native VLAN.
+    if admin is None:
+        if tagged_vids or has_all_member or native_vid is not None:
+            admin = "trunk"
+        elif untagged_vid is not None:
+            admin = "access"
 
     if admin == "trunk":
         allowed: list[int] | str | None = "all" if has_all_member else tagged_vids
