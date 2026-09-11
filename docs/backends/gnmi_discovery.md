@@ -71,8 +71,31 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | interface | map | Interface defaults: `if_type` (fallback type, default `other`), `description`, `tags` |
 | ip_address | map | IP address defaults: `role`, `tenant`, `description`, `comments`, `tags` |
 | vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery) |
+| vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant`, `role`, `description`, `tags` |
 | interface_patterns | list | Name-regex → NetBox type, highest precedence (first match wins). |
 | interface_exclude_patterns | list | Name-regex; matching interfaces are skipped entirely. |
+
+##### VLAN group
+`vlan.group` attaches every emitted VLAN to an `ipam.vlangroup`. Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. A bare name scopes the group to the device's site. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
+
+```yaml
+defaults:
+  site: "mysite01"
+  vlan:
+    group:
+      name: "Brussels VLAN Group"
+      scope_site_group: "Brussels"
+```
+
+| Key | Type | Description |
+|:---:|:----:|:-----------:|
+| name | str | VLAN group name (required in the map form) |
+| scope_site | str | Scope the group to this site instead of the device's site |
+| scope_site_group | str | Scope the group to a site group |
+| scope_region | str | Scope the group to a region |
+| scope_location | str | Scope the group to a location. Locations are unique per site in NetBox, so the device's site is sent with it |
+
+Only one `scope_*` may be set; a map with none behaves like the bare name. An unknown key in the map, two scopes, or a missing name rejects the policy rather than falling back to a site-scoped group. In a per-target `override_defaults`, the group replaces the policy value as a whole. Rack and cluster scopes are not supported.
 
 ### Scope
 `scope` defines the list of gNMI targets to discover.

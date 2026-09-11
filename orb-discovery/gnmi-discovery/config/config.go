@@ -1,6 +1,13 @@
 package config
 
-import "time"
+import (
+	"errors"
+	"fmt"
+	"reflect"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
 
 // Delivery mode constants (spec §5).
 const (
@@ -167,13 +174,71 @@ type PrefixDefaults struct {
 	Description string   `yaml:"description,omitempty"`
 }
 
+// VlanGroupParameters names the VLAN group discovered VLANs are attached
+// to and the NetBox object the group is scoped to. A bare string is the
+// group name; the mapping form adds at most one scope_* field. With no
+// scope the group is scoped to the device's site, as the string form is.
+type VlanGroupParameters struct {
+	Name           string `yaml:"name,omitempty"`
+	ScopeSite      string `yaml:"scope_site,omitempty"`
+	ScopeSiteGroup string `yaml:"scope_site_group,omitempty"`
+	ScopeRegion    string `yaml:"scope_region,omitempty"`
+	ScopeLocation  string `yaml:"scope_location,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar group name or a mapping.
+//
+// An unknown key in the mapping is an error rather than the warning the
+// rest of the policy gets: the warning pass cannot see inside a custom
+// decoder, and a misspelled scope would otherwise fall back to a
+// site-scoped group that then persists in NetBox.
+func (g *VlanGroupParameters) UnmarshalYAML(node *yaml.Node) error {
+	*g = VlanGroupParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return nil
+		}
+		g.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		known := yamlFieldNames(reflect.TypeFor[VlanGroupParameters]())
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if key := node.Content[i].Value; !known[key] {
+				return fmt.Errorf("vlan.group: unknown key %s", key)
+			}
+		}
+		type alias VlanGroupParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		if a.Name == "" {
+			return errors.New("vlan.group: name is required")
+		}
+		scopes := 0
+		for _, v := range []string{a.ScopeSite, a.ScopeSiteGroup, a.ScopeRegion, a.ScopeLocation} {
+			if v != "" {
+				scopes++
+			}
+		}
+		if scopes > 1 {
+			return errors.New("vlan.group: only one scope may be set (scope_site, scope_site_group, scope_region, scope_location)")
+		}
+		*g = VlanGroupParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("vlan.group: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
 // VlanDefaults holds NetBox defaults applied to discovered VLANs.
 type VlanDefaults struct {
-	Group       string   `yaml:"group,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Role        string   `yaml:"role,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Description string   `yaml:"description,omitempty"`
+	Group       VlanGroupParameters `yaml:"group,omitempty"`
+	Tenant      string              `yaml:"tenant,omitempty"`
+	Role        string              `yaml:"role,omitempty"`
+	Tags        []string            `yaml:"tags,omitempty"`
+	Description string              `yaml:"description,omitempty"`
 }
 
 // IPAddressDefaults holds NetBox defaults applied to discovered IP addresses.
@@ -420,7 +485,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if len(overrideDefaults.InterfaceExcludePatterns) > 0 {
 		merged.InterfaceExcludePatterns = cloneStrings(overrideDefaults.InterfaceExcludePatterns)
 	}
-	if overrideDefaults.Vlan.Group != "" {
+	if overrideDefaults.Vlan.Group.Name != "" {
 		merged.Vlan.Group = overrideDefaults.Vlan.Group
 	}
 	if overrideDefaults.Vlan.Tenant != "" {
