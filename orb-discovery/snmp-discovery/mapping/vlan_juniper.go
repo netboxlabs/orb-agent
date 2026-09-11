@@ -44,7 +44,7 @@ var dot1qVlanStaticColumns = []string{
 // also for the Junos platforms whose indices are already tags and answer this
 // OID with No Such Object. Those are correct today and must stay that way.
 func resolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) ObjectIDValueMap {
-	tagByIndex := juniperVlanTags(all)
+	tagByIndex := juniperVlanTags(all, logger)
 	if len(tagByIndex) == 0 {
 		return all
 	}
@@ -83,9 +83,22 @@ func resolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 	return out
 }
 
-// juniperVlanTags reads the enterprise table into index -> tag.
-func juniperVlanTags(all ObjectIDValueMap) map[int]int {
-	var out map[int]int
+// juniperVlanTags reads the enterprise table into index -> tag, dropping any
+// tag more than one index claims.
+//
+// A tag two indices both claim cannot be resolved, and guessing is worse than
+// it looks: the rows are rewritten one OID at a time, so the name column would
+// keep whichever index Go's map iteration happened to yield last while the
+// ports column kept the other, pairing one VLAN's name with another VLAN's
+// ports. Map order is not stable, so that pairing would differ between polls
+// of identical data and the VLAN would be rewritten on every ingest. Neither
+// index survives, because nothing available says which one owns the tag.
+//
+// Not observed on the reported switches, whose tags are distinct. Guarded
+// because the cost of being wrong is silent and recurring, and the device is
+// the one asserting something impossible.
+func juniperVlanTags(all ObjectIDValueMap, logger *slog.Logger) map[int]int {
+	indicesByTag := map[int][]int{}
 	for oid, v := range all {
 		if !strings.HasPrefix(oid, oidJnxExVlanTag) {
 			continue
@@ -98,10 +111,21 @@ func juniperVlanTags(all ObjectIDValueMap) map[int]int {
 		if !ok {
 			continue
 		}
+		indicesByTag[tag] = append(indicesByTag[tag], index)
+	}
+
+	var out map[int]int
+	for tag, indices := range indicesByTag {
+		if len(indices) > 1 {
+			logger.Warn("vlan: refusing an ambiguous Juniper VLAN tag",
+				"tag", tag, "claimed_by_indices", len(indices),
+				"reason", "more than one internal index reports this tag")
+			continue
+		}
 		if out == nil {
 			out = map[int]int{}
 		}
-		out[index] = tag
+		out[indices[0]] = tag
 	}
 	return out
 }

@@ -197,3 +197,45 @@ func TestShippedPolicyWalksTheJuniperVlanTable(t *testing.T) {
 		t.Error("the enterprise column must not be walked on every host")
 	}
 }
+
+// TestResolveJuniperVlanIndices_RefusesAmbiguousTags covers a device that
+// contradicts itself: two internal indices claiming one tag.
+//
+// The rows are rewritten per OID, so without this the name column would keep
+// whichever index Go's map iteration yielded last and the ports column could
+// keep the other, pairing one VLAN's name with another's ports. Map order is
+// random, so the pairing would differ between polls of identical data and the
+// VLAN would be rewritten on every ingest. Neither index is emitted, because
+// nothing available says which one the tag belongs to.
+func TestResolveJuniperVlanIndices_RefusesAmbiguousTags(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar:                {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "5":        {Value: "FIRST"},
+		oidDot1qVlanStaticEgressPorts + "5": {Value: "\x01"},
+		oidDot1qVlanStaticName + "9":        {Value: "SECOND"},
+		oidDot1qVlanStaticEgressPorts + "9": {Value: "\x02"},
+		oidDot1qVlanStaticName + "7":        {Value: "FINE"},
+		oidJnxExVlanTag + "5":               {Value: "100"},
+		oidJnxExVlanTag + "9":               {Value: "100"},
+		oidJnxExVlanTag + "7":               {Value: "200"},
+	}
+
+	// Repeated because the failure this guards against is order-dependent:
+	// a single pass could agree with itself by luck.
+	for i := 0; i < 25; i++ {
+		out := resolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
+		if _, ok := out[oidDot1qVlanStaticName+"100"]; ok {
+			t.Fatal("a tag two indices both claim must not be emitted")
+		}
+		for _, oid := range []string{oidDot1qVlanStaticName + "5", oidDot1qVlanStaticName + "9"} {
+			if _, ok := out[oid]; ok {
+				t.Fatalf("%s: the internal index must not be emitted in its place either", oid)
+			}
+		}
+		// The unambiguous VLAN in the same walk is unaffected.
+		if got := out[oidDot1qVlanStaticName+"200"].Value; got != "FINE" {
+			t.Fatalf("an unambiguous VLAN must still translate, got %q", got)
+		}
+	}
+}
