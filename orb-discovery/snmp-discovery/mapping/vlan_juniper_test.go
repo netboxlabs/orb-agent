@@ -1426,3 +1426,36 @@ func TestResolveJuniperVlanIndices_ACompleteShortNameStillDisagrees(t *testing.T
 		t.Errorf("the refusal must name the disagreement, got %q", logged.String())
 	}
 }
+
+// TestShippedPolicyWalksNoUnrekeyedStaticColumn converts a comment into a guard.
+//
+// dot1qVlanStaticColumns says it and the shipped policy "have to stay in step",
+// and nothing enforced that. Adding a fifth column to mapping.yaml without
+// adding it here would leave that column keyed by the internal index while the
+// other four move to the tag — which files one VLAN's ports under another
+// VLAN's ID, the precise failure the whole rekey is built to avoid, and no
+// existing test would notice.
+func TestShippedPolicyWalksNoUnrekeyedStaticColumn(t *testing.T) {
+	const staticTable = ".1.3.6.1.2.1.17.7.1.4.3."
+
+	rekeyed := map[string]struct{}{}
+	for _, col := range dot1qVlanStaticColumns {
+		rekeyed[col] = struct{}{}
+	}
+
+	cfg := newTestMappingConfig(t, testLogger())
+	walked := 0
+	for oid := range cfg.GenericObjectIDs() {
+		if !strings.HasPrefix(oid, staticTable) {
+			continue
+		}
+		walked++
+		if _, ok := rekeyed[oid+"."]; !ok {
+			t.Errorf("%s is walked but not rekeyed: it would keep the device's internal index "+
+				"while the other columns move to the tag", oid)
+		}
+	}
+	if walked != len(dot1qVlanStaticColumns) {
+		t.Errorf("walked %d columns of dot1qVlanStaticTable, rekey covers %d", walked, len(dot1qVlanStaticColumns))
+	}
+}
