@@ -1521,12 +1521,13 @@ func TestResolveJuniperVlanIndices_ZeroesAPvidAmbiguousWithAnInternalIndex(t *te
 // numbering happens to agree with its tags for some rows.
 func TestResolvablePvidValues_KeepsAnIdentityRow(t *testing.T) {
 	staticIndices := map[int]struct{}{17: {}, 20: {}, 40: {}}
+	described := map[int]struct{}{17: {}, 20: {}, 40: {}}
 	tagByIndex := map[int]int{
 		17: 156, // 156 is no index: unambiguous
 		20: 20,  // identity: both readings agree
 		40: 17,  // 17 is index 17, which holds 156: ambiguous
 	}
-	got := resolvablePvidValues(staticIndices, tagByIndex)
+	got := resolvablePvidValues(staticIndices, described, tagByIndex)
 
 	for _, want := range []int{156, 20} {
 		if _, ok := got[want]; !ok {
@@ -1535,5 +1536,63 @@ func TestResolvablePvidValues_KeepsAnIdentityRow(t *testing.T) {
 	}
 	if _, ok := got[17]; ok {
 		t.Errorf("tag 17 is also an index naming a different VLAN and must not be resolvable, got %v", got)
+	}
+}
+
+// TestResolveJuniperVlanIndices_ZeroesAPvidAmbiguousWithAnEnterpriseOnlyIndex
+// keeps the two index questions apart.
+//
+// Whether a PVID value NAMES a VLAN is asked of the static rows, since those
+// are the catalog that reaches NetBox. Whether it could be an INDEX has to be
+// asked of every row the enterprise table describes, because that is the space
+// the device numbers in — and it may describe bridge domains the static table
+// never lists, which is what a protocol-learned one looks like.
+//
+// Asking the second question of the static rows alone kept a PVID whose value
+// is an enterprise-only index, binding the port to the VLAN with that tag when
+// the device may have meant the VLAN at that index.
+func TestResolveJuniperVlanIndices_ZeroesAPvidAmbiguousWithAnEnterpriseOnlyIndex(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// The only static row: index 5 holds the VLAN tagged 17.
+		oidDot1qVlanStaticName + "5": {Value: "VL17"},
+		oidJnxExVlanName + "5":       {Value: "VL17"},
+		oidJnxExVlanTag + "5":        {Value: "17"},
+		// Index 17 exists in the enterprise table only, holding tag 200. So
+		// the value 17 is a real tag AND an index naming a different VLAN.
+		oidJnxExVlanName + "17": {Value: "LEARNED"},
+		oidJnxExVlanTag + "17":  {Value: "200"},
+
+		oidDot1qPvid + "1": {Value: "17"},
+	}
+	out := ResolveJuniperVlanIndices(in, testLogger())
+
+	if got := out[oidDot1qPvid+"1"].Value; got != "0" {
+		t.Errorf("a PVID whose value is an enterprise-only index must be zeroed, got %q", got)
+	}
+	// The rekey still happens; only the ambiguous port loses its PVID.
+	if got := out[oidDot1qVlanStaticName+"17"].Value; got != "VL17" {
+		t.Errorf("an ambiguous PVID must not abandon the rekey, got %q", got)
+	}
+}
+
+// TestResolvablePvidValues_AsksTheIndexQuestionOfEveryDescribedRow is the same
+// distinction at the unit level, where the two sets can be told apart directly.
+func TestResolvablePvidValues_AsksTheIndexQuestionOfEveryDescribedRow(t *testing.T) {
+	staticIndices := map[int]struct{}{5: {}}
+	// 17 is described by the enterprise table but has no static row.
+	described := map[int]struct{}{5: {}, 17: {}}
+	tagByIndex := map[int]int{5: 17, 17: 200}
+
+	got := resolvablePvidValues(staticIndices, described, tagByIndex)
+	if _, ok := got[17]; ok {
+		t.Errorf("tag 17 is also an enterprise-only index naming a different VLAN, got %v", got)
+	}
+
+	// With that row absent from the enterprise table, 17 is only ever a tag.
+	got = resolvablePvidValues(staticIndices, map[int]struct{}{5: {}}, map[int]int{5: 17})
+	if _, ok := got[17]; !ok {
+		t.Errorf("tag 17 names exactly one VLAN here and must stay resolvable, got %v", got)
 	}
 }

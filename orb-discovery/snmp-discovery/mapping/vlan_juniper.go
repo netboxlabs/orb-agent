@@ -140,7 +140,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		return all
 	}
 
-	resolved := resolvablePvidValues(staticIndices, tagByIndex)
+	resolved := resolvablePvidValues(staticIndices, described, tagByIndex)
 
 	out := make(ObjectIDValueMap, len(all))
 	dropped, unnameable := 0, 0
@@ -271,20 +271,32 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 // whatever NetBox holds, which is the same answer already given to a PVID that
 // names nothing at all.
 //
+// The two questions take different index sets, which is the easy thing to get
+// wrong here. Whether a value NAMES a VLAN is asked of the static rows, because
+// those are the catalog that reaches NetBox. Whether it could be an INDEX is
+// asked of every row the enterprise table describes, because that is the space
+// the device numbers in — and it may describe bridge domains the static table
+// never lists. Asking the second question of the static rows alone kept a PVID
+// whose value is an enterprise-only index, which is exactly the ambiguity this
+// is for.
+//
 // Not theoretical: on the reported switch two of the 39 tags are also indices
 // pointing elsewhere. Neither is used as a PVID there, so this costs that
 // device nothing — but the collision is a property of real hardware rather
-// than of a constructed case.
+// than of a constructed case. That switch's two index sets coincide, so it
+// cannot tell the two questions apart; a device with a protocol-learned bridge
+// domain can.
 //
 // Built from the raw tags rather than the coerced VIDs, so the untagged bridge
 // domain's tag 0 stays in the set: a PVID of 0 must survive, since the
 // Q-BRIDGE reader takes it as "bridged, nothing untagged".
-func resolvablePvidValues(staticIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
+func resolvablePvidValues(staticIndices, describedIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
 	out := make(map[int]struct{}, len(staticIndices))
 	for index := range staticIndices {
 		tag := tagByIndex[index]
-		// An identity row is not ambiguous: both readings name it.
-		if _, alsoAnIndex := staticIndices[tag]; alsoAnIndex && tagByIndex[tag] != tag {
+		// An identity row is not ambiguous: both readings name it. An index
+		// whose own tag would not parse is, since nothing says what it means.
+		if _, alsoAnIndex := describedIndices[tag]; alsoAnIndex && tagByIndex[tag] != tag {
 			continue
 		}
 		out[tag] = struct{}{}
