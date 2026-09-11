@@ -140,20 +140,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		return all
 	}
 
-	// The tags of the rows actually being rekeyed — the catalog this device
-	// will report. NOT every tag the enterprise table mentions: gate 1 only
-	// requires that table to cover the static rows, so it may describe VLANs
-	// with no static row (a protocol-learned bridge domain looks exactly like
-	// that). Such a tag names no VLAN in the emitted catalog, so keeping a
-	// PVID for it fabricates the placeholder this guard exists to prevent.
-	//
-	// Built from the raw tags rather than the coerced VIDs, so the untagged
-	// bridge domain's tag 0 stays in the set: a PVID of 0 must survive, since
-	// the Q-BRIDGE reader takes it as "bridged, nothing untagged".
-	resolved := make(map[int]struct{}, len(staticIndices))
-	for index := range staticIndices {
-		resolved[tagByIndex[index]] = struct{}{}
-	}
+	resolved := resolvablePvidValues(staticIndices, tagByIndex)
 
 	out := make(ObjectIDValueMap, len(all))
 	dropped, unnameable := 0, 0
@@ -246,7 +233,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 //
 // On the reported switch this drops nothing — every PVID there is a resolved
 // tag — which is why it costs the fix's own device nothing.
-func pvidIsUnnameable(value string, resolvedTags map[int]struct{}) bool {
+func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 	pvid, ok := atoi(trimSNMPString(value))
 	if !ok {
 		return false
@@ -255,13 +242,54 @@ func pvidIsUnnameable(value string, resolvedTags map[int]struct{}) bool {
 	// all-tagged trunk reports. It names no VLAN, so it can fabricate none, and
 	// it is already the value this function would write. Short-circuited so a
 	// switch with no untagged bridge domain — whose tag 0 is therefore not in
-	// the resolved set — does not warn on every poll about ports that lost
+	// the resolvable set — does not warn on every poll about ports that lost
 	// nothing.
 	if pvid == 0 {
 		return false
 	}
-	_, known := resolvedTags[pvid]
+	_, known := resolvable[pvid]
 	return !known
+}
+
+// resolvablePvidValues is the set of dot1qPvid values that name exactly one
+// VLAN on a rekeyed device.
+//
+// It is the tags of the rows actually being rekeyed — the catalog this device
+// will report — less those a reader cannot pin to one VLAN.
+//
+// NOT every tag the enterprise table mentions. Gate 1 only requires that table
+// to cover the static rows, so it may describe VLANs with no static row (a
+// protocol-learned bridge domain looks exactly like that). Such a tag names no
+// VLAN in the emitted catalog, so keeping a PVID for it fabricates the
+// placeholder this guard exists to prevent.
+//
+// And not a tag that is ALSO one of the device's internal indices, resolving
+// there to a different VLAN. This device numbers VLANs internally, so a PVID
+// may be in either space, and such a value reads as one VLAN under each — with
+// nothing to say which the device meant. Keeping it binds the port to a
+// specific VLAN on a coin flip; zeroing it writes no untagged VLAN and leaves
+// whatever NetBox holds, which is the same answer already given to a PVID that
+// names nothing at all.
+//
+// Not theoretical: on the reported switch two of the 39 tags are also indices
+// pointing elsewhere. Neither is used as a PVID there, so this costs that
+// device nothing — but the collision is a property of real hardware rather
+// than of a constructed case.
+//
+// Built from the raw tags rather than the coerced VIDs, so the untagged bridge
+// domain's tag 0 stays in the set: a PVID of 0 must survive, since the
+// Q-BRIDGE reader takes it as "bridged, nothing untagged".
+func resolvablePvidValues(staticIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
+	out := make(map[int]struct{}, len(staticIndices))
+	for index := range staticIndices {
+		tag := tagByIndex[index]
+		// An identity row is not ambiguous: both readings name it.
+		if _, alsoAnIndex := staticIndices[tag]; alsoAnIndex && tagByIndex[tag] != tag {
+			continue
+		}
+		out[tag] = struct{}{}
+	}
+	return out
 }
 
 // staticVlanIndices collects the distinct VlanIndex values dot1qVlanStaticTable

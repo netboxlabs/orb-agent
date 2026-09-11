@@ -1459,3 +1459,81 @@ func TestShippedPolicyWalksNoUnrekeyedStaticColumn(t *testing.T) {
 		t.Errorf("walked %d columns of dot1qVlanStaticTable, rekey covers %d", walked, len(dot1qVlanStaticColumns))
 	}
 }
+
+// TestResolveJuniperVlanIndices_ZeroesAPvidAmbiguousWithAnInternalIndex closes
+// the last reading of a PVID that names two different VLANs.
+//
+// On a device that numbers VLANs internally a PVID may be in either space. A
+// value that is a real tag AND also one of the device's internal indices
+// pointing at a different VLAN therefore names one VLAN under each reading,
+// with nothing to say which the device meant. Keeping it binds the port to a
+// specific VLAN on a coin flip.
+//
+// The collision is a property of real hardware: on the reported switch two of
+// the 39 tags are also indices resolving elsewhere. Neither is used as a PVID
+// there, which is why this costs that device nothing.
+func TestResolveJuniperVlanIndices_ZeroesAPvidAmbiguousWithAnInternalIndex(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// Index 17 holds the VLAN tagged 156.
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		// Index 40 holds the VLAN tagged 17. So the value 17 is both a real
+		// tag and an internal index naming a different VLAN.
+		oidDot1qVlanStaticName + "40": {Value: "VL17"},
+		oidJnxExVlanName + "40":       {Value: "VL17"},
+		oidJnxExVlanTag + "40":        {Value: "17"},
+		// Index 41 holds the VLAN tagged 900, which is no index at all.
+		oidDot1qVlanStaticName + "41": {Value: "VL900"},
+		oidJnxExVlanName + "41":       {Value: "VL900"},
+		oidJnxExVlanTag + "41":        {Value: "900"},
+
+		oidDot1qPvid + "1": {Value: "17"},  // ambiguous
+		oidDot1qPvid + "2": {Value: "900"}, // a tag, and no index: unambiguous
+		oidDot1qPvid + "3": {Value: "156"}, // likewise
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if got := out[oidDot1qPvid+"1"].Value; got != "0" {
+		t.Errorf("a PVID that names one VLAN as a tag and another as an index must be zeroed, got %q", got)
+	}
+	for port, want := range map[string]string{"2": "900", "3": "156"} {
+		if got := out[oidDot1qPvid+port].Value; got != want {
+			t.Errorf("an unambiguous PVID must survive: port %s = %q, want %q", port, got, want)
+		}
+	}
+	// The rekey itself still happens; only the one port loses its PVID.
+	if got := out[oidDot1qVlanStaticName+"156"].Value; got != "VL156" {
+		t.Errorf("an ambiguous PVID must not abandon the rekey, got %q", got)
+	}
+	if !strings.Contains(logged.String(), "ports=1") {
+		t.Errorf("the drop must be reported, got %q", logged.String())
+	}
+}
+
+// TestResolvablePvidValues_KeepsAnIdentityRow pins the exclusion's one carve-out.
+//
+// A tag that is also its own index is not ambiguous: both readings name the
+// same VLAN. Excluding it would zero PVIDs on every device whose internal
+// numbering happens to agree with its tags for some rows.
+func TestResolvablePvidValues_KeepsAnIdentityRow(t *testing.T) {
+	staticIndices := map[int]struct{}{17: {}, 20: {}, 40: {}}
+	tagByIndex := map[int]int{
+		17: 156, // 156 is no index: unambiguous
+		20: 20,  // identity: both readings agree
+		40: 17,  // 17 is index 17, which holds 156: ambiguous
+	}
+	got := resolvablePvidValues(staticIndices, tagByIndex)
+
+	for _, want := range []int{156, 20} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("tag %d names exactly one VLAN and must stay resolvable, got %v", want, got)
+		}
+	}
+	if _, ok := got[17]; ok {
+		t.Errorf("tag 17 is also an index naming a different VLAN and must not be resolvable, got %v", got)
+	}
+}
