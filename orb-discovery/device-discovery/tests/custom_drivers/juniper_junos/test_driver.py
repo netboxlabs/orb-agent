@@ -228,3 +228,222 @@ def test_details_walk_survives_an_xml_comment_in_the_reply():
     assert "<!--" in text
     result = _els_details_to_switchports(etree.fromstring(text.encode("utf-8")))
     assert result["xe-0/0/19"] == {"mode": "trunk", "tagged": [665], "untagged": None}
+
+
+class TestJunosSwitchportModeFallback:
+    """
+    Classify a switchport when the reply carries no mode element.
+
+    The plain form of ``<get-ethernet-switching-interface-information>`` can
+    answer with VLAN memberships and no ``<interface-port-mode>`` anywhere. A
+    measured EX4550 on 15.1 does exactly that, and every one of its ports read
+    as routed, so the switch reached NetBox with no VLAN associations at all.
+    """
+
+    @staticmethod
+    def _wrapper(xml: str):
+        from lxml import etree
+
+        return etree.fromstring(
+            b'<switching-interface-information xmlns:junos="http://xml.juniper.net/junos/x/junos">'
+            + xml.encode()
+            + b"</switching-interface-information>"
+        )
+
+    @staticmethod
+    def _driver(brief: str, detail: str | None = None, vlans: dict | None = None):
+        from custom_napalm.junos import JunOSDriver
+
+        wrapper = TestJunosSwitchportModeFallback._wrapper
+
+        class Dev:
+            def __init__(self):
+                self.rpc = self
+                self.asked = []
+
+            def get_ethernet_switching_interface_information(self, **kw):
+                self.asked.append(kw)
+                if kw.get("detail"):
+                    if detail is None:
+                        raise RuntimeError("this platform rejects the argument")
+                    return wrapper(detail)
+                return wrapper(brief)
+
+            def get_ethernet_switching_interface_details(self, **kw):
+                raise RuntimeError("not an ELS switch")
+
+        d = object.__new__(JunOSDriver)
+        d.device = Dev()
+        d.get_vlans = lambda: (vlans if vlans is not None else {})
+        return d
+
+    ACCESS_MEMBER = """
+        <interface>
+          <interface-name>ge-0/0/23.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VL888</interface-vlan-name>
+              <interface-vlan-member-tagid>888</interface-vlan-member-tagid>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+
+    TRUNK_MEMBER = """
+        <interface>
+          <interface-name>xe-0/0/17.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VL156</interface-vlan-name>
+              <interface-vlan-member-tagid>156</interface-vlan-member-tagid>
+              <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+
+    def test_mode_is_read_from_membership_when_the_element_is_absent(self):
+        """A tagged member makes a trunk; an untagged-only member makes access."""
+        d = self._driver(self.ACCESS_MEMBER + self.TRUNK_MEMBER)
+        result = d.get_interfaces_vlans()
+
+        assert result["ge-0/0/23.0"] == {"mode": "access", "tagged": [], "untagged": 888}
+        assert result["xe-0/0/17.0"] == {"mode": "trunk", "tagged": [156], "untagged": None}
+
+    def test_the_detail_form_is_asked_for_first(self):
+        """
+        Ask for the reply that carries the mode element.
+
+        It is the authoritative statement of access versus trunk, and only the
+        detailed reply has it.
+        """
+        detail = """
+        <interface>
+          <interface-name>ge-0/0/23.0</interface-name>
+          <interface-port-mode>Trunk</interface-port-mode>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VL888</interface-vlan-name>
+              <interface-vlan-member-tagid>888</interface-vlan-member-tagid>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(self.ACCESS_MEMBER, detail=detail)
+        result = d.get_interfaces_vlans()
+
+        assert d.device.asked[0] == {"detail": True}, "the detailed form must be asked for first"
+        # The device says trunk. Membership alone would have inferred access,
+        # which is the case inference cannot get right and the element can.
+        assert result["ge-0/0/23.0"]["mode"] == "trunk"
+
+    def test_the_plain_form_still_answers_when_detail_is_refused(self):
+        """A platform that rejects the argument keeps the behaviour it has."""
+        d = self._driver(self.ACCESS_MEMBER, detail=None)
+        result = d.get_interfaces_vlans()
+
+        assert [kw.get("detail", False) for kw in d.device.asked] == [True, False]
+        assert result["ge-0/0/23.0"]["mode"] == "access"
+
+    def test_a_member_named_but_not_tagged_is_resolved_from_the_vlan_table(self):
+        """Junos reports some members by name alone; the device's own table names them."""
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/9.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VOICE</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml, vlans={30: {"name": "VOICE"}, 40: {"name": "DATA"}})
+
+        assert d.get_interfaces_vlans()["ge-0/0/9.0"] == {
+            "mode": "access",
+            "tagged": [],
+            "untagged": 30,
+        }
+
+    def test_a_name_differing_only_in_case_is_a_different_name(self):
+        """
+        A name differing only in case names a different VLAN.
+
+        Junos puts the out-of-band management port in a pseudo-VLAN named
+        ``mgmt`` that is not in the switching space, while a real VLAN on the
+        same measured switch is named ``MGMT`` at tag 20. Case-folding would
+        bind the management port to that VLAN, wrongly and silently.
+        """
+        xml = """
+        <interface>
+          <interface-name>me0.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>mgmt</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml, vlans={20: {"name": "MGMT"}})
+
+        assert d.get_interfaces_vlans()["me0.0"]["untagged"] is None
+
+    def test_a_name_the_table_gives_two_ids_is_refused(self):
+        """Nothing but the device could say which was meant, and it has not."""
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/9.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>SHARED</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml, vlans={10: {"name": "SHARED"}, 11: {"name": "SHARED"}})
+
+        assert d.get_interfaces_vlans()["ge-0/0/9.0"]["untagged"] is None
+
+    def test_the_vlan_table_is_fetched_once_at_most(self):
+        """
+        Fetch the VLAN table once at most, and only when a name needs it.
+
+        The table costs an RPC. It is not fetched at all when every member
+        carries a tagid, and fetched once however many members are reported by
+        name, rather than once per member.
+        """
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/9.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VOICE</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>
+        <interface>
+          <interface-name>ge-0/0/10.0</interface-name>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>DATA</interface-vlan-name>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+            <interface-vlan-member>
+              <interface-vlan-name>VOICE</interface-vlan-name>
+              <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+
+        calls = []
+        d = self._driver(xml)
+        d.get_vlans = lambda: (calls.append(1), {30: {"name": "VOICE"}, 40: {"name": "DATA"}})[1]
+        result = d.get_interfaces_vlans()
+        assert len(calls) == 1, f"three named members must cost one get_vlans, got {len(calls)}"
+        assert result["ge-0/0/10.0"] == {"mode": "trunk", "tagged": [30], "untagged": 40}
+
+        calls.clear()
+        d = self._driver(self.ACCESS_MEMBER + self.TRUNK_MEMBER)
+        d.get_vlans = lambda: (calls.append(1), {})[1]
+        d.get_interfaces_vlans()
+        assert calls == [], "a walk with no named member must not fetch the table at all"
