@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -255,13 +256,60 @@ type DeviceDefaults struct {
 	Platform     string   `yaml:"platform,omitempty"`
 }
 
+// VLANGroupParameters names the VLAN group discovered VLANs are attached
+// to and the NetBox object the group is scoped to. A bare string is the
+// group name; the mapping form adds at most one scope_* field. With no
+// scope the group is scoped to defaults.site, as the string form is.
+type VLANGroupParameters struct {
+	Name           string `yaml:"name,omitempty"`
+	ScopeSite      string `yaml:"scope_site,omitempty"`
+	ScopeSiteGroup string `yaml:"scope_site_group,omitempty"`
+	ScopeRegion    string `yaml:"scope_region,omitempty"`
+	ScopeLocation  string `yaml:"scope_location,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar group name or a mapping.
+func (g *VLANGroupParameters) UnmarshalYAML(node *yaml.Node) error {
+	*g = VLANGroupParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return nil
+		}
+		g.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		type alias VLANGroupParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		if a.Name == "" {
+			return errors.New("vlan.group: name is required")
+		}
+		scopes := 0
+		for _, v := range []string{a.ScopeSite, a.ScopeSiteGroup, a.ScopeRegion, a.ScopeLocation} {
+			if v != "" {
+				scopes++
+			}
+		}
+		if scopes > 1 {
+			return errors.New("vlan.group: only one scope may be set (scope_site, scope_site_group, scope_region, scope_location)")
+		}
+		*g = VLANGroupParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("vlan.group: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
 // VLANDefaults represents default values applied to discovered VLAN entities.
 type VLANDefaults struct {
-	Description string   `yaml:"description,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Group       string   `yaml:"group,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Status      string   `yaml:"status,omitempty"`
+	Description string              `yaml:"description,omitempty"`
+	Tags        []string            `yaml:"tags,omitempty"`
+	Group       VLANGroupParameters `yaml:"group,omitempty"`
+	Tenant      string              `yaml:"tenant,omitempty"`
+	Status      string              `yaml:"status,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy
@@ -424,7 +472,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if len(overrideDefaults.VLAN.Tags) > 0 {
 		merged.VLAN.Tags = overrideDefaults.VLAN.Tags
 	}
-	if overrideDefaults.VLAN.Group != "" {
+	if overrideDefaults.VLAN.Group.Name != "" {
 		merged.VLAN.Group = overrideDefaults.VLAN.Group
 	}
 	if overrideDefaults.VLAN.Tenant != "" {

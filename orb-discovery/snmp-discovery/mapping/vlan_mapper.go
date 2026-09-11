@@ -272,16 +272,37 @@ func applyVLANDefaults(v *diode.VLAN, defaults *config.Defaults) {
 	if vd.Tenant != "" {
 		v.Tenant = &diode.Tenant{Name: StringPtr(vd.Tenant)}
 	}
-	if vd.Group != "" {
-		name := vd.Group
+	if vd.Group.Name != "" {
+		name := vd.Group.Name
 		group := &diode.VLANGroup{Name: &name, Slug: toSlug(&name)}
-		if defaults.Site != "" {
-			group.Scope = &diode.Site{Name: StringPtr(defaults.Site)}
-		}
+		setVLANGroupScope(group, vd.Group, defaults.Site)
 		v.Group = group
 	}
 	if vd.Status != "" {
 		v.Status = StringPtr(vd.Status)
+	}
+}
+
+// setVLANGroupScope attaches the configured scope to a VLAN group. An
+// explicit scope_* wins; otherwise defaults.site applies, so the string
+// form of vlan.group keeps its site scope. NetBox Locations are unique
+// within their site, so a Location scope carries defaults.site when set.
+func setVLANGroupScope(group *diode.VLANGroup, g config.VLANGroupParameters, defaultSite string) {
+	switch {
+	case g.ScopeSiteGroup != "":
+		group.Scope = &diode.SiteGroup{Name: StringPtr(g.ScopeSiteGroup)}
+	case g.ScopeRegion != "":
+		group.Scope = &diode.Region{Name: StringPtr(g.ScopeRegion)}
+	case g.ScopeLocation != "":
+		loc := &diode.Location{Name: StringPtr(g.ScopeLocation)}
+		if defaultSite != "" {
+			loc.Site = &diode.Site{Name: StringPtr(defaultSite)}
+		}
+		group.Scope = loc
+	case g.ScopeSite != "":
+		group.Scope = &diode.Site{Name: StringPtr(g.ScopeSite)}
+	case defaultSite != "":
+		group.Scope = &diode.Site{Name: StringPtr(defaultSite)}
 	}
 }
 
