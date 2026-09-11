@@ -68,13 +68,15 @@ var _ PolicyManager = (*policyManager)(nil)
 // RemoveBackendPolicies sets it, the first thing it does under this mutex, so
 // a manage arriving while it is set is stored as starting instead of reaching
 // the backend, and is applied once by the replay that follows. A successful
-// ApplyBackendPolicies clears it once its entry gate has confirmed the
-// backend answers, also under this mutex, so a manage arriving after the
-// clear applies directly to a backend already confirmed up, and coexists
-// safely with the replay racing for the same mutex: whichever gets in first
-// is not re-applied by the other. A replay whose gate never passes leaves the
-// marker set, so manages for that backend stay deferred until the next
-// successful restart.
+// ApplyBackendPolicies clears it only once its replay has handed every
+// deferred policy to a backend that answered, at the end of the call and
+// still under this mutex, so a manage arriving after the clear applies
+// directly to a backend already confirmed up, and coexists safely with the
+// replay racing for the same mutex: whichever gets in first is not re-applied
+// by the other. Any retryable exit, the entry gate refusing, a per-policy
+// probe refusing mid-loop, a cancelled context, or a persist error, leaves
+// the marker set, so manages for that backend stay deferred until a replay
+// completes.
 type policyManager struct {
 	logger *slog.Logger
 	config config.Config
@@ -99,9 +101,9 @@ func (a *policyManager) applyLock(backendName string) *sync.Mutex {
 }
 
 // restartingFlag returns the per-backend restart marker described on
-// policyManager: set by a non-permanent removal, cleared by a replay once its
-// entry gate confirms the backend answers. Entries are never deleted, same
-// race rationale as applyLock.
+// policyManager: set by a non-permanent removal, cleared by a replay once it
+// completes, having handed every deferred policy to a backend that answered.
+// Entries are never deleted, same race rationale as applyLock.
 func (a *policyManager) restartingFlag(name string) *atomic.Bool {
 	v, _ := a.restarting.LoadOrStore(name, &atomic.Bool{})
 	flag, _ := v.(*atomic.Bool) // LoadOrStore stored a *atomic.Bool; assertion cannot fail.
@@ -349,23 +351,53 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 	}
 }
 
+// removeLockKey is the backend whose mutex a remove of this policy must hold:
+// the stored record's when there is one, else the caller's.
+func (a *policyManager) removeLockKey(policyID, beName string) string {
+	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" {
+		return stored.Backend
+	}
+	return beName
+}
+
 // RemovePolicy removes a policy under the mutex of the backend the stored
 // record names (the argument when there is no record), so a remove naming
 // the wrong backend cannot run beside a manage on the right one. The key is
-// a best-effort read; the body re-reads the record under the lock, and a
-// remove is idempotent, so no re-validation loop is needed. Every caller is
-// expected to pass the backend the repo already names for this policy; a
-// caller passing a different name breaks the mutex invariant this wrapper
-// exists to enforce.
+// re-validated under the lock the same way manageUnderLock re-validates a
+// manage's: a record deleted and re-created under another backend between
+// the pre-lock read and the lock changes the key, and the wrapper starts
+// over on the right mutex. A remove naming a backend other than the one the
+// stored record names is refused, with the record untouched: acting on it
+// would remove from the caller's backend and delete the record, stranding
+// the backend the record actually names with the policy still running and no
+// state left to remove it from. Every caller is expected to pass the backend
+// the repo already names for this policy; this wrapper enforces that even
+// when it isn't.
 func (a *policyManager) RemovePolicy(policyID string, policyName string, beName string) error {
-	key := beName
-	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" {
-		key = stored.Backend
+	for {
+		key := a.removeLockKey(policyID, beName)
+		done, err := a.removeUnderLock(key, policyID, policyName, beName)
+		if done {
+			return err
+		}
 	}
+}
+
+// removeUnderLock runs the remove under key's mutex, reporting whether the
+// operation is finished; false means the key changed and the caller retries.
+func (a *policyManager) removeUnderLock(key, policyID, policyName, beName string) (bool, error) {
 	mu := a.applyLock(key)
 	mu.Lock()
 	defer mu.Unlock()
-	return a.removePolicyLocked(policyID, policyName, beName)
+	if current := a.removeLockKey(policyID, beName); current != key {
+		return false, nil
+	}
+	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" && stored.Backend != beName {
+		a.logger.Warn("policy remove names a backend other than the one it runs on; ignoring",
+			"policy_id", policyID, "policy_name", policyName, "stored_backend", stored.Backend, "backend", beName)
+		return true, fmt.Errorf("policy %s runs on backend %s, not %s; remove ignored", policyID, stored.Backend, beName)
+	}
+	return true, a.removePolicyLocked(policyID, policyName, beName)
 }
 
 func (a *policyManager) removePolicyLocked(policyID string, policyName string, beName string) error {
@@ -413,19 +445,39 @@ func (a *policyManager) removePolicyLocked(policyID string, policyName string, b
 
 // RemovePolicyDataset removes a dataset under the mutex of the backend the
 // stored record names, with the caller's name as the fallback; both callers
-// read the name from the repo right before calling. Every caller is expected
-// to pass the backend the repo already names for this policy; a caller
-// passing a different name breaks the mutex invariant this wrapper exists to
-// enforce.
+// read the name from the repo right before calling. The key is re-validated
+// under the lock the same way RemovePolicy's is, and a caller naming a
+// backend other than the stored one is refused rather than acted on, for the
+// same reason: acting on it would strand the other backend's copy with
+// nothing left to remove it. Every caller is expected to pass the backend the
+// repo already names for this policy; this wrapper enforces that even when it
+// isn't.
 func (a *policyManager) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
-	key := beName
-	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" {
-		key = stored.Backend
+	for {
+		key := a.removeLockKey(policyID, beName)
+		if a.removeDatasetUnderLock(key, policyID, datasetID, beName, be) {
+			return
+		}
 	}
+}
+
+// removeDatasetUnderLock runs the dataset removal under key's mutex,
+// reporting whether the operation is finished; false means the key changed
+// and the caller retries.
+func (a *policyManager) removeDatasetUnderLock(key, policyID, datasetID, beName string, be backend.Backend) bool {
 	mu := a.applyLock(key)
 	mu.Lock()
 	defer mu.Unlock()
+	if current := a.removeLockKey(policyID, beName); current != key {
+		return false
+	}
+	if stored, err := a.repo.Get(policyID); err == nil && stored.Backend != "" && stored.Backend != beName {
+		a.logger.Warn("policy dataset remove names a backend other than the one it runs on; ignoring",
+			"policy_id", policyID, "dataset_id", datasetID, "stored_backend", stored.Backend, "backend", beName)
+		return true
+	}
 	a.removePolicyDatasetLocked(policyID, datasetID, be)
+	return true
 }
 
 func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID string, be backend.Backend) {
@@ -542,8 +594,8 @@ func removeFromBackend(be backend.Backend, pd policies.PolicyData) error {
 // backend's restarting marker, the first statement of the locked body run
 // under this backend's apply mutex, so a manage racing in for the same mutex
 // sees a restart in flight rather than a backend it can apply to.
-// ApplyBackendPolicies clears the marker once its replay's entry gate
-// confirms the backend is back.
+// ApplyBackendPolicies clears the marker once its replay completes, having
+// handed every deferred policy to a backend that answered.
 func (a *policyManager) RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error {
 	mu := a.applyLock(name)
 	mu.Lock()
@@ -556,7 +608,7 @@ func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Back
 		// A non-permanent removal is the start of a restart: setting the
 		// marker here, under this backend's apply mutex, means no manage can
 		// be mid-apply when it flips. ApplyBackendPolicies clears it once its
-		// replay confirms the backend is answering again.
+		// replay completes.
 		a.restartingFlag(name).Store(true)
 	}
 	plcies, err := a.repo.GetAll()
@@ -618,15 +670,17 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // the loop and is returned, leaving whatever policies were not yet reached
 // as they were (most often unknown) for a later replay to pick up.
 //
-// Once the entry gate above passes, the restart marker for this backend
-// (see the policyManager type comment) is cleared under this same mutex: the
-// backend has answered once, so a manage arriving from here on applies
-// directly instead of waiting for this call. A gate failure leaves the
-// marker set, so a manage arriving during the caller's retry delay keeps
-// being deferred, and a caller that gives up after every retry leaves it set
-// too, so manages for the backend stay deferred until the next successful
-// restart, because the backend was not answering the same probe the health
-// monitor uses.
+// The restart marker for this backend (see the policyManager type comment) is
+// cleared only once this replay has handed every deferred policy to a
+// backend that answered: at the end of this call, still under this same
+// mutex, immediately before it returns nil. From then on a manage applies
+// directly instead of waiting for another replay. Any exit before that
+// point, the entry gate refusing, a per-policy probe refusing mid-loop, a
+// cancelled context, or a persist error, leaves the marker set, so a manage
+// arriving during the caller's retry delay keeps being deferred, and a
+// caller that gives up after every retry leaves it set too, so manages for
+// the backend stay deferred until a replay completes, because the backend
+// was not answering the same probe the health monitor uses.
 //
 // Only a record deferredByRestart is applied: one marked unknown, one
 // marked offline while the process was down, or one stored failed to apply
@@ -651,10 +705,6 @@ func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name str
 			"backend", name, "backend_state", state.String(), "detail", detail, "error", err)
 		return fmt.Errorf("%w: %s", ErrBackendNotRunning, name)
 	}
-	// The gate passed: the backend has answered once, so clear the restart
-	// marker now, before the loop below, so a manage arriving from here on
-	// applies directly rather than waiting for this replay.
-	a.restartingFlag(name).Store(false)
 	plcies, err := a.repo.GetAll()
 	if err != nil {
 		a.logger.Error("failed to retrieve list of policies", "error", err)
@@ -684,6 +734,11 @@ func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name str
 			return err
 		}
 	}
+	// The loop has handed every deferred policy to a backend that answered:
+	// clear the restart marker now, still under this mutex, so a manage
+	// arriving from here on applies directly instead of waiting for another
+	// replay.
+	a.restartingFlag(name).Store(false)
 	return nil
 }
 

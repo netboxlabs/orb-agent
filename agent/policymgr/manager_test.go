@@ -1254,6 +1254,75 @@ func TestManageStaysDeferredWhileTheReplayGateFails(t *testing.T) {
 	assert.Equal(t, policies.Running, deferredStored.State)
 }
 
+// A replay that exits on a per-policy probe failure (not the entry gate)
+// must leave the restart marker set too: clearing it right after the entry
+// gate let a manage arriving during the caller's retry delay reach the
+// backend directly, get stamped with the probe's own transient reason, and
+// be excluded from the next replay by deferredByRestart.
+func TestManageStaysDeferredWhileAReplayExitsOnAPerPolicyProbeFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "midreplay_marker_backend"}
+	backend.Register("midreplay_marker_backend", be)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+
+	// Set the restart marker with an empty repo, so this sets the flag
+	// without exercising any backend call, then seed the two policies the
+	// replay below will reach.
+	require.NoError(t, mgr.RemoveBackendPolicies("midreplay_marker_backend", be, false))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p1", Name: "p1", Backend: "midreplay_marker_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "p2", Name: "p2", Backend: "midreplay_marker_backend", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Once()                                           // entry gate
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Once()                                           // first policy reached
+	be.On("GetRunningStatus").Return(backend.BackendError, "process running, REST API unavailable", nil).Once() // second policy reached
+	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Once()                                                // the one record the loop reaches before the probe fails
+
+	err = mgr.ApplyBackendPolicies(context.Background(), "midreplay_marker_backend", be)
+	require.ErrorIs(t, err, policymgr.ErrBackendNotRunning)
+
+	// A manage during the retry delay must stay deferred, not reach the
+	// backend: the marker is still set because this replay exited on the
+	// per-policy probe rather than completing.
+	mgr.ManagePolicy(config.PolicyPayload{
+		Action: "manage", ID: "new-during-retry", Name: "new-during-retry",
+		Backend: "midreplay_marker_backend", DatasetID: "d1", Version: 1, Data: map[string]any{},
+	})
+	deferredManage, err := repo.Get("new-during-retry")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, deferredManage.State, "a manage during the retry delay must stay deferred")
+	assert.Equal(t, policymgr.ReasonBackendStarting, deferredManage.BackendErr)
+
+	// A second, successful replay applies the seeded record the first replay
+	// never reached, plus the manage stored as starting, each exactly once.
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, true).Return(nil).Times(2)
+
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), "midreplay_marker_backend", be))
+	be.AssertExpectations(t) // a third ApplyPolicy call here would panic on the exhausted expectation
+
+	for _, id := range []string{"p1", "p2", "new-during-retry"} {
+		stored, err := repo.Get(id)
+		require.NoError(t, err)
+		assert.Equal(t, policies.Running, stored.State, "id %s must be running once the replay completed", id)
+	}
+
+	// Once that replay has completed, a manage arriving afterwards applies
+	// directly rather than waiting for another replay.
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "after-replay" }), false).Return(nil).Once()
+	mgr.ManagePolicy(config.PolicyPayload{
+		Action: "manage", ID: "after-replay", Name: "after-replay",
+		Backend: "midreplay_marker_backend", DatasetID: "d2", Version: 1, Data: map[string]any{},
+	})
+	afterReplay, err := repo.Get("after-replay")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, afterReplay.State)
+	be.AssertExpectations(t)
+}
+
 // A permanent removal is not the start of a restart, so it must not defer
 // manages: one arriving afterwards applies directly.
 func TestPermanentRemovalDoesNotDeferManages(t *testing.T) {
@@ -2239,6 +2308,59 @@ func TestManagePolicyRefusesMovingAPolicyToAnotherBackend(t *testing.T) {
 	assert.Equal(t, stored.Backend, after.Backend)
 	assert.Equal(t, stored.Version, after.Version)
 	assert.Equal(t, policies.Running, after.State)
+}
+
+// A remove naming a backend other than the one the stored record runs on is
+// refused: acting on it would remove from the caller's backend and delete the
+// record, stranding the backend the record actually names with the policy
+// still running and no state left to remove it from.
+func TestRemovePolicyRefusesABackendOtherThanTheStoredOne(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	beA := &mockBackend{name: "remove_refuse_a"}
+	beB := &mockBackend{name: "remove_refuse_b"}
+	backend.Register("remove_refuse_a", beA)
+	backend.Register("remove_refuse_b", beB)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "moved", Name: "moved", Backend: "remove_refuse_b", Version: 1, Data: map[string]any{}, State: policies.Running}))
+
+	err = mgr.RemovePolicy("moved", "moved", "remove_refuse_a")
+	require.Error(t, err)
+
+	beA.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	beB.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	stored, err := mgr.GetRepo().Get("moved")
+	require.NoError(t, err)
+	assert.Equal(t, "remove_refuse_b", stored.Backend, "the record must be untouched")
+}
+
+// Same shape as TestRemovePolicyRefusesABackendOtherThanTheStoredOne, for the
+// dataset removal: a caller naming a backend other than the stored one is
+// refused, and the dataset stays.
+func TestRemovePolicyDatasetRefusesABackendOtherThanTheStoredOne(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	beA := &mockBackend{name: "remove_ds_refuse_a"}
+	beB := &mockBackend{name: "remove_ds_refuse_b"}
+	backend.Register("remove_ds_refuse_a", beA)
+	backend.Register("remove_ds_refuse_b", beB)
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{
+		ID: "moved-ds", Name: "moved-ds", Backend: "remove_ds_refuse_b", Version: 1,
+		Data: map[string]any{}, State: policies.Running, Datasets: map[string]bool{"ds1": true},
+	}))
+
+	mgr.RemovePolicyDataset("moved-ds", "ds1", "remove_ds_refuse_a", beA)
+
+	beA.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	beB.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	stored, err := mgr.GetRepo().Get("moved-ds")
+	require.NoError(t, err)
+	assert.Contains(t, stored.Datasets, "ds1", "the dataset must stay")
 }
 
 // The secrets refresh removes a policy the provider no longer allows through
