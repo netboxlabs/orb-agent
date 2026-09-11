@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -62,6 +63,18 @@ var _ PolicyManager = (*policyManager)(nil)
 // this one; this mutex is taken before any supervisor entry mutex when both
 // are needed, never the reverse; the repo's own lock is innermost and never
 // held across a call out.
+//
+// A per-backend marker tracks a restart in flight: a non-permanent
+// RemoveBackendPolicies sets it, the first thing it does under this mutex, so
+// a manage arriving while it is set is stored as starting instead of reaching
+// the backend, and is applied once by the replay that follows. A successful
+// ApplyBackendPolicies clears it once its entry gate has confirmed the
+// backend answers, also under this mutex, so a manage arriving after the
+// clear applies directly to a backend already confirmed up, and coexists
+// safely with the replay racing for the same mutex: whichever gets in first
+// is not re-applied by the other. A replay whose gate never passes leaves the
+// marker set, so manages for that backend stay deferred until the next
+// successful restart.
 type policyManager struct {
 	logger *slog.Logger
 	config config.Config
@@ -71,6 +84,9 @@ type policyManager struct {
 	starter BackendStarter
 
 	applyMu sync.Map // backend name -> *sync.Mutex
+
+	// restarting is the marker described in the type comment above.
+	restarting sync.Map // backend name -> *atomic.Bool
 }
 
 // applyLock returns the mutex serialising every policy operation on one
@@ -80,6 +96,16 @@ func (a *policyManager) applyLock(backendName string) *sync.Mutex {
 	v, _ := a.applyMu.LoadOrStore(backendName, &sync.Mutex{})
 	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
 	return mu
+}
+
+// restartingFlag returns the per-backend restart marker described on
+// policyManager: set by a non-permanent removal, cleared by a replay once its
+// entry gate confirms the backend answers. Entries are never deleted, same
+// race rationale as applyLock.
+func (a *policyManager) restartingFlag(name string) *atomic.Bool {
+	v, _ := a.restarting.LoadOrStore(name, &atomic.Bool{})
+	flag, _ := v.(*atomic.Bool) // LoadOrStore stored a *atomic.Bool; assertion cannot fail.
+	return flag
 }
 
 // New creates a new instance of PolicyManager
@@ -111,10 +137,20 @@ func (a *policyManager) SetStarter(starter BackendStarter) {
 // whose apply was deferred because the starter reported the backend starting.
 const ReasonBackendStarting = "backend starting"
 
-// backendReady consults the starter for the policy's backend. It returns
-// true when the apply may proceed; otherwise it has set the policy's state
-// and reason and the caller persists the record.
+// backendReady reports whether a manage or refresh may proceed for name's
+// backend. A restart in flight defers the manage the same way a starting
+// backend does: the replay applies it once the backend answers. The marker
+// is checked before the starter because it is this package's own state,
+// cheaper than a call out, and independent of whether a starter is even
+// installed. Past that check it consults the starter; either way, when the
+// apply may not proceed it has set the policy's state and reason and the
+// caller persists the record.
 func (a *policyManager) backendReady(name string, pd *policies.PolicyData) bool {
+	if a.restartingFlag(name).Load() {
+		pd.State = policies.FailedToApply
+		pd.BackendErr = ReasonBackendStarting
+		return false
+	}
 	if a.starter == nil {
 		return true
 	}
@@ -502,7 +538,12 @@ func removeFromBackend(be backend.Backend, pd policies.PolicyData) error {
 
 // RemoveBackendPolicies removes the named backend's policies, and only its
 // own: the repo holds every backend's policies, and a restart of one backend
-// must not take the others' with it.
+// must not take the others' with it. A non-permanent removal also sets the
+// backend's restarting marker, the first statement of the locked body run
+// under this backend's apply mutex, so a manage racing in for the same mutex
+// sees a restart in flight rather than a backend it can apply to.
+// ApplyBackendPolicies clears the marker once its replay's entry gate
+// confirms the backend is back.
 func (a *policyManager) RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error {
 	mu := a.applyLock(name)
 	mu.Lock()
@@ -511,6 +552,13 @@ func (a *policyManager) RemoveBackendPolicies(name string, be backend.Backend, p
 }
 
 func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Backend, permanently bool) error {
+	if !permanently {
+		// A non-permanent removal is the start of a restart: setting the
+		// marker here, under this backend's apply mutex, means no manage can
+		// be mid-apply when it flips. ApplyBackendPolicies clears it once its
+		// replay confirms the backend is answering again.
+		a.restartingFlag(name).Store(true)
+	}
 	plcies, err := a.repo.GetAll()
 	if err != nil {
 		a.logger.Error("failed to retrieve list of policies", "error", err)
@@ -570,6 +618,16 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // the loop and is returned, leaving whatever policies were not yet reached
 // as they were (most often unknown) for a later replay to pick up.
 //
+// Once the entry gate above passes, the restart marker for this backend
+// (see the policyManager type comment) is cleared under this same mutex: the
+// backend has answered once, so a manage arriving from here on applies
+// directly instead of waiting for this call. A gate failure leaves the
+// marker set, so a manage arriving during the caller's retry delay keeps
+// being deferred, and a caller that gives up after every retry leaves it set
+// too, so manages for the backend stay deferred until the next successful
+// restart, because the backend was not answering the same probe the health
+// monitor uses.
+//
 // Only a record deferredByRestart is applied: one marked unknown, one
 // marked offline while the process was down, or one stored failed to apply
 // because the starter reported the backend starting. A record already
@@ -593,6 +651,10 @@ func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name str
 			"backend", name, "backend_state", state.String(), "detail", detail, "error", err)
 		return fmt.Errorf("%w: %s", ErrBackendNotRunning, name)
 	}
+	// The gate passed: the backend has answered once, so clear the restart
+	// marker now, before the loop below, so a manage arriving from here on
+	// applies directly rather than waiting for this replay.
+	a.restartingFlag(name).Store(false)
 	plcies, err := a.repo.GetAll()
 	if err != nil {
 		a.logger.Error("failed to retrieve list of policies", "error", err)
