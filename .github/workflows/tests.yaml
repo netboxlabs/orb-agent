@@ -16,6 +16,7 @@ on:
       - "go.mod"
       - "go.sum"
       - "!agent/docker/**"
+      - ".github/workflows/tests.yaml"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -44,7 +45,22 @@ jobs:
       - name: Install additional dependencies
         run: |
           go install github.com/mfridman/tparse@v0.14.0
-          sudo apt-get -y install nmap
+          # The runner reaches its apt mirrors over plain HTTP, and that route
+          # has been down for hours at a time, failing every run before a test
+          # ran. Retry with a short timeout first, then fall back to the Ubuntu
+          # archive over HTTPS, which does not share the port 80 route.
+          install_nmap() {
+            sudo apt-get -y -o Acquire::Retries=3 -o Acquire::http::Timeout=20 install nmap
+          }
+          if ! install_nmap; then
+            echo "apt mirrors unreachable, falling back to the Ubuntu archive over HTTPS"
+            . /etc/os-release
+            fallback=/etc/apt/sources.list.d/zz-https-fallback.list
+            printf 'deb https://archive.ubuntu.com/ubuntu %s main universe\ndeb https://archive.ubuntu.com/ubuntu %s-updates main universe\ndeb https://security.ubuntu.com/ubuntu %s-security main universe\n' \
+              "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" | sudo tee "$fallback" >/dev/null
+            sudo apt-get update -o Dir::Etc::sourcelist="$fallback" -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+            install_nmap
+          fi
       - name: Run go test
         id: go-test
         run: |
