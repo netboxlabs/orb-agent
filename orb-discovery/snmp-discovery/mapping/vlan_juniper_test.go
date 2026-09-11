@@ -1126,3 +1126,126 @@ func TestVlanNamesByVid_NoVlanChangesAnotherVlansName(t *testing.T) {
 		}
 	}
 }
+
+// TestVlanNamesByVid_ALongUnsuffixedNameDeniesTheConvention pins the direction
+// the length test must NOT be read as a minimum.
+//
+// A name longer than the column bound proves this agent does not cut at the
+// bound, so its missing suffix cannot be truncation — it is the device saying
+// plainly that it has no such convention, and the strongest counter-evidence
+// available. Setting it aside would strip every other VLAN's name on exactly
+// the device that just denied the premise.
+func TestVlanNamesByVid_ALongUnsuffixedNameDeniesTheConvention(t *testing.T) {
+	long := "a-name-far-longer-than-the-column-bound"
+	if len(long) <= dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must exceed the bound, got %d", len(long))
+	}
+	got := vlanNamesByVid(ObjectIDValueMap{
+		oidSysObjectIDScalar:           {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "100": {Value: "office+100"},
+		oidDot1qVlanStaticName + "200": {Value: "eng+200"},
+		oidDot1qVlanStaticName + "300": {Value: long},
+	})
+	for vid, want := range map[int]string{100: "office+100", 200: "eng+200", 300: long} {
+		if got[vid] != want {
+			t.Errorf("a name too long to have been cut must deny the convention: vid %d = %q, want %q",
+				vid, got[vid], want)
+		}
+	}
+}
+
+// TestResolveJuniperVlanIndices_ALongNameStillDisagrees is the same rule on the
+// corroboration side, where reading the length test as a minimum is worse.
+//
+// Laundering a genuine disagreement into "no evidence" does not merely lose a
+// vote: a disagreement is a hard refusal, so it would let a device that should
+// be refused proceed to a full rekey and re-emit every VLAN under another
+// VLAN's ID.
+func TestResolveJuniperVlanIndices_ALongNameStillDisagrees(t *testing.T) {
+	long := "a-static-name-that-runs-past-the-column-bound"
+	if len(long) <= dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must exceed the bound, got %d", len(long))
+	}
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		oidDot1qVlanStaticName + "17": {Value: long},
+		oidJnxExVlanName + "17":       {Value: long + "-different-vlan-entirely"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		// A row that does agree, so the refusal can only come from the above.
+		oidDot1qVlanStaticName + "20": {Value: "MGMT"},
+		oidJnxExVlanName + "20":       {Value: "MGMT"},
+		oidJnxExVlanTag + "20":        {Value: "200"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a name too long to have been cut must contradict, not abstain, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "disagree") {
+		t.Errorf("the refusal must name the disagreement, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_LeavesAZeroPvidAloneAndSilent covers the
+// healthy all-tagged trunk.
+//
+// A PVID of 0 is the device saying "bridged, nothing untagged". It names no
+// VLAN, so it can fabricate none, and 0 is already the value the guard would
+// write. On a switch with no untagged bridge domain, tag 0 is not among the
+// resolved tags — so without a short-circuit every such trunk is reported as
+// having lost its untagged VLAN, on every poll, forever, when nothing is wrong.
+func TestResolveJuniperVlanIndices_LeavesAZeroPvidAloneAndSilent(t *testing.T) {
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+		// No tag-0 row anywhere on this device.
+		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
+		oidJnxExVlanName + "17":       {Value: "MGMT"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+
+		oidDot1qPvid + "1": {Value: "0"},
+	}, logger)
+
+	if got := out[oidDot1qPvid+"1"].Value; got != "0" {
+		t.Errorf("a PVID of 0 must survive verbatim, got %q", got)
+	}
+	if logged.Len() != 0 {
+		t.Errorf("an all-tagged trunk is healthy and must not be reported as losing anything: %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenOnlyDroppedRowsCorroborate scopes
+// corroboration to the rows the rekey will actually produce.
+//
+// Agreement from a row that is discarded moments later is evidence about
+// nothing that reaches NetBox. It also lets the index != tag exclusion be
+// sidestepped: that exclusion exists to deny the rekey a free pass on "VLAN 1,
+// named default, at index 1", and on a box whose default bridge domain is
+// untagged the enterprise tag there is 0, so 1 != 0 and the coincidence would
+// have counted after all.
+func TestResolveJuniperVlanIndices_RefusesWhenOnlyDroppedRowsCorroborate(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// The only rows both tables name are untagged bridge domains, which
+		// are dropped rather than rewritten.
+		oidDot1qVlanStaticName + "1": {Value: "default"},
+		oidJnxExVlanName + "1":       {Value: "default"},
+		oidJnxExVlanTag + "1":        {Value: "0"},
+		// The row that WOULD be rewritten is unnamed by the enterprise table,
+		// so nothing corroborates it.
+		oidDot1qVlanStaticName + "17": {Value: "MGMT"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("agreement from rows that will be dropped must not carry the rekey, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "nothing corroborates") {
+		t.Errorf("the refusal must say the evidence is missing, got %q", logged.String())
+	}
+}
