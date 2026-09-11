@@ -19,6 +19,9 @@ from netboxlabs.diode.sdk.ingester import (
     Location,
     Platform,
     Rack,
+    Region,
+    Site,
+    SiteGroup,
     Tenant,
     TenantGroup,
     VLANGroup,
@@ -32,6 +35,7 @@ from device_discovery.policy.models import (
     Defaults,
     Options,
     TenantParameters,
+    VlanGroupParameters,
     VrfParameters,
 )
 from device_discovery.proto_presence import blank_to_none
@@ -247,7 +251,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
         tenant = translate_tenant(defaults.vlan.tenant)
         role = defaults.vlan.role
         if group:
-            group = VLANGroup(name=group, slug=slugify(group), scope_site=defaults.site)
+            group = translate_vlan_group(group, defaults.site)
 
     clean_name = " ".join(vlan_name.strip().split())
     vlan = VLAN(
@@ -262,6 +266,33 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
     )
 
     return vlan
+
+
+def translate_vlan_group(
+    group: str | VlanGroupParameters, default_site: str | None
+) -> VLANGroup:
+    """
+    Build the VLAN group with the scope NetBox attaches it to.
+
+    An explicit ``scope_*`` wins; otherwise ``default_site`` applies, so a
+    bare group name keeps its site scope. NetBox locations are unique within
+    their site, so a location scope carries ``default_site`` when set.
+    """
+    if isinstance(group, str):
+        group = VlanGroupParameters(name=group)
+    scope: dict[str, Any] = {}
+    if group.scope_site_group:
+        scope["scope_site_group"] = SiteGroup(name=group.scope_site_group)
+    elif group.scope_region:
+        scope["scope_region"] = Region(name=group.scope_region)
+    elif group.scope_location:
+        site = Site(name=default_site) if default_site else None
+        scope["scope_location"] = Location(name=group.scope_location, site=site)
+    elif group.scope_site:
+        scope["scope_site"] = group.scope_site
+    elif default_site:
+        scope["scope_site"] = default_site
+    return VLANGroup(name=group.name, slug=slugify(group.name), **scope)
 
 
 def _build_vlan_cache(
