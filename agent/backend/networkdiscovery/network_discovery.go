@@ -170,6 +170,7 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "network-discovery",
 		NameUnderscore: "network_discovery",
 		Exec:           d.exec,

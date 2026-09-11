@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"testing"
@@ -145,8 +146,12 @@ func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 	return nil
 }
 
-// mockFilesManager implements filesmgr.Manager for testing (no-op)
-type mockFilesManager struct{}
+// mockFilesManager implements filesmgr.Manager for testing (no-op), and
+// records every Rollback call so a test can assert one was, or was not, made.
+type mockFilesManager struct {
+	rollbackCalls int
+	rollbackNames []string
+}
 
 func (m *mockFilesManager) Start(_ context.Context) error { return nil }
 func (m *mockFilesManager) Stop(_ context.Context) error  { return nil }
@@ -158,10 +163,14 @@ func (m *mockFilesManager) Get(_ string) (filesmgr.FileEntry, bool) {
 	return filesmgr.FileEntry{}, false
 }
 
-func (m *mockFilesManager) List() []filesmgr.FileEntry                  { return nil }
-func (m *mockFilesManager) ListPending() []filesmgr.FileEntry           { return nil }
-func (m *mockFilesManager) Remove(_ context.Context, _ string) error    { return nil }
-func (m *mockFilesManager) Rollback(_ context.Context, _ string) error  { return nil }
+func (m *mockFilesManager) List() []filesmgr.FileEntry               { return nil }
+func (m *mockFilesManager) ListPending() []filesmgr.FileEntry        { return nil }
+func (m *mockFilesManager) Remove(_ context.Context, _ string) error { return nil }
+func (m *mockFilesManager) Rollback(_ context.Context, name string) error {
+	m.rollbackCalls++
+	m.rollbackNames = append(m.rollbackNames, name)
+	return nil
+}
 func (m *mockFilesManager) Subscribe(_ func(filesmgr.FileEvent)) func() { return func() {} }
 
 // mockSecretsManager implements secretsmgr.Manager for testing
@@ -382,4 +391,58 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 	// into backendsCommon and then deletes the "common" key from the map.
 	// Verify the extracted config has the custom port.
 	assert.Equal(t, "grpc://localhost:9999", orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should use configured port")
+}
+
+// stubCancelledStartBackend is a minimal backend.Backend and backend.ManagedBinary
+// whose Start always fails as if the agent's own shutdown had already cancelled
+// the context it was given, for testing that filesmgr's rollback gate treats
+// that as distinct from a bad binary.
+type stubCancelledStartBackend struct {
+	startCalls int
+}
+
+func (s *stubCancelledStartBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
+	return nil
+}
+func (s *stubCancelledStartBackend) Version() (string, error) { return "", nil }
+func (s *stubCancelledStartBackend) Start(context.Context, context.CancelFunc) error {
+	s.startCalls++
+	return fmt.Errorf("stub start cancelled: %w", context.Canceled)
+}
+func (s *stubCancelledStartBackend) Stop(context.Context) error      { return nil }
+func (s *stubCancelledStartBackend) FullReset(context.Context) error { return nil }
+func (s *stubCancelledStartBackend) GetStartTime() time.Time         { return time.Time{} }
+func (s *stubCancelledStartBackend) GetCapabilities() (map[string]any, error) {
+	return nil, nil
+}
+
+func (s *stubCancelledStartBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
+	return backend.Unknown, "", nil
+}
+func (s *stubCancelledStartBackend) GetInitialState() backend.RunningStatus      { return backend.Unknown }
+func (s *stubCancelledStartBackend) ApplyPolicy(policies.PolicyData, bool) error { return nil }
+func (s *stubCancelledStartBackend) RemovePolicy(policies.PolicyData) error      { return nil }
+func (s *stubCancelledStartBackend) ManagedBinaryName() string                   { return "stub-binary" }
+
+// A start the agent itself gave up on (its context was already cancelled,
+// typically by shutdown) is not evidence the managed binary is bad, so it
+// must not trigger a rollback to the previous version.
+func TestFilesmgrRestartDoesNotRollBackACancelledStart(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &stubCancelledStartBackend{}
+	fm := &mockFilesManager{}
+
+	a := &orbAgent{
+		logger:       logger,
+		backends:     map[string]backend.Backend{"stub": be},
+		filesManager: fm,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	a.restartBackendWithFilesmgrRollback(ctx, "stub")
+
+	assert.Equal(t, 1, be.startCalls, "Start should be attempted exactly once")
+	assert.Equal(t, 0, fm.rollbackCalls, "a cancelled start must not trigger a rollback")
 }

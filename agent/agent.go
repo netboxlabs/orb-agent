@@ -335,6 +335,10 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
 		return
 	}
+	if errors.Is(startErr, context.Canceled) || ctx.Err() != nil {
+		a.logger.Info("filesmgr: backend start cancelled during restart, leaving the binary as it is", "backend", backendName, "error", startErr)
+		return
+	}
 	a.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", backendName, "error", startErr)
 
 	if binaryName == "" {

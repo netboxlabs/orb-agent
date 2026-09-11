@@ -408,6 +408,7 @@ func (d *gnmiTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "gnmi-telemetry",
 		NameUnderscore: "gnmi_telemetry",
 		Exec:           d.exec,

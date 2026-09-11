@@ -206,7 +206,7 @@ func TestGnmiDiscoveryBackendStart(t *testing.T) {
 	assert.NotContains(t, lastDelete, "dummy-policy-updated",
 		"update must not DELETE the new policy name")
 
-	require.NoError(t, be.FullReset(ctx))
+	require.NoError(t, be.FullReset(context.Background()))
 
 	mockCmd.AssertExpectations(t)
 }

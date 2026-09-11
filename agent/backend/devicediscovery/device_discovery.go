@@ -188,6 +188,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "device-discovery",
 		NameUnderscore: "device_discovery",
 		Exec:           d.exec,

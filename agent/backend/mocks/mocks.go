@@ -78,6 +78,11 @@ func SetupSuccessfulProcess(mockCmd *MockCmd, pid int) (<-chan string, <-chan st
 		// Delay before sending to simulate process startup
 		time.Sleep(10 * time.Millisecond)
 		statusCh <- status
+		// Mirrors CmdWrapper.Start in agent/backend/cmd.go: close the status
+		// channel once its one value is sent, so a second StopProcess call
+		// against this mock receives immediately instead of waiting out the
+		// real grace period.
+		close(statusCh)
 		// Simulate some output
 		stdoutCh <- "success"
 		stderrCh <- "error"
@@ -121,9 +126,12 @@ func SetupCompletedProcess(mockCmd *MockCmd, exitCode int, err error) {
 	close(stdoutCh)
 	close(stderrCh)
 
-	// Send status immediately
+	// Send status immediately, then close: mirrors CmdWrapper.Start in
+	// agent/backend/cmd.go, so a second StopProcess call against this mock
+	// receives immediately instead of waiting out the real grace period.
 	go func() {
 		statusCh <- status
+		close(statusCh)
 	}()
 }
 

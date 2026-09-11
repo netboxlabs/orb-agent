@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
@@ -307,4 +308,29 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	os.Exit(code)
+}
+
+// A second StopProcess call against a mock whose one status was already
+// delivered must return at once: SetupSuccessfulProcess closes its status
+// channel after sending, mirroring CmdWrapper.Start, so a stale receive
+// never makes a caller wait out the real grace period or attempt to SIGKILL
+// a fabricated PID.
+func TestStopProcessReturnsAtOnceOnASecondCallAgainstAClosedMockChannel(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12345)
+	statusCh := mockCmd.Start()
+
+	backend.StopProcess(logger, mockCmd, statusCh, 5*time.Second, "test-backend")
+
+	done := make(chan struct{})
+	go func() {
+		backend.StopProcess(logger, mockCmd, statusCh, 5*time.Second, "test-backend")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("second StopProcess call did not return within 100ms; the mock's status channel is still open")
+	}
 }

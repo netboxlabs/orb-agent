@@ -109,6 +109,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         o.logger,
+		Ctx:            o.ctx,
 		NameDisplay:    "opentelemetry infinity",
 		NameUnderscore: "opentelemetry_infinity",
 		Exec:           o.exec,

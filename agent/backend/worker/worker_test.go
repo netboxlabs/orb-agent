@@ -150,7 +150,7 @@ func TestWorkerBackendStart(t *testing.T) {
 	}
 	require.NoError(t, be.ApplyPolicy(updatedData, true))
 
-	require.NoError(t, be.FullReset(ctx))
+	require.NoError(t, be.FullReset(context.Background()))
 
 	mockCmd.AssertExpectations(t)
 }
