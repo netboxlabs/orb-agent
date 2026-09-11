@@ -678,6 +678,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				attribute.String("policy", policyName)))
 	}
 
+	// Normalise the walk before any consumer reads it. On the Junos platforms
+	// that index dot1qVlanStaticTable internally, the VLAN catalog, the port
+	// masks and the SVI resolver would each otherwise read an internal number
+	// as a VLAN ID. Done here, once, so every consumer below sees one keying
+	// and the translation's warnings are logged once per target. A no-op
+	// everywhere else.
+	oids = mapping.ResolveJuniperVlanIndices(oids, r.logger)
+
 	entities := make([]diode.Entity, 0)
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()

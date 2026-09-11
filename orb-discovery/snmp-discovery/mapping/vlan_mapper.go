@@ -89,6 +89,12 @@ func (m *VlanMapper) PostMap(
 	registry *EntityRegistry,
 	defaults *config.Defaults,
 ) []diode.Entity {
+	// The walked rows arrive already normalised: the runner calls
+	// ResolveJuniperVlanIndices once, before any consumer reads them, so a
+	// Junos device that indexes dot1qVlanStaticTable internally reaches every
+	// reader below keyed by the real 802.1Q tag. Normalising again here would
+	// log the same refusal twice per target, and the map is shared with the
+	// SVI resolver, which has to see the same keying this mapper does.
 	gen := m.buildGenericRows(allObjectIDs)
 	if len(gen.BasePortToIfIndex) == 0 {
 		// No bridge port table — refuse Interface mutation. Still emit
@@ -368,9 +374,9 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			rows.PortPvid[ifx] = vid
 		}
 	}
-	if v, ok := all[oidSysObjectIDScalar]; ok {
-		rows.TextPortLists = strings.HasPrefix("."+strings.TrimPrefix(v.Value, "."), juniperEnterprise)
-	}
+	// Same sysObjectID test the VLAN index translation uses, so a padded or
+	// dot-prefixed value cannot make one fire and not the other.
+	rows.TextPortLists = isJuniper(all)
 	return rows
 }
 
@@ -449,7 +455,87 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 			rows = append(rows, vlanNameRow{oid: oid, value: v.Value})
 		}
 	}
-	return mergeVLANNames(rows)
+	names := mergeVLANNames(rows)
+	if !isJuniper(all) || !everyNameCarriesItsTagSuffix(names) {
+		return names
+	}
+	// Junos ELS reports a bridge domain as "<name>+<tag>", so the VLAN an
+	// operator calls VL156 arrives as VL156+156. Scoped to Juniper because a
+	// plus and a number in another vendor's name is just a name.
+	for vid, name := range names {
+		names[vid] = stripVlanNameTagSuffix(name, vid)
+	}
+	return names
+}
+
+// everyNameCarriesItsTagSuffix reports whether EVERY named VLAN on the device
+// ends in "+<its own id>".
+//
+// Stripping renames VLANs in NetBox, which Diode PATCHes over whatever the
+// operator has there, so it needs evidence rather than plausibility — the same
+// bar the index rekey is held to. A device convention is uniform: the switch
+// that decorates one bridge domain decorates all of them. Operator naming is
+// not, so a single VLAN an operator happened to call "site+100" no longer
+// makes the agent shorten it, and no longer drags every other VLAN on that
+// switch through a rename with it.
+//
+// One conforming name is enough, and requiring two was worse. The count can
+// only ever include names short enough to read, so on a switch whose names
+// mostly run past the column bound it is a count of the few short ones — and a
+// hard threshold sitting in a small number flaps: deleting one short-named VLAN
+// pushed an eleven-VLAN switch below it and renamed a DIFFERENT VLAN on the
+// next ingest, then renamed it back. A rename of operator data that recurs is
+// worse than the case the threshold guarded, which is a device holding exactly
+// one readable conforming name and nothing contradicting it.
+//
+// The discriminating work is done by the veto above, not by the count: any
+// readable name WITHOUT the suffix means the device has no such convention.
+// The count only establishes that something was actually observed.
+//
+// Measured: on the reported ELS switch 5 of 5 names carry the suffix, and on
+// the pre-ELS switch 0 of 39 do. Neither is a borderline case.
+func everyNameCarriesItsTagSuffix(names map[int]string) bool {
+	named := 0
+	for vid, name := range names {
+		// No name is evidence of nothing.
+		if name == "" {
+			continue
+		}
+		// Whether the name CARRIES the suffix is asked first, and length never
+		// overrides it. A suffix that is still visible cannot have been cut
+		// off, so such a name is evidence of the convention however long it is
+		// — discarding it would be the same device-wide rename in mirror
+		// image, since dropping conforming names can put the device under the
+		// count below.
+		//
+		// A name that is nothing BUT the suffix counts as carrying it:
+		// stripVlanNameTagSuffix deliberately leaves that one alone, because
+		// removing it would leave the VLAN nameless, and reading it as
+		// counter-evidence would let it veto the convention for the device.
+		if name == "+"+strconv.Itoa(vid) || stripVlanNameTagSuffix(name, vid) != name {
+			named++
+			continue
+		}
+		// The suffix is absent. That is only counter-evidence if it could have
+		// been there: RFC 4363 bounds this column at 32 octets, so a name plus
+		// suffix running past that arrives with the suffix cut away. Reading
+		// that as the convention being broken would turn one long VLAN name
+		// into a device-wide rename of every OTHER VLAN on the switch, back and
+		// forth as that VLAN is configured and removed.
+		//
+		// Length ON the bound is the proxy for "was cut", deliberately an
+		// equality: a name LONGER than the bound proves this agent does not cut
+		// at the bound, so it cannot have lost a suffix that way, and it is the
+		// strongest counter-evidence a device offers. The proxy is imperfect in
+		// the other direction — trimming strips NUL padding as well as
+		// whitespace, so a name cut at the bound with a NUL terminator arrives
+		// at 31 and reads as a genuine absence.
+		if len(name) == dot1qVlanStaticNameMax {
+			continue
+		}
+		return false
+	}
+	return named > 0
 }
 
 // mergeVLANNames resolves one name per VID from the collected name rows.

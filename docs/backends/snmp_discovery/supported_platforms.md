@@ -88,13 +88,14 @@ You can add or override lookup data without rebuilding the agent. See the [Devic
 
 ## Interface ↔ VLAN associations
 
-Switchport-to-VLAN association discovery is built on standard MIBs with one vendor overlay:
+Switchport-to-VLAN association discovery is built on standard MIBs with vendor overlays:
 
 | Layer | MIB / OID root | What it provides |
 |-------|----------------|------------------|
 | **Generic** | Q-BRIDGE-MIB (RFC 4363, `1.3.6.1.2.1.17.7.1.4`) + BRIDGE-MIB `dot1dBasePortIfIndex` | VLAN catalog (`dot1qVlanStaticTable` — names + admin status), per-port PVID (`dot1qPvid`), per-VLAN egress + untagged port lists (`dot1qVlanStatic{Egress,Untagged}Ports`), read as the bitmap the MIB defines, or, on Junos only, as the comma-separated bridge port numbers it publishes by default when the values could not be bitmaps. Required for trunk classification. A port is access when its one VLAN is the one it is untagged in, or the one its PVID names when the device publishes no untagged row for that VLAN; any VLAN a port is only tagged in makes it a trunk, one tagged VLAN included, and a PVID of 0 is read as no untagged VLAN rather than as VLAN 0. |
 | **Cisco overlay** | CISCO-VLAN-MEMBERSHIP-MIB `vmMembershipTable`, CISCO-VOICE-VLAN-MIB `vmVoiceVlanId` | Access VLAN refinement on non-trunk ports + voice-VLAN promotion. Walked only when `sysObjectID` falls under enterprise prefix `1.3.6.1.4.1.9.` (Cisco Systems) or `1.3.6.1.4.1.29671.` (Meraki). |
 | **CISCOSB overlay** | CISCOSB private `vlan` group (`1.3.6.1.4.1.9.6.1.101.48`): `vlanAccessPortModeVlanId`, `vlanTrunkPortModeNativeVlanId` | Corrects the untagged VLAN on Cisco small-business switches, where the standard sources are wrong rather than absent. Indexed by `ifIndex` rather than bridge port. Shares the Cisco vendor gate above. |
+| **Juniper overlay** | JUNIPER-VLAN-MIB `jnxExVlanTable` (`1.3.6.1.4.1.2636.3.40.1.5.1.5.1`): `jnxExVlanName`, `jnxExVlanTag` | Resolves the internal number some Junos platforms key `dot1qVlanStaticTable` by to the real 802.1Q tag, so VLANs reach NetBox under the ID the operator configured. Walked only when `sysObjectID` falls under enterprise prefix `1.3.6.1.4.1.2636.`, and acted on only when the two tables corroborate each other. On the Junos platforms measured, those that key the static table by the tag already do not publish this table and are untouched. |
 
 When a switchport has both Q-BRIDGE membership and the Cisco overlay rows, the overlay layers on top of the generic classification (vmMembership refines the access VLAN for non-trunk ports; vmVoiceVlanId is promoted into the tagged VLAN list per Cisco's voice-on-access semantics). When a device exposes only the Cisco overlay (classic Cisco IOS without Q-BRIDGE), the overlay alone is sufficient to classify access ports — but trunk allowed/native VLANs cannot be reconstructed from `vmMembershipTable` (which is non-trunk by spec).
 
@@ -102,16 +103,22 @@ The CISCOSB overlay is different in kind from the Cisco one: on those switches t
 
 The overlay corrects the untagged VLAN only. It does not determine tagged membership or access-vs-trunk mode, so a trunk port on one of these switches is reported as an access port carrying its native VLAN. The private MIB does define per-port egress bitmaps that would supply both, but they are returned empty in practice, leaving no reliable source to derive membership or mode from.
 
+The Juniper overlay is narrower than either: it changes the VLAN **ID** a row is reported under, nothing else. It acts only when the enterprise table resolves every static row, no two rows contest a tag, and the two tables agree on at least one VLAN's name and contradict on none — the last is what tells an index-keyed switch apart from one already keyed by the tag, which must be left alone. Falling any of those leaves the walk untouched and logs why, so the VLANs stay wrong rather than becoming wrong in a new way.
+
+Three operator-visible consequences. An untagged bridge domain (Junos reports it at tag 0) is not emitted as a VLAN. A port whose PVID cannot be pinned to exactly one VLAN is reported as having no untagged VLAN rather than being guessed at. And on Junos ELS, where the switch decorates every bridge domain name as `<name>+<tag>`, the decoration is stripped — so a VLAN already in NetBox as `office+100` is renamed to `office`.
+
+**After upgrading a switch discovered before this existed**, its VLANs are in NetBox under the old internal indices. Diode applies partial updates, so nothing removes them: the correctly-numbered VLANs appear alongside the stale ones, which have to be deleted by hand along with the interface references to them.
+
 ### Device coverage
 
-| Device class | Generic Q-BRIDGE | Cisco overlay | Result |
+| Device class | Generic Q-BRIDGE | Vendor overlay | Result |
 |--------------|------------------|---------------|--------|
 | Arista EOS, Aruba CX, Juniper Junos ELS, MikroTik RouterOS, HPE Comware, Extreme EXOS (recent), Cumulus Linux / SONiC, Dell OS10 | ✅ Full | n/a | Access + trunk classification, real VLAN names |
 | Classic Cisco IOS (e.g. Catalyst 2960, 2950) | ⚠️ None or partial | ✅ Available | Access classification via `vmMembershipTable`; trunk ports remain unclassified |
 | Cisco IOS-XE (e.g. Catalyst 3850, 9400) | ⚠️ Sometimes empty pre-16.x | ✅ Available | As above; access ports classify, trunks unclassified unless Q-BRIDGE is also present |
 | Cisco NX-OS | ⚠️ Q-BRIDGE present, trunk membership often vendor-only | ✅ Available | Access via overlay; trunks may rely on Q-BRIDGE membership masks |
 | Cisco small business (Catalyst 1200/1300, CBS/SG series) | ❌ Present but wrong: `dot1qPvid` answers 1 on every port, egress/untagged masks empty | ✅ CISCOSB overlay | Correct untagged VLAN per port; mode is not derived, so trunks appear as access on their native VLAN |
-| Pre-ELS Junos | ⚠️ Incomplete | n/a | Limited — defer to a future Junos overlay |
+| Pre-ELS Junos (e.g. EX4550) | ⚠️ Present, but `dot1qVlanStaticTable` is keyed by an internal index | ✅ Juniper overlay | VLAN catalog at the real tags once the two VLAN tables corroborate each other; left untranslated with a warning when they do not |
 | Cisco WLC (e.g. 9800), routers, anything without `dot1dBasePortIfIndex` | n/a | n/a | No interface mutations emitted (refused by design — see Bridge-port translation below); VLAN catalog still emitted if `dot1qVlanStaticTable` is present |
 
 **Voice VLAN (Cisco):** when `vmVoiceVlanId` returns a valid VID (in 1..4094), an access port is promoted to `mode=tagged` with the access VLAN as untagged and the voice VLAN as tagged — same NetBox-mapping convention as device-discovery. Sentinel values are filtered: `0` (no voice), `4095` (dot1p-only / priority-tagged), `4096` (untagged voice rides the access VLAN). Voice-on-trunk is not promoted (would create double-tagging).
