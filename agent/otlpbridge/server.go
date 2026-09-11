@@ -211,6 +211,22 @@ func (s *BridgeServer) GetTelemetryTopic() string {
 	return s.telemetryTopic
 }
 
+// ListenAddr returns the bound OTLP/gRPC address, or "" before Start.
+func (s *BridgeServer) ListenAddr() string {
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
+}
+
+// HTTPListenAddr returns the bound OTLP/HTTP address, or "" when disabled or before Start.
+func (s *BridgeServer) HTTPListenAddr() string {
+	if s.httpListener == nil {
+		return ""
+	}
+	return s.httpListener.Addr().String()
+}
+
 // GetPolicyRepo returns the policy repo (for handlers).
 func (s *BridgeServer) GetPolicyRepo() policies.PolicyRepo {
 	s.mu.RLock()
@@ -261,6 +277,9 @@ func (s *BridgeServer) startHTTP(ctx context.Context) error {
 	s.httpServer = &http.Server{
 		Handler:           s.otlpHTTPHandler(),
 		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		ErrorLog:          slog.NewLogLogger(s.logger.Handler(), slog.LevelWarn),
 	}
 	go func() {
 		if err := s.httpServer.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -277,11 +296,14 @@ func (s *BridgeServer) Stop(_ context.Context) error {
 	s.closeOnce.Do(func() {
 		// Drain in-flight requests on both transports first so no Export
 		// handler enqueues after the writer goroutine exits, then cancel the
-		// writer context to flush remaining items.
+		// writer context; anything still queued at that point is abandoned.
 		if s.httpServer != nil {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
 			if shutdownErr := s.httpServer.Shutdown(shutdownCtx); shutdownErr != nil {
-				err = fmt.Errorf("OTLP HTTP server shutdown: %w", shutdownErr)
+				// A stalled client kept a handler busy past the deadline; force
+				// the connections closed so nothing outlives Stop.
+				s.logger.Warn("OTLP HTTP server did not drain in time, closing connections", "error", shutdownErr)
+				_ = s.httpServer.Close()
 			}
 			cancel()
 		}

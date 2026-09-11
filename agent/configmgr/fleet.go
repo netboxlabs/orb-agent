@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,9 +115,10 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 
 	grpcPort := fleetOTLPGRPCPort(cfg)
 	httpPort := fleetOTLPHTTPPort(cfg)
+	bindHost := strings.TrimSpace(cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost)
 	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr:     fmt.Sprintf(":%d", grpcPort),
-		HTTPListenAddr: fmt.Sprintf(":%d", httpPort),
+		ListenAddr:     net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
+		HTTPListenAddr: net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
 		Encoding:       "json",
 	}
 
@@ -128,7 +132,7 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		fleetManager.otlpBridge = nil
 		return fmt.Errorf("failed to start OTLP bridge (grpc port %d, http port %d): %w", grpcPort, httpPort, err)
 	}
-	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort))
+	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort), slog.String("bind_host", bindHost))
 	return nil
 }
 

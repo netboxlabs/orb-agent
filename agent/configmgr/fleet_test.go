@@ -1703,3 +1703,25 @@ func TestFleetOTLPPorts_Defaults(t *testing.T) {
 	assert.Equal(t, 4337, fleetOTLPGRPCPort(cfg))
 	assert.Equal(t, 4338, fleetOTLPHTTPPort(cfg))
 }
+
+func TestStartOTLPBridge_BindHost(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+
+	ephemeral := 0
+	var cfg config.Config
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &ephemeral
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &ephemeral
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = " 127.0.0.1 "
+
+	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+	t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
+
+	for _, addr := range []string{fm.otlpBridge.ListenAddr(), fm.otlpBridge.HTTPListenAddr()} {
+		host, _, err := net.SplitHostPort(addr)
+		require.NoError(t, err)
+		assert.Equal(t, "127.0.0.1", host, "listener %s must honour otlp_bridge_bind_host", addr)
+	}
+}

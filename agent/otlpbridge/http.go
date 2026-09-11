@@ -30,6 +30,8 @@ const (
 	contentTypeJSON     = "application/json"
 
 	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = 30 * time.Second // headers + body; a stalled body must not pin a handler
+	httpIdleTimeout       = 60 * time.Second
 	httpShutdownTimeout   = 5 * time.Second
 )
 
@@ -39,17 +41,18 @@ const (
 // (pktvisor) reach the bridge through it.
 func (s *BridgeServer) otlpHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/metrics", func(w http.ResponseWriter, r *http.Request) {
+	// Method-scoped patterns: the mux answers 405 with an Allow header for other methods.
+	mux.HandleFunc("POST /v1/metrics", func(w http.ResponseWriter, r *http.Request) {
 		s.serveExport(w, r, &collectormetrics.ExportMetricsServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
 			return (&metricsServer{bridge: s}).Export(ctx, m.(*collectormetrics.ExportMetricsServiceRequest))
 		})
 	})
-	mux.HandleFunc("/v1/logs", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1/logs", func(w http.ResponseWriter, r *http.Request) {
 		s.serveExport(w, r, &collectorlogs.ExportLogsServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
 			return (&logsServer{bridge: s}).Export(ctx, m.(*collectorlogs.ExportLogsServiceRequest))
 		})
 	})
-	mux.HandleFunc("/v1/traces", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /v1/traces", func(w http.ResponseWriter, r *http.Request) {
 		s.serveExport(w, r, &collectortrace.ExportTraceServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
 			return (&traceServer{bridge: s}).Export(ctx, m.(*collectortrace.ExportTraceServiceRequest))
 		})
@@ -62,18 +65,13 @@ func (s *BridgeServer) otlpHTTPHandler() http.Handler {
 // status conventions: 429 (with Retry-After) when the bridge queue is full so
 // the client backs off, 400 for undecodable bodies, 415 for other encodings.
 func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req proto.Message, export func(context.Context, proto.Message) (proto.Message, error)) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", http.MethodPost)
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || (mediaType != contentTypeProtobuf && mediaType != contentTypeJSON) {
 		http.Error(w, "unsupported content type: use application/x-protobuf or application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
-	body, err := readOTLPBody(r)
+	body, err := readOTLPBody(w, r)
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
@@ -102,7 +100,7 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req p
 			return
 		}
 		s.logger.Warn("OTLP HTTP export failed", "path", r.URL.Path, "error", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "export failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -113,7 +111,8 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req p
 		out, err = proto.Marshal(resp)
 	}
 	if err != nil {
-		http.Error(w, "unable to encode response: "+err.Error(), http.StatusInternalServerError)
+		s.logger.Warn("OTLP HTTP response encoding failed", "path", r.URL.Path, "error", err)
+		http.Error(w, "export failed", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", mediaType)
@@ -123,9 +122,12 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req p
 
 // readOTLPBody reads the request body, transparently gunzipping when the
 // client set Content-Encoding: gzip, and enforces maxHTTPBodyBytes on the
-// decoded bytes so a compressed body cannot bypass the limit.
-func readOTLPBody(r *http.Request) ([]byte, error) {
-	var reader io.Reader = http.MaxBytesReader(nil, r.Body, maxHTTPBodyBytes)
+// decoded bytes so a compressed body cannot bypass the limit. MaxBytesReader
+// is given the ResponseWriter so net/http stops reading and closes the
+// connection after an oversized body instead of draining it.
+func readOTLPBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxHTTPBodyBytes)
+	var reader io.Reader = r.Body
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") {
 		zr, err := gzip.NewReader(reader)
 		if err != nil {

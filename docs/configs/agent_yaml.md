@@ -151,6 +151,9 @@ rewrites both endpoints to it (`grpc://localhost:<otlp_bridge_grpc_port>` and
 `http://localhost:<otlp_bridge_http_port>`, defaults 4317 and 4318) so every
 backend's telemetry is forwarded to Fleet. Set the two ports under
 `config_manager.sources.fleet` when the defaults collide with another process.
+Both listeners bind all interfaces by default so a backend running outside the
+agent container can still reach them; they accept unauthenticated OTLP, so on a
+shared network set `otlp_bridge_bind_host: 127.0.0.1` unless you need that.
 
 ### Backend keys
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -109,6 +110,7 @@ func TestHTTP_MetricsJSON_PublishesToTelemetry(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.status)
 	assert.Equal(t, "application/json", resp.contentType)
+	assert.True(t, json.Valid(resp.body), "response body must be JSON: %q", resp.body)
 	waitForPayload(t, fp)
 	assert.Equal(t, "telemetry", fp.getTopic())
 	var published collectormetrics.ExportMetricsServiceRequest
@@ -180,26 +182,53 @@ func TestHTTP_GzipBodyAccepted(t *testing.T) {
 	waitForPayload(t, fp)
 }
 
+// blockingPublisher parks the writer goroutine inside Publish until released,
+// so a test can pin the queue in a known state without scheduling assumptions.
+type blockingPublisher struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingPublisher) Publish(ctx context.Context, _ string, _ []byte) error {
+	b.entered <- struct{}{}
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
 func TestHTTP_QueueFull_Returns429WithRetryAfter(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	// Queue of one, no publisher: the writer takes one message and blocks
-	// retrying it, the second fills the queue, the third must be refused.
 	bridge, err := NewBridgeServer(BridgeConfig{ListenAddr: ":0", HTTPListenAddr: "127.0.0.1:0", Encoding: "json", MaxPendingQueue: 1}, nil, logger)
 	require.NoError(t, err)
+	pub := &blockingPublisher{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	bridge.SetPublisher(pub)
+	bridge.SetTelemetryTopic("telemetry")
 	require.NoError(t, bridge.Start(context.Background()))
-	t.Cleanup(func() { _ = bridge.Stop(context.Background()) })
+	t.Cleanup(func() {
+		close(pub.release)
+		_ = bridge.Stop(context.Background())
+	})
 	base := "http://" + bridge.httpListener.Addr().String()
 
+	// Message 1: the writer picks it up and parks inside Publish.
+	require.NoError(t, bridge.Enqueue(context.Background(), false, []byte("one")))
+	select {
+	case <-pub.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("writer never entered Publish")
+	}
+	// Message 2 fills the single-slot queue.
+	require.NoError(t, bridge.Enqueue(context.Background(), false, []byte("two")))
+
+	// Message 3 over HTTP must be refused with a retryable status.
 	body, err := proto.Marshal(metricsRequest())
 	require.NoError(t, err)
-
-	var last postResult
-	for range 3 {
-		last = postBody(t, base+"/v1/metrics", "application/x-protobuf", body)
-	}
-	assert.Equal(t, http.StatusTooManyRequests, last.status)
-	assert.NotEmpty(t, last.retryAfter)
-	assert.Contains(t, string(last.body), "queue is full")
+	resp := postBody(t, base+"/v1/metrics", "application/x-protobuf", body)
+	assert.Equal(t, http.StatusTooManyRequests, resp.status)
+	assert.NotEmpty(t, resp.retryAfter)
+	assert.Contains(t, string(resp.body), "queue is full")
 }
 
 func TestHTTP_BadRequests(t *testing.T) {
@@ -216,6 +245,10 @@ func TestHTTP_BadRequests(t *testing.T) {
 		want        int
 	}{
 		{"wrong method", http.MethodGet, "/v1/metrics", "application/x-protobuf", nil, http.StatusMethodNotAllowed},
+		{"trailing slash", http.MethodPost, "/v1/metrics/", "application/x-protobuf", good, http.StatusNotFound},
+		{"missing content type", http.MethodPost, "/v1/metrics", "", good, http.StatusUnsupportedMediaType},
+		{"json with charset parameter", http.MethodPost, "/v1/metrics", "application/json; charset=utf-8", []byte(`{"resourceMetrics":[]}`), http.StatusOK},
+		{"empty body is a valid empty export", http.MethodPost, "/v1/metrics", "application/x-protobuf", nil, http.StatusOK},
 		{"unknown path", http.MethodPost, "/v1/profiles", "application/x-protobuf", good, http.StatusNotFound},
 		{"unsupported content type", http.MethodPost, "/v1/metrics", "text/plain", good, http.StatusUnsupportedMediaType},
 		{"undecodable protobuf", http.MethodPost, "/v1/metrics", "application/x-protobuf", []byte{0xff, 0xff, 0xff}, http.StatusBadRequest},
@@ -225,11 +258,16 @@ func TestHTTP_BadRequests(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req, err := http.NewRequest(tc.method, base+tc.path, bytes.NewReader(tc.body))
 			require.NoError(t, err)
-			req.Header.Set("Content-Type", tc.contentType)
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			}
 			resp, err := http.DefaultClient.Do(req)
 			require.NoError(t, err)
 			defer func() { _ = resp.Body.Close() }()
 			assert.Equal(t, tc.want, resp.StatusCode)
+			if tc.want == http.StatusMethodNotAllowed {
+				assert.Equal(t, http.MethodPost, resp.Header.Get("Allow"))
+			}
 		})
 	}
 }
