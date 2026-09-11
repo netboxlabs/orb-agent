@@ -148,12 +148,14 @@ Optional OpenTelemetry export for backend metrics.
 
 When `config_manager.active` is `fleet`, the agent runs a local OTLP bridge and
 rewrites both endpoints to it (`grpc://localhost:<otlp_bridge_grpc_port>` and
-`http://localhost:<otlp_bridge_http_port>`, defaults 4317 and 4318) so every
-backend's telemetry is forwarded to Fleet. Set the two ports under
+`http://localhost:<otlp_bridge_http_port>`, defaults 4317 and 4318; the
+container image's `default_config.yaml` uses 4337 and 4338) so every backend's
+telemetry is forwarded to Fleet. Set the two ports under
 `config_manager.sources.fleet` when the defaults collide with another process.
-Both listeners bind all interfaces by default so a backend running outside the
-agent container can still reach them; they accept unauthenticated OTLP, so on a
-shared network set `otlp_bridge_bind_host: 127.0.0.1` unless you need that.
+Both listeners bind all interfaces by default and accept unauthenticated OTLP,
+so on a shared network set `otlp_bridge_bind_host: 127.0.0.1`. Because backends
+always dial `localhost`, the bind host must be empty, an unspecified address
+(`0.0.0.0`, `::`) or a loopback address; the agent refuses to start otherwise.
 
 ### Backend keys
 

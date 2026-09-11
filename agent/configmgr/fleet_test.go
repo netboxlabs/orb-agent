@@ -1725,3 +1725,19 @@ func TestStartOTLPBridge_BindHost(t *testing.T) {
 		assert.Equal(t, "127.0.0.1", host, "listener %s must honour otlp_bridge_bind_host", addr)
 	}
 }
+
+func TestFleetOTLPBindHost_Validation(t *testing.T) {
+	for _, ok := range []string{"", "localhost", "127.0.0.1", "::1", "0.0.0.0", "::", " LocalHost "} {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = ok
+		_, err := fleetOTLPBindHost(cfg)
+		assert.NoError(t, err, "%q must be accepted", ok)
+	}
+	for _, bad := range []string{"10.0.0.5", "192.168.1.1", "example.com", "agent.internal"} {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = bad
+		_, err := fleetOTLPBindHost(cfg)
+		require.Error(t, err, "%q must be rejected: backends dial localhost", bad)
+		assert.Contains(t, err.Error(), "localhost")
+	}
+}

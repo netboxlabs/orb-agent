@@ -64,10 +64,17 @@ func (s *BridgeServer) otlpHTTPHandler() http.Handler {
 // the response in the same encoding the client used, following the OTLP/HTTP
 // status conventions: 429 (with Retry-After) when the bridge queue is full so
 // the client backs off, 400 for undecodable bodies, 415 for other encodings.
+// Failure bodies are plain text rather than the spec's google.rpc.Status:
+// pktvisor ignores response bodies and the collector's otlphttp exporter
+// tolerates non-Status bodies, so the status code is what matters here.
 func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req proto.Message, export func(context.Context, proto.Message) (proto.Message, error)) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || (mediaType != contentTypeProtobuf && mediaType != contentTypeJSON) {
 		http.Error(w, "unsupported content type: use application/x-protobuf or application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	if enc := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Encoding"))); enc != "" && enc != "identity" && enc != "gzip" {
+		http.Error(w, "unsupported content encoding: use gzip or none", http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -123,8 +130,11 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req p
 // readOTLPBody reads the request body, transparently gunzipping when the
 // client set Content-Encoding: gzip, and enforces maxHTTPBodyBytes on the
 // decoded bytes so a compressed body cannot bypass the limit. MaxBytesReader
-// is given the ResponseWriter so net/http stops reading and closes the
-// connection after an oversized body instead of draining it.
+// is given the ResponseWriter so, for raw bodies, net/http stops reading and
+// closes the connection after an oversized body instead of draining it. A
+// gzip bomb (small on the wire, over the cap decoded) is caught by the
+// LimitReader check below; net/http then drains at most 256 KiB of the
+// remaining compressed bytes before reusing the connection.
 func readOTLPBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxHTTPBodyBytes)
 	var reader io.Reader = r.Body

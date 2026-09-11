@@ -96,6 +96,23 @@ func fleetOTLPGRPCPort(cfg config.Config) int {
 	return grpcPort
 }
 
+// fleetOTLPBindHost returns the host both bridge listeners bind to. Backends
+// always dial localhost (agent.go rewrites common.otlp.* to localhost:<port>),
+// so only "" / an unspecified address (all interfaces) or a loopback address
+// can work; anything else would listen where nothing dials and lose telemetry
+// silently, so it is rejected at start-up.
+func fleetOTLPBindHost(cfg config.Config) (string, error) {
+	host := strings.TrimSpace(cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost)
+	if host == "" || strings.EqualFold(host, "localhost") {
+		return host, nil
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && (ip.IsUnspecified() || ip.IsLoopback()) {
+		return host, nil
+	}
+	return "", fmt.Errorf("otlp_bridge_bind_host %q must be empty, an unspecified address (0.0.0.0, ::) or a loopback address: backends always dial localhost", host)
+}
+
 func fleetOTLPHTTPPort(cfg config.Config) int {
 	httpPort := 4318
 	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort != nil {
@@ -115,14 +132,16 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 
 	grpcPort := fleetOTLPGRPCPort(cfg)
 	httpPort := fleetOTLPHTTPPort(cfg)
-	bindHost := strings.TrimSpace(cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost)
+	bindHost, err := fleetOTLPBindHost(cfg)
+	if err != nil {
+		return err
+	}
 	bridgeConfig := otlpbridge.BridgeConfig{
 		ListenAddr:     net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
 		HTTPListenAddr: net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
 		Encoding:       "json",
 	}
 
-	var err error
 	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
 	if err != nil {
 		return fmt.Errorf("failed to create OTLP bridge: %w", err)
@@ -132,7 +151,7 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		fleetManager.otlpBridge = nil
 		return fmt.Errorf("failed to start OTLP bridge (grpc port %d, http port %d): %w", grpcPort, httpPort, err)
 	}
-	fleetManager.logger.Info("OTLP bridge server started", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort), slog.String("bind_host", bindHost))
+	fleetManager.logger.Info("OTLP bridge bound for fleet config manager", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort), slog.String("bind_host", bindHost))
 	return nil
 }
 

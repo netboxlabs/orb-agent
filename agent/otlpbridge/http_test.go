@@ -190,7 +190,11 @@ type blockingPublisher struct {
 }
 
 func (b *blockingPublisher) Publish(ctx context.Context, _ string, _ []byte) error {
-	b.entered <- struct{}{}
+	select {
+	case b.entered <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	select {
 	case <-b.release:
 	case <-ctx.Done():
@@ -254,12 +258,23 @@ func TestHTTP_BadRequests(t *testing.T) {
 		{"undecodable protobuf", http.MethodPost, "/v1/metrics", "application/x-protobuf", []byte{0xff, 0xff, 0xff}, http.StatusBadRequest},
 		{"undecodable json", http.MethodPost, "/v1/metrics", "application/json", []byte("{not json"), http.StatusBadRequest},
 	}
+	cases = append(cases, struct {
+		name        string
+		method      string
+		path        string
+		contentType string
+		body        []byte
+		want        int
+	}{"unsupported content encoding", http.MethodPost, "/v1/metrics", "application/x-protobuf", good, http.StatusUnsupportedMediaType})
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			req, err := http.NewRequest(tc.method, base+tc.path, bytes.NewReader(tc.body))
 			require.NoError(t, err)
 			if tc.contentType != "" {
 				req.Header.Set("Content-Type", tc.contentType)
+			}
+			if tc.name == "unsupported content encoding" {
+				req.Header.Set("Content-Encoding", "zstd")
 			}
 			resp, err := http.DefaultClient.Do(req)
 			require.NoError(t, err)

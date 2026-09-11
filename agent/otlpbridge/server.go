@@ -292,7 +292,6 @@ func (s *BridgeServer) startHTTP(ctx context.Context) error {
 
 // Stop gracefully shuts down the server.
 func (s *BridgeServer) Stop(_ context.Context) error {
-	var err error
 	s.closeOnce.Do(func() {
 		// Drain in-flight requests on both transports first so no Export
 		// handler enqueues after the writer goroutine exits, then cancel the
@@ -320,5 +319,5 @@ func (s *BridgeServer) Stop(_ context.Context) error {
 			_ = s.httpListener.Close()
 		}
 	})
-	return err
+	return nil
 }
