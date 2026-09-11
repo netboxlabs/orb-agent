@@ -40,6 +40,11 @@ const (
 // BackendStarter starts a backend on demand for a policy that needs it. The
 // supervisor implements it; until one is set, every backend is assumed to be
 // started at agent start, as before.
+//
+// EnsureStarted is called while the policy manager holds that backend's apply
+// mutex, so it must not block: it launches the start and reports StartStarting,
+// it never waits for one to finish. It must also never call back into the
+// policy manager, which would deadlock on that mutex.
 type BackendStarter interface {
 	EnsureStarted(name string) (StartState, error)
 }
@@ -522,7 +527,8 @@ func (a *policyManager) removeBackendPoliciesLocked(name string, be backend.Back
 
 // ErrBackendNotRunning is returned by ApplyBackendPolicies when the backend
 // cannot take an apply at that moment; its policies are left as they are,
-// for the next start or restart, rather than stamped failed.
+// for the next start or restart, rather than stamped failed. Its intended
+// consumer is the supervisor's retry loop; today's only consumer logs it.
 var ErrBackendNotRunning = errors.New("backend is not running; its policies are left for its next start")
 
 // ApplyBackendPolicies applies every policy the repo holds for the named
@@ -533,7 +539,9 @@ var ErrBackendNotRunning = errors.New("backend is not running; its policies are 
 // before it touches anything: a backend that does not answer at that moment
 // keeps its policies untouched and the caller learns why. A backend that
 // stops mid-loop is caught by applyPolicy's own check, which does stamp the
-// policy failed.
+// policy failed; that per-policy check is a second GetRunningStatus call,
+// an HTTP round trip for every policy in the loop, and is not redundant
+// with the gate above, so do not remove either thinking the other covers it.
 func (a *policyManager) ApplyBackendPolicies(name string, be backend.Backend) error {
 	mu := a.applyLock(name)
 	mu.Lock()

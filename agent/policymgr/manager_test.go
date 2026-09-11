@@ -1796,7 +1796,10 @@ func TestManagePolicyWaitsForAnApplierHoldingTheBackendsMutex(t *testing.T) {
 // Two operations on the same policy cannot interleave: a manage with a newer
 // version that arrives while the applier is re-applying the older one runs
 // after it, so the repo ends with the newer version and the applier's stale
-// copy is never written back over it.
+// copy is never written back over it. This is the spec's "a policy
+// persisted between the starter's decision and the applier's read is
+// applied by exactly one of them", exercised here through the applier alone,
+// since no starter exists yet.
 func TestManageOfTheSamePolicyIsNotLostUnderAConcurrentApplier(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := &mockSecretsManager{passthrough: true}
@@ -1901,7 +1904,10 @@ func TestPoliciesChangedDoesNotResurrectARemovedPolicy(t *testing.T) {
 	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "victim", Name: "Victim", Backend: "resurrect_backend", Version: 1, Data: map[string]any{}, State: policies.Running}))
 
 	// the applier holds the mutex; the refresh queues behind it having read
-	// nothing yet, and a remove that also queues behind it lands first
+	// nothing yet, and a remove that also queues behind it lands first.
+	// be is the hand-written blockingBackend, not a testify expectation, so
+	// a lost sleep race here fails the appliedVersions assertion below
+	// cleanly rather than panicking on an unregistered call.
 	applierDone := make(chan struct{})
 	go func() { _ = mgr.ApplyBackendPolicies("resurrect_backend", be); close(applierDone) }()
 	waitFor(t, be.entered, "the applier reaching the backend")
@@ -1931,6 +1937,10 @@ func TestRefreshPolicySkipsAPolicyMovedToAnotherBackendWhileQueued(t *testing.T)
 	backend.Register("moved_from_backend", from)
 	to := &mockBackend{name: "moved_to_backend"}
 	to.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	// Permissive stub so a lost sleep race (the refresh reading the record
+	// after the move instead of before) fails the AssertNotCalled assertion
+	// below cleanly instead of panicking on an unregistered expectation.
+	to.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
 	backend.Register("moved_to_backend", to)
 	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
@@ -1963,16 +1973,31 @@ func TestRefreshPolicySkipsAPolicyMovedToAnotherBackendWhileQueued(t *testing.T)
 }
 
 // fakeStarter answers EnsureStarted with a fixed state or error and counts
-// the calls.
+// the calls under a mutex: EnsureStarted is called under a per-backend
+// mutex, so two backends sharing one starter can reach it concurrently.
 type fakeStarter struct {
 	state policymgr.StartState
 	err   error
+
+	mu    sync.Mutex
 	calls []string
 }
 
 func (f *fakeStarter) EnsureStarted(name string) (policymgr.StartState, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, name)
+	f.mu.Unlock()
 	return f.state, f.err
+}
+
+// callsSeen returns a snapshot of the backend names EnsureStarted was
+// called with, safe to read while other goroutines may still be calling it.
+func (f *fakeStarter) callsSeen() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.calls))
+	copy(out, f.calls)
+	return out
 }
 
 // A backend the starter reports as starting does not receive the policy
@@ -1993,7 +2018,7 @@ func TestManagePolicyStoresAPolicyForABackendThatIsStarting(t *testing.T) {
 
 	mgr.ManagePolicy(payload)
 
-	assert.Equal(t, []string{"starter_backend"}, starter.calls)
+	assert.Equal(t, []string{"starter_backend"}, starter.callsSeen())
 	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
 	stored, err := mgr.GetRepo().Get("starting-1")
 	require.NoError(t, err)
@@ -2060,7 +2085,7 @@ func TestPoliciesChangedConsultsTheStarter(t *testing.T) {
 
 	secretsMgr.TriggerCallbacks(map[string]bool{"refresh-1": true})
 
-	assert.Equal(t, []string{"starter_refresh"}, starter.calls)
+	assert.Equal(t, []string{"starter_refresh"}, starter.callsSeen())
 	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
 	stored, _ := mgr.GetRepo().Get("refresh-1")
 	assert.Equal(t, policies.FailedToApply, stored.State)
