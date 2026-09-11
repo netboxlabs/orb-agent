@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -269,6 +270,11 @@ type VLANGroupParameters struct {
 }
 
 // UnmarshalYAML accepts a scalar group name or a mapping.
+//
+// An unknown key in the mapping is an error rather than the warning the
+// rest of the policy gets: the warning pass cannot see inside a custom
+// decoder, and a misspelled scope would otherwise fall back to a
+// site-scoped group that then persists in NetBox.
 func (g *VLANGroupParameters) UnmarshalYAML(node *yaml.Node) error {
 	*g = VLANGroupParameters{}
 	switch node.Kind {
@@ -279,6 +285,12 @@ func (g *VLANGroupParameters) UnmarshalYAML(node *yaml.Node) error {
 		g.Name = node.Value
 		return nil
 	case yaml.MappingNode:
+		known := yamlFieldNames(reflect.TypeFor[VLANGroupParameters]())
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if key := node.Content[i].Value; !known[key] {
+				return fmt.Errorf("vlan.group: unknown key %s", key)
+			}
+		}
 		type alias VLANGroupParameters
 		var a alias
 		if err := node.Decode(&a); err != nil {

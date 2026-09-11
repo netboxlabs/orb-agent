@@ -985,6 +985,7 @@ func TestVLANGroupParameters_UnmarshalErrors(t *testing.T) {
 	}{
 		{"two scopes", "group:\n  name: g\n  scope_site: s\n  scope_site_group: sg\n", "only one scope"},
 		{"missing name", "group:\n  scope_site_group: sg\n", "name is required"},
+		{"unknown key", "group:\n  name: g\n  scope_regoin: r\n", "unknown key scope_regoin"},
 		{"bad kind", "group:\n  - g\n", "expected string or mapping"},
 	}
 	for _, tt := range tests {
