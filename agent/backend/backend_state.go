@@ -16,11 +16,20 @@ const MinRestartTime = 5 * time.Minute
 // BackendMonitorInterval is the interval at which to monitor backends
 const BackendMonitorInterval = 10 * time.Second
 
-// newMonitorTicker is a seam for tests: production code gets a real ticker,
-// tests install a function that hands back a channel they control.
-var newMonitorTicker = func(interval time.Duration) (<-chan time.Time, func()) {
-	t := time.NewTicker(interval)
-	return t.C, t.Stop
+// TickSource creates the channel a monitor reads ticks from, and a function
+// to stop it. Production code is given a real ticker; tests inject one that
+// hands back a channel they control.
+type TickSource func(interval time.Duration) (<-chan time.Time, func())
+
+// StateManagerOption configures a stateManager built by NewStateManager.
+type StateManagerOption func(*stateManager)
+
+// WithTickSource overrides the tick source a stateManager's monitors use,
+// for tests that need to drive ticks by hand instead of waiting on a timer.
+func WithTickSource(tick TickSource) StateManagerOption {
+	return func(manager *stateManager) {
+		manager.tick = tick
+	}
 }
 
 // StateRetriever provides an interface for accessing backend state information
@@ -43,17 +52,28 @@ type stateManager struct {
 	logger             *slog.Logger
 	restartBackendChan chan string
 	policyRepo         policies.PolicyRepo
+	tick               TickSource
 }
 
-// NewStateManager creates a new StateManager with the given logger and restart channel
-func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string, policyRepo policies.PolicyRepo) StateManager {
+// NewStateManager creates a new StateManager with the given logger and restart channel.
+// The tick source each monitor uses defaults to a real ticker; pass WithTickSource to
+// override it.
+func NewStateManager(activeConfigMgr string, logger *slog.Logger, restartBackendChan chan string, policyRepo policies.PolicyRepo, opts ...StateManagerOption) StateManager {
 	if configMgrSupportsStateMonitoring(activeConfigMgr) {
-		return &stateManager{
+		manager := &stateManager{
 			backendState:       make(map[string]*State),
 			logger:             logger,
 			restartBackendChan: restartBackendChan,
 			policyRepo:         policyRepo,
+			tick: func(d time.Duration) (<-chan time.Time, func()) {
+				t := time.NewTicker(d)
+				return t.C, t.Stop
+			},
 		}
+		for _, opt := range opts {
+			opt(manager)
+		}
+		return manager
 	}
 	return nullStateManager{}
 }
@@ -85,7 +105,7 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	}
 	manager.mu.Unlock()
 
-	ticks, stop := newMonitorTicker(BackendMonitorInterval)
+	ticks, stop := manager.tick(BackendMonitorInterval)
 	go func() {
 		defer stop()
 		for range ticks {

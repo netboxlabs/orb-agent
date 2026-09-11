@@ -27,29 +27,23 @@ func (c *countingBackend) GetRunningStatus() (RunningStatus, string, error) {
 	return c.status, "", nil
 }
 
-// installTickSeam replaces newMonitorTicker with a fake that hands each call
-// its own unbuffered channel, recorded in order, so a test can drive ticks by
-// hand instead of waiting on a real ticker. The real seam is restored in
-// t.Cleanup; the returned pointer reflects channels recorded after the call.
-func installTickSeam(t *testing.T) *[]chan time.Time {
+// newTestManager builds a stateManager whose tick source hands each call its
+// own unbuffered channel, recorded in order, so a test can drive ticks by
+// hand instead of waiting on a real ticker. Injected through WithTickSource,
+// so there is no package variable to restore.
+func newTestManager(t *testing.T, restartChan chan string) (*stateManager, *[]chan time.Time) {
 	t.Helper()
-	orig := newMonitorTicker
 	channels := make([]chan time.Time, 0)
-	newMonitorTicker = func(_ time.Duration) (<-chan time.Time, func()) {
+	tick := func(_ time.Duration) (<-chan time.Time, func()) {
 		ch := make(chan time.Time)
 		channels = append(channels, ch)
 		return ch, func() {}
 	}
-	t.Cleanup(func() { newMonitorTicker = orig })
-	return &channels
-}
-
-func newTestManager(t *testing.T, restartChan chan string) *stateManager {
-	t.Helper()
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return NewStateManager("fleet", logger, restartChan, repo).(*stateManager)
+	manager := NewStateManager("fleet", logger, restartChan, repo, WithTickSource(tick)).(*stateManager)
+	return manager, &channels
 }
 
 // sendTick delivers one tick on ch, failing the test if the monitor is not
@@ -67,10 +61,9 @@ func sendTick(t *testing.T, ch chan time.Time) {
 // state lock while it waits: heartbeats read that lock, and a full channel
 // would freeze them. The request is dropped and logged instead.
 func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
-	channels := installTickSeam(t)
 	restartChan := make(chan string, 1)
 	restartChan <- "already-queued"
-	manager := newTestManager(t, restartChan)
+	manager, channels := newTestManager(t, restartChan)
 	be := &countingBackend{status: BackendError, started: time.Now().Add(-2 * MinRestartTime)}
 	manager.StartBackendMonitor("unhealthy", be)
 	require.Len(t, *channels, 1)
@@ -92,17 +85,16 @@ func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
 	}
 }
 
-// Each monitor gets its own tick source from newMonitorTicker, so adding a
-// backend does not slow the polling of the others.
+// Each monitor gets its own tick source, so adding a backend does not slow
+// the polling of the others.
 func TestEachMonitorHasItsOwnTickSource(t *testing.T) {
-	channels := installTickSeam(t)
-	manager := newTestManager(t, make(chan string, 10))
+	manager, channels := newTestManager(t, make(chan string, 10))
 	first := &countingBackend{status: Running, started: time.Now()}
 	second := &countingBackend{status: Running, started: time.Now()}
 	manager.StartBackendMonitor("first", first)
 	manager.StartBackendMonitor("second", second)
 
-	require.Len(t, *channels, 2, "each monitor must call newMonitorTicker for its own channel")
+	require.Len(t, *channels, 2, "each monitor must call the tick source for its own channel")
 	firstTicks, secondTicks := (*channels)[0], (*channels)[1]
 
 	for i := 0; i < 3; i++ {
