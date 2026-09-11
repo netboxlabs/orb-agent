@@ -59,7 +59,10 @@ func ResolveVendor(sysObjectID, sysDescr string, matchers []VendorMatcher) strin
 }
 
 func sysObjectIDMatches(sysObjectID string, prefixes []string) bool {
-	sysObjectID = strings.TrimPrefix(sysObjectID, ".")
+	// Trimmed before the prefix test: agents pad DisplayString-like values
+	// with NUL bytes and whitespace, and an untrimmed leading space makes
+	// every prefix miss, which silently drops the vendor's whole OID set.
+	sysObjectID = strings.TrimPrefix(mapping.TrimSNMPString(sysObjectID), ".")
 	for _, p := range prefixes {
 		p = strings.TrimPrefix(p, ".")
 		if strings.HasPrefix(sysObjectID, p) {
