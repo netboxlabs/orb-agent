@@ -42,8 +42,8 @@ func (m *mockPolicyManagerForToRPC) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForToRPC) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForToRPC) ApplyBackendPolicies(name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 

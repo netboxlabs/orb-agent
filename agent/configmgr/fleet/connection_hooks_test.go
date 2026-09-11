@@ -21,7 +21,7 @@ func (noopPM) ManagePolicy(_ config.PolicyPayload)                             {
 func (noopPM) RemovePolicyDataset(_ string, _ string, _ backend.Backend)       {}
 func (noopPM) GetPolicyState() ([]policies.PolicyData, error)                  { return nil, nil }
 func (noopPM) GetRepo() policies.PolicyRepo                                    { return nil }
-func (noopPM) ApplyBackendPolicies(_ backend.Backend) error                    { return nil }
+func (noopPM) ApplyBackendPolicies(_ string, _ backend.Backend) error          { return nil }
 func (noopPM) RemoveBackendPolicies(_ string, _ backend.Backend, _ bool) error { return nil }
 func (noopPM) RemovePolicy(_ string, _ string, _ string) error                 { return nil }
 

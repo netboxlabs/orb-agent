@@ -41,8 +41,8 @@ func (m *mockPolicyManagerForFleet) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 

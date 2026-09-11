@@ -18,7 +18,7 @@ type PolicyManager interface {
 	RemovePolicyDataset(policyID string, datasetID string, be backend.Backend)
 	GetPolicyState() ([]policies.PolicyData, error)
 	GetRepo() policies.PolicyRepo
-	ApplyBackendPolicies(be backend.Backend) error
+	ApplyBackendPolicies(name string, be backend.Backend) error
 	RemoveBackendPolicies(name string, be backend.Backend, permanently bool) error
 	RemovePolicy(policyID string, policyName string, beName string) error
 }
@@ -354,33 +354,64 @@ func (a *policyManager) RemoveBackendPolicies(name string, be backend.Backend, p
 	return nil
 }
 
-func (a *policyManager) ApplyBackendPolicies(be backend.Backend) error {
+// ErrBackendNotRunning is returned by ApplyBackendPolicies when the backend
+// cannot take an apply at that moment; its policies are left as they are,
+// for the next start or restart, rather than stamped failed.
+var ErrBackendNotRunning = errors.New("backend is not running; its policies are left for its next start")
+
+// ApplyBackendPolicies applies every policy the repo holds for the named
+// backend, the way a manage does: secrets solved for the call and the
+// unsolved references persisted, the name checked, and updatePolicy true,
+// the remove-then-apply form every backend implements, which is safe
+// against a name the backend already runs. It gates on the backend running
+// before it touches anything: a backend that does not answer at that moment
+// keeps its policies untouched and the caller learns why. A backend that
+// stops mid-loop is caught by applyPolicy's own check, which does stamp the
+// policy failed.
+func (a *policyManager) ApplyBackendPolicies(name string, be backend.Backend) error {
+	if state, detail, err := be.GetRunningStatus(); state != backend.Running || err != nil {
+		a.logger.Warn("backend is not running; its policies are left for its next start",
+			"backend", name, "backend_state", state.String(), "detail", detail, "error", err)
+		return fmt.Errorf("%w: %s", ErrBackendNotRunning, name)
+	}
 	plcies, err := a.repo.GetAll()
 	if err != nil {
 		a.logger.Error("failed to retrieve list of policies", "error", err)
 		return err
 	}
-
 	for _, policy := range plcies {
-		err := be.ApplyPolicy(policy, false)
-		if err != nil {
-			a.logger.Warn("policy failed to apply", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
-			policy.State = policies.FailedToApply
-			policy.BackendErr = err.Error()
-		} else {
-			a.logger.Info("policy applied successfully", "policy_id", policy.ID, "policy_name", policy.Name)
-			policy.State = policies.Running
-			policy.BackendErr = ""
-			// see ManagePolicy: clearing on Running assumes the rename delete
-			// succeeded, which backends do not confirm (swallowed remove error)
-			policy.PreviousPolicyData = nil
+		if policy.Backend != name {
+			continue
 		}
-		err = a.repo.Update(policy)
-		if err != nil {
+		a.applyStoredPolicy(&policy, be)
+		if err := a.repo.Update(policy); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyStoredPolicy applies a policy the repo already holds to its backend:
+// secrets are solved for the call, the policy is applied with updatePolicy
+// true, the unsolved data is put back for the caller to persist, and a
+// successful apply clears a pending rename. The caller persists the record.
+func (a *policyManager) applyStoredPolicy(policy *policies.PolicyData, be backend.Backend) {
+	payload := config.PolicyPayload{ID: policy.ID, Name: policy.Name, Backend: policy.Backend, Version: policy.Version, Data: policy.Data}
+	solved, err := a.secrets.SolvePolicySecrets(payload)
+	if err != nil {
+		a.logger.Error("failed to solve secrets", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
+		policy.State = policies.FailedToApply
+		policy.BackendErr = secretsFailureReason(err)
+	} else {
+		policy.Data = solved.Data
+		a.applyPolicy(payload, be, policy, true)
+		policy.Data = payload.Data
+	}
+	if policy.State == policies.Running {
+		// see ManagePolicy: clearing on Running assumes the rename delete
+		// succeeded, which backends do not confirm (swallowed remove error)
+		policy.PreviousPolicyData = nil
+	}
 }
 
 func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {

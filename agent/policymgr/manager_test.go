@@ -481,94 +481,140 @@ func TestRemoveBackendPolicies(t *testing.T) {
 	assert.Empty(t, state)
 }
 
-func TestApplyBackendPolicies(t *testing.T) {
+// A backend's policies are re-applied with their secrets solved the way a
+// manage solves them, with updatePolicy true (the remove-then-apply form
+// every backend implements, safe against a name already present), and the
+// repo keeps the unsolved data. Another backend's policies are not touched.
+func TestApplyBackendPoliciesAppliesOnlyThatBackendsPoliciesWithSolvedSecrets(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)
-	cfg := config.Config{}
+	mine := &mockBackend{name: "applier_mine"}
+	mine.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	other := &mockBackend{name: "applier_other"}
+	other.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
 
-	mockBe := &mockBackend{name: "testbackend"}
-	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	backend.Register("testbackend", mockBe)
-
-	mgr, err := policymgr.New(logger, secretsMgr, cfg)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-
-	// First add policies but mark them as unknown (simulating a backend restart)
 	repo := mgr.GetRepo()
-	for i := 1; i <= 3; i++ {
-		policy := policies.PolicyData{
-			ID:       fmt.Sprintf("policy%d", i),
-			Name:     fmt.Sprintf("Test Policy %d", i),
-			Backend:  "testbackend",
-			Version:  int32(i),
-			Data:     map[string]any{},
-			State:    policies.Unknown,
-			Datasets: map[string]bool{fmt.Sprintf("dataset%d", i): true},
-		}
-		err := repo.Update(policy)
-		require.NoError(t, err)
-	}
+	unsolved := map[string]any{"community": "${vault://snmp/community}"}
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "mine-1", Name: "Mine One", Backend: "applier_mine", Version: 1, Data: unsolved, State: policies.Unknown, PreviousPolicyData: &policies.PolicyData{Name: "Old Name"}}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "other-1", Name: "Other One", Backend: "applier_other", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
 
-	// Set up expectations for applying policies
-	mockBe.On("ApplyPolicy", mock.Anything, false).Return(nil).Times(3)
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "mine-1" && p.Backend == "applier_mine" })).
+		Return(config.PolicyPayload{ID: "mine-1", Name: "Mine One", Backend: "applier_mine", Version: 1, Data: map[string]any{"community": "s3cr3t"}}, nil).Once()
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "other-1" })).
+		Return(config.PolicyPayload{ID: "other-1", Name: "Other One", Backend: "applier_other", Version: 1, Data: map[string]any{}}, nil).Maybe()
+	mine.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
+		data, _ := pd.Data.(map[string]any)
+		return pd.ID == "mine-1" && data["community"] == "s3cr3t"
+	}), true).Return(nil).Once()
+	// registered after the specific expectation, so testify's first-match
+	// rule still routes mine-1 to it; a wrong implementation then fails on
+	// the assertions below instead of panicking inside testify
+	mine.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	// Execute
-	err = mgr.ApplyBackendPolicies(mockBe)
+	require.NoError(t, mgr.ApplyBackendPolicies("applier_mine", mine))
+
+	mine.AssertExpectations(t)
+	secretsMgr.AssertExpectations(t)
+	other.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err := repo.Get("mine-1")
 	require.NoError(t, err)
-
-	// Verify policies are now running
-	state, err := mgr.GetPolicyState()
+	assert.Equal(t, policies.Running, stored.State)
+	assert.Empty(t, stored.BackendErr)
+	assert.Equal(t, unsolved, stored.Data, "the repo keeps the unsolved references")
+	assert.Nil(t, stored.PreviousPolicyData, "a successful apply clears a pending rename")
+	otherStored, err := repo.Get("other-1")
 	require.NoError(t, err)
-	assert.Len(t, state, 3)
-	for _, policy := range state {
-		assert.Equal(t, policies.Running, policy.State)
-		assert.Empty(t, policy.BackendErr)
-	}
+	assert.Equal(t, policies.Unknown, otherStored.State)
+}
 
-	// Test error case - one policy fails to apply
-	repo = mgr.GetRepo() // Get fresh repo
-	for i := 1; i <= 3; i++ {
-		policy := policies.PolicyData{
-			ID:       fmt.Sprintf("policy%d", i),
-			Name:     fmt.Sprintf("Test Policy %d", i),
-			Backend:  "testbackend",
-			Version:  int32(i),
-			Data:     map[string]any{},
-			State:    policies.Unknown,
-			Datasets: map[string]bool{fmt.Sprintf("dataset%d", i): true},
-		}
-		err := repo.Update(policy)
-		require.NoError(t, err)
-	}
+// A backend that is not running at that moment cannot take an apply; the
+// policies are left as they are for its next start rather than stamped
+// failed, and the caller learns why.
+func TestApplyBackendPoliciesLeavesPoliciesWhenTheBackendIsNotRunning(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	flaky := &mockBackend{name: "applier_flaky"}
+	flaky.On("GetRunningStatus").Return(backend.BackendError, "process running, REST API unavailable", nil)
+	flaky.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	secretsMgr.On("SolvePolicySecrets", mock.Anything).Return(config.PolicyPayload{}, nil).Maybe()
 
-	// Make policy2 fail
-	mockBe.ExpectedCalls = nil
-	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
-	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
-		return pd.ID == "policy1" || pd.ID == "policy3"
-	}), false).Return(nil).Times(2)
-	mockBe.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
-		return pd.ID == "policy2"
-	}), false).Return(errors.New("failed to apply")).Once()
-
-	// Execute
-	err = mgr.ApplyBackendPolicies(mockBe)
-	require.NoError(t, err) // Function should not return error even if some policies fail
-
-	// Verify status
-	state, err = mgr.GetPolicyState()
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
 	require.NoError(t, err)
-	assert.Len(t, state, 3)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "flaky-1", Name: "Flaky One", Backend: "applier_flaky", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
 
-	for _, policy := range state {
-		if policy.ID == "policy2" {
-			assert.Equal(t, policies.FailedToApply, policy.State)
-			assert.Equal(t, "failed to apply", policy.BackendErr)
-		} else {
-			assert.Equal(t, policies.Running, policy.State)
-			assert.Empty(t, policy.BackendErr)
-		}
+	err = mgr.ApplyBackendPolicies("applier_flaky", flaky)
+
+	require.ErrorIs(t, err, policymgr.ErrBackendNotRunning)
+	flaky.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err := mgr.GetRepo().Get("flaky-1")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Unknown, stored.State, "untouched for the next start")
+}
+
+// A secret that cannot be solved fails that policy alone, with the operator
+// facing reason, and the others still apply.
+func TestApplyBackendPoliciesFailsOnlyThePolicyWhoseSecretsCannotBeSolved(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	be := &mockBackend{name: "applier_secrets"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	for _, id := range []string{"sec-good", "sec-bad"} {
+		require.NoError(t, repo.Update(policies.PolicyData{ID: id, Name: id, Backend: "applier_secrets", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
 	}
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "sec-good" })).
+		Return(config.PolicyPayload{ID: "sec-good", Name: "sec-good", Backend: "applier_secrets", Version: 1, Data: map[string]any{}}, nil).Once()
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "sec-bad" })).
+		Return(config.PolicyPayload{}, errors.New("vault: permission denied")).Once()
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "sec-good" }), true).Return(nil).Once()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe() // after the specific one, see the first test
+
+	require.NoError(t, mgr.ApplyBackendPolicies("applier_secrets", be))
+
+	be.AssertExpectations(t)
+	secretsMgr.AssertExpectations(t)
+	good, _ := repo.Get("sec-good")
+	bad, _ := repo.Get("sec-bad")
+	assert.Equal(t, policies.Running, good.State)
+	assert.Equal(t, policies.FailedToApply, bad.State)
+	assert.Contains(t, bad.BackendErr, "failed to resolve policy secrets: vault: permission denied")
+}
+
+// A backend that rejects one policy's apply fails that policy alone, with
+// the backend's own error as the reason, and the others still apply.
+func TestApplyBackendPoliciesFailsOnlyThePolicyTheBackendRejects(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := new(mockSecretsManager)
+	be := &mockBackend{name: "applier_backend_fail"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	for _, id := range []string{"be-good", "be-bad"} {
+		require.NoError(t, repo.Update(policies.PolicyData{ID: id, Name: id, Backend: "applier_backend_fail", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	}
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "be-good" })).
+		Return(config.PolicyPayload{ID: "be-good", Name: "be-good", Backend: "applier_backend_fail", Version: 1, Data: map[string]any{}}, nil).Once()
+	secretsMgr.On("SolvePolicySecrets", mock.MatchedBy(func(p config.PolicyPayload) bool { return p.ID == "be-bad" })).
+		Return(config.PolicyPayload{ID: "be-bad", Name: "be-bad", Backend: "applier_backend_fail", Version: 1, Data: map[string]any{}}, nil).Once()
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "be-good" }), true).Return(nil).Once()
+	be.On("ApplyPolicy", mock.MatchedBy(func(pd policies.PolicyData) bool { return pd.ID == "be-bad" }), true).Return(errors.New("failed to apply")).Once()
+
+	require.NoError(t, mgr.ApplyBackendPolicies("applier_backend_fail", be))
+
+	be.AssertExpectations(t)
+	secretsMgr.AssertExpectations(t)
+	good, _ := repo.Get("be-good")
+	bad, _ := repo.Get("be-bad")
+	assert.Equal(t, policies.Running, good.State)
+	assert.Equal(t, policies.FailedToApply, bad.State)
+	assert.Equal(t, "failed to apply", bad.BackendErr)
 }
 
 func TestPoliciesChanged(t *testing.T) {

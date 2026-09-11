@@ -51,7 +51,9 @@ func (t *testPolicyManagerWithRepo) GetPolicyState() ([]policies.PolicyData, err
 
 func (t *testPolicyManagerWithRepo) GetRepo() policies.PolicyRepo { return t.repo }
 
-func (t *testPolicyManagerWithRepo) ApplyBackendPolicies(_ backend.Backend) error { return nil }
+func (t *testPolicyManagerWithRepo) ApplyBackendPolicies(_ string, _ backend.Backend) error {
+	return nil
+}
 
 func (t *testPolicyManagerWithRepo) RemoveBackendPolicies(_ string, _ backend.Backend, _ bool) error {
 	return nil
@@ -94,8 +96,8 @@ func (m *mockPolicyManagerForHeartbeat) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForHeartbeat) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForHeartbeat) ApplyBackendPolicies(name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 

@@ -133,7 +133,7 @@ func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 	return m.repo
 }
 
-func (m *mockPolicyManager) ApplyBackendPolicies(_ backend.Backend) error {
+func (m *mockPolicyManager) ApplyBackendPolicies(_ string, _ backend.Backend) error {
 	return nil
 }
 
