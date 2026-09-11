@@ -678,6 +678,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				attribute.String("policy", policyName)))
 	}
 
+	// Normalise the walk before any consumer reads it. On the Junos platforms
+	// that index dot1qVlanStaticTable internally, the VLAN catalog, the port
+	// masks and the SVI resolver would each otherwise read an internal number
+	// as a VLAN ID. Done here, once, so every consumer below sees one keying
+	// and the translation's warnings are logged once per target. A no-op
+	// everywhere else.
+	oids = mapping.ResolveJuniperVlanIndices(oids, r.logger)
+
 	entities := make([]diode.Entity, 0)
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()
@@ -768,13 +776,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// target pays nothing (no ifName/ifDescr rescan) when it's off.
 	var sviVlanByIfIndex map[int]*diode.VLAN
 	if r.config.Options.PrefixVlanMode() != "off" {
-		// Normalised the same way VlanMapper normalised it, so the VLAN IDs
-		// this resolver reads are the ones the VLAN entities were emitted
-		// under. Without it a Junos device with internal indices would have
-		// the resolver keyed on indices while the entities are keyed on
-		// tags. Idempotent, so a device needing no translation pays nothing.
-		sviVlanByIfIndex = mapping.ResolveSviVlans(
-			mapping.ResolveJuniperVlanIndices(oids, r.logger), entitiesForTarget, r.logger)
+		sviVlanByIfIndex = mapping.ResolveSviVlans(oids, entitiesForTarget, r.logger)
 	}
 
 	// Prefix derivation (default on, opt-out via emit_prefixes: false):

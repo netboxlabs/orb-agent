@@ -8,10 +8,16 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping/qbridge"
 )
 
-// oidJnxExVlanTag is JUNIPER-VLAN-MIB jnxExVlanTag, the real 802.1Q tag of a
-// VLAN the switch indexes internally. Walked only on Juniper, and absent on
-// the Junos platforms that index dot1qVlanStaticTable by the tag already.
-const oidJnxExVlanTag = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5."
+// JUNIPER-VLAN-MIB jnxExVlanTable columns. Walked only on Juniper, and absent
+// on the Junos platforms that index dot1qVlanStaticTable by the tag already.
+//
+// jnxExVlanTag carries the real 802.1Q tag of a VLAN the switch indexes
+// internally. jnxExVlanName carries the same name dot1qVlanStaticName does,
+// and is what lets the two tables be checked against each other.
+const (
+	oidJnxExVlanName = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.2."
+	oidJnxExVlanTag  = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5."
+)
 
 // dot1qVlanStaticColumns are the columns of dot1qVlanStaticTable, all of them
 // keyed by the same VlanIndex. Rekeying one and not the others would pair a
@@ -33,63 +39,77 @@ var dot1qVlanStaticColumns = []string{
 // vendor-scoped rather than a general repair.
 //
 // Rewriting the walked rows, rather than translating at each place an index
-// becomes a VID, is deliberate: PostMap hands the same map to the catalog,
-// the port masks and the row-status reader, and a translation applied at some
-// of those and not others would pair one VLAN's name with another's ports.
-// Doing it once, before anything reads them, makes that class of mistake
-// unavailable.
+// becomes a VID, is deliberate: the same map reaches the VLAN catalog, the
+// port masks, the row-status reader and the SVI resolver, and a translation
+// applied at some of those and not others would pair one VLAN's name with
+// another's ports. Doing it once, before anything reads them, makes that class
+// of mistake unavailable. Call it exactly once per target, from the runner.
 //
-// Translation is all-or-nothing, and happens only when the enterprise table
-// explains EVERY static-table index. Presence of that table is not evidence
-// that the static table is index-keyed: the two are independent properties of
-// a Junos build, and a device publishing the enterprise table while already
-// keying the static table by the tag would have every lookup miss. Acting on
-// the weaker signal would delete every VLAN such a device reports correctly
-// today, or, where a tag happens to also be a valid index, emit one VLAN's
-// rows under another VLAN's ID.
+// # What has to be true before anything is rewritten
 //
-// Requiring full coverage also settles the partial walk. The walk layer keeps
-// what it collected when a table ends early, so a truncated enterprise table
-// arrives short but non-empty; translating then would silently delete every
-// static row past the cut. An incomplete answer is not grounds to remove
-// VLANs that are being emitted today.
+// Rewriting is all-or-nothing, and every gate below has to pass. Presence of
+// the enterprise table is NOT on its own evidence that the static table is
+// index-keyed: the two are independent properties of a Junos build, and a
+// device publishing the enterprise table while already keying the static table
+// by the tag would have every row rewritten to some other VLAN's ID. That
+// device's VLANs are correct today, so the bar is evidence, not plausibility.
 //
-// So the input is returned untouched whenever the table is absent, empty,
-// incomplete, or keyed in a different space. That covers every non-Juniper
-// device and the Junos platforms whose indices are already tags, which are
-// correct as they are.
-// Idempotent: a second call finds the static table keyed by tags, which the
-// enterprise table does not describe, so the coverage check returns the input
-// unchanged. That is what lets the runner and VlanMapper each normalise
-// without coordinating.
+//  1. The enterprise table must resolve EVERY static row to a readable tag.
+//     Partial coverage means the two are keyed in different spaces, or the walk
+//     was truncated — the walk layer keeps what it collected when a table ends
+//     early, so a truncated table arrives short but non-empty. Rewriting then
+//     would silently delete every static row past the cut.
+//  2. No two static rows may claim the same tag. Nothing available says which
+//     one owns it.
+//  3. The two tables must agree on at least one VLAN's name, and disagree
+//     about none. This is the gate that catches a tag-keyed static table whose
+//     keys happen to also be valid enterprise indices, where counting rows
+//     alone is satisfied and every VLAN would be re-emitted under a stranger's
+//     ID. The device generates both names from one configuration, so equality
+//     at an index is the device confirming the two rows describe one VLAN;
+//     inequality is it denying the premise.
+//
+// Failing any of them returns the input untouched, with a warning naming which
+// one and why. The device then reports internal indices as VLAN IDs, which is
+// the bug this fixes — but an unrepaired VLAN an operator can see in a log is
+// recoverable, and a VLAN silently re-identified as a different one is not.
+//
+// Returned untouched and silently when there is no enterprise table at all:
+// that is every non-Juniper device and the Junos platforms whose indices are
+// already tags, which are correct as they are.
 func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) ObjectIDValueMap {
-	tagByIndex, described := juniperVlanTags(all, logger)
-	// No table at all: the QFX and every non-Juniper device. Nothing is
-	// wrong, so nothing is said.
+	staticIndices := staticVlanIndices(all)
+	if len(staticIndices) == 0 {
+		return all
+	}
+	tagByIndex, nameByIndex, described := juniperVlanTable(all)
 	if len(described) == 0 {
 		return all
 	}
-	// A table that answered with nothing usable is a different thing, and
-	// the reported bug is about to reappear untranslated. Say so, because an
-	// operator cannot act on it otherwise, and leave the walk alone rather
-	// than deleting rows on the strength of a table nobody could read.
-	if len(tagByIndex) == 0 {
-		logger.Warn("vlan: the Juniper VLAN tag table was walked but no row was usable; VLAN IDs will be the device's internal indices",
-			"rows", len(described), "reason", "no jnxExVlanTag value parsed to a usable tag")
+
+	if missing, unreadable := staticRowsUnresolved(staticIndices, tagByIndex, described); missing+unreadable > 0 {
+		logger.Warn("vlan: not translating Juniper VLAN indices; the tag table does not resolve every static row",
+			"static_rows", len(staticIndices), "not_described", missing, "tag_unreadable", unreadable,
+			"reason", "the tag table is incomplete, keyed in a different space from the static table, or answered with a value that is not a tag")
 		return all
 	}
-	// Coverage is checked against every index the table DESCRIBED, including
-	// those whose tag was refused as ambiguous. The two questions are
-	// different: coverage asks whether the table is keyed in the same space
-	// as the static table, ambiguity asks whether one row is usable. Counting
-	// a refused row as unexplained would let a single contradictory tag
-	// abandon the translation for the whole device, which falls back to
-	// emitting internal indices as VLAN IDs: worse than dropping the one
-	// VLAN nobody can resolve.
-	if missing, total := staticIndicesNotIn(all, described); missing > 0 {
-		logger.Warn("vlan: not translating Juniper VLAN indices; the enterprise table does not describe them",
-			"static_rows", total, "unexplained", missing,
-			"reason", "table incomplete, or keyed in a different space from the static table")
+	if tag, claimants, ambiguous := ambiguousStaticTag(staticIndices, tagByIndex); ambiguous {
+		logger.Warn("vlan: not translating Juniper VLAN indices; two static rows claim one tag",
+			"tag", tag, "claimed_by_indices", claimants,
+			"reason", "the device reports one 802.1Q tag for more than one VLAN, so no row can be attributed to it")
+		return all
+	}
+	agreed, disagreed, firstDisagreement := corroborateVlanNames(all, staticIndices, tagByIndex, nameByIndex)
+	if disagreed > 0 {
+		logger.Warn("vlan: not translating Juniper VLAN indices; the two VLAN tables disagree about what they describe",
+			"agreed", agreed, "disagreed", disagreed, "first_disagreeing_index", firstDisagreement,
+			"reason", "dot1qVlanStaticName and jnxExVlanName name different VLANs at the same index, so the static table is keyed in a different space")
+		return all
+	}
+	if agreed == 0 {
+		logger.Warn("vlan: not translating Juniper VLAN indices; nothing corroborates that the two VLAN tables are keyed alike",
+			"static_rows", len(staticIndices),
+			"reason", "no index carries a name in both dot1qVlanStaticName and jnxExVlanName")
 		return all
 	}
 
@@ -102,105 +122,161 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 			continue
 		}
 		// CoerceVid owns what counts as a VLAN ID, sentinels included. Junos
-		// reports its default VLAN with tag 0, which it rejects: neither that
-		// tag nor the index it came from may be emitted.
-		tag, usable := tagByIndex[index]
-		vid := qbridge.CoerceVid(tag)
-		if !usable || vid == nil {
+		// reports an untagged bridge domain with tag 0, which it rejects.
+		//
+		// This is the one per-row drop, and the only one that is safe to make.
+		// A dropped row leaves no VLAN entity, so anything still naming that
+		// VID would have VlanMapper fabricate a "VLAN<vid>" placeholder for it
+		// — and Diode PATCHes, so the placeholder would rename the operator's
+		// VLAN in NetBox. Nothing can name this one: the only other reference
+		// is dot1qPvid, gated by the same CoerceVid. The gates above exist so
+		// that every row we cannot resolve for any OTHER reason abandons the
+		// translation entirely rather than dropping a row whose VID something
+		// else still names.
+		vid := qbridge.CoerceVid(tagByIndex[index])
+		if vid == nil {
 			dropped++
 			continue
 		}
 		out[col+strconv.Itoa(*vid)] = v
 	}
 	if dropped > 0 {
-		// Debug rather than warn. Junos reports its default VLAN with tag 0,
-		// so a healthy switch reaches this on every poll forever, and a
-		// warning that fires on normal operation is one nobody reads.
+		// Debug rather than warn: a healthy switch reaches this on every poll
+		// forever, and a warning that fires during normal operation is one
+		// nobody reads.
 		logger.Debug("vlan: dropped Juniper static-table rows whose tag is not a VLAN ID",
-			"rows", dropped, "reason", "tag outside 1-4094, which is how Junos reports an untagged domain")
+			"rows", dropped, "reason", "tag outside 1-4094, which is how Junos reports an untagged bridge domain")
 	}
 	return out
 }
 
-// staticIndicesNotIn reports how many distinct dot1qVlanStaticTable indices
-// the tag map does not describe, and how many there were in total.
-func staticIndicesNotIn(all ObjectIDValueMap, described map[int]struct{}) (missing, total int) {
-	seen := map[int]struct{}{}
+// staticVlanIndices collects the distinct VlanIndex values dot1qVlanStaticTable
+// was walked with.
+func staticVlanIndices(all ObjectIDValueMap) map[int]struct{} {
+	out := map[int]struct{}{}
 	for oid := range all {
-		_, index, ok := splitStaticVlanOID(oid)
-		if !ok {
-			continue
-		}
-		if _, dup := seen[index]; dup {
-			continue
-		}
-		seen[index] = struct{}{}
-		total++
-		if _, known := described[index]; !known {
-			missing++
+		if _, index, ok := splitStaticVlanOID(oid); ok {
+			out[index] = struct{}{}
 		}
 	}
-	return missing, total
+	return out
 }
 
-// juniperVlanTags reads the enterprise table into index -> tag, dropping any
-// tag more than one index claims.
+// juniperVlanTable reads jnxExVlanTable into index -> tag and index -> name,
+// plus the set of indices the table has a row for at all.
 //
-// A tag two indices both claim cannot be resolved, and guessing is worse than
-// it looks: the rows are rewritten one OID at a time, so the name column would
-// keep whichever index Go's map iteration happened to yield last while the
-// ports column kept the other, pairing one VLAN's name with another VLAN's
-// ports. Map order is not stable, so that pairing would differ between polls
-// of identical data and the VLAN would be rewritten on every ingest. Neither
-// index survives, because nothing available says which one owns the tag.
-//
-// Not observed on the reported switches, whose tags are distinct. Guarded
-// because the cost of being wrong is silent and recurring, and the device is
-// the one asserting something impossible.
-// Returns the usable index -> tag map, and the set of indices the table
-// described at all, refused ones included. The caller needs both: see
-// ResolveJuniperVlanIndices for why they answer different questions.
-func juniperVlanTags(all ObjectIDValueMap, logger *slog.Logger) (map[int]int, map[int]struct{}) {
-	indicesByTag := map[int][]int{}
-	described := map[int]struct{}{}
+// described is deliberately wider than tagByIndex: an index whose tag will not
+// parse still proves the table HAS that row, which is a different fact from
+// whether the row is usable. Reporting only the parsed tags would let the
+// caller read an unreadable value as "the table is keyed in another space".
+func juniperVlanTable(all ObjectIDValueMap) (tagByIndex map[int]int, nameByIndex map[int]string, described map[int]struct{}) {
+	tagByIndex = map[int]int{}
+	nameByIndex = map[int]string{}
+	described = map[int]struct{}{}
 	for oid, v := range all {
-		if !strings.HasPrefix(oid, oidJnxExVlanTag) {
-			continue
+		switch {
+		case strings.HasPrefix(oid, oidJnxExVlanTag):
+			index, ok := atoi(strings.TrimPrefix(oid, oidJnxExVlanTag))
+			if !ok {
+				continue
+			}
+			described[index] = struct{}{}
+			if tag, ok := atoi(trimSNMPString(v.Value)); ok {
+				tagByIndex[index] = tag
+			}
+		case strings.HasPrefix(oid, oidJnxExVlanName):
+			index, ok := atoi(strings.TrimPrefix(oid, oidJnxExVlanName))
+			if !ok {
+				continue
+			}
+			described[index] = struct{}{}
+			if name := trimSNMPString(v.Value); name != "" {
+				nameByIndex[index] = name
+			}
 		}
-		index, ok := atoi(strings.TrimPrefix(oid, oidJnxExVlanTag))
-		if !ok {
-			continue
-		}
-		// Described the moment the table has a row for the index, whatever
-		// the value turns out to be. A row whose tag will not parse is one
-		// VLAN nobody can resolve, not evidence that the table is keyed in a
-		// different space, and treating it as the latter would abandon the
-		// translation for every other VLAN on the device.
-		described[index] = struct{}{}
-		tag, ok := atoi(trimSNMPString(v.Value))
-		if !ok {
-			continue
-		}
-		indicesByTag[tag] = append(indicesByTag[tag], index)
 	}
+	return tagByIndex, nameByIndex, described
+}
 
-	out := map[int]int{}
-	for tag, indices := range indicesByTag {
-		if len(indices) > 1 {
-			logger.Warn("vlan: refusing an ambiguous Juniper VLAN tag",
-				"tag", tag, "claimed_by_indices", len(indices),
-				"reason", "more than one internal index reports this tag")
+// staticRowsUnresolved counts the static indices the enterprise table has no
+// row for (missing) and those whose row carries a value that is not a number
+// (unreadable). They are counted apart because they say different things about
+// the device, and the warning names both.
+func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int, described map[int]struct{}) (missing, unreadable int) {
+	for index := range staticIndices {
+		if _, ok := tagByIndex[index]; ok {
 			continue
 		}
-		out[indices[0]] = tag
+		if _, ok := described[index]; ok {
+			unreadable++
+			continue
+		}
+		missing++
 	}
-	return out, described
+	return missing, unreadable
+}
+
+// ambiguousStaticTag reports the first tag that more than one static row claims.
+//
+// Judged over the static rows only. An enterprise row for an index the static
+// table never used describes a VLAN nothing is about to be rewritten to, so
+// letting it collide would refuse a device over a row that does not matter.
+//
+// The smallest claimant is reported so the warning reads the same on every
+// poll rather than naming whichever index map iteration happened to yield.
+func ambiguousStaticTag(staticIndices map[int]struct{}, tagByIndex map[int]int) (tag, claimants int, ambiguous bool) {
+	count := map[int]int{}
+	for index := range staticIndices {
+		count[tagByIndex[index]]++
+	}
+	for t, n := range count {
+		if n > 1 && (!ambiguous || t < tag) {
+			tag, claimants, ambiguous = t, n, true
+		}
+	}
+	return tag, claimants, ambiguous
+}
+
+// corroborateVlanNames asks the device whether the two tables describe the same
+// VLANs, by comparing the name each gives for one index.
+//
+// Only indices carrying a name in both tables are counted; the rest are
+// evidence of nothing either way. The ELS "+<tag>" suffix is stripped from both
+// sides first, since only one table may carry it.
+//
+// firstDisagreement is the lowest disagreeing index, so the warning names the
+// same VLAN on every poll.
+func corroborateVlanNames(all ObjectIDValueMap, staticIndices map[int]struct{}, tagByIndex map[int]int, nameByIndex map[int]string) (agreed, disagreed, firstDisagreement int) {
+	for index := range staticIndices {
+		enterprise, ok := nameByIndex[index]
+		if !ok {
+			continue
+		}
+		v, ok := all[oidDot1qVlanStaticName+strconv.Itoa(index)]
+		if !ok {
+			continue
+		}
+		static := trimSNMPString(v.Value)
+		if static == "" {
+			continue
+		}
+		tag := tagByIndex[index]
+		if stripVlanNameTagSuffix(static, tag) == stripVlanNameTagSuffix(enterprise, tag) {
+			agreed++
+			continue
+		}
+		if disagreed == 0 || index < firstDisagreement {
+			firstDisagreement = index
+		}
+		disagreed++
+	}
+	return agreed, disagreed, firstDisagreement
 }
 
 // splitStaticVlanOID splits a dot1qVlanStaticTable OID into its column prefix
 // and its VlanIndex. Reports false for anything else, including the other
 // Q-BRIDGE tables: dot1qPvid carries a VLAN value rather than a VLAN index in
-// its OID, and on the reported switch that value is already the real tag, so
+// its OID, and on the reported switches that value is already the real tag, so
 // putting it through this translation would read a tag as an index.
 func splitStaticVlanOID(oid string) (column string, index int, ok bool) {
 	for _, col := range dot1qVlanStaticColumns {

@@ -1,9 +1,11 @@
 package mapping
 
 import (
+	"bytes"
 	"log/slog"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -22,6 +24,14 @@ const (
 	ciscoSysObjID  = ".1.3.6.1.4.1.9.1.2494"
 )
 
+func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, nil)) }
+
+// capturingLogger returns a logger and the buffer it writes to.
+func capturingLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	return slog.New(slog.NewTextHandler(&buf, nil)), &buf
+}
+
 // internalIndexWalk is the EX4550 shape, with the index and tag spaces
 // deliberately overlapping the way the real capture does: index 24 resolves
 // to tag 32 while index 32 exists in its own right and resolves to 666. A
@@ -29,7 +39,9 @@ const (
 // leave a fixture of disjoint values intact.
 //
 // Values are taken from the reporter's capture: index 17 is VL156 at tag 156,
-// index 31 is the default VLAN at tag 0.
+// index 31 is the default bridge domain at tag 0. Both VLAN tables carry the
+// same name for each index, which is how the real device answers and what the
+// corroboration gate requires.
 func internalIndexWalk() ObjectIDValueMap {
 	return ObjectIDValueMap{
 		oidSysObjectIDScalar: {Value: jnxSysObjectID},
@@ -48,6 +60,11 @@ func internalIndexWalk() ObjectIDValueMap {
 		oidDot1qVlanStaticName + "31":      {Value: "default"},
 		oidDot1qVlanStaticRowStatus + "31": {Value: "1"},
 
+		oidJnxExVlanName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "24": {Value: "VL32"},
+		oidJnxExVlanName + "32": {Value: "VL666"},
+		oidJnxExVlanName + "31": {Value: "default"},
+
 		oidJnxExVlanTag + "17": {Value: "156"},
 		oidJnxExVlanTag + "24": {Value: "32"},
 		oidJnxExVlanTag + "32": {Value: "666"},
@@ -56,7 +73,7 @@ func internalIndexWalk() ObjectIDValueMap {
 }
 
 func TestResolveJuniperVlanIndices_TranslatesStaticTable(t *testing.T) {
-	out := ResolveJuniperVlanIndices(internalIndexWalk(), slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	out := ResolveJuniperVlanIndices(internalIndexWalk(), testLogger())
 
 	// Every column of the table is keyed by the same index, so every column
 	// must move together. Rekeying the name and not the port masks would file
@@ -68,135 +85,351 @@ func TestResolveJuniperVlanIndices_TranslatesStaticTable(t *testing.T) {
 		{oidDot1qVlanStaticUntaggedPorts + "156", "\x40"},
 		{oidDot1qVlanStaticRowStatus + "156", "1"},
 		// The overlapping pair: 24 becomes 32, and the row that was already
-		// at 32 becomes 666 rather than being overwritten.
+		// at 32 becomes 666. Both must land on their own tag.
 		{oidDot1qVlanStaticName + "32", "VL32"},
 		{oidDot1qVlanStaticEgressPorts + "32", "\x20"},
 		{oidDot1qVlanStaticName + "666", "VL666"},
 		{oidDot1qVlanStaticEgressPorts + "666", "\x10"},
+		// Untouched: not part of the table being rekeyed.
+		{oidSysObjectIDScalar, jnxSysObjectID},
 	} {
-		got, ok := out[want.oid]
-		if !ok {
-			t.Errorf("%s missing: the column did not travel with its VLAN", want.oid)
-			continue
-		}
-		if got.Value != want.value {
-			t.Errorf("%s = %q, want %q", want.oid, got.Value, want.value)
+		if got := out[want.oid].Value; got != want.value {
+			t.Errorf("%s = %q, want %q", want.oid, got, want.value)
 		}
 	}
 
-	// No internal index may survive alongside the tag it resolved to.
+	// Every index must be gone, including 17 and 24 whose numbers are not
+	// also tags on this device. A translation that merely ADDED the tag rows
+	// would leave the device reporting each VLAN twice.
 	for _, gone := range []string{
-		oidDot1qVlanStaticName + "17", oidDot1qVlanStaticEgressPorts + "17",
-		oidDot1qVlanStaticUntaggedPorts + "17", oidDot1qVlanStaticRowStatus + "17",
-		oidDot1qVlanStaticName + "24", oidDot1qVlanStaticEgressPorts + "24",
+		oidDot1qVlanStaticName + "17",
+		oidDot1qVlanStaticEgressPorts + "17",
+		oidDot1qVlanStaticUntaggedPorts + "17",
+		oidDot1qVlanStaticRowStatus + "17",
+		oidDot1qVlanStaticName + "24",
+		oidDot1qVlanStaticEgressPorts + "24",
 	} {
 		if _, ok := out[gone]; ok {
-			t.Errorf("%s must not survive: it is an internal index", gone)
+			t.Errorf("%s survived: the internal index must not reach NetBox as a VLAN ID", gone)
 		}
 	}
 }
 
-func TestResolveJuniperVlanIndices_DropsUnusableTag(t *testing.T) {
-	out := ResolveJuniperVlanIndices(internalIndexWalk(), slog.New(slog.NewTextHandler(os.Stderr, nil)))
+// TestResolveJuniperVlanIndices_DropsTheUntaggedDomain covers the one row the
+// translation drops rather than refusing the device over.
+//
+// Junos reports an untagged bridge domain with tag 0, so a healthy switch has
+// one of these on every poll. Dropping the row is safe precisely because
+// nothing else can name it: dot1qPvid is the only other reference to a VID and
+// CoerceVid rejects 0 there too, so no placeholder VLAN can be fabricated in
+// its place.
+func TestResolveJuniperVlanIndices_DropsTheUntaggedDomain(t *testing.T) {
+	out := ResolveJuniperVlanIndices(internalIndexWalk(), testLogger())
 
-	// Tag 0 is not a VLAN ID. Neither it nor the internal index it came from
-	// may reach the emitted entities: index 31 as a VID would be a VLAN the
-	// device never had.
-	for _, oid := range []string{
-		oidDot1qVlanStaticName + "0", oidDot1qVlanStaticName + "31",
-		oidDot1qVlanStaticRowStatus + "0", oidDot1qVlanStaticRowStatus + "31",
+	for _, gone := range []string{
+		oidDot1qVlanStaticName + "31",
+		oidDot1qVlanStaticRowStatus + "31",
+		oidDot1qVlanStaticName + "0",
+		oidDot1qVlanStaticRowStatus + "0",
 	} {
-		if _, ok := out[oid]; ok {
-			t.Errorf("%s must not survive: tag 0 is not a VLAN", oid)
+		if _, ok := out[gone]; ok {
+			t.Errorf("%s must not survive: tag 0 is not a VLAN", gone)
 		}
 	}
 }
 
+// TestResolveJuniperVlanIndices_DropsEverySentinelTag walks the boundary of
+// what CoerceVid accepts, so the translation cannot drift away from the one
+// definition of a VLAN ID the rest of the package uses.
 func TestResolveJuniperVlanIndices_DropsEverySentinelTag(t *testing.T) {
-	// CoerceVid owns the range, and this pins that the resolver defers to it
-	// rather than special-casing the tag 0 we happen to have seen.
-	in := ObjectIDValueMap{oidSysObjectIDScalar: {Value: jnxSysObjectID}}
-	for idx, tag := range map[string]string{
-		"41": "0", "42": "4095", "43": "4096", "44": "-1", "45": "nonsense", "46": "",
-	} {
-		in[oidDot1qVlanStaticName+idx] = Value{Value: "NAME" + idx}
-		in[oidJnxExVlanTag+idx] = Value{Value: tag}
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		oidDot1qVlanStaticName + "40": {Value: "REAL"},
+		oidJnxExVlanName + "40":       {Value: "REAL"},
+		oidJnxExVlanTag + "40":        {Value: "4094"},
 	}
-	// One usable VLAN, so the table still covers every index and translation runs.
-	in[oidDot1qVlanStaticName+"40"] = Value{Value: "GOOD"}
-	in[oidJnxExVlanTag+"40"] = Value{Value: "500"}
+	// Every value CoerceVid refuses. Each gets its own static row so a
+	// translation that let one through would be visible.
+	for i, tag := range []string{"0", "4095", "4096", "-1", "65535"} {
+		index := strconv.Itoa(41 + i)
+		in[oidDot1qVlanStaticName+index] = Value{Value: "SENTINEL" + index}
+		in[oidJnxExVlanName+index] = Value{Value: "SENTINEL" + index}
+		in[oidJnxExVlanTag+index] = Value{Value: tag}
+	}
 
-	out := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	out := ResolveJuniperVlanIndices(in, testLogger())
 
-	if got := out[oidDot1qVlanStaticName+"500"].Value; got != "GOOD" {
+	if got := out[oidDot1qVlanStaticName+"4094"].Value; got != "REAL" {
 		t.Errorf("the usable VLAN must still translate, got %q", got)
 	}
-	for _, idx := range []string{"41", "42", "43", "44", "45", "46"} {
-		if _, ok := out[oidDot1qVlanStaticName+idx]; ok {
-			t.Errorf("index %s must not be emitted in place of an unusable tag", idx)
-		}
-	}
-	for _, tag := range []string{"0", "4095", "4096", "-1"} {
-		if _, ok := out[oidDot1qVlanStaticName+tag]; ok {
-			t.Errorf("tag %s is not a VLAN ID and must not be emitted", tag)
+	// Scoped to the static table: the enterprise rows are not rekeyed and
+	// pass through by design, so only a surviving dot1qVlanStaticTable row
+	// would mean a sentinel reached NetBox as a VLAN.
+	for oid, v := range out {
+		if _, _, isStatic := splitStaticVlanOID(oid); isStatic && strings.HasPrefix(v.Value, "SENTINEL") {
+			t.Errorf("%s = %q survived: a sentinel tag is not a VLAN ID", oid, v.Value)
 		}
 	}
 }
 
+// TestResolveJuniperVlanIndices_PassesThroughWithoutTheEnterpriseTable is the
+// QFX in the same report: Juniper, and already keyed by the VLAN ID.
+//
+// Refusing to emit VLANs from a Juniper that publishes no enterprise table
+// would break a device that is correct today, which is why the vendor alone
+// never decides anything here.
 func TestResolveJuniperVlanIndices_PassesThroughWithoutTheEnterpriseTable(t *testing.T) {
-	// The QFX shape: indices already are the VLAN IDs, and the enterprise
-	// table answers No Such Object, so nothing is walked. Translating here
-	// would corrupt a device that is correct today.
-	in := ObjectIDValueMap{
-		oidSysObjectIDScalar:           {Value: jnxSysObjectID},
-		oidDot1qVlanStaticName + "156": {Value: "VL156+156"},
-		oidDot1qVlanStaticName + "1":   {Value: "default+1"},
-	}
-	want := ObjectIDValueMap{
-		oidSysObjectIDScalar:           {Value: jnxSysObjectID},
-		oidDot1qVlanStaticName + "156": {Value: "VL156+156"},
-		oidDot1qVlanStaticName + "1":   {Value: "default+1"},
-	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar:              {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "156":    {Value: "VL156+156"},
+		oidDot1qVlanStaticName + "1":      {Value: "default+1"},
+		oidDot1qVlanStaticRowStatus + "1": {Value: "1"},
+	}, logger)
 
-	// Compared against a separate literal rather than against the input: the
-	// pass-through returns the same map value, so asserting input against
-	// output would compare a map with itself and hold for any implementation.
-	if got := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil))); !reflect.DeepEqual(got, want) {
-		t.Errorf("walk must be unchanged when there is no enterprise table\n got %v\nwant %v", got, want)
+	// Compared against a separate literal rather than against the input, so a
+	// function that returned its own argument could not pass by identity.
+	want := ObjectIDValueMap{
+		oidSysObjectIDScalar:              {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "156":    {Value: "VL156+156"},
+		oidDot1qVlanStaticName + "1":      {Value: "default+1"},
+		oidDot1qVlanStaticRowStatus + "1": {Value: "1"},
+	}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("a Juniper without the enterprise table must be untouched\n got %v\nwant %v", out, want)
+	}
+	// Nothing is wrong with this device, so nothing is said about it. A
+	// warning here would fire on every poll of every correct Junos switch.
+	if logged.Len() != 0 {
+		t.Errorf("a device needing no translation must log nothing, got %q", logged.String())
 	}
 }
 
-// TestResolveJuniperVlanIndices_SaysSoWhenTheTableIsUnreadable separates a
-// device that has no enterprise table from one whose table answered with
-// nothing usable. The first is normal and silent; the second means the
-// reported bug is about to reappear untranslated, which an operator can only
-// act on if it is said.
-func TestResolveJuniperVlanIndices_SaysSoWhenTheTableIsUnreadable(t *testing.T) {
-	var buf strings.Builder
-	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-
+// TestResolveJuniperVlanIndices_RefusesWhenATagIsUnreadable covers a tag
+// column that answered with something that is not a number.
+//
+// The whole device is refused rather than the one row dropped. A dropped row
+// leaves no VLAN entity while dot1qPvid may still name that VID, and
+// VlanMapper would then fabricate a "VLAN<vid>" placeholder — which Diode
+// PATCHes over the operator's real VLAN name. Refusing leaves the reported bug
+// in place, visibly, which is recoverable; the rename is not.
+func TestResolveJuniperVlanIndices_RefusesWhenATagIsUnreadable(t *testing.T) {
 	in := ObjectIDValueMap{
 		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
 		oidDot1qVlanStaticName + "17": {Value: "VL156"},
-		oidJnxExVlanTag + "17":        {Value: ""}, // walked, but no usable value
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		oidDot1qVlanStaticName + "18": {Value: "VLOTHER"},
+		oidJnxExVlanName + "18":       {Value: "VLOTHER"},
+		oidJnxExVlanTag + "18":        {Value: "No Such Instance"},
 	}
+	logger, logged := capturingLogger()
 	out := ResolveJuniperVlanIndices(in, logger)
 
-	if _, ok := out[oidDot1qVlanStaticName+"17"]; !ok {
-		t.Error("an unusable table must leave the walk alone, not delete it")
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("one unreadable tag must abandon the whole translation, got %v", out)
 	}
-	if !strings.Contains(buf.String(), "no row was usable") {
-		t.Errorf("an unreadable enterprise table must be reported, got %q", buf.String())
+	if !strings.Contains(logged.String(), "tag_unreadable=1") {
+		t.Errorf("the refusal must name what was unreadable, got %q", logged.String())
 	}
+}
 
-	// And the ordinary absence stays quiet.
-	buf.Reset()
-	ResolveJuniperVlanIndices(ObjectIDValueMap{
+// TestResolveJuniperVlanIndices_RefusesAmbiguousTags covers a device that
+// contradicts itself: two static rows claiming one tag. Nothing available says
+// which row owns it, and the same placeholder-rename hazard applies, so the
+// device is refused rather than the two rows dropped.
+func TestResolveJuniperVlanIndices_RefusesAmbiguousTags(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar:                {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "5":        {Value: "FIRST"},
+		oidDot1qVlanStaticEgressPorts + "5": {Value: "\x01"},
+		oidDot1qVlanStaticName + "9":        {Value: "SECOND"},
+		oidDot1qVlanStaticEgressPorts + "9": {Value: "\x02"},
+		oidDot1qVlanStaticName + "11":       {Value: "UNAMBIGUOUS"},
+		oidJnxExVlanName + "5":              {Value: "FIRST"},
+		oidJnxExVlanName + "9":              {Value: "SECOND"},
+		oidJnxExVlanName + "11":             {Value: "UNAMBIGUOUS"},
+		oidJnxExVlanTag + "5":               {Value: "100"},
+		oidJnxExVlanTag + "9":               {Value: "100"},
+		oidJnxExVlanTag + "11":              {Value: "200"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a contradictory tag must abandon the whole translation, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "tag=100") {
+		t.Errorf("the refusal must name the contested tag, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_IgnoresAmbiguityTheStaticTableDoesNotUse keeps
+// the ambiguity check scoped to rows that are about to be rewritten.
+//
+// The enterprise table can describe VLANs the static table never lists. A
+// collision between two of those decides nothing about any row being
+// translated, and refusing over it would abandon a device on the strength of
+// data it is not using.
+func TestResolveJuniperVlanIndices_IgnoresAmbiguityTheStaticTableDoesNotUse(t *testing.T) {
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		// Two enterprise-only rows sharing a tag. Neither has a static row.
+		oidJnxExVlanName + "80": {Value: "GHOST_A"},
+		oidJnxExVlanTag + "80":  {Value: "900"},
+		oidJnxExVlanName + "81": {Value: "GHOST_B"},
+		oidJnxExVlanTag + "81":  {Value: "900"},
+	}, testLogger())
+
+	if got := out[oidDot1qVlanStaticName+"156"].Value; got != "VL156" {
+		t.Errorf("a collision among rows the static table never lists must not block translation, got %q", got)
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenTheNamesDisagree is the gate that
+// counting rows cannot provide.
+//
+// This device keys dot1qVlanStaticTable by the TAG already — it needs no
+// translation — but its tags happen to be small numbers that are also valid
+// enterprise indices. Coverage is satisfied and no tag is contested, so
+// without the names every VLAN here would be re-emitted under a stranger's ID:
+// VLAN_ONE would reach NetBox as VLAN 100, silently.
+//
+// The device generates both names from one configuration, so their
+// disagreement at an index is the device itself denying that the two rows
+// describe the same VLAN.
+func TestResolveJuniperVlanIndices_RefusesWhenTheNamesDisagree(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// Static table, keyed by tag: VLAN 1 and VLAN 2.
+		oidDot1qVlanStaticName + "1":        {Value: "VLAN_ONE"},
+		oidDot1qVlanStaticEgressPorts + "1": {Value: "\x01"},
+		oidDot1qVlanStaticName + "2":        {Value: "VLAN_TWO"},
+		oidDot1qVlanStaticEgressPorts + "2": {Value: "\x02"},
+
+		// Enterprise table, keyed by index: two unrelated VLANs that happen
+		// to sit at indices 1 and 2.
+		oidJnxExVlanName + "1": {Value: "MGMT"},
+		oidJnxExVlanTag + "1":  {Value: "100"},
+		oidJnxExVlanName + "2": {Value: "USERS"},
+		oidJnxExVlanTag + "2":  {Value: "200"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a tag-keyed static table must be left alone, got %v", out)
+	}
+	for _, mustNotExist := range []string{
+		oidDot1qVlanStaticName + "100",
+		oidDot1qVlanStaticName + "200",
+	} {
+		if _, ok := out[mustNotExist]; ok {
+			t.Errorf("%s: a VLAN was re-identified as a different one", mustNotExist)
+		}
+	}
+	if !strings.Contains(logged.String(), "first_disagreeing_index=1") {
+		t.Errorf("the refusal must name the first VLAN the tables disagree on, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenNothingCorroborates covers a tag
+// table with no names to check it against. Absence of contradiction is not
+// agreement: without a single matching name there is no evidence the two
+// tables are keyed alike, and the rewrite is exactly as destructive as it is
+// in the disagreeing case.
+func TestResolveJuniperVlanIndices_RefusesWhenNothingCorroborates(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("an uncorroborated tag table must not be acted on, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "nothing corroborates") {
+		t.Errorf("the refusal must say what is missing, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_CorroboratesThroughTheElsNameSuffix keeps the
+// gate from rejecting a device over a cosmetic difference: an ELS switch
+// appends "+<tag>" to a bridge domain's name, and only one of the two tables
+// may carry it.
+func TestResolveJuniperVlanIndices_CorroboratesThroughTheElsNameSuffix(t *testing.T) {
+	// Stripped from both sides: no capture shows which table carries it, so
+	// the gate must not depend on guessing. Either direction is a cosmetic
+	// difference, and reading one as a disagreement would refuse a device
+	// whose two tables agree about every VLAN on it.
+	for _, tc := range []struct{ what, static, enterprise string }{
+		{"static carries it", "VL156+156", "VL156"},
+		{"enterprise carries it", "VL156", "VL156+156"},
+		{"both carry it", "VL156+156", "VL156+156"},
+		{"neither carries it", "VL156", "VL156"},
+	} {
+		out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+			oidSysObjectIDScalar:          {Value: jnxSysObjectID},
+			oidDot1qVlanStaticName + "17": {Value: tc.static},
+			oidJnxExVlanName + "17":       {Value: tc.enterprise},
+			oidJnxExVlanTag + "17":        {Value: "156"},
+		}, testLogger())
+
+		if got := out[oidDot1qVlanStaticName+"156"].Value; got != tc.static {
+			t.Errorf("%s: the suffix must not be read as a disagreement, got %q", tc.what, got)
+		}
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenTheTableDoesNotExplainEveryRow
+// covers the case the corroboration gate cannot see: the tag table is keyed in
+// a different space entirely, so most static rows have no entry at all.
+func TestResolveJuniperVlanIndices_RefusesWhenTheTableDoesNotExplainEveryRow(t *testing.T) {
+	in := ObjectIDValueMap{
 		oidSysObjectIDScalar:           {Value: jnxSysObjectID},
-		oidDot1qVlanStaticName + "156": {Value: "VL156"},
-	}, logger)
-	if buf.Len() != 0 {
-		t.Errorf("a device with no enterprise table must stay quiet, got %q", buf.String())
+		oidDot1qVlanStaticName + "100": {Value: "MGMT"},
+		oidDot1qVlanStaticName + "200": {Value: "USERS"},
+		// Keyed elsewhere: neither static row is described.
+		oidJnxExVlanName + "1": {Value: "MGMT"},
+		oidJnxExVlanTag + "1":  {Value: "100"},
+		oidJnxExVlanName + "2": {Value: "USERS"},
+		oidJnxExVlanTag + "2":  {Value: "200"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a table keyed in another space must not be acted on, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "not_described=2") {
+		t.Errorf("the refusal must count the rows it could not explain, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesOnAPartialEnterpriseTable covers the
+// truncated walk. The walk layer keeps what it collected when a table ends
+// early, so a cut table arrives short but non-empty — and translating on it
+// would silently delete every static row past the cut.
+func TestResolveJuniperVlanIndices_RefusesOnAPartialEnterpriseTable(t *testing.T) {
+	in := internalIndexWalk()
+	delete(in, oidJnxExVlanTag+"32")
+	delete(in, oidJnxExVlanName+"32")
+
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Error("a partial enterprise table must not delete the rows it fails to describe")
+	}
+	if !strings.Contains(logged.String(), "not_described=1") {
+		t.Errorf("the refusal must count the rows it could not explain, got %q", logged.String())
 	}
 }
 
@@ -208,13 +441,36 @@ func TestResolveJuniperVlanIndices_LeavesPvidsAlone(t *testing.T) {
 	in[oidDot1qPvid+"536"] = Value{Value: "888"}
 	in[oidDot1qPvid+"5"] = Value{Value: "17"}
 
-	out := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	out := ResolveJuniperVlanIndices(in, testLogger())
 
 	if got := out[oidDot1qPvid+"536"].Value; got != "888" {
 		t.Errorf("PVID 888 is already a tag and must not be translated, got %q", got)
 	}
 	if got := out[oidDot1qPvid+"5"].Value; got != "17" {
 		t.Errorf("PVID 17 must survive verbatim even though 17 is a valid index, got %q", got)
+	}
+}
+
+// TestResolveJuniperVlanIndices_DoesNotMutateTheWalk pins the property the
+// overlapping index and tag spaces make load-bearing: the caller's map is
+// shared with every other mapper, and a rewrite done in place would have
+// index 24's row land on 32 and then be read again as index 32.
+func TestResolveJuniperVlanIndices_DoesNotMutateTheWalk(t *testing.T) {
+	in := internalIndexWalk()
+	before := make(ObjectIDValueMap, len(in))
+	for k, v := range in {
+		before[k] = v
+	}
+
+	out := ResolveJuniperVlanIndices(in, testLogger())
+
+	if !reflect.DeepEqual(in, before) {
+		t.Error("the caller's map was mutated; every other mapper reads the same map")
+	}
+	// Same input, same output: nothing about the result may depend on the
+	// order Go's map iteration happened to yield.
+	if second := ResolveJuniperVlanIndices(in, testLogger()); !reflect.DeepEqual(out, second) {
+		t.Error("two calls on identical input disagreed")
 	}
 }
 
@@ -269,12 +525,15 @@ func TestVlanNamesByVid_StripsTheSuffixOnlyForJuniper(t *testing.T) {
 	}
 }
 
-// TestVlanMapper_PostMap_JuniperInternalIndices_EmitVlansAtTheirTags is the
-// reported bug end to end: the switch is discovered with the VLAN IDs an
-// operator configured rather than the indices the agent happens to read.
-func TestVlanMapper_PostMap_JuniperInternalIndices_EmitVlansAtTheirTags(t *testing.T) {
-	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
-	got := vm.PostMap(internalIndexWalk(), NewEntityRegistry(slog.Default()), &config.Defaults{})
+// TestJuniperInternalIndices_EmitVlansAtTheirTags is the reported bug end to
+// end, through the composition the runner performs: normalise the walk once,
+// then map it. The switch is discovered with the VLAN IDs an operator
+// configured rather than the indices the agent happens to read.
+func TestJuniperInternalIndices_EmitVlansAtTheirTags(t *testing.T) {
+	oids := ResolveJuniperVlanIndices(internalIndexWalk(), testLogger())
+
+	vm := NewVlanMapper(testLogger(), config.Options{})
+	got := vm.PostMap(oids, NewEntityRegistry(slog.Default()), &config.Defaults{})
 
 	byVid := map[int64]string{}
 	for _, e := range got {
@@ -305,143 +564,55 @@ func TestVlanMapper_PostMap_JuniperInternalIndices_EmitVlansAtTheirTags(t *testi
 	}
 }
 
+// TestVlanMapper_PostMap_DoesNotNormaliseAgain pins the half of the
+// single-call contract that lives in this package.
+//
+// Normalisation is the runner's, done once before anything reads the walk, so
+// the VLAN catalog, the port masks and the SVI resolver all see one keying and
+// a refusal is reported once per target rather than once per reader. If
+// PostMap normalised too, every warning would appear twice in an operator's
+// log and read as two different devices.
+func TestVlanMapper_PostMap_DoesNotNormaliseAgain(t *testing.T) {
+	logger, logged := capturingLogger()
+	vm := NewVlanMapper(logger, config.Options{})
+	got := vm.PostMap(internalIndexWalk(), NewEntityRegistry(slog.Default()), &config.Defaults{})
+
+	vids := map[int64]struct{}{}
+	for _, e := range got {
+		if v, ok := e.(*diode.VLAN); ok && v != nil && v.Vid != nil {
+			vids[*v.Vid] = struct{}{}
+		}
+	}
+	// Untranslated input in, untranslated VIDs out: PostMap read what it was
+	// given rather than repeating the runner's work.
+	if _, ok := vids[17]; !ok {
+		t.Errorf("PostMap must not normalise; it is the runner's single call, got %v", vids)
+	}
+	if strings.Contains(logged.String(), "Juniper VLAN") {
+		t.Errorf("PostMap must not log about the translation, got %q", logged.String())
+	}
+}
+
 // TestShippedPolicyWalksTheJuniperVlanTable pins the wiring rather than the
-// logic. The translation is worthless if the column is never walked, and
+// logic. The translation is worthless if the columns are never walked, and
 // nothing else in this file would notice: every other test here supplies the
 // enterprise rows directly.
 func TestShippedPolicyWalksTheJuniperVlanTable(t *testing.T) {
-	cfg := newTestMappingConfig(t, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-	const column = ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5"
-
-	if _, ok := cfg.VendorObjectIDs("juniper")[column]; !ok {
-		t.Errorf("a Juniper host must walk %s, got %v", column, cfg.VendorObjectIDs("juniper"))
-	}
-	// Every other host pays nothing: the column is vendor-scoped, so it is
-	// absent from the generic walk that every target performs.
-	if _, ok := cfg.GenericObjectIDs()[column]; ok {
-		t.Error("the enterprise column must not be walked on every host")
-	}
-}
-
-// TestResolveJuniperVlanIndices_RefusesAmbiguousTags covers a device that
-// contradicts itself: two internal indices claiming one tag.
-//
-// The rows are rewritten per OID, so without this the name column would keep
-// whichever index Go's map iteration yielded last and the ports column could
-// keep the other, pairing one VLAN's name with another's ports. Map order is
-// random, so the pairing would differ between polls of identical data and the
-// VLAN would be rewritten on every ingest. Neither index is emitted, because
-// nothing available says which one the tag belongs to.
-func TestResolveJuniperVlanIndices_RefusesAmbiguousTags(t *testing.T) {
-	in := ObjectIDValueMap{
-		oidSysObjectIDScalar:                {Value: jnxSysObjectID},
-		oidDot1qVlanStaticName + "5":        {Value: "FIRST"},
-		oidDot1qVlanStaticEgressPorts + "5": {Value: "\x01"},
-		oidDot1qVlanStaticName + "9":        {Value: "SECOND"},
-		oidDot1qVlanStaticEgressPorts + "9": {Value: "\x02"},
-		oidDot1qVlanStaticName + "7":        {Value: "FINE"},
-		oidJnxExVlanTag + "5":               {Value: "100"},
-		oidJnxExVlanTag + "9":               {Value: "100"},
-		oidJnxExVlanTag + "7":               {Value: "200"},
-	}
-
-	out := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-
-	if _, ok := out[oidDot1qVlanStaticName+"100"]; ok {
-		t.Error("a tag two indices both claim must not be emitted")
-	}
-	for _, oid := range []string{oidDot1qVlanStaticName + "5", oidDot1qVlanStaticName + "9"} {
-		if _, ok := out[oid]; ok {
-			t.Errorf("%s: the internal index must not be emitted in its place either", oid)
-		}
-	}
-	// The unambiguous VLAN in the same walk is unaffected: one contradictory
-	// tag must not cost the device its other VLANs.
-	if got := out[oidDot1qVlanStaticName+"200"].Value; got != "FINE" {
-		t.Errorf("an unambiguous VLAN must still translate, got %q", got)
-	}
-}
-
-// TestResolveJuniperVlanIndices_DoesNotMutateTheWalk pins that the rewrite
-// builds a new map.
-//
-// The runner normalises the same walk a second time for the SVI resolver, and
-// other post-pass mappers read the same map, so rewriting in place would
-// change what they see. It would also make the rewrite order-dependent: a row
-// rekeyed onto an index not yet visited would be re-read as though it were an
-// index, which a fixture of disjoint values would never reveal and the real
-// device, whose index and tag spaces overlap, would hit immediately.
-func TestResolveJuniperVlanIndices_DoesNotMutateTheWalk(t *testing.T) {
-	in := internalIndexWalk()
-	before := make(ObjectIDValueMap, len(in))
-	for k, v := range in {
-		before[k] = v
-	}
-
-	first := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-
-	if !reflect.DeepEqual(in, before) {
-		t.Error("the walk handed in must be unchanged")
-	}
-	// Idempotent, which is what lets the runner and VlanMapper each normalise
-	// without coordinating: the second pass finds a tag-keyed table the
-	// enterprise rows do not describe, and returns it untouched.
-	if second := ResolveJuniperVlanIndices(first, slog.New(slog.NewTextHandler(os.Stderr, nil))); !reflect.DeepEqual(second, first) {
-		t.Error("a second normalisation must be a no-op")
-	}
-}
-
-// TestResolveJuniperVlanIndices_RefusesWhenTheTableDoesNotExplainEveryRow
-// covers a Junos device that publishes the enterprise table AND already keys
-// the static table by the tag.
-//
-// The two are independent properties, and the presence of the enterprise
-// table is not evidence about how the static table is keyed. Translating on
-// that assumption looks up tag-keyed rows as though they were indices: every
-// lookup misses and the device loses every VLAN it reports correctly today.
-// Worse, where a tag-keyed row number happens to be a valid index, the
-// identity is swapped rather than dropped.
-func TestResolveJuniperVlanIndices_RefusesWhenTheTableDoesNotExplainEveryRow(t *testing.T) {
-	// Static rows keyed by tag (156, 178); enterprise rows keyed by an index
-	// space of its own (1, 2). Nothing lines up.
-	in := ObjectIDValueMap{
-		oidSysObjectIDScalar:                  {Value: jnxSysObjectID},
-		oidDot1qVlanStaticName + "156":        {Value: "VL156"},
-		oidDot1qVlanStaticName + "178":        {Value: "VL178"},
-		oidDot1qVlanStaticEgressPorts + "156": {Value: "\x01"},
-		oidJnxExVlanTag + "1":                 {Value: "156"},
-		oidJnxExVlanTag + "2":                 {Value: "178"},
-	}
-	out := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-
-	for _, oid := range []string{
-		oidDot1qVlanStaticName + "156", oidDot1qVlanStaticName + "178",
-		oidDot1qVlanStaticEgressPorts + "156",
+	cfg := newTestMappingConfig(t, testLogger())
+	// Both columns are required. The tag is what the translation reads; the
+	// name is what permits it to act at all, so a policy that walked only the
+	// tag would refuse every device.
+	for _, column := range []string{
+		".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5",
+		".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.2",
 	} {
-		if _, ok := out[oid]; !ok {
-			t.Errorf("%s must survive: the enterprise table does not describe this index space", oid)
+		if _, ok := cfg.VendorObjectIDs("juniper")[column]; !ok {
+			t.Errorf("a Juniper host must walk %s, got %v", column, cfg.VendorObjectIDs("juniper"))
 		}
-	}
-}
-
-// TestResolveJuniperVlanIndices_RefusesOnAPartialEnterpriseTable is the same
-// guard reached a different way.
-//
-// The walk layer deliberately keeps the rows it collected when a table ends
-// early, so a truncated enterprise walk arrives as a short but non-empty
-// map. Translating then would delete every static row past the cut, which is
-// worse than the wrong VLAN IDs it was meant to fix: those VLANs are emitted
-// today, and an incomplete answer is not grounds to remove them.
-func TestResolveJuniperVlanIndices_RefusesOnAPartialEnterpriseTable(t *testing.T) {
-	in := internalIndexWalk()
-	delete(in, oidJnxExVlanTag+"24") // walk cut short before this row
-
-	out := ResolveJuniperVlanIndices(in, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-
-	if _, ok := out[oidDot1qVlanStaticName+"24"]; !ok {
-		t.Error("a row the partial table cannot explain must be kept, not deleted")
-	}
-	if _, ok := out[oidDot1qVlanStaticName+"156"]; ok {
-		t.Error("and no row may be translated from a table that is incomplete")
+		// Every other host pays nothing: the columns are vendor-scoped, so
+		// they are absent from the generic walk every target performs.
+		if _, ok := cfg.GenericObjectIDs()[column]; ok {
+			t.Errorf("%s must not be walked on every host", column)
+		}
 	}
 }

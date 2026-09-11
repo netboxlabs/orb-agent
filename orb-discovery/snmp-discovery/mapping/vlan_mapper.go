@@ -89,11 +89,12 @@ func (m *VlanMapper) PostMap(
 	registry *EntityRegistry,
 	defaults *config.Defaults,
 ) []diode.Entity {
-	// Normalise before anything reads the walked rows. On the Junos platforms
-	// that index dot1qVlanStaticTable internally, every consumer below would
-	// otherwise read an internal number as a VLAN ID. A no-op everywhere else.
-	allObjectIDs = ResolveJuniperVlanIndices(allObjectIDs, m.logger)
-
+	// The walked rows arrive already normalised: the runner calls
+	// ResolveJuniperVlanIndices once, before any consumer reads them, so a
+	// Junos device that indexes dot1qVlanStaticTable internally reaches every
+	// reader below keyed by the real 802.1Q tag. Normalising again here would
+	// log the same refusal twice per target, and the map is shared with the
+	// SVI resolver, which has to see the same keying this mapper does.
 	gen := m.buildGenericRows(allObjectIDs)
 	if len(gen.BasePortToIfIndex) == 0 {
 		// No bridge port table — refuse Interface mutation. Still emit

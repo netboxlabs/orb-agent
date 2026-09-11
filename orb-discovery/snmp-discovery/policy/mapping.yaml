@@ -233,6 +233,18 @@ entries:
     vendor: "juniper"
     description: "JUNIPER-VLAN-MIB jnxExVlanTag (internal VLAN index to 802.1Q tag)"
 
+  # jnxExVlanName, the same column's names. Required, not decorative: a tag
+  # table whose row count happens to line up with the static table is not
+  # evidence the two are keyed alike, and rewriting on that alone would
+  # re-emit every VLAN under a stranger's ID. Matching names at one index is
+  # the device confirming both rows describe one VLAN.
+  - oid: ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.2"
+    entity: "vlan"
+    field: "juniperVlanName"
+    identifier_size: 1
+    vendor: "juniper"
+    description: "JUNIPER-VLAN-MIB jnxExVlanName (corroborates the tag table's keying)"
+
   # CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable — non-trunk access VLAN per ifIndex.
   - oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1"
     entity: "interface_vlan"

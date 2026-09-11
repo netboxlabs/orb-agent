@@ -156,17 +156,33 @@ The top-level `tenant` default accepts either a bare string (tenant name) or a m
 
 #### Juniper VLAN indices
 
-RFC 4363 defines `dot1qVlanIndex` as "the VLAN-ID **or other identifier** referring to this VLAN", and some Junos platforms take the second half of that: `dot1qVlanStaticTable` is keyed by an internal number rather than the 802.1Q tag, so a VLAN an operator configured as 156 reads as VLAN 17. The tag is only available from `JUNIPER-VLAN-MIB::jnxExVlanTag`, which snmp-discovery walks on Juniper hosts and uses to rekey the static table before anything reads it.
+RFC 4363 defines `dot1qVlanIndex` as "the VLAN-ID **or other identifier** referring to this VLAN", and some Junos platforms take the second half of that: `dot1qVlanStaticTable` is keyed by an internal number rather than the 802.1Q tag, so a VLAN an operator configured as 156 reads as VLAN 17. The tag is only available from `JUNIPER-VLAN-MIB::jnxExVlanTable`, which snmp-discovery walks on Juniper hosts and uses to rekey the static table once, before anything reads it.
 
-Three things are deliberately left alone.
+##### What has to be true before anything is rekeyed
+
+Presence of the enterprise table is not on its own evidence that the static table is index-keyed: the two are independent properties of a Junos build. A device that publishes the enterprise table while already keying the static table by the tag would have every row rewritten to some other VLAN's ID — so the bar is evidence, not plausibility, and all three of these must hold.
+
+1. **The enterprise table resolves every static row to a readable tag.** Partial coverage means the two tables are keyed in different spaces, or the walk was truncated — a table that ends early arrives short but non-empty, and rekeying on it would silently delete every row past the cut.
+2. **No two static rows claim the same tag.** Nothing available says which row owns it.
+3. **The two tables agree on at least one VLAN's name, and disagree about none.** `jnxExVlanName` and `dot1qVlanStaticName` are generated from one configuration, so equality at an index is the device confirming both rows describe the same VLAN. This is the check that catches a tag-keyed static table whose keys happen to also be valid enterprise indices, where counting rows alone is satisfied and every VLAN would otherwise be re-emitted under a stranger's ID. The ELS `+<tag>` name suffix is ignored on both sides.
+
+Failing any of them leaves the walk untouched and logs a warning naming which one and why. The device then reports internal indices as VLAN IDs — the unfixed bug — but an unrepaired VLAN an operator can see in a log is recoverable, and a VLAN silently re-identified as a different one is not.
+
+##### Rows that are dropped, and rows that abandon the translation
+
+A tag outside 1-4094 drops just that row. Junos reports an untagged bridge domain with tag 0, so a healthy switch has one on every poll; the row is safe to drop because nothing else can name it, `dot1qPvid` being gated by the same range check.
+
+Every *other* unresolvable row abandons the translation for the whole device instead of being dropped. Dropping such a row would leave no VLAN entity while `dot1qPvid` still named that VID, and `create_unknown_vlans` would then fabricate a `VLAN<vid>` placeholder for it — which, under Diode's PATCH semantics, renames the operator's real VLAN in NetBox.
+
+##### Deliberately left alone
 
 - **`dot1qPvid` is not translated.** On the affected platforms it already carries the real tag while the static table carries indices, so translating it would read a tag as though it were an index.
-- **SVI-derived VLANs are not translated.** That resolver takes the tag from the interface name and the name carries the real one. Note it does not fire on Junos in any case: it refuses a name containing a dot, and Junos names its SVIs `vlan.156` / `irb.156`.
-- **Platforms without the enterprise table are untouched.** Other Junos switches key the static table by the tag already and answer this OID with `No Such Object`. They are correct as they are, so an absent enterprise table means no translation rather than a refusal.
+- **SVI-derived VLANs are not translated.** That resolver takes the tag from the interface name, which carries the real one. It does not fire on Junos in any case: it refuses a name containing a dot, and Junos names its SVIs `vlan.156` / `irb.156`.
+- **Platforms without the enterprise table are untouched, and silently.** Other Junos switches key the static table by the tag already and answer these OIDs with `No Such Object`. They are correct as they are, so an absent enterprise table means no translation rather than a refusal, and no log line on every poll.
 
-**A VLAN that cannot be resolved is not emitted**, rather than being emitted under a number the device never configured. That covers a tag outside 1-4094 (Junos reports its default VLAN with tag 0) and a tag that two internal indices both claim.
+##### Limitation
 
-**And the translation is all-or-nothing.** It runs only when the enterprise table describes every static-table index. A table that is incomplete, or keyed in a space of its own on a platform whose static table is already tag-keyed, means no translation at all rather than a device losing every VLAN it reports correctly today. Ports whose only VLAN was dropped this way come through with no untagged VLAN, which is the honest answer when the VLAN has no ID.
+On Junos ELS the VLAN name reaches NetBox as the operator configured it, with the `+<tag>` suffix the switch appends stripped. A VLAN whose configured name genuinely ends in `+<its own tag>` is indistinguishable from the device's own decoration and loses that suffix.
 
 **Junos ELS name suffix.** ELS reports a bridge domain as `<name>+<tag>`, so a VLAN called `VL156` arrives as `VL156+156`. The suffix is removed only when the number equals that VLAN's own ID, and only on Juniper, so an operator's own naming such as `BroadbandMgmt_702` is untouched. A Juniper VLAN genuinely named `site+100` whose ID is 100 would be shortened to `site`; nothing in the data distinguishes that from the device's own convention.
 
