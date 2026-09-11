@@ -10,7 +10,7 @@ from enum import Enum
 from typing import Any, Literal
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
@@ -105,10 +105,49 @@ class VrfParameters(ObjectParameters):
     rd: str | None = Field(default=None, description="Route distinguisher, optional")
 
 
+class VlanGroupParameters(BaseModel):
+    """
+    VLAN group discovered VLANs are attached to, and the NetBox object it is scoped to.
+
+    At most one ``scope_*`` may be set. With none, the group is scoped to
+    ``defaults.site``, as a bare group name is. Unknown keys are rejected: a
+    misspelled scope would otherwise fall back to a site-scoped group that
+    then persists in NetBox.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    scope_site: str | None = Field(default=None, description="Scope the group to this site")
+    scope_site_group: str | None = Field(default=None, description="Scope the group to a site group")
+    scope_region: str | None = Field(default=None, description="Scope the group to a region")
+    scope_location: str | None = Field(
+        default=None,
+        description="Scope the group to a location; ``defaults.site`` is sent with it",
+    )
+
+    @model_validator(mode="after")
+    def _single_scope(self) -> "VlanGroupParameters":
+        scopes = [
+            self.scope_site,
+            self.scope_site_group,
+            self.scope_region,
+            self.scope_location,
+        ]
+        if sum(1 for scope in scopes if scope) > 1:
+            raise ValueError(
+                "only one scope may be set (scope_site, scope_site_group, scope_region, scope_location)"
+            )
+        return self
+
+
 class VlanParameters(ObjectParameters):
     """Model for VLAN parameters."""
 
-    group: str | None = Field(default=None, description="VLAN group, optional")
+    group: str | VlanGroupParameters | None = Field(
+        default=None,
+        description="VLAN group: a bare name, or a map with name and one optional scope_*",
+    )
     tenant: str | TenantParameters | None = Field(
         default=None, description="VLAN tenant, optional"
     )

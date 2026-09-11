@@ -233,13 +233,34 @@ Current supported defaults:
 | ├─ comments | str | VRF comments |
 | ├─ tags | list | VRF tags |
 | vlan       | map  | VLAN-specific defaults        |
-| ├─ group   | str  | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
+| ├─ group   | str/map  | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see [VLAN group](#vlan-group) below). In a per-device `override_defaults`, the group replaces the policy value as a whole |
 | ├─ tenant   | str  | VLAN tenant                  |
 | ├─ role   | str  | VLAN role                      |
 | ├─ description | str  | VLAN description          |
 | ├─ comments   | str  | VLAN comments              |
 | ├─ tags       | list | VLAN tags                  |
 
+##### VLAN group
+Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
+
+```yaml
+defaults:
+  site: "mysite01"
+  vlan:
+    group:
+      name: "Brussels VLAN Group"
+      scope_site_group: "Brussels"
+```
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | str | VLAN group name (required in the map form) |
+| scope_site | str | Scope the group to this site instead of `defaults.site` |
+| scope_site_group | str | Scope the group to a site group |
+| scope_region | str | Scope the group to a region |
+| scope_location | str | Scope the group to a location. Locations are unique per site in NetBox, so `defaults.site` is sent with it |
+
+Only one `scope_*` may be set; a map with none behaves like the bare name. Rack and cluster scopes are not supported.
 
 ### Scope
 The scope defines a list of devices that can be accessed and pulled data. 

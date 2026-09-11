@@ -85,6 +85,22 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return merged
 
 
+def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
+    """
+    Overlay a target's ``override_defaults`` onto the policy defaults.
+
+    Fields merge recursively, except ``vlan.group``: an override group replaces
+    the policy group as a whole so a scope set on the policy cannot leak into
+    a group the override named without one.
+    """
+    override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
+    merged = _deep_merge(base.model_dump(), override_dump)
+    override_group = override_dump.get("vlan", {}).get("group")
+    if override_group is not None:
+        merged["vlan"]["group"] = override_group
+    return Defaults.model_validate(merged)
+
+
 class PolicyRunner:
     """Policy Runner class."""
 
@@ -175,13 +191,9 @@ class PolicyRunner:
 
             config = self.config.model_copy(deep=True)
             if scope.override_defaults is not None:
-                merged = _deep_merge(
-                    config.defaults.model_dump(),
-                    scope.override_defaults.model_dump(
-                        exclude_unset=True, exclude_none=True
-                    ),
+                config.defaults = merge_override_defaults(
+                    config.defaults, scope.override_defaults
                 )
-                config.defaults = Defaults.model_validate(merged)
             hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
 
             if parsed_as_range:
