@@ -3,6 +3,7 @@ package backend
 import (
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,25 +14,72 @@ import (
 )
 
 // countingBackend reports a fixed status and counts how often it is asked.
+// status and started are guarded by mu so a test can flip them between
+// ticks without racing the monitor goroutine's reads.
 type countingBackend struct {
 	Backend
+	mu      sync.Mutex
 	status  RunningStatus
 	started time.Time
 	polls   atomic.Int32
 }
 
 func (c *countingBackend) GetInitialState() RunningStatus { return Running }
-func (c *countingBackend) GetStartTime() time.Time        { return c.started }
+
+func (c *countingBackend) GetStartTime() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.started
+}
+
 func (c *countingBackend) GetRunningStatus() (RunningStatus, string, error) {
 	c.polls.Add(1)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.status, "", nil
+}
+
+func (c *countingBackend) setStatus(status RunningStatus) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.status = status
+}
+
+func (c *countingBackend) setStarted(started time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.started = started
+}
+
+// mutableClock is a manually advanced clock for tests that need to age a
+// queued restart request deterministically instead of sleeping.
+type mutableClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newMutableClock(start time.Time) *mutableClock {
+	return &mutableClock{now: start}
+}
+
+func (c *mutableClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *mutableClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }
 
 // newTestManager builds a stateManager whose tick source hands each call its
 // own unbuffered channel, recorded in order, so a test can drive ticks by
 // hand instead of waiting on a real ticker. Injected through WithTickSource,
-// so there is no package variable to restore.
-func newTestManager(t *testing.T, restartChan chan string) (*stateManager, *[]chan time.Time) {
+// so there is no package variable to restore. Extra options, such as
+// WithClock, are applied after it.
+func newTestManager(t *testing.T, restartChan chan string, extraOpts ...StateManagerOption) (*stateManager, *[]chan time.Time) {
 	t.Helper()
 	channels := make([]chan time.Time, 0)
 	tick := func(_ time.Duration) (<-chan time.Time, func()) {
@@ -42,7 +90,8 @@ func newTestManager(t *testing.T, restartChan chan string) (*stateManager, *[]ch
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	manager := NewStateManager("fleet", logger, restartChan, repo, WithTickSource(tick)).(*stateManager)
+	opts := append([]StateManagerOption{WithTickSource(tick)}, extraOpts...)
+	manager := NewStateManager("fleet", logger, restartChan, repo, opts...).(*stateManager)
 	return manager, &channels
 }
 
@@ -86,9 +135,11 @@ func TestMonitorDoesNotHoldTheLockOnAFullRestartChannel(t *testing.T) {
 }
 
 // A backend holds at most one slot in the restart queue: repeated ticks
-// while a request is still pending must not enqueue it again, since a name
-// with no dedup would let a handful of unhealthy backends fill every slot
-// and starve one whose request never fits.
+// while a request is still pending, or still in flight after RegisterRestart
+// took it, must not enqueue it again, since a name with no dedup would let a
+// handful of unhealthy backends fill every slot and starve one whose request
+// never fits. Once the backend is seen running again, or fails again after a
+// fresh restart, the slot is free for another request.
 func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
 	restartChan := make(chan string, 5)
 	manager, channels := newTestManager(t, restartChan)
@@ -98,14 +149,55 @@ func TestMonitorQueuesOneRestartPerBackendUntilItIsTaken(t *testing.T) {
 	tick := (*channels)[0]
 
 	sendTick(t, tick)
-	sendTick(t, tick)
-	sendTick(t, tick)
-	require.Len(t, restartChan, 1)
+	require.Eventually(t, func() bool { return len(restartChan) == 1 }, time.Second, time.Millisecond)
 
 	manager.RegisterRestart("unhealthy", "taken")
 	sendTick(t, tick)
+	// The next tick only arrives once the previous one's iteration is fully
+	// done, which is what proves it really did skip instead of just not
+	// having gotten to the send yet.
+	sendTick(t, tick)
+	require.Len(t, restartChan, 1, "a request already taken and in flight must not be queued again")
+
+	be.setStatus(Running)
+	sendTick(t, tick)
+	// Wait for the Running tick's iteration to actually clear the slot
+	// before flipping the backend again, so that iteration's own read of
+	// status and start time cannot race the mutation below.
+	require.Eventually(t, func() bool {
+		manager.mu.Lock()
+		defer manager.mu.Unlock()
+		_, ok := manager.queued["unhealthy"]
+		return !ok
+	}, time.Second, time.Millisecond, "seeing the backend running again must release the slot")
+
+	be.setStatus(BackendError)
+	be.setStarted(time.Now().Add(-2 * MinRestartTime))
+	sendTick(t, tick)
 	require.Eventually(t, func() bool { return len(restartChan) == 2 }, time.Second, time.Millisecond,
-		"RegisterRestart must release the slot so the next tick can queue again")
+		"a later failure after the slot was released must be able to queue again")
+}
+
+// A restart in flight for longer than MinRestartTime never brought the
+// backend back, so its slot is released and the next tick may queue another
+// one, keeping today's retry cadence for a permanently failing backend.
+func TestMonitorReleasesAnInFlightRestartOlderThanMinRestartTime(t *testing.T) {
+	clock := newMutableClock(time.Now())
+	restartChan := make(chan string, 5)
+	manager, channels := newTestManager(t, restartChan, WithClock(clock.Now))
+	be := &countingBackend{status: BackendError, started: time.Now().Add(-2 * MinRestartTime)}
+	manager.StartBackendMonitor("unhealthy", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+
+	sendTick(t, tick)
+	require.Eventually(t, func() bool { return len(restartChan) == 1 }, time.Second, time.Millisecond)
+
+	manager.RegisterRestart("unhealthy", "taken")
+	clock.Advance(MinRestartTime)
+	sendTick(t, tick)
+	require.Eventually(t, func() bool { return len(restartChan) == 2 }, time.Second, time.Millisecond,
+		"an in-flight restart older than MinRestartTime must release its slot")
 }
 
 // A restart request that did not fit in a full queue must not be considered
@@ -124,7 +216,8 @@ func TestMonitorKeepsARequestThatDidNotFit(t *testing.T) {
 	require.Eventually(t, func() bool {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
-		return !manager.queued["unhealthy"]
+		_, ok := manager.queued["unhealthy"]
+		return !ok
 	}, time.Second, time.Millisecond, "a request that did not fit must be released so the next tick retries it")
 	require.Len(t, restartChan, 1)
 	require.Equal(t, "other", <-restartChan)
