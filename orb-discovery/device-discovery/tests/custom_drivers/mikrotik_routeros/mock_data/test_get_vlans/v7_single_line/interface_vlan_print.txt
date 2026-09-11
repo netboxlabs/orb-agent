@@ -1,0 +1,8 @@
+Flags: X - disabled, R - running
+Columns: NAME, MTU, ARP, VLAN-ID, INTERFACE
+#   NAME             MTU  ARP      VLAN-ID  INTERFACE
+0 R vlan160         1500  enabled      160  sfp-sfpplus1
+1 R vlan663         1500  enabled      663  sfp-sfpplus1
+2 R vlan667         1500  enabled      667  sfp-sfpplus1
+3 R vlan3333        1500  enabled     3333  ether1
+4 R vlan665         1500  enabled      665  sfp-sfpplus2

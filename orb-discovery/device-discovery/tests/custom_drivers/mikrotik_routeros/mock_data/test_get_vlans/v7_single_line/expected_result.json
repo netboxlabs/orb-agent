@@ -1,0 +1,32 @@
+{
+  "160": {
+    "name": "vlan160",
+    "interfaces": [
+      "sfp-sfpplus1"
+    ]
+  },
+  "663": {
+    "name": "vlan663",
+    "interfaces": [
+      "sfp-sfpplus1"
+    ]
+  },
+  "667": {
+    "name": "vlan667",
+    "interfaces": [
+      "sfp-sfpplus1"
+    ]
+  },
+  "3333": {
+    "name": "vlan3333",
+    "interfaces": [
+      "ether1"
+    ]
+  },
+  "665": {
+    "name": "vlan665",
+    "interfaces": [
+      "sfp-sfpplus2"
+    ]
+  }
+}
