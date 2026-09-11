@@ -427,7 +427,9 @@ After a rekey, a PVID that names no VLAN in the rekeyed catalog is reported as 0
 
 The catalog here means the VLANs actually being rekeyed, not every tag the enterprise table mentions — that table may describe VLANs with no static row, and those name nothing in the emitted catalog.
 
-The port's `untagged_vlan` is then left unwritten, so partial updates leave whatever NetBox holds for it. This is narrower than "nothing changes": a port that also has tagged membership still has its `mode` and `tagged_vlans` written, so it can end up `tagged` beside an `untagged_vlan` from a previous discovery. It is also narrower than closing the hole — an index-space PVID whose value happens to equal some *other* VLAN's real tag is indistinguishable from a correct one, and binds the port to the wrong VLAN. On the reported switch none of this applies: every PVID there is a resolved tag.
+A value that names a VLAN under *both* readings is zeroed for the same reason. This device numbers VLANs internally, so a PVID may be in either space: a value that is a real tag **and** also one of the device's internal indices pointing elsewhere identifies one VLAN as a tag and a different one as an index, with nothing to say which was meant. Keeping it would bind the port to a specific VLAN on a coin flip. A tag that is its own index is exempt, since both readings agree. The collision is real hardware behaviour rather than a constructed case — two of the reported switch's 39 tags are also indices resolving elsewhere — though neither is used as a PVID there, so that device is unaffected.
+
+The port's `untagged_vlan` is then left unwritten, so partial updates leave whatever NetBox holds for it. That is narrower than "nothing changes": a port that also has tagged membership still has its `mode` and `tagged_vlans` written, so it can end up `tagged` beside an `untagged_vlan` from a previous discovery.
 
 ### Deliberately left alone
 
