@@ -1320,9 +1320,109 @@ func TestCompareVlanNames_TruncationIsAskedSymmetrically(t *testing.T) {
 		{"one cut, surviving prefixes differ", onBound, "MGMT", namesDisagree},
 		{"longer than the bound, so not a cut", onBound + "x", onBound + "y", namesDisagree},
 		{"the ELS suffix, short", "office+100", "office", namesAgree},
+
+		// A complete SHORT name cannot be the same VLAN as a name that was
+		// cut at the bound: the short one ended where it ended, and the cut
+		// one runs on past it. An undirected prefix test abstained here and
+		// lost the hard refusal that should follow.
+		{"cut static, complete short enterprise", onBound, "campus", namesDisagree},
+		{"complete short static, cut enterprise", "campus", onBound, namesDisagree},
+		{"cut static, single-character enterprise", onBound, "c", namesDisagree},
+
+		// One octet below the bound is a NUL-terminated cut, and is treated
+		// as possibly cut for corroboration.
+		{"NUL-terminated cut, enterprise continues it", onBound[:31], onBound + "an-alpha", namesInconclusive},
+		{"both NUL-terminated to the same octets", onBound[:31], onBound[:31], namesInconclusive},
+
+		// A visible suffix proves the end survived, so the name is complete
+		// however long it is, and it corroborates rather than abstaining.
+		{"suffix intact on the bound", "campus-west-building12-floor+100", "campus-west-building12-floor", namesAgree},
 	} {
 		if got := compareVlanNames(tc.static, tc.enterprise, 100); got != tc.want {
 			t.Errorf("%s: compareVlanNames(%q, %q) = %v, want %v", tc.what, tc.static, tc.enterprise, got, tc.want)
 		}
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesWhenANameIsCutOneOctetShort covers the
+// blind spot an agent's NUL terminator opens.
+//
+// trimSNMPString strips NUL bytes, so an agent that writes into a 32-octet
+// buffer and NUL-terminates delivers 31 octets of text. Read as a complete
+// name, that is the same silent full-rekey as the both-cut case one octet
+// higher: an already tag-keyed device whose structured names all collapse to
+// the same prefix passes coverage and ambiguity, and every VLAN is re-emitted
+// carrying the next VLAN's name, ports and row status.
+//
+// Covering it costs this gate only a vote — the rekey needs its evidence from
+// an uncut row instead. The ELS convention gate cannot make the same trade, and
+// does not.
+func TestResolveJuniperVlanIndices_RefusesWhenANameIsCutOneOctetShort(t *testing.T) {
+	shared := "campus-west-building12-floor3-v" // one octet below the bound
+	if len(shared) != dot1qVlanStaticNameMax-1 {
+		t.Fatalf("fixture must sit one octet below the bound, got %d", len(shared))
+	}
+	in := ObjectIDValueMap{oidSysObjectIDScalar: {Value: jnxSysObjectID}}
+	tags := []int{100, 101, 102, 103}
+	for i, tag := range tags {
+		key := strconv.Itoa(tag)
+		in[oidDot1qVlanStaticName+key] = Value{Value: shared}
+		in[oidDot1qVlanStaticEgressPorts+key] = Value{Value: "ports-of-" + key}
+		in[oidJnxExVlanName+key] = Value{Value: shared}
+		in[oidJnxExVlanTag+key] = Value{Value: strconv.Itoa(tags[(i+1)%len(tags)])}
+	}
+
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("names that may all be truncations must not corroborate, got %v", out)
+	}
+	for _, tag := range tags {
+		key := strconv.Itoa(tag)
+		if got, want := out[oidDot1qVlanStaticEgressPorts+key].Value, "ports-of-"+key; got != want {
+			t.Errorf("VLAN %s carries another VLAN's ports: %q, want %q", key, got, want)
+		}
+	}
+	if !strings.Contains(logged.String(), "nothing corroborates") {
+		t.Errorf("the refusal must say the evidence is missing, got %q", logged.String())
+	}
+}
+
+// TestResolveJuniperVlanIndices_ACompleteShortNameStillDisagrees is the
+// device-level form of the directed prefix rule.
+//
+// Before it, a row whose enterprise name was a complete short string and whose
+// static name was cut at the bound abstained instead of contradicting — so a
+// device with one agreeing row and one such row was rekeyed, and the row that
+// should have refused the device was re-emitted under the wrong identity.
+func TestResolveJuniperVlanIndices_ACompleteShortNameStillDisagrees(t *testing.T) {
+	onBound := "campus-west-building12-floor3-vl"
+	if len(onBound) != dot1qVlanStaticNameMax {
+		t.Fatalf("fixture must sit on the bound, got %d", len(onBound))
+	}
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// A row that genuinely agrees, so the refusal can only come from below.
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+
+		// The static name was cut; the enterprise name is complete and short.
+		// They cannot be one VLAN under any reading.
+		oidDot1qVlanStaticName + "24":        {Value: onBound},
+		oidDot1qVlanStaticEgressPorts + "24": {Value: "ports-of-24"},
+		oidJnxExVlanName + "24":              {Value: "campus"},
+		oidJnxExVlanTag + "24":               {Value: "32"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("a proven contradiction must refuse the device, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "disagree") {
+		t.Errorf("the refusal must name the disagreement, got %q", logged.String())
 	}
 }

@@ -372,11 +372,16 @@ const dot1qVlanStaticNameMax = 32
 // evidence of nothing either way. The ELS "+<tag>" suffix is stripped from both
 // sides first, since only one table may carry it.
 //
-// The gate's discriminating power rests on VLAN names being unique across the
-// device: agreement at index k on a tag-keyed table would require the VLAN
-// tagged k and the VLAN at internal index k to share a name, which under unique
-// names forces k to equal the tag and is excluded below. Junos makes the name a
-// configuration key, so this holds there.
+// The gate's discriminating power rests on VLAN names being distinct among the
+// rows it compares: agreement at index k on a tag-keyed table would require the
+// VLAN tagged k and the VLAN at internal index k to share a name, which under
+// distinct names forces k to equal the tag and is excluded below. Junos makes
+// the name a configuration key, which gives that within a bridge domain space;
+// names can repeat across routing-instances, so this is the platform's habit
+// rather than a guarantee. Requiring the agreement to come from an uncut name
+// does not repair that — two VLANs may legitimately share a name at any length
+// — it only keeps truncation from manufacturing collisions that the assumption
+// would then have to absorb.
 //
 // An index whose tag EQUALS it is not counted as agreement. Such a row reads
 // the same whether the static table is keyed by index or by tag, so it cannot
@@ -457,67 +462,88 @@ const (
 // rekey still needs a full agreement somewhere on the device.
 //
 // Agreement is judged on the stripped names, which subsumes raw equality. The
-// truncation test below uses the raw ones, because a cut can land in the middle
-// of the ELS "+<tag>" suffix and leave one side strippable and the other not.
+// truncation test uses the raw ones, because a cut can land in the middle of
+// the ELS "+<tag>" suffix and leave one side strippable and the other not.
+// That rescues the case where the UNCUT side is the decorated one; where the
+// cut side is, the surviving text no longer prefixes the other and the row
+// contradicts. Unattested on either captured device — the pre-ELS switch
+// decorates nothing and the ELS one publishes no enterprise table — and it
+// fails toward a refusal rather than a write.
 //
-// Length ON the bound is the proxy for "was cut", and it is deliberately an
-// equality rather than a minimum: a name LONGER than the bound is proof that
-// this agent does not cut at the bound, which falsifies the premise exactly
-// where a minimum would apply it.
-//
-// The proxy is imperfect in the other direction. Device strings are trimmed
-// before they reach here, and that strips NUL bytes anywhere as well as
-// surrounding whitespace — so a name cut at the bound whose last octet is the
-// NUL many agents pad with arrives at 31 and is read as a plain disagreement.
-// It is the signal available.
+// See maybeCutAtColumnBound for what counts as possibly cut, and for the blind
+// spot that remains.
 func compareVlanNames(static, enterprise string, tag int) nameVerdict {
-	a, b := stripVlanNameTagSuffix(static, tag), stripVlanNameTagSuffix(enterprise, tag)
+	staticCut := maybeCutAtColumnBound(static, tag)
+	enterpriseCut := maybeCutAtColumnBound(enterprise, tag)
 
-	// Neither name could have been cut, so they speak for themselves.
-	if !maybeCutAtColumnBound(static) && !maybeCutAtColumnBound(enterprise) {
-		if a == b {
+	// Neither name could have been cut, so both speak for themselves.
+	if !staticCut && !enterpriseCut {
+		if stripVlanNameTagSuffix(static, tag) == stripVlanNameTagSuffix(enterprise, tag) {
 			return namesAgree
 		}
 		return namesDisagree
 	}
-	// One of them might be a truncation. Equality is then not agreement: it may
-	// be an artifact of the cut, which is the whole danger — two VLANs sharing
-	// a 32-octet prefix, cut, are indistinguishable. A prefix relation is the
-	// same question one step weaker. Either way the row decides nothing.
+
+	// One of them might be a truncation, so equality is not agreement: it may
+	// be an artifact of the cut, which is the danger — two VLANs sharing a
+	// 32-octet prefix, cut, are indistinguishable.
 	//
-	// Checking BOTH sides matters. Bounding dot1qVlanStaticName at 32 octets is
-	// RFC 4363; jnxExVlanName carrying no such bound is an assumption the
-	// captures cannot confirm, because every name on them is short. If some
-	// Junos build bounds it too, then on a device with structured names the two
-	// columns are cut to the same 32 octets, arrive EQUAL, and this gate stops
-	// discriminating at the moment it matters most. Asking the question
-	// symmetrically costs nothing and removes the dependency on that fact.
-	if strings.HasPrefix(a, b) || strings.HasPrefix(b, a) ||
-		strings.HasPrefix(static, enterprise) || strings.HasPrefix(enterprise, static) {
+	// Asked in a direction. Under the model this file uses, a name below the
+	// bound is complete, so two observed strings can be one name ONLY if the
+	// possibly-cut one is a prefix of the other. An undirected test also
+	// abstained when a complete SHORT name was a prefix of a cut long one —
+	// "campus" against a 32-octet name, which under this model are different
+	// VLANs — and the hard refusal that should follow was lost.
+	//
+	// Both sides are asked because bounding dot1qVlanStaticName at 32 octets
+	// is RFC 4363, while jnxExVlanName carrying no such bound is an assumption
+	// the captures cannot confirm: every name on them is short. If some Junos
+	// build bounds it too, a device with structured names has both columns cut
+	// to the same octets, arriving EQUAL, and this gate would stop
+	// discriminating at the moment it matters most.
+	if staticCut && strings.HasPrefix(enterprise, static) {
+		return namesInconclusive
+	}
+	if enterpriseCut && strings.HasPrefix(static, enterprise) {
 		return namesInconclusive
 	}
 	// The surviving prefixes differ, and a cut cannot change what survived.
 	return namesDisagree
 }
 
-// maybeCutAtColumnBound reports whether a name is the length at which the
-// standard column must truncate, so its content past that point is unknown.
+// maybeCutAtColumnBound reports whether a name might have lost its end to the
+// standard column's length limit, so its content past that point is unknown.
 //
-// Exactly the bound, not at least it: a longer name proves this agent does not
-// cut at the bound, so it cannot have lost anything that way.
+// Three things decide it.
 //
-// Known blind spot one octet below. trimSNMPString strips NUL bytes, so an
-// agent that writes into a 32-octet buffer and NUL-terminates — an ordinary C
-// idiom — delivers 31 octets of text that this reads as a complete name. The
-// window is not widened to cover it because doing so is only safe on one of
-// the two sides that ask this question: for corroboration a false "maybe cut"
-// merely abstains, but for the ELS name convention it discards a veto, and
-// discarding a veto renames the operator's VLANs. Trading a loud refusal for a
-// silent rename on an unverified guess about agent internals is the wrong
-// direction. The cost is that one VLAN name of exactly that length can refuse
-// the rekey for its switch, which is logged.
-func maybeCutAtColumnBound(name string) bool {
-	return len(name) == dot1qVlanStaticNameMax
+// A name whose "+<tag>" suffix is still visible cannot have been cut: the end
+// is right there. That is the same question everyNameCarriesItsTagSuffix asks
+// before consulting a length, and asking it here keeps the two gates consistent
+// — without it, an ELS name landing exactly on the bound with its suffix intact
+// would abstain instead of corroborating.
+//
+// A name LONGER than the bound proves this agent does not truncate there, so it
+// cannot have lost anything that way and its content is real evidence.
+//
+// The window is the bound and one octet below it. trimSNMPString strips NUL
+// bytes, so an agent that writes into a 32-octet buffer and NUL-terminates — an
+// ordinary C idiom — delivers 31 octets of text that would otherwise read as a
+// complete name. Reaching that case silently re-emits every VLAN under another
+// VLAN's identity, which is the worst outcome in this file, while the cost of
+// covering it is only that a name of exactly that length corroborates nothing.
+// This gate can afford that: abstaining loses a vote, and the rekey simply needs
+// its evidence elsewhere.
+//
+// The ELS convention gate deliberately does NOT widen the same way, and the two
+// are independent windows rather than one shared rule. There, a name that
+// abstains is a veto discarded, and a discarded veto renames the operator's
+// VLANs — so the cost of widening runs the opposite direction and is paid
+// silently. It keeps the tighter window and documents the same blind spot.
+func maybeCutAtColumnBound(name string, tag int) bool {
+	if stripVlanNameTagSuffix(name, tag) != name {
+		return false
+	}
+	return len(name) == dot1qVlanStaticNameMax || len(name) == dot1qVlanStaticNameMax-1
 }
 
 // splitStaticVlanOID splits a dot1qVlanStaticTable OID into its column prefix
