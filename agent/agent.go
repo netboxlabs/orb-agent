@@ -28,6 +28,11 @@ const (
 	routineKey             config.ContextKey = "routine"
 	otlpShutdownTimeout    time.Duration     = 5 * time.Second
 	restartBackendChanSize int               = 5
+
+	// reapplyAttempts bounds how many times reapplyBackendPolicies calls
+	// ApplyBackendPolicies for a single restart while it keeps answering
+	// ErrBackendNotRunning.
+	reapplyAttempts int = 3
 )
 
 // Agent is the interface that all agents must implement
@@ -108,6 +113,11 @@ type orbAgent struct {
 	// begins still sees a live context; stopCtx is what it observes instead.
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
+
+	// reapplyRetryDelay separates the attempts a restart's replay makes while
+	// the backend is not yet answering its status probe. New sets it; tests
+	// shorten it.
+	reapplyRetryDelay time.Duration
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -168,6 +178,7 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 		restartBackendChan:  restartBackendChan,
 		stopCtx:             stopCtx,
 		stopCancel:          stopCancel,
+		reapplyRetryDelay:   10 * time.Second,
 	}
 	pm.SetStarter(restartStarter{agent: a})
 	return a, nil
@@ -333,12 +344,23 @@ func (a *orbAgent) restartingFlag(name string) *atomic.Bool {
 }
 
 // reapplyBackendPolicies hands the backend its own policies again after a
-// restart. A failure is logged, not returned: the policies stay marked unknown
-// for the next successful restart. Once the context is done the agent is
-// shutting down and no new work is launched; the policies stay unknown. The
-// policy manager itself re-checks the context before every policy in its
-// loop, so a shutdown that begins mid-replay stops launching further HTTP
-// calls instead of running the whole backlog.
+// restart. A backend that has just come back from a reset or a start may not
+// answer its first status probe or two, so ApplyBackendPolicies can return
+// ErrBackendNotRunning transiently even though the backend is on its way up.
+// The replay retries that specific error, up to reapplyAttempts times,
+// reapplyRetryDelay apart, because nothing else would install the policies:
+// the health monitor sees a healthy backend and never asks for another
+// restart. Any other failure, and giving up after reapplyAttempts, is
+// logged, not returned: the policies stay marked unknown for the next
+// successful restart. Once the context is done the agent is shutting down
+// and no new work is launched; the policies stay unknown. The policy manager
+// itself re-checks the context before every policy in its loop, so a
+// shutdown that begins mid-replay stops launching further HTTP calls instead
+// of running the whole backlog.
+//
+// The restart mutex stays held across the retries, which is intended: no
+// other restart for this backend may interleave with a replay in progress,
+// and a shutdown cancels the wait rather than blocking it.
 //
 // The apply context is cancelled by whichever of the caller's context or the
 // agent's stop context is cancelled first, since the agent context (unlike
@@ -368,9 +390,24 @@ func (a *orbAgent) reapplyBackendPolicies(ctx context.Context, name string, be b
 		a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", err)
 		return
 	}
-	if err := a.policyManager.ApplyBackendPolicies(applyCtx, name, be); err != nil {
-		a.logger.Error("backend policies left unapplied after restart; they stay unknown until the next successful restart",
-			"backend", name, "error", err)
+	for attempt := 1; ; attempt++ {
+		err := a.policyManager.ApplyBackendPolicies(applyCtx, name, be)
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, policymgr.ErrBackendNotRunning) || attempt == reapplyAttempts {
+			a.logger.Error("backend policies left unapplied after restart; they stay unknown until the next successful restart",
+				"backend", name, "attempts", attempt, "error", err)
+			return
+		}
+		a.logger.Warn("backend not answering yet after restart; retrying the policy replay",
+			"backend", name, "attempt", attempt, "retry_in", a.reapplyRetryDelay)
+		select {
+		case <-applyCtx.Done():
+			a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", applyCtx.Err())
+			return
+		case <-time.After(a.reapplyRetryDelay):
+		}
 	}
 }
 

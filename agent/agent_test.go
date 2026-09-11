@@ -132,6 +132,15 @@ type mockPolicyManager struct {
 	// the backend is in flight at call time (see ApplyBackendPolicies below).
 	// Left nil, and so checked before use, by tests that do not care.
 	agent *orbAgent
+
+	// applyErrs queues the errors ApplyBackendPolicies returns, one per call,
+	// popped in call order; once the queue is empty every further call
+	// returns nil.
+	applyErrs []error
+
+	// onApply, when set, runs at the start of every ApplyBackendPolicies
+	// call, before the queued error is popped.
+	onApply func()
 }
 
 func (m *mockPolicyManager) record(event string) {
@@ -156,12 +165,20 @@ func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 // (restarting=false, since the marker clears before it runs) from a manage
 // that lands while a restart holds the marker.
 func (m *mockPolicyManager) ApplyBackendPolicies(_ context.Context, name string, _ backend.Backend) error {
+	if m.onApply != nil {
+		m.onApply()
+	}
 	if m.agent == nil {
 		m.record("apply:" + name)
-		return nil
+	} else {
+		m.record(fmt.Sprintf("apply:%s:restarting=%t", name, m.agent.restartingFlag(name).Load()))
 	}
-	m.record(fmt.Sprintf("apply:%s:restarting=%t", name, m.agent.restartingFlag(name).Load()))
-	return nil
+	var err error
+	if len(m.applyErrs) > 0 {
+		err = m.applyErrs[0]
+		m.applyErrs = m.applyErrs[1:]
+	}
+	return err
 }
 
 func (m *mockPolicyManager) RemoveBackendPolicies(name string, _ backend.Backend, permanently bool) error {
@@ -249,6 +266,146 @@ func TestRestartBackendReappliesItsOwnPolicies(t *testing.T) {
 		"reset",
 		"apply:snmp_discovery:restarting=false",
 	}, events, "policies kept, removed before the reset, applied once with the restarting marker already cleared")
+}
+
+// Right after a reset or start, a backend's status probe can transiently
+// fail, so the applier answers ErrBackendNotRunning even though the backend
+// is on its way up. The replay must retry rather than leave the policies
+// unknown until some later restart that may not come.
+func TestRestartBackendRetriesTheReplayWhileTheBackendIsNotAnsweringYet(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, nil,
+	}}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+	}
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, []string{
+		"remove:snmp_discovery:permanently=false",
+		"configure",
+		"reset",
+		"apply:snmp_discovery",
+		"apply:snmp_discovery",
+		"apply:snmp_discovery",
+	}, events, "the replay retries while the backend answers not-running, then succeeds on the third attempt")
+}
+
+// The replay is retried a bounded number of times: a backend that keeps
+// answering not-running must not be retried forever, since nothing else
+// would ever install its policies (the health monitor sees it as healthy).
+func TestRestartBackendGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
+	}}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+	}
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, []string{
+		"remove:snmp_discovery:permanently=false",
+		"configure",
+		"reset",
+		"apply:snmp_discovery",
+		"apply:snmp_discovery",
+		"apply:snmp_discovery",
+	}, events, "the replay gives up after three attempts and leaves the policies unknown")
+}
+
+// A failure that is not ErrBackendNotRunning is not transient in the same
+// way, so the replay must not retry it.
+func TestRestartBackendDoesNotRetryAReplayThatFailedForAnotherReason(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		errors.New("repo failure"),
+	}}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+	}
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, []string{
+		"remove:snmp_discovery:permanently=false",
+		"configure",
+		"reset",
+		"apply:snmp_discovery",
+	}, events, "a non-transient failure must not be retried")
+}
+
+// A retry waits on the apply context, not a plain sleep, so a shutdown that
+// begins mid-wait ends the wait immediately instead of the replay sleeping
+// out a long retry delay.
+func TestRestartBackendStopsRetryingWhenStopBegins(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
+	}}
+	be := &restartableBackend{events: &events}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Hour,
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+	}
+	pm.onApply = func() { a.stopCancel() }
+
+	done := make(chan error, 1)
+	go func() { done <- a.RestartBackend(context.Background(), "snmp_discovery", "test") }()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("RestartBackend did not return promptly once Stop began")
+	}
+
+	assert.Equal(t, []string{
+		"remove:snmp_discovery:permanently=false",
+		"configure",
+		"reset",
+		"apply:snmp_discovery",
+	}, events, "the retry wait is cancelled the instant Stop begins, not slept out")
 }
 
 // A reset that fails leaves the policies marked for the next restart and
