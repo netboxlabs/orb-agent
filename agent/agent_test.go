@@ -300,6 +300,57 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP)
 }
 
+// fleetRewriteCase starts an agent in fleet mode with the given backends map and
+// returns the extracted common config, so table cases can assert the rewrite.
+func fleetRewriteCase(t *testing.T, backends map[string]any) config.BackendCommons {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Backends:       backends,
+			ConfigManager:  config.ManagerConfig{Active: "fleet"},
+			SecretsManager: config.ManagerSecrets{Active: ""},
+		},
+	}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &mockSecretsManager{}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, orbAgent.Start(ctx, cancel))
+	return orbAgent.backendsCommon
+}
+
+func TestStart_FleetConfig_RewritesOTLPForDegenerateCommonBlocks(t *testing.T) {
+	// `common:` with no value is stored as nil by yaml.v3; `otlp:` with no
+	// value likewise. Neither may stop the bridge endpoints from being set,
+	// otherwise pktvisor starts without --otel and silently sends nothing.
+	cases := map[string]map[string]any{
+		"empty common block":     {"common": nil},
+		"non-map common value":   {"common": "oops"},
+		"empty otlp key":         {"common": map[string]any{"otlp": nil}},
+		"non-map otlp value":     {"common": map[string]any{"otlp": []any{"x"}}},
+		"nil backends map":       nil,
+		"common with other keys": {"common": map[string]any{"diode": map[string]any{"target": "t"}}},
+	}
+	for name, backends := range cases {
+		t.Run(name, func(t *testing.T) {
+			common := fleetRewriteCase(t, backends)
+			assert.Equal(t, "grpc://localhost:4317", common.Otlp.Grpc)
+			assert.Equal(t, "http://localhost:4318", common.Otlp.HTTP)
+		})
+	}
+}
+
 func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	repo, err := policies.NewMemRepo()
