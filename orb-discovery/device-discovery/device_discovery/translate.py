@@ -111,22 +111,26 @@ def _drop_unconfigured_placeholder(value: str | None, *, is_update: bool) -> str
     return value
 
 
-# Placeholder fqdn values drivers report when no real FQDN is known:
-# junos stringifies an undetermined fqdn fact to "None"; the ios family
-# defaults the fact to "Unknown".
-_FQDN_PLACEHOLDERS = frozenset({"None", "Unknown"})
-
-
 def _resolve_device_name(device_info: dict, options: Options | None) -> str | None:
     """
     Pick the fact used for ``Device.name``.
 
     Defaults to the ``hostname`` fact. With ``options.device_name_source``
-    set to ``"fqdn"`` the ``fqdn`` fact is used instead, falling back to
-    the hostname when the driver reported no usable FQDN — a missing or
-    empty value, a known placeholder, or a value equal to the hostname
-    (every driver reports ``fqdn == hostname`` when no domain is
-    configured, which adds nothing over the hostname).
+    set to ``"fqdn"`` the ``fqdn`` fact is used instead, but only when it
+    positively looks like a domain-qualified form of the hostname: no
+    whitespace and, case-insensitively, the hostname followed by a dot and
+    at least one more character. Anything else falls back to the hostname.
+    A denylist cannot keep up with what drivers emit when no domain is
+    configured — ``"None"`` (junos stringifies an undetermined fact),
+    ``"Unknown"`` (the ios-family default), ``"N/A"`` (paloalto), or
+    ``"<hostname>.not set"`` (ios keeps the text after "Default domain
+    is") — while the positive check rejects them all, including an fqdn
+    merely equal to the hostname, which adds nothing over it.
+
+    A hostname that already contains a dot is kept as-is: ios, junos and
+    others build ``hostname + "." + domain`` with no check, so a
+    domain-qualified hostname plus a configured domain would yield
+    ``rtr1.dc1.example.net.dc1.example.net``.
 
     A driver that discovered no hostname at all must OMIT device.name. An
     explicit empty name is a real value to the Diode plugin, not an
@@ -136,10 +140,13 @@ def _resolve_device_name(device_info: dict, options: Options | None) -> str | No
     if options is not None and options.device_name_source == "fqdn":
         fqdn = device_info.get("fqdn")
         if (
-            isinstance(fqdn, str)
-            and fqdn
-            and fqdn not in _FQDN_PLACEHOLDERS
-            and fqdn != hostname
+            isinstance(hostname, str)
+            and hostname
+            and "." not in hostname
+            and isinstance(fqdn, str)
+            and len(fqdn) > len(hostname) + 1
+            and not any(ch.isspace() for ch in fqdn)
+            and fqdn.lower().startswith(hostname.lower() + ".")
         ):
             return blank_to_none(fqdn)
     return blank_to_none(hostname)

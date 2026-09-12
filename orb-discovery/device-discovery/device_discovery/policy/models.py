@@ -442,7 +442,9 @@ class Options(WarnUnknownKeys):
     emit_device_name: bool = Field(
         default=True,
         description=(
-            "Emit Device.name from the hostname the driver reported. "
+            "Emit Device.name from the discovered device name — the "
+            "hostname fact, or the fqdn fact under device_name_source: "
+            "fqdn. "
             "Defaults to True. Set False to suppress the name on the matched "
             "device so continual discovery stops proposing a hostname rename "
             "when the discovered hostname differs from the NetBox name. Only "
@@ -458,17 +460,56 @@ class Options(WarnUnknownKeys):
         description=(
             "Fact used for Device.name. 'hostname' (default) keeps the "
             "driver-reported hostname. 'fqdn' uses the fqdn fact instead, "
-            "falling back to the hostname when the driver reported no "
-            "usable FQDN: a missing or empty value, the placeholders "
-            "'None' (junos stringifies an undetermined fqdn) and "
-            "'Unknown' (the ios-family default), or a value equal to the "
-            "hostname. Diode matches devices by name, so switching an "
-            "existing deployment to 'fqdn' creates new records unless the "
-            "NetBox devices are renamed first. Virtual-chassis member "
-            "names built from stack_member_name_template keep using the "
-            "raw hostname fact."
+            "but only when it positively looks like a domain-qualified "
+            "form of the hostname: no whitespace and, case-insensitively, "
+            "the hostname followed by a dot and at least one more "
+            "character. Anything else — placeholders such as 'None', "
+            "'Unknown', 'N/A' or ios's '<hostname>.not set', an fqdn "
+            "equal to the hostname, or a hostname that already contains "
+            "a dot (several drivers blindly append the domain again) — "
+            "falls back to the hostname. Does not apply to "
+            "virtual-chassis stacks: every member's name, the master's "
+            "included, comes from stack_member_name_template. Diode "
+            "matches devices by name, so switching an existing "
+            "deployment to 'fqdn' creates new records unless the NetBox "
+            "devices are renamed first. An unrecognized value logs a "
+            "warning and resolves to 'hostname'."
         ),
     )
+
+    @field_validator("device_name_source", mode="before")
+    @classmethod
+    def _normalize_device_name_source(cls, v: object) -> str:
+        """
+        Normalize the source string the way _normalize_emit_prefix_vlan does.
+
+        Trim and lowercase, then fall back to 'hostname' for anything
+        unrecognized so a typo keeps today's naming instead of failing the
+        whole policy. A boolean arrives from a bare YAML on/off/yes/no and
+        names no source; other scalars are coerced by the Go twin's string
+        decoding — none may raise. A sequence or mapping is rejected by
+        both sides, so raising here matches.
+        """
+        if v is None:
+            return "hostname"
+        if isinstance(v, bool):
+            logger.warning(
+                "device_name_source was read as a boolean — YAML treats a "
+                "bare on/off/yes/no that way. It names no source, so the "
+                "default 'hostname' is used; quote 'fqdn' to enable it."
+            )
+            return "hostname"
+        if isinstance(v, (list, tuple, set, dict)):
+            raise ValueError(
+                f"device_name_source must be 'hostname' or 'fqdn', "
+                f"got {type(v).__name__}"
+            )
+        text = v.decode() if isinstance(v, bytes) else str(v)
+        text = text.strip().lower()
+        if text in ("hostname", "fqdn"):
+            return text
+        logger.warning("Unrecognized device_name_source %r — using 'hostname'.", v)
+        return "hostname"
     emit_host_prefixes: bool = Field(
         default=False,
         description=(
