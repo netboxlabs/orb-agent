@@ -143,8 +143,20 @@ Optional OpenTelemetry export for backend metrics.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `grpc` | string | No | gRPC endpoint for OTLP export, e.g. `grpc://collector:4317` |
-| `http` | string | No | HTTP endpoint for OTLP export |
+| `http` | string | No | HTTP endpoint for OTLP export, e.g. `http://collector:4318` (used by pktvisor) |
 | `agent_labels` | map | No | Extra key/value labels attached to all exported telemetry |
+
+When `config_manager.active` is `fleet`, the agent runs a local OTLP bridge and
+rewrites both endpoints to it (`grpc://localhost:<otlp_bridge_grpc_port>` and
+`http://localhost:<otlp_bridge_http_port>`, defaults 4317 and 4318; the
+container image's `default_config.yaml` uses 4337 and 4338) so every backend's
+telemetry is forwarded to Fleet. Set the two ports under
+`config_manager.sources.fleet` when the defaults collide with another process.
+Both listeners accept unauthenticated OTLP, so they bind `127.0.0.1` by
+default. Set `otlp_bridge_bind_host: 0.0.0.0` (or `::`) only if a backend that
+runs outside the agent's network namespace must reach them. Because backends
+always dial `localhost`, the value must be `127.0.0.1`, `::1` or an
+unspecified address; the agent refuses to start otherwise.
 
 ### Backend keys
 
