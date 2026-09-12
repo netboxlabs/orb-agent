@@ -446,7 +446,6 @@ func (a *orbAgent) scheduleReplay(name string, be backend.Backend) {
 	a.replayers.Add(1)
 	go func() {
 		defer a.replayers.Done()
-		defer scheduled.Store(false)
 		stopCtx := a.stopCtx
 		if stopCtx == nil {
 			stopCtx = context.Background()
@@ -454,12 +453,21 @@ func (a *orbAgent) scheduleReplay(name string, be backend.Backend) {
 		for attempt := 1; ; attempt++ {
 			select {
 			case <-stopCtx.Done():
+				scheduled.Store(false)
 				return
 			case <-time.After(a.replayRetryInterval):
 			}
 			restartMu := a.backendRestartLock(name)
 			restartMu.Lock()
 			completed, retryable := a.reapplyBackendPolicies(stopCtx, name, be)
+			done := completed || !retryable
+			if done {
+				// Cleared while the restart mutex is still held: a restart
+				// that takes the mutex next and gives up must be able to
+				// schedule its own replay rather than be told one is pending
+				// by a goroutine about to exit.
+				scheduled.Store(false)
+			}
 			restartMu.Unlock()
 			if completed {
 				return

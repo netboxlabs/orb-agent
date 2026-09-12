@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -524,6 +526,60 @@ func TestRestartBackendReschedulesAReplayThatGaveUp(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("replayers.Wait did not return promptly once the scheduled replay completed")
 	}
+}
+
+// The scheduled replay clears its per-backend flag while it still holds the
+// restart mutex, so a restart that takes the mutex right after it and gives
+// up is not told a replay is already scheduled by a goroutine about to exit.
+func TestScheduledReplayClearsItsFlagBeforeReleasingTheRestartMutex(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, nil,
+	}}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+		replayRetryInterval: time.Millisecond,
+	}
+	pm.agent = a
+	var applies atomic.Int32
+	observed := make(chan bool, 1)
+	pm.onApply = func() {
+		if applies.Add(1) != 4 {
+			return
+		}
+		// The fourth apply is the scheduled replay's, made under the restart
+		// mutex. Race for the mutex from here; whoever gets it after the
+		// scheduled replay releases it must see the flag already cleared.
+		go func() {
+			mu := a.backendRestartLock("snmp_discovery")
+			for !mu.TryLock() {
+				runtime.Gosched()
+			}
+			v, _ := a.replayScheduled.Load("snmp_discovery")
+			flag, _ := v.(*atomic.Bool)
+			observed <- flag != nil && flag.Load()
+			mu.Unlock()
+		}()
+	}
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	select {
+	case stillScheduled := <-observed:
+		assert.False(t, stillScheduled, "the flag must be cleared before the restart mutex is released")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the scheduled replay never made its fourth attempt")
+	}
+	a.replayers.Wait()
 }
 
 // The wait between scheduled replay attempts is cancelled the instant Stop
