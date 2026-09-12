@@ -626,6 +626,31 @@ func TestApplyBackendPoliciesFailsOnlyThePolicyTheBackendRejects(t *testing.T) {
 // next policy: the one already applied keeps its outcome, the one never
 // reached stays unknown, and the call reports the cancellation so the caller
 // knows the remaining policies were left untouched rather than applied.
+// A replay whose context is already done when it gets the apply mutex does
+// not probe the backend at all: a shutdown that landed while it was queued
+// must not cost one more status round trip while Stop waits.
+func TestApplyBackendPoliciesDoesNotProbeTheBackendWhenTheContextIsAlreadyDone(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "applier_cancelled"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "cancelled-1", Name: "Cancelled", Backend: "applier_cancelled", Version: 1, Data: map[string]any{}, State: policies.Unknown}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = mgr.ApplyBackendPolicies(ctx, "applier_cancelled", be)
+
+	require.ErrorIs(t, err, context.Canceled)
+	be.AssertNotCalled(t, "GetRunningStatus")
+	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err := mgr.GetRepo().Get("cancelled-1")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Unknown, stored.State)
+}
+
 func TestApplyBackendPoliciesStopsWhenTheContextIsCancelledMidLoop(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := &mockSecretsManager{passthrough: true}

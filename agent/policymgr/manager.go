@@ -703,6 +703,12 @@ func (a *policyManager) ApplyBackendPolicies(ctx context.Context, name string, b
 }
 
 func (a *policyManager) applyBackendPoliciesLocked(ctx context.Context, name string, be backend.Backend) error {
+	// Checked again here, after the wait for the apply mutex: a shutdown that
+	// landed meanwhile must not cost one more status round trip.
+	if err := ctx.Err(); err != nil {
+		a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", err)
+		return err
+	}
 	if state, detail, err := be.GetRunningStatus(); state != backend.Running || err != nil {
 		a.logger.Warn("backend is not running; its policies are left for its next start",
 			"backend", name, "backend_state", state.String(), "detail", detail, "error", err)
