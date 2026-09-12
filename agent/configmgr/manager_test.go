@@ -15,6 +15,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // Mock implementations for testing
@@ -27,8 +28,8 @@ func (m *mockPolicyManager) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManager) GetPolicyState() ([]policies.PolicyData, error) {
@@ -41,8 +42,8 @@ func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManager) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManager) ApplyBackendPolicies(_ context.Context, name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 
@@ -55,6 +56,8 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
 type mockBackend struct {
 	mock.Mock
