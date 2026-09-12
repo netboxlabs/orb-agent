@@ -306,8 +306,8 @@ class TestJunosSwitchportModeFallback:
         d = self._driver(self.ACCESS_MEMBER + self.TRUNK_MEMBER)
         result = d.get_interfaces_vlans()
 
-        assert result["ge-0/0/23.0"] == {"mode": "access", "tagged": [], "untagged": 888}
-        assert result["xe-0/0/17.0"] == {"mode": "trunk", "tagged": [156], "untagged": None}
+        assert result["ge-0/0/23"] == {"mode": "access", "tagged": [], "untagged": 888}
+        assert result["xe-0/0/17"] == {"mode": "trunk", "tagged": [156], "untagged": None}
 
     def test_the_detail_form_is_asked_for_first(self):
         """
@@ -334,7 +334,7 @@ class TestJunosSwitchportModeFallback:
         assert d.device.asked[0] == {"detail": True}, "the detailed form must be asked for first"
         # The device says trunk. Membership alone would have inferred access,
         # which is the case inference cannot get right and the element can.
-        assert result["ge-0/0/23.0"]["mode"] == "trunk"
+        assert result["ge-0/0/23"]["mode"] == "trunk"
 
     def test_the_plain_form_still_answers_when_detail_is_refused(self):
         """A platform that rejects the argument keeps the behaviour it has."""
@@ -342,7 +342,7 @@ class TestJunosSwitchportModeFallback:
         result = d.get_interfaces_vlans()
 
         assert [kw.get("detail", False) for kw in d.device.asked] == [True, False]
-        assert result["ge-0/0/23.0"]["mode"] == "access"
+        assert result["ge-0/0/23"]["mode"] == "access"
 
     def test_a_member_named_but_not_tagged_is_resolved_from_the_vlan_table(self):
         """Junos reports some members by name alone; the device's own table names them."""
@@ -358,7 +358,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml, vlans={30: {"name": "VOICE"}, 40: {"name": "DATA"}})
 
-        assert d.get_interfaces_vlans()["ge-0/0/9.0"] == {
+        assert d.get_interfaces_vlans()["ge-0/0/9"] == {
             "mode": "access",
             "tagged": [],
             "untagged": 30,
@@ -385,7 +385,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml, vlans={20: {"name": "MGMT"}})
 
-        assert d.get_interfaces_vlans()["me0.0"]["untagged"] is None
+        assert d.get_interfaces_vlans()["me0"]["untagged"] is None
 
     def test_a_name_the_table_gives_two_ids_is_refused(self):
         """Nothing but the device could say which was meant, and it has not."""
@@ -401,7 +401,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml, vlans={10: {"name": "SHARED"}, 11: {"name": "SHARED"}})
 
-        assert d.get_interfaces_vlans()["ge-0/0/9.0"]["untagged"] is None
+        assert d.get_interfaces_vlans()["ge-0/0/9"]["untagged"] is None
 
     def test_the_vlan_table_is_fetched_once_at_most(self):
         """
@@ -440,7 +440,7 @@ class TestJunosSwitchportModeFallback:
         d.get_vlans = lambda: (calls.append(1), {30: {"name": "VOICE"}, 40: {"name": "DATA"}})[1]
         result = d.get_interfaces_vlans()
         assert len(calls) == 1, f"three named members must cost one get_vlans, got {len(calls)}"
-        assert result["ge-0/0/10.0"] == {"mode": "trunk", "tagged": [30], "untagged": 40}
+        assert result["ge-0/0/10"] == {"mode": "trunk", "tagged": [30], "untagged": 40}
 
         calls.clear()
         d = self._driver(self.ACCESS_MEMBER + self.TRUNK_MEMBER)
@@ -468,7 +468,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml)
 
-        assert d.get_interfaces_vlans()["xe-0/0/40.0"]["mode"] == "trunk-all"
+        assert d.get_interfaces_vlans()["xe-0/0/40"]["mode"] == "trunk-all"
 
     def test_a_native_vlan_id_makes_a_single_untagged_member_a_trunk(self):
         """
@@ -493,7 +493,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml)
 
-        assert d.get_interfaces_vlans()["xe-0/0/41.0"] == {
+        assert d.get_interfaces_vlans()["xe-0/0/41"] == {
             "mode": "trunk",
             "tagged": [],
             "untagged": 99,
@@ -521,7 +521,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml)
 
-        assert d.get_interfaces_vlans()["ge-0/0/44.0"]["mode"] == "routed"
+        assert d.get_interfaces_vlans()["ge-0/0/44"]["mode"] == "routed"
 
     def test_the_vlan_table_may_key_on_strings(self):
         """
@@ -542,7 +542,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml, vlans={"30": {"name": "VOICE"}, "40": {"name": "DATA"}})
 
-        assert d.get_interfaces_vlans()["ge-0/0/9.0"]["untagged"] == 30
+        assert d.get_interfaces_vlans()["ge-0/0/9"]["untagged"] == 30
 
     def test_a_name_resolving_outside_the_dot1q_range_is_refused(self):
         """A table entry out of range names no VLAN that NetBox could hold."""
@@ -558,7 +558,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml, vlans={9999: {"name": "ODD"}})
 
-        assert d.get_interfaces_vlans()["ge-0/0/9.0"]["mode"] == "routed"
+        assert d.get_interfaces_vlans()["ge-0/0/9"]["mode"] == "routed"
 
     def test_an_unusable_native_vlan_id_does_not_make_a_trunk(self):
         """
@@ -583,7 +583,7 @@ class TestJunosSwitchportModeFallback:
         </interface>"""
         d = self._driver(xml)
 
-        assert d.get_interfaces_vlans()["ge-0/0/45.0"] == {
+        assert d.get_interfaces_vlans()["ge-0/0/45"] == {
             "mode": "access",
             "tagged": [],
             "untagged": 888,

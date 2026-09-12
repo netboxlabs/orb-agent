@@ -1,5 +1,20 @@
 {
-  "ge-0/0/23.0": {"mode": "access", "tagged": [], "untagged": 888},
-  "xe-0/0/17.0": {"mode": "trunk", "tagged": [156, 178], "untagged": null},
-  "ae4.0": {"mode": "routed", "tagged": [], "untagged": null}
+  "ae4": {
+    "mode": "routed",
+    "tagged": [],
+    "untagged": null
+  },
+  "ge-0/0/23": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 888
+  },
+  "xe-0/0/17": {
+    "mode": "trunk",
+    "tagged": [
+      156,
+      178
+    ],
+    "untagged": null
+  }
 }

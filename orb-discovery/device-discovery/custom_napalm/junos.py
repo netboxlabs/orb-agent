@@ -1303,7 +1303,14 @@ class JunOSDriver(NapalmJunOSDriver):
                 if not ifname:
                     continue
                 info = _interface_to_switchport_info(intf, resolve_name)
-                result[ifname] = classify_switchport(info)
+                # Junos reports switching per logical unit — the measured EX4550
+                # answers with ge-0/0/23.0 — while NetBox carries switchport mode
+                # and VLANs on the port. The ELS path has normalised this since it
+                # was written; this one did not, and no fixture caught it because
+                # every synthetic non-ELS reply was written without unit suffixes.
+                # Left literal, the recovered VLANs land on the subinterface and
+                # the port they belong to stays blank.
+                result[_physical_name(ifname)] = classify_switchport(info)
             return result
         except Exception:
             logger.debug("Junos VLAN XML parse failed", exc_info=True)
