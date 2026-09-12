@@ -559,3 +559,32 @@ class TestJunosSwitchportModeFallback:
         d = self._driver(xml, vlans={9999: {"name": "ODD"}})
 
         assert d.get_interfaces_vlans()["ge-0/0/9.0"]["mode"] == "routed"
+
+    def test_an_unusable_native_vlan_id_does_not_make_a_trunk(self):
+        """
+        A native id outside 1-4094 is not a trunk signal.
+
+        It is a sharper version of the member-id case: a native id is both a
+        trunk signal and the value substituted for the untagged member, so a
+        placeholder like 0 would report a port that has VLAN 888 as a trunk
+        with no VLAN at all, silently discarding the one it does have.
+        """
+        xml = """
+        <interface>
+          <interface-name>ge-0/0/45.0</interface-name>
+          <interface-native-vlan-id>0</interface-native-vlan-id>
+          <interface-vlan-member-list>
+            <interface-vlan-member>
+              <interface-vlan-name>VL888</interface-vlan-name>
+              <interface-vlan-member-tagid>888</interface-vlan-member-tagid>
+              <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+            </interface-vlan-member>
+          </interface-vlan-member-list>
+        </interface>"""
+        d = self._driver(xml)
+
+        assert d.get_interfaces_vlans()["ge-0/0/45.0"] == {
+            "mode": "access",
+            "tagged": [],
+            "untagged": 888,
+        }

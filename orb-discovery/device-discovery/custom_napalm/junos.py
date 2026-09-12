@@ -341,7 +341,12 @@ def _interface_to_switchport_info(intf_elem, resolve_vlan_name=None) -> Switchpo
     else:
         admin = None
 
-    native_vid = _maybe_int(_text(_find_child(intf_elem, "interface-native-vlan-id")))
+    # coerce_vid, for the same reason the member ids below use it, and with a
+    # sharper consequence: a native id is now a trunk signal, so an
+    # out-of-range or placeholder value would make a port a trunk AND be
+    # substituted for its real untagged member, which classify_switchport then
+    # rejects — leaving a port that has a VLAN reported as a trunk with none.
+    native_vid = coerce_vid(_text(_find_child(intf_elem, "interface-native-vlan-id")))
 
     untagged_vid, tagged_vids, has_all_member = _members_to_vids(
         _find_child(intf_elem, "interface-vlan-member-list"), resolve_vlan_name
