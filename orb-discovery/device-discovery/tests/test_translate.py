@@ -2405,3 +2405,69 @@ def test_translate_data_withholds_prefix_vlan_when_the_option_is_off(sample_devi
     for e in entities:
         if e.WhichOneof("entity") == "prefix":
             assert not e.prefix.HasField("vlan")
+
+
+def test_junos_switching_unit_lands_on_the_physical_port():
+    """
+    Junos reports switching on unit .0; NetBox wants it on the port.
+
+    This is the seam between the two halves and neither side's own tests
+    cross it. The Junos driver reads switching information from the RPC per
+    logical unit (``ge-0/0/23.0`` on a measured EX4550) and keys its result by
+    the physical port, because ``apply_interface_vlans`` pairs on an exact
+    name and orb emits the port and the unit as separate Interfaces. Key it by
+    the unit and the recovered VLANs attach to the subinterface while the port
+    they belong to stays blank, which is the shape of a fix that looks like it
+    worked.
+    """
+    from lxml import etree
+
+    from custom_napalm.junos import JunOSDriver, _localname
+
+    reply = etree.fromstring(
+        b"""<switching-interface-information>
+              <interface>
+                <interface-name>ge-0/0/23.0</interface-name>
+                <interface-port-mode>Access</interface-port-mode>
+                <interface-vlan-member-list>
+                  <interface-vlan-member>
+                    <interface-vlan-name>VL888</interface-vlan-name>
+                    <interface-vlan-member-tagid>888</interface-vlan-member-tagid>
+                    <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+                  </interface-vlan-member>
+                </interface-vlan-member-list>
+              </interface>
+            </switching-interface-information>"""
+    )
+    assert [_localname(c) for c in reply] == ["interface"], "fixture shape changed"
+
+    class Dev:
+        def __init__(self):
+            self.rpc = self
+
+        def get_ethernet_switching_interface_information(self, **_kw):
+            return reply
+
+    driver = object.__new__(JunOSDriver)
+    driver.device = Dev()
+    driver.get_vlans = dict
+    switchports = driver.get_interfaces_vlans()
+
+    assert set(switchports) == {"ge-0/0/23"}, (
+        f"the driver must key on the physical port, got {sorted(switchports)}"
+    )
+
+    # Both interfaces exist in NetBox, as orb emits them.
+    entities = [_make_iface_entity("ge-0/0/23"), _make_iface_entity("ge-0/0/23.0")]
+    defaults = Defaults()
+    options = Options()
+    cache = _build_vlan_cache({"888": {"name": "VL888"}}, defaults)
+    new_stubs: list = []
+
+    apply_interface_vlans(entities, switchports, cache, defaults, options, new_stubs)
+
+    port, unit = entities[0].interface, entities[1].interface
+    assert port.mode == "access"
+    assert port.untagged_vlan.vid == 888
+    assert unit.mode == "", "the subinterface must not carry the switchport config"
+    assert not unit.HasField("untagged_vlan")

@@ -1,0 +1,43 @@
+<switching-interface-information junos:style="brief" xmlns:junos="http://xml.juniper.net/junos/15.1R7/junos">
+        <interface>
+            <interface-name>ae4.0</interface-name>
+            <interface-state>down</interface-state>
+            <interface-vlan-member-list>
+                <interface-vlan-member>
+                    <interface-vlan-name>default</interface-vlan-name>
+                    <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+                    <blocking-status junos:emit="emit">unblocked</blocking-status>
+                </interface-vlan-member>
+            </interface-vlan-member-list>
+        </interface>
+        <interface>
+            <interface-name>ge-0/0/23.0</interface-name>
+            <interface-state>up</interface-state>
+            <interface-vlan-member-list>
+                <interface-vlan-member>
+                    <interface-vlan-name>VL888</interface-vlan-name>
+                    <interface-vlan-member-tagid>888</interface-vlan-member-tagid>
+                    <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+                    <blocking-status junos:emit="emit">unblocked</blocking-status>
+                </interface-vlan-member>
+            </interface-vlan-member-list>
+        </interface>
+        <interface>
+            <interface-name>xe-0/0/17.0</interface-name>
+            <interface-state>up</interface-state>
+            <interface-vlan-member-list>
+                <interface-vlan-member>
+                    <interface-vlan-name>VL156</interface-vlan-name>
+                    <interface-vlan-member-tagid>156</interface-vlan-member-tagid>
+                    <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+                    <blocking-status junos:emit="emit">unblocked</blocking-status>
+                </interface-vlan-member>
+                <interface-vlan-member>
+                    <interface-vlan-name>VL178</interface-vlan-name>
+                    <interface-vlan-member-tagid>178</interface-vlan-member-tagid>
+                    <interface-vlan-member-tagness>tagged</interface-vlan-member-tagness>
+                    <blocking-status junos:emit="emit">unblocked</blocking-status>
+                </interface-vlan-member>
+            </interface-vlan-member-list>
+        </interface>
+    </switching-interface-information>

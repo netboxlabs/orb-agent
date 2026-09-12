@@ -434,7 +434,17 @@ class _FakePyEZRpc:
         candidates = [f"{kebab}.xml", f"{name}.xml"]
 
         def _call(*_args, **_kwargs):
-            for fname in candidates:
+            # A boolean RPC argument becomes a bare child element on the wire
+            # (detail=True -> <detail/>), and Junos often answers a different
+            # shape for it. Serve "<rpc-name>-<arg>.xml" when the scenario
+            # provides one, so a fixture can distinguish the two replies; fall
+            # back to the plain file, which is what every existing scenario has.
+            flagged = [
+                f"{kebab}-{key.replace('_', '-')}.xml"
+                for key, value in sorted(_kwargs.items())
+                if value is True
+            ]
+            for fname in [*flagged, *candidates]:
                 path = self._mock_dir / fname
                 if path.exists():
                     return etree.fromstring(path.read_text(encoding="utf-8").encode("utf-8"))
