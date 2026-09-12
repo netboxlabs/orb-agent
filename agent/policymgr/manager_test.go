@@ -2283,6 +2283,32 @@ func TestManageOfTheSamePolicyIsNotLostUnderAConcurrentApplier(t *testing.T) {
 // is refused with the record untouched: the two backends have different
 // mutexes, so a move would let the policy run on both with nothing left to
 // remove the old copy.
+// A remove action whose payload names a backend other than the one the
+// stored record runs on is refused with the record untouched: the removal
+// would otherwise go to the wrong backend while the record, the only state
+// left to remove the policy from its real backend, is deleted.
+func TestManagePolicyRefusesARemoveNamingAnotherBackend(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	actual := &mockBackend{name: "remove_actual"}
+	actual.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	actual.On("RemovePolicy", mock.Anything).Return(nil).Maybe()
+	stale := &mockBackend{name: "remove_stale"}
+	stale.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	stale.On("RemovePolicy", mock.Anything).Return(nil).Maybe()
+	backend.Register("remove_actual", actual)
+	backend.Register("remove_stale", stale)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: "remove_actual", Version: 1, Data: map[string]any{}, State: policies.Running}))
+
+	mgr.ManagePolicy(config.PolicyPayload{Action: "remove", ID: "kept", Name: "Kept", Backend: "remove_stale"})
+
+	stale.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	actual.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+	assert.True(t, mgr.GetRepo().Exists("kept"), "the record stays, it is the only state left to remove the policy from its backend")
+}
+
 func TestManagePolicyRefusesMovingAPolicyToAnotherBackend(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := &mockSecretsManager{passthrough: true}

@@ -208,16 +208,19 @@ func (a *policyManager) manageUnderLock(key string, payload config.PolicyPayload
 
 // policyLockKey returns the backend whose mutex an operation on this payload
 // must hold: the stored record's backend when there is one, else the
-// payload's. A manage that would move the policy to another backend is
-// refused here (ok false) and logged.
+// payload's. A payload naming a backend other than the stored one is
+// refused here (ok false) and logged, for a manage and a remove alike: a
+// manage would move the policy to another backend, and a remove would go to
+// the wrong backend while deleting the only record left to remove the policy
+// from its real one.
 func (a *policyManager) policyLockKey(payload config.PolicyPayload) (string, bool) {
 	stored, err := a.repo.Get(payload.ID)
 	if err != nil || stored.Backend == "" {
 		return payload.Backend, true
 	}
-	if payload.Action == "manage" && stored.Backend != payload.Backend {
+	if stored.Backend != payload.Backend {
 		a.logger.Warn("policy names a different backend than the one it runs on; ignoring",
-			"policy_id", payload.ID, "policy_name", payload.Name, "stored_backend", stored.Backend, "backend", payload.Backend)
+			"action", payload.Action, "policy_id", payload.ID, "policy_name", payload.Name, "stored_backend", stored.Backend, "backend", payload.Backend)
 		return "", false
 	}
 	return stored.Backend, true
