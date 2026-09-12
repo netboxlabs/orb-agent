@@ -128,20 +128,52 @@ type mockPolicyManager struct {
 	repo   policies.PolicyRepo
 	events *[]string // shared with the backend stub so one slice records the order
 
+	// mu guards events, applyErrs, and lastErr against a scheduled replay
+	// goroutine calling ApplyBackendPolicies while a test concurrently reads
+	// the recorded events through snapshotEvents.
+	mu sync.Mutex
+
 	// applyErrs queues the errors ApplyBackendPolicies returns, one per call,
 	// popped in call order; once the queue is empty every further call
-	// returns nil.
+	// returns nil, unless repeatLastErr is set.
 	applyErrs []error
+
+	// repeatLastErr, when true, makes ApplyBackendPolicies keep returning the
+	// last popped error forever once applyErrs is exhausted, instead of nil.
+	repeatLastErr bool
+	lastErr       error
 
 	// onApply, when set, runs at the start of every ApplyBackendPolicies
 	// call, before the queued error is popped.
 	onApply func()
+
+	// agent, when set, makes ApplyBackendPolicies record whether the
+	// backend's restart mutex is held at call time (see ApplyBackendPolicies
+	// below), so a test can see a scheduled replay's attempt hold the
+	// mutex. Left nil, and so checked before use, by tests that do not care.
+	agent *orbAgent
 }
 
 func (m *mockPolicyManager) record(event string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.events != nil {
 		*m.events = append(*m.events, event)
 	}
+}
+
+// snapshotEvents returns a copy of the recorded events. Safe to call while a
+// scheduled replay goroutine may be recording concurrently, unlike reading
+// the shared slice directly.
+func (m *mockPolicyManager) snapshotEvents() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.events == nil {
+		return nil
+	}
+	out := make([]string, len(*m.events))
+	copy(out, *m.events)
+	return out
 }
 
 func (m *mockPolicyManager) ManagePolicy(_ config.PolicyPayload)                                 {}
@@ -154,18 +186,47 @@ func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 	return m.repo
 }
 
-// ApplyBackendPolicies records a plain "apply:<name>" event.
+// nextErr pops the next queued error for ApplyBackendPolicies, in call
+// order; once the queue is empty it returns nil, unless repeatLastErr is
+// set, in which case it keeps returning the last popped error.
+func (m *mockPolicyManager) nextErr() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.applyErrs) > 0 {
+		m.lastErr = m.applyErrs[0]
+		m.applyErrs = m.applyErrs[1:]
+		return m.lastErr
+	}
+	if m.repeatLastErr {
+		return m.lastErr
+	}
+	return nil
+}
+
+// ApplyBackendPolicies records a plain "apply:<name>" event, unless agent is
+// set: then it records whether the backend's restart mutex is held at call
+// time, as "apply:<name>:locked" or "apply:<name>:unlocked", using a
+// non-blocking TryLock, so a test can see a scheduled replay's attempt hold
+// the mutex.
 func (m *mockPolicyManager) ApplyBackendPolicies(_ context.Context, name string, _ backend.Backend) error {
 	if m.onApply != nil {
 		m.onApply()
 	}
-	m.record("apply:" + name)
-	var err error
-	if len(m.applyErrs) > 0 {
-		err = m.applyErrs[0]
-		m.applyErrs = m.applyErrs[1:]
+	if m.agent == nil {
+		m.record("apply:" + name)
+	} else {
+		mu := m.agent.backendRestartLock(name)
+		held := !mu.TryLock()
+		if !held {
+			mu.Unlock()
+		}
+		state := "unlocked"
+		if held {
+			state = "locked"
+		}
+		m.record(fmt.Sprintf("apply:%s:%s", name, state))
 	}
-	return err
+	return m.nextErr()
 }
 
 func (m *mockPolicyManager) RemoveBackendPolicies(name string, _ backend.Backend, permanently bool) error {
@@ -290,6 +351,10 @@ func TestRestartBackendRetriesTheReplayWhileTheBackendIsNotAnsweringYet(t *testi
 // The replay is retried a bounded number of times: a backend that keeps
 // answering not-running must not be retried forever, since nothing else
 // would ever install its policies (the health monitor sees it as healthy).
+// The give-up schedules a replay (covered by
+// TestRestartBackendReschedulesAReplayThatGaveUp); replayRetryInterval is
+// set long here and torn down through Stop's own cancellation so that
+// background attempt cannot fire during this test and race its assertion.
 func TestRestartBackendGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	repo, err := policies.NewMemRepo()
@@ -299,6 +364,7 @@ func TestRestartBackendGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
 		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
 	}}
 	be := &restartableBackend{events: &events}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	a := &orbAgent{
 		logger:              logger,
 		backends:            map[string]backend.Backend{"snmp_discovery": be},
@@ -306,6 +372,9 @@ func TestRestartBackendGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
 		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
 		config:              config.Config{},
 		reapplyRetryDelay:   time.Millisecond,
+		replayRetryInterval: time.Hour,
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
 	}
 
 	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
@@ -318,6 +387,15 @@ func TestRestartBackendGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
 		"apply:snmp_discovery",
 		"apply:snmp_discovery",
 	}, events, "the replay gives up after three attempts and leaves the policies unknown")
+
+	a.stopCancel()
+	waitDone := make(chan struct{})
+	go func() { a.replayers.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayers.Wait did not return within 5s of shutdown")
+	}
 }
 
 // A failure that is not ErrBackendNotRunning is not transient in the same
@@ -391,6 +469,170 @@ func TestRestartBackendStopsRetryingWhenStopBegins(t *testing.T) {
 		"reset",
 		"apply:snmp_discovery",
 	}, events, "the retry wait is cancelled the instant Stop begins, not slept out")
+}
+
+// countLockedApplies counts how many "apply:<name>:locked" events appear in
+// events, so a test can wait for a scheduled replay's own attempt (recorded
+// the same way as the restart's own attempts, since both hold the restart
+// mutex) without racing the goroutine that records it.
+func countLockedApplies(events []string, name string) int {
+	want := "apply:" + name + ":locked"
+	n := 0
+	for _, e := range events {
+		if e == want {
+			n++
+		}
+	}
+	return n
+}
+
+// A replay that gives up because the backend is still not answering must
+// not leave the restart marker set forever: nothing else asks for another
+// restart once the health monitor sees the backend running. The give-up is
+// rescheduled and keeps trying, at replayRetryInterval, until it completes.
+func TestRestartBackendReschedulesAReplayThatGaveUp(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, nil,
+	}}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+		replayRetryInterval: time.Millisecond,
+	}
+	pm.agent = a
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	require.Eventually(t, func() bool {
+		return countLockedApplies(pm.snapshotEvents(), "snmp_discovery") >= 4
+	}, 5*time.Second, time.Millisecond,
+		"the scheduled replay must make a fourth attempt, holding the restart mutex, and complete")
+
+	waitDone := make(chan struct{})
+	go func() { a.replayers.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayers.Wait did not return promptly once the scheduled replay completed")
+	}
+}
+
+// The wait between scheduled replay attempts is cancelled the instant Stop
+// begins, not slept out, even when the interval is long: the loop selects
+// on stopCtx rather than sleeping.
+func TestScheduledReplayStopsOnShutdown(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
+	}, repeatLastErr: true}
+	be := &restartableBackend{events: &events}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+		replayRetryInterval: time.Hour,
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+	}
+	pm.agent = a
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	a.stopCancel()
+
+	waitDone := make(chan struct{})
+	go func() { a.replayers.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayers.Wait did not return within 5s of shutdown")
+	}
+}
+
+// A second give-up for the same backend while a replay is already scheduled
+// must not start a second goroutine: the one already running keeps
+// retrying on its own.
+func TestScheduledReplayIsNotDuplicated(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
+		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
+	}, repeatLastErr: true}
+	be := &restartableBackend{events: &events}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+		replayRetryInterval: time.Hour,
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+	}
+	pm.agent = a
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, int32(1), a.replayStarts.Load(),
+		"a second give-up while one replay is already scheduled must not start a second goroutine")
+
+	a.stopCancel()
+	waitDone := make(chan struct{})
+	go func() { a.replayers.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replayers.Wait did not return within 5s of shutdown")
+	}
+}
+
+// A failure that is not ErrBackendNotRunning is not transient, so it must
+// not be rescheduled either: nothing about it will change on its own.
+func TestRestartBackendDoesNotRescheduleANonRetryableFailure(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
+		errors.New("repo failure"),
+	}}
+	be := &restartableBackend{events: &events}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		reapplyRetryDelay:   time.Millisecond,
+		replayRetryInterval: time.Millisecond,
+	}
+	pm.agent = a
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, int32(0), a.replayStarts.Load(), "a non-retryable failure must not be rescheduled")
 }
 
 // A reset that fails leaves the policies marked for the next restart and
