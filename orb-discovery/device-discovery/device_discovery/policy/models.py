@@ -453,6 +453,22 @@ class Options(WarnUnknownKeys):
             "stack_member_name_template."
         ),
     )
+    device_name_source: Literal["hostname", "fqdn"] = Field(
+        default="hostname",
+        description=(
+            "Fact used for Device.name. 'hostname' (default) keeps the "
+            "driver-reported hostname. 'fqdn' uses the fqdn fact instead, "
+            "falling back to the hostname when the driver reported no "
+            "usable FQDN: a missing or empty value, the placeholders "
+            "'None' (junos stringifies an undetermined fqdn) and "
+            "'Unknown' (the ios-family default), or a value equal to the "
+            "hostname. Diode matches devices by name, so switching an "
+            "existing deployment to 'fqdn' creates new records unless the "
+            "NetBox devices are renamed first. Virtual-chassis member "
+            "names built from stack_member_name_template keep using the "
+            "raw hostname fact."
+        ),
+    )
     emit_host_prefixes: bool = Field(
         default=False,
         description=(

@@ -111,6 +111,40 @@ def _drop_unconfigured_placeholder(value: str | None, *, is_update: bool) -> str
     return value
 
 
+# Placeholder fqdn values drivers report when no real FQDN is known:
+# junos stringifies an undetermined fqdn fact to "None"; the ios family
+# defaults the fact to "Unknown".
+_FQDN_PLACEHOLDERS = frozenset({"None", "Unknown"})
+
+
+def _resolve_device_name(device_info: dict, options: Options | None) -> str | None:
+    """
+    Pick the fact used for ``Device.name``.
+
+    Defaults to the ``hostname`` fact. With ``options.device_name_source``
+    set to ``"fqdn"`` the ``fqdn`` fact is used instead, falling back to
+    the hostname when the driver reported no usable FQDN — a missing or
+    empty value, a known placeholder, or a value equal to the hostname
+    (every driver reports ``fqdn == hostname`` when no domain is
+    configured, which adds nothing over the hostname).
+
+    A driver that discovered no hostname at all must OMIT device.name. An
+    explicit empty name is a real value to the Diode plugin, not an
+    omission — hence ``blank_to_none`` on the result.
+    """
+    hostname = device_info.get("hostname")
+    if options is not None and options.device_name_source == "fqdn":
+        fqdn = device_info.get("fqdn")
+        if (
+            isinstance(fqdn, str)
+            and fqdn
+            and fqdn not in _FQDN_PLACEHOLDERS
+            and fqdn != hostname
+        ):
+            return blank_to_none(fqdn)
+    return blank_to_none(hostname)
+
+
 def translate_device(
     device_info: dict,
     defaults: Defaults,
@@ -184,9 +218,9 @@ def translate_device(
 
     # Build Device parameters
     device_params = {
-        # A driver that discovered no hostname must OMIT device.name. An explicit
-        # empty name is a real value to the Diode plugin, not an omission.
-        "name": blank_to_none(device_info.get("hostname")),
+        # Name-fact selection (hostname vs fqdn) and the omit-blank rule
+        # live in _resolve_device_name.
+        "name": _resolve_device_name(device_info, options),
         "device_type": DeviceType(model=model, manufacturer=manufacturer),
         "platform": Platform(name=platform, manufacturer=manufacturer),
         "role": role,
