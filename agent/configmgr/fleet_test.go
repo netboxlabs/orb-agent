@@ -1129,9 +1129,11 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
 
-	// Pre-occupy a port with a test listener
+	// Pre-occupy a port with a test listener on loopback, where the bridge binds
+	// by default. (A wildcard listener would not conflict on macOS, where
+	// SO_REUSEADDR lets 127.0.0.1:port bind next to :port.)
 	testPort := findAvailablePort(t)
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
 	defer func() {
 		_ = listener.Close()
@@ -1160,6 +1162,7 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	defer server.Close()
 
 	// Create config with the pre-occupied port
+	ephemeralHTTPPort := 0
 	cfg := config.Config{
 		OrbAgent: config.OrbAgent{
 			ConfigManager: config.ManagerConfig{
@@ -1170,6 +1173,7 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 						ClientID:           "test_client",
 						ClientSecret:       "test_secret",
 						OTLPBridgeGRPCPort: &testPort,
+						OTLPBridgeHTTPPort: &ephemeralHTTPPort,
 					},
 				},
 			},
@@ -1705,33 +1709,44 @@ func TestFleetOTLPPorts_Defaults(t *testing.T) {
 }
 
 func TestStartOTLPBridge_BindHost(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	mockPMgr := &mockPolicyManagerForFleet{}
-	mockPMgr.On("GetRepo").Return(nil)
-	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+	for name, bindHost := range map[string]string{"default is loopback": "", "explicit loopback with spaces": " 127.0.0.1 "} {
+		t.Run(name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+			mockPMgr := &mockPolicyManagerForFleet{}
+			mockPMgr.On("GetRepo").Return(nil)
+			fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
-	ephemeral := 0
-	var cfg config.Config
-	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &ephemeral
-	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &ephemeral
-	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = " 127.0.0.1 "
+			ephemeral := 0
+			var cfg config.Config
+			cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &ephemeral
+			cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &ephemeral
+			cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = bindHost
 
-	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
-	t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
+			require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+			t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
 
-	for _, addr := range []string{fm.otlpBridge.ListenAddr(), fm.otlpBridge.HTTPListenAddr()} {
-		host, _, err := net.SplitHostPort(addr)
-		require.NoError(t, err)
-		assert.Equal(t, "127.0.0.1", host, "listener %s must honour otlp_bridge_bind_host", addr)
+			for _, addr := range []string{fm.otlpBridge.ListenAddr(), fm.otlpBridge.HTTPListenAddr()} {
+				host, _, err := net.SplitHostPort(addr)
+				require.NoError(t, err)
+				assert.Equal(t, "127.0.0.1", host, "listener %s must be on loopback", addr)
+			}
+		})
 	}
 }
 
 func TestFleetOTLPBindHost_Validation(t *testing.T) {
-	for _, ok := range []string{"", "localhost", "127.0.0.1", "::1", "0.0.0.0", "::", " LocalHost "} {
+	for _, ok := range []string{"localhost", "127.0.0.1", "::1", "0.0.0.0", "::", " LocalHost "} {
 		var cfg config.Config
 		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = ok
 		_, err := fleetOTLPBindHost(cfg)
 		assert.NoError(t, err, "%q must be accepted", ok)
+	}
+	for _, empty := range []string{"", "   "} {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = empty
+		host, err := fleetOTLPBindHost(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, "127.0.0.1", host, "unset bind host must default to loopback")
 	}
 	for _, bad := range []string{"10.0.0.5", "192.168.1.1", "example.com", "agent.internal", "127.0.0.2", "[::1]"} {
 		var cfg config.Config

@@ -43,17 +43,17 @@ func (s *BridgeServer) otlpHTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	// Method-scoped patterns: the mux answers 405 with an Allow header for other methods.
 	mux.HandleFunc("POST /v1/metrics", func(w http.ResponseWriter, r *http.Request) {
-		s.serveExport(w, r, &collectormetrics.ExportMetricsServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
+		s.serveExport(w, r, "metrics", &collectormetrics.ExportMetricsServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
 			return (&metricsServer{bridge: s}).Export(ctx, m.(*collectormetrics.ExportMetricsServiceRequest))
 		})
 	})
 	mux.HandleFunc("POST /v1/logs", func(w http.ResponseWriter, r *http.Request) {
-		s.serveExport(w, r, &collectorlogs.ExportLogsServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
+		s.serveExport(w, r, "logs", &collectorlogs.ExportLogsServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
 			return (&logsServer{bridge: s}).Export(ctx, m.(*collectorlogs.ExportLogsServiceRequest))
 		})
 	})
 	mux.HandleFunc("POST /v1/traces", func(w http.ResponseWriter, r *http.Request) {
-		s.serveExport(w, r, &collectortrace.ExportTraceServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
+		s.serveExport(w, r, "traces", &collectortrace.ExportTraceServiceRequest{}, func(ctx context.Context, m proto.Message) (proto.Message, error) {
 			return (&traceServer{bridge: s}).Export(ctx, m.(*collectortrace.ExportTraceServiceRequest))
 		})
 	})
@@ -67,7 +67,8 @@ func (s *BridgeServer) otlpHTTPHandler() http.Handler {
 // Failure bodies are plain text rather than the spec's google.rpc.Status:
 // pktvisor ignores response bodies and the collector's otlphttp exporter
 // tolerates non-Status bodies, so the status code is what matters here.
-func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req proto.Message, export func(context.Context, proto.Message) (proto.Message, error)) {
+// signal is a fixed name for log lines; nothing request-derived is logged.
+func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signal string, req proto.Message, export func(context.Context, proto.Message) (proto.Message, error)) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || (mediaType != contentTypeProtobuf && mediaType != contentTypeJSON) {
 		http.Error(w, "unsupported content type: use application/x-protobuf or application/json", http.StatusUnsupportedMediaType)
@@ -106,7 +107,7 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req p
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
 			return
 		}
-		s.logger.Warn("OTLP HTTP export failed", "path", r.URL.Path, "error", err)
+		s.logger.Warn("OTLP HTTP export failed", "signal", signal, "error", err)
 		http.Error(w, "export failed", http.StatusInternalServerError)
 		return
 	}
@@ -118,7 +119,7 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, req p
 		out, err = proto.Marshal(resp)
 	}
 	if err != nil {
-		s.logger.Warn("OTLP HTTP response encoding failed", "path", r.URL.Path, "error", err)
+		s.logger.Warn("OTLP HTTP response encoding failed", "signal", signal, "error", err)
 		http.Error(w, "export failed", http.StatusInternalServerError)
 		return
 	}

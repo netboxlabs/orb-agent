@@ -96,15 +96,22 @@ func fleetOTLPGRPCPort(cfg config.Config) int {
 	return grpcPort
 }
 
+// defaultOTLPBridgeBindHost keeps both unauthenticated bridge listeners off the
+// network unless an operator opts in with otlp_bridge_bind_host.
+const defaultOTLPBridgeBindHost = "127.0.0.1"
+
 // fleetOTLPBindHost returns the host both bridge listeners bind to. Backends
 // always dial localhost (agent.go rewrites common.otlp.* to localhost:<port>),
-// which resolves to 127.0.0.1 or ::1, so only "" / an unspecified address (all
-// interfaces) or exactly those two loopback addresses can work; anything else
+// which resolves to 127.0.0.1 or ::1, so only those two loopback addresses or
+// an unspecified address (all interfaces, opt-in) can work; anything else
 // (including other 127/8 addresses) would listen where nothing dials and lose
-// telemetry silently, so it is rejected at start-up.
+// telemetry silently, so it is rejected at start-up. Empty means loopback.
 func fleetOTLPBindHost(cfg config.Config) (string, error) {
 	host := strings.TrimSpace(cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost)
-	if host == "" || strings.EqualFold(host, "localhost") {
+	if host == "" {
+		return defaultOTLPBridgeBindHost, nil
+	}
+	if strings.EqualFold(host, "localhost") {
 		return host, nil
 	}
 	ip := net.ParseIP(host)
