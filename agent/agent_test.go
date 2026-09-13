@@ -351,6 +351,50 @@ func TestStart_FleetConfig_RewritesOTLPForDegenerateCommonBlocks(t *testing.T) {
 	}
 }
 
+func TestStart_FleetConfig_RejectsUnusablePorts(t *testing.T) {
+	// Backends dial the configured port on localhost, so an ephemeral (0) or
+	// out-of-range port must fail start-up loudly instead of leaving pktvisor
+	// without --otel.
+	zero, tooBig, negative := 0, 70000, -1
+	cases := map[string]struct {
+		fleet   config.FleetManager
+		mention string
+	}{
+		"http port zero":     {config.FleetManager{OTLPBridgeHTTPPort: &zero}, "otlp_bridge_http_port"},
+		"http port too big":  {config.FleetManager{OTLPBridgeHTTPPort: &tooBig}, "otlp_bridge_http_port"},
+		"grpc port zero":     {config.FleetManager{OTLPBridgeGRPCPort: &zero}, "otlp_bridge_grpc_port"},
+		"grpc port negative": {config.FleetManager{OTLPBridgeGRPCPort: &negative}, "otlp_bridge_grpc_port"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+			repo, err := policies.NewMemRepo()
+			require.NoError(t, err)
+			cfg := config.Config{
+				OrbAgent: config.OrbAgent{
+					Backends:       map[string]any{},
+					ConfigManager:  config.ManagerConfig{Active: "fleet", Sources: config.Sources{Fleet: tc.fleet}},
+					SecretsManager: config.ManagerSecrets{Active: ""},
+				},
+			}
+			agent, err := New(logger, cfg, false)
+			require.NoError(t, err)
+			orbAgent := agent.(*orbAgent)
+			orbAgent.secretsManager = &mockSecretsManager{}
+			orbAgent.policyManager = &mockPolicyManager{repo: repo}
+			orbAgent.configManager = &mockConfigManager{}
+			orbAgent.filesManager = &mockFilesManager{}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err = orbAgent.Start(ctx, cancel)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.mention)
+			assert.Contains(t, err.Error(), "between 1 and 65535")
+		})
+	}
+}
+
 func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	repo, err := policies.NewMemRepo()

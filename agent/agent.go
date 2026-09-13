@@ -453,15 +453,18 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		// Get gRPC port from config, defaulting to 4317 if not specified
-		grpcPort := 4317
-		if a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
-			grpcPort = *a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+		// The bridge ports are handed to backends as fixed localhost URLs, so
+		// they must be real ports: 0 would bind an ephemeral listener whose
+		// number never reaches the backends (pktvisor then silently starts
+		// without --otel), and anything out of range cannot be bound at all.
+		grpcPort, err := fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort, 4317, "otlp_bridge_grpc_port")
+		if err != nil {
+			return err
 		}
 		// Same for the HTTP listener, which pktvisor (OTLP/HTTP only) uses.
-		httpPort := 4318
-		if a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort != nil {
-			httpPort = *a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort
+		httpPort, err := fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort, 4318, "otlp_bridge_http_port")
+		if err != nil {
+			return err
 		}
 		otlpBridgeEndpoint := fmt.Sprintf("grpc://localhost:%d", grpcPort)
 		otlpBridgeHTTPEndpoint := fmt.Sprintf("http://localhost:%d", httpPort)
@@ -596,6 +599,18 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			a.cancelFunction()
 		}
 	}()
+}
+
+// fleetBridgePort resolves a configured bridge port (nil means the default)
+// and rejects values outside 1-65535, since backends dial the port verbatim.
+func fleetBridgePort(configured *int, def int, setting string) (int, error) {
+	if configured == nil {
+		return def, nil
+	}
+	if *configured < 1 || *configured > 65535 {
+		return 0, fmt.Errorf("%s must be between 1 and 65535, got %d (backends dial this port on localhost, so an ephemeral port cannot be used)", setting, *configured)
+	}
+	return *configured, nil
 }
 
 func (a *orbAgent) shutdownOTLP() {
