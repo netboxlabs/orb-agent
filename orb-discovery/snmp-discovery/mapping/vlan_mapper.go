@@ -455,7 +455,7 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 			rows = append(rows, vlanNameRow{oid: oid, value: v.Value})
 		}
 	}
-	names := mergeVLANNames(rows)
+	names := mergeVLANNames(rows, vendorVlanCatalog(all).Names)
 	if !isJuniper(all) || !everyNameCarriesItsTagSuffix(names) {
 		return names
 	}
@@ -540,8 +540,12 @@ func everyNameCarriesItsTagSuffix(names map[int]string) bool {
 
 // mergeVLANNames resolves one name per VID from the collected name rows.
 //
-// dot1qVlanStaticName is authoritative and the Cisco VTP catalog is the
-// fallback for the devices that do not populate it. Precedence is applied
+// dot1qVlanStaticName is authoritative and the vendor catalogs — the Cisco
+// VTP rows read here, plus whatever the private-table extractors reduced to
+// vendorNames (see vlan_huawei.go) — are the fallback for the devices that
+// do not populate it. Each vendor table is walked only behind its own
+// vendor gate, so on one device at most one of them answers and they share
+// the fallback tier without an ordering between them. Precedence is applied
 // once, after every row has been read, rather than as each row arrives:
 // resolving it in arrival order let an empty dot1q name erase a VTP name
 // (or not) depending on which OID the map yielded first, so the emitted
@@ -550,9 +554,12 @@ func everyNameCarriesItsTagSuffix(names map[int]string) bool {
 // Values are stripped of the NUL padding and whitespace many vendor agents
 // append; NetBox/PostgreSQL rejects NUL bytes in text fields, and a
 // NUL-only name must collapse to "" so it counts as no name.
-func mergeVLANNames(rows []vlanNameRow) map[int]string {
+func mergeVLANNames(rows []vlanNameRow, vendorNames map[int]string) map[int]string {
 	dot1q := map[int]string{}
-	vtp := map[int]string{}
+	vendor := make(map[int]string, len(vendorNames))
+	for vid, name := range vendorNames {
+		vendor[vid] = name
+	}
 	vtpOID := map[int]string{}
 	for _, r := range rows {
 		name := trimSNMPString(r.value)
@@ -568,13 +575,13 @@ func mergeVLANNames(rows []vlanNameRow) map[int]string {
 			if !ok {
 				continue
 			}
-			if held, seen := vtp[vid]; !seen || preferVtpRow(held, vtpOID[vid], name, r.oid) {
-				vtp[vid], vtpOID[vid] = name, r.oid
+			if held, seen := vendor[vid]; !seen || preferVtpRow(held, vtpOID[vid], name, r.oid) {
+				vendor[vid], vtpOID[vid] = name, r.oid
 			}
 		}
 	}
-	out := make(map[int]string, len(dot1q)+len(vtp))
-	for vid, name := range vtp {
+	out := make(map[int]string, len(dot1q)+len(vendor))
+	for vid, name := range vendor {
 		out[vid] = name
 	}
 	for vid, name := range dot1q {
@@ -651,6 +658,15 @@ func preferVtpRow(heldName, heldOID, name, oid string) bool {
 // from defaults.VLAN.Status; if empty, derived from RowStatus
 // (active(1)->active, notInService(2)->reserved, else unset).
 //
+// A device that publishes its VLAN database only in a private table (see
+// vendorVlanCatalog) contributes the same three facts through the
+// vendor-neutral vlanCatalog: every VID it lists, the names it supplies,
+// and its RowStatus where it has one, run through the same derivation. A
+// VID the catalog lists without a name is a nameless VLAN and is gated
+// exactly like a status-only dot1q row. Where both tables report a VID,
+// dot1qVlanStaticRowStatus wins over the catalog's status, exactly as
+// dot1qVlanStaticName wins over its name.
+//
 // CreateUnknownVlans gating: the option is *bool. nil is treated as
 // true (matches device-discovery PR #378's _ensure_vlan default and is
 // the value Manager.applyDefaults installs when the policy YAML omits
@@ -667,6 +683,27 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 	for vid, name := range vlanNamesByVid(all) {
 		byVid[vid] = &pending{name: name}
 	}
+	ensure := func(vid int) *pending {
+		p, exists := byVid[vid]
+		if !exists {
+			p = &pending{}
+			byVid[vid] = p
+		}
+		return p
+	}
+	// Vendor catalog first, dot1qVlanStaticTable second, so the standard
+	// column's RowStatus overwrites the private table's for any VID both
+	// report — the same precedence names get, and applied by ordering the
+	// two passes rather than by whichever row a map iteration yields last.
+	// A VID the catalog lists is registered even when it carries no name
+	// and no status: the index row alone is what says the VLAN exists.
+	catalog := vendorVlanCatalog(all)
+	for vid := range catalog.Vids {
+		ensure(vid)
+	}
+	for vid, st := range catalog.RowStatus {
+		ensure(vid).rowStatus = st
+	}
 	for oid, v := range all {
 		if !strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus) {
 			continue
@@ -679,12 +716,7 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 		if !ok2 {
 			continue
 		}
-		p, exists := byVid[vid]
-		if !exists {
-			p = &pending{}
-			byVid[vid] = p
-		}
-		p.rowStatus = st
+		ensure(vid).rowStatus = st
 	}
 	out := make([]diode.Entity, 0, len(byVid))
 	for vid, p := range byVid {
@@ -738,8 +770,9 @@ func atoi(s string) (int, bool) {
 }
 
 // hasVLANSignal reports whether any VLAN-related OID was walked for the
-// host — Q-BRIDGE static catalog / per-port PVID, or Cisco-overlay
-// vmMembership / vmVoiceVlanId. Used by PostMap to decide whether a
+// host — Q-BRIDGE static catalog / per-port PVID, Cisco-overlay
+// vmMembership / vmVoiceVlanId, or any private VLAN catalog a vendor
+// extractor reduced (vendorVlanCatalog). Used by PostMap to decide whether a
 // missing dot1dBasePortIfIndex is a real partial-data condition (warn)
 // or just a routine non-switch target (debug).
 func hasVLANSignal(all ObjectIDValueMap) bool {
@@ -762,7 +795,7 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 			}
 		}
 	}
-	return false
+	return !vendorVlanCatalog(all).empty()
 }
 
 // int64Ptr is a local helper for *int64 values (diode.VLAN.Vid is *int64).

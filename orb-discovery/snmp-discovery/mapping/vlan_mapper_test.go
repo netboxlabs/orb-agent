@@ -762,7 +762,7 @@ func TestMergeVLANNames_ResolvesTheSameNameInEveryArrivalOrder(t *testing.T) {
 			orders := permuteVLANNameRows(tc.rows)
 			require.Len(t, orders, 2, "both arrival orders must be exercised")
 			for _, order := range orders {
-				assert.Equal(t, tc.want, mergeVLANNames(order),
+				assert.Equal(t, tc.want, mergeVLANNames(order, nil),
 					"arrival order %v", oidsOfRows(order))
 			}
 		})

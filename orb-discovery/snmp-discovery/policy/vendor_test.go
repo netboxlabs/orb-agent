@@ -19,6 +19,12 @@ func TestResolveVendor(t *testing.T) {
 		{"empty sysObjectID", "", "", ""},
 		{"cisco no-dot prefix", "1.3.6.1.4.1.9.1.1234", "Cisco IOS Software", "cisco"},
 		{"cisco no-dot meraki", "1.3.6.1.4.1.29671.5.1", "Meraki MS220", "cisco"},
+		// SmartAX OLTs sit under the Huawei enterprise arc like every other
+		// Huawei product; the gate is the enterprise, not a product family.
+		{"huawei smartax olt", ".1.3.6.1.4.1.2011.2.80.8", "Huawei Integrated Access Software", "huawei"},
+		{"huawei vrp switch", ".1.3.6.1.4.1.2011.2.23.96", "S5720-28X-SI-AC", "huawei"},
+		{"huawei no-dot prefix", "1.3.6.1.4.1.2011.2.80.8", "", "huawei"},
+		{"an arc that merely starts like huawei", ".1.3.6.1.4.1.20111.1", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
