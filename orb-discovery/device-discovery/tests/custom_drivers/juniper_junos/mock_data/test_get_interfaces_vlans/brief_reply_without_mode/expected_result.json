@@ -1,0 +1,20 @@
+{
+  "ae4": {
+    "mode": "routed",
+    "tagged": [],
+    "untagged": null
+  },
+  "ge-0/0/23": {
+    "mode": "access",
+    "tagged": [],
+    "untagged": 888
+  },
+  "xe-0/0/17": {
+    "mode": "trunk",
+    "tagged": [
+      156,
+      178
+    ],
+    "untagged": null
+  }
+}
