@@ -84,8 +84,20 @@ const defaultPvid = 1
 // The branch that withdraws a PVID already refuses to read operational absence
 // as configuration. This is the same asymmetry the other way round: operational
 // presence must not overrule it either.
-func operationalNativeDisplacesPvid(rows GenericRows, native, pvid int) bool {
-	if native == pvid || pvid == defaultPvid {
+//
+// A PVID of 1 is asked the same question the rest of this file asks it: is this
+// device's PVID column maintained? Where some other port reports a VLAN the
+// operator had to set, a 1 here is a report and displaces like any other value.
+// Where every port answers the default, it is the MIB's DEFVAL and displaces
+// nothing. Refusing on the value alone threw away the real ones: a recorded
+// switch names one port in VLAN 88 and leaves exactly that port out of VLAN 1's
+// untagged mask, its PVID column and its masks agreeing, and its two ports that
+// read untagged in both VLAN 1 and VLAN 101 were still moved onto 101.
+func operationalNativeDisplacesPvid(rows GenericRows, native, pvid int, everyPvidIsDefault bool) bool {
+	if native == pvid {
+		return false
+	}
+	if pvid == defaultPvid && everyPvidIsDefault {
 		return false
 	}
 	if CoerceVid(pvid) == nil {
@@ -231,7 +243,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		}
 		native := chooseNative(untaggedVids)
 		switch {
-		case native != nil && operationalNativeDisplacesPvid(rows, *native, pvid):
+		case native != nil && operationalNativeDisplacesPvid(rows, *native, pvid, everyPvidIsDefault):
 			// The mask naming this port untagged came from the current table,
 			// which says what is forwarding now, while the port's own PVID is
 			// configuration and names a different VLAN. The configured answer
@@ -272,9 +284,12 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		// A VLAN this port egresses untagged is not one it carries tagged, so
 		// it cannot go in tagged_vlans. Only one such VLAN fits untagged_vlan;
 		// the rest are dropped rather than reported as the opposite of what
-		// the device said. This bites only where a port reads untagged in more
-		// than one VLAN, which the configured table alone does not produce.
-		allowed := withoutUntaggedOtherThan(egressVids, untaggedVids, native)
+		// the device said. This bites wherever a port reads untagged in more
+		// than one VLAN, which the configured table produces on its own: a
+		// recorded Linux bridge leaves five ports in VLAN 1's static untagged
+		// mask beside the VLAN they carry, and a recorded Junos does the same
+		// on 61.
+		allowed := withoutUntaggedOtherThan(rows, egressVids, untaggedVids, native)
 		info.AllowedVlans = AllowedVlans{Vids: allowed, IsWildcard: isWildcard}
 		// Membership is the stronger evidence: a port the device places in a
 		// VLAN is bridged, however its PVID table reads. The routed inference
@@ -420,13 +435,24 @@ func chooseNative(untaggedVids []int) *int {
 // port egresses untagged except the one that became its native VLAN.
 // Those VLANs are the one thing the masks rule out as tagged, so the
 // alternative is to publish the opposite of what the device reported.
-func withoutUntaggedOtherThan(egressVids, untaggedVids []int, native *int) []int {
+//
+// A VLAN whose membership is configured and whose untagged row is only
+// operational is kept, as a tagged VLAN. Provenance here is per column, so
+// that pairing is possible, and an operational untagged row that was not
+// trusted to name the port's untagged VLAN must not be trusted to delete a
+// configured membership either. The port is a member with no configured
+// untagged row naming it, which is what a tagged VLAN is.
+func withoutUntaggedOtherThan(rows GenericRows, egressVids, untaggedVids []int, native *int) []int {
 	if len(untaggedVids) == 0 || len(egressVids) == 0 {
 		return egressVids
 	}
 	drop := make(map[int]struct{}, len(untaggedVids))
 	for _, vid := range untaggedVids {
 		if native != nil && vid == *native {
+			continue
+		}
+		if fromCurrentTable(rows.VlanUntaggedFromCurrent, vid) &&
+			!fromCurrentTable(rows.VlanEgressFromCurrent, vid) {
 			continue
 		}
 		drop[vid] = struct{}{}
