@@ -1596,3 +1596,68 @@ func TestResolvablePvidValues_AsksTheIndexQuestionOfEveryDescribedRow(t *testing
 		t.Errorf("tag 17 names exactly one VLAN here and must stay resolvable, got %v", got)
 	}
 }
+
+// TestResolveJuniperVlanIndices_RekeysTheCurrentTableToo covers the table that
+// arrived after this translation was written.
+//
+// dot1qVlanCurrentTable is keyed by dot1qVlanIndex, the same internal
+// identifier the static table uses on these platforms, so it has to move with
+// them. Left alone it keeps the device's internal number while the static rows
+// move to real tags, and the membership merge — finding that number absent
+// from the static table — inserts the row under it. That fabricates a VLAN at
+// an internal index, or lands on a real VLAN carrying that number, which is
+// the collision this translation exists to prevent.
+func TestResolveJuniperVlanIndices_RekeysTheCurrentTableToo(t *testing.T) {
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		oidDot1qVlanStaticName + "24": {Value: "VL32"},
+		oidJnxExVlanName + "24":       {Value: "VL32"},
+		oidJnxExVlanTag + "24":        {Value: "32"},
+		// Current-table rows under the same internal indices, with time marks.
+		oidDot1qVlanCurrentEgressPorts + "0.17":      {Value: "\x80"},
+		oidDot1qVlanCurrentUntaggedPorts + "2828.24": {Value: "\x40"},
+		// An index the enterprise table cannot resolve.
+		oidDot1qVlanCurrentEgressPorts + "0.99": {Value: "\x20"},
+	}, testLogger())
+
+	// Moved to the real tags, time marks preserved.
+	if got := out[oidDot1qVlanCurrentEgressPorts+"0.156"].Value; got != "\x80" {
+		t.Errorf("current egress must move to the tag: got %q", got)
+	}
+	if got := out[oidDot1qVlanCurrentUntaggedPorts+"2828.32"].Value; got != "\x40" {
+		t.Errorf("current untagged must move to the tag, keeping its mark: got %q", got)
+	}
+	// The internal indices must not survive as VLAN ids.
+	for _, gone := range []string{
+		oidDot1qVlanCurrentEgressPorts + "0.17",
+		oidDot1qVlanCurrentUntaggedPorts + "2828.24",
+		oidDot1qVlanCurrentEgressPorts + "0.99",
+	} {
+		if _, ok := out[gone]; ok {
+			t.Errorf("%s survived: an internal index must not reach NetBox as a VLAN", gone)
+		}
+	}
+}
+
+func TestSplitCurrentVlanOID(t *testing.T) {
+	for _, tc := range []struct {
+		oid         string
+		mark, index int
+		ok          bool
+	}{
+		{oidDot1qVlanCurrentEgressPorts + "0.1", 0, 1, true},
+		{oidDot1qVlanCurrentUntaggedPorts + "2828.156", 2828, 156, true},
+		{oidDot1qVlanCurrentEgressPorts + "1", 0, 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "x.1", 0, 0, false},
+		{oidDot1qVlanStaticName + "0.1", 0, 0, false},
+	} {
+		_, mark, index, ok := splitCurrentVlanOID(tc.oid)
+		if mark != tc.mark || index != tc.index || ok != tc.ok {
+			t.Errorf("%s: got (%d,%d,%v), want (%d,%d,%v)", tc.oid, mark, index, ok, tc.mark, tc.index, tc.ok)
+		}
+	}
+}

@@ -162,6 +162,30 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 			out[oid] = v
 			continue
 		}
+		if col, mark, index, ok := splitCurrentVlanOID(oid); ok {
+			// The current table is keyed by dot1qVlanIndex, the SAME internal
+			// identifier the static table uses on these platforms, so it has
+			// to move with them. Left alone it would keep the device's
+			// internal number while the static rows moved to real tags — and
+			// the merge, finding that number absent from the static table,
+			// would insert the row under it. That fabricates a VLAN at an
+			// internal index, or lands on a real VLAN that happens to carry
+			// that number, which is the collision this whole translation
+			// exists to prevent.
+			//
+			// A row whose index the enterprise table cannot resolve is
+			// dropped rather than kept under a number that means nothing
+			// here. Its time mark is preserved: it selects between rows, and
+			// carries no VLAN identity.
+			tag, known := tagByIndex[index]
+			vid := qbridge.CoerceVid(tag)
+			if !known || vid == nil {
+				dropped++
+				continue
+			}
+			out[col+strconv.Itoa(mark)+"."+strconv.Itoa(*vid)] = v
+			continue
+		}
 		col, index, ok := splitStaticVlanOID(oid)
 		if !ok {
 			out[oid] = v
@@ -584,6 +608,37 @@ func maybeCutAtColumnBound(name string, tag int) bool {
 		return false
 	}
 	return len(name) == dot1qVlanStaticNameMax || len(name) == dot1qVlanStaticNameMax-1
+}
+
+// dot1qVlanCurrentColumns are the columns of dot1qVlanCurrentTable this backend
+// walks. Keyed by { dot1qVlanTimeMark, dot1qVlanIndex }, and that index is the
+// same internal identifier dot1qVlanStaticTable uses, so these rows are rekeyed
+// alongside the static ones.
+var dot1qVlanCurrentColumns = []string{
+	oidDot1qVlanCurrentEgressPorts,
+	oidDot1qVlanCurrentUntaggedPorts,
+}
+
+// splitCurrentVlanOID splits a dot1qVlanCurrentTable OID into its column
+// prefix, its time mark and its VlanIndex. Reports false for anything else.
+func splitCurrentVlanOID(oid string) (column string, mark, index int, ok bool) {
+	for _, col := range dot1qVlanCurrentColumns {
+		if !strings.HasPrefix(oid, col) {
+			continue
+		}
+		suffix := strings.TrimPrefix(oid, col)
+		dot := strings.IndexByte(suffix, '.')
+		if dot < 0 {
+			return "", 0, 0, false
+		}
+		mark, okMark := atoi(suffix[:dot])
+		index, okIndex := atoi(suffix[dot+1:])
+		if !okMark || !okIndex {
+			return "", 0, 0, false
+		}
+		return col, mark, index, true
+	}
+	return "", 0, 0, false
 }
 
 // splitStaticVlanOID splits a dot1qVlanStaticTable OID into its column prefix
