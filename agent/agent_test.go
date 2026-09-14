@@ -1811,6 +1811,45 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 // whose Start always fails as if the agent's own shutdown had already cancelled
 // the context it was given, for testing that filesmgr's rollback gate treats
 // that as distinct from a bad binary.
+// selfCancellingStartBackend fails its first Start the way a backend that hits
+// a fatal startup error does: it cancels the run context it was handed and
+// returns an error wrapping the cancellation. The second Start succeeds.
+type selfCancellingStartBackend struct {
+	stubCancelledStartBackend
+}
+
+func (s *selfCancellingStartBackend) Start(_ context.Context, cancel context.CancelFunc) error {
+	s.startCalls++
+	if s.startCalls == 1 {
+		cancel()
+		return fmt.Errorf("fatal startup error: %w", context.Canceled)
+	}
+	return nil
+}
+
+func (s *selfCancellingStartBackend) ManagedBinaryName() string { return "orb-stub" }
+
+// A backend that cancels its own run context on a fatal start is not the
+// agent shutting down: the upgrade must be rolled back and Start retried,
+// not left with the bad binary installed.
+func TestFilesmgrRestartRollsBackWhenTheBackendCancelsItself(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &selfCancellingStartBackend{}
+	fm := &mockFilesManager{}
+	a := &orbAgent{
+		logger:        logger,
+		policyManager: &mockPolicyManager{},
+		backends:      map[string]backend.Backend{"stub": be},
+		filesManager:  fm,
+	}
+
+	a.restartBackendWithFilesmgrRollback(context.Background(), "stub")
+
+	assert.Equal(t, 1, fm.rollbackCalls, "the binary must be rolled back")
+	assert.Equal(t, []string{"orb-stub"}, fm.rollbackNames)
+	assert.Equal(t, 2, be.startCalls, "Start is retried with the rolled-back binary")
+}
+
 type stubCancelledStartBackend struct {
 	startCalls int
 }

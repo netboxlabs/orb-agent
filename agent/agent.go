@@ -556,7 +556,10 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 		}
 		return
 	}
-	if errors.Is(startErr, context.Canceled) || ctx.Err() != nil {
+	// Only the agent's own context tells shutdown apart from a backend that
+	// cancelled its run context on a fatal start: the latter also returns an
+	// error wrapping the cancellation, and it must be rolled back.
+	if ctx.Err() != nil {
 		a.logger.Info("filesmgr: backend start cancelled during restart, leaving the binary as it is", "backend", backendName, "error", startErr)
 		return
 	}
