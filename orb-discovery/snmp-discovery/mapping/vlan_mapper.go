@@ -446,7 +446,8 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		IfAdminStatus:     map[int]int{},
 		IfTypes:           map[int]string{},
 
-		VlansFromCurrentTable: map[int]struct{}{},
+		VlanEgressFromCurrent:   map[int]struct{}{},
+		VlanUntaggedFromCurrent: map[int]struct{}{},
 	}
 	// dot1qPortVlanTable is INDEX { dot1dBasePort } per RFC 4363, so the OID
 	// suffix is a bridge port number, NOT an ifIndex. Collect raw bridge-port-
@@ -529,14 +530,14 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			continue
 		}
 		rows.VlanEgressPorts[vid] = []byte(row.mask)
-		rows.VlansFromCurrentTable[vid] = struct{}{}
+		rows.VlanEgressFromCurrent[vid] = struct{}{}
 	}
 	for vid, row := range currentUntagged {
 		if _, ok := rows.VlanUntaggedPorts[vid]; ok || row.placesNobody(currentEgress[vid]) {
 			continue
 		}
 		rows.VlanUntaggedPorts[vid] = []byte(row.mask)
-		rows.VlansFromCurrentTable[vid] = struct{}{}
+		rows.VlanUntaggedFromCurrent[vid] = struct{}{}
 	}
 
 	rows.VlanCatalogPresent = vlanCatalogPresent(all)

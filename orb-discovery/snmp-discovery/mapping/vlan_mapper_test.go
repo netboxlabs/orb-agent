@@ -1295,13 +1295,62 @@ func TestVlanMapper_BuildGenericRows_RecordsCurrentTableProvenance(t *testing.T)
 		oidDot1qVlanCurrentUntaggedPorts + "0.30": {Value: portMask(1)},
 	})
 
-	for _, vid := range []int{20, 30} {
-		if _, ok := rows.VlansFromCurrentTable[vid]; !ok {
-			t.Errorf("VLAN %d came from the current table and must be marked as such", vid)
+	if _, ok := rows.VlanEgressFromCurrent[20]; !ok {
+		t.Error("VLAN 20's egress mask came from the current table")
+	}
+	if _, ok := rows.VlanUntaggedFromCurrent[30]; !ok {
+		t.Error("VLAN 30's untagged mask came from the current table")
+	}
+	// Recorded per column, not per VLAN. VLAN 20 supplied only an egress
+	// mask, so nothing may claim its untagged mask is operational — that
+	// would suppress a withdrawal the static untagged table's own absence
+	// should trigger.
+	if _, ok := rows.VlanUntaggedFromCurrent[20]; ok {
+		t.Error("VLAN 20 supplied no untagged mask; its untagged column is not from the current table")
+	}
+	if _, ok := rows.VlanEgressFromCurrent[30]; ok {
+		t.Error("VLAN 30 supplied no egress mask; its egress column is not from the current table")
+	}
+	for _, m := range []map[int]struct{}{rows.VlanEgressFromCurrent, rows.VlanUntaggedFromCurrent} {
+		if _, ok := m[10]; ok {
+			t.Error("VLAN 10 came from the static table and must not be marked")
 		}
 	}
-	if _, ok := rows.VlansFromCurrentTable[10]; ok {
-		t.Error("VLAN 10 came from the static table and must not be marked")
+}
+
+// A VLAN whose egress mask is operational but whose untagged mask is
+// configuration must still have its untagged absence honoured. A single
+// per-VLAN provenance set marked it "from current" for both columns and
+// suppressed a withdrawal the static table's own absence should trigger.
+func TestVlanMapper_PostMap_ProvenanceIsPerColumnNotPerVlan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1", 102: "gi2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		oidDot1qPvid + "1":            {Value: "31"},
+		oidDot1qPvid + "2":            {Value: "31"},
+		oidDot1qVlanStaticName + "31": {Value: "USERS"},
+		// The untagged mask is CONFIGURATION and names only port 1, so port 2
+		// is tagged there and its PVID names no untagged VLAN.
+		oidDot1qVlanStaticUntaggedPorts + "31": {Value: portMask(1)},
+		// The egress mask for the same VLAN is operational.
+		oidDot1qVlanCurrentEgressPorts + "0.31": {Value: portMask(1, 2)},
+	}
+
+	NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
+
+	if got := ifaces[102]; got.UntaggedVlan != nil {
+		t.Errorf("the static untagged table leaves gi2 out, so its PVID names no untagged VLAN: got %+v", got.UntaggedVlan)
+	}
+	if got := ifaces[101]; got.UntaggedVlan == nil || *got.UntaggedVlan.Vid != 31 {
+		t.Errorf("gi1 is untagged in VLAN 31: got %+v", got.UntaggedVlan)
 	}
 }
 

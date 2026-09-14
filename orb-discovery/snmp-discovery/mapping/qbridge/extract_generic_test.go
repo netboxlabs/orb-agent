@@ -510,14 +510,15 @@ func TestExtractGeneric_AZeroPvidIsNotARealPvid(t *testing.T) {
 func TestExtractGeneric_CurrentUntaggedAbsenceDoesNotWithdrawAPvid(t *testing.T) {
 	// Two ports configured on VLAN 31; only port 1 is currently forwarding.
 	rows := GenericRows{
-		BasePortToIfIndex:     map[int]int{1: 101, 2: 102},
-		PortPvid:              map[int]int{101: 31, 102: 31},
-		VlanEgressPorts:       map[int][]byte{31: maskWithPorts(1)},
-		VlanUntaggedPorts:     map[int][]byte{31: maskWithPorts(1)},
-		VlansFromCurrentTable: map[int]struct{}{31: {}},
-		IfAdminStatus:         map[int]int{101: 1, 102: 1},
-		IfTypes:               map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
-		VlanCatalogPresent:    true,
+		BasePortToIfIndex:       map[int]int{1: 101, 2: 102},
+		PortPvid:                map[int]int{101: 31, 102: 31},
+		VlanEgressPorts:         map[int][]byte{31: maskWithPorts(1)},
+		VlanUntaggedPorts:       map[int][]byte{31: maskWithPorts(1)},
+		VlanEgressFromCurrent:   map[int]struct{}{31: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{31: {}},
+		IfAdminStatus:           map[int]int{101: 1, 102: 1},
+		IfTypes:                 map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent:      true,
 	}
 	got, err := ExtractGeneric(rows)
 	if err != nil {
@@ -529,7 +530,8 @@ func TestExtractGeneric_CurrentUntaggedAbsenceDoesNotWithdrawAPvid(t *testing.T)
 
 	// The same shape from the static table is configuration, and absence there
 	// does withdraw the PVID, exactly as before.
-	rows.VlansFromCurrentTable = map[int]struct{}{}
+	rows.VlanEgressFromCurrent = map[int]struct{}{}
+	rows.VlanUntaggedFromCurrent = map[int]struct{}{}
 	got, err = ExtractGeneric(rows)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -553,7 +555,7 @@ func TestExtractGeneric_OneBinaryCurrentMaskDoesNotUnmakeATextHost(t *testing.T)
 			4000: maskWithPorts(1, 2, 3), // a current row, in binary
 		},
 		VlanUntaggedPorts:     map[int][]byte{10: []byte("100,101")},
-		VlansFromCurrentTable: map[int]struct{}{4000: {}},
+		VlanEgressFromCurrent: map[int]struct{}{4000: {}},
 		IfAdminStatus:         map[int]int{500: 1, 501: 1},
 		IfTypes:               map[int]string{500: "ethernetCsmacd", 501: "ethernetCsmacd"},
 		TextPortLists:         true,

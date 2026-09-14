@@ -143,7 +143,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 	resolved := resolvablePvidValues(staticIndices, described, tagByIndex)
 
 	out := make(ObjectIDValueMap, len(all))
-	dropped, unnameable := 0, 0
+	dropped, droppedCurrent, unnameable := 0, 0, 0
 	for oid, v := range all {
 		if strings.HasPrefix(oid, oidDot1qPvid) {
 			if pvidIsUnnameable(v.Value, resolved) {
@@ -180,7 +180,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 			tag, known := tagByIndex[index]
 			vid := qbridge.CoerceVid(tag)
 			if !known || vid == nil {
-				dropped++
+				droppedCurrent++
 				continue
 			}
 			out[col+strconv.Itoa(mark)+"."+strconv.Itoa(*vid)] = v
@@ -221,6 +221,14 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		// nobody reads.
 		logger.Debug("vlan: dropped Juniper static-table rows whose tag is not a VLAN ID",
 			"rows", dropped, "reason", "tag outside 1-4094, which is how Junos reports an untagged bridge domain")
+	}
+	if droppedCurrent > 0 {
+		// Counted apart from the static rows above. The two are dropped for
+		// different reasons and on different devices, so one number covering
+		// both would point at the wrong table when someone reads the log.
+		logger.Debug("vlan: dropped Juniper current-table rows the enterprise table does not resolve",
+			"rows", droppedCurrent,
+			"reason", "the row is keyed by an internal index with no usable tag, so it names no VLAN here")
 	}
 	if unnameable > 0 {
 		logger.Warn("vlan: reported Juniper PVIDs the rekeyed VLAN catalog cannot name as 0",

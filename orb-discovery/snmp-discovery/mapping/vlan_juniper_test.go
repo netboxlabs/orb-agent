@@ -28,6 +28,13 @@ const (
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, nil)) }
 
 // capturingLogger returns a logger and the buffer it writes to.
+// capturingDebugLogger captures at Debug, for the messages a healthy device
+// emits on every poll and which are deliberately not warnings.
+func capturingDebugLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})), &buf
+}
+
 func capturingLogger() (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	return slog.New(slog.NewTextHandler(&buf, nil)), &buf
@@ -1631,6 +1638,24 @@ func TestResolveJuniperVlanIndices_RekeysTheCurrentTableToo(t *testing.T) {
 	if got := out[oidDot1qVlanCurrentUntaggedPorts+"2828.32"].Value; got != "\x40" {
 		t.Errorf("current untagged must move to the tag, keeping its mark: got %q", got)
 	}
+	// The two drops are counted and reported apart: they happen for different
+	// reasons and on different devices, so one number would point at the
+	// wrong table.
+	logger, logged := capturingDebugLogger()
+	ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar:                    {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17":           {Value: "VL156"},
+		oidJnxExVlanName + "17":                 {Value: "VL156"},
+		oidJnxExVlanTag + "17":                  {Value: "156"},
+		oidDot1qVlanCurrentEgressPorts + "0.99": {Value: "\x20"},
+	}, logger)
+	if !strings.Contains(logged.String(), "current-table rows the enterprise table does not resolve") {
+		t.Errorf("a dropped current row must be reported as one, got %q", logged.String())
+	}
+	if strings.Contains(logged.String(), "static-table rows whose tag") {
+		t.Errorf("no static row was dropped here, got %q", logged.String())
+	}
+
 	// The internal indices must not survive as VLAN ids.
 	for _, gone := range []string{
 		oidDot1qVlanCurrentEgressPorts + "0.17",

@@ -43,7 +43,8 @@ type GenericRows struct {
 	// it parses.
 	TextPortLists bool
 
-	// VlansFromCurrentTable names the VLANs whose masks came from
+	// VlanEgressFromCurrent and VlanUntaggedFromCurrent name, per column, the
+	// VLANs whose mask came from
 	// dot1qVlanCurrentTable rather than dot1qVlanStaticTable.
 	//
 	// The two tables do not mean the same thing and cannot be read the same
@@ -56,7 +57,12 @@ type GenericRows struct {
 	//
 	// That difference only matters where absence from a mask is read as a
 	// statement. Membership is taken from either table alike.
-	VlansFromCurrentTable map[int]struct{}
+	// Tracked per column because the question asked of them is per column. A
+	// VLAN can have a static untagged mask and a current-table egress mask; a
+	// single set would mark it "from current" for both and suppress a
+	// withdrawal the static untagged table's own absence should trigger.
+	VlanEgressFromCurrent   map[int]struct{}
+	VlanUntaggedFromCurrent map[int]struct{}
 
 	// VlanCatalogPresent says the device named VLANs of its own: a static
 	// name or row-status row, a membership mask, or a VTP catalog entry.
@@ -126,8 +132,8 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// bitmaps.
 	egress, untagged := rows.VlanEgressPorts, rows.VlanUntaggedPorts
 	if rows.TextPortLists && listsAreText(
-		withoutVlans(egress, rows.VlansFromCurrentTable),
-		withoutVlans(untagged, rows.VlansFromCurrentTable),
+		withoutVlans(egress, rows.VlanEgressFromCurrent),
+		withoutVlans(untagged, rows.VlanUntaggedFromCurrent),
 		rows.BasePortToIfIndex,
 	) {
 		egress, untagged = listsToBitmaps(egress), listsToBitmaps(untagged)
@@ -192,13 +198,13 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			info.NativeVlan = native
 			info.AccessVlan = native
 		case bridged && pvid > 0 && hasRow(untagged, pvid) &&
-			!fromCurrentTable(rows.VlansFromCurrentTable, pvid):
+			!fromCurrentTable(rows.VlanUntaggedFromCurrent, pvid):
 			// The device publishes an untagged row for the PVID's VLAN and
 			// leaves this port out of it: the port is tagged there, and the
 			// PVID names no untagged VLAN. The PVID stands in for the row
 			// only where the device publishes none.
 			//
-			// Read only from the static table, which RFC 4363 defines as the
+			// Read only from the static untagged table, which RFC 4363 defines as the
 			// ports permanently assigned to egress untagged — configuration,
 			// so a port's absence from it is a statement about that port. The
 			// current table says which ports are transmitting untagged right
