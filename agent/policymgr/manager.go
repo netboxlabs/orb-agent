@@ -272,6 +272,15 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 				a.logger.Error("failed to retrieve policy", "policy_id", payload.ID, "error", err)
 				return
 			}
+			if currentPolicy.Backend == pd.Backend && currentPolicy.Version > pd.Version {
+				// Whatever the record's state: a restart marks records unknown
+				// before its replay, and a stale payload arriving in that
+				// window must not replace the newer version the replay is
+				// about to hand back.
+				a.logger.Info("a newer version of this policy is stored, skipping", "policy_id", pd.ID, "policy_name", pd.Name,
+					"attempted_version", fmt.Sprint(pd.Version), "current_version", fmt.Sprint(currentPolicy.Version))
+				return
+			}
 			if currentPolicy.Backend == pd.Backend && currentPolicy.Version >= pd.Version && currentPolicy.State == policies.Running {
 				a.logger.Info("a better version of this policy has already been applied, skipping", "policy_id", pd.ID, "policy_name", pd.Name,
 					"attempted_version", fmt.Sprint(pd.Version), "current_version", fmt.Sprint(currentPolicy.Version))

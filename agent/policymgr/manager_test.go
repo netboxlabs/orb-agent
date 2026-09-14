@@ -2312,6 +2312,38 @@ func TestManageOfTheSamePolicyIsNotLostUnderAConcurrentApplier(t *testing.T) {
 // stored record runs on is refused with the record untouched: the removal
 // would otherwise go to the wrong backend while the record, the only state
 // left to remove the policy from its real backend, is deleted.
+// A payload older than the stored record is refused whatever the record's
+// state: a restart marks records unknown before its replay, and a stale
+// fleet manage arriving in that window must not replace the newer version
+// the replay is about to hand back. The same version is still accepted for
+// a record that is not running, so a failed apply can be retried.
+func TestManagePolicyRefusesAnOlderVersionWhileTheRecordIsDeferred(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "version_backend"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	backend.Register("version_backend", be)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "versioned", Name: "Versioned", Backend: "version_backend", Version: 3, Data: map[string]any{"v": 3}, State: policies.Unknown, Datasets: map[string]bool{"ds": true}}))
+
+	mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "versioned", Name: "Versioned", Backend: "version_backend", Version: 2, Data: map[string]any{"v": 2}})
+
+	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err := mgr.GetRepo().Get("versioned")
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), stored.Version, "the newer stored version is kept")
+	assert.Equal(t, policies.Unknown, stored.State)
+
+	mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "versioned", Name: "Versioned", Backend: "version_backend", Version: 3, Data: map[string]any{"v": 3}})
+
+	be.AssertCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err = mgr.GetRepo().Get("versioned")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State, "the same version re-applies a record that is not running")
+}
+
 func TestManagePolicyRefusesARemoveNamingAnotherBackend(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := &mockSecretsManager{passthrough: true}
