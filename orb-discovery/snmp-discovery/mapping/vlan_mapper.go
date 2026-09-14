@@ -490,8 +490,8 @@ func currentVlanRow(oid, prefix string) (vid, mark int, ok bool) {
 //
 // The sources are every place the walk could learn a VLAN identity from: the
 // static table's names, row statuses and membership masks, the current table's
-// membership masks, the Cisco VTP catalog and the Juniper enterprise table's
-// names.
+// membership masks, the Cisco VTP catalog, the Huawei catalog and the Juniper
+// enterprise table's names.
 //
 // dot1qPvid is deliberately not among them. Whether a PVID means anything is
 // the question this answers, so counting it would make every device its own
@@ -529,6 +529,15 @@ func vlanCatalogPresent(all ObjectIDValueMap) bool {
 			strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus),
 			strings.HasPrefix(oid, oidDot1qVlanStaticEgressPorts),
 			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts):
+			if namesAVlan(lastOIDElement(oid)) {
+				return true
+			}
+		case strings.HasPrefix(oid, oidHwVlanIndex),
+			strings.HasPrefix(oid, oidHwVlanName),
+			strings.HasPrefix(oid, oidHwVlanRowStatus):
+			// The Huawei catalog is a VLAN catalog like any other: a device
+			// publishing it has named VLANs of its own, whether or not it
+			// answers Q-BRIDGE at all.
 			if namesAVlan(lastOIDElement(oid)) {
 				return true
 			}

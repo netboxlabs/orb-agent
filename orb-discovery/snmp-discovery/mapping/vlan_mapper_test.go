@@ -1600,3 +1600,17 @@ func TestVlanMapper_BuildGenericRows_ThreeMarksResolveTheSameWayEveryRun(t *test
 		}
 	}
 }
+
+// A device that publishes its VLANs in a vendor catalog has named VLANs of its
+// own, whichever MIB the catalog lives in. Counting only the ones Q-BRIDGE
+// knows about would withhold every port on a Huawei switch whose VLANs are
+// real and whose PVID column happens to answer the MIB default.
+func TestVlanMapper_VlanCatalogPresent_CountsTheHuaweiCatalog(t *testing.T) {
+	all := ObjectIDValueMap{oidHwVlanName + "120": {Value: "uplink"}}
+	if !vlanCatalogPresent(all) {
+		t.Error("a Huawei catalog row names a VLAN")
+	}
+	if vlanCatalogPresent(ObjectIDValueMap{oidHwVlanName + "9999": {Value: "x"}}) {
+		t.Error("a row naming no VLAN NetBox could hold is not a catalog")
+	}
+}
