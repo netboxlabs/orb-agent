@@ -941,6 +941,8 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 		oidDot1qVlanStaticEgressPorts,
 		oidDot1qVlanStaticUntaggedPorts,
 		oidDot1qVlanStaticRowStatus,
+		oidDot1qVlanCurrentEgressPorts,
+		oidDot1qVlanCurrentUntaggedPorts,
 		oidDot1qPvid,
 		oidCiscoVMVlan,
 		oidCiscoVMVoiceVlanID,

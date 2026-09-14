@@ -1259,3 +1259,22 @@ func TestIsEmptyPortMask_PrintableBytesAreStillPorts(t *testing.T) {
 		}
 	}
 }
+
+// A device publishing only the current table has VLAN data, so a missing
+// bridge-port table is partial data worth warning about rather than the quiet
+// "this is not a switch" case.
+func TestHasVLANSignal_CountsTheCurrentTable(t *testing.T) {
+	if !hasVLANSignal(ObjectIDValueMap{
+		oidDot1qVlanCurrentEgressPorts + "0.1": {Value: portMask(1)},
+	}) {
+		t.Error("the current table is a VLAN signal")
+	}
+	if !hasVLANSignal(ObjectIDValueMap{
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1)},
+	}) {
+		t.Error("the current untagged table is a VLAN signal")
+	}
+	if hasVLANSignal(ObjectIDValueMap{oidIfDescr + "1": {Value: "eth0"}}) {
+		t.Error("an interface table alone is not a VLAN signal")
+	}
+}
