@@ -892,9 +892,9 @@ func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testin
 		t.Errorf("a configured row excluding the port outranks its default PVID: got %+v", c)
 	}
 
-	// A PVID the operator had to set is not asked this question: a port parked
-	// on a VLAN it is not a member of is a configuration, and the PVID is the
-	// only record of it.
+	// The same holds for a PVID the operator had to set. The configured table
+	// is what it is being weighed against, and that does not read differently
+	// because the value is not the MIB default.
 	rows.PortPvid = map[int]int{101: 999, 102: 7}
 	rows.VlanEgressPorts[999] = maskWithPorts(2)
 	rows.VlanUntaggedPorts[999] = maskWithPorts(2)
@@ -902,8 +902,8 @@ func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testin
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 999 {
-		t.Errorf("a non-default PVID stands even where a row excludes the port: got %+v", c)
+	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 16 {
+		t.Errorf("a configured row excluding the port refutes any PVID: got %+v", c)
 	}
 
 	// Publishing no row at all for the PVID's VLAN is not a contradiction. The
@@ -1041,5 +1041,47 @@ func TestExtractGeneric_RecordsWhetherTheNativeCameFromAMask(t *testing.T) {
 	}
 	if got[101].NativeUntaggedByMask {
 		t.Error("a native the PVID displaced onto is not a statement about egress tagging")
+	}
+}
+
+// Two ports the configured table describes identically must be answered
+// identically about that VLAN. Both are tagged members of the VLAN their PVID
+// names; one of them also happens to be forwarding a second VLAN untagged.
+// That is a fact about the second VLAN and must not change the first answer.
+func TestExtractGeneric_TheSameConfiguredEvidenceGetsTheSameAnswer(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 101, 2: 102},
+		PortPvid:          map[int]int{101: 30, 102: 30},
+		VlanEgressPorts: map[int][]byte{
+			30: maskWithPorts(1, 2),
+			40: maskWithPorts(1),
+		},
+		VlanUntaggedPorts: map[int][]byte{
+			// Neither port is untagged in VLAN 30: both are tagged members.
+			30: {},
+			40: maskWithPorts(1),
+		},
+		VlanEgressFromCurrent:   map[int]struct{}{40: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{40: {}},
+		IfAdminStatus:           map[int]int{101: 1, 102: 1},
+		IfTypes:                 map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent:      true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	a, b := Classify(*got[101]), Classify(*got[102])
+	for _, c := range []Classification{a, b} {
+		if c.Untagged != nil && *c.Untagged == 30 {
+			t.Errorf("VLAN 30's configured untagged row excludes both ports: got %+v", c)
+		}
+	}
+	// The port forwarding VLAN 40 untagged keeps it; neither loses VLAN 30.
+	if a.Untagged == nil || *a.Untagged != 40 {
+		t.Errorf("the operational untagged VLAN stands where the PVID is refuted: got %+v", a)
+	}
+	if len(b.Tagged) != 1 || b.Tagged[0] != 30 {
+		t.Errorf("the port with no other membership is tagged in VLAN 30: got %+v", b)
 	}
 }

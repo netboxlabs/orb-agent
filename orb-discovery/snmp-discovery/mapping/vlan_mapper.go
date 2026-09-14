@@ -554,7 +554,11 @@ func vlanCatalogPresent(all ObjectIDValueMap) bool {
 			// that refutes what counting it would license. The refusal it
 			// waives ends in access VLAN 1 on every port of the device; a row
 			// saying no port is in that VLAN cannot be the evidence for it.
-			// The merge drops such a row for the same reason.
+			//
+			// Judged over the rows as walked, so a VLAN answered under several
+			// time marks counts if any of them names a port, while the merge
+			// reads only the newest. A VLAN every port has since left is then
+			// still a VLAN the device has, which is the question here.
 			if namesAVlan(lastOIDElement(oid)) && !isEmptyPortMask(v.Value) {
 				return true
 			}
@@ -661,13 +665,18 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// per VLAN rather than per table, so a device whose static table covers
 	// some VLANs and whose current table covers others is read from both.
 	//
-	// A VLAN the current table mentions but places nobody in is skipped. Such
-	// a row is not membership, and merging it is not harmless: an empty
-	// untagged row is still a row, and the generic extractor reads the mere
-	// presence of one for a port's PVID as "the device publishes an untagged
-	// table for that VLAN and left this port out of it", which withdraws the
-	// port's PVID. A ProCurve publishing six all-zero VLANs beside 23 ports
-	// with real PVIDs lost every one of them that way.
+	// A VLAN the current table mentions but places nobody in is skipped: such
+	// a row is not membership.
+	//
+	// It was added because the extractor read the mere presence of an untagged
+	// row for a port's PVID as "the device publishes one for that VLAN and left
+	// this port out", withdrawing the PVID; a ProCurve publishing six all-zero
+	// VLANs beside 23 ports with real PVIDs lost every one of them. Every
+	// consumer of a merged row now gates on provenance instead, so removing
+	// this skip changes no port on any recorded walk. It stays for what it
+	// costs: two of them publish all 4094 VLANs empty, and merging those means
+	// carrying 4094 masks and scanning them once per port, for rows that say
+	// nothing.
 	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
 		egress, untagged := oneSnapshot(currentEgress[vid], currentUntagged[vid])
 		if isEmptyPortMask(egress) && isEmptyPortMask(untagged) {

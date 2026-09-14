@@ -106,17 +106,25 @@ const defaultPvid = 1
 // egress row for the PVID's VLAN that leaves the port out, on a device whose
 // PVID column is otherwise maintained.
 //
-// A PVID the operator had to set is not asked the second question. A port whose
-// PVID names a VLAN it is not a member of is a configuration, not a
-// contradiction: it is how an unused port is parked on a VLAN that goes
-// nowhere, and the PVID is the only record of it.
+// The port-level test applies to every PVID, the device-level one only to the
+// default. A port parked on a VLAN it is not a member of, which is how an
+// unused port is sent nowhere, reaches none of this: it has no other membership
+// for an operational mask to displace, so it goes to the withdrawal branch
+// below, which decides the identical evidence. Exempting a configured PVID here
+// made the two disagree, and on the same device: two ports the configured table
+// describes identically, both tagged members of the VLAN their PVID names, were
+// answered "tagged there, so no untagged VLAN" and "untagged there" according
+// to whether one of them happened to be forwarding some other VLAN untagged.
 func operationalNativeDisplacesPvid(
 	rows GenericRows, native, pvid int, everyPvidIsDefault, masksContradict bool,
 ) bool {
 	if native == pvid {
 		return false
 	}
-	if pvid == defaultPvid && (everyPvidIsDefault || masksContradict) {
+	if masksContradict {
+		return false
+	}
+	if pvid == defaultPvid && everyPvidIsDefault {
 		return false
 	}
 	if CoerceVid(pvid) == nil {
