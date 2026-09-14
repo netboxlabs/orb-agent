@@ -1043,20 +1043,21 @@ func TestVlanMapper_PostMap_CurrentTableSuppliesMembershipTheStaticTableOmits(t 
 
 // The two-element index is the trap: reading the first element would take the
 // time mark, which is 0 and not a VLAN, discarding every row.
-func TestCurrentVlanID_ReadsTheSecondIndexElement(t *testing.T) {
+func TestCurrentVlanRow_ReadsTheSecondIndexElement(t *testing.T) {
 	for _, tc := range []struct {
-		oid  string
-		want int
-		ok   bool
+		oid       string
+		vid, mark int
+		ok        bool
 	}{
-		{oidDot1qVlanCurrentEgressPorts + "0.1", 1, true},
-		{oidDot1qVlanCurrentEgressPorts + "12345.151", 151, true},
-		{oidDot1qVlanCurrentEgressPorts + "1", 0, false},
-		{oidDot1qVlanCurrentEgressPorts + "0.x", 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "0.1", 1, 0, true},
+		{oidDot1qVlanCurrentEgressPorts + "12345.151", 151, 12345, true},
+		{oidDot1qVlanCurrentEgressPorts + "1", 0, 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "0.x", 0, 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "x.1", 0, 0, false},
 	} {
-		got, ok := currentVlanID(tc.oid, oidDot1qVlanCurrentEgressPorts)
-		if got != tc.want || ok != tc.ok {
-			t.Errorf("%s: got (%d,%v), want (%d,%v)", tc.oid, got, ok, tc.want, tc.ok)
+		vid, mark, ok := currentVlanRow(tc.oid, oidDot1qVlanCurrentEgressPorts)
+		if vid != tc.vid || mark != tc.mark || ok != tc.ok {
+			t.Errorf("%s: got (%d,%d,%v), want (%d,%d,%v)", tc.oid, vid, mark, ok, tc.vid, tc.mark, tc.ok)
 		}
 	}
 }
@@ -1138,6 +1139,123 @@ func TestVlanMapper_PostMap_CurrentTableOnlyDeviceIsNotRefused(t *testing.T) {
 		}
 		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
 			t.Errorf("%s untagged: got %+v, want VLAN 1", name, iface.UntaggedVlan)
+		}
+	}
+}
+
+// TestVlanMapper_BuildGenericRows_LatestTimeMarkWins is the determinism the
+// table's index demands.
+//
+// dot1qVlanCurrentTable is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, so one
+// VLAN is answered once per mark the agent still holds, with different masks.
+// Taking whichever the walk map yielded made the result depend on Go's map
+// iteration order: a real D-Link answering VLAN 1 under two marks alternated
+// between two NetBox states on every poll, with Diode rewriting mode and
+// tagged VLANs each way.
+func TestVlanMapper_BuildGenericRows_LatestTimeMarkWins(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// The same VLAN under two marks, oldest last in source order.
+		oidDot1qVlanCurrentEgressPorts + "2831.1": {Value: portMask(1, 2, 3, 4)},
+		oidDot1qVlanCurrentEgressPorts + "2828.1": {Value: portMask(4)},
+	}
+
+	// Repeated because the defect was map-iteration order: one pass could
+	// pass by luck.
+	want := portMask(1, 2, 3, 4)
+	for i := range 50 {
+		if got := string(vm.buildGenericRows(all).VlanEgressPorts[1]); got != want {
+			t.Fatalf("run %d: got %x, want the highest time mark's mask %x", i, got, want)
+		}
+	}
+}
+
+// A VLAN the current table mentions but places nobody in is not membership,
+// and merging it is not harmless: an empty untagged row is still a row, and
+// the generic extractor reads the presence of one for a port's PVID as "the
+// device publishes an untagged table for that VLAN and left this port out",
+// withdrawing the port's PVID. A ProCurve publishing six all-zero VLANs beside
+// 23 ports with real PVIDs lost every one of them that way.
+func TestVlanMapper_PostMap_AnEmptyCurrentVlanDoesNotWithdrawAPvid(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1", 102: "gi2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		// Real, operator-set PVIDs.
+		oidDot1qPvid + "1": {Value: "22"},
+		oidDot1qPvid + "2": {Value: "72"},
+		// The current table names those VLANs and puts no port in them.
+		oidDot1qVlanCurrentEgressPorts + "0.22":   {Value: string(make([]byte, 8))},
+		oidDot1qVlanCurrentUntaggedPorts + "0.22": {Value: string(make([]byte, 8))},
+		oidDot1qVlanCurrentEgressPorts + "0.72":   {Value: string(make([]byte, 8))},
+		oidDot1qVlanCurrentUntaggedPorts + "0.72": {Value: string(make([]byte, 8))},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	for name, want := range map[string]int64{"gi1": 22, "gi2": 72} {
+		iface := ifaces[101]
+		if name == "gi2" {
+			iface = ifaces[102]
+		}
+		if iface.Mode == nil || *iface.Mode != "access" {
+			t.Errorf("%s mode: got %v, want access", name, iface.Mode)
+		}
+		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != want {
+			t.Errorf("%s untagged: got %+v, want VLAN %d", name, iface.UntaggedVlan, want)
+		}
+	}
+}
+
+// An all-zero untagged mask beside a populated egress mask is meaningful: it is
+// how a VLAN every member carries tagged reports. Only the pair being empty
+// says the VLAN merely exists.
+func TestVlanMapper_BuildGenericRows_AnAllTaggedCurrentVlanIsStillMembership(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":             {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "0.30":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.30": {Value: string(make([]byte, 8))},
+	})
+
+	if got, want := string(rows.VlanEgressPorts[30]), portMask(1); got != want {
+		t.Errorf("egress: got %x, want %x", got, want)
+	}
+	if _, ok := rows.VlanUntaggedPorts[30]; !ok {
+		t.Error("the empty untagged mask belongs with its populated egress mask")
+	}
+}
+
+// A PortList bitmap byte can be any value, and several low ones are printable:
+// 0x20 is the ASCII space and sets port 3, 0x30 is "0" and sets ports 3 and 4.
+// Emptiness has to be tested on the bytes, or real membership is discarded as
+// if it named nobody.
+func TestIsEmptyPortMask_PrintableBytesAreStillPorts(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		mask string
+		want bool
+	}{
+		{"no value", "", true},
+		{"all zero bytes", string(make([]byte, 8)), true},
+		{"port 3 only, which is the ASCII space", portMask(3), false},
+		{"ports 3 and 4, which is ASCII zero", portMask(3, 4), false},
+		{"port 1", portMask(1), false},
+		{"a zero byte beside a set one", string([]byte{0x00, 0x20}), false},
+	} {
+		if got := isEmptyPortMask(tc.mask); got != tc.want {
+			t.Errorf("%s (% x): got %v, want %v", tc.what, tc.mask, got, tc.want)
 		}
 	}
 }
