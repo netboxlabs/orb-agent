@@ -368,3 +368,80 @@ func TestExtractGeneric_MarksATrunkInferredFromOneTaggedVlan(t *testing.T) {
 		t.Error("a trunk seen in two VLANs is not marked")
 	}
 }
+
+// A bridge with VLAN filtering off still answers dot1qPvid, because RFC 4363
+// gives the object a DEFVAL of 1 and the agent must return something. On a
+// device that names no VLAN of its own there is nothing to corroborate that
+// against, so reading it as "access on VLAN 1" invents a VLAN the operator
+// never configured and attaches every bridge port to it.
+func TestExtractGeneric_DefaultPvidWithoutACatalogIsNotAnAccessVlan(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 101, 2: 102},
+		PortPvid:          map[int]int{101: 1, 102: 1},
+		VlanEgressPorts:   map[int][]byte{},
+		VlanUntaggedPorts: map[int][]byte{},
+		IfAdminStatus:     map[int]int{101: 1, 102: 1},
+		IfTypes:           map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		// The device published no VLAN of its own.
+		VlanCatalogPresent: false,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	for _, ifIndex := range []int{101, 102} {
+		info := got[ifIndex]
+		if info == nil {
+			t.Fatalf("ifIndex %d missing", ifIndex)
+		}
+		if info.AdminMode == AdminAccess {
+			t.Errorf("ifIndex %d: the MIB default alone must not make an access port", ifIndex)
+		}
+		if c := Classify(*info); c.Mode != ModeUnknown || c.Untagged != nil {
+			t.Errorf("ifIndex %d: got %+v, want unclassified with no VLAN", ifIndex, c)
+		}
+	}
+}
+
+// The same default PVID is real configuration once the device names a VLAN
+// somewhere: that is the Arista EOS shape, which publishes a static name
+// catalog while omitting the membership masks.
+func TestExtractGeneric_DefaultPvidWithACatalogIsStillAccess(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:  map[int]int{1: 101},
+		PortPvid:           map[int]int{101: 1},
+		VlanEgressPorts:    map[int][]byte{},
+		VlanUntaggedPorts:  map[int][]byte{},
+		IfAdminStatus:      map[int]int{101: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd"},
+		VlanCatalogPresent: true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 1 {
+		t.Errorf("got %+v, want access on VLAN 1", c)
+	}
+}
+
+// A PVID the operator had to set is configuration whether or not the device
+// publishes a catalog, so only the default is refused.
+func TestExtractGeneric_NonDefaultPvidWithoutACatalogIsStillAccess(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:  map[int]int{1: 101},
+		PortPvid:           map[int]int{101: 200},
+		VlanEgressPorts:    map[int][]byte{},
+		VlanUntaggedPorts:  map[int][]byte{},
+		IfAdminStatus:      map[int]int{101: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd"},
+		VlanCatalogPresent: false,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 200 {
+		t.Errorf("got %+v, want access on VLAN 200", c)
+	}
+}

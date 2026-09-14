@@ -42,7 +42,20 @@ type GenericRows struct {
 	// digit and comma bytes is a legal bitmap on any other platform, however
 	// it parses.
 	TextPortLists bool
+
+	// VlanCatalogPresent says the device named VLANs of its own: a static
+	// name or row-status row, a membership mask, or a VTP catalog entry.
+	//
+	// Without one, the agent has learned no VLAN from this device except
+	// through dot1qPvid, and RFC 4363 gives dot1qPvid a DEFVAL of 1 — so a
+	// port answering 1 there may be saying nothing at all. See the default
+	// PVID branch in ExtractGeneric.
+	VlanCatalogPresent bool
 }
+
+// defaultPvid is the DEFVAL RFC 4363 gives dot1qPvid. A port reporting it on
+// a device that publishes no VLAN catalog has told us nothing.
+const defaultPvid = 1
 
 // ExtractGeneric builds a per-ifIndex SwitchportInfo map from Q-BRIDGE
 // rows. The bridge-port→ifIndex translation table is consulted exactly
@@ -146,11 +159,27 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		case len(allowed) >= 1:
 			info.AdminMode = AdminTrunk
 			info.TrunkFromOneTaggedVlan = len(allowed) == 1
+		case len(allowed) == 0 && info.AccessVlan != nil &&
+			!rows.VlanCatalogPresent && *info.AccessVlan == defaultPvid:
+			// The device published no VLAN of its own and this port answers
+			// the MIB's default PVID. Both halves matter. A bridge with VLAN
+			// filtering off still answers 1 here because RFC 4363 says it
+			// must, so on its own the value is not a configured assignment —
+			// and with no catalog there is nothing to corroborate it against.
+			// Reading it as "access on VLAN 1" invents a VLAN the operator
+			// never configured and attaches every bridge port to it.
+			//
+			// Left unclassified rather than called routed: the port is
+			// bridged, we simply cannot say into what. A non-default PVID is
+			// still configuration and classifies below, as does any PVID at
+			// all once the device names a VLAN somewhere.
 		case len(allowed) == 0 && info.AccessVlan != nil:
 			// PVID-only signal: switches like Arista EOS expose dot1qPvid but
 			// omit dot1qVlanStaticEgressPorts/UntaggedPorts. The PVID alone is
 			// sufficient — a port with a PVID participates in bridging, and the
 			// safe default is "access on PVID" when membership masks are absent.
+			// Arista publishes a static name catalog, so the branch above does
+			// not take this case away from it.
 			info.AdminMode = AdminAccess
 		}
 		out[ifIndex] = info

@@ -912,3 +912,75 @@ func TestApplyVLANDefaults_GroupLocationWithoutSite(t *testing.T) {
 		t.Errorf("Location.Site: got %v, want nil", l.Site)
 	}
 }
+
+// TestVlanMapper_PostMap_BridgeWithoutVlanFilteringEmitsNoVlan is the reported
+// shape end to end: a bridge whose VLAN filtering is off, which answers the
+// bridge port table and dot1qPvid but publishes no Q-BRIDGE VLAN tables at all.
+//
+// Every port reports the MIB's default PVID of 1. Read as configuration that
+// made eleven access ports on a VLAN 1 the device never had, and fabricated the
+// VLAN to attach them to.
+func TestVlanMapper_PostMap_BridgeWithoutVlanFilteringEmitsNoVlan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+
+	names := map[int]string{}
+	for i := range 11 {
+		names[100+i] = "sfp" + strconv.Itoa(i+2)
+	}
+	ifaces := interfacesFor(registry, names)
+
+	all := ObjectIDValueMap{}
+	for i := range 11 {
+		bp, ifIndex := strconv.Itoa(i+1), strconv.Itoa(100+i)
+		all[oidDot1dBasePortIfIndex+bp] = Value{Value: ifIndex}
+		all[oidDot1qPvid+bp] = Value{Value: "1"}
+		all[oidIfAdminStatus+ifIndex] = Value{Value: "1"}
+		all[oidIfType+ifIndex] = Value{Value: "6"}
+	}
+	// No dot1qVlanStaticTable, no VTP catalog: the device names no VLAN.
+
+	vm := NewVlanMapper(logger, config.Options{})
+	entities := vm.PostMap(all, registry, &config.Defaults{})
+
+	for _, e := range entities {
+		if v, ok := e.(*diode.VLAN); ok && v != nil && v.Vid != nil {
+			t.Errorf("no VLAN may be emitted for a device that named none, got vid %d", *v.Vid)
+		}
+	}
+	for ifIndex, iface := range ifaces {
+		if iface.Mode != nil {
+			t.Errorf("%s: mode %q written from the MIB default alone", names[ifIndex], *iface.Mode)
+		}
+		if iface.UntaggedVlan != nil {
+			t.Errorf("%s: untagged VLAN attached from the MIB default alone", names[ifIndex])
+		}
+	}
+}
+
+// The same walk with one VLAN named by the device classifies as before: the
+// refusal is about having no catalog, not about the value 1.
+func TestVlanMapper_PostMap_DefaultPvidClassifiesOnceTheDeviceNamesAVlan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{100: "sfp2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "100"},
+		oidDot1qPvid + "1":            {Value: "1"},
+		oidIfAdminStatus + "100":      {Value: "1"},
+		oidIfType + "100":             {Value: "6"},
+		oidDot1qVlanStaticName + "1":  {Value: "default"},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	iface := ifaces[100]
+	if iface.Mode == nil || *iface.Mode != "access" {
+		t.Errorf("mode: got %v, want access", iface.Mode)
+	}
+	if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
+		t.Errorf("untagged: got %+v, want VLAN 1", iface.UntaggedVlan)
+	}
+}

@@ -312,6 +312,33 @@ func setVLANGroupScope(group *diode.VLANGroup, g config.VLANGroupParameters, def
 	}
 }
 
+// vlanCatalogPresent reports whether this device named a VLAN of its own.
+//
+// The sources are the ones the agent walks and could learn a VLAN identity
+// from: the static table's names and row statuses, its membership masks, and
+// the Cisco VTP catalog. dot1qPvid is deliberately not among them — whether a
+// PVID means anything is the question this answers, so counting it would make
+// every device its own corroboration.
+//
+// Note the walk does not include dot1qVlanCurrentTable, so a device that
+// publishes only that is read here as naming no VLAN. Reading it would let
+// such a device be classified properly rather than left unclassified, and is
+// worth doing separately; it does not change the answer for a device that
+// publishes no VLAN table at all, which is the case this exists for.
+func vlanCatalogPresent(all ObjectIDValueMap) bool {
+	for oid := range all {
+		switch {
+		case strings.HasPrefix(oid, oidDot1qVlanStaticName),
+			strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus),
+			strings.HasPrefix(oid, oidDot1qVlanStaticEgressPorts),
+			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts),
+			strings.HasPrefix(oid, oidCiscoVtpVlanName):
+			return true
+		}
+	}
+	return false
+}
+
 // buildGenericRows extracts Q-BRIDGE + BRIDGE-MIB rows from the host's
 // flat ObjectIDValueMap.
 func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows {
@@ -377,6 +404,7 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// Same sysObjectID test the VLAN index translation uses, so a padded or
 	// dot-prefixed value cannot make one fire and not the other.
 	rows.TextPortLists = isJuniper(all)
+	rows.VlanCatalogPresent = vlanCatalogPresent(all)
 	return rows
 }
 
