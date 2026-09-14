@@ -445,3 +445,51 @@ func TestExtractGeneric_NonDefaultPvidWithoutACatalogIsStillAccess(t *testing.T)
 		t.Errorf("got %+v, want access on VLAN 200", c)
 	}
 }
+
+// One port reporting a PVID the operator had to set says the column is
+// maintained on that device, so a 1 on its neighbour is a report rather than
+// the MIB's default. Silencing only the neighbour would leave one switch
+// described two ways: its VLAN-200 ports classified and its VLAN-1 ports
+// absent.
+func TestExtractGeneric_ARealPvidAnywhereMakesTheDefaultMeaningful(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:  map[int]int{1: 101, 2: 102},
+		PortPvid:           map[int]int{101: 1, 102: 200},
+		VlanEgressPorts:    map[int][]byte{},
+		VlanUntaggedPorts:  map[int][]byte{},
+		IfAdminStatus:      map[int]int{101: 1, 102: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent: false,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	for ifIndex, want := range map[int]int{101: 1, 102: 200} {
+		c := Classify(*got[ifIndex])
+		if c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != want {
+			t.Errorf("ifIndex %d: got %+v, want access on VLAN %d", ifIndex, c, want)
+		}
+	}
+}
+
+// A PVID of 0 is the device saying "no untagged VLAN", not a configured one,
+// so it does not make the defaults on its neighbours meaningful.
+func TestExtractGeneric_AZeroPvidIsNotARealPvid(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:  map[int]int{1: 101, 2: 102},
+		PortPvid:           map[int]int{101: 1, 102: 0},
+		VlanEgressPorts:    map[int][]byte{},
+		VlanUntaggedPorts:  map[int][]byte{},
+		IfAdminStatus:      map[int]int{101: 1, 102: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent: false,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Mode != ModeUnknown {
+		t.Errorf("got %+v, want unclassified", c)
+	}
+}

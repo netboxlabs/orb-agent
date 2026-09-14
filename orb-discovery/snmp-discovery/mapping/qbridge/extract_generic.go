@@ -92,6 +92,20 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		egress, untagged = listsToBitmaps(egress), listsToBitmaps(untagged)
 	}
 
+	// Whether this device's PVID table carries information at all. If any port
+	// reports a PVID the operator had to set, the table is being maintained,
+	// so a 1 elsewhere on the same device is a report rather than a default.
+	// Judged per device, not per port, because that is the scope of the
+	// evidence: one port cannot tell us its own value is meaningful, but its
+	// neighbour reporting VLAN 130 tells us the column is not stuck at DEFVAL.
+	everyPvidIsDefault := true
+	for _, pvid := range rows.PortPvid {
+		if pvid != 0 && pvid != defaultPvid {
+			everyPvidIsDefault = false
+			break
+		}
+	}
+
 	out := make(map[int]*SwitchportInfo, len(ifIndexToBridge))
 	for ifIndex := range ifIndexToBridge {
 		info := &SwitchportInfo{
@@ -160,19 +174,26 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			info.AdminMode = AdminTrunk
 			info.TrunkFromOneTaggedVlan = len(allowed) == 1
 		case len(allowed) == 0 && info.AccessVlan != nil &&
-			!rows.VlanCatalogPresent && *info.AccessVlan == defaultPvid:
-			// The device published no VLAN of its own and this port answers
-			// the MIB's default PVID. Both halves matter. A bridge with VLAN
-			// filtering off still answers 1 here because RFC 4363 says it
-			// must, so on its own the value is not a configured assignment —
-			// and with no catalog there is nothing to corroborate it against.
-			// Reading it as "access on VLAN 1" invents a VLAN the operator
-			// never configured and attaches every bridge port to it.
+			!rows.VlanCatalogPresent && everyPvidIsDefault &&
+			*info.AccessVlan == defaultPvid:
+			// This device published no VLAN of its own, and every port it has
+			// answers the MIB's default PVID. All three matter. A bridge with
+			// VLAN filtering off still answers 1 because RFC 4363 says it
+			// must, so the value alone is not a configured assignment; with no
+			// catalog there is nothing to corroborate it against; and with no
+			// port anywhere reporting a real PVID there is no sign the column
+			// is maintained at all. Reading it as "access on VLAN 1" then
+			// invents a VLAN the operator never configured and attaches every
+			// bridge port to it.
+			//
+			// Scoped to the device rather than the port because that is the
+			// scope of the evidence. A switch reporting VLAN 130 on one port
+			// and 1 on another is telling us both, and silencing only the
+			// second would leave one device described two ways: its VLAN-130
+			// ports classified and its VLAN-1 ports absent.
 			//
 			// Left unclassified rather than called routed: the port is
-			// bridged, we simply cannot say into what. A non-default PVID is
-			// still configuration and classifies below, as does any PVID at
-			// all once the device names a VLAN somewhere.
+			// bridged, we simply cannot say into what.
 		case len(allowed) == 0 && info.AccessVlan != nil:
 			// PVID-only signal: switches like Arista EOS expose dot1qPvid but
 			// omit dot1qVlanStaticEgressPorts/UntaggedPorts. The PVID alone is
