@@ -37,6 +37,12 @@ var defaultVendorMatchers = []VendorMatcher{
 			".1.3.6.1.4.1.2636.", // Juniper Networks
 		},
 	},
+	{
+		Vendor: "huawei",
+		SysObjectIDPrefixes: []string{
+			".1.3.6.1.4.1.2011.", // Huawei Technologies
+		},
+	},
 	// Future vendors append here.
 }
 

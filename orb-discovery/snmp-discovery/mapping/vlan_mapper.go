@@ -24,7 +24,16 @@ const (
 	// dot1qVlanStaticName in the default SNMP context, so this is the only
 	// place their VLAN database is readable. Indexed by
 	// (managementDomainIndex, vlanIndex), so the VID is the LAST element.
-	oidCiscoVtpVlanName             = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
+	oidCiscoVtpVlanName = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
+	// HUAWEI-VLAN-MIB hwVlanMIBEntry. Huawei access platforms (SmartAX
+	// MA5600T/MA5608T OLTs) implement no Q-BRIDGE-MIB at all and publish
+	// their VLAN database only here. Indexed by hwVlanIndex, which IS the
+	// 802.1Q tag, so the suffix is the VID. hwVlanName is optional per row —
+	// a VLAN with no configured description has an index row and no name
+	// row — so hwVlanIndex is what establishes which VLANs exist.
+	oidHwVlanIndex                  = ".1.3.6.1.4.1.2011.5.6.1.1.1.1."
+	oidHwVlanName                   = ".1.3.6.1.4.1.2011.5.6.1.1.1.2."
+	oidHwVlanRowStatus              = ".1.3.6.1.4.1.2011.5.6.1.1.1.13."
 	oidDot1qVlanStaticEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
 	oidDot1qVlanStaticUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
 	oidDot1qVlanStaticRowStatus     = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
@@ -451,7 +460,8 @@ func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 	var rows []vlanNameRow
 	for oid, v := range all {
 		if strings.HasPrefix(oid, oidDot1qVlanStaticName) ||
-			strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+			strings.HasPrefix(oid, oidCiscoVtpVlanName) ||
+			strings.HasPrefix(oid, oidHwVlanName) {
 			rows = append(rows, vlanNameRow{oid: oid, value: v.Value})
 		}
 	}
@@ -540,8 +550,11 @@ func everyNameCarriesItsTagSuffix(names map[int]string) bool {
 
 // mergeVLANNames resolves one name per VID from the collected name rows.
 //
-// dot1qVlanStaticName is authoritative and the Cisco VTP catalog is the
-// fallback for the devices that do not populate it. Precedence is applied
+// dot1qVlanStaticName is authoritative and the vendor catalogs (Cisco VTP,
+// HUAWEI-VLAN-MIB) are the fallback for the devices that do not populate
+// it. The two vendor catalogs never both answer on one device — each is
+// walked only behind its own vendor gate — so they share the fallback tier
+// without an ordering between them. Precedence is applied
 // once, after every row has been read, rather than as each row arrives:
 // resolving it in arrival order let an empty dot1q name erase a VTP name
 // (or not) depending on which OID the map yielded first, so the emitted
@@ -552,7 +565,7 @@ func everyNameCarriesItsTagSuffix(names map[int]string) bool {
 // NUL-only name must collapse to "" so it counts as no name.
 func mergeVLANNames(rows []vlanNameRow) map[int]string {
 	dot1q := map[int]string{}
-	vtp := map[int]string{}
+	vendor := map[int]string{}
 	vtpOID := map[int]string{}
 	for _, r := range rows {
 		name := trimSNMPString(r.value)
@@ -568,13 +581,19 @@ func mergeVLANNames(rows []vlanNameRow) map[int]string {
 			if !ok {
 				continue
 			}
-			if held, seen := vtp[vid]; !seen || preferVtpRow(held, vtpOID[vid], name, r.oid) {
-				vtp[vid], vtpOID[vid] = name, r.oid
+			if held, seen := vendor[vid]; !seen || preferVtpRow(held, vtpOID[vid], name, r.oid) {
+				vendor[vid], vtpOID[vid] = name, r.oid
+			}
+		case strings.HasPrefix(r.oid, oidHwVlanName):
+			// hwVlanMIBTable is indexed by the VID alone, so at most one
+			// row per VID reaches this branch.
+			if vid, ok := atoi(strings.TrimPrefix(r.oid, oidHwVlanName)); ok {
+				vendor[vid] = name
 			}
 		}
 	}
-	out := make(map[int]string, len(dot1q)+len(vtp))
-	for vid, name := range vtp {
+	out := make(map[int]string, len(dot1q)+len(vendor))
+	for vid, name := range vendor {
 		out[vid] = name
 	}
 	for vid, name := range dot1q {
@@ -651,6 +670,13 @@ func preferVtpRow(heldName, heldOID, name, oid string) bool {
 // from defaults.VLAN.Status; if empty, derived from RowStatus
 // (active(1)->active, notInService(2)->reserved, else unset).
 //
+// On a Huawei host with no Q-BRIDGE-MIB the same three facts come from
+// HUAWEI-VLAN-MIB instead: hwVlanIndex establishes the VID (its row is the
+// only one every VLAN is guaranteed to have), hwVlanName the name, and
+// hwVlanRowStatus — a standard RowStatus — the status, through the same
+// derivation. A VID known only from its index row is a nameless VLAN and
+// is gated exactly like a status-only dot1q row.
+//
 // CreateUnknownVlans gating: the option is *bool. nil is treated as
 // true (matches device-discovery PR #378's _ensure_vlan default and is
 // the value Manager.applyDefaults installs when the policy YAML omits
@@ -667,11 +693,31 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 	for vid, name := range vlanNamesByVid(all) {
 		byVid[vid] = &pending{name: name}
 	}
+	ensure := func(vid int) *pending {
+		p, exists := byVid[vid]
+		if !exists {
+			p = &pending{}
+			byVid[vid] = p
+		}
+		return p
+	}
 	for oid, v := range all {
-		if !strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus) {
+		var statusPrefix string
+		switch {
+		case strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus):
+			statusPrefix = oidDot1qVlanStaticRowStatus
+		case strings.HasPrefix(oid, oidHwVlanRowStatus):
+			statusPrefix = oidHwVlanRowStatus
+		case strings.HasPrefix(oid, oidHwVlanIndex):
+			// The row's presence is the fact; its value repeats the index.
+			if vid, ok := atoi(strings.TrimPrefix(oid, oidHwVlanIndex)); ok {
+				ensure(vid)
+			}
+			continue
+		default:
 			continue
 		}
-		vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
+		vid, ok := atoi(strings.TrimPrefix(oid, statusPrefix))
 		if !ok {
 			continue
 		}
@@ -679,12 +725,7 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 		if !ok2 {
 			continue
 		}
-		p, exists := byVid[vid]
-		if !exists {
-			p = &pending{}
-			byVid[vid] = p
-		}
-		p.rowStatus = st
+		ensure(vid).rowStatus = st
 	}
 	out := make([]diode.Entity, 0, len(byVid))
 	for vid, p := range byVid {
@@ -738,8 +779,9 @@ func atoi(s string) (int, bool) {
 }
 
 // hasVLANSignal reports whether any VLAN-related OID was walked for the
-// host — Q-BRIDGE static catalog / per-port PVID, or Cisco-overlay
-// vmMembership / vmVoiceVlanId. Used by PostMap to decide whether a
+// host — Q-BRIDGE static catalog / per-port PVID, Cisco-overlay
+// vmMembership / vmVoiceVlanId, or the HUAWEI-VLAN-MIB catalog. Used by
+// PostMap to decide whether a
 // missing dot1dBasePortIfIndex is a real partial-data condition (warn)
 // or just a routine non-switch target (debug).
 func hasVLANSignal(all ObjectIDValueMap) bool {
@@ -754,6 +796,9 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 		oidCiscoVMVoiceVlanID,
 		oidCiscoSBAccessVlan,
 		oidCiscoSBTrunkNativeVlan,
+		oidHwVlanIndex,
+		oidHwVlanName,
+		oidHwVlanRowStatus,
 	}
 	for oid := range all {
 		for _, p := range prefixes {

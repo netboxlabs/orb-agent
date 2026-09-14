@@ -2248,6 +2248,80 @@ func TestMappingYAML_VtpEntryPresent(t *testing.T) {
 	}
 }
 
+// HUAWEI-VLAN-MIB is the only place a Huawei SmartAX OLT exposes its VLAN
+// database — dot1qVlanStaticTable and dot1qPortVlanTable answer "No Such
+// Object" there — so the catalog must be walked, and walked only behind the
+// huawei vendor gate so no other host pays for it. Unlike VTP the entry is
+// not tied to prefix-VLAN corroboration: it is the primary catalog, and the
+// index column has to be present because a VLAN with no description has no
+// hwVlanName row at all.
+func TestMappingYAML_HuaweiVlanCatalogPresent(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	const tableOID = ".1.3.6.1.4.1.2011.5.6.1.1" // hwVlanMIBTable
+	wantCols := map[string]bool{
+		".1.3.6.1.4.1.2011.5.6.1.1.1.1":  false, // hwVlanIndex
+		".1.3.6.1.4.1.2011.5.6.1.1.1.2":  false, // hwVlanName
+		".1.3.6.1.4.1.2011.5.6.1.1.1.13": false, // hwVlanRowStatus
+	}
+	found := false
+	for _, e := range doc.Entries {
+		if e.OID != tableOID {
+			continue
+		}
+		found = true
+		if e.Vendor != "huawei" {
+			t.Errorf("%s: vendor = %q, want huawei", e.OID, e.Vendor)
+		}
+		if e.Entity != "vlan" {
+			t.Errorf("%s: entity = %q, want vlan (VlanMapper post-pass)", e.OID, e.Entity)
+		}
+		for _, c := range e.MappingEntries {
+			if _, want := wantCols[c.OID]; want {
+				wantCols[c.OID] = true
+			}
+			if c.Entity != "vlan" {
+				t.Errorf("%s: child %s entity = %q, want vlan", e.OID, c.OID, c.Entity)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("mapping.yaml missing huawei-scoped OID %s", tableOID)
+	}
+	for oid, ok := range wantCols {
+		if !ok {
+			t.Errorf("%s: missing child mapping entry for column %s", tableOID, oid)
+		}
+	}
+
+	// The whole production table, loaded the way the runner loads it: the
+	// columns land in the huawei walk set and nowhere else, whatever the
+	// options — a Huawei OLT operator has nothing to switch on.
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg, err := mapping.NewConfig(doc.Entries, logger, nil, nil, &config.Defaults{}, config.Options{})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	huawei := cfg.VendorObjectIDs("huawei")
+	for oid := range wantCols {
+		if _, ok := huawei[oid]; !ok {
+			t.Errorf("huawei walk set missing %s", oid)
+		}
+		if _, ok := cfg.GenericObjectIDs()[oid]; ok {
+			t.Errorf("generic walk set must not include huawei-scoped %s", oid)
+		}
+		if _, ok := cfg.VendorObjectIDs("cisco")[oid]; ok {
+			t.Errorf("cisco walk set must not include huawei-scoped %s", oid)
+		}
+	}
+}
+
 // The VTP VLAN catalog exists to corroborate SVI-derived prefix VLANs, so
 // with emit_prefix_vlan off it must not be walked at all: a stock Cisco
 // switch has to emit exactly the VLAN entities it emitted before the
