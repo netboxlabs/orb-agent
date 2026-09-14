@@ -1847,9 +1847,10 @@ func TestFilesmgrRestartDoesNotRollBackACancelledStart(t *testing.T) {
 	fm := &mockFilesManager{}
 
 	a := &orbAgent{
-		logger:       logger,
-		backends:     map[string]backend.Backend{"stub": be},
-		filesManager: fm,
+		logger:        logger,
+		policyManager: &mockPolicyManager{},
+		backends:      map[string]backend.Backend{"stub": be},
+		filesManager:  fm,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
