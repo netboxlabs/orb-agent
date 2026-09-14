@@ -132,11 +132,26 @@ func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 		// still ends up with no mode, and no VLAN.
 		//
 		// Narrower than the precedence ApplyCisco gives vmMembership, which
-		// also demotes a one-tagged-VLAN trunk and overrides a routed
-		// inference. Neither is needed here and both would be claims these
-		// columns do not make.
+		// also demotes a one-tagged-VLAN trunk. That is a claim these columns
+		// do not make, and it is still declined.
 		if fromAccessColumn && info.AdminMode == AdminUnknown {
 			info.AdminMode = AdminAccess
+		}
+
+		// The routed inference is overridden, which ApplyCisco also does.
+		// It is drawn from a missing dot1qPvid row, and a port the access
+		// column names is a port the device says is an access port, so it is
+		// bridged: positive evidence against an inference from absence, the
+		// same precedence the generic extractor gives membership masks.
+		//
+		// It matters because Classify answers routed before it reads the mode
+		// set above and returns no VLAN at all. These switches do answer
+		// dot1qPvid for every port, which is why this went unnoticed, but the
+		// PVID column is walked separately and a failed or truncated walk
+		// leaves every port of an otherwise healthy device looking routed,
+		// discarding the one column that could still classify it.
+		if fromAccessColumn && info.OperMode == OperRouted {
+			info.OperMode = OperUnknown
 		}
 	}
 }

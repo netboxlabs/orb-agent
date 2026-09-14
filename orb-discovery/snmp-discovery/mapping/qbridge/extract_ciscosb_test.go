@@ -218,3 +218,33 @@ func TestApplyCiscoSB_DoesNotPublishADisplacedUntaggedVlanAsTagged(t *testing.T)
 		t.Fatalf("got tagged=%v want %v", got.Tagged, want)
 	}
 }
+
+// The generic extractor infers routed from a missing dot1qPvid row. These
+// switches answer that column for every port, but it is walked separately, so
+// a failed or truncated walk leaves every port looking routed. The access
+// column names the port an access port, which is positive evidence it is
+// bridged, and Classify answers routed before it reads the mode.
+func TestApplyCiscoSB_OverridesTheRoutedInference(t *testing.T) {
+	infos := map[int]*SwitchportInfo{
+		7: {Enabled: true, BridgePortPresent: true, OperMode: OperRouted},
+	}
+	ApplyCiscoSB(infos, CiscoSBRows{AccessVlan: map[int]int{7: 42}})
+	got := Classify(*infos[7])
+	if got.Mode != ModeAccess {
+		t.Fatalf("got mode=%v want access", got.Mode)
+	}
+	if got.Untagged == nil || *got.Untagged != 42 {
+		t.Fatalf("got untagged=%v want 42", deref(got.Untagged))
+	}
+
+	// The trunk-native column is not access evidence, so it does not override
+	// the inference: a port whose only CISCOSB value is a trunk native VLAN
+	// still ends up with no mode and no VLAN.
+	infos = map[int]*SwitchportInfo{
+		7: {Enabled: true, BridgePortPresent: true, OperMode: OperRouted},
+	}
+	ApplyCiscoSB(infos, CiscoSBRows{NativeVlan: map[int]int{7: 42}})
+	if got := Classify(*infos[7]); got.Mode != ModeRouted {
+		t.Fatalf("got mode=%v want routed", got.Mode)
+	}
+}
