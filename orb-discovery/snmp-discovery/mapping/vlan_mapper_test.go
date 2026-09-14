@@ -984,3 +984,95 @@ func TestVlanMapper_PostMap_DefaultPvidClassifiesOnceTheDeviceNamesAVlan(t *test
 		t.Errorf("untagged: got %+v, want VLAN 1", iface.UntaggedVlan)
 	}
 }
+
+// TestVlanMapper_PostMap_CurrentTableSuppliesMembershipTheStaticTableOmits is
+// the reported Eltex shape: port-channels the switch runs as untagged members
+// of VLAN 1, where VLAN 1 has no dot1qVlanStaticTable row and the port-channels
+// have no dot1qPvid row either. The only place that membership appears is
+// dot1qVlanCurrentTable, which was not walked.
+func TestVlanMapper_PostMap_CurrentTableSuppliesMembershipTheStaticTableOmits(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{1000: "Po1", 1001: "Po2", 105: "te1/0/1"})
+
+	// The device's own index space: bridge ports 1000/1001 are the LAGs.
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1000": {Value: "1000"},
+		oidDot1dBasePortIfIndex + "1001": {Value: "1001"},
+		oidDot1dBasePortIfIndex + "105":  {Value: "105"},
+		oidIfAdminStatus + "1000":        {Value: "1"},
+		oidIfAdminStatus + "1001":        {Value: "1"},
+		oidIfAdminStatus + "105":         {Value: "1"},
+		oidIfType + "1000":               {Value: "161"},
+		oidIfType + "1001":               {Value: "161"},
+		oidIfType + "105":                {Value: "6"},
+		// The static table knows only VLAN 151, tagged on te1/0/1.
+		oidDot1qVlanStaticName + "151":        {Value: "UPLINK"},
+		oidDot1qVlanStaticEgressPorts + "151": {Value: portMask(105)},
+		// VLAN 1 exists only in the current table, with the LAGs untagged in
+		// it. Index is <timemark>.<vid>.
+		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: portMask(1000, 1001)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1000, 1001)},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	for _, name := range []string{"Po1", "Po2"} {
+		var iface *diode.Interface
+		for ifIndex, i := range ifaces {
+			if names := map[int]string{1000: "Po1", 1001: "Po2", 105: "te1/0/1"}; names[ifIndex] == name {
+				iface = i
+			}
+		}
+		if iface == nil {
+			t.Fatalf("%s missing", name)
+		}
+		if iface.Mode == nil || *iface.Mode != "access" {
+			t.Errorf("%s mode: got %v, want access", name, iface.Mode)
+		}
+		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
+			t.Errorf("%s untagged: got %+v, want VLAN 1", name, iface.UntaggedVlan)
+		}
+	}
+	// The static table still wins where it speaks.
+	if got := ifaces[105]; got.Mode == nil || *got.Mode != "tagged" {
+		t.Errorf("te1/0/1 mode: got %v, want tagged", got.Mode)
+	}
+}
+
+// The two-element index is the trap: reading the first element would take the
+// time mark, which is 0 and not a VLAN, discarding every row.
+func TestCurrentVlanID_ReadsTheSecondIndexElement(t *testing.T) {
+	for _, tc := range []struct {
+		oid  string
+		want int
+		ok   bool
+	}{
+		{oidDot1qVlanCurrentEgressPorts + "0.1", 1, true},
+		{oidDot1qVlanCurrentEgressPorts + "12345.151", 151, true},
+		{oidDot1qVlanCurrentEgressPorts + "1", 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "0.x", 0, false},
+	} {
+		got, ok := currentVlanID(tc.oid, oidDot1qVlanCurrentEgressPorts)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("%s: got (%d,%v), want (%d,%v)", tc.oid, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// portMask builds a Q-BRIDGE PortList bitmap with the given bridge ports set,
+// the same bit order the MIB defines: port 1 is the high bit of octet 0.
+func portMask(ports ...int) string {
+	maxPort := 0
+	for _, p := range ports {
+		if p > maxPort {
+			maxPort = p
+		}
+	}
+	mask := make([]byte, (maxPort+7)/8)
+	for _, p := range ports {
+		mask[(p-1)/8] |= 1 << (7 - (p-1)%8)
+	}
+	return string(mask)
+}

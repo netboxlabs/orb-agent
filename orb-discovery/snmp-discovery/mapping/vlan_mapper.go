@@ -24,12 +24,17 @@ const (
 	// dot1qVlanStaticName in the default SNMP context, so this is the only
 	// place their VLAN database is readable. Indexed by
 	// (managementDomainIndex, vlanIndex), so the VID is the LAST element.
-	oidCiscoVtpVlanName             = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
-	oidDot1qVlanStaticEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
-	oidDot1qVlanStaticUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
-	oidDot1qVlanStaticRowStatus     = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
-	oidIfAdminStatus                = ".1.3.6.1.2.1.2.2.1.7."
-	oidIfType                       = ".1.3.6.1.2.1.2.2.1.3."
+	oidCiscoVtpVlanName = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
+	// dot1qVlanCurrentTable, the VLANs the device is actually running. Same
+	// per-VLAN masks the static table carries, but INDEX { dot1qVlanTimeMark,
+	// dot1qVlanIndex }, so the VLAN id is the LAST index element.
+	oidDot1qVlanCurrentEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.2.1.4."
+	oidDot1qVlanCurrentUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.2.1.5."
+	oidDot1qVlanStaticEgressPorts    = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
+	oidDot1qVlanStaticUntaggedPorts  = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
+	oidDot1qVlanStaticRowStatus      = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
+	oidIfAdminStatus                 = ".1.3.6.1.2.1.2.2.1.7."
+	oidIfType                        = ".1.3.6.1.2.1.2.2.1.3."
 	// ifDescr / ifName, consulted by ResolveSviVlans (svi_vlan.go). Both are
 	// already walked for the interface-name resolver; SVI resolution reuses
 	// them rather than requiring a separate walk.
@@ -312,6 +317,21 @@ func setVLANGroupScope(group *diode.VLANGroup, g config.VLANGroupParameters, def
 	}
 }
 
+// currentVlanID reads the VLAN id out of a dot1qVlanCurrentTable OID.
+//
+// The table is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, so the suffix is
+// two elements and the id is the second. Taking the first, as the static
+// table's single-element suffix allows, would read every row as the time mark
+// — usually 0, which is not a VLAN, so every row would be discarded.
+func currentVlanID(oid, prefix string) (int, bool) {
+	suffix := strings.TrimPrefix(oid, prefix)
+	dot := strings.IndexByte(suffix, '.')
+	if dot < 0 {
+		return 0, false
+	}
+	return atoi(suffix[dot+1:])
+}
+
 // vlanCatalogPresent reports whether this device named a VLAN of its own.
 //
 // The sources are the ones the agent walks and could learn a VLAN identity
@@ -333,7 +353,9 @@ func vlanCatalogPresent(all ObjectIDValueMap) bool {
 			strings.HasPrefix(oid, oidDot1qVlanStaticEgressPorts),
 			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts),
 			strings.HasPrefix(oid, oidCiscoVtpVlanName),
-			strings.HasPrefix(oid, oidJnxExVlanName):
+			strings.HasPrefix(oid, oidJnxExVlanName),
+			strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts),
+			strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
 			return true
 		}
 	}
@@ -356,6 +378,7 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// keyed PVIDs first; translate to ifIndex after the loop once
 	// BasePortToIfIndex is fully populated.
 	bridgePortPvid := map[int]int{}
+	currentEgress, currentUntagged := map[int][]byte{}, map[int][]byte{}
 	for oid, v := range all {
 		switch {
 		case strings.HasPrefix(oid, oidDot1dBasePortIfIndex):
@@ -379,6 +402,14 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticUntaggedPorts))
 			if ok {
 				rows.VlanUntaggedPorts[vid] = []byte(v.Value)
+			}
+		case strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts):
+			if vid, ok := currentVlanID(oid, oidDot1qVlanCurrentEgressPorts); ok {
+				currentEgress[vid] = []byte(v.Value)
+			}
+		case strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
+			if vid, ok := currentVlanID(oid, oidDot1qVlanCurrentUntaggedPorts); ok {
+				currentUntagged[vid] = []byte(v.Value)
 			}
 		case strings.HasPrefix(oid, oidIfAdminStatus):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidIfAdminStatus))
@@ -404,6 +435,23 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	}
 	// Same sysObjectID test the VLAN index translation uses, so a padded or
 	// dot-prefixed value cannot make one fire and not the other.
+	// The static table is the configured intent and wins wherever it speaks.
+	// The current table fills VLANs it never mentions, which is the case this
+	// exists for: a switch can run a VLAN, and place ports in it untagged,
+	// while listing neither in dot1qVlanStaticTable nor in dot1qPvid. Merged
+	// per VLAN rather than per table, so a device whose static table covers
+	// some VLANs and whose current table covers others is read from both.
+	for vid, mask := range currentEgress {
+		if _, ok := rows.VlanEgressPorts[vid]; !ok {
+			rows.VlanEgressPorts[vid] = mask
+		}
+	}
+	for vid, mask := range currentUntagged {
+		if _, ok := rows.VlanUntaggedPorts[vid]; !ok {
+			rows.VlanUntaggedPorts[vid] = mask
+		}
+	}
+
 	rows.TextPortLists = isJuniper(all)
 	rows.VlanCatalogPresent = vlanCatalogPresent(all)
 	return rows
