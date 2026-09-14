@@ -906,4 +906,20 @@ func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testin
 	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 999 {
 		t.Errorf("a non-default PVID stands even where no mask names the port: got %+v", c)
 	}
+
+	// Publishing no row at all for the PVID's VLAN is not a contradiction. The
+	// device has said nothing about that VLAN, so there is nothing to weigh the
+	// PVID against and it stands, as it does wherever it is the only evidence.
+	rows.PortPvid = map[int]int{101: 1, 102: 7}
+	delete(rows.VlanEgressPorts, 1)
+	delete(rows.VlanUntaggedPorts, 1)
+	delete(rows.VlanEgressFromCurrent, 1)
+	delete(rows.VlanUntaggedFromCurrent, 1)
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 1 {
+		t.Errorf("an unpublished VLAN contradicts nothing: got %+v", c)
+	}
 }
