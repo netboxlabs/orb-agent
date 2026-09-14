@@ -1433,3 +1433,77 @@ func TestVlanMapper_BuildGenericRows_LatestAcrossTheTimeMarkWrap(t *testing.T) {
 		}
 	}
 }
+
+// A row is catalog evidence only when a VLAN can be read out of it. A table
+// answering nothing but an out-of-range index, or a suffix that will not
+// parse, has named no VLAN however many rows it has — and counting it would
+// bypass the default-PVID refusal and hand those ports back the access VLAN 1
+// it exists to withhold.
+func TestVlanCatalogPresent_RequiresARowThatNamesAVlan(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		all  ObjectIDValueMap
+		want bool
+	}{
+		{"nothing at all", ObjectIDValueMap{}, false},
+		{"a static name for a real VLAN", ObjectIDValueMap{
+			oidDot1qVlanStaticName + "10": {Value: "USERS"},
+		}, true},
+		{"a current mask for a real VLAN", ObjectIDValueMap{
+			oidDot1qVlanCurrentEgressPorts + "0.10": {Value: portMask(1)},
+		}, true},
+		{"a current mask for the reserved 4095", ObjectIDValueMap{
+			oidDot1qVlanCurrentEgressPorts + "0.4095": {Value: portMask(1)},
+		}, false},
+		{"a static row for VLAN 0", ObjectIDValueMap{
+			oidDot1qVlanStaticRowStatus + "0": {Value: "1"},
+		}, false},
+		{"a suffix that will not parse", ObjectIDValueMap{
+			oidDot1qVlanStaticName + "notanumber": {Value: "USERS"},
+		}, false},
+		{"a VTP name, whose id is the last element", ObjectIDValueMap{
+			oidCiscoVtpVlanName + "1.20": {Value: "VOICE"},
+		}, true},
+		{"a VTP row for a reserved id", ObjectIDValueMap{
+			oidCiscoVtpVlanName + "1.4095": {Value: "RESERVED"},
+		}, false},
+		{"a Juniper enterprise name, keyed by internal index", ObjectIDValueMap{
+			oidJnxExVlanName + "99999": {Value: "VL156"},
+		}, true},
+		{"a Juniper enterprise row with no name", ObjectIDValueMap{
+			oidJnxExVlanName + "17": {Value: ""},
+		}, false},
+	} {
+		if got := vlanCatalogPresent(tc.all); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.what, got, tc.want)
+		}
+	}
+}
+
+// End to end: a device whose only VLAN table row names no VLAN is, in
+// substance, catalog-free, so the default PVID is still refused.
+func TestVlanMapper_PostMap_AnUnusableCatalogRowDoesNotBypassTheRefusal(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidDot1qPvid + "1":            {Value: "1"},
+		// The device's only VLAN row, and it names no VLAN NetBox could hold.
+		oidDot1qVlanCurrentEgressPorts + "0.4095": {Value: portMask(1)},
+	}
+
+	entities := NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
+
+	for _, e := range entities {
+		if v, ok := e.(*diode.VLAN); ok && v != nil && v.Vid != nil {
+			t.Errorf("no VLAN may be emitted: got vid %d", *v.Vid)
+		}
+	}
+	if got := ifaces[101]; got.Mode != nil || got.UntaggedVlan != nil {
+		t.Errorf("gi1 must stay unclassified: mode=%v untagged=%+v", got.Mode, got.UntaggedVlan)
+	}
+}

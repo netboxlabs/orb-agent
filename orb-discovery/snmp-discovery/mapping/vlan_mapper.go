@@ -441,26 +441,62 @@ func currentVlanRow(oid, prefix string) (vid, mark int, ok bool) {
 // gives on some switches. Such a device is normally classified from that
 // membership and never reaches the default-PVID question.
 //
-// Read from the walked OIDs, not from what the merge kept, so a device whose
-// current rows all place nobody still counts as having named VLANs while
-// supplying no membership. Those ports fall through to the PVID, and the
-// refusal does not apply to them. Unobserved, and the conservative direction:
-// a device that named VLANs is one we have less reason to second-guess.
+// A row only counts when something usable can be read out of it. Every source
+// but one is keyed by a VLAN id, so the row is evidence only if that id names a
+// VLAN NetBox could hold: a table answering nothing but an out-of-range index,
+// or a suffix that will not parse, has named no VLAN however many rows it has,
+// and letting it pass would bypass the refusal and hand those ports back the
+// access VLAN 1 it exists to withhold.
+//
+// The exception is the Juniper enterprise table, whose suffix is the device's
+// internal index rather than a VLAN id. There the name itself is the evidence.
+//
+// Read from the walked OIDs rather than from what the merge kept, so a device
+// whose rows all name valid VLANs but place no port in any of them still counts
+// as having named VLANs. Those ports fall through to the PVID and the refusal
+// does not apply. That is the conservative direction: a device that named VLANs
+// is one we have less reason to second-guess.
 func vlanCatalogPresent(all ObjectIDValueMap) bool {
-	for oid := range all {
+	for oid, v := range all {
 		switch {
+		case strings.HasPrefix(oid, oidJnxExVlanName):
+			// Keyed by an internal index; the name is what names a VLAN.
+			if trimSNMPString(v.Value) != "" {
+				return true
+			}
 		case strings.HasPrefix(oid, oidDot1qVlanStaticName),
 			strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus),
 			strings.HasPrefix(oid, oidDot1qVlanStaticEgressPorts),
-			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts),
-			strings.HasPrefix(oid, oidCiscoVtpVlanName),
-			strings.HasPrefix(oid, oidJnxExVlanName),
+			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts):
+			if namesAVlan(lastOIDElement(oid)) {
+				return true
+			}
+		case strings.HasPrefix(oid, oidCiscoVtpVlanName),
 			strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts),
 			strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
-			return true
+			// Both are two-element indexes — (domain, vlan) and
+			// (timeMark, vlan) — so the id is the last element either way.
+			if namesAVlan(lastOIDElement(oid)) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// namesAVlan reports whether an OID suffix element is a VLAN id NetBox could
+// hold, using the same range the rest of the package does.
+func namesAVlan(element string) bool {
+	vid, ok := atoi(element)
+	return ok && qbridge.CoerceVid(vid) != nil
+}
+
+// lastOIDElement returns the final dot-separated element of an OID.
+func lastOIDElement(oid string) string {
+	if i := strings.LastIndexByte(oid, '.'); i >= 0 {
+		return oid[i+1:]
+	}
+	return oid
 }
 
 // buildGenericRows extracts Q-BRIDGE + BRIDGE-MIB rows from the host's
