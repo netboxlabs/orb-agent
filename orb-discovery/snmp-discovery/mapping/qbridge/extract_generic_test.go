@@ -982,3 +982,64 @@ func TestMasksContradictPvid(t *testing.T) {
 		}
 	}
 }
+
+// NativeUntaggedByMask separates a native VLAN the device stated the port
+// egresses untagged from one inferred from dot1qPvid, which says nothing about
+// egress tagging. An overlay replacing the native VLAN drops the VLAN it
+// displaces only in the first case.
+func TestExtractGeneric_RecordsWhetherTheNativeCameFromAMask(t *testing.T) {
+	base := func() GenericRows {
+		return GenericRows{
+			BasePortToIfIndex:       map[int]int{1: 101},
+			PortPvid:                map[int]int{101: 20},
+			VlanEgressPorts:         map[int][]byte{20: maskWithPorts(1)},
+			VlanUntaggedPorts:       map[int][]byte{20: maskWithPorts(1)},
+			VlanEgressFromCurrent:   map[int]struct{}{},
+			VlanUntaggedFromCurrent: map[int]struct{}{},
+			IfAdminStatus:           map[int]int{101: 1},
+			IfTypes:                 map[int]string{101: "ethernetCsmacd"},
+			VlanCatalogPresent:      true,
+		}
+	}
+
+	// Untagged mask names the port: the device stated it.
+	got, err := ExtractGeneric(base())
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if !got[101].NativeUntaggedByMask {
+		t.Error("a native read from an untagged mask is marked as such")
+	}
+
+	// No untagged table at all: the PVID is the only source.
+	rows := base()
+	rows.VlanUntaggedPorts = map[int][]byte{}
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got[101].NativeVlan == nil || *got[101].NativeVlan != 20 {
+		t.Fatalf("expected the PVID to stand: %+v", got[101])
+	}
+	if got[101].NativeUntaggedByMask {
+		t.Error("a native taken from dot1qPvid is not a statement about egress tagging")
+	}
+
+	// The PVID displaces an operational mask. The native is then the PVID's
+	// VLAN, which no untagged mask named, so again it is not a mask statement.
+	rows = base()
+	rows.PortPvid = map[int]int{101: 30}
+	rows.VlanEgressPorts[30] = maskWithPorts(1)
+	rows.VlanEgressFromCurrent = map[int]struct{}{20: {}, 30: {}}
+	rows.VlanUntaggedFromCurrent = map[int]struct{}{20: {}}
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got[101].NativeVlan == nil || *got[101].NativeVlan != 30 {
+		t.Fatalf("expected the PVID to displace the operational mask: %+v", got[101])
+	}
+	if got[101].NativeUntaggedByMask {
+		t.Error("a native the PVID displaced onto is not a statement about egress tagging")
+	}
+}
