@@ -304,6 +304,12 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 	return !known
 }
 
+// untaggedBridgeDomainTag is the tag Junos reports for the untagged bridge
+// domain. CoerceVid rejects it like any other out-of-range VID, but dot1qPvid
+// uses the same value to say "bridged, nothing untagged", so it has to
+// survive PVID resolution.
+const untaggedBridgeDomainTag = 0
+
 // resolvablePvidValues is the set of dot1qPvid values that name exactly one
 // VLAN on a rekeyed device.
 //
@@ -346,13 +352,21 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 // cannot tell the two questions apart; a device with a protocol-learned bridge
 // domain can.
 //
-// Built from the raw tags rather than the coerced VIDs, so the untagged bridge
-// domain's tag 0 stays in the set: a PVID of 0 must survive, since the
-// Q-BRIDGE reader takes it as "bridged, nothing untagged".
+// Tag 0 stays in the set: that is the untagged bridge domain, and a PVID of 0
+// must survive because the Q-BRIDGE reader takes it as "bridged, nothing
+// untagged". Every other tag has to be a VID NetBox could hold. A row whose tag
+// is reserved is dropped by the rewrite, so keeping a PVID for it leaves a port
+// naming a VLAN that no longer exists anywhere in the walk: ExtractGeneric
+// reads the value as an access VLAN, Classify then rejects it through the same
+// CoerceVid, and the port is emitted as access with no untagged VLAN at all.
+// That overwrites the mode of whatever NetBox holds while supplying nothing.
 func resolvablePvidValues(namingIndices, describedIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
 	out := make(map[int]struct{}, len(namingIndices))
 	for index := range namingIndices {
 		tag := tagByIndex[index]
+		if tag != untaggedBridgeDomainTag && qbridge.CoerceVid(tag) == nil {
+			continue
+		}
 		// An identity row is not ambiguous: both readings name it. An index
 		// whose own tag would not parse is, since nothing says what it means.
 		if _, alsoAnIndex := describedIndices[tag]; alsoAnIndex && tagByIndex[tag] != tag {

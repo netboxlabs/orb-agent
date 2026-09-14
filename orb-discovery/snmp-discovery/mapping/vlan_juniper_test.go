@@ -1796,3 +1796,58 @@ func TestResolveJuniperVlanIndices_AStaleCurrentRowNamesNoVlan(t *testing.T) {
 		t.Errorf("the resolved snapshot names no port, so the tag names no VLAN: got %q", v)
 	}
 }
+
+// A row whose tag is reserved is dropped by the rewrite, so a PVID naming it
+// points at a VLAN that exists nowhere in the walk. Kept, it reads as an access
+// VLAN that Classify then rejects, and the port is emitted as access with no
+// untagged VLAN, overwriting whatever mode NetBox holds while supplying
+// nothing. Both the static and the current path reach it.
+func TestResolveJuniperVlanIndices_AReservedTagNamesNoVlan(t *testing.T) {
+	base := func() ObjectIDValueMap {
+		return ObjectIDValueMap{
+			oidSysObjectIDScalar:                 {Value: jnxSysObjectID},
+			oidDot1qVlanStaticName + "10":        {Value: "office"},
+			oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+			oidJnxExVlanTag + "10":               {Value: "100"},
+			oidJnxExVlanName + "10":              {Value: "office"},
+			oidJnxExVlanTag + "11":               {Value: "4095"},
+			oidJnxExVlanName + "11":              {Value: "reserved"},
+			oidDot1qPvid + "1":                   {Value: "100"},
+			oidDot1qPvid + "2":                   {Value: "4095"},
+		}
+	}
+	for _, tc := range []struct {
+		what string
+		row  func(ObjectIDValueMap)
+	}{
+		{"from a static row", func(all ObjectIDValueMap) {
+			all[oidDot1qVlanStaticName+"11"] = Value{Value: "reserved"}
+			all[oidDot1qVlanStaticEgressPorts+"11"] = Value{Value: portMask(2)}
+		}},
+		{"from a current row", func(all ObjectIDValueMap) {
+			all[oidDot1qVlanCurrentEgressPorts+"0.11"] = Value{Value: portMask(2)}
+		}},
+	} {
+		all := base()
+		tc.row(all)
+		got := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if v := got[oidDot1qPvid+"2"].Value; v != "0" {
+			t.Errorf("%s: a reserved tag names no VLAN: got %q", tc.what, v)
+		}
+		if v := got[oidDot1qPvid+"1"].Value; v != "100" {
+			t.Errorf("%s: a usable tag still resolves: got %q", tc.what, v)
+		}
+	}
+
+	// The untagged bridge domain's tag 0 is not a usable VID either, and must
+	// still survive: dot1qPvid uses it to say "bridged, nothing untagged".
+	all := base()
+	all[oidDot1qVlanStaticName+"11"] = Value{Value: "untagged"}
+	all[oidDot1qVlanStaticEgressPorts+"11"] = Value{Value: portMask(2)}
+	all[oidJnxExVlanTag+"11"] = Value{Value: "0"}
+	all[oidJnxExVlanName+"11"] = Value{Value: "untagged"}
+	all[oidDot1qPvid+"2"] = Value{Value: "0"}
+	if v := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))[oidDot1qPvid+"2"].Value; v != "0" {
+		t.Errorf("a PVID of 0 survives: got %q", v)
+	}
+}
