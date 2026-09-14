@@ -493,3 +493,77 @@ func TestExtractGeneric_AZeroPvidIsNotARealPvid(t *testing.T) {
 		t.Errorf("got %+v, want unclassified", c)
 	}
 }
+
+// TestExtractGeneric_CurrentUntaggedAbsenceDoesNotWithdrawAPvid separates the
+// two Q-BRIDGE untagged tables, which do not mean the same thing.
+//
+// RFC 4363 defines the static untagged mask as configuration, the ports
+// "permanently assigned" to egress untagged, so a port's absence from it is a
+// statement about that port. The current mask is operational, the ports
+// actually "transmitting traffic as untagged frames", and a port that is
+// administratively up but not forwarding is simply not in it while dot1qPvid
+// still reports the VLAN it is configured for.
+//
+// Reading absence in the current table the same way withdrew the access VLAN
+// from every such port: six of them on a recorded Arista walk, the platform
+// the PVID-only branch itself cites.
+func TestExtractGeneric_CurrentUntaggedAbsenceDoesNotWithdrawAPvid(t *testing.T) {
+	// Two ports configured on VLAN 31; only port 1 is currently forwarding.
+	rows := GenericRows{
+		BasePortToIfIndex:     map[int]int{1: 101, 2: 102},
+		PortPvid:              map[int]int{101: 31, 102: 31},
+		VlanEgressPorts:       map[int][]byte{31: maskWithPorts(1)},
+		VlanUntaggedPorts:     map[int][]byte{31: maskWithPorts(1)},
+		VlansFromCurrentTable: map[int]struct{}{31: {}},
+		IfAdminStatus:         map[int]int{101: 1, 102: 1},
+		IfTypes:               map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent:    true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[102]); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 31 {
+		t.Errorf("a port absent from the OPERATIONAL untagged mask keeps its PVID: got %+v", c)
+	}
+
+	// The same shape from the static table is configuration, and absence there
+	// does withdraw the PVID, exactly as before.
+	rows.VlansFromCurrentTable = map[int]struct{}{}
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[102]); c.Untagged != nil {
+		t.Errorf("a port absent from the CONFIGURED untagged mask has no untagged VLAN: got %+v", c)
+	}
+}
+
+// Whether a host publishes text port lists is judged on its static masks
+// alone. Junos is the vendor that does, and it keys some platforms' static
+// table internally, so its current rows sit under indices the rekey never
+// touches and arrive as extra VLANs. One of those in binary would otherwise
+// make the whole host read as binary and lose every static membership on it.
+func TestExtractGeneric_OneBinaryCurrentMaskDoesNotUnmakeATextHost(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{100: 500, 101: 501},
+		PortPvid:          map[int]int{500: 10, 501: 10},
+		VlanEgressPorts: map[int][]byte{
+			10:   []byte("100,101"),      // the static text list
+			4000: maskWithPorts(1, 2, 3), // a current row, in binary
+		},
+		VlanUntaggedPorts:     map[int][]byte{10: []byte("100,101")},
+		VlansFromCurrentTable: map[int]struct{}{4000: {}},
+		IfAdminStatus:         map[int]int{500: 1, 501: 1},
+		IfTypes:               map[int]string{500: "ethernetCsmacd", 501: "ethernetCsmacd"},
+		TextPortLists:         true,
+		VlanCatalogPresent:    true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[500]); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 10 {
+		t.Errorf("the text host must keep its static membership: got %+v", c)
+	}
+}

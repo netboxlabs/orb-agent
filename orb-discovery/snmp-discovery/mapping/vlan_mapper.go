@@ -410,8 +410,14 @@ func currentVlanRow(oid, prefix string) (vid, mark int, ok bool) {
 //
 // The current table counts because a device publishing it has told us which
 // VLANs it is running and which ports are in them — more than the static table
-// gives on some switches. Such a device is classified from that membership and
-// never reaches the default-PVID question at all.
+// gives on some switches. Such a device is normally classified from that
+// membership and never reaches the default-PVID question.
+//
+// Read from the walked OIDs, not from what the merge kept, so a device whose
+// current rows all place nobody still counts as having named VLANs while
+// supplying no membership. Those ports fall through to the PVID, and the
+// refusal does not apply to them. Unobserved, and the conservative direction:
+// a device that named VLANs is one we have less reason to second-guess.
 func vlanCatalogPresent(all ObjectIDValueMap) bool {
 	for oid := range all {
 		switch {
@@ -439,6 +445,8 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		VlanUntaggedPorts: map[int][]byte{},
 		IfAdminStatus:     map[int]int{},
 		IfTypes:           map[int]string{},
+
+		VlansFromCurrentTable: map[int]struct{}{},
 	}
 	// dot1qPortVlanTable is INDEX { dot1dBasePort } per RFC 4363, so the OID
 	// suffix is a bridge port number, NOT an ifIndex. Collect raw bridge-port-
@@ -500,12 +508,6 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			rows.PortPvid[ifx] = vid
 		}
 	}
-	// Whether this host publishes its port lists as text is decided on the
-	// static masks alone, before the current table is merged in. Junos is the
-	// vendor that does, and it keys some platforms' static table internally, so
-	// its current rows sit under indices the rekey never touches and are merged
-	// in as extra VLANs. One of those arriving as a binary mask would make the
-	// whole host read as binary and lose every static membership on it.
 	rows.TextPortLists = isJuniper(all)
 
 	// The static table is the configured intent and wins wherever it speaks.
@@ -527,12 +529,14 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			continue
 		}
 		rows.VlanEgressPorts[vid] = []byte(row.mask)
+		rows.VlansFromCurrentTable[vid] = struct{}{}
 	}
 	for vid, row := range currentUntagged {
 		if _, ok := rows.VlanUntaggedPorts[vid]; ok || row.placesNobody(currentEgress[vid]) {
 			continue
 		}
 		rows.VlanUntaggedPorts[vid] = []byte(row.mask)
+		rows.VlansFromCurrentTable[vid] = struct{}{}
 	}
 
 	rows.VlanCatalogPresent = vlanCatalogPresent(all)

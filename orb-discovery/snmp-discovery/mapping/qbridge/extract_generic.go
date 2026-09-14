@@ -43,6 +43,21 @@ type GenericRows struct {
 	// it parses.
 	TextPortLists bool
 
+	// VlansFromCurrentTable names the VLANs whose masks came from
+	// dot1qVlanCurrentTable rather than dot1qVlanStaticTable.
+	//
+	// The two tables do not mean the same thing and cannot be read the same
+	// way. RFC 4363 defines the static untagged mask as configuration, the set
+	// of ports "permanently assigned" to egress untagged, while the current
+	// one is operational: the ports actually "transmitting traffic for this
+	// VLAN as untagged frames". A port that is administratively up but not
+	// forwarding is absent from the current mask while dot1qPvid still reports
+	// the VLAN it is configured for.
+	//
+	// That difference only matters where absence from a mask is read as a
+	// statement. Membership is taken from either table alike.
+	VlansFromCurrentTable map[int]struct{}
+
 	// VlanCatalogPresent says the device named VLANs of its own: a static
 	// name or row-status row, a membership mask, or a VTP catalog entry.
 	//
@@ -56,6 +71,28 @@ type GenericRows struct {
 // defaultPvid is the DEFVAL RFC 4363 gives dot1qPvid. A port reporting it on
 // a device that publishes no VLAN catalog has told us nothing.
 const defaultPvid = 1
+
+// fromCurrentTable reports whether a VLAN's masks came from the operational
+// table rather than the configured one.
+func fromCurrentTable(current map[int]struct{}, vid int) bool {
+	_, ok := current[vid]
+	return ok
+}
+
+// withoutVlans returns masks excluding the named VLANs, for the decisions that
+// may only consider what the static table said.
+func withoutVlans(masks map[int][]byte, exclude map[int]struct{}) map[int][]byte {
+	if len(exclude) == 0 {
+		return masks
+	}
+	out := make(map[int][]byte, len(masks))
+	for vid, mask := range masks {
+		if _, skip := exclude[vid]; !skip {
+			out[vid] = mask
+		}
+	}
+	return out
+}
 
 // ExtractGeneric builds a per-ifIndex SwitchportInfo map from Q-BRIDGE
 // rows. The bridge-port→ifIndex translation table is consulted exactly
@@ -88,7 +125,11 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// lists are decoded once into bitmaps here; everything below reads
 	// bitmaps.
 	egress, untagged := rows.VlanEgressPorts, rows.VlanUntaggedPorts
-	if rows.TextPortLists && listsAreText(egress, untagged, rows.BasePortToIfIndex) {
+	if rows.TextPortLists && listsAreText(
+		withoutVlans(egress, rows.VlansFromCurrentTable),
+		withoutVlans(untagged, rows.VlansFromCurrentTable),
+		rows.BasePortToIfIndex,
+	) {
 		egress, untagged = listsToBitmaps(egress), listsToBitmaps(untagged)
 	}
 
@@ -145,11 +186,22 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		case native != nil:
 			info.NativeVlan = native
 			info.AccessVlan = native
-		case bridged && pvid > 0 && hasRow(untagged, pvid):
+		case bridged && pvid > 0 && hasRow(untagged, pvid) &&
+			!fromCurrentTable(rows.VlansFromCurrentTable, pvid):
 			// The device publishes an untagged row for the PVID's VLAN and
 			// leaves this port out of it: the port is tagged there, and the
 			// PVID names no untagged VLAN. The PVID stands in for the row
 			// only where the device publishes none.
+			//
+			// Read only from the static table, which RFC 4363 defines as the
+			// ports permanently assigned to egress untagged — configuration,
+			// so a port's absence from it is a statement about that port. The
+			// current table says which ports are transmitting untagged right
+			// now, and a port that is administratively up but not forwarding
+			// is simply not in it while dot1qPvid still reports the VLAN it is
+			// configured for. Reading absence there the same way withdrew the
+			// access VLAN from every such port: six of them on a recorded
+			// Arista walk, the very platform the PVID-only branch below cites.
 			info.NativeVlan = nil
 			info.AccessVlan = nil
 		}
