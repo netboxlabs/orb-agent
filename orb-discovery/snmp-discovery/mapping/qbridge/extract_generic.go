@@ -85,6 +85,23 @@ func fromCurrentTable(current map[int]struct{}, vid int) bool {
 	return ok
 }
 
+// listsToBitmapsExcept decodes the text lists, leaving the named VLANs' masks
+// exactly as they arrived. Those came from a table that publishes bitmaps, and
+// a bitmap that happens to parse as a list would be decoded into the wrong
+// ports, or into none.
+func listsToBitmapsExcept(masks map[int][]byte, keep map[int]struct{}) map[int][]byte {
+	if len(keep) == 0 {
+		return listsToBitmaps(masks)
+	}
+	converted := listsToBitmaps(withoutVlans(masks, keep))
+	for vid := range keep {
+		if mask, ok := masks[vid]; ok {
+			converted[vid] = mask
+		}
+	}
+	return converted
+}
+
 // withoutVlans returns masks excluding the named VLANs, for the decisions that
 // may only consider what the static table said.
 func withoutVlans(masks map[int][]byte, exclude map[int]struct{}) map[int][]byte {
@@ -130,13 +147,22 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// next the other, and only for a vendor known to publish text. Text
 	// lists are decoded once into bitmaps here; everything below reads
 	// bitmaps.
+	// Both the decision and the conversion are confined to the static masks.
+	// The decision, because one binary row from the current table would
+	// otherwise make a text host read as binary and lose every static
+	// membership on it. The conversion, because the reverse is just as
+	// destructive: a genuine bitmap byte can parse as a text list — 0x30 is
+	// ports 3 and 4 and reads as the list "0" — so putting a current-table
+	// bitmap through the text decoder turns real membership into an empty
+	// mask.
 	egress, untagged := rows.VlanEgressPorts, rows.VlanUntaggedPorts
 	if rows.TextPortLists && listsAreText(
 		withoutVlans(egress, rows.VlanEgressFromCurrent),
 		withoutVlans(untagged, rows.VlanUntaggedFromCurrent),
 		rows.BasePortToIfIndex,
 	) {
-		egress, untagged = listsToBitmaps(egress), listsToBitmaps(untagged)
+		egress = listsToBitmapsExcept(egress, rows.VlanEgressFromCurrent)
+		untagged = listsToBitmapsExcept(untagged, rows.VlanUntaggedFromCurrent)
 	}
 
 	// Whether this device's PVID table carries information at all. If any port

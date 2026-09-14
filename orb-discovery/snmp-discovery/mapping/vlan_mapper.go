@@ -369,11 +369,39 @@ func isEmptyPortMask(mask string) bool {
 // is the same collect-then-resolve the VLAN name and VTP readers use, and for
 // the same reason.
 func keepLatestRow(rows map[int]timeMarkedMask, vid, mark int, mask string) map[int]timeMarkedMask {
-	if held, ok := rows[vid]; ok && held.mark >= mark {
+	if held, ok := rows[vid]; ok && !markIsNewer(mark, held.mark) {
 		return rows
 	}
 	rows[vid] = timeMarkedMask{mask: mask, mark: mark}
 	return rows
+}
+
+// timeMarkWrap is where dot1qVlanTimeMark restarts. It is a TimeFilter over
+// TimeTicks, hundredths of a second since the agent came up, so it wraps after
+// a little under 497 days of uptime.
+const timeMarkWrap = 1 << 32
+
+// markIsNewer compares two time marks allowing for that wrap.
+//
+// A plain comparison is wrong on a switch up long enough to have wrapped: a row
+// changed just before the wrap holds a mark near the ceiling while one changed
+// just after holds a small one, so the larger number is the older row and
+// membership would revert to a stale snapshot whenever two rows straddle it.
+//
+// Compared the way serial numbers are (RFC 1982): a is newer when the forward
+// distance to it is less than half the space. That is exact for marks closer
+// together than half the wrap, which is any pair a device could plausibly hold
+// — the agent keeps snapshots for minutes, not months — and degrades to plain
+// magnitude for everything else.
+func markIsNewer(a, b int) bool {
+	if a == b {
+		return false
+	}
+	forward := (a - b) % timeMarkWrap
+	if forward < 0 {
+		forward += timeMarkWrap
+	}
+	return forward < timeMarkWrap/2
 }
 
 // currentVlanRow reads the VLAN id and time mark out of a

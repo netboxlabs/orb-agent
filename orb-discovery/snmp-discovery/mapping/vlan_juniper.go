@@ -120,7 +120,12 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 			"reason", "the tag table is incomplete, keyed in a different space from the static table, or answered with a value that is not a tag")
 		return all
 	}
-	if tag, claimants, ambiguous := ambiguousStaticTag(staticIndices, tagByIndex); ambiguous {
+	// Every index about to be rewritten, not only the static table's. The
+	// current table is keyed in the same internal space and its rows are
+	// rekeyed alongside, so an index it uses is no longer one "the static
+	// table never used" and a tag two of them share is no longer harmless.
+	rewritten := indicesBeingRekeyed(all, staticIndices)
+	if tag, claimants, ambiguous := ambiguousStaticTag(rewritten, tagByIndex); ambiguous {
 		logger.Warn("vlan: not translating Juniper VLAN indices; two static rows claim one tag",
 			"tag", tag, "claimed_by_indices", claimants,
 			"reason", "the device reports one 802.1Q tag for more than one VLAN, so no row can be attributed to it")
@@ -402,7 +407,32 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 	return missing, unreadable
 }
 
-// ambiguousStaticTag reports the first tag that more than one static row claims.
+// indicesBeingRekeyed is every internal index whose rows this translation will
+// rewrite: the static table's, plus any the current table uses.
+//
+// The ambiguity gate has to see all of them. It was written when only static
+// rows moved, and says so: an enterprise row for an index the static table
+// never used describes a VLAN nothing is about to be rewritten to, so letting
+// it collide would refuse a device over a row that does not matter. Once the
+// current table is rekeyed too, such an index IS being rewritten, and two of
+// them resolving to one tag would land two rows on the same OID — with which
+// survives decided by map iteration order, so the VLAN's membership would
+// differ between polls of identical data.
+func indicesBeingRekeyed(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {
+	out := make(map[int]struct{}, len(staticIndices))
+	for index := range staticIndices {
+		out[index] = struct{}{}
+	}
+	for oid := range all {
+		if _, _, index, ok := splitCurrentVlanOID(oid); ok {
+			out[index] = struct{}{}
+		}
+	}
+	return out
+}
+
+// ambiguousStaticTag reports the first tag that more than one rewritten row
+// claims.
 //
 // Judged over the static rows only. An enterprise row for an index the static
 // table never used describes a VLAN nothing is about to be rewritten to, so
@@ -410,9 +440,9 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 //
 // The smallest claimant is reported so the warning reads the same on every
 // poll rather than naming whichever index map iteration happened to yield.
-func ambiguousStaticTag(staticIndices map[int]struct{}, tagByIndex map[int]int) (tag, claimants int, ambiguous bool) {
+func ambiguousStaticTag(rewritten map[int]struct{}, tagByIndex map[int]int) (tag, claimants int, ambiguous bool) {
 	count := map[int]int{}
-	for index := range staticIndices {
+	for index := range rewritten {
 		// Tags no row will be rewritten TO are not contested. Junos reports an
 		// untagged bridge domain with tag 0 and a switch may have more than
 		// one, which would otherwise refuse the whole device over rows that are

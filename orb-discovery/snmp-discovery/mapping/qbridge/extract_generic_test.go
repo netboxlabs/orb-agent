@@ -612,3 +612,39 @@ func TestExtractGeneric_ASentinelPvidIsNotEvidenceOfConfiguration(t *testing.T) 
 		t.Errorf("4094 is a real VLAN id and makes the column meaningful, got %+v", c)
 	}
 }
+
+// A genuine bitmap byte can parse as a text list — 0x30 sets bridge ports 3
+// and 4 and reads as the list "0" — so a current-table mask must not go
+// through the text decoder on a host whose static masks are text. Converting
+// it turns real membership into the wrong ports, or none.
+func TestExtractGeneric_ACurrentBitmapIsNotDecodedAsText(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{3: 103, 4: 104, 100: 500},
+		PortPvid:          map[int]int{500: 10},
+		VlanEgressPorts: map[int][]byte{
+			10: []byte("100"), // the static text list
+			77: {0x30},        // a current bitmap: ports 3 and 4, reads as "0"
+		},
+		VlanUntaggedPorts:     map[int][]byte{10: []byte("100")},
+		VlanEgressFromCurrent: map[int]struct{}{77: {}},
+		IfAdminStatus:         map[int]int{103: 1, 104: 1, 500: 1},
+		IfTypes:               map[int]string{103: "ethernetCsmacd", 104: "ethernetCsmacd", 500: "ethernetCsmacd"},
+		TextPortLists:         true,
+		VlanCatalogPresent:    true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// Ports 3 and 4 are members of VLAN 77 by that bitmap.
+	for _, ifIndex := range []int{103, 104} {
+		c := Classify(*got[ifIndex])
+		if len(c.Tagged) == 0 && c.Untagged == nil {
+			t.Errorf("ifIndex %d lost its current-table membership to the text decoder: %+v", ifIndex, c)
+		}
+	}
+	// And the text host still reads its own static list.
+	if c := Classify(*got[500]); c.Untagged == nil || *c.Untagged != 10 {
+		t.Errorf("the static text list must still decode: %+v", c)
+	}
+}

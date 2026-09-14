@@ -1686,3 +1686,42 @@ func TestSplitCurrentVlanOID(t *testing.T) {
 		}
 	}
 }
+
+// TestResolveJuniperVlanIndices_RefusesATagTwoRekeyedRowsClaim extends the
+// ambiguity gate to the rows the current table adds.
+//
+// The gate was written when only static rows moved, and deliberately allowed a
+// collision between two enterprise indices the static table never used: those
+// described a VLAN nothing was about to be rewritten to. Once the current
+// table is rekeyed too, such an index IS being rewritten, and two of them
+// resolving to one tag would land two rows on the same OID with map iteration
+// deciding which survives — so one VLAN's membership would differ between
+// polls of identical data.
+func TestResolveJuniperVlanIndices_RefusesATagTwoRekeyedRowsClaim(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// A static row that corroborates, so the other gates pass.
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+
+		// Two enterprise-only indices claiming one tag, both used by the
+		// current table and therefore both about to be rewritten.
+		oidJnxExVlanName + "80":                 {Value: "GHOST_A"},
+		oidJnxExVlanTag + "80":                  {Value: "900"},
+		oidJnxExVlanName + "81":                 {Value: "GHOST_B"},
+		oidJnxExVlanTag + "81":                  {Value: "900"},
+		oidDot1qVlanCurrentEgressPorts + "0.80": {Value: "\x80"},
+		oidDot1qVlanCurrentEgressPorts + "0.81": {Value: "\x40"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("two rewritten rows claiming one tag must abandon the translation, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "tag=900") {
+		t.Errorf("the refusal must name the contested tag, got %q", logged.String())
+	}
+}

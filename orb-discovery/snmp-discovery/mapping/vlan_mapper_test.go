@@ -1386,3 +1386,50 @@ func TestVlanMapper_PostMap_ANotForwardingPortKeepsItsPvid(t *testing.T) {
 		t.Errorf("et2 is configured on VLAN 31 and merely not forwarding: got %+v", got.UntaggedVlan)
 	}
 }
+
+// dot1qVlanTimeMark is a TimeFilter over TimeTicks, so it restarts after a
+// little under 497 days of uptime. A row changed just before the wrap holds a
+// mark near the ceiling while one changed just after holds a small one: plain
+// magnitude picks the older row, and the VLAN's membership reverts to a stale
+// snapshot whenever two rows straddle it.
+func TestMarkIsNewer_HandlesTheTimeTicksWrap(t *testing.T) {
+	const ceiling = 1<<32 - 1
+	for _, tc := range []struct {
+		what string
+		a, b int
+		want bool
+	}{
+		{"ordinary ascending", 2831, 2828, true},
+		{"ordinary descending", 2828, 2831, false},
+		{"equal", 2828, 2828, false},
+		{"just after the wrap beats just before", 2000, ceiling - 1000, true},
+		{"just before the wrap loses to just after", ceiling - 1000, 2000, false},
+		{"zero beats the ceiling", 0, ceiling, true},
+	} {
+		if got := markIsNewer(tc.a, tc.b); got != tc.want {
+			t.Errorf("%s: markIsNewer(%d, %d) = %v, want %v", tc.what, tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// The same thing through the merge: the post-wrap row's mask must win.
+func TestVlanMapper_BuildGenericRows_LatestAcrossTheTimeMarkWrap(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+	const nearCeiling = 1<<32 - 1000
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// The pre-wrap row is numerically huge but older.
+		oidDot1qVlanCurrentEgressPorts + "4294966296.1": {Value: portMask(4)},
+		// The post-wrap row is the current one.
+		oidDot1qVlanCurrentEgressPorts + "2000.1": {Value: portMask(1, 2)},
+	}
+	_ = nearCeiling
+
+	want := portMask(1, 2)
+	for i := range 50 {
+		if got := string(vm.buildGenericRows(all).VlanEgressPorts[1]); got != want {
+			t.Fatalf("run %d: got %x, want the post-wrap mask %x", i, got, want)
+		}
+	}
+}
