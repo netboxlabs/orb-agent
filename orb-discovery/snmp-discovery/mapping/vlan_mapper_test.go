@@ -1100,3 +1100,44 @@ func TestVlanMapper_BuildGenericRows_StaticMasksWinOverCurrent(t *testing.T) {
 		t.Errorf("VLAN 20: got %x, want the current mask %x", got, want)
 	}
 }
+
+// A device whose only VLAN table is the current one is not a device that named
+// no VLAN. It is classified from that membership, and never reaches the
+// default-PVID refusal — which matters because its PVIDs are all the default,
+// so without the current table it would be silenced entirely.
+func TestVlanMapper_PostMap_CurrentTableOnlyDeviceIsNotRefused(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1", 102: "gi2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		// Every PVID is the MIB default: on its own this is the refused shape.
+		oidDot1qPvid + "1": {Value: "1"},
+		oidDot1qPvid + "2": {Value: "1"},
+		// But the device does say which VLANs it runs and who is in them.
+		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1, 2)},
+	}
+
+	if !vlanCatalogPresent(all) {
+		t.Fatal("the current table is VLAN knowledge; the refusal must not apply")
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	for name, iface := range map[string]*diode.Interface{"gi1": ifaces[101], "gi2": ifaces[102]} {
+		if iface.Mode == nil || *iface.Mode != "access" {
+			t.Errorf("%s mode: got %v, want access", name, iface.Mode)
+		}
+		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
+			t.Errorf("%s untagged: got %+v, want VLAN 1", name, iface.UntaggedVlan)
+		}
+	}
+}

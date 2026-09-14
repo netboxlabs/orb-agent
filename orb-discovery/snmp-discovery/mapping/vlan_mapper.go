@@ -334,17 +334,19 @@ func currentVlanID(oid, prefix string) (int, bool) {
 
 // vlanCatalogPresent reports whether this device named a VLAN of its own.
 //
-// The sources are the ones the agent walks and could learn a VLAN identity
-// from: the static table's names and row statuses, its membership masks, the
-// Cisco VTP catalog and the Juniper enterprise table's names. dot1qPvid is deliberately not among them — whether a
-// PVID means anything is the question this answers, so counting it would make
-// every device its own corroboration.
+// The sources are every place the walk could learn a VLAN identity from: the
+// static table's names, row statuses and membership masks, the current table's
+// membership masks, the Cisco VTP catalog and the Juniper enterprise table's
+// names.
 //
-// Note the walk does not include dot1qVlanCurrentTable, so a device that
-// publishes only that is read here as naming no VLAN. Reading it would let
-// such a device be classified properly rather than left unclassified, and is
-// worth doing separately; it does not change the answer for a device that
-// publishes no VLAN table at all, which is the case this exists for.
+// dot1qPvid is deliberately not among them. Whether a PVID means anything is
+// the question this answers, so counting it would make every device its own
+// corroboration.
+//
+// The current table counts because a device publishing it has told us which
+// VLANs it is running and which ports are in them — more than the static table
+// gives on some switches. Such a device is classified from that membership and
+// never reaches the default-PVID question at all.
 func vlanCatalogPresent(all ObjectIDValueMap) bool {
 	for oid := range all {
 		switch {
