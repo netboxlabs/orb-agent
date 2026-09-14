@@ -143,7 +143,7 @@ Optional OpenTelemetry export for backend metrics.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `grpc` | string | No | gRPC endpoint for OTLP export, e.g. `grpc://collector:4317` |
-| `http` | string | No | HTTP endpoint for OTLP export |
+| `http` | string | No | HTTP endpoint for OTLP export, e.g. `http://collector:4318` (used by pktvisor) |
 | `agent_labels` | map | No | Extra key/value labels attached to all exported telemetry |
 
 ### Backend keys

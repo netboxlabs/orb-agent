@@ -2,9 +2,11 @@ package otlpbridge
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -43,6 +45,8 @@ type BridgeServer struct {
 	enc              Encoder
 	ingestGRPCServer *grpc.Server
 	listener         net.Listener
+	httpServer       *http.Server
+	httpListener     net.Listener
 	closeOnce        sync.Once
 
 	// Publisher and topics — set after the MQTT connection is established.
@@ -207,6 +211,22 @@ func (s *BridgeServer) GetTelemetryTopic() string {
 	return s.telemetryTopic
 }
 
+// ListenAddr returns the bound OTLP/gRPC address, or "" before Start.
+func (s *BridgeServer) ListenAddr() string {
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
+}
+
+// HTTPListenAddr returns the bound OTLP/HTTP address, or "" when disabled or before Start.
+func (s *BridgeServer) HTTPListenAddr() string {
+	if s.httpListener == nil {
+		return ""
+	}
+	return s.httpListener.Addr().String()
+}
+
 // GetPolicyRepo returns the policy repo (for handlers).
 func (s *BridgeServer) GetPolicyRepo() policies.PolicyRepo {
 	s.mu.RLock()
@@ -214,8 +234,9 @@ func (s *BridgeServer) GetPolicyRepo() policies.PolicyRepo {
 	return s.policyRepo
 }
 
-// Start starts the gRPC server without establishing MQTT.
-// Publisher and topic should be set before OTLP data arrives.
+// Start starts the OTLP/gRPC server and, when HTTPListenAddr is set, the
+// OTLP/HTTP server, without establishing MQTT. Publisher and topic should be
+// set before OTLP data arrives.
 func (s *BridgeServer) Start(ctx context.Context) error {
 	// Platform-specific socket configuration (SO_REUSEADDR on Unix for faster port reuse)
 	lis, err := listen(ctx, s.cfg.ListenAddr)
@@ -236,17 +257,55 @@ func (s *BridgeServer) Start(ctx context.Context) error {
 			s.logger.Error("failed to serve gRPC server", "error", err)
 		}
 	}()
-	s.logger.Info("OTLP bridge server started")
+
+	if s.cfg.HTTPListenAddr != "" {
+		if err := s.startHTTP(ctx); err != nil {
+			return err
+		}
+	}
+	s.logger.Info("OTLP bridge server started", "grpc_addr", lis.Addr().String(), "http_enabled", s.httpListener != nil)
+	return nil
+}
+
+// startHTTP binds the OTLP/HTTP listener and serves the export endpoints.
+func (s *BridgeServer) startHTTP(ctx context.Context) error {
+	lis, err := listen(ctx, s.cfg.HTTPListenAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on %s (port may be in use by another service): %w", s.cfg.HTTPListenAddr, err)
+	}
+	s.httpListener = lis
+	s.httpServer = &http.Server{
+		Handler:           s.otlpHTTPHandler(),
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		IdleTimeout:       httpIdleTimeout,
+		ErrorLog:          slog.NewLogLogger(s.logger.Handler(), slog.LevelWarn),
+	}
+	go func() {
+		if err := s.httpServer.Serve(lis); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("failed to serve OTLP HTTP server", "error", err)
+		}
+	}()
+	s.logger.Info("OTLP bridge HTTP listener started", "http_addr", lis.Addr().String())
 	return nil
 }
 
 // Stop gracefully shuts down the server.
 func (s *BridgeServer) Stop(_ context.Context) error {
-	var err error
 	s.closeOnce.Do(func() {
-		// Drain in-flight RPCs first so no Export handler enqueues after the
-		// writer goroutine exits. GracefulStop blocks until all active RPCs
-		// complete, then we cancel the writer context to flush remaining items.
+		// Drain in-flight requests on both transports first so no Export
+		// handler enqueues after the writer goroutine exits, then cancel the
+		// writer context; anything still queued at that point is abandoned.
+		if s.httpServer != nil {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), httpShutdownTimeout)
+			if shutdownErr := s.httpServer.Shutdown(shutdownCtx); shutdownErr != nil {
+				// A stalled client kept a handler busy past the deadline; force
+				// the connections closed so nothing outlives Stop.
+				s.logger.Warn("OTLP HTTP server did not drain in time, closing connections", "error", shutdownErr)
+				_ = s.httpServer.Close()
+			}
+			cancel()
+		}
 		if s.ingestGRPCServer != nil {
 			s.ingestGRPCServer.GracefulStop()
 		}
@@ -256,6 +315,9 @@ func (s *BridgeServer) Stop(_ context.Context) error {
 		if s.listener != nil {
 			_ = s.listener.Close()
 		}
+		if s.httpListener != nil {
+			_ = s.httpListener.Close()
+		}
 	})
-	return err
+	return nil
 }

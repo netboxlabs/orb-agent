@@ -226,8 +226,9 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 	err = orbAgent.Start(ctx, cancel)
 	require.NoError(t, err)
 
-	// Verify the OTLP gRPC URL was overridden before backends started
+	// Verify the OTLP URLs were overridden before backends started
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
+	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP)
 }
 
 func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
@@ -267,6 +268,7 @@ func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
+	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP)
 }
 
 func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
@@ -301,9 +303,105 @@ func TestStart_FleetConfig_CreatesCommonBackendWhenMissing(t *testing.T) {
 	err = orbAgent.Start(ctx, cancel)
 	require.NoError(t, err)
 
-	// The OTLP override creates the "common" backend with the grpc URL before
-	// startBackends extracts it into backendsCommon (and deletes the key).
+	// The OTLP override creates the "common" backend with the grpc and http
+	// URLs before startBackends extracts it into backendsCommon (and deletes the key).
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
+	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP)
+}
+
+// fleetRewriteCase starts an agent in fleet mode with the given backends map and
+// returns the extracted common config, so table cases can assert the rewrite.
+func fleetRewriteCase(t *testing.T, backends map[string]any) config.BackendCommons {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Backends:       backends,
+			ConfigManager:  config.ManagerConfig{Active: "fleet"},
+			SecretsManager: config.ManagerSecrets{Active: ""},
+		},
+	}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &mockSecretsManager{}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, orbAgent.Start(ctx, cancel))
+	return orbAgent.backendsCommon
+}
+
+func TestStart_FleetConfig_RewritesOTLPForDegenerateCommonBlocks(t *testing.T) {
+	// `common:` with no value is stored as nil by yaml.v3; `otlp:` with no
+	// value likewise. Neither may stop the bridge endpoints from being set,
+	// otherwise pktvisor starts without --otel and silently sends nothing.
+	cases := map[string]map[string]any{
+		"empty common block":     {"common": nil},
+		"non-map common value":   {"common": "oops"},
+		"empty otlp key":         {"common": map[string]any{"otlp": nil}},
+		"non-map otlp value":     {"common": map[string]any{"otlp": []any{"x"}}},
+		"nil backends map":       nil,
+		"common with other keys": {"common": map[string]any{"diode": map[string]any{"target": "t"}}},
+	}
+	for name, backends := range cases {
+		t.Run(name, func(t *testing.T) {
+			common := fleetRewriteCase(t, backends)
+			assert.Equal(t, "grpc://localhost:4317", common.Otlp.Grpc)
+			assert.Equal(t, "http://localhost:4318", common.Otlp.HTTP)
+		})
+	}
+}
+
+func TestStart_FleetConfig_RejectsUnusablePorts(t *testing.T) {
+	// Backends dial the configured port on localhost, so an ephemeral (0) or
+	// out-of-range port must fail start-up loudly instead of leaving pktvisor
+	// without --otel.
+	zero, tooBig, negative := 0, 70000, -1
+	cases := map[string]struct {
+		fleet   config.FleetManager
+		mention string
+	}{
+		"http port zero":     {config.FleetManager{OTLPBridgeHTTPPort: &zero}, "otlp_bridge_http_port"},
+		"http port too big":  {config.FleetManager{OTLPBridgeHTTPPort: &tooBig}, "otlp_bridge_http_port"},
+		"grpc port zero":     {config.FleetManager{OTLPBridgeGRPCPort: &zero}, "otlp_bridge_grpc_port"},
+		"grpc port negative": {config.FleetManager{OTLPBridgeGRPCPort: &negative}, "otlp_bridge_grpc_port"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+			repo, err := policies.NewMemRepo()
+			require.NoError(t, err)
+			cfg := config.Config{
+				OrbAgent: config.OrbAgent{
+					Backends:       map[string]any{},
+					ConfigManager:  config.ManagerConfig{Active: "fleet", Sources: config.Sources{Fleet: tc.fleet}},
+					SecretsManager: config.ManagerSecrets{Active: ""},
+				},
+			}
+			agent, err := New(logger, cfg, false)
+			require.NoError(t, err)
+			orbAgent := agent.(*orbAgent)
+			orbAgent.secretsManager = &mockSecretsManager{}
+			orbAgent.policyManager = &mockPolicyManager{repo: repo}
+			orbAgent.configManager = &mockConfigManager{}
+			orbAgent.filesManager = &mockFilesManager{}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err = orbAgent.Start(ctx, cancel)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.mention)
+			assert.Contains(t, err.Error(), "between 1 and 65535")
+		})
+	}
 }
 
 func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
@@ -347,6 +445,7 @@ func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 	// Verify the config was NOT modified by checking backendsCommon which is set in startBackends
 	// For non-fleet config, the original value should remain
 	assert.Equal(t, originalGrpcURL, orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should remain unchanged for non-fleet config")
+	assert.Empty(t, orbAgent.backendsCommon.Otlp.HTTP, "http URL should not be injected for non-fleet config")
 }
 
 func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
@@ -391,6 +490,55 @@ func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 	// into backendsCommon and then deletes the "common" key from the map.
 	// Verify the extracted config has the custom port.
 	assert.Equal(t, "grpc://localhost:9999", orbAgent.backendsCommon.Otlp.Grpc, "grpc URL should use configured port")
+	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP, "http URL keeps its default when only the grpc port is set")
+}
+
+func TestStart_FleetConfig_UsesConfiguredHTTPPort(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	httpPort := 4338
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Backends: map[string]any{
+				"common": map[string]any{
+					"otlp": map[string]any{
+						"http": "http://otel-collector:4318",
+					},
+				},
+			},
+			ConfigManager: config.ManagerConfig{
+				Active: "fleet",
+				Sources: config.Sources{
+					Fleet: config.FleetManager{
+						OTLPBridgeHTTPPort: &httpPort,
+					},
+				},
+			},
+			SecretsManager: config.ManagerSecrets{
+				Active: "",
+			},
+		},
+	}
+
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &mockSecretsManager{}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{} // avoid real fleet startup
+	orbAgent.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err = orbAgent.Start(ctx, cancel)
+	require.NoError(t, err)
+
+	assert.Equal(t, "http://localhost:4338", orbAgent.backendsCommon.Otlp.HTTP, "a user-supplied http URL is replaced by the bridge listener in fleet mode")
+	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
 // stubCancelledStartBackend is a minimal backend.Backend and backend.ManagedBinary
