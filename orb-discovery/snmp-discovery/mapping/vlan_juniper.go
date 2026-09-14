@@ -441,25 +441,61 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 // survives decided by map iteration order, so the VLAN's membership would
 // differ between polls of identical data.
 // indicesNamingAVlan is the subset of the rekeyed indices whose VLAN will reach
-// NetBox: every static row, plus a current-table index with at least one port
-// in one of its masks.
+// NetBox: every static row, plus a current-table index whose resolved snapshot
+// puts a port somewhere.
 //
 // It is narrower than indicesBeingRekeyed, which answers a different question.
 // Ambiguity is about two rows landing on one OID, so it counts every row being
 // rewritten however empty. This asks whether a PVID naming the tag will find a
 // VLAN there, and a current row naming no port is dropped before it becomes
 // membership.
+//
+// Resolved the way the merge resolves it, one snapshot per index, rather than
+// by scanning the rows as walked. This table answers once per retained time
+// mark, so an index whose newest snapshot is empty has a non-empty older one
+// sitting beside it; reading that as "names a VLAN" keeps a PVID for a VLAN
+// the merge is about to discard, and the placeholder it then fabricates is
+// what this guard exists to prevent.
 func indicesNamingAVlan(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {
 	out := make(map[int]struct{}, len(staticIndices))
 	for index := range staticIndices {
 		out[index] = struct{}{}
 	}
+	egress := map[int]map[int]string{}
+	untagged := map[int]map[int]string{}
 	for oid, v := range all {
-		if _, _, index, ok := splitCurrentVlanOID(oid); ok && !isEmptyPortMask(v.Value) {
+		column, mark, index, ok := splitCurrentVlanOID(oid)
+		if !ok {
+			continue
+		}
+		byIndex := egress
+		if column == oidDot1qVlanCurrentUntaggedPorts {
+			byIndex = untagged
+		}
+		if byIndex[index] == nil {
+			byIndex[index] = map[int]string{}
+		}
+		byIndex[index][mark] = v.Value
+	}
+	for index := range egress {
+		if snapshotNamesAPort(egress[index], untagged[index]) {
+			out[index] = struct{}{}
+		}
+	}
+	for index := range untagged {
+		if snapshotNamesAPort(egress[index], untagged[index]) {
 			out[index] = struct{}{}
 		}
 	}
 	return out
+}
+
+// snapshotNamesAPort reports whether one index's resolved snapshot puts a port
+// in either column, applying the same resolution and the same empty-row test
+// the merge applies.
+func snapshotNamesAPort(egress, untagged map[int]string) bool {
+	eg, unt := oneSnapshot(egress, untagged)
+	return !isEmptyPortMask(eg) || !isEmptyPortMask(unt)
 }
 
 func indicesBeingRekeyed(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {

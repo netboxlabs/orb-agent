@@ -1764,3 +1764,35 @@ func TestResolveJuniperVlanIndices_CurrentOnlyVlansMakeAPvidResolvable(t *testin
 		t.Errorf("a current row naming nobody names no VLAN: got %q", v)
 	}
 }
+
+// The current table answers once per retained time mark, so an index whose
+// newest snapshot is empty has a non-empty older one beside it. The merge
+// resolves the newest and discards the VLAN, so a PVID kept for its tag would
+// fabricate the placeholder this guard exists to prevent.
+func TestResolveJuniperVlanIndices_AStaleCurrentRowNamesNoVlan(t *testing.T) {
+	empty := string(make([]byte, 8))
+	all := ObjectIDValueMap{
+		oidSysObjectIDScalar:                 {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "10":        {Value: "office"},
+		oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+		oidJnxExVlanTag + "10":               {Value: "100"},
+		oidJnxExVlanName + "10":              {Value: "office"},
+		// Index 11: ports under an older mark, none under the newest.
+		oidDot1qVlanCurrentEgressPorts + "100.11":   {Value: portMask(2)},
+		oidDot1qVlanCurrentUntaggedPorts + "100.11": {Value: portMask(2)},
+		oidDot1qVlanCurrentEgressPorts + "200.11":   {Value: empty},
+		oidDot1qVlanCurrentUntaggedPorts + "200.11": {Value: empty},
+		oidJnxExVlanTag + "11":                      {Value: "200"},
+		oidJnxExVlanName + "11":                     {Value: "voice"},
+		oidDot1qPvid + "1":                          {Value: "100"},
+		oidDot1qPvid + "2":                          {Value: "200"},
+	}
+	got := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if v := got[oidDot1qPvid+"1"].Value; v != "100" {
+		t.Errorf("a static VLAN's tag stays resolvable: got %q", v)
+	}
+	if v := got[oidDot1qPvid+"2"].Value; v != "0" {
+		t.Errorf("the resolved snapshot names no port, so the tag names no VLAN: got %q", v)
+	}
+}
