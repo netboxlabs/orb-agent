@@ -161,7 +161,7 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		return all
 	}
 
-	resolved := resolvablePvidValues(staticIndices, described, tagByIndex)
+	resolved := resolvablePvidValues(indicesNamingAVlan(all, staticIndices), described, tagByIndex)
 
 	out := make(ObjectIDValueMap, len(all))
 	dropped, droppedCurrent, unnameable := 0, 0, 0
@@ -316,6 +316,12 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 // VLAN in the emitted catalog, so keeping a PVID for it fabricates the
 // placeholder this guard exists to prevent.
 //
+// The current table's rows are rekeyed too, and a VLAN it places a port in is
+// one the emitted catalog will carry, so those tags belong here as well. Only
+// the ones with a port in them: a row naming nobody is dropped before it
+// becomes membership, so a PVID kept for it would fabricate the same
+// placeholder as a tag with no row at all.
+//
 // And not a tag that is ALSO one of the device's internal indices, resolving
 // there to a different VLAN. This device numbers VLANs internally, so a PVID
 // may be in either space, and such a value reads as one VLAN under each — with
@@ -343,9 +349,9 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 // Built from the raw tags rather than the coerced VIDs, so the untagged bridge
 // domain's tag 0 stays in the set: a PVID of 0 must survive, since the
 // Q-BRIDGE reader takes it as "bridged, nothing untagged".
-func resolvablePvidValues(staticIndices, describedIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
-	out := make(map[int]struct{}, len(staticIndices))
-	for index := range staticIndices {
+func resolvablePvidValues(namingIndices, describedIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
+	out := make(map[int]struct{}, len(namingIndices))
+	for index := range namingIndices {
 		tag := tagByIndex[index]
 		// An identity row is not ambiguous: both readings name it. An index
 		// whose own tag would not parse is, since nothing says what it means.
@@ -434,6 +440,28 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 // them resolving to one tag would land two rows on the same OID — with which
 // survives decided by map iteration order, so the VLAN's membership would
 // differ between polls of identical data.
+// indicesNamingAVlan is the subset of the rekeyed indices whose VLAN will reach
+// NetBox: every static row, plus a current-table index with at least one port
+// in one of its masks.
+//
+// It is narrower than indicesBeingRekeyed, which answers a different question.
+// Ambiguity is about two rows landing on one OID, so it counts every row being
+// rewritten however empty. This asks whether a PVID naming the tag will find a
+// VLAN there, and a current row naming no port is dropped before it becomes
+// membership.
+func indicesNamingAVlan(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {
+	out := make(map[int]struct{}, len(staticIndices))
+	for index := range staticIndices {
+		out[index] = struct{}{}
+	}
+	for oid, v := range all {
+		if _, _, index, ok := splitCurrentVlanOID(oid); ok && !isEmptyPortMask(v.Value) {
+			out[index] = struct{}{}
+		}
+	}
+	return out
+}
+
 func indicesBeingRekeyed(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {
 	out := make(map[int]struct{}, len(staticIndices))
 	for index := range staticIndices {

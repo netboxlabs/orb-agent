@@ -374,7 +374,14 @@ func oneSnapshot(egress, untagged map[int]string) (string, string) {
 	}
 	common, found := newestMark(shared)
 	if !found {
-		return newestMask(egress), newestMask(untagged)
+		// Both columns answered and no mark is common to them. Taking each
+		// one's newest is the very pairing this function exists to prevent,
+		// just narrower: the masks would come from two moments, and the port
+		// would be published tagged where it is untagged or the reverse. There
+		// is no snapshot here, so the VLAN contributes none; the caller drops
+		// it. Losing a VLAN is recoverable at the next poll, a wrong tagging
+		// mode written over NetBox is not.
+		return "", ""
 	}
 	return egress[common], untagged[common]
 }
@@ -540,19 +547,13 @@ var vlanCatalogSources = []vlanCatalogSource{
 	{prefix: oidHwVlanName, elements: 1},
 	{prefix: oidHwVlanRowStatus, elements: 1},
 	{prefix: oidCiscoVtpVlanName, elements: 2},
-	// Unlike every other source these two are masks rather than names or row
-	// statuses, and one naming no port is the only "catalog" entry that refutes
-	// what counting it would license. The refusal it waives ends in access VLAN
-	// 1 on every port of the device; a row saying no port is in that VLAN
-	// cannot be the evidence for it.
-	//
-	// Judged over the rows as walked, so a VLAN answered under several time
-	// marks counts if any of them names a port, while the merge reads only the
-	// newest. A VLAN every port has since left is then still a VLAN the device
-	// has, which is the question here.
-	{prefix: oidDot1qVlanCurrentEgressPorts, elements: 2, maskRow: true},
-	{prefix: oidDot1qVlanCurrentUntaggedPorts, elements: 2, maskRow: true},
 }
+
+// The current table is deliberately absent from that list. Unlike every other
+// source its rows are masks rather than names or row statuses, so whether one
+// names a VLAN depends on which snapshot is read, and it is answered in
+// buildGenericRows from the snapshot the merge resolved rather than from the
+// rows as walked.
 
 func vlanCatalogPresent(all ObjectIDValueMap) bool {
 	for oid, v := range all {
@@ -698,6 +699,7 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// costs: two of them publish all 4094 VLANs empty, and merging those means
 	// carrying 4094 masks and scanning them once per port, for rows that say
 	// nothing.
+	currentNamedAVlan := false
 	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
 		egress, untagged := oneSnapshot(currentEgress[vid], currentUntagged[vid])
 		if isEmptyPortMask(egress) && isEmptyPortMask(untagged) {
@@ -711,9 +713,38 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			rows.VlanUntaggedPorts[vid] = []byte(untagged)
 			rows.VlanUntaggedFromCurrent[vid] = struct{}{}
 		}
+		// This VLAN survived resolution with a port in it, which is what makes
+		// it evidence the device has VLANs of its own. Judged here rather than
+		// over the walked rows so the answer is the snapshot that was actually
+		// used: a VLAN whose newest snapshot is empty is dropped above, and a
+		// stale non-empty row from an older mark must not go on licensing the
+		// default PVID after every port has left the VLAN.
+		//
+		// Still only for an id NetBox could hold. RFC 4363 lets this table be
+		// keyed by an internal identifier, and a row under one names no VLAN
+		// however many ports are in it.
+		if qbridge.CoerceVid(vid) != nil {
+			currentNamedAVlan = true
+		}
 	}
 
-	rows.VlanCatalogPresent = vlanCatalogPresent(all)
+	// An untagged member is an egress member: RFC 4363 defines the untagged
+	// ports as those that transmit this VLAN's egress packets untagged, so
+	// they are a subset. membershipFromMasks walks the egress map and only
+	// consults untagged masks for VIDs it finds there, so a VLAN whose egress
+	// column is unsupported or whose separate walk was truncated would have
+	// its untagged membership ignored entirely.
+	for vid, mask := range rows.VlanUntaggedPorts {
+		if _, ok := rows.VlanEgressPorts[vid]; ok {
+			continue
+		}
+		rows.VlanEgressPorts[vid] = mask
+		if _, ok := rows.VlanUntaggedFromCurrent[vid]; ok {
+			rows.VlanEgressFromCurrent[vid] = struct{}{}
+		}
+	}
+
+	rows.VlanCatalogPresent = vlanCatalogPresent(all) || currentNamedAVlan
 	return rows
 }
 

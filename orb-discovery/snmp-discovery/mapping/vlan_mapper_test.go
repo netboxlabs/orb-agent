@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -1126,7 +1127,9 @@ func TestVlanMapper_PostMap_CurrentTableOnlyDeviceIsNotRefused(t *testing.T) {
 		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1, 2)},
 	}
 
-	if !vlanCatalogPresent(all) {
+	// Decided from the snapshot the merge resolved, not from the walked rows.
+	vmRows := NewVlanMapper(logger, config.Options{}).buildGenericRows(all)
+	if !vmRows.VlanCatalogPresent {
 		t.Fatal("the current table is VLAN knowledge; the refusal must not apply")
 	}
 
@@ -1308,8 +1311,15 @@ func TestVlanMapper_BuildGenericRows_RecordsCurrentTableProvenance(t *testing.T)
 	if _, ok := rows.VlanUntaggedFromCurrent[20]; ok {
 		t.Error("VLAN 20 supplied no untagged mask; its untagged column is not from the current table")
 	}
-	if _, ok := rows.VlanEgressFromCurrent[30]; ok {
-		t.Error("VLAN 30 supplied no egress mask; its egress column is not from the current table")
+	// VLAN 30 supplied no egress mask, so one is synthesized from its untagged
+	// mask: an untagged member is an egress member. The synthesized mask is
+	// only as configured as the row it came from, which was operational, so it
+	// carries that provenance and not a stronger one.
+	if _, ok := rows.VlanEgressFromCurrent[30]; !ok {
+		t.Error("an egress mask synthesized from a current untagged mask is operational too")
+	}
+	if got := string(rows.VlanEgressPorts[30]); got != portMask(1) {
+		t.Errorf("VLAN 30's egress mask is its untagged mask: got %x", got)
 	}
 	for _, m := range []map[int]struct{}{rows.VlanEgressFromCurrent, rows.VlanUntaggedFromCurrent} {
 		if _, ok := m[10]; ok {
@@ -1474,7 +1484,7 @@ func TestVlanCatalogPresent_RequiresARowThatNamesAVlan(t *testing.T) {
 			oidJnxExVlanName + "17": {Value: ""},
 		}, false},
 	} {
-		if got := vlanCatalogPresent(tc.all); got != tc.want {
+		if got := vlanCatalogPresent(tc.all) || catalogFromWalk(t, tc.all); got != tc.want {
 			t.Errorf("%s: got %v, want %v", tc.what, got, tc.want)
 		}
 	}
@@ -1615,6 +1625,16 @@ func TestVlanMapper_VlanCatalogPresent_CountsTheHuaweiCatalog(t *testing.T) {
 	}
 }
 
+// catalogFromWalk answers the catalog question the way buildGenericRows does,
+// which is where the current table's contribution is decided: its rows are
+// masks, so whether one names a VLAN depends on the snapshot that was resolved
+// rather than on the rows as walked.
+func catalogFromWalk(t *testing.T, all ObjectIDValueMap) bool {
+	t.Helper()
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{})
+	return vm.buildGenericRows(all).VlanCatalogPresent
+}
+
 // A current-table row that places no port in a VLAN is not a VLAN catalog.
 // The merge already discards such a row as membership; counting it as the
 // device naming a VLAN waives the default-PVID refusal, and what that emits
@@ -1625,17 +1645,30 @@ func TestVlanMapper_VlanCatalogPresent_AnEmptyCurrentRowIsNotACatalog(t *testing
 		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: zero},
 		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: zero},
 	}
-	if vlanCatalogPresent(all) {
+	if catalogFromWalk(t, all) {
 		t.Error("a row naming no port names no VLAN")
 	}
 	// One port in it and the device has told us the VLAN is real.
 	all[oidDot1qVlanCurrentEgressPorts+"0.1"] = Value{Value: portMask(1)}
-	if !vlanCatalogPresent(all) {
+	if !catalogFromWalk(t, all) {
 		t.Error("a row naming a port is a catalog entry")
 	}
 	// A static row still counts however empty, since the VLAN is configured.
 	if !vlanCatalogPresent(ObjectIDValueMap{oidDot1qVlanStaticEgressPorts + "7": {Value: zero}}) {
 		t.Error("a configured VLAN is named whether or not a port is in it")
+	}
+
+	// A VLAN every port has since left: an older snapshot names ports, the
+	// newest names none. The merge resolves the newest and drops the VLAN, so
+	// the stale row must not go on licensing the default PVID either.
+	stale := ObjectIDValueMap{
+		oidDot1qVlanCurrentEgressPorts + "10.1":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "10.1": {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "20.1":   {Value: zero},
+		oidDot1qVlanCurrentUntaggedPorts + "20.1": {Value: zero},
+	}
+	if catalogFromWalk(t, stale) {
+		t.Error("the resolved snapshot names no port, so the device named no VLAN")
 	}
 }
 
@@ -1666,9 +1699,12 @@ func TestVlanMapper_VlanCatalogPresent_ChecksTheWholeIndex(t *testing.T) {
 		{"huawei, two components", oidHwVlanName + "10.1", "uplink", false},
 	}
 	for _, c := range cases {
-		got := vlanCatalogPresent(ObjectIDValueMap{c.oid: {Value: c.val}})
+		all := ObjectIDValueMap{c.oid: {Value: c.val}}
+		// The current table's contribution is decided during the merge, the
+		// rest directly; both must reject a suffix of the wrong shape.
+		got := vlanCatalogPresent(all) || catalogFromWalk(t, all)
 		if got != c.want {
-			t.Errorf("%s: vlanCatalogPresent = %v, want %v", c.name, got, c.want)
+			t.Errorf("%s: catalog present = %v, want %v", c.name, got, c.want)
 		}
 	}
 }

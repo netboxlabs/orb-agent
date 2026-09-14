@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
 	"reflect"
@@ -1723,5 +1724,43 @@ func TestResolveJuniperVlanIndices_RefusesATagTwoRekeyedRowsClaim(t *testing.T) 
 	}
 	if !strings.Contains(logged.String(), "tag=900") {
 		t.Errorf("the refusal must name the contested tag, got %q", logged.String())
+	}
+}
+
+// A VLAN only the current table publishes is rekeyed like any other, and a
+// port in it is membership that reaches NetBox, so a PVID naming its tag names
+// a real VLAN and must survive. A current row naming nobody is dropped before
+// it becomes membership, so a PVID for that one still does not.
+func TestResolveJuniperVlanIndices_CurrentOnlyVlansMakeAPvidResolvable(t *testing.T) {
+	all := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+		// One static VLAN, internally indexed, corroborated by name.
+		oidDot1qVlanStaticName + "10":        {Value: "office"},
+		oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+		oidJnxExVlanTag + "10":               {Value: "100"},
+		oidJnxExVlanName + "10":              {Value: "office"},
+		// A VLAN only the current table carries, with a port in it.
+		oidDot1qVlanCurrentEgressPorts + "0.11": {Value: portMask(2)},
+		oidJnxExVlanTag + "11":                  {Value: "200"},
+		oidJnxExVlanName + "11":                 {Value: "voice"},
+		// One with no port in it at all.
+		oidDot1qVlanCurrentEgressPorts + "0.12": {Value: string(make([]byte, 8))},
+		oidJnxExVlanTag + "12":                  {Value: "300"},
+		oidJnxExVlanName + "12":                 {Value: "spare"},
+		// Ports naming each of the three tags.
+		oidDot1qPvid + "1": {Value: "100"},
+		oidDot1qPvid + "2": {Value: "200"},
+		oidDot1qPvid + "3": {Value: "300"},
+	}
+	got := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if v := got[oidDot1qPvid+"1"].Value; v != "100" {
+		t.Errorf("a static VLAN's tag stays resolvable: got %q", v)
+	}
+	if v := got[oidDot1qPvid+"2"].Value; v != "200" {
+		t.Errorf("a current-only VLAN with a port in it names a VLAN: got %q", v)
+	}
+	if v := got[oidDot1qPvid+"3"].Value; v != "0" {
+		t.Errorf("a current row naming nobody names no VLAN: got %q", v)
 	}
 }
