@@ -517,54 +517,83 @@ func currentVlanRow(oid, prefix string) (vid, mark int, ok bool) {
 // device's database whether or not anything is using it today. The current
 // table's two columns are the exception, being masks rather than names, and one
 // naming no port is not read as a catalog entry.
+// vlanCatalogSource is one place a VLAN identity can be read from, with the
+// shape of the index its rows carry.
+type vlanCatalogSource struct {
+	prefix string
+	// elements the index must have. The VLAN id is the last of them: the
+	// VLAN-keyed tables carry one, the VTP catalog's (domain, vlan) and the
+	// current table's (timeMark, vlan) carry two.
+	elements int
+	// maskRow says the value is a port mask rather than a name or a status.
+	maskRow bool
+}
+
+var vlanCatalogSources = []vlanCatalogSource{
+	{prefix: oidDot1qVlanStaticName, elements: 1},
+	{prefix: oidDot1qVlanStaticRowStatus, elements: 1},
+	{prefix: oidDot1qVlanStaticEgressPorts, elements: 1},
+	{prefix: oidDot1qVlanStaticUntaggedPorts, elements: 1},
+	// The Huawei catalog is a VLAN catalog like any other: a device publishing
+	// it has named VLANs of its own, whether or not it answers Q-BRIDGE at all.
+	{prefix: oidHwVlanIndex, elements: 1},
+	{prefix: oidHwVlanName, elements: 1},
+	{prefix: oidHwVlanRowStatus, elements: 1},
+	{prefix: oidCiscoVtpVlanName, elements: 2},
+	// Unlike every other source these two are masks rather than names or row
+	// statuses, and one naming no port is the only "catalog" entry that refutes
+	// what counting it would license. The refusal it waives ends in access VLAN
+	// 1 on every port of the device; a row saying no port is in that VLAN
+	// cannot be the evidence for it.
+	//
+	// Judged over the rows as walked, so a VLAN answered under several time
+	// marks counts if any of them names a port, while the merge reads only the
+	// newest. A VLAN every port has since left is then still a VLAN the device
+	// has, which is the question here.
+	{prefix: oidDot1qVlanCurrentEgressPorts, elements: 2, maskRow: true},
+	{prefix: oidDot1qVlanCurrentUntaggedPorts, elements: 2, maskRow: true},
+}
+
 func vlanCatalogPresent(all ObjectIDValueMap) bool {
 	for oid, v := range all {
-		switch {
-		case strings.HasPrefix(oid, oidJnxExVlanName):
-			// Keyed by an internal index; the name is what names a VLAN.
+		// The Juniper enterprise table is keyed by the device's internal index
+		// rather than a VLAN id, so there the name itself is the evidence.
+		if strings.HasPrefix(oid, oidJnxExVlanName) {
 			if trimSNMPString(v.Value) != "" {
 				return true
 			}
-		case strings.HasPrefix(oid, oidDot1qVlanStaticName),
-			strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus),
-			strings.HasPrefix(oid, oidDot1qVlanStaticEgressPorts),
-			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts):
-			if namesAVlan(lastOIDElement(oid)) {
-				return true
+			continue
+		}
+		for _, src := range vlanCatalogSources {
+			if !strings.HasPrefix(oid, src.prefix) {
+				continue
 			}
-		case strings.HasPrefix(oid, oidHwVlanIndex),
-			strings.HasPrefix(oid, oidHwVlanName),
-			strings.HasPrefix(oid, oidHwVlanRowStatus):
-			// The Huawei catalog is a VLAN catalog like any other: a device
-			// publishing it has named VLANs of its own, whether or not it
-			// answers Q-BRIDGE at all.
-			if namesAVlan(lastOIDElement(oid)) {
-				return true
+			if !namesAVlanAt(strings.TrimPrefix(oid, src.prefix), src.elements) {
+				break
 			}
-		case strings.HasPrefix(oid, oidCiscoVtpVlanName):
-			// A two-element index, (domain, vlan), so the id is the last.
-			if namesAVlan(lastOIDElement(oid)) {
-				return true
+			if src.maskRow && isEmptyPortMask(v.Value) {
+				break
 			}
-		case strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts),
-			strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
-			// Also a two-element index, (timeMark, vlan). Unlike every other
-			// source here these two are masks rather than names or row
-			// statuses, and one naming no port is the only "catalog" entry
-			// that refutes what counting it would license. The refusal it
-			// waives ends in access VLAN 1 on every port of the device; a row
-			// saying no port is in that VLAN cannot be the evidence for it.
-			//
-			// Judged over the rows as walked, so a VLAN answered under several
-			// time marks counts if any of them names a port, while the merge
-			// reads only the newest. A VLAN every port has since left is then
-			// still a VLAN the device has, which is the question here.
-			if namesAVlan(lastOIDElement(oid)) && !isEmptyPortMask(v.Value) {
-				return true
-			}
+			return true
 		}
 	}
 	return false
+}
+
+// namesAVlanAt reports whether an OID suffix is an index of exactly the
+// expected shape whose last element is a VLAN id NetBox could hold.
+//
+// The arity is checked, not just the last element. A suffix with one component
+// too many is a row the readers reject — currentVlanRow will not parse
+// "0.10.1" — and reading a VLAN id off the end of it would count as a catalog
+// a row from which nothing can be derived, waiving the default-PVID refusal on
+// the strength of a malformed OID.
+func namesAVlanAt(suffix string, elements int) bool {
+	parts := strings.Split(suffix, ".")
+	if len(parts) != elements {
+		return false
+	}
+	return namesAVlan(parts[elements-1])
 }
 
 // namesAVlan reports whether an OID suffix element is a VLAN id NetBox could
@@ -572,14 +601,6 @@ func vlanCatalogPresent(all ObjectIDValueMap) bool {
 func namesAVlan(element string) bool {
 	vid, ok := atoi(element)
 	return ok && qbridge.CoerceVid(vid) != nil
-}
-
-// lastOIDElement returns the final dot-separated element of an OID.
-func lastOIDElement(oid string) string {
-	if i := strings.LastIndexByte(oid, '.'); i >= 0 {
-		return oid[i+1:]
-	}
-	return oid
 }
 
 // buildGenericRows extracts Q-BRIDGE + BRIDGE-MIB rows from the host's

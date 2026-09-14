@@ -1638,3 +1638,37 @@ func TestVlanMapper_VlanCatalogPresent_AnEmptyCurrentRowIsNotACatalog(t *testing
 		t.Error("a configured VLAN is named whether or not a port is in it")
 	}
 }
+
+// Each catalog source is read at the shape its own rows carry. A suffix with
+// the wrong number of components is a row the readers reject, and taking a
+// VLAN id off the end of one would count a malformed OID as a catalog and
+// waive the default-PVID refusal on the strength of it.
+func TestVlanMapper_VlanCatalogPresent_ChecksTheWholeIndex(t *testing.T) {
+	mask := portMask(1)
+	cases := []struct {
+		name string
+		oid  string
+		val  string
+		want bool
+	}{
+		// The current table is (timeMark, vlan): exactly two components.
+		{"current, well formed", oidDot1qVlanCurrentEgressPorts + "0.10", mask, true},
+		{"current, one component", oidDot1qVlanCurrentEgressPorts + "10", mask, false},
+		{"current, three components", oidDot1qVlanCurrentEgressPorts + "0.10.1", mask, false},
+		{"current, id out of range", oidDot1qVlanCurrentEgressPorts + "0.4095", mask, false},
+		// The VTP catalog is (domain, vlan).
+		{"vtp, well formed", oidCiscoVtpVlanName + "1.10", "voice", true},
+		{"vtp, three components", oidCiscoVtpVlanName + "1.10.1", "voice", false},
+		// The VLAN-keyed tables carry one component.
+		{"static name, well formed", oidDot1qVlanStaticName + "10", "voice", true},
+		{"static name, two components", oidDot1qVlanStaticName + "10.1", "voice", false},
+		{"huawei, well formed", oidHwVlanName + "10", "uplink", true},
+		{"huawei, two components", oidHwVlanName + "10.1", "uplink", false},
+	}
+	for _, c := range cases {
+		got := vlanCatalogPresent(ObjectIDValueMap{c.oid: {Value: c.val}})
+		if got != c.want {
+			t.Errorf("%s: vlanCatalogPresent = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
