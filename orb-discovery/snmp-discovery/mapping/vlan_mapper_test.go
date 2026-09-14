@@ -1708,3 +1708,45 @@ func TestVlanMapper_VlanCatalogPresent_ChecksTheWholeIndex(t *testing.T) {
 		}
 	}
 }
+
+// Two columns that share no time mark are not a snapshot. Taking each one's
+// newest is the pairing the resolution exists to prevent, just narrower: the
+// masks come from two moments, so the port is published tagged where it is
+// untagged or the reverse. Such a VLAN contributes nothing.
+func TestVlanMapper_BuildGenericRows_DisjointTimeMarksAreNotPaired(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{})
+
+	// VLAN 10's two columns never answered under the same mark.
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.10":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentUntaggedPorts + "200.10": {Value: portMask(1)},
+	})
+	if _, ok := rows.VlanEgressPorts[10]; ok {
+		t.Errorf("no snapshot pairs these columns, so the VLAN supplies no membership: %x", rows.VlanEgressPorts[10])
+	}
+	if _, ok := rows.VlanUntaggedPorts[10]; ok {
+		t.Error("nor an untagged mask")
+	}
+
+	// A VLAN only one column mentions is unaffected: nothing is being paired,
+	// and the untagged mask stands in as the egress one.
+	rows = vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentUntaggedPorts + "200.20": {Value: portMask(1)},
+	})
+	if got := string(rows.VlanUntaggedPorts[20]); got != portMask(1) {
+		t.Errorf("one column alone is still membership: got %x", got)
+	}
+
+	// Sharing one mark, they pair on it even with other marks present.
+	rows = vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.30":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentEgressPorts + "300.30":   {Value: portMask(3)},
+		oidDot1qVlanCurrentUntaggedPorts + "300.30": {Value: portMask(3)},
+	})
+	if got := string(rows.VlanEgressPorts[30]); got != portMask(3) {
+		t.Errorf("both masks come from the newest shared mark: got %x", got)
+	}
+}
