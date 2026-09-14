@@ -528,6 +528,34 @@ func TestRestartBackendReschedulesAReplayThatGaveUp(t *testing.T) {
 	}
 }
 
+// Once Stop began, no replay is admitted: a late restart from the health
+// monitor must not add a goroutine while Stop waits for the replayers.
+func TestScheduleReplayIsRefusedOnceStopBegan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events}
+	be := &failingResetBackend{restartableBackend: restartableBackend{events: &events}}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+		replayRetryInterval: time.Millisecond,
+	}
+	stopCancel()
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "late restart"))
+
+	assert.Equal(t, int32(0), a.replayStarts.Load(), "no replay may be scheduled after Stop began")
+	a.replayers.Wait()
+}
+
 // The scheduled replay clears its per-backend flag while it still holds the
 // restart mutex, so a restart that takes the mutex right after it and gives
 // up is not told a replay is already scheduled by a goroutine about to exit.

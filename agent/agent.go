@@ -120,6 +120,11 @@ type orbAgent struct {
 	// replayers tracks every goroutine scheduleReplay starts, so Stop can
 	// wait for all of them to exit before returning.
 	replayers sync.WaitGroup
+	// replayAdmitMu orders replay admission against Stop: scheduleReplay
+	// checks stopCtx and adds to replayers under it, and Stop takes it once
+	// after cancelling stopCtx, so no replayer is added after Stop started
+	// waiting for them.
+	replayAdmitMu sync.Mutex
 
 	// replayRetryInterval separates the attempts a scheduled replay makes
 	// after a restart's own replay gave up because the backend was still not
@@ -437,6 +442,12 @@ func (a *orbAgent) reapplyBackendPolicies(ctx context.Context, name string, be b
 // once, because a replay with nothing left deferred is a no-op that returns
 // nil.
 func (a *orbAgent) scheduleReplay(name string, be backend.Backend) {
+	a.replayAdmitMu.Lock()
+	defer a.replayAdmitMu.Unlock()
+	if a.stopCtx != nil && a.stopCtx.Err() != nil {
+		a.logger.Info("shutting down; no policy replay scheduled", "backend", name)
+		return
+	}
 	v, _ := a.replayScheduled.LoadOrStore(name, &atomic.Bool{})
 	scheduled, _ := v.(*atomic.Bool) // LoadOrStore stored an *atomic.Bool; assertion cannot fail.
 	if !scheduled.CompareAndSwap(false, true) {
@@ -829,8 +840,13 @@ func (a *orbAgent) Stop(ctx context.Context) {
 		}
 	}()
 	// stopCtx was cancelled first, above, so every scheduled replay goroutine
-	// either already exited or is about to, on its next check; wait for all
-	// of them so none outlives the agent.
+	// either already exited or is about to, on its next check. Taking the
+	// admission mutex once here lets any admission already in flight finish
+	// its Add, and every later one sees the cancelled context and refuses,
+	// so Wait cannot race an Add. Then wait for all of them so none outlives
+	// the agent.
+	a.replayAdmitMu.Lock()
+	a.replayAdmitMu.Unlock() //nolint:staticcheck // the empty critical section is the barrier
 	a.replayers.Wait()
 }
 
