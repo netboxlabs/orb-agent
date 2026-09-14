@@ -181,7 +181,7 @@ func TestSnmpTelemetryBackendStart(t *testing.T) {
 	assert.Equal(t, http.MethodDelete, reqs[3].method)
 	assert.Equal(t, "/api/v1/policies/core", reqs[3].path, "a remove without rename history uses the current name")
 
-	require.NoError(t, be.FullReset(ctx))
+	require.NoError(t, be.FullReset(context.Background()))
 
 	// With the API gone the process still runs, and the backend says so.
 	server.Close()
@@ -322,4 +322,25 @@ func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(op
 	t.Cleanup(func() {
 		backend.NewCmdOptions = original
 	})
+}
+
+// The context the agent hands Start reaches the process start, so a start
+// the agent has already given up on spawns nothing.
+func TestSnmpTelemetryBackendStartHonoursACancelledContext(t *testing.T) {
+	mockCmd := &mocks.MockCmd{}
+	spawned := false
+	overrideNewCmdOptions(t, mockCmd, func(backend.CmdOptions, string, []string) { spawned = true })
+
+	assert.True(t, snmptelemetry.Register())
+	be := backend.GetBackend("snmp_telemetry")
+	var commons config.BackendCommons
+	commons.Otlp.Grpc = "collector:4317"
+	require.NoError(t, be.Configure(slog.New(slog.NewTextHandler(os.Stdout, nil)), nil, map[string]any{}, commons, nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := be.Start(ctx, cancel)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, spawned, "no process is spawned for a start that was cancelled before it began")
 }

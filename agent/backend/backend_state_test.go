@@ -411,7 +411,7 @@ func TestBackendStateManager_Interface_Implementation(t *testing.T) {
 	assert.NotNil(t, state)
 }
 
-func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T) {
+func TestBackendStateManager_RegisterError_UpdatesStatusAndErrorInPlace(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
@@ -433,7 +433,8 @@ func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T)
 
 	initialRestartCount := manager.Get()[backendName].RestartCount
 
-	// Act - RegisterError should overwrite the state
+	// Act - RegisterError updates only the status and error, in place, and
+	// keeps the restart record
 	errorMsg := "critical error"
 	manager.RegisterError(backendName, errorMsg)
 
@@ -442,9 +443,10 @@ func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T)
 	require.Contains(t, state, backendName)
 	assert.Equal(t, backend.BackendError, state[backendName].Status)
 	assert.Equal(t, errorMsg, state[backendName].LastError)
-	// RestartCount should be reset to 0 because RegisterError creates a new State
-	assert.Equal(t, int64(0), state[backendName].RestartCount)
-	assert.NotEqual(t, initialRestartCount, state[backendName].RestartCount)
+	// RestartCount is preserved: RegisterError updates the entry in place
+	// rather than replacing it, so a failed retry does not erase the
+	// restarts recorded before it.
+	assert.Equal(t, initialRestartCount, state[backendName].RestartCount)
 }
 
 func TestBackendStateManager_MinRestartTime_Constant(t *testing.T) {
@@ -712,6 +714,29 @@ func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T
 	assert.Zero(t, retrievedPolicy.Runs[0].EntityCount, "Expected entity_count to be zero when not provided")
 
 	mockBe.AssertExpectations(t)
+}
+
+// A failed start after restarts must not erase the restarts: RegisterError
+// creates an entry when there is none, and on an existing one updates the
+// status and error and leaves the restart record alone.
+func TestBackendStateManager_RegisterError_KeepsTheRestartRecord(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	manager := backend.NewStateManager("fleet", logger, make(chan string, 5), repo)
+	manager.RegisterError("flaky", "first failure")
+	manager.RegisterRestart("flaky", "first")
+	manager.RegisterRestart("flaky", "second")
+	before := manager.Get()["flaky"]
+
+	manager.RegisterError("flaky", "binary not found")
+
+	state := manager.Get()["flaky"]
+	assert.Equal(t, backend.BackendError, state.Status)
+	assert.Equal(t, "binary not found", state.LastError)
+	assert.Equal(t, int64(2), state.RestartCount)
+	assert.Equal(t, "second", state.LastRestartReason)
+	assert.Equal(t, before.LastRestartTS, state.LastRestartTS)
 }
 
 func TestBackendStateManager_PolicyStatusPolling_NonProviderBackend(t *testing.T) {

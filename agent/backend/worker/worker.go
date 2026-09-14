@@ -189,6 +189,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "worker",
 		NameUnderscore: "worker",
 		Exec:           d.resolveExecPath(),
