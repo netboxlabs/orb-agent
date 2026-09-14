@@ -17,6 +17,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockPolicyManagerForToRPC implements the PolicyManager interface for to_rpc testing
@@ -28,8 +29,8 @@ func (m *mockPolicyManagerForToRPC) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForToRPC) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForToRPC) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForToRPC) GetPolicyState() ([]policies.PolicyData, error) {
@@ -42,8 +43,8 @@ func (m *mockPolicyManagerForToRPC) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForToRPC) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForToRPC) ApplyBackendPolicies(_ context.Context, name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 
@@ -56,6 +57,8 @@ func (m *mockPolicyManagerForToRPC) RemovePolicy(policyID string, policyName str
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManagerForToRPC) SetStarter(_ policymgr.BackendStarter) {}
 
 func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	// Arrange

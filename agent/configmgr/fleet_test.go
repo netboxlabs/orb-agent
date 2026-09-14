@@ -24,6 +24,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
 	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockPolicyManagerForFleet implements the PolicyManager interface for fleet testing
@@ -35,8 +36,8 @@ func (m *mockPolicyManagerForFleet) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForFleet) GetPolicyState() ([]policies.PolicyData, error) {
@@ -53,8 +54,8 @@ func (m *mockPolicyManagerForFleet) GetRepo() policies.PolicyRepo {
 	return val.(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(_ context.Context, name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 
@@ -67,6 +68,8 @@ func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName str
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManagerForFleet) SetStarter(_ policymgr.BackendStarter) {}
 
 type mockBackendState struct {
 	mock.Mock

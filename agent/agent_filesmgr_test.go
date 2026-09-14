@@ -89,6 +89,7 @@ func TestRestartBackendWithFilesmgrRollback_RetriesAfterFailure(t *testing.T) {
 	defer cancel()
 
 	a := &orbAgent{
+		policyManager:  &mockPolicyManager{},
 		logger:         slog.Default(),
 		backends:       map[string]backend.Backend{"worker": be},
 		filesManager:   fm,
@@ -241,6 +242,7 @@ func TestRestartDispatcher_StopsOnDispatcherCancel(t *testing.T) {
 	dispatcherCtx, dispatcherCancel := context.WithCancel(parentCtx)
 
 	a := &orbAgent{
+		policyManager:    &mockPolicyManager{},
 		logger:           slog.Default(),
 		backends:         map[string]backend.Backend{"worker": be},
 		filesManager:     &mockFilesManager{},
@@ -305,6 +307,7 @@ func TestRestartDispatcher_ProcessesRestartsSequentially(t *testing.T) {
 	defer cancel()
 
 	a := &orbAgent{
+		policyManager:  &mockPolicyManager{},
 		logger:         slog.Default(),
 		backends:       backends,
 		filesManager:   &mockFilesManager{},
@@ -364,6 +367,7 @@ func TestRestartDispatcher_CtxCancelMidDrain(t *testing.T) {
 	dispatcherCtx, dispatcherCancel := context.WithCancel(parentCtx)
 
 	a := &orbAgent{
+		policyManager:    &mockPolicyManager{},
 		logger:           slog.Default(),
 		backends:         backends,
 		filesManager:     &mockFilesManager{},
@@ -445,6 +449,7 @@ func TestSubscribeToFilesmgr_CoalescesAndDeliversReliably(t *testing.T) {
 	defer cancel()
 
 	a := &orbAgent{
+		policyManager:  &mockPolicyManager{},
 		logger:         slog.Default(),
 		backends:       map[string]backend.Backend{},
 		filesManager:   &mockFilesManager{},
@@ -562,6 +567,7 @@ func TestBackendRestartLock_SerializesConcurrentRestarts(t *testing.T) {
 	defer cancel()
 
 	a := &orbAgent{
+		policyManager:  &mockPolicyManager{},
 		logger:         slog.Default(),
 		backends:       map[string]backend.Backend{"worker": cbe},
 		filesManager:   &mockFilesManager{},
@@ -693,6 +699,7 @@ func TestRestartBackendWithFilesmgrRollback_FirstInstallFailureFallsBackToBaked(
 	defer cancel()
 
 	a := &orbAgent{
+		policyManager:  &mockPolicyManager{},
 		logger:         slog.Default(),
 		backends:       map[string]backend.Backend{"worker": be},
 		filesManager:   fm,
@@ -751,6 +758,7 @@ func TestRestartBackendWithFilesmgrRollback_NoCancelLeakOnRollbackRetry(t *testi
 	defer cancel()
 
 	a := &orbAgent{
+		policyManager:  &mockPolicyManager{},
 		logger:         slog.Default(),
 		backends:       map[string]backend.Backend{"worker": be},
 		filesManager:   fm,
