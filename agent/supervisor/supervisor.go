@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -113,6 +114,11 @@ type entry struct {
 	// restart, including its replay and the replay's retries, so no two of
 	// those interleave for one backend and no stop runs mid-flight.
 	restartMu sync.Mutex
+
+	// replayScheduled tracks whether a scheduleReplay goroutine is currently
+	// waiting or attempting a replay for this entry, so a second give-up
+	// while one is already scheduled is a no-op (restart.go).
+	replayScheduled atomic.Bool
 }
 
 // beginStart cancels the entry's previous run context, if any, stores the
@@ -185,6 +191,25 @@ type Supervisor struct {
 	// loop, replays and waits observe it.
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
+
+	// pending holds backend names queued by QueueUpgrade; dispatchUpgrades
+	// drains it every DispatchInterval, coalescing repeated upgrade events
+	// for the same backend into a single restart.
+	pending   map[string]struct{}
+	pendingMu sync.Mutex
+
+	// replayers tracks every goroutine scheduleReplay starts, so StopAll can
+	// wait for all of them to exit before returning; replayAdmitMu orders
+	// replay admission against that wait: scheduleReplay checks stopCtx and
+	// adds to replayers under it, and waitReplays takes it once after
+	// stopCtx is cancelled, so no replayer is added after the wait began.
+	replayers     sync.WaitGroup
+	replayAdmitMu sync.Mutex
+
+	// replayStarts counts how many scheduleReplay calls actually started a
+	// goroutine, for tests to assert a second call for an entry that already
+	// has one scheduled is a no-op.
+	replayStarts atomic.Int32
 }
 
 // New builds a supervisor over the state manager, the files manager (nil

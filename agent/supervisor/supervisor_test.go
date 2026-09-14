@@ -81,7 +81,7 @@ type stubBackend struct {
 	configureErr error
 	binary       string
 	onStart      func(ctx context.Context, cancel context.CancelFunc)
-	onReset      func()
+	onReset      func(ctx context.Context)
 	onStop       func()
 	mu           sync.Mutex
 }
@@ -140,10 +140,10 @@ func (s *stubBackend) Stop(context.Context) error {
 	return nil
 }
 
-func (s *stubBackend) FullReset(context.Context) error {
+func (s *stubBackend) FullReset(ctx context.Context) error {
 	s.rec.add("reset:" + s.name)
 	if s.onReset != nil {
-		s.onReset()
+		s.onReset(ctx)
 	}
 	return s.resetErr
 }
@@ -245,18 +245,17 @@ func boolString(b bool) string {
 var errNotRunning = errors.New("backend is not running")
 
 // newTestSupervisor builds a supervisor over the stubs with every delay
-// shortened; tests that need a long interval override the option.
-func newTestSupervisor(t *testing.T, rec *recorder, applier *stubApplier, files *stubFiles) *Supervisor {
+// shortened; tests that need a long interval override the option. files is
+// a filesmgr.Manager so a test can pass a *stubFiles or, for an end-to-end
+// rollback test, a real filesmgr.Manager; nil (the common case) starts the
+// supervisor with none, as an agent without a files manager does.
+func newTestSupervisor(t *testing.T, rec *recorder, applier *stubApplier, files filesmgr.Manager) *Supervisor {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	if applier == nil {
 		applier = &stubApplier{rec: rec}
 	}
-	var fm filesmgr.Manager
-	if files != nil {
-		fm = files
-	}
-	s := New(logger, &stubState{rec: rec}, fm, applier, make(chan string, 1), Options{
+	s := New(logger, &stubState{rec: rec}, files, applier, make(chan string, 1), Options{
 		NotRunning:          errNotRunning,
 		ReapplyAttempts:     3,
 		ReapplyRetryDelay:   time.Millisecond,
