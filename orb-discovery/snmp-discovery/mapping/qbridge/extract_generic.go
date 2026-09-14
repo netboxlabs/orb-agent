@@ -308,6 +308,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		case native != nil:
 			info.NativeVlan = native
 			info.AccessVlan = native
+			info.NativeUntaggedByMask = true
 		case bridged && pvid > 0 && hasRow(untagged, pvid) &&
 			!fromCurrentTable(rows.VlanUntaggedFromCurrent, pvid):
 			// The device publishes an untagged row for the PVID's VLAN and
@@ -483,6 +484,18 @@ func chooseNative(untaggedVids []int) *int {
 	}
 	v := untaggedVids[len(untaggedVids)-1]
 	return &v
+}
+
+// withoutVlan returns vids without one VLAN, keeping order.
+func withoutVlan(vids []int, drop int) []int {
+	kept := make([]int, 0, len(vids))
+	for _, vid := range vids {
+		if vid == drop {
+			continue
+		}
+		kept = append(kept, vid)
+	}
+	return kept
 }
 
 // withoutUntaggedOtherThan removes from the egress set every VLAN the

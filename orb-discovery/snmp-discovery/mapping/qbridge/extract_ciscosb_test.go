@@ -196,3 +196,25 @@ func TestApplyCiscoSB_DoesNotDemoteATrunk(t *testing.T) {
 		t.Errorf("the trunk must keep its tagged VLANs, got %+v", c)
 	}
 }
+
+// The overlay names the untagged VLAN. Where the generic pass had read a
+// different one out of an untagged mask, that VLAN is not a tagged VLAN and
+// must not be published as one: the device said the port egresses it untagged.
+func TestApplyCiscoSB_DoesNotPublishADisplacedUntaggedVlanAsTagged(t *testing.T) {
+	info := genericTrunk(1, 1, 2, 3)
+	info.NativeUntaggedByMask = true
+	infos := map[int]*SwitchportInfo{10: info}
+	ApplyCiscoSB(infos, CiscoSBRows{AccessVlan: map[int]int{10: 4}})
+	got := Classify(*infos[10])
+	if got.Untagged == nil || *got.Untagged != 4 {
+		t.Fatalf("got untagged=%v want 4", deref(got.Untagged))
+	}
+	for _, v := range got.Tagged {
+		if v == 1 {
+			t.Fatalf("VLAN 1 is egressed untagged and cannot be tagged: got %v", got.Tagged)
+		}
+	}
+	if want := []int{2, 3}; !reflect.DeepEqual(got.Tagged, want) {
+		t.Fatalf("got tagged=%v want %v", got.Tagged, want)
+	}
+}

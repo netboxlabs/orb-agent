@@ -100,6 +100,21 @@ func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 			continue
 		}
 
+		// Where the VLAN this replaces was read from an untagged mask, the
+		// device stated the port egresses it untagged, so it is not a tagged
+		// VLAN. Leaving it in the allowed set publishes it as one, the same
+		// inversion the generic extractor drops it to avoid, and it cannot be
+		// reported at all because these columns have just named a different
+		// VLAN for the one untagged_vlan slot.
+		//
+		// A native that came from dot1qPvid is left alone. That says nothing
+		// about how the port tags its egress, so the port may be a tagged
+		// member and dropping it would lose a real VLAN.
+		if prev := CoerceVid(deref(info.NativeVlan)); info.NativeUntaggedByMask &&
+			prev != nil && *prev != *native {
+			info.AllowedVlans.Vids = withoutVlan(info.AllowedVlans.Vids, *prev)
+		}
+
 		info.AccessVlan = native
 		info.NativeVlan = native
 

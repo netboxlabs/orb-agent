@@ -106,6 +106,15 @@ The overlay corrects the untagged VLAN, and supplies access mode for a port that
 
 **Where the two tables disagree, the configured one wins.** `dot1qVlanCurrentTable` reports what is forwarding now; `dot1qVlanStaticTable` and `dot1qPvid` are configuration, which is what NetBox is meant to hold. So a port missing from a current-table untagged mask does not lose the VLAN its PVID names, and a port named by one does not move off it. That second rule needs a PVID worth trusting. A PVID the operator had to set always is. The MIB's default of 1 has to earn it twice: some other port on the device must report a VLAN that was set, so the column is known to be maintained at all, and the device must not configure the VLAN the PVID names while leaving this port out of it. Failing either, the mask stands instead.
 
+**VLANs known only from the current table reach NetBox under a placeholder
+name.** That table has no name column, so a VLAN it is the only evidence for is
+emitted as `VLAN<vid>` like any other VLAN a port references and the device does
+not name. Where NetBox already holds that VID under an operator's name, the
+placeholder is written over it, so `create_unknown_vlans: false` is the way to
+keep the association without the rename. This is how the Eltex port-channels in
+the report are recovered: the VLAN they are in is the one VLAN the device does
+not name.
+
 **A VLAN a port egresses untagged is never reported as a tagged VLAN.** Only one VLAN fits `untagged_vlan`, and a device can name several, so the rest are left off the interface rather than published as the opposite of what its mask said. A VLAN whose membership is configured and whose untagged row is only operational is the exception: it is reported tagged, since the row that was not trusted to name the untagged VLAN does not delete a configured membership either.
 
 **A PVID alone is not always configuration.** RFC 4363 gives `dot1qPvid` a DEFVAL of 1, so a bridge with VLAN filtering disabled still answers 1 for every port because the agent must return something. A port reporting that default is left unclassified, and no VLAN is created for it, when **both** hold: the device published no VLAN of its own anywhere (no static names or row statuses, no membership masks, no current-table masks, no VTP catalog, no Huawei catalog, no Juniper enterprise names), and no port on it reports a PVID the operator had to set. Either one alone is not enough: a switch reporting VLAN 130 on one port and 1 on another is telling us both.

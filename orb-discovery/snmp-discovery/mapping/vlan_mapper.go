@@ -512,11 +512,11 @@ func currentVlanRow(oid, prefix string) (vid, mark int, ok bool) {
 // The exception is the Juniper enterprise table, whose suffix is the device's
 // internal index rather than a VLAN id. There the name itself is the evidence.
 //
-// Read from the walked OIDs rather than from what the merge kept, so a device
-// whose rows all name valid VLANs but place no port in any of them still counts
-// as having named VLANs. Those ports fall through to the PVID and the refusal
-// does not apply. That is the conservative direction: a device that named VLANs
-// is one we have less reason to second-guess.
+// Read from the walked OIDs rather than from what the merge kept, so a static
+// row naming a VLAN counts even where no port is in it: the VLAN is in the
+// device's database whether or not anything is using it today. The current
+// table's two columns are the exception, being masks rather than names, and one
+// naming no port is not read as a catalog entry.
 func vlanCatalogPresent(all ObjectIDValueMap) bool {
 	for oid, v := range all {
 		switch {
@@ -541,12 +541,21 @@ func vlanCatalogPresent(all ObjectIDValueMap) bool {
 			if namesAVlan(lastOIDElement(oid)) {
 				return true
 			}
-		case strings.HasPrefix(oid, oidCiscoVtpVlanName),
-			strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts),
-			strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
-			// Both are two-element indexes — (domain, vlan) and
-			// (timeMark, vlan) — so the id is the last element either way.
+		case strings.HasPrefix(oid, oidCiscoVtpVlanName):
+			// A two-element index, (domain, vlan), so the id is the last.
 			if namesAVlan(lastOIDElement(oid)) {
+				return true
+			}
+		case strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts),
+			strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
+			// Also a two-element index, (timeMark, vlan). Unlike every other
+			// source here these two are masks rather than names or row
+			// statuses, and one naming no port is the only "catalog" entry
+			// that refutes what counting it would license. The refusal it
+			// waives ends in access VLAN 1 on every port of the device; a row
+			// saying no port is in that VLAN cannot be the evidence for it.
+			// The merge drops such a row for the same reason.
+			if namesAVlan(lastOIDElement(oid)) && !isEmptyPortMask(v.Value) {
 				return true
 			}
 		}

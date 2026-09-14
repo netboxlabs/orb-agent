@@ -1614,3 +1614,27 @@ func TestVlanMapper_VlanCatalogPresent_CountsTheHuaweiCatalog(t *testing.T) {
 		t.Error("a row naming no VLAN NetBox could hold is not a catalog")
 	}
 }
+
+// A current-table row that places no port in a VLAN is not a VLAN catalog.
+// The merge already discards such a row as membership; counting it as the
+// device naming a VLAN waives the default-PVID refusal, and what that emits
+// is access VLAN 1 on every port, which the same row refutes.
+func TestVlanMapper_VlanCatalogPresent_AnEmptyCurrentRowIsNotACatalog(t *testing.T) {
+	zero := string(make([]byte, 8))
+	all := ObjectIDValueMap{
+		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: zero},
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: zero},
+	}
+	if vlanCatalogPresent(all) {
+		t.Error("a row naming no port names no VLAN")
+	}
+	// One port in it and the device has told us the VLAN is real.
+	all[oidDot1qVlanCurrentEgressPorts+"0.1"] = Value{Value: portMask(1)}
+	if !vlanCatalogPresent(all) {
+		t.Error("a row naming a port is a catalog entry")
+	}
+	// A static row still counts however empty, since the VLAN is configured.
+	if !vlanCatalogPresent(ObjectIDValueMap{oidDot1qVlanStaticEgressPorts + "7": {Value: zero}}) {
+		t.Error("a configured VLAN is named whether or not a port is in it")
+	}
+}
