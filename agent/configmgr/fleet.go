@@ -97,8 +97,32 @@ func fleetOTLPGRPCPort(cfg config.Config) int {
 }
 
 // defaultOTLPBridgeBindHost keeps both unauthenticated bridge listeners off the
-// network unless an operator opts in with otlp_bridge_bind_host.
-const defaultOTLPBridgeBindHost = "127.0.0.1"
+// network unless an operator opts in with otlp_bridge_bind_host. "localhost"
+// rather than a literal so the listener lands on the same address family the
+// backends resolve first (127.0.0.1 on dual-stack hosts, ::1 on IPv6-only).
+const defaultOTLPBridgeBindHost = "localhost"
+
+// bridgeDialBackTimeout bounds the post-bind reachability probe.
+const bridgeDialBackTimeout = 2 * time.Second
+
+// checkBridgeReachable dials localhost:<port> the way backends will and
+// reports whether it connects. Backends fail silently when the bridge is not
+// where they dial (pktvisor just stops exporting), so a failure here is the
+// operator's only early signal; it is logged, not fatal, because the bind
+// itself succeeded and an unusual resolver setup may still work for a client
+// that tries every address.
+func checkBridgeReachable(ctx context.Context, listenAddr string) error {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return fmt.Errorf("parse listener address %q: %w", listenAddr, err)
+	}
+	dialer := net.Dialer{Timeout: bridgeDialBackTimeout}
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort("localhost", port))
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
 
 // fleetOTLPBindHost returns the host both bridge listeners bind to. Backends
 // always dial localhost (agent.go rewrites common.otlp.* to localhost:<port>),
@@ -160,6 +184,13 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		return fmt.Errorf("failed to start OTLP bridge (grpc port %d, http port %d): %w", grpcPort, httpPort, err)
 	}
 	fleetManager.logger.Info("OTLP bridge bound for fleet config manager", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort), slog.String("bind_host", bindHost))
+	for name, addr := range map[string]string{"grpc": fleetManager.otlpBridge.ListenAddr(), "http": fleetManager.otlpBridge.HTTPListenAddr()} {
+		if err := checkBridgeReachable(ctx, addr); err != nil {
+			fleetManager.logger.Warn("OTLP bridge listener is not reachable at localhost, backends may fail to export telemetry",
+				slog.String("listener", name), slog.String("bound", addr), slog.String("bind_host", bindHost), slog.String("error", err.Error()),
+				slog.String("hint", "set otlp_bridge_bind_host to :: or 0.0.0.0 if localhost resolves to a different loopback family on this host"))
+		}
+	}
 	return nil
 }
 

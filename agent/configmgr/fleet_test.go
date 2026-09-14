@@ -1710,6 +1710,7 @@ func TestFleetOTLPPorts_Defaults(t *testing.T) {
 
 func TestStartOTLPBridge_BindHost(t *testing.T) {
 	for name, bindHost := range map[string]string{"default is loopback": "", "explicit loopback with spaces": " 127.0.0.1 "} {
+		bindHost := bindHost
 		t.Run(name, func(t *testing.T) {
 			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 			mockPMgr := &mockPolicyManagerForFleet{}
@@ -1728,10 +1729,26 @@ func TestStartOTLPBridge_BindHost(t *testing.T) {
 			for _, addr := range []string{fm.otlpBridge.ListenAddr(), fm.otlpBridge.HTTPListenAddr()} {
 				host, _, err := net.SplitHostPort(addr)
 				require.NoError(t, err)
-				assert.Equal(t, "127.0.0.1", host, "listener %s must be on loopback", addr)
+				ip := net.ParseIP(host)
+				require.NotNil(t, ip, "listener %s must be bound to an IP", addr)
+				assert.True(t, ip.IsLoopback(), "listener %s must be on loopback", addr)
+				if bindHost != "" {
+					assert.Equal(t, "127.0.0.1", host)
+				}
+				assert.NoError(t, checkBridgeReachable(context.Background(), addr), "backends dial localhost:<port>; it must reach %s", addr)
 			}
 		})
 	}
+}
+
+func TestCheckBridgeReachable_ReportsClosedPort(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, checkBridgeReachable(context.Background(), addr))
+	require.NoError(t, l.Close())
+	require.Error(t, checkBridgeReachable(context.Background(), addr), "a closed port must be reported")
+	require.Error(t, checkBridgeReachable(context.Background(), "not-an-address"))
 }
 
 func TestFleetOTLPBindHost_Validation(t *testing.T) {
@@ -1746,7 +1763,7 @@ func TestFleetOTLPBindHost_Validation(t *testing.T) {
 		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = empty
 		host, err := fleetOTLPBindHost(cfg)
 		require.NoError(t, err)
-		assert.Equal(t, "127.0.0.1", host, "unset bind host must default to loopback")
+		assert.Equal(t, "localhost", host, "unset bind host must default to loopback by name")
 	}
 	for _, bad := range []string{"10.0.0.5", "192.168.1.1", "example.com", "agent.internal", "127.0.0.2", "[::1]"} {
 		var cfg config.Config
