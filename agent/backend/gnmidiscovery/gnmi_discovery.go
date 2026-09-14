@@ -198,6 +198,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "gnmi-discovery",
 		NameUnderscore: "gnmi_discovery",
 		Exec:           d.exec,

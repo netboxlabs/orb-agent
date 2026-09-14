@@ -360,6 +360,11 @@ func trimSNMPString(s string) string {
 	return strings.Trim(strings.ReplaceAll(s, "\x00", ""), " \t\r\n")
 }
 
+// TrimSNMPString is trimSNMPString for callers outside this package. Exported
+// so vendor dispatch sanitizes sysObjectID the same way every reader of a
+// device-provided string does, rather than keeping a second copy of the rule.
+func TrimSNMPString(s string) string { return trimSNMPString(s) }
+
 var trailingIntRe = regexp.MustCompile(`(\d+)\s*$`)
 
 // leadingMemberNumRe matches the leading slash-delimited number of an

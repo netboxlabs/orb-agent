@@ -31,6 +31,12 @@ var defaultVendorMatchers = []VendorMatcher{
 			".1.3.6.1.4.1.29671.", // Meraki (Cisco-acquired; distinct enterprise)
 		},
 	},
+	{
+		Vendor: "juniper",
+		SysObjectIDPrefixes: []string{
+			".1.3.6.1.4.1.2636.", // Juniper Networks
+		},
+	},
 	// Future vendors append here.
 }
 
@@ -53,7 +59,18 @@ func ResolveVendor(sysObjectID, sysDescr string, matchers []VendorMatcher) strin
 }
 
 func sysObjectIDMatches(sysObjectID string, prefixes []string) bool {
-	sysObjectID = strings.TrimPrefix(sysObjectID, ".")
+	// Trimmed before the prefix test: agents pad DisplayString-like values
+	// with NUL bytes and whitespace, and an untrimmed leading space makes
+	// every prefix miss, which silently drops the vendor's whole OID set.
+	//
+	// TrimSNMPString removes NUL bytes wherever they sit, not only at the
+	// ends, so an interior NUL would splice two digit runs into one arc. That
+	// needs an agent typing sysObjectID as an OctetString: the walk hands this
+	// function gosnmp's parsed dotted string for an ObjectIdentifier, which
+	// carries no padding at all. Sharing the one sanitizer every other reader
+	// of a device string uses is worth more than hand-rolling an ends-only
+	// trim for a case no real agent reaches.
+	sysObjectID = strings.TrimPrefix(mapping.TrimSNMPString(sysObjectID), ".")
 	for _, p := range prefixes {
 		p = strings.TrimPrefix(p, ".")
 		if strings.HasPrefix(sysObjectID, p) {

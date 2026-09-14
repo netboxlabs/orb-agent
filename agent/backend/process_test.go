@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"os"
@@ -66,12 +67,14 @@ func (f *fakeCommander) GetStderr() <-chan string { return f.stderrCh }
 // stubProcessTimers stubs the package-level startup wait + readiness sleep to
 // no-ops so tests run instantly. NOT t.Parallel-safe — these are package vars,
 // which -race would flag under parallel mutation; callers must not parallelize.
+// The sleep stub ignores its context and always reports true, so a test that
+// needs cancellation during a sleep must not use this helper.
 func stubProcessTimers(t *testing.T) {
 	t.Helper()
 	origWait := startProcessStartupWait
 	origSleep := startProcessSleep
 	startProcessStartupWait = 0
-	startProcessSleep = func(time.Duration) {}
+	startProcessSleep = func(context.Context, time.Duration) bool { return true }
 	t.Cleanup(func() {
 		startProcessStartupWait = origWait
 		startProcessSleep = origSleep
@@ -404,4 +407,135 @@ func TestStartProcess_PassesExecAndArgs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "my-binary", captured.exec)
 	assert.Equal(t, []string{"run", "--flag", "value"}, captured.args)
+}
+
+// A context that is already done spawns nothing: the caller has moved on,
+// and a child it never sees would run until something else killed it.
+func TestStartProcess_ReturnsBeforeSpawningWhenTheContextIsDone(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(1)
+	captured := stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1", nil },
+		Ctx:            ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, captured.exec, "no command is built for a start that was cancelled before it began")
+	assert.Equal(t, int32(0), fake.stopCalls.Load())
+}
+
+// A cancellation during the startup wait stops the child and returns at
+// once, with the cancellation as the cause.
+func TestStartProcess_CancelledDuringTheStartupWait(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 5 * time.Second
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	start := time.Now()
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1", nil },
+		Ctx:            ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Contains(t, err.Error(), "test-backend start cancelled")
+	assert.Less(t, time.Since(start), time.Second, "the startup wait ends with the context")
+	assert.Equal(t, int32(1), fake.stopCalls.Load(), "the child is stopped")
+}
+
+// A cancellation during a readiness backoff does the same; the readiness
+// check itself is not interrupted, so the return is bounded by one check.
+func TestStartProcess_CancelledDuringAReadinessBackoff(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 0
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	var checks atomic.Int32
+	start := time.Now()
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) {
+			if checks.Add(1) == 2 {
+				cancel() // the second attempt's backoff is one second; cancel lands inside it
+			}
+			return "", errors.New("not yet")
+		},
+		Ctx: ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(start), time.Second, "the backoff sleep ends with the context")
+	assert.Equal(t, int32(2), checks.Load(), "no readiness check after the cancellation")
+	assert.Equal(t, int32(1), fake.stopCalls.Load())
+}
+
+// A readiness budget bounds the whole readiness phase: the loop never sleeps
+// past it and gives up when it is spent, naming the budget.
+func TestStartProcess_GivesUpWhenTheReadinessBudgetIsSpent(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 0
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+	var checks atomic.Int32
+	start := time.Now()
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck:  func() (string, error) { checks.Add(1); return "", errors.New("not yet") },
+		ReadinessBudget: 40 * time.Millisecond,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "test-backend not ready within 40ms")
+	assert.Contains(t, err.Error(), "not yet", "the last readiness error is kept as the cause")
+	assert.Less(t, time.Since(start), time.Second, "the one-second backoff was cut to the budget")
+	assert.LessOrEqual(t, checks.Load(), int32(3), "attempt 0 sleeps nothing, attempt 1 sleeps the clamped budget, attempt 2 finds it spent")
+	assert.Equal(t, int32(1), fake.stopCalls.Load())
+}
+
+// A readiness check that completes successfully after the context was
+// cancelled must still stop the child: the check itself is not interrupted,
+// but its result arrives too late to matter, and the start must not report
+// success while leaving an unwanted process running.
+func TestStartProcess_StopsTheChildWhenCancelledDuringASuccessfulReadinessCheck(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 0
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	var checks atomic.Int32
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) {
+			checks.Add(1)
+			cancel()
+			return "1.2.3", nil
+		},
+		Ctx: ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, int32(1), checks.Load(), "the readiness check ran once")
+	assert.Equal(t, int32(1), fake.stopCalls.Load())
 }

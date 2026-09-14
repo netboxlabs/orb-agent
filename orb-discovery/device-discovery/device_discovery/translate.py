@@ -111,6 +111,47 @@ def _drop_unconfigured_placeholder(value: str | None, *, is_update: bool) -> str
     return value
 
 
+def _resolve_device_name(device_info: dict, options: Options | None) -> str | None:
+    """
+    Pick the fact used for ``Device.name``.
+
+    Defaults to the ``hostname`` fact. With ``options.device_name_source``
+    set to ``"fqdn"`` the ``fqdn`` fact is used instead, but only when it
+    positively looks like a domain-qualified form of the hostname: no
+    whitespace and, case-insensitively, the hostname followed by a dot and
+    at least one more character. Anything else falls back to the hostname.
+    A denylist cannot keep up with what drivers emit when no domain is
+    configured — ``"None"`` (junos stringifies an undetermined fact),
+    ``"Unknown"`` (the ios-family default), ``"N/A"`` (paloalto), or
+    ``"<hostname>.not set"`` (ios keeps the text after "Default domain
+    is") — while the positive check rejects them all, including an fqdn
+    merely equal to the hostname, which adds nothing over it.
+
+    A hostname that already contains a dot is kept as-is: ios, junos and
+    others build ``hostname + "." + domain`` with no check, so a
+    domain-qualified hostname plus a configured domain would yield
+    ``rtr1.dc1.example.net.dc1.example.net``.
+
+    A driver that discovered no hostname at all must OMIT device.name. An
+    explicit empty name is a real value to the Diode plugin, not an
+    omission — hence ``blank_to_none`` on the result.
+    """
+    hostname = device_info.get("hostname")
+    if options is not None and options.device_name_source == "fqdn":
+        fqdn = device_info.get("fqdn")
+        if (
+            isinstance(hostname, str)
+            and hostname
+            and "." not in hostname
+            and isinstance(fqdn, str)
+            and len(fqdn) > len(hostname) + 1
+            and not any(ch.isspace() for ch in fqdn)
+            and fqdn.lower().startswith(hostname.lower() + ".")
+        ):
+            return blank_to_none(fqdn)
+    return blank_to_none(hostname)
+
+
 def translate_device(
     device_info: dict,
     defaults: Defaults,
@@ -184,9 +225,9 @@ def translate_device(
 
     # Build Device parameters
     device_params = {
-        # A driver that discovered no hostname must OMIT device.name. An explicit
-        # empty name is a real value to the Diode plugin, not an omission.
-        "name": blank_to_none(device_info.get("hostname")),
+        # Name-fact selection (hostname vs fqdn) and the omit-blank rule
+        # live in _resolve_device_name.
+        "name": _resolve_device_name(device_info, options),
         "device_type": DeviceType(model=model, manufacturer=manufacturer),
         "platform": Platform(name=platform, manufacturer=manufacturer),
         "role": role,

@@ -40,3 +40,25 @@ func TestExtractSysIdentity(t *testing.T) {
 		t.Errorf("got (%q, %q), want (.1.3.6.1.4.1.9.1.123, Cisco IOS XE)", soid, sdescr)
 	}
 }
+
+// TestResolveVendor_ToleratesPaddedSysObjectID covers the decorations agents
+// put on a DisplayString-like value.
+//
+// The consequence of a miss here is silent and total: no vendor means the
+// vendor's whole OID set is never walked, so a feature that depends on an
+// enterprise table simply does nothing, with no error anywhere.
+func TestResolveVendor_ToleratesPaddedSysObjectID(t *testing.T) {
+	for _, tc := range []struct{ what, sysObjectID, want string }{
+		{"canonical", ".1.3.6.1.4.1.2636.1.1.1.2.92", "juniper"},
+		{"no leading dot", "1.3.6.1.4.1.2636.1.1.1.2.92", "juniper"},
+		{"NUL padded", ".1.3.6.1.4.1.2636.1.1.1.2.92\x00", "juniper"},
+		{"space padded", "  .1.3.6.1.4.1.2636.1.1.1.2.92 ", "juniper"},
+		{"trailing newline", ".1.3.6.1.4.1.2636.1.1.1.2.92\n", "juniper"},
+		{"an arc that merely starts the same", ".1.3.6.1.4.1.26361.1", ""},
+		{"empty", "", ""},
+	} {
+		if got := ResolveVendor(tc.sysObjectID, "", defaultVendorMatchers); got != tc.want {
+			t.Errorf("%s: ResolveVendor(%q) = %q, want %q", tc.what, tc.sysObjectID, got, tc.want)
+		}
+	}
+}

@@ -245,6 +245,12 @@ def _build_member_devices(
 
     def _one(m: dict, *, is_master: bool) -> pb.Device:
         member_info = dict(device_info)
+        # FQDN naming (options.device_name_source) does not apply to
+        # stacks: every member's name — the master's included — comes from
+        # stack_member_name_template. Drop the chassis-level fqdn fact so
+        # _resolve_device_name cannot override the rendered name; the raw
+        # fact describes the management plane, not any one member.
+        member_info.pop("fqdn", None)
         member_info["hostname"] = render_stack_member_name(
             defaults.stack_member_name_template, vc_name, m["id"]
         )

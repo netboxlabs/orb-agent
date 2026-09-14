@@ -61,7 +61,7 @@ from custom_napalm._modules import (
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
 )
-from custom_napalm._vlan import SwitchportInfo, classify_switchport
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, coerce_vid
 
 logger = logging.getLogger(__name__)
 
@@ -200,7 +200,117 @@ def _els_details_to_switchports(root) -> dict[str, dict]:
     return result
 
 
-def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
+def _vlan_name_resolver(driver):
+    """
+    Return a callable mapping a VLAN name to its id, built on first use.
+
+    Junos reports a member either by tag id or by name alone. A name can only be
+    turned into an id by asking the device's own VLAN table, which costs an RPC,
+    so the table is fetched the first time a nameless member is actually seen and
+    not at all on the devices that never report one. Once per call, that is: the
+    runner asks get_vlans for its own reasons just before this, and napalm does
+    not memoize it, so a device reporting any nameless member does pay for a
+    second round trip.
+
+    **Matched exactly, never case-folded.** On a measured EX4550 the VLAN table
+    holds ``MGMT`` at tag 20, while ``me0.0`` reports a member named ``mgmt``:
+    Junos puts the out-of-band management port in a pseudo-VLAN of that name that
+    is not in the switching space at all. Case-folding would bind the management
+    port to VLAN 20, which is wrong, and wrong silently. A name that differs in
+    case is a different name.
+
+    A name the table gives more than one id for is refused for the same reason
+    nothing else here guesses: the device is the only thing that could say which
+    was meant, and it has not.
+    """
+    cache: dict[str, int] = {}
+    loaded = False
+
+    def resolve(name: str) -> int | None:
+        nonlocal loaded
+        if not name:
+            return None
+        if not loaded:
+            loaded = True
+            cache.update(_vlan_ids_by_name(driver))
+        return cache.get(name)
+
+    return resolve
+
+
+def _vlan_ids_by_name(driver) -> dict[str, int]:
+    """Build name -> id from ``get_vlans()``, dropping names that are not unique."""
+    try:
+        vlans = driver.get_vlans() or {}
+    except Exception:
+        logger.debug("Junos get_vlans failed while resolving a VLAN name", exc_info=True)
+        return {}
+
+    ids_by_name: dict[str, set[int]] = {}
+    for vid, data in vlans.items():
+        name = (data or {}).get("name") or ""
+        parsed = _maybe_int(vid)
+        if not name or parsed is None:
+            continue
+        ids_by_name.setdefault(name, set()).add(parsed)
+
+    resolved: dict[str, int] = {}
+    for name, ids in ids_by_name.items():
+        if len(ids) > 1:
+            logger.warning(
+                "Junos VLAN name %r maps to %d ids (%s); not resolving members by that name",
+                name,
+                len(ids),
+                ", ".join(str(i) for i in sorted(ids)),
+            )
+            continue
+        resolved[name] = next(iter(ids))
+    return resolved
+
+
+def _members_to_vids(member_list, resolve_vlan_name) -> tuple[int | None, list[int], bool]:
+    """
+    Read one ``<interface-vlan-member-list>`` into (untagged, tagged, has-all).
+
+    A member carries its id in ``<interface-vlan-member-tagid>`` and its side of
+    the trunk in ``<interface-vlan-member-tagness>``. Where the id is absent the
+    name is put to the device's VLAN table; see _vlan_name_resolver.
+    """
+    members = _find_children(member_list, "interface-vlan-member") if member_list is not None else []
+
+    untagged_vid: int | None = None
+    tagged_vids: list[int] = []
+    has_all_member = False
+    for m in members:
+        name = _text(_find_child(m, "interface-vlan-name"))
+        if name.lower() == "all":
+            has_all_member = True
+            continue
+        # coerce_vid, not _maybe_int, so a value outside 1-4094 is refused here
+        # rather than counted as membership and dropped later. The difference is
+        # not cosmetic: a member with tagid 0 would otherwise make the port look
+        # like it has an untagged VLAN, infer access from that, and write
+        # mode=access to NetBox with no VLAN to go with it.
+        vid = coerce_vid(_text(_find_child(m, "interface-vlan-member-tagid")))
+        if vid is None and resolve_vlan_name is not None:
+            vid = coerce_vid(resolve_vlan_name(name))
+        if vid is None:
+            # Nothing names this member: either the table has no VLAN called
+            # that, or it has several. Warn so operators see the association go
+            # missing at default log levels rather than wondering.
+            logger.warning(
+                "Junos interface-vlan-member %r has no tagid and no VLAN of that exact name; skipping",
+                name,
+            )
+            continue
+        if "untagged" in _text(_find_child(m, "interface-vlan-member-tagness")).lower():
+            untagged_vid = vid
+        else:
+            tagged_vids.append(vid)
+    return untagged_vid, tagged_vids, has_all_member
+
+
+def _interface_to_switchport_info(intf_elem, resolve_vlan_name=None) -> SwitchportInfo:
     """
     Build a SwitchportInfo from one ``<interface>`` element.
 
@@ -211,9 +321,12 @@ def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
     VLAN membership is in ``<interface-vlan-member-list>`` containing
     ``<interface-vlan-member>`` entries with
     ``<interface-vlan-member-tagid>`` and
-    ``<interface-vlan-member-tagness>`` ("tagged"|"untagged"). Members
-    with only a name (no tagid) are dropped with a warning log — VLAN-name
-    resolution against ``self.get_vlans()`` is out-of-scope for v1.
+    ``<interface-vlan-member-tagness>`` ("tagged"|"untagged"). A member with
+    only a name is put to ``resolve_vlan_name`` when the caller supplies one,
+    and dropped with a warning when nothing names it.
+
+    Where the reply carries no mode element at all, the mode is read off the
+    membership; see the comment on that branch for which signals decide it.
     """
     # Mode — read whichever element is present
     mode_text = (
@@ -228,34 +341,42 @@ def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
     else:
         admin = None
 
-    native_vid = _maybe_int(_text(_find_child(intf_elem, "interface-native-vlan-id")))
+    # coerce_vid, for the same reason the member ids below use it, and with a
+    # sharper consequence: a native id is now a trunk signal, so an
+    # out-of-range or placeholder value would make a port a trunk AND be
+    # substituted for its real untagged member, which classify_switchport then
+    # rejects — leaving a port that has a VLAN reported as a trunk with none.
+    native_vid = coerce_vid(_text(_find_child(intf_elem, "interface-native-vlan-id")))
 
-    member_list = _find_child(intf_elem, "interface-vlan-member-list")
-    members = _find_children(member_list, "interface-vlan-member") if member_list is not None else []
+    untagged_vid, tagged_vids, has_all_member = _members_to_vids(
+        _find_child(intf_elem, "interface-vlan-member-list"), resolve_vlan_name
+    )
 
-    untagged_vid: int | None = None
-    tagged_vids: list[int] = []
-    has_all_member = False
-    for m in members:
-        name = _text(_find_child(m, "interface-vlan-name"))
-        if name.lower() == "all":
-            has_all_member = True
-            continue
-        vid = _maybe_int(_text(_find_child(m, "interface-vlan-member-tagid")))
-        tagness = _text(_find_child(m, "interface-vlan-member-tagness")).lower()
-        if vid is None:
-            # Member emitted with only a name (no tagid). v1 doesn't resolve
-            # names → IDs via self.get_vlans(); warn so operators see the
-            # missing association at default log levels.
-            logger.warning(
-                "Junos interface-vlan-member %r has no tagid; skipping (name resolution out-of-scope for v1)",
-                name,
-            )
-            continue
-        if "untagged" in tagness:
-            untagged_vid = vid
-        else:
-            tagged_vids.append(vid)
+    # No mode element, but the device did report memberships. Read the mode off
+    # them: a member the port carries tagged makes it a trunk, and a port with
+    # only an untagged member is an access port. This is the same conclusion the
+    # SNMP path draws from Q-BRIDGE, and it is what the plain form of this RPC
+    # leaves us — a measured EX4550 returns 56 memberships with no mode element
+    # anywhere, and without this every one of its ports read as routed and the
+    # whole switch reached NetBox with no VLAN associations at all.
+    #
+    # Checked against that device's own detailed reply, which does carry the
+    # mode: 11 of its 11 classifiable interfaces agree, none disagree. Inference
+    # is still the fallback rather than the rule, because a trunk carrying only
+    # an untagged member and no other trunk signal reads as access, and the mode
+    # element says so outright.
+    #
+    # Three things make a trunk here, not one. A member the port carries tagged
+    # is the obvious one. A member named "all" is a trunk-only construct, since
+    # "vlan members all" is only configurable under "port-mode trunk". And a
+    # native VLAN id is only meaningful on a trunk, which is what makes it the
+    # deciding signal for a port whose single member is untagged: without it
+    # that port is access, with it the untagged member is the native VLAN.
+    if admin is None:
+        if tagged_vids or has_all_member or native_vid is not None:
+            admin = "trunk"
+        elif untagged_vid is not None:
+            admin = "access"
 
     if admin == "trunk":
         allowed: list[int] | str | None = "all" if has_all_member else tagged_vids
@@ -1166,14 +1287,7 @@ class JunOSDriver(NapalmJunOSDriver):
         emit subtly-different XML and we'd rather skip VLAN ingest than fail
         the whole device.
         """
-        reply = None
-        try:
-            reply = self.device.rpc.get_ethernet_switching_interface_information()
-        except Exception:
-            # An ELS switch refuses this RPC outright, as a syntax error: it
-            # is the normal state of such a switch, not a fault, and the
-            # fallback below is its path.
-            logger.debug("Junos get-ethernet-switching-interface-information failed", exc_info=True)
+        reply = self._switching_interface_reply()
 
         # Wrapper element is <ethernet-switching-interface-information> (non-ELS)
         # or <l2ng-l2ald-iff-information> (ELS). Each <interface> child has the
@@ -1182,17 +1296,57 @@ class JunOSDriver(NapalmJunOSDriver):
         if not interfaces:
             return self._interfaces_vlans_from_details()
         try:
+            resolve_name = _vlan_name_resolver(self)
             result: dict[str, dict] = {}
             for intf in interfaces:
                 ifname = _text(_find_child(intf, "interface-name"))
                 if not ifname:
                     continue
-                info = _interface_to_switchport_info(intf)
-                result[ifname] = classify_switchport(info)
+                info = _interface_to_switchport_info(intf, resolve_name)
+                # Junos reports switching per logical unit — the measured EX4550
+                # answers with ge-0/0/23.0 — while NetBox carries switchport mode
+                # and VLANs on the port. The ELS path has normalised this since it
+                # was written; this one did not, and no fixture caught it because
+                # every synthetic non-ELS reply was written without unit suffixes.
+                # Left literal, the recovered VLANs land on the subinterface and
+                # the port they belong to stays blank.
+                result[_physical_name(ifname)] = classify_switchport(info)
             return result
         except Exception:
             logger.debug("Junos VLAN XML parse failed", exc_info=True)
             return {}
+
+    def _switching_interface_reply(self):
+        """
+        Fetch ``<get-ethernet-switching-interface-information>``, detail first.
+
+        The two CLI forms map to one RPC, the detailed one adding ``<detail/>``.
+        They do not answer alike: on a measured EX4550 running 15.1 the plain
+        form returns the VLAN memberships with NO ``<interface-port-mode>`` at
+        all, while the detailed form carries it on every interface. The mode is
+        the authoritative statement of access versus trunk, so ask for the reply
+        that has it.
+
+        The plain form is still tried when the detailed one yields nothing, so a
+        platform that rejects the argument keeps the behaviour it has today, and
+        an ELS switch that refuses the RPC in both forms falls through to its own.
+        """
+        for kwargs in ({"detail": True}, {}):
+            try:
+                reply = self.device.rpc.get_ethernet_switching_interface_information(**kwargs)
+            except Exception:
+                # An ELS switch refuses this RPC outright, as a syntax error: it
+                # is the normal state of such a switch, not a fault, and the
+                # details RPC is its path.
+                logger.debug(
+                    "Junos get-ethernet-switching-interface-information%s failed",
+                    " (detail)" if kwargs else "",
+                    exc_info=True,
+                )
+                continue
+            if _find_children(reply, "interface"):
+                return reply
+        return None
 
     def _interfaces_vlans_from_details(self) -> dict[str, dict]:
         """
