@@ -920,7 +920,12 @@ func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason strin
 	// the re-apply below heals it by re-applying every stored policy.
 	if err := be.FullReset(ctx); err != nil {
 		a.backendStateManager.RegisterError(name, fmt.Sprintf("failed to reset backend: %v", err))
-		// The policies stay marked unknown; the next successful restart applies them.
+		// The policies stay marked unknown and manages stay deferred until a
+		// replay completes. A failed reset can leave the process running (a
+		// Stop that failed), and then the health monitor never asks for
+		// another restart, so the replay is scheduled here rather than left
+		// to a restart that may never come.
+		a.scheduleReplay(name, be)
 		return nil
 	}
 	if completed, retryable := a.reapplyBackendPolicies(ctx, name, be); !completed && retryable {

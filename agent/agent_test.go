@@ -700,12 +700,16 @@ func TestRestartBackendDoesNotReapplyWhenTheResetFails(t *testing.T) {
 	events := []string{}
 	pm := &mockPolicyManager{repo: repo, events: &events}
 	be := &failingResetBackend{restartableBackend: restartableBackend{events: &events}}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	a := &orbAgent{
 		logger:              logger,
 		backends:            map[string]backend.Backend{"snmp_discovery": be},
 		policyManager:       pm,
 		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
 		config:              config.Config{},
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+		replayRetryInterval: time.Hour,
 	}
 
 	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
@@ -714,7 +718,39 @@ func TestRestartBackendDoesNotReapplyWhenTheResetFails(t *testing.T) {
 		"remove:snmp_discovery:permanently=false",
 		"configure",
 		"reset",
-	}, events, "the removal still runs and nothing past the failed reset does")
+	}, pm.snapshotEvents(), "the removal still runs and nothing past the failed reset does, until the scheduled replay")
+	stopCancel()
+	a.replayers.Wait()
+}
+
+// A reset that fails can leave the process running (a Stop that failed), in
+// which case the health monitor never asks for another restart and nothing
+// else would clear the restart marker: the replay is scheduled, keeps trying
+// under the restart mutex, and completes once the backend answers.
+func TestRestartBackendSchedulesAReplayWhenTheResetFails(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	events := []string{}
+	pm := &mockPolicyManager{repo: repo, events: &events}
+	be := &failingResetBackend{restartableBackend: restartableBackend{events: &events}}
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"snmp_discovery": be},
+		policyManager:       pm,
+		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
+		config:              config.Config{},
+		replayRetryInterval: time.Millisecond,
+	}
+	pm.agent = a
+
+	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+
+	assert.Equal(t, int32(1), a.replayStarts.Load(), "a failed reset schedules a replay")
+	require.Eventually(t, func() bool {
+		return countLockedApplies(pm.snapshotEvents(), "snmp_discovery") >= 1
+	}, 5*time.Second, time.Millisecond, "the scheduled replay must run under the restart mutex and complete")
+	a.replayers.Wait()
 }
 
 // A Configure failure never stops the backend: it is still running its
