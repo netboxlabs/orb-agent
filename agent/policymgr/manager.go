@@ -246,6 +246,10 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			State:   policies.Unknown,
 		}
 		var updatePolicy bool
+		// sameVersion means the payload repeats the stored version, so the
+		// record keeps its runs when persisted: a same-version manage is a
+		// retry of what the backend already ran, not a new version.
+		var sameVersion bool
 		if a.repo.Exists(payload.ID) {
 			// we have already processed this policy id before (it may be running or failed)
 			// ensure we are associating this dataset with this policy, if one was specified
@@ -287,6 +291,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 				return
 			}
 			updatePolicy = true
+			sameVersion = currentPolicy.Version == pd.Version
 			if currentPolicy.PreviousPolicyData != nil {
 				// a rename is already pending: the persisted PreviousPolicyData names
 				// the policy the backend actually runs; keep it through stacked
@@ -346,7 +351,12 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			pd.PreviousPolicyData = nil
 		}
 		// save policy (with latest status) to local policy db
-		err := a.repo.Update(pd)
+		var err error
+		if sameVersion {
+			err = a.persistApplyOutcome(pd)
+		} else {
+			err = a.repo.Update(pd)
+		}
 		if err != nil {
 			a.logger.Error("got error in update last status", "error", err)
 			return

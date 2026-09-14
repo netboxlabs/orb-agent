@@ -2317,6 +2317,34 @@ func TestManageOfTheSamePolicyIsNotLostUnderAConcurrentApplier(t *testing.T) {
 // fleet manage arriving in that window must not replace the newer version
 // the replay is about to hand back. The same version is still accepted for
 // a record that is not running, so a failed apply can be retried.
+// A same-version manage deferred while a restart holds the record unknown
+// keeps the record's runs: it is a retry of the version the backend already
+// ran, not a new version, so the run history must not be wiped.
+func TestManageOfTheSameVersionKeepsTheRunsWhileDeferred(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secretsMgr := &mockSecretsManager{passthrough: true}
+	be := &mockBackend{name: "runs_backend"}
+	be.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	be.On("RemovePolicy", mock.Anything).Return(nil).Maybe()
+	be.On("ApplyPolicy", mock.Anything, mock.Anything).Return(nil).Maybe()
+	backend.Register("runs_backend", be)
+	mgr, err := policymgr.New(logger, secretsMgr, config.Config{})
+	require.NoError(t, err)
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "with-runs", Name: "With Runs", Backend: "runs_backend", Version: 1, Data: map[string]any{}, State: policies.Running, Datasets: map[string]bool{"ds": true}}))
+	require.NoError(t, repo.UpdateRuns("With Runs", []policies.RunData{{ID: "run-1", Status: "completed"}}))
+	require.NoError(t, mgr.RemoveBackendPolicies("runs_backend", be, false))
+
+	mgr.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "with-runs", Name: "With Runs", Backend: "runs_backend", Version: 1, Data: map[string]any{}})
+
+	stored, err := repo.Get("with-runs")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	assert.Equal(t, policymgr.ReasonBackendStarting, stored.BackendErr)
+	require.Len(t, stored.Runs, 1, "the deferred same-version manage keeps the run history")
+	assert.Equal(t, "run-1", stored.Runs[0].ID)
+}
+
 func TestManagePolicyRefusesAnOlderVersionWhileTheRecordIsDeferred(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := &mockSecretsManager{passthrough: true}
