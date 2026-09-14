@@ -860,25 +860,26 @@ func TestExtractGeneric_TaggedMembershipSurvivesTheUntaggedDrop(t *testing.T) {
 }
 
 // A maintained PVID column is a fact about the device; it does not make every
-// value in it true of every port. Where the device publishes the PVID's VLAN
+// value in it true of every port. Where the device CONFIGURES the PVID's VLAN
 // and leaves this port out of it, the port is not in that VLAN whatever the
 // column says, and a default PVID does not displace what the masks report.
 //
-// A recorded ProCurve maintains the column across 45 ports and publishes VLAN 1
-// with no member at all. Reading the column alone moved its remaining ports
-// onto that empty VLAN and deleted the VLAN they were in.
+// The withdrawal branch already refuses to read the same evidence the other
+// way round. This is what makes the two branches agree.
 func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testing.T) {
 	rows := GenericRows{
 		BasePortToIfIndex: map[int]int{1: 101, 2: 102},
 		PortPvid:          map[int]int{101: 1, 102: 7},
 		VlanEgressPorts: map[int][]byte{
-			1: {}, 7: maskWithPorts(2), 16: maskWithPorts(1),
+			1: maskWithPorts(2), 7: maskWithPorts(2), 16: maskWithPorts(1),
 		},
 		VlanUntaggedPorts: map[int][]byte{
-			1: {}, 7: maskWithPorts(2), 16: maskWithPorts(1),
+			1: maskWithPorts(2), 7: maskWithPorts(2), 16: maskWithPorts(1),
 		},
-		VlanEgressFromCurrent:   map[int]struct{}{1: {}, 7: {}, 16: {}},
-		VlanUntaggedFromCurrent: map[int]struct{}{1: {}, 7: {}, 16: {}},
+		// VLAN 1 is configured and excludes this port; the port is untagged in
+		// VLAN 16 operationally.
+		VlanEgressFromCurrent:   map[int]struct{}{16: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{16: {}},
 		IfAdminStatus:           map[int]int{101: 1, 102: 1},
 		IfTypes:                 map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
 		VlanCatalogPresent:      true,
@@ -888,23 +889,21 @@ func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testin
 		t.Fatalf("err: %v", err)
 	}
 	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 16 {
-		t.Errorf("the VLAN the masks put the port in wins over an empty VLAN 1: got %+v", c)
+		t.Errorf("a configured row excluding the port outranks its default PVID: got %+v", c)
 	}
 
 	// A PVID the operator had to set is not asked this question: a port parked
 	// on a VLAN it is not a member of is a configuration, and the PVID is the
 	// only record of it.
 	rows.PortPvid = map[int]int{101: 999, 102: 7}
-	rows.VlanEgressPorts[999] = []byte{}
-	rows.VlanUntaggedPorts[999] = []byte{}
-	rows.VlanEgressFromCurrent[999] = struct{}{}
-	rows.VlanUntaggedFromCurrent[999] = struct{}{}
+	rows.VlanEgressPorts[999] = maskWithPorts(2)
+	rows.VlanUntaggedPorts[999] = maskWithPorts(2)
 	got, err = ExtractGeneric(rows)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 999 {
-		t.Errorf("a non-default PVID stands even where no mask names the port: got %+v", c)
+		t.Errorf("a non-default PVID stands even where a row excludes the port: got %+v", c)
 	}
 
 	// Publishing no row at all for the PVID's VLAN is not a contradiction. The
@@ -913,13 +912,56 @@ func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testin
 	rows.PortPvid = map[int]int{101: 1, 102: 7}
 	delete(rows.VlanEgressPorts, 1)
 	delete(rows.VlanUntaggedPorts, 1)
-	delete(rows.VlanEgressFromCurrent, 1)
-	delete(rows.VlanUntaggedFromCurrent, 1)
 	got, err = ExtractGeneric(rows)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 1 {
 		t.Errorf("an unpublished VLAN contradicts nothing: got %+v", c)
+	}
+}
+
+// masksContradictPvid is the port-level half of the default-PVID test. Which
+// table it reads, in which order, and whose rows count are what it means.
+func TestMasksContradictPvid(t *testing.T) {
+	const pvid = 1
+	ports := []int{1}
+	in, out := maskWithPorts(1), maskWithPorts(2)
+	configured := GenericRows{
+		VlanEgressFromCurrent:   map[int]struct{}{},
+		VlanUntaggedFromCurrent: map[int]struct{}{},
+	}
+	operational := GenericRows{
+		VlanEgressFromCurrent:   map[int]struct{}{pvid: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{pvid: {}},
+	}
+	cases := []struct {
+		name             string
+		rows             GenericRows
+		egress, untagged map[int][]byte
+		want             bool
+	}{
+		{"no row at all", configured, nil, nil, false},
+		{"untagged excludes the port", configured, nil, map[int][]byte{pvid: out}, true},
+		{"untagged names the port", configured, nil, map[int][]byte{pvid: in}, false},
+		{"untagged row with no member", configured, nil, map[int][]byte{pvid: {}}, true},
+		// In the egress mask but not the untagged one is a TAGGED member, which
+		// refutes a PVID naming that VLAN as the port's untagged one.
+		{"tagged member of its own PVID's VLAN", configured,
+			map[int][]byte{pvid: in}, map[int][]byte{pvid: out}, true},
+		{"no untagged row, egress excludes", configured,
+			map[int][]byte{pvid: out}, nil, true},
+		{"no untagged row, egress names it", configured,
+			map[int][]byte{pvid: in}, nil, false},
+		// Operational absence is not configuration.
+		{"current untagged excludes the port", operational,
+			nil, map[int][]byte{pvid: out}, false},
+		{"current egress excludes the port", operational,
+			map[int][]byte{pvid: out}, nil, false},
+	}
+	for _, c := range cases {
+		if got := masksContradictPvid(c.rows, c.egress, c.untagged, pvid, ports); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }

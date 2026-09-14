@@ -97,10 +97,14 @@ const defaultPvid = 1
 // 1 and VLAN 101 were being moved onto 101.
 //
 // Without the second, a device-wide answer overrules a port that plainly
-// disagrees with it. A ProCurve maintains its PVID column across 45 ports and
-// publishes VLAN 1 with no member at all; its remaining ports answer the
-// default and read untagged in VLANs 2 and 16. Trusting the column alone moved
-// them onto the empty VLAN 1 and deleted the VLAN they were in.
+// disagrees with it: the configured table says this port is not in the VLAN
+// its PVID names, and the PVID moves it there anyway, deleting the VLAN the
+// port is in. The branch 150 lines below already refuses that reading of the
+// same evidence, and refusing it here too is what makes the two agree.
+//
+// No walk in the corpus exercises it. The shape needs a configured untagged or
+// egress row for the PVID's VLAN that leaves the port out, on a device whose
+// PVID column is otherwise maintained.
 //
 // A PVID the operator had to set is not asked the second question. A port whose
 // PVID names a VLAN it is not a member of is a configuration, not a
@@ -121,25 +125,31 @@ func operationalNativeDisplacesPvid(
 	return fromCurrentTable(rows.VlanUntaggedFromCurrent, native)
 }
 
-// masksContradictPvid reports whether the device publishes a membership row for
-// the VLAN this port's PVID names and leaves the port out of it.
+// masksContradictPvid reports whether the device configures the VLAN this
+// port's PVID names and leaves the port out of it.
 //
-// Publishing no row for that VLAN is not a contradiction: the PVID is then the
-// only thing the device said about the port, which is the case the PVID-only
-// classification below exists for.
-func masksContradictPvid(egress, untagged map[int][]byte, pvid int, bridgePorts []int) bool {
-	published := false
-	for _, table := range []map[int][]byte{untagged, egress} {
-		mask, ok := table[pvid]
-		if !ok {
-			continue
-		}
-		published = true
-		if anyBridgePortInMask(mask, bridgePorts) {
-			return false
-		}
+// The untagged table answers first, because it answers the question the PVID
+// answers: which VLAN this port has no tag for. A port the device places in
+// that VLAN's egress mask but not its untagged mask is a tagged member, which
+// refutes the PVID rather than confirming it. Only where the device publishes
+// no untagged row does the egress mask stand in, and then it says only whether
+// the port is a member at all.
+//
+// Configured rows only. A port missing from a current-table mask may simply not
+// be forwarding, which is the reading the withdrawal branch below was corrected
+// to reject, and reading it as configuration here would reintroduce that.
+//
+// Publishing no row for that VLAN is not a contradiction either: the PVID is
+// then the only thing the device said about the port, which is the case the
+// PVID-only classification exists for.
+func masksContradictPvid(rows GenericRows, egress, untagged map[int][]byte, pvid int, bridgePorts []int) bool {
+	if mask, ok := untagged[pvid]; ok && !fromCurrentTable(rows.VlanUntaggedFromCurrent, pvid) {
+		return !anyBridgePortInMask(mask, bridgePorts)
 	}
-	return published
+	if mask, ok := egress[pvid]; ok && !fromCurrentTable(rows.VlanEgressFromCurrent, pvid) {
+		return !anyBridgePortInMask(mask, bridgePorts)
+	}
+	return false
 }
 
 // fromCurrentTable reports whether a VLAN's masks came from the operational
@@ -280,7 +290,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		native := chooseNative(untaggedVids)
 		switch {
 		case native != nil && operationalNativeDisplacesPvid(rows, *native, pvid, everyPvidIsDefault,
-			masksContradictPvid(egress, untagged, pvid, ifIndexToBridge[ifIndex])):
+			masksContradictPvid(rows, egress, untagged, pvid, ifIndexToBridge[ifIndex])):
 			// The mask naming this port untagged came from the current table,
 			// which says what is forwarding now, while the port's own PVID is
 			// configuration and names a different VLAN. The configured answer
