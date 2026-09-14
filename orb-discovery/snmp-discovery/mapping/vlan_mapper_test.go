@@ -1575,3 +1575,28 @@ func TestVlanMapper_BuildGenericRows_OneColumnOnlyStillContributes(t *testing.T)
 		t.Error("the untagged column said nothing about VLAN 20 and must not be invented")
 	}
 }
+
+// markIsNewer is a wrap-aware comparison, not an ordering: over three marks
+// spread more than half the space apart, each is "newer" than the next and the
+// relation cycles. Folding it over a Go map then picks a different winner from
+// run to run, which is the map-order dependence the snapshot resolution exists
+// to remove. The marks are sorted first so the fold has one answer.
+func TestVlanMapper_BuildGenericRows_ThreeMarksResolveTheSameWayEveryRun(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	// Each of these is markIsNewer than the one before, and the first is
+	// markIsNewer than the last.
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":                   {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "0.1":          {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "1400000000.1": {Value: portMask(2)},
+		oidDot1qVlanCurrentEgressPorts + "2800000000.1": {Value: portMask(3)},
+	}
+
+	first := string(vm.buildGenericRows(all).VlanEgressPorts[1])
+	for i := range 50 {
+		if got := string(vm.buildGenericRows(all).VlanEgressPorts[1]); got != first {
+			t.Fatalf("run %d: got %x, first run gave %x", i, got, first)
+		}
+	}
+}

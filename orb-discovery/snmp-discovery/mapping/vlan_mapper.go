@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -365,15 +366,13 @@ func oneSnapshot(egress, untagged map[int]string) (string, string) {
 	if egress == nil || untagged == nil {
 		return newestMask(egress), newestMask(untagged)
 	}
-	common, found := 0, false
+	shared := make([]int, 0, len(egress))
 	for mark := range egress {
-		if _, shared := untagged[mark]; !shared {
-			continue
-		}
-		if !found || markIsNewer(mark, common) {
-			common, found = mark, true
+		if _, ok := untagged[mark]; ok {
+			shared = append(shared, mark)
 		}
 	}
+	common, found := newestMark(shared)
 	if !found {
 		return newestMask(egress), newestMask(untagged)
 	}
@@ -382,16 +381,38 @@ func oneSnapshot(egress, untagged map[int]string) (string, string) {
 
 // newestMask returns the mask under the newest time mark in one column.
 func newestMask(byMark map[int]string) string {
-	newest, found := 0, false
+	marks := make([]int, 0, len(byMark))
 	for mark := range byMark {
-		if !found || markIsNewer(mark, newest) {
-			newest, found = mark, true
-		}
+		marks = append(marks, mark)
 	}
+	newest, found := newestMark(marks)
 	if !found {
 		return ""
 	}
 	return byMark[newest]
+}
+
+// newestMark folds markIsNewer over a set of time marks.
+//
+// The marks are sorted first. markIsNewer is a wrap-aware comparison, not an
+// ordering: three marks spread more than half the space apart are each "newer"
+// than the next, so folding over them in the order a Go map happens to yield
+// picks a different winner from run to run. Sorting makes the answer the same
+// every poll, which is the whole point of resolving a snapshot at all. A device
+// holding marks that far apart would have to keep a row for months; the sort
+// costs nothing on the handful of marks a real agent retains.
+func newestMark(marks []int) (int, bool) {
+	if len(marks) == 0 {
+		return 0, false
+	}
+	sort.Ints(marks)
+	newest := marks[0]
+	for _, mark := range marks[1:] {
+		if markIsNewer(mark, newest) {
+			newest = mark
+		}
+	}
+	return newest, true
 }
 
 // isEmptyPortMask reports whether a port list names no port: a PortList bitmap
