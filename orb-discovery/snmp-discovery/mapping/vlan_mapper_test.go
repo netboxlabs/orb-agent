@@ -1278,3 +1278,62 @@ func TestHasVLANSignal_CountsTheCurrentTable(t *testing.T) {
 		t.Error("an interface table alone is not a VLAN signal")
 	}
 }
+
+// Provenance has to survive the merge, or the distinction between the
+// configured and operational tables is lost before anything can act on it.
+// Recorded from both columns, since a VLAN can arrive through either.
+func TestVlanMapper_BuildGenericRows_RecordsCurrentTableProvenance(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// VLAN 10 from the static table: configuration.
+		oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+		// VLAN 20 arrives through the current egress column only.
+		oidDot1qVlanCurrentEgressPorts + "0.20": {Value: portMask(1)},
+		// VLAN 30 through the current untagged column only.
+		oidDot1qVlanCurrentUntaggedPorts + "0.30": {Value: portMask(1)},
+	})
+
+	for _, vid := range []int{20, 30} {
+		if _, ok := rows.VlansFromCurrentTable[vid]; !ok {
+			t.Errorf("VLAN %d came from the current table and must be marked as such", vid)
+		}
+	}
+	if _, ok := rows.VlansFromCurrentTable[10]; ok {
+		t.Error("VLAN 10 came from the static table and must not be marked")
+	}
+}
+
+// The same distinction end to end, through the path a device actually takes:
+// a port configured on a VLAN but not currently forwarding is absent from the
+// operational untagged mask, and must keep the VLAN its PVID names.
+func TestVlanMapper_PostMap_ANotForwardingPortKeepsItsPvid(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "et1", 102: "et2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		// Both ports are configured on VLAN 31.
+		oidDot1qPvid + "1": {Value: "31"},
+		oidDot1qPvid + "2": {Value: "31"},
+		// A catalog exists, so the default-PVID refusal is not in play.
+		oidDot1qVlanStaticName + "31": {Value: "USERS"},
+		// Only port 1 is currently transmitting untagged on it.
+		oidDot1qVlanCurrentEgressPorts + "0.31":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.31": {Value: portMask(1)},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	if got := ifaces[102]; got.UntaggedVlan == nil || got.UntaggedVlan.Vid == nil || *got.UntaggedVlan.Vid != 31 {
+		t.Errorf("et2 is configured on VLAN 31 and merely not forwarding: got %+v", got.UntaggedVlan)
+	}
+}
