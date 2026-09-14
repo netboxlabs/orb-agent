@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -910,5 +911,842 @@ func TestApplyVLANDefaults_GroupLocationWithoutSite(t *testing.T) {
 	}
 	if l.Site != nil {
 		t.Errorf("Location.Site: got %v, want nil", l.Site)
+	}
+}
+
+// TestVlanMapper_PostMap_BridgeWithoutVlanFilteringEmitsNoVlan is the reported
+// shape end to end: a bridge whose VLAN filtering is off, which answers the
+// bridge port table and dot1qPvid but publishes no Q-BRIDGE VLAN tables at all.
+//
+// Every port reports the MIB's default PVID of 1. Read as configuration that
+// made eleven access ports on a VLAN 1 the device never had, and fabricated the
+// VLAN to attach them to.
+func TestVlanMapper_PostMap_BridgeWithoutVlanFilteringEmitsNoVlan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+
+	names := map[int]string{}
+	for i := range 11 {
+		names[100+i] = "sfp" + strconv.Itoa(i+2)
+	}
+	ifaces := interfacesFor(registry, names)
+
+	all := ObjectIDValueMap{}
+	for i := range 11 {
+		bp, ifIndex := strconv.Itoa(i+1), strconv.Itoa(100+i)
+		all[oidDot1dBasePortIfIndex+bp] = Value{Value: ifIndex}
+		all[oidDot1qPvid+bp] = Value{Value: "1"}
+		all[oidIfAdminStatus+ifIndex] = Value{Value: "1"}
+		all[oidIfType+ifIndex] = Value{Value: "6"}
+	}
+	// No dot1qVlanStaticTable, no VTP catalog: the device names no VLAN.
+
+	vm := NewVlanMapper(logger, config.Options{})
+	entities := vm.PostMap(all, registry, &config.Defaults{})
+
+	for _, e := range entities {
+		if v, ok := e.(*diode.VLAN); ok && v != nil && v.Vid != nil {
+			t.Errorf("no VLAN may be emitted for a device that named none, got vid %d", *v.Vid)
+		}
+	}
+	for ifIndex, iface := range ifaces {
+		if iface.Mode != nil {
+			t.Errorf("%s: mode %q written from the MIB default alone", names[ifIndex], *iface.Mode)
+		}
+		if iface.UntaggedVlan != nil {
+			t.Errorf("%s: untagged VLAN attached from the MIB default alone", names[ifIndex])
+		}
+	}
+}
+
+// The same walk with one VLAN named by the device classifies as before: the
+// refusal is about having no catalog, not about the value 1.
+func TestVlanMapper_PostMap_DefaultPvidClassifiesOnceTheDeviceNamesAVlan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{100: "sfp2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "100"},
+		oidDot1qPvid + "1":            {Value: "1"},
+		oidIfAdminStatus + "100":      {Value: "1"},
+		oidIfType + "100":             {Value: "6"},
+		oidDot1qVlanStaticName + "1":  {Value: "default"},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	iface := ifaces[100]
+	if iface.Mode == nil || *iface.Mode != "access" {
+		t.Errorf("mode: got %v, want access", iface.Mode)
+	}
+	if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
+		t.Errorf("untagged: got %+v, want VLAN 1", iface.UntaggedVlan)
+	}
+}
+
+// TestVlanMapper_PostMap_CurrentTableSuppliesMembershipTheStaticTableOmits is
+// the reported Eltex shape: port-channels the switch runs as untagged members
+// of VLAN 1, where VLAN 1 has no dot1qVlanStaticTable row and the port-channels
+// have no dot1qPvid row either. The only place that membership appears is
+// dot1qVlanCurrentTable, which was not walked.
+func TestVlanMapper_PostMap_CurrentTableSuppliesMembershipTheStaticTableOmits(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{1000: "Po1", 1001: "Po2", 105: "te1/0/1"})
+
+	// The device's own index space: bridge ports 1000/1001 are the LAGs.
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1000": {Value: "1000"},
+		oidDot1dBasePortIfIndex + "1001": {Value: "1001"},
+		oidDot1dBasePortIfIndex + "105":  {Value: "105"},
+		oidIfAdminStatus + "1000":        {Value: "1"},
+		oidIfAdminStatus + "1001":        {Value: "1"},
+		oidIfAdminStatus + "105":         {Value: "1"},
+		oidIfType + "1000":               {Value: "161"},
+		oidIfType + "1001":               {Value: "161"},
+		oidIfType + "105":                {Value: "6"},
+		// The static table knows only VLAN 151, tagged on te1/0/1.
+		oidDot1qVlanStaticName + "151":        {Value: "UPLINK"},
+		oidDot1qVlanStaticEgressPorts + "151": {Value: portMask(105)},
+		// VLAN 1 exists only in the current table, with the LAGs untagged in
+		// it. Index is <timemark>.<vid>.
+		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: portMask(1000, 1001)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1000, 1001)},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	for _, name := range []string{"Po1", "Po2"} {
+		var iface *diode.Interface
+		for ifIndex, i := range ifaces {
+			if names := map[int]string{1000: "Po1", 1001: "Po2", 105: "te1/0/1"}; names[ifIndex] == name {
+				iface = i
+			}
+		}
+		if iface == nil {
+			t.Fatalf("%s missing", name)
+		}
+		if iface.Mode == nil || *iface.Mode != "access" {
+			t.Errorf("%s mode: got %v, want access", name, iface.Mode)
+		}
+		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
+			t.Errorf("%s untagged: got %+v, want VLAN 1", name, iface.UntaggedVlan)
+		}
+	}
+	// The static table still wins where it speaks.
+	if got := ifaces[105]; got.Mode == nil || *got.Mode != "tagged" {
+		t.Errorf("te1/0/1 mode: got %v, want tagged", got.Mode)
+	}
+}
+
+// The two-element index is the trap: reading the first element would take the
+// time mark, which is 0 and not a VLAN, discarding every row.
+func TestCurrentVlanRow_ReadsTheSecondIndexElement(t *testing.T) {
+	for _, tc := range []struct {
+		oid       string
+		vid, mark int
+		ok        bool
+	}{
+		{oidDot1qVlanCurrentEgressPorts + "0.1", 1, 0, true},
+		{oidDot1qVlanCurrentEgressPorts + "12345.151", 151, 12345, true},
+		{oidDot1qVlanCurrentEgressPorts + "1", 0, 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "0.x", 0, 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "x.1", 0, 0, false},
+	} {
+		vid, mark, ok := currentVlanRow(tc.oid, oidDot1qVlanCurrentEgressPorts)
+		if vid != tc.vid || mark != tc.mark || ok != tc.ok {
+			t.Errorf("%s: got (%d,%d,%v), want (%d,%d,%v)", tc.oid, vid, mark, ok, tc.vid, tc.mark, tc.ok)
+		}
+	}
+}
+
+// portMask builds a Q-BRIDGE PortList bitmap with the given bridge ports set,
+// the same bit order the MIB defines: port 1 is the high bit of octet 0.
+func portMask(ports ...int) string {
+	maxPort := 0
+	for _, p := range ports {
+		if p > maxPort {
+			maxPort = p
+		}
+	}
+	mask := make([]byte, (maxPort+7)/8)
+	for _, p := range ports {
+		mask[(p-1)/8] |= 1 << (7 - (p-1)%8)
+	}
+	return string(mask)
+}
+
+// The static table is the configured intent and wins wherever it speaks. The
+// current table reflects what is running, which can include VLANs learned
+// dynamically, so it fills gaps rather than overriding.
+func TestVlanMapper_BuildGenericRows_StaticMasksWinOverCurrent(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	vm := NewVlanMapper(logger, config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// VLAN 10 is in both tables, with different members.
+		oidDot1qVlanStaticEgressPorts + "10":    {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "0.10": {Value: portMask(2)},
+		// VLAN 20 is only in the current table.
+		oidDot1qVlanCurrentEgressPorts + "0.20": {Value: portMask(3)},
+	})
+
+	if got, want := rows.VlanEgressPorts[10], portMask(1); string(got) != want {
+		t.Errorf("VLAN 10: got %x, want the static mask %x", got, want)
+	}
+	if got, want := rows.VlanEgressPorts[20], portMask(3); string(got) != want {
+		t.Errorf("VLAN 20: got %x, want the current mask %x", got, want)
+	}
+}
+
+// A device whose only VLAN table is the current one is not a device that named
+// no VLAN. It is classified from that membership, and never reaches the
+// default-PVID refusal — which matters because its PVIDs are all the default,
+// so without the current table it would be silenced entirely.
+func TestVlanMapper_PostMap_CurrentTableOnlyDeviceIsNotRefused(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1", 102: "gi2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		// Every PVID is the MIB default: on its own this is the refused shape.
+		oidDot1qPvid + "1": {Value: "1"},
+		oidDot1qPvid + "2": {Value: "1"},
+		// But the device does say which VLANs it runs and who is in them.
+		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1, 2)},
+	}
+
+	// Decided from the snapshot the merge resolved, not from the walked rows.
+	vmRows := NewVlanMapper(logger, config.Options{}).buildGenericRows(all)
+	if !vmRows.VlanCatalogPresent {
+		t.Fatal("the current table is VLAN knowledge; the refusal must not apply")
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	for name, iface := range map[string]*diode.Interface{"gi1": ifaces[101], "gi2": ifaces[102]} {
+		if iface.Mode == nil || *iface.Mode != "access" {
+			t.Errorf("%s mode: got %v, want access", name, iface.Mode)
+		}
+		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != 1 {
+			t.Errorf("%s untagged: got %+v, want VLAN 1", name, iface.UntaggedVlan)
+		}
+	}
+}
+
+// TestVlanMapper_BuildGenericRows_LatestTimeMarkWins is the determinism the
+// table's index demands.
+//
+// dot1qVlanCurrentTable is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, so one
+// VLAN is answered once per mark the agent still holds, with different masks.
+// Taking whichever the walk map yielded made the result depend on Go's map
+// iteration order: a real D-Link answering VLAN 1 under two marks alternated
+// between two NetBox states on every poll, with Diode rewriting mode and
+// tagged VLANs each way.
+func TestVlanMapper_BuildGenericRows_LatestTimeMarkWins(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// The same VLAN under two marks, oldest last in source order.
+		oidDot1qVlanCurrentEgressPorts + "2831.1": {Value: portMask(1, 2, 3, 4)},
+		oidDot1qVlanCurrentEgressPorts + "2828.1": {Value: portMask(4)},
+	}
+
+	// Repeated because the defect was map-iteration order: one pass could
+	// pass by luck.
+	want := portMask(1, 2, 3, 4)
+	for i := range 50 {
+		if got := string(vm.buildGenericRows(all).VlanEgressPorts[1]); got != want {
+			t.Fatalf("run %d: got %x, want the highest time mark's mask %x", i, got, want)
+		}
+	}
+}
+
+// A VLAN the current table mentions but places nobody in is not membership,
+// and merging it is not harmless: an empty untagged row is still a row, and
+// the generic extractor reads the presence of one for a port's PVID as "the
+// device publishes an untagged table for that VLAN and left this port out",
+// withdrawing the port's PVID. A ProCurve publishing six all-zero VLANs beside
+// 23 ports with real PVIDs lost every one of them that way.
+func TestVlanMapper_PostMap_AnEmptyCurrentVlanDoesNotWithdrawAPvid(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1", 102: "gi2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		// Real, operator-set PVIDs.
+		oidDot1qPvid + "1": {Value: "22"},
+		oidDot1qPvid + "2": {Value: "72"},
+		// The current table names those VLANs and puts no port in them.
+		oidDot1qVlanCurrentEgressPorts + "0.22":   {Value: string(make([]byte, 8))},
+		oidDot1qVlanCurrentUntaggedPorts + "0.22": {Value: string(make([]byte, 8))},
+		oidDot1qVlanCurrentEgressPorts + "0.72":   {Value: string(make([]byte, 8))},
+		oidDot1qVlanCurrentUntaggedPorts + "0.72": {Value: string(make([]byte, 8))},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	for name, want := range map[string]int64{"gi1": 22, "gi2": 72} {
+		iface := ifaces[101]
+		if name == "gi2" {
+			iface = ifaces[102]
+		}
+		if iface.Mode == nil || *iface.Mode != "access" {
+			t.Errorf("%s mode: got %v, want access", name, iface.Mode)
+		}
+		if iface.UntaggedVlan == nil || iface.UntaggedVlan.Vid == nil || *iface.UntaggedVlan.Vid != want {
+			t.Errorf("%s untagged: got %+v, want VLAN %d", name, iface.UntaggedVlan, want)
+		}
+	}
+}
+
+// An all-zero untagged mask beside a populated egress mask is meaningful: it is
+// how a VLAN every member carries tagged reports. Only the pair being empty
+// says the VLAN merely exists.
+func TestVlanMapper_BuildGenericRows_AnAllTaggedCurrentVlanIsStillMembership(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":             {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "0.30":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.30": {Value: string(make([]byte, 8))},
+	})
+
+	if got, want := string(rows.VlanEgressPorts[30]), portMask(1); got != want {
+		t.Errorf("egress: got %x, want %x", got, want)
+	}
+	if _, ok := rows.VlanUntaggedPorts[30]; !ok {
+		t.Error("the empty untagged mask belongs with its populated egress mask")
+	}
+}
+
+// A PortList bitmap byte can be any value, and several low ones are printable:
+// 0x20 is the ASCII space and sets port 3, 0x30 is "0" and sets ports 3 and 4.
+// Emptiness has to be tested on the bytes, or real membership is discarded as
+// if it named nobody.
+func TestIsEmptyPortMask_PrintableBytesAreStillPorts(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		mask string
+		want bool
+	}{
+		{"no value", "", true},
+		{"all zero bytes", string(make([]byte, 8)), true},
+		{"port 3 only, which is the ASCII space", portMask(3), false},
+		{"ports 3 and 4, which is ASCII zero", portMask(3, 4), false},
+		{"port 1", portMask(1), false},
+		{"a zero byte beside a set one", string([]byte{0x00, 0x20}), false},
+	} {
+		if got := isEmptyPortMask(tc.mask); got != tc.want {
+			t.Errorf("%s (% x): got %v, want %v", tc.what, tc.mask, got, tc.want)
+		}
+	}
+}
+
+// A device publishing only the current table has VLAN data, so a missing
+// bridge-port table is partial data worth warning about rather than the quiet
+// "this is not a switch" case.
+func TestHasVLANSignal_CountsTheCurrentTable(t *testing.T) {
+	if !hasVLANSignal(ObjectIDValueMap{
+		oidDot1qVlanCurrentEgressPorts + "0.1": {Value: portMask(1)},
+	}) {
+		t.Error("the current table is a VLAN signal")
+	}
+	if !hasVLANSignal(ObjectIDValueMap{
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: portMask(1)},
+	}) {
+		t.Error("the current untagged table is a VLAN signal")
+	}
+	if hasVLANSignal(ObjectIDValueMap{oidIfDescr + "1": {Value: "eth0"}}) {
+		t.Error("an interface table alone is not a VLAN signal")
+	}
+}
+
+// Provenance has to survive the merge, or the distinction between the
+// configured and operational tables is lost before anything can act on it.
+// Recorded from both columns, since a VLAN can arrive through either.
+func TestVlanMapper_BuildGenericRows_RecordsCurrentTableProvenance(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// VLAN 10 from the static table: configuration.
+		oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+		// VLAN 20 arrives through the current egress column only.
+		oidDot1qVlanCurrentEgressPorts + "0.20": {Value: portMask(1)},
+		// VLAN 30 through the current untagged column only.
+		oidDot1qVlanCurrentUntaggedPorts + "0.30": {Value: portMask(1)},
+	})
+
+	if _, ok := rows.VlanEgressFromCurrent[20]; !ok {
+		t.Error("VLAN 20's egress mask came from the current table")
+	}
+	if _, ok := rows.VlanUntaggedFromCurrent[30]; !ok {
+		t.Error("VLAN 30's untagged mask came from the current table")
+	}
+	// Recorded per column, not per VLAN. VLAN 20 supplied only an egress
+	// mask, so nothing may claim its untagged mask is operational — that
+	// would suppress a withdrawal the static untagged table's own absence
+	// should trigger.
+	if _, ok := rows.VlanUntaggedFromCurrent[20]; ok {
+		t.Error("VLAN 20 supplied no untagged mask; its untagged column is not from the current table")
+	}
+	// VLAN 30 supplied no egress mask, so one is synthesized from its untagged
+	// mask: an untagged member is an egress member. The synthesized mask is
+	// only as configured as the row it came from, which was operational, so it
+	// carries that provenance and not a stronger one.
+	if _, ok := rows.VlanEgressFromCurrent[30]; !ok {
+		t.Error("an egress mask synthesized from a current untagged mask is operational too")
+	}
+	if got := string(rows.VlanEgressPorts[30]); got != portMask(1) {
+		t.Errorf("VLAN 30's egress mask is its untagged mask: got %x", got)
+	}
+	for _, m := range []map[int]struct{}{rows.VlanEgressFromCurrent, rows.VlanUntaggedFromCurrent} {
+		if _, ok := m[10]; ok {
+			t.Error("VLAN 10 came from the static table and must not be marked")
+		}
+	}
+}
+
+// A VLAN whose egress mask is operational but whose untagged mask is
+// configuration must still have its untagged absence honoured. A single
+// per-VLAN provenance set marked it "from current" for both columns and
+// suppressed a withdrawal the static table's own absence should trigger.
+func TestVlanMapper_PostMap_ProvenanceIsPerColumnNotPerVlan(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1", 102: "gi2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		oidDot1qPvid + "1":            {Value: "31"},
+		oidDot1qPvid + "2":            {Value: "31"},
+		oidDot1qVlanStaticName + "31": {Value: "USERS"},
+		// The untagged mask is CONFIGURATION and names only port 1, so port 2
+		// is tagged there and its PVID names no untagged VLAN.
+		oidDot1qVlanStaticUntaggedPorts + "31": {Value: portMask(1)},
+		// The egress mask for the same VLAN is operational.
+		oidDot1qVlanCurrentEgressPorts + "0.31": {Value: portMask(1, 2)},
+	}
+
+	NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
+
+	if got := ifaces[102]; got.UntaggedVlan != nil {
+		t.Errorf("the static untagged table leaves gi2 out, so its PVID names no untagged VLAN: got %+v", got.UntaggedVlan)
+	}
+	if got := ifaces[101]; got.UntaggedVlan == nil || *got.UntaggedVlan.Vid != 31 {
+		t.Errorf("gi1 is untagged in VLAN 31: got %+v", got.UntaggedVlan)
+	}
+}
+
+// The same distinction end to end, through the path a device actually takes:
+// a port configured on a VLAN but not currently forwarding is absent from the
+// operational untagged mask, and must keep the VLAN its PVID names.
+func TestVlanMapper_PostMap_ANotForwardingPortKeepsItsPvid(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "et1", 102: "et2"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidDot1dBasePortIfIndex + "2": {Value: "102"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfAdminStatus + "102":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidIfType + "102":             {Value: "6"},
+		// Both ports are configured on VLAN 31.
+		oidDot1qPvid + "1": {Value: "31"},
+		oidDot1qPvid + "2": {Value: "31"},
+		// A catalog exists, so the default-PVID refusal is not in play.
+		oidDot1qVlanStaticName + "31": {Value: "USERS"},
+		// Only port 1 is currently transmitting untagged on it.
+		oidDot1qVlanCurrentEgressPorts + "0.31":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "0.31": {Value: portMask(1)},
+	}
+
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.PostMap(all, registry, &config.Defaults{})
+
+	if got := ifaces[102]; got.UntaggedVlan == nil || got.UntaggedVlan.Vid == nil || *got.UntaggedVlan.Vid != 31 {
+		t.Errorf("et2 is configured on VLAN 31 and merely not forwarding: got %+v", got.UntaggedVlan)
+	}
+}
+
+// dot1qVlanTimeMark is a TimeFilter over TimeTicks, so it restarts after a
+// little under 497 days of uptime. A row changed just before the wrap holds a
+// mark near the ceiling while one changed just after holds a small one: plain
+// magnitude picks the older row, and the VLAN's membership reverts to a stale
+// snapshot whenever two rows straddle it.
+func TestMarkIsNewer_HandlesTheTimeTicksWrap(t *testing.T) {
+	const ceiling = 1<<32 - 1
+	for _, tc := range []struct {
+		what string
+		a, b int
+		want bool
+	}{
+		{"ordinary ascending", 2831, 2828, true},
+		{"ordinary descending", 2828, 2831, false},
+		{"equal", 2828, 2828, false},
+		{"just after the wrap beats just before", 2000, ceiling - 1000, true},
+		{"just before the wrap loses to just after", ceiling - 1000, 2000, false},
+		{"zero beats the ceiling", 0, ceiling, true},
+	} {
+		if got := markIsNewer(tc.a, tc.b); got != tc.want {
+			t.Errorf("%s: markIsNewer(%d, %d) = %v, want %v", tc.what, tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// The same thing through the merge: the post-wrap row's mask must win.
+func TestVlanMapper_BuildGenericRows_LatestAcrossTheTimeMarkWrap(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+	const nearCeiling = 1<<32 - 1000
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// The pre-wrap row is numerically huge but older.
+		oidDot1qVlanCurrentEgressPorts + "4294966296.1": {Value: portMask(4)},
+		// The post-wrap row is the current one.
+		oidDot1qVlanCurrentEgressPorts + "2000.1": {Value: portMask(1, 2)},
+	}
+	_ = nearCeiling
+
+	want := portMask(1, 2)
+	for i := range 50 {
+		if got := string(vm.buildGenericRows(all).VlanEgressPorts[1]); got != want {
+			t.Fatalf("run %d: got %x, want the post-wrap mask %x", i, got, want)
+		}
+	}
+}
+
+// A row is catalog evidence only when a VLAN can be read out of it. A table
+// answering nothing but an out-of-range index, or a suffix that will not
+// parse, has named no VLAN however many rows it has — and counting it would
+// bypass the default-PVID refusal and hand those ports back the access VLAN 1
+// it exists to withhold.
+func TestVlanCatalogPresent_RequiresARowThatNamesAVlan(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		all  ObjectIDValueMap
+		want bool
+	}{
+		{"nothing at all", ObjectIDValueMap{}, false},
+		{"a static name for a real VLAN", ObjectIDValueMap{
+			oidDot1qVlanStaticName + "10": {Value: "USERS"},
+		}, true},
+		{"a current mask for a real VLAN", ObjectIDValueMap{
+			oidDot1qVlanCurrentEgressPorts + "0.10": {Value: portMask(1)},
+		}, true},
+		{"a current mask for the reserved 4095", ObjectIDValueMap{
+			oidDot1qVlanCurrentEgressPorts + "0.4095": {Value: portMask(1)},
+		}, false},
+		{"a static row for VLAN 0", ObjectIDValueMap{
+			oidDot1qVlanStaticRowStatus + "0": {Value: "1"},
+		}, false},
+		{"a suffix that will not parse", ObjectIDValueMap{
+			oidDot1qVlanStaticName + "notanumber": {Value: "USERS"},
+		}, false},
+		{"a VTP name, whose id is the last element", ObjectIDValueMap{
+			oidCiscoVtpVlanName + "1.20": {Value: "VOICE"},
+		}, true},
+		{"a VTP row for a reserved id", ObjectIDValueMap{
+			oidCiscoVtpVlanName + "1.4095": {Value: "RESERVED"},
+		}, false},
+		{"a Juniper enterprise name, keyed by internal index", ObjectIDValueMap{
+			oidJnxExVlanName + "99999": {Value: "VL156"},
+		}, true},
+		{"a Juniper enterprise row with no name", ObjectIDValueMap{
+			oidJnxExVlanName + "17": {Value: ""},
+		}, false},
+	} {
+		if got := vlanCatalogPresent(tc.all) || catalogFromWalk(t, tc.all); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.what, got, tc.want)
+		}
+	}
+}
+
+// End to end: a device whose only VLAN table row names no VLAN is, in
+// substance, catalog-free, so the default PVID is still refused.
+func TestVlanMapper_PostMap_AnUnusableCatalogRowDoesNotBypassTheRefusal(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry := NewEntityRegistry(logger)
+	ifaces := interfacesFor(registry, map[int]string{101: "gi1"})
+
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		oidIfAdminStatus + "101":      {Value: "1"},
+		oidIfType + "101":             {Value: "6"},
+		oidDot1qPvid + "1":            {Value: "1"},
+		// The device's only VLAN row, and it names no VLAN NetBox could hold.
+		oidDot1qVlanCurrentEgressPorts + "0.4095": {Value: portMask(1)},
+	}
+
+	entities := NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
+
+	for _, e := range entities {
+		if v, ok := e.(*diode.VLAN); ok && v != nil && v.Vid != nil {
+			t.Errorf("no VLAN may be emitted: got vid %d", *v.Vid)
+		}
+	}
+	if got := ifaces[101]; got.Mode != nil || got.UntaggedVlan != nil {
+		t.Errorf("gi1 must stay unclassified: mode=%v untagged=%+v", got.Mode, got.UntaggedVlan)
+	}
+}
+
+// The two current-table columns are walked separately, so a VLAN that changes
+// between the walks answers one column before the change and the other after.
+// Taking each column's own newest row would combine halves of two snapshots and
+// report a port as tagged where it is untagged, or the reverse.
+func TestVlanMapper_BuildGenericRows_PairsTheColumnsAtOneTimeMark(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// Mark 100: the VLAN as it was, ports 1 and 2 egress, port 1 untagged.
+		oidDot1qVlanCurrentEgressPorts + "100.10":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentUntaggedPorts + "100.10": {Value: portMask(1)},
+		// Mark 200: it changed, and only the egress column caught it.
+		oidDot1qVlanCurrentEgressPorts + "200.10": {Value: portMask(1, 2, 3)},
+	})
+
+	// Both masks must come from mark 100, the newest the columns share. Taking
+	// each column's own newest would pair mark 200's egress with mark 100's
+	// untagged.
+	if got, want := string(rows.VlanEgressPorts[10]), portMask(1, 2); got != want {
+		t.Errorf("egress: got %x, want the shared snapshot %x", got, want)
+	}
+	if got, want := string(rows.VlanUntaggedPorts[10]), portMask(1); got != want {
+		t.Errorf("untagged: got %x, want %x", got, want)
+	}
+
+	// With more than one shared mark it has to be the NEWEST shared one, not
+	// merely a shared one: an older snapshot is as wrong as a mismatched pair.
+	twoShared := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.11":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "100.11": {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "300.11":   {Value: portMask(1, 2, 3)},
+		oidDot1qVlanCurrentUntaggedPorts + "300.11": {Value: portMask(3)},
+	}
+	// Repeated because picking merely A shared mark rather than the NEWEST one
+	// leaves the winner to map iteration order: a single pass agrees by luck
+	// about half the time, which is a test that reports the defect as flaky.
+	for i := range 50 {
+		rows = vm.buildGenericRows(twoShared)
+		if got, want := string(rows.VlanEgressPorts[11]), portMask(1, 2, 3); got != want {
+			t.Fatalf("run %d egress: got %x, want the newest shared snapshot %x", i, got, want)
+		}
+		if got, want := string(rows.VlanUntaggedPorts[11]), portMask(3); got != want {
+			t.Fatalf("run %d untagged: got %x, want the newest shared snapshot %x", i, got, want)
+		}
+	}
+}
+
+// A VLAN only one column mentions still contributes: there is no snapshot to
+// share, so that column's newest row is the best available.
+func TestVlanMapper_BuildGenericRows_OneColumnOnlyStillContributes(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":             {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.20": {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "200.20": {Value: portMask(1, 2)},
+	})
+
+	if got, want := string(rows.VlanEgressPorts[20]), portMask(1, 2); got != want {
+		t.Errorf("egress: got %x, want the newest %x", got, want)
+	}
+	if _, ok := rows.VlanUntaggedPorts[20]; ok {
+		t.Error("the untagged column said nothing about VLAN 20 and must not be invented")
+	}
+}
+
+// markIsNewer is a wrap-aware comparison, not an ordering: over three marks
+// spread more than half the space apart, each is "newer" than the next and the
+// relation cycles. Folding it over a Go map then picks a different winner from
+// run to run, which is the map-order dependence the snapshot resolution exists
+// to remove. The marks are sorted first so the fold has one answer.
+func TestVlanMapper_BuildGenericRows_ThreeMarksResolveTheSameWayEveryRun(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	// Each of these is markIsNewer than the one before, and the first is
+	// markIsNewer than the last.
+	all := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":                   {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "0.1":          {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "1400000000.1": {Value: portMask(2)},
+		oidDot1qVlanCurrentEgressPorts + "2800000000.1": {Value: portMask(3)},
+	}
+
+	first := string(vm.buildGenericRows(all).VlanEgressPorts[1])
+	for i := range 50 {
+		if got := string(vm.buildGenericRows(all).VlanEgressPorts[1]); got != first {
+			t.Fatalf("run %d: got %x, first run gave %x", i, got, first)
+		}
+	}
+}
+
+// A device that publishes its VLANs in a vendor catalog has named VLANs of its
+// own, whichever MIB the catalog lives in. Counting only the ones Q-BRIDGE
+// knows about would withhold every port on a Huawei switch whose VLANs are
+// real and whose PVID column happens to answer the MIB default.
+func TestVlanMapper_VlanCatalogPresent_CountsTheHuaweiCatalog(t *testing.T) {
+	all := ObjectIDValueMap{oidHwVlanName + "120": {Value: "uplink"}}
+	if !vlanCatalogPresent(all) {
+		t.Error("a Huawei catalog row names a VLAN")
+	}
+	if vlanCatalogPresent(ObjectIDValueMap{oidHwVlanName + "9999": {Value: "x"}}) {
+		t.Error("a row naming no VLAN NetBox could hold is not a catalog")
+	}
+}
+
+// catalogFromWalk answers the catalog question the way buildGenericRows does,
+// which is where the current table's contribution is decided: its rows are
+// masks, so whether one names a VLAN depends on the snapshot that was resolved
+// rather than on the rows as walked.
+func catalogFromWalk(t *testing.T, all ObjectIDValueMap) bool {
+	t.Helper()
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{})
+	return vm.buildGenericRows(all).VlanCatalogPresent
+}
+
+// A current-table row that places no port in a VLAN is not a VLAN catalog.
+// The merge already discards such a row as membership; counting it as the
+// device naming a VLAN waives the default-PVID refusal, and what that emits
+// is access VLAN 1 on every port, which the same row refutes.
+func TestVlanMapper_VlanCatalogPresent_AnEmptyCurrentRowIsNotACatalog(t *testing.T) {
+	zero := string(make([]byte, 8))
+	all := ObjectIDValueMap{
+		oidDot1qVlanCurrentEgressPorts + "0.1":   {Value: zero},
+		oidDot1qVlanCurrentUntaggedPorts + "0.1": {Value: zero},
+	}
+	if catalogFromWalk(t, all) {
+		t.Error("a row naming no port names no VLAN")
+	}
+	// One port in it and the device has told us the VLAN is real.
+	all[oidDot1qVlanCurrentEgressPorts+"0.1"] = Value{Value: portMask(1)}
+	if !catalogFromWalk(t, all) {
+		t.Error("a row naming a port is a catalog entry")
+	}
+	// A static row still counts however empty, since the VLAN is configured.
+	if !vlanCatalogPresent(ObjectIDValueMap{oidDot1qVlanStaticEgressPorts + "7": {Value: zero}}) {
+		t.Error("a configured VLAN is named whether or not a port is in it")
+	}
+
+	// A VLAN every port has since left: an older snapshot names ports, the
+	// newest names none. The merge resolves the newest and drops the VLAN, so
+	// the stale row must not go on licensing the default PVID either.
+	stale := ObjectIDValueMap{
+		oidDot1qVlanCurrentEgressPorts + "10.1":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "10.1": {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "20.1":   {Value: zero},
+		oidDot1qVlanCurrentUntaggedPorts + "20.1": {Value: zero},
+	}
+	if catalogFromWalk(t, stale) {
+		t.Error("the resolved snapshot names no port, so the device named no VLAN")
+	}
+}
+
+// Each catalog source is read at the shape its own rows carry. A suffix with
+// the wrong number of components is a row the readers reject, and taking a
+// VLAN id off the end of one would count a malformed OID as a catalog and
+// waive the default-PVID refusal on the strength of it.
+func TestVlanMapper_VlanCatalogPresent_ChecksTheWholeIndex(t *testing.T) {
+	mask := portMask(1)
+	cases := []struct {
+		name string
+		oid  string
+		val  string
+		want bool
+	}{
+		// The current table is (timeMark, vlan): exactly two components.
+		{"current, well formed", oidDot1qVlanCurrentEgressPorts + "0.10", mask, true},
+		{"current, one component", oidDot1qVlanCurrentEgressPorts + "10", mask, false},
+		{"current, three components", oidDot1qVlanCurrentEgressPorts + "0.10.1", mask, false},
+		{"current, id out of range", oidDot1qVlanCurrentEgressPorts + "0.4095", mask, false},
+		// The VTP catalog is (domain, vlan).
+		{"vtp, well formed", oidCiscoVtpVlanName + "1.10", "voice", true},
+		{"vtp, three components", oidCiscoVtpVlanName + "1.10.1", "voice", false},
+		// The VLAN-keyed tables carry one component.
+		{"static name, well formed", oidDot1qVlanStaticName + "10", "voice", true},
+		{"static name, two components", oidDot1qVlanStaticName + "10.1", "voice", false},
+		{"huawei, well formed", oidHwVlanName + "10", "uplink", true},
+		{"huawei, two components", oidHwVlanName + "10.1", "uplink", false},
+	}
+	for _, c := range cases {
+		all := ObjectIDValueMap{c.oid: {Value: c.val}}
+		// The current table's contribution is decided during the merge, the
+		// rest directly; both must reject a suffix of the wrong shape.
+		got := vlanCatalogPresent(all) || catalogFromWalk(t, all)
+		if got != c.want {
+			t.Errorf("%s: catalog present = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// Two columns that share no time mark are not a snapshot. Taking each one's
+// newest is the pairing the resolution exists to prevent, just narrower: the
+// masks come from two moments, so the port is published tagged where it is
+// untagged or the reverse. Such a VLAN contributes nothing.
+func TestVlanMapper_BuildGenericRows_DisjointTimeMarksAreNotPaired(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{})
+
+	// VLAN 10's two columns never answered under the same mark.
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.10":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentUntaggedPorts + "200.10": {Value: portMask(1)},
+	})
+	if _, ok := rows.VlanEgressPorts[10]; ok {
+		t.Errorf("no snapshot pairs these columns, so the VLAN supplies no membership: %x", rows.VlanEgressPorts[10])
+	}
+	if _, ok := rows.VlanUntaggedPorts[10]; ok {
+		t.Error("nor an untagged mask")
+	}
+
+	// A VLAN only one column mentions is unaffected: nothing is being paired,
+	// and the untagged mask stands in as the egress one.
+	rows = vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentUntaggedPorts + "200.20": {Value: portMask(1)},
+	})
+	if got := string(rows.VlanUntaggedPorts[20]); got != portMask(1) {
+		t.Errorf("one column alone is still membership: got %x", got)
+	}
+
+	// Sharing one mark, they pair on it even with other marks present.
+	rows = vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.30":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentEgressPorts + "300.30":   {Value: portMask(3)},
+		oidDot1qVlanCurrentUntaggedPorts + "300.30": {Value: portMask(3)},
+	})
+	if got := string(rows.VlanEgressPorts[30]); got != portMask(3) {
+		t.Errorf("both masks come from the newest shared mark: got %x", got)
 	}
 }

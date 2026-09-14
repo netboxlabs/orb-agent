@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
 	"reflect"
@@ -28,6 +29,13 @@ const (
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(os.Stderr, nil)) }
 
 // capturingLogger returns a logger and the buffer it writes to.
+// capturingDebugLogger captures at Debug, for the messages a healthy device
+// emits on every poll and which are deliberately not warnings.
+func capturingDebugLogger() (*slog.Logger, *bytes.Buffer) {
+	var buf bytes.Buffer
+	return slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})), &buf
+}
+
 func capturingLogger() (*slog.Logger, *bytes.Buffer) {
 	var buf bytes.Buffer
 	return slog.New(slog.NewTextHandler(&buf, nil)), &buf
@@ -1594,5 +1602,252 @@ func TestResolvablePvidValues_AsksTheIndexQuestionOfEveryDescribedRow(t *testing
 	got = resolvablePvidValues(staticIndices, map[int]struct{}{5: {}}, map[int]int{5: 17})
 	if _, ok := got[17]; !ok {
 		t.Errorf("tag 17 names exactly one VLAN here and must stay resolvable, got %v", got)
+	}
+}
+
+// TestResolveJuniperVlanIndices_RekeysTheCurrentTableToo covers the table that
+// arrived after this translation was written.
+//
+// dot1qVlanCurrentTable is keyed by dot1qVlanIndex, the same internal
+// identifier the static table uses on these platforms, so it has to move with
+// them. Left alone it keeps the device's internal number while the static rows
+// move to real tags, and the membership merge — finding that number absent
+// from the static table — inserts the row under it. That fabricates a VLAN at
+// an internal index, or lands on a real VLAN carrying that number, which is
+// the collision this translation exists to prevent.
+func TestResolveJuniperVlanIndices_RekeysTheCurrentTableToo(t *testing.T) {
+	out := ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+		oidDot1qVlanStaticName + "24": {Value: "VL32"},
+		oidJnxExVlanName + "24":       {Value: "VL32"},
+		oidJnxExVlanTag + "24":        {Value: "32"},
+		// Current-table rows under the same internal indices, with time marks.
+		oidDot1qVlanCurrentEgressPorts + "0.17":      {Value: "\x80"},
+		oidDot1qVlanCurrentUntaggedPorts + "2828.24": {Value: "\x40"},
+		// An index the enterprise table cannot resolve.
+		oidDot1qVlanCurrentEgressPorts + "0.99": {Value: "\x20"},
+	}, testLogger())
+
+	// Moved to the real tags, time marks preserved.
+	if got := out[oidDot1qVlanCurrentEgressPorts+"0.156"].Value; got != "\x80" {
+		t.Errorf("current egress must move to the tag: got %q", got)
+	}
+	if got := out[oidDot1qVlanCurrentUntaggedPorts+"2828.32"].Value; got != "\x40" {
+		t.Errorf("current untagged must move to the tag, keeping its mark: got %q", got)
+	}
+	// The two drops are counted and reported apart: they happen for different
+	// reasons and on different devices, so one number would point at the
+	// wrong table.
+	logger, logged := capturingDebugLogger()
+	ResolveJuniperVlanIndices(ObjectIDValueMap{
+		oidSysObjectIDScalar:                    {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "17":           {Value: "VL156"},
+		oidJnxExVlanName + "17":                 {Value: "VL156"},
+		oidJnxExVlanTag + "17":                  {Value: "156"},
+		oidDot1qVlanCurrentEgressPorts + "0.99": {Value: "\x20"},
+	}, logger)
+	if !strings.Contains(logged.String(), "current-table rows the enterprise table does not resolve") {
+		t.Errorf("a dropped current row must be reported as one, got %q", logged.String())
+	}
+	if strings.Contains(logged.String(), "static-table rows whose tag") {
+		t.Errorf("no static row was dropped here, got %q", logged.String())
+	}
+
+	// The internal indices must not survive as VLAN ids.
+	for _, gone := range []string{
+		oidDot1qVlanCurrentEgressPorts + "0.17",
+		oidDot1qVlanCurrentUntaggedPorts + "2828.24",
+		oidDot1qVlanCurrentEgressPorts + "0.99",
+	} {
+		if _, ok := out[gone]; ok {
+			t.Errorf("%s survived: an internal index must not reach NetBox as a VLAN", gone)
+		}
+	}
+}
+
+func TestSplitCurrentVlanOID(t *testing.T) {
+	for _, tc := range []struct {
+		oid         string
+		mark, index int
+		ok          bool
+	}{
+		{oidDot1qVlanCurrentEgressPorts + "0.1", 0, 1, true},
+		{oidDot1qVlanCurrentUntaggedPorts + "2828.156", 2828, 156, true},
+		{oidDot1qVlanCurrentEgressPorts + "1", 0, 0, false},
+		{oidDot1qVlanCurrentEgressPorts + "x.1", 0, 0, false},
+		{oidDot1qVlanStaticName + "0.1", 0, 0, false},
+	} {
+		_, mark, index, ok := splitCurrentVlanOID(tc.oid)
+		if mark != tc.mark || index != tc.index || ok != tc.ok {
+			t.Errorf("%s: got (%d,%d,%v), want (%d,%d,%v)", tc.oid, mark, index, ok, tc.mark, tc.index, tc.ok)
+		}
+	}
+}
+
+// TestResolveJuniperVlanIndices_RefusesATagTwoRekeyedRowsClaim extends the
+// ambiguity gate to the rows the current table adds.
+//
+// The gate was written when only static rows moved, and deliberately allowed a
+// collision between two enterprise indices the static table never used: those
+// described a VLAN nothing was about to be rewritten to. Once the current
+// table is rekeyed too, such an index IS being rewritten, and two of them
+// resolving to one tag would land two rows on the same OID with map iteration
+// deciding which survives — so one VLAN's membership would differ between
+// polls of identical data.
+func TestResolveJuniperVlanIndices_RefusesATagTwoRekeyedRowsClaim(t *testing.T) {
+	in := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+
+		// A static row that corroborates, so the other gates pass.
+		oidDot1qVlanStaticName + "17": {Value: "VL156"},
+		oidJnxExVlanName + "17":       {Value: "VL156"},
+		oidJnxExVlanTag + "17":        {Value: "156"},
+
+		// Two enterprise-only indices claiming one tag, both used by the
+		// current table and therefore both about to be rewritten.
+		oidJnxExVlanName + "80":                 {Value: "GHOST_A"},
+		oidJnxExVlanTag + "80":                  {Value: "900"},
+		oidJnxExVlanName + "81":                 {Value: "GHOST_B"},
+		oidJnxExVlanTag + "81":                  {Value: "900"},
+		oidDot1qVlanCurrentEgressPorts + "0.80": {Value: "\x80"},
+		oidDot1qVlanCurrentEgressPorts + "0.81": {Value: "\x40"},
+	}
+	logger, logged := capturingLogger()
+	out := ResolveJuniperVlanIndices(in, logger)
+
+	if !reflect.DeepEqual(out, in) {
+		t.Errorf("two rewritten rows claiming one tag must abandon the translation, got %v", out)
+	}
+	if !strings.Contains(logged.String(), "tag=900") {
+		t.Errorf("the refusal must name the contested tag, got %q", logged.String())
+	}
+}
+
+// A VLAN only the current table publishes is rekeyed like any other, and a
+// port in it is membership that reaches NetBox, so a PVID naming its tag names
+// a real VLAN and must survive. A current row naming nobody is dropped before
+// it becomes membership, so a PVID for that one still does not.
+func TestResolveJuniperVlanIndices_CurrentOnlyVlansMakeAPvidResolvable(t *testing.T) {
+	all := ObjectIDValueMap{
+		oidSysObjectIDScalar: {Value: jnxSysObjectID},
+		// One static VLAN, internally indexed, corroborated by name.
+		oidDot1qVlanStaticName + "10":        {Value: "office"},
+		oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+		oidJnxExVlanTag + "10":               {Value: "100"},
+		oidJnxExVlanName + "10":              {Value: "office"},
+		// A VLAN only the current table carries, with a port in it.
+		oidDot1qVlanCurrentEgressPorts + "0.11": {Value: portMask(2)},
+		oidJnxExVlanTag + "11":                  {Value: "200"},
+		oidJnxExVlanName + "11":                 {Value: "voice"},
+		// One with no port in it at all.
+		oidDot1qVlanCurrentEgressPorts + "0.12": {Value: string(make([]byte, 8))},
+		oidJnxExVlanTag + "12":                  {Value: "300"},
+		oidJnxExVlanName + "12":                 {Value: "spare"},
+		// Ports naming each of the three tags.
+		oidDot1qPvid + "1": {Value: "100"},
+		oidDot1qPvid + "2": {Value: "200"},
+		oidDot1qPvid + "3": {Value: "300"},
+	}
+	got := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if v := got[oidDot1qPvid+"1"].Value; v != "100" {
+		t.Errorf("a static VLAN's tag stays resolvable: got %q", v)
+	}
+	if v := got[oidDot1qPvid+"2"].Value; v != "200" {
+		t.Errorf("a current-only VLAN with a port in it names a VLAN: got %q", v)
+	}
+	if v := got[oidDot1qPvid+"3"].Value; v != "0" {
+		t.Errorf("a current row naming nobody names no VLAN: got %q", v)
+	}
+}
+
+// The current table answers once per retained time mark, so an index whose
+// newest snapshot is empty has a non-empty older one beside it. The merge
+// resolves the newest and discards the VLAN, so a PVID kept for its tag would
+// fabricate the placeholder this guard exists to prevent.
+func TestResolveJuniperVlanIndices_AStaleCurrentRowNamesNoVlan(t *testing.T) {
+	empty := string(make([]byte, 8))
+	all := ObjectIDValueMap{
+		oidSysObjectIDScalar:                 {Value: jnxSysObjectID},
+		oidDot1qVlanStaticName + "10":        {Value: "office"},
+		oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+		oidJnxExVlanTag + "10":               {Value: "100"},
+		oidJnxExVlanName + "10":              {Value: "office"},
+		// Index 11: ports under an older mark, none under the newest.
+		oidDot1qVlanCurrentEgressPorts + "100.11":   {Value: portMask(2)},
+		oidDot1qVlanCurrentUntaggedPorts + "100.11": {Value: portMask(2)},
+		oidDot1qVlanCurrentEgressPorts + "200.11":   {Value: empty},
+		oidDot1qVlanCurrentUntaggedPorts + "200.11": {Value: empty},
+		oidJnxExVlanTag + "11":                      {Value: "200"},
+		oidJnxExVlanName + "11":                     {Value: "voice"},
+		oidDot1qPvid + "1":                          {Value: "100"},
+		oidDot1qPvid + "2":                          {Value: "200"},
+	}
+	got := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	if v := got[oidDot1qPvid+"1"].Value; v != "100" {
+		t.Errorf("a static VLAN's tag stays resolvable: got %q", v)
+	}
+	if v := got[oidDot1qPvid+"2"].Value; v != "0" {
+		t.Errorf("the resolved snapshot names no port, so the tag names no VLAN: got %q", v)
+	}
+}
+
+// A row whose tag is reserved is dropped by the rewrite, so a PVID naming it
+// points at a VLAN that exists nowhere in the walk. Kept, it reads as an access
+// VLAN that Classify then rejects, and the port is emitted as access with no
+// untagged VLAN, overwriting whatever mode NetBox holds while supplying
+// nothing. Both the static and the current path reach it.
+func TestResolveJuniperVlanIndices_AReservedTagNamesNoVlan(t *testing.T) {
+	base := func() ObjectIDValueMap {
+		return ObjectIDValueMap{
+			oidSysObjectIDScalar:                 {Value: jnxSysObjectID},
+			oidDot1qVlanStaticName + "10":        {Value: "office"},
+			oidDot1qVlanStaticEgressPorts + "10": {Value: portMask(1)},
+			oidJnxExVlanTag + "10":               {Value: "100"},
+			oidJnxExVlanName + "10":              {Value: "office"},
+			oidJnxExVlanTag + "11":               {Value: "4095"},
+			oidJnxExVlanName + "11":              {Value: "reserved"},
+			oidDot1qPvid + "1":                   {Value: "100"},
+			oidDot1qPvid + "2":                   {Value: "4095"},
+		}
+	}
+	for _, tc := range []struct {
+		what string
+		row  func(ObjectIDValueMap)
+	}{
+		{"from a static row", func(all ObjectIDValueMap) {
+			all[oidDot1qVlanStaticName+"11"] = Value{Value: "reserved"}
+			all[oidDot1qVlanStaticEgressPorts+"11"] = Value{Value: portMask(2)}
+		}},
+		{"from a current row", func(all ObjectIDValueMap) {
+			all[oidDot1qVlanCurrentEgressPorts+"0.11"] = Value{Value: portMask(2)}
+		}},
+	} {
+		all := base()
+		tc.row(all)
+		got := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))
+		if v := got[oidDot1qPvid+"2"].Value; v != "0" {
+			t.Errorf("%s: a reserved tag names no VLAN: got %q", tc.what, v)
+		}
+		if v := got[oidDot1qPvid+"1"].Value; v != "100" {
+			t.Errorf("%s: a usable tag still resolves: got %q", tc.what, v)
+		}
+	}
+
+	// The untagged bridge domain's tag 0 is not a usable VID either, and must
+	// still survive: dot1qPvid uses it to say "bridged, nothing untagged".
+	all := base()
+	all[oidDot1qVlanStaticName+"11"] = Value{Value: "untagged"}
+	all[oidDot1qVlanStaticEgressPorts+"11"] = Value{Value: portMask(2)}
+	all[oidJnxExVlanTag+"11"] = Value{Value: "0"}
+	all[oidJnxExVlanName+"11"] = Value{Value: "untagged"}
+	all[oidDot1qPvid+"2"] = Value{Value: "0"}
+	if v := ResolveJuniperVlanIndices(all, slog.New(slog.NewTextHandler(io.Discard, nil)))[oidDot1qPvid+"2"].Value; v != "0" {
+		t.Errorf("a PVID of 0 survives: got %q", v)
 	}
 }

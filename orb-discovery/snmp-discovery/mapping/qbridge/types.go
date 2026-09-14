@@ -94,8 +94,17 @@ type SwitchportInfo struct {
 	// for the port may override that inference; a trunk seen in several
 	// VLANs it may not.
 	TrunkFromOneTaggedVlan bool
-	VoiceVlan              *int
-	BridgePortPresent      bool
+
+	// NativeUntaggedByMask says NativeVlan was read from a VLAN's untagged
+	// port mask, so the device stated the port egresses that VLAN untagged.
+	// A native derived from dot1qPvid instead carries no such statement: the
+	// PVID classifies ingress, and the port may well be a tagged member. An
+	// overlay replacing the native VLAN needs the difference, because only in
+	// the first case is the VLAN it displaces ruled out as a tagged one.
+	NativeUntaggedByMask bool
+
+	VoiceVlan         *int
+	BridgePortPresent bool
 }
 
 // Classification is the per-interface output VlanMapper consumes to mutate
