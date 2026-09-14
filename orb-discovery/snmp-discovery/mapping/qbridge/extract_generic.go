@@ -417,12 +417,20 @@ func membershipFromMasks(
 // A port has one untagged VLAN, but a device can name several: some
 // devices leave a port in the default VLAN's untagged mask alongside
 // the one it actually carries, and the current table reports what is
-// forwarding untagged now rather than what is configured. Where the
-// masks alone cannot settle it, the highest VID wins. That is arbitrary
-// but it is the rule this has always applied, and it is stable across
-// polls where map order is not. The PVID does not break the tie here:
-// where it disagrees with an operational mask it overrules it outright,
-// which the caller decides, having the provenance this does not.
+// forwarding untagged now rather than what is configured.
+//
+// Where an operational mask is one of them the caller settles it, the
+// PVID overruling the mask; that needs the provenance this does not
+// have. Where they are all configured the device is describing
+// something NetBox cannot hold, a port egressing untagged in two VLANs,
+// and neither answer is the right one. The highest wins. Letting the
+// PVID decide there is defensible and was measured: on a recorded Linux
+// bridge it moves five ports off the VLAN they carry and onto the
+// bridge default, dropping the carried VLAN entirely, because the
+// loser is not a tagged VLAN either. That is a worse record than the
+// arbitrary rule produces, on no evidence from either reporter, so it
+// is left alone. The rule is at least stable across polls, where map
+// order is not.
 func chooseNative(untaggedVids []int) *int {
 	if len(untaggedVids) == 0 {
 		return nil
