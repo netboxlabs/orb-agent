@@ -107,6 +107,22 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 	}
 	staticIndices := staticVlanIndices(all)
 	if len(staticIndices) == 0 {
+		// Nothing keyed by a VlanIndex in the static table. A device may still
+		// answer the current table, and its rows are keyed in the same space —
+		// but with no static row there is no name to put beside the enterprise
+		// table's, so the one thing that could tell an internally numbered
+		// device from a normally numbered one is unavailable.
+		//
+		// Left alone rather than rewritten or discarded, which is the answer
+		// every other unresolvable case gets. Rewriting would be the guess this
+		// translation exists to avoid, on the weakest possible evidence: #605
+		// established that publishing the enterprise table is not by itself a
+		// statement that the other tables are index-keyed. Discarding would
+		// delete membership from a device that may well be reporting it
+		// correctly. No measured device is in this position — every Juniper
+		// walk with an enterprise table also has a static table — and if one
+		// appears, its VLAN ids are wrong in NetBox in a way an operator can
+		// see rather than silently replaced.
 		return all
 	}
 	tagByIndex, nameByIndex, described := juniperVlanTable(all)

@@ -1507,3 +1507,71 @@ func TestVlanMapper_PostMap_AnUnusableCatalogRowDoesNotBypassTheRefusal(t *testi
 		t.Errorf("gi1 must stay unclassified: mode=%v untagged=%+v", got.Mode, got.UntaggedVlan)
 	}
 }
+
+// The two current-table columns are walked separately, so a VLAN that changes
+// between the walks answers one column before the change and the other after.
+// Taking each column's own newest row would combine halves of two snapshots and
+// report a port as tagged where it is untagged, or the reverse.
+func TestVlanMapper_BuildGenericRows_PairsTheColumnsAtOneTimeMark(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// Mark 100: the VLAN as it was, ports 1 and 2 egress, port 1 untagged.
+		oidDot1qVlanCurrentEgressPorts + "100.10":   {Value: portMask(1, 2)},
+		oidDot1qVlanCurrentUntaggedPorts + "100.10": {Value: portMask(1)},
+		// Mark 200: it changed, and only the egress column caught it.
+		oidDot1qVlanCurrentEgressPorts + "200.10": {Value: portMask(1, 2, 3)},
+	})
+
+	// Both masks must come from mark 100, the newest the columns share. Taking
+	// each column's own newest would pair mark 200's egress with mark 100's
+	// untagged.
+	if got, want := string(rows.VlanEgressPorts[10]), portMask(1, 2); got != want {
+		t.Errorf("egress: got %x, want the shared snapshot %x", got, want)
+	}
+	if got, want := string(rows.VlanUntaggedPorts[10]), portMask(1); got != want {
+		t.Errorf("untagged: got %x, want %x", got, want)
+	}
+
+	// With more than one shared mark it has to be the NEWEST shared one, not
+	// merely a shared one: an older snapshot is as wrong as a mismatched pair.
+	twoShared := ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":               {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.11":   {Value: portMask(1)},
+		oidDot1qVlanCurrentUntaggedPorts + "100.11": {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "300.11":   {Value: portMask(1, 2, 3)},
+		oidDot1qVlanCurrentUntaggedPorts + "300.11": {Value: portMask(3)},
+	}
+	// Repeated because picking merely A shared mark rather than the NEWEST one
+	// leaves the winner to map iteration order: a single pass agrees by luck
+	// about half the time, which is a test that reports the defect as flaky.
+	for i := range 50 {
+		rows = vm.buildGenericRows(twoShared)
+		if got, want := string(rows.VlanEgressPorts[11]), portMask(1, 2, 3); got != want {
+			t.Fatalf("run %d egress: got %x, want the newest shared snapshot %x", i, got, want)
+		}
+		if got, want := string(rows.VlanUntaggedPorts[11]), portMask(3); got != want {
+			t.Fatalf("run %d untagged: got %x, want the newest shared snapshot %x", i, got, want)
+		}
+	}
+}
+
+// A VLAN only one column mentions still contributes: there is no snapshot to
+// share, so that column's newest row is the best available.
+func TestVlanMapper_BuildGenericRows_OneColumnOnlyStillContributes(t *testing.T) {
+	vm := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1":             {Value: "101"},
+		oidDot1qVlanCurrentEgressPorts + "100.20": {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "200.20": {Value: portMask(1, 2)},
+	})
+
+	if got, want := string(rows.VlanEgressPorts[20]), portMask(1, 2); got != want {
+		t.Errorf("egress: got %x, want the newest %x", got, want)
+	}
+	if _, ok := rows.VlanUntaggedPorts[20]; ok {
+		t.Error("the untagged column said nothing about VLAN 20 and must not be invented")
+	}
+}

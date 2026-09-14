@@ -317,19 +317,81 @@ func setVLANGroupScope(group *diode.VLANGroup, g config.VLANGroupParameters, def
 	}
 }
 
-// timeMarkedMask is one dot1qVlanCurrentTable row: its port mask and the time
-// mark it arrived under.
-type timeMarkedMask struct {
-	mask string
-	mark int
+// recordRow stores one dot1qVlanCurrentTable row under its VLAN and time mark.
+func recordRow(rows map[int]map[int]string, vid, mark int, mask string) {
+	byMark := rows[vid]
+	if byMark == nil {
+		byMark = map[int]string{}
+		rows[vid] = byMark
+	}
+	byMark[mark] = mask
 }
 
-// placesNobody reports whether this row and its counterpart column both put no
-// port in the VLAN. Judged across the pair, because an all-zero untagged mask
-// beside a populated egress mask is meaningful — it is how a VLAN every member
-// carries tagged reports — while both empty says only that the VLAN exists.
-func (t timeMarkedMask) placesNobody(other timeMarkedMask) bool {
-	return isEmptyPortMask(t.mask) && isEmptyPortMask(other.mask)
+// allCurrentVlans is every VLAN either column mentions.
+func allCurrentVlans(egress, untagged map[int]map[int]string) map[int]struct{} {
+	out := make(map[int]struct{}, len(egress)+len(untagged))
+	for vid := range egress {
+		out[vid] = struct{}{}
+	}
+	for vid := range untagged {
+		out[vid] = struct{}{}
+	}
+	return out
+}
+
+// oneSnapshot picks the egress and untagged masks of one VLAN from the SAME
+// moment in time.
+//
+// dot1qVlanCurrentTable is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, and a
+// TimeFilter index means the same VLAN is answered once per time mark the agent
+// still holds — with different masks, since a mark is when that row last
+// changed. Taking whichever the walk map yielded last made membership depend on
+// Go's map iteration order, so a switch answering VLAN 1 under two marks
+// alternated between two NetBox states on every poll. Observed on recorded
+// walks from three vendors. This is the same collect-then-resolve the VLAN name
+// and VTP readers use, and for the same reason.
+//
+// The two columns are walked separately, so a VLAN that changes between the two
+// walks answers one column before the change and the other after. Taking each
+// column's own latest row would then combine halves of two different snapshots
+// and report a port as tagged where it is untagged, or the reverse, until the
+// next poll.
+//
+// The newest mark both columns share is therefore preferred. Where they share
+// none — a VLAN only one column mentions, or an agent that has already aged one
+// of them out — each column's own newest is used, which is the best available
+// and no worse than not reading the table at all.
+func oneSnapshot(egress, untagged map[int]string) (string, string) {
+	if egress == nil || untagged == nil {
+		return newestMask(egress), newestMask(untagged)
+	}
+	common, found := 0, false
+	for mark := range egress {
+		if _, shared := untagged[mark]; !shared {
+			continue
+		}
+		if !found || markIsNewer(mark, common) {
+			common, found = mark, true
+		}
+	}
+	if !found {
+		return newestMask(egress), newestMask(untagged)
+	}
+	return egress[common], untagged[common]
+}
+
+// newestMask returns the mask under the newest time mark in one column.
+func newestMask(byMark map[int]string) string {
+	newest, found := 0, false
+	for mark := range byMark {
+		if !found || markIsNewer(mark, newest) {
+			newest, found = mark, true
+		}
+	}
+	if !found {
+		return ""
+	}
+	return byMark[newest]
 }
 
 // isEmptyPortMask reports whether a port list names no port: a PortList bitmap
@@ -352,28 +414,6 @@ func isEmptyPortMask(mask string) bool {
 		}
 	}
 	return true
-}
-
-// keepLatestRow resolves the several rows one VLAN can arrive under.
-//
-// dot1qVlanCurrentTable is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, and a
-// TimeFilter index means the same VLAN is answered once per time mark the agent
-// still holds — with DIFFERENT masks, since the marks are when the row last
-// changed. Taking whichever the walk map yielded last made the membership
-// depend on Go's map iteration order, so a switch answering VLAN 1 under two
-// marks alternated between two NetBox states on every poll, forever, with Diode
-// rewriting mode and tagged VLANs each way. Observed on recorded walks from
-// three vendors.
-//
-// The highest mark is the most recent snapshot, which is the one to keep. This
-// is the same collect-then-resolve the VLAN name and VTP readers use, and for
-// the same reason.
-func keepLatestRow(rows map[int]timeMarkedMask, vid, mark int, mask string) map[int]timeMarkedMask {
-	if held, ok := rows[vid]; ok && !markIsNewer(mark, held.mark) {
-		return rows
-	}
-	rows[vid] = timeMarkedMask{mask: mask, mark: mark}
-	return rows
 }
 
 // timeMarkWrap is where dot1qVlanTimeMark restarts. It is a TimeFilter over
@@ -518,7 +558,7 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// keyed PVIDs first; translate to ifIndex after the loop once
 	// BasePortToIfIndex is fully populated.
 	bridgePortPvid := map[int]int{}
-	currentEgress, currentUntagged := map[int]timeMarkedMask{}, map[int]timeMarkedMask{}
+	currentEgress, currentUntagged := map[int]map[int]string{}, map[int]map[int]string{}
 	for oid, v := range all {
 		switch {
 		case strings.HasPrefix(oid, oidDot1dBasePortIfIndex):
@@ -545,11 +585,11 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			}
 		case strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts):
 			if vid, mark, ok := currentVlanRow(oid, oidDot1qVlanCurrentEgressPorts); ok {
-				currentEgress = keepLatestRow(currentEgress, vid, mark, v.Value)
+				recordRow(currentEgress, vid, mark, v.Value)
 			}
 		case strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
 			if vid, mark, ok := currentVlanRow(oid, oidDot1qVlanCurrentUntaggedPorts); ok {
-				currentUntagged = keepLatestRow(currentUntagged, vid, mark, v.Value)
+				recordRow(currentUntagged, vid, mark, v.Value)
 			}
 		case strings.HasPrefix(oid, oidIfAdminStatus):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidIfAdminStatus))
@@ -589,19 +629,19 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// table for that VLAN and left this port out of it", which withdraws the
 	// port's PVID. A ProCurve publishing six all-zero VLANs beside 23 ports
 	// with real PVIDs lost every one of them that way.
-	for vid, row := range currentEgress {
-		if _, ok := rows.VlanEgressPorts[vid]; ok || row.placesNobody(currentUntagged[vid]) {
+	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
+		egress, untagged := oneSnapshot(currentEgress[vid], currentUntagged[vid])
+		if isEmptyPortMask(egress) && isEmptyPortMask(untagged) {
 			continue
 		}
-		rows.VlanEgressPorts[vid] = []byte(row.mask)
-		rows.VlanEgressFromCurrent[vid] = struct{}{}
-	}
-	for vid, row := range currentUntagged {
-		if _, ok := rows.VlanUntaggedPorts[vid]; ok || row.placesNobody(currentEgress[vid]) {
-			continue
+		if _, ok := rows.VlanEgressPorts[vid]; !ok && currentEgress[vid] != nil {
+			rows.VlanEgressPorts[vid] = []byte(egress)
+			rows.VlanEgressFromCurrent[vid] = struct{}{}
 		}
-		rows.VlanUntaggedPorts[vid] = []byte(row.mask)
-		rows.VlanUntaggedFromCurrent[vid] = struct{}{}
+		if _, ok := rows.VlanUntaggedPorts[vid]; !ok && currentUntagged[vid] != nil {
+			rows.VlanUntaggedPorts[vid] = []byte(untagged)
+			rows.VlanUntaggedFromCurrent[vid] = struct{}{}
+		}
 	}
 
 	rows.VlanCatalogPresent = vlanCatalogPresent(all)
