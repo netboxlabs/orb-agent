@@ -567,3 +567,46 @@ func TestExtractGeneric_OneBinaryCurrentMaskDoesNotUnmakeATextHost(t *testing.T)
 		t.Errorf("the text host must keep its static membership: got %+v", c)
 	}
 }
+
+// A sentinel PVID names no VLAN, so it is not evidence that the column is
+// maintained. Counting it would hand every neighbour back the access VLAN 1
+// the refusal exists to withhold, on the strength of a value CoerceVid itself
+// rejects.
+func TestExtractGeneric_ASentinelPvidIsNotEvidenceOfConfiguration(t *testing.T) {
+	for _, sentinel := range []int{4095, 4096, 0, -1, 65535} {
+		rows := GenericRows{
+			BasePortToIfIndex:  map[int]int{1: 101, 2: 102},
+			PortPvid:           map[int]int{101: 1, 102: sentinel},
+			VlanEgressPorts:    map[int][]byte{},
+			VlanUntaggedPorts:  map[int][]byte{},
+			IfAdminStatus:      map[int]int{101: 1, 102: 1},
+			IfTypes:            map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+			VlanCatalogPresent: false,
+		}
+		got, err := ExtractGeneric(rows)
+		if err != nil {
+			t.Fatalf("sentinel %d: %v", sentinel, err)
+		}
+		if c := Classify(*got[101]); c.Mode != ModeUnknown || c.Untagged != nil {
+			t.Errorf("sentinel %d: the neighbour must stay unclassified, got %+v", sentinel, c)
+		}
+	}
+
+	// A value that does name a VLAN still is evidence.
+	rows := GenericRows{
+		BasePortToIfIndex:  map[int]int{1: 101, 2: 102},
+		PortPvid:           map[int]int{101: 1, 102: 4094},
+		VlanEgressPorts:    map[int][]byte{},
+		VlanUntaggedPorts:  map[int][]byte{},
+		IfAdminStatus:      map[int]int{101: 1, 102: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent: false,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 1 {
+		t.Errorf("4094 is a real VLAN id and makes the column meaningful, got %+v", c)
+	}
+}
