@@ -576,12 +576,18 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 	}
 	a.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", backendName, "error", startErr)
 
+	// Every failure exit after the removal schedules the replay: a Stop that
+	// failed can leave the old process running, and then the health monitor
+	// never asks for another restart and nothing else would hand the
+	// policies back or clear the restart marker.
 	if binaryName == "" {
 		a.logger.Error("filesmgr: cannot roll back, backend declares no managed binary", "backend", backendName)
+		a.scheduleReplay(backendName, be)
 		return
 	}
 	if err := a.filesManager.Rollback(ctx, binaryName); err != nil {
 		a.logger.Error("filesmgr: rollback failed", "backend", backendName, "binary", binaryName, "error", err)
+		a.scheduleReplay(backendName, be)
 		return
 	}
 
@@ -598,6 +604,7 @@ func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backe
 
 	if err := be.Start(runCtx2, runCancel2); err != nil {
 		a.logger.Error("filesmgr: backend Start failed even after rollback", "backend", backendName, "error", err)
+		a.scheduleReplay(backendName, be)
 		return
 	}
 	a.logger.Info("filesmgr: backend restarted with rolled-back binary", "backend", backendName, "binary", binaryName)

@@ -1581,11 +1581,15 @@ func TestRestartBackendWithFilesmgrRollback_DoesNotReapplyWithoutAManagedBinary(
 	events := []string{}
 	pm := &mockPolicyManager{events: &events}
 	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, startFailures: 1}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	a := &orbAgent{
-		logger:        logger,
-		backends:      map[string]backend.Backend{"worker": be},
-		policyManager: pm,
-		filesManager:  &mockFilesManager{},
+		logger:              logger,
+		backends:            map[string]backend.Backend{"worker": be},
+		policyManager:       pm,
+		filesManager:        &mockFilesManager{},
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+		replayRetryInterval: time.Hour,
 	}
 
 	a.restartBackendWithFilesmgrRollback(context.Background(), "worker")
@@ -1594,7 +1598,43 @@ func TestRestartBackendWithFilesmgrRollback_DoesNotReapplyWithoutAManagedBinary(
 		"remove:worker:permanently=false",
 		"stop",
 		"start",
-	}, events)
+	}, pm.snapshotEvents())
+	assert.Equal(t, int32(1), a.replayStarts.Load(), "an upgrade restart that cannot roll back schedules the replay, since the old process may still be running")
+	stopCancel()
+	a.replayers.Wait()
+}
+
+// An upgrade restart whose retried Start fails too leaves the policies
+// unknown and the marker set; a scheduled replay keeps trying, because a
+// Stop that failed can leave the old process running with nothing else to
+// hand its policies back.
+func TestRestartBackendWithFilesmgrRollbackSchedulesAReplayWhenTheRetryFails(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	events := []string{}
+	pm := &mockPolicyManager{events: &events}
+	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, startFailures: 2, binaryName: "orb-worker"}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
+	a := &orbAgent{
+		logger:              logger,
+		backends:            map[string]backend.Backend{"worker": be},
+		policyManager:       pm,
+		filesManager:        &mockFilesManager{},
+		stopCtx:             stopCtx,
+		stopCancel:          stopCancel,
+		replayRetryInterval: time.Hour,
+	}
+
+	a.restartBackendWithFilesmgrRollback(context.Background(), "worker")
+
+	assert.Equal(t, []string{
+		"remove:worker:permanently=false",
+		"stop",
+		"start",
+		"start",
+	}, pm.snapshotEvents())
+	assert.Equal(t, int32(1), a.replayStarts.Load(), "the failed retry schedules the replay")
+	stopCancel()
+	a.replayers.Wait()
 }
 
 // A Start that succeeds after the agent context was already cancelled before
