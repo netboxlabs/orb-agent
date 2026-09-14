@@ -947,17 +947,34 @@ func TestMasksContradictPvid(t *testing.T) {
 		{"untagged row with no member", configured, nil, map[int][]byte{pvid: {}}, true},
 		// In the egress mask but not the untagged one is a TAGGED member, which
 		// refutes a PVID naming that VLAN as the port's untagged one.
-		{"tagged member of its own PVID's VLAN", configured,
-			map[int][]byte{pvid: in}, map[int][]byte{pvid: out}, true},
-		{"no untagged row, egress excludes", configured,
-			map[int][]byte{pvid: out}, nil, true},
-		{"no untagged row, egress names it", configured,
-			map[int][]byte{pvid: in}, nil, false},
+		{
+			"tagged member of its own PVID's VLAN", configured,
+			map[int][]byte{pvid: in},
+			map[int][]byte{pvid: out},
+			true,
+		},
+		{
+			"no untagged row, egress excludes", configured,
+			map[int][]byte{pvid: out},
+			nil, true,
+		},
+		{
+			"no untagged row, egress names it", configured,
+			map[int][]byte{pvid: in},
+			nil, false,
+		},
 		// Operational absence is not configuration.
-		{"current untagged excludes the port", operational,
-			nil, map[int][]byte{pvid: out}, false},
-		{"current egress excludes the port", operational,
-			map[int][]byte{pvid: out}, nil, false},
+		{
+			"current untagged excludes the port", operational,
+			nil,
+			map[int][]byte{pvid: out},
+			false,
+		},
+		{
+			"current egress excludes the port", operational,
+			map[int][]byte{pvid: out},
+			nil, false,
+		},
 	}
 	for _, c := range cases {
 		if got := masksContradictPvid(c.rows, c.egress, c.untagged, pvid, ports); got != c.want {
