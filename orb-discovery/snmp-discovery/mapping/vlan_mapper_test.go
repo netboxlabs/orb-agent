@@ -1076,3 +1076,27 @@ func portMask(ports ...int) string {
 	}
 	return string(mask)
 }
+
+// The static table is the configured intent and wins wherever it speaks. The
+// current table reflects what is running, which can include VLANs learned
+// dynamically, so it fills gaps rather than overriding.
+func TestVlanMapper_BuildGenericRows_StaticMasksWinOverCurrent(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	vm := NewVlanMapper(logger, config.Options{})
+
+	rows := vm.buildGenericRows(ObjectIDValueMap{
+		oidDot1dBasePortIfIndex + "1": {Value: "101"},
+		// VLAN 10 is in both tables, with different members.
+		oidDot1qVlanStaticEgressPorts + "10":    {Value: portMask(1)},
+		oidDot1qVlanCurrentEgressPorts + "0.10": {Value: portMask(2)},
+		// VLAN 20 is only in the current table.
+		oidDot1qVlanCurrentEgressPorts + "0.20": {Value: portMask(3)},
+	})
+
+	if got, want := rows.VlanEgressPorts[10], portMask(1); string(got) != want {
+		t.Errorf("VLAN 10: got %x, want the static mask %x", got, want)
+	}
+	if got, want := rows.VlanEgressPorts[20], portMask(3); string(got) != want {
+		t.Errorf("VLAN 20: got %x, want the current mask %x", got, want)
+	}
+}
