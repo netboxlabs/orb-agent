@@ -85,25 +85,61 @@ const defaultPvid = 1
 // as configuration. This is the same asymmetry the other way round: operational
 // presence must not overrule it either.
 //
-// A PVID of 1 is asked the same question the rest of this file asks it: is this
-// device's PVID column maintained? Where some other port reports a VLAN the
-// operator had to set, a 1 here is a report and displaces like any other value.
-// Where every port answers the default, it is the MIB's DEFVAL and displaces
-// nothing. Refusing on the value alone threw away the real ones: a recorded
-// switch names one port in VLAN 88 and leaves exactly that port out of VLAN 1's
-// untagged mask, its PVID column and its masks agreeing, and its two ports that
-// read untagged in both VLAN 1 and VLAN 101 were still moved onto 101.
-func operationalNativeDisplacesPvid(rows GenericRows, native, pvid int, everyPvidIsDefault bool) bool {
+// A PVID of 1 has to earn it twice, because 1 is what the MIB hands back when
+// nobody has set one. First the device: where some other port reports a VLAN
+// the operator had to set, the column is maintained and a 1 here is a report.
+// Then the port: the device's own masks must not contradict it. Both are
+// needed, and each without the other gets a recorded device wrong.
+//
+// Without the first, the real ones are thrown away. A switch names one port in
+// VLAN 88 and leaves exactly that port out of VLAN 1's untagged mask, its PVID
+// column and its masks agreeing; its two ports that read untagged in both VLAN
+// 1 and VLAN 101 were being moved onto 101.
+//
+// Without the second, a device-wide answer overrules a port that plainly
+// disagrees with it. A ProCurve maintains its PVID column across 45 ports and
+// publishes VLAN 1 with no member at all; its remaining ports answer the
+// default and read untagged in VLANs 2 and 16. Trusting the column alone moved
+// them onto the empty VLAN 1 and deleted the VLAN they were in.
+//
+// A PVID the operator had to set is not asked the second question. A port whose
+// PVID names a VLAN it is not a member of is a configuration, not a
+// contradiction: it is how an unused port is parked on a VLAN that goes
+// nowhere, and the PVID is the only record of it.
+func operationalNativeDisplacesPvid(
+	rows GenericRows, native, pvid int, everyPvidIsDefault, masksContradict bool,
+) bool {
 	if native == pvid {
 		return false
 	}
-	if pvid == defaultPvid && everyPvidIsDefault {
+	if pvid == defaultPvid && (everyPvidIsDefault || masksContradict) {
 		return false
 	}
 	if CoerceVid(pvid) == nil {
 		return false
 	}
 	return fromCurrentTable(rows.VlanUntaggedFromCurrent, native)
+}
+
+// masksContradictPvid reports whether the device publishes a membership row for
+// the VLAN this port's PVID names and leaves the port out of it.
+//
+// Publishing no row for that VLAN is not a contradiction: the PVID is then the
+// only thing the device said about the port, which is the case the PVID-only
+// classification below exists for.
+func masksContradictPvid(egress, untagged map[int][]byte, pvid int, bridgePorts []int) bool {
+	published := false
+	for _, table := range []map[int][]byte{untagged, egress} {
+		mask, ok := table[pvid]
+		if !ok {
+			continue
+		}
+		published = true
+		if anyBridgePortInMask(mask, bridgePorts) {
+			return false
+		}
+	}
+	return published
 }
 
 // fromCurrentTable reports whether a VLAN's masks came from the operational
@@ -243,7 +279,8 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		}
 		native := chooseNative(untaggedVids)
 		switch {
-		case native != nil && operationalNativeDisplacesPvid(rows, *native, pvid, everyPvidIsDefault):
+		case native != nil && operationalNativeDisplacesPvid(rows, *native, pvid, everyPvidIsDefault,
+			masksContradictPvid(egress, untagged, pvid, ifIndexToBridge[ifIndex])):
 			// The mask naming this port untagged came from the current table,
 			// which says what is forwarding now, while the port's own PVID is
 			// configuration and names a different VLAN. The configured answer
@@ -287,8 +324,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		// the device said. This bites wherever a port reads untagged in more
 		// than one VLAN, which the configured table produces on its own: a
 		// recorded Linux bridge leaves five ports in VLAN 1's static untagged
-		// mask beside the VLAN they carry, and a recorded Junos does the same
-		// on 61.
+		// mask beside the VLAN they carry.
 		allowed := withoutUntaggedOtherThan(rows, egressVids, untaggedVids, native)
 		info.AllowedVlans = AllowedVlans{Vids: allowed, IsWildcard: isWildcard}
 		// Membership is the stronger evidence: a port the device places in a
@@ -445,11 +481,15 @@ func chooseNative(untaggedVids []int) *int {
 // alternative is to publish the opposite of what the device reported.
 //
 // A VLAN whose membership is configured and whose untagged row is only
-// operational is kept, as a tagged VLAN. Provenance here is per column, so
-// that pairing is possible, and an operational untagged row that was not
-// trusted to name the port's untagged VLAN must not be trusted to delete a
+// operational is kept, as a tagged VLAN: an operational untagged row that was
+// not trusted to name the port's untagged VLAN must not be trusted to delete a
 // configured membership either. The port is a member with no configured
 // untagged row naming it, which is what a tagged VLAN is.
+//
+// Provenance is per column, so the pairing is possible, but no walk in the
+// corpus has it: it needs a device that publishes a static egress mask for a
+// VLAN, no static untagged mask for it, and a current untagged mask. The rule
+// is the contract the per-column tracking implies, not a device we have seen.
 func withoutUntaggedOtherThan(rows GenericRows, egressVids, untaggedVids []int, native *int) []int {
 	if len(untaggedVids) == 0 || len(egressVids) == 0 {
 		return egressVids

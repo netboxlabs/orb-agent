@@ -858,3 +858,52 @@ func TestExtractGeneric_TaggedMembershipSurvivesTheUntaggedDrop(t *testing.T) {
 		t.Errorf("only VLAN 1, which the port egresses untagged, is dropped: got %+v", c)
 	}
 }
+
+// A maintained PVID column is a fact about the device; it does not make every
+// value in it true of every port. Where the device publishes the PVID's VLAN
+// and leaves this port out of it, the port is not in that VLAN whatever the
+// column says, and a default PVID does not displace what the masks report.
+//
+// A recorded ProCurve maintains the column across 45 ports and publishes VLAN 1
+// with no member at all. Reading the column alone moved its remaining ports
+// onto that empty VLAN and deleted the VLAN they were in.
+func TestExtractGeneric_ADefaultPvidTheMasksContradictDisplacesNothing(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 101, 2: 102},
+		PortPvid:          map[int]int{101: 1, 102: 7},
+		VlanEgressPorts: map[int][]byte{
+			1: {}, 7: maskWithPorts(2), 16: maskWithPorts(1),
+		},
+		VlanUntaggedPorts: map[int][]byte{
+			1: {}, 7: maskWithPorts(2), 16: maskWithPorts(1),
+		},
+		VlanEgressFromCurrent:   map[int]struct{}{1: {}, 7: {}, 16: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{1: {}, 7: {}, 16: {}},
+		IfAdminStatus:           map[int]int{101: 1, 102: 1},
+		IfTypes:                 map[int]string{101: "ethernetCsmacd", 102: "ethernetCsmacd"},
+		VlanCatalogPresent:      true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 16 {
+		t.Errorf("the VLAN the masks put the port in wins over an empty VLAN 1: got %+v", c)
+	}
+
+	// A PVID the operator had to set is not asked this question: a port parked
+	// on a VLAN it is not a member of is a configuration, and the PVID is the
+	// only record of it.
+	rows.PortPvid = map[int]int{101: 999, 102: 7}
+	rows.VlanEgressPorts[999] = []byte{}
+	rows.VlanUntaggedPorts[999] = []byte{}
+	rows.VlanEgressFromCurrent[999] = struct{}{}
+	rows.VlanUntaggedFromCurrent[999] = struct{}{}
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 999 {
+		t.Errorf("a non-default PVID stands even where no mask names the port: got %+v", c)
+	}
+}
