@@ -354,7 +354,10 @@ const untaggedBridgeDomainTag = 0
 //
 // Tag 0 stays in the set: that is the untagged bridge domain, and a PVID of 0
 // must survive because the Q-BRIDGE reader takes it as "bridged, nothing
-// untagged". Every other tag has to be a VID NetBox could hold. A row whose tag
+// untagged". pvidIsUnnameable short-circuits that value too, so removing the
+// exception here changes nothing and no test can tell the difference; it is
+// written out because this function's set is meant to be readable on its own,
+// and a reader should not have to find the second guard to know 0 is safe. Every other tag has to be a VID NetBox could hold. A row whose tag
 // is reserved is dropped by the rewrite, so keeping a PVID for it leaves a port
 // naming a VLAN that no longer exists anywhere in the walk: ExtractGeneric
 // reads the value as an access VLAN, Classify then rejects it through the same
