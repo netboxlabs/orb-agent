@@ -19,7 +19,8 @@ import "sort"
 //
 // This overlay corrects the untagged VLAN from those columns.
 //
-// It deliberately does not attempt tagged membership or access-vs-trunk mode.
+// It deliberately does not attempt tagged membership, and derives access-vs-trunk
+// mode only from the access column, only for a port nothing else could classify.
 // The MIB does expose per-port egress bitmaps (rldot1qPortVlanStaticTable) that
 // would carry both, but they come back empty in practice, so there is nothing to
 // derive them from — and walking that table is expensive, since it is twelve
@@ -66,10 +67,14 @@ func (r CiscoSBRows) IfIndexes() []int {
 // CISCOSB value keeps whatever the generic pass decided, which matters because
 // these OIDs are walked on every Cisco device and most will not answer them.
 //
-// Mode and the tagged VLAN set are deliberately left untouched. These columns
-// say which VLAN a port is untagged on, not whether it is an access port or a
-// trunk; deriving mode from them would demote a correctly classified trunk and
-// drop its tagged VLANs.
+// The tagged VLAN set is deliberately left untouched, and so is the mode of any
+// port that already has one: these columns say which VLAN a port is untagged on,
+// and reading a mode out of them in general would demote a correctly classified
+// trunk and drop its tagged VLANs.
+//
+// The one exception is a port with no mode at all, where the access column is
+// the only thing that could supply one. See the end of the loop for why that
+// case exists and why it cannot demote anything.
 func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 	for _, ifIndex := range rows.IfIndexes() {
 		info, ok := infos[ifIndex]
@@ -108,7 +113,13 @@ func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 		// Only into a vacuum, and only from the access column. A port already
 		// read as a trunk keeps that, so this cannot demote one or drop its
 		// tagged VLANs, and the trunk-native column above is not access
-		// evidence. Same precedence ApplyCisco gives vmMembership.
+		// evidence — a port whose only CISCOSB value is a trunk native VLAN
+		// still ends up with no mode, and no VLAN.
+		//
+		// Narrower than the precedence ApplyCisco gives vmMembership, which
+		// also demotes a one-tagged-VLAN trunk and overrides a routed
+		// inference. Neither is needed here and both would be claims these
+		// columns do not make.
 		if fromAccessColumn && info.AdminMode == AdminUnknown {
 			info.AdminMode = AdminAccess
 		}

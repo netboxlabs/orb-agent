@@ -315,8 +315,8 @@ func setVLANGroupScope(group *diode.VLANGroup, g config.VLANGroupParameters, def
 // vlanCatalogPresent reports whether this device named a VLAN of its own.
 //
 // The sources are the ones the agent walks and could learn a VLAN identity
-// from: the static table's names and row statuses, its membership masks, and
-// the Cisco VTP catalog. dot1qPvid is deliberately not among them — whether a
+// from: the static table's names and row statuses, its membership masks, the
+// Cisco VTP catalog and the Juniper enterprise table's names. dot1qPvid is deliberately not among them — whether a
 // PVID means anything is the question this answers, so counting it would make
 // every device its own corroboration.
 //
@@ -332,7 +332,8 @@ func vlanCatalogPresent(all ObjectIDValueMap) bool {
 			strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus),
 			strings.HasPrefix(oid, oidDot1qVlanStaticEgressPorts),
 			strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts),
-			strings.HasPrefix(oid, oidCiscoVtpVlanName):
+			strings.HasPrefix(oid, oidCiscoVtpVlanName),
+			strings.HasPrefix(oid, oidJnxExVlanName):
 			return true
 		}
 	}
