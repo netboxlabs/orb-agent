@@ -132,3 +132,67 @@ func TestApplyCiscoSBHasData(t *testing.T) {
 		t.Error("native-VLAN rows must report data")
 	}
 }
+
+// TestApplyCiscoSB_SuppliesTheModeOnADeviceWithNoCatalog is the interaction
+// between the two halves, which neither alone covers.
+//
+// These switches answer 1 for dot1qPvid on every port whatever it is
+// configured for, and most publish no VLAN catalog, so the generic extractor
+// now refuses that PVID and leaves the port with no mode. The private columns
+// are the only real evidence such a port has, and a VLAN without a mode never
+// reaches NetBox — so the overlay has to supply both.
+func TestApplyCiscoSB_SuppliesTheModeOnADeviceWithNoCatalog(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:  map[int]int{1: 101},
+		PortPvid:           map[int]int{101: 1},
+		VlanEgressPorts:    map[int][]byte{},
+		VlanUntaggedPorts:  map[int][]byte{},
+		IfAdminStatus:      map[int]int{101: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd"},
+		VlanCatalogPresent: false,
+	}
+	infos, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if infos[101].AdminMode != AdminUnknown {
+		t.Fatalf("precondition: the default PVID should have been refused, got %v", infos[101].AdminMode)
+	}
+
+	ApplyCiscoSB(infos, CiscoSBRows{AccessVlan: map[int]int{101: 20}})
+
+	if c := Classify(*infos[101]); c.Mode != ModeAccess || c.Untagged == nil || *c.Untagged != 20 {
+		t.Errorf("got %+v, want access on VLAN 20", c)
+	}
+}
+
+// The trunk-native column is not access evidence and must not supply a mode.
+func TestApplyCiscoSB_TheNativeColumnAloneSuppliesNoMode(t *testing.T) {
+	infos := map[int]*SwitchportInfo{
+		101: {Enabled: true, BridgePortPresent: true, AdminMode: AdminUnknown},
+	}
+	ApplyCiscoSB(infos, CiscoSBRows{NativeVlan: map[int]int{101: 30}})
+
+	if infos[101].AdminMode == AdminAccess {
+		t.Error("a trunk native VLAN does not make a port access")
+	}
+}
+
+// A port already read as a trunk keeps that: the overlay fills a vacuum, it
+// does not overrule membership evidence.
+func TestApplyCiscoSB_DoesNotDemoteATrunk(t *testing.T) {
+	infos := map[int]*SwitchportInfo{
+		101: {
+			Enabled: true, BridgePortPresent: true, AdminMode: AdminTrunk,
+			AllowedVlans: AllowedVlans{Vids: []int{10, 20}},
+		},
+	}
+	ApplyCiscoSB(infos, CiscoSBRows{AccessVlan: map[int]int{101: 20}})
+
+	if infos[101].AdminMode != AdminTrunk {
+		t.Errorf("AdminMode: got %v, want AdminTrunk", infos[101].AdminMode)
+	}
+	if c := Classify(*infos[101]); c.Mode != ModeTrunk || len(c.Tagged) != 1 || c.Tagged[0] != 10 {
+		t.Errorf("the trunk must keep its tagged VLANs, got %+v", c)
+	}
+}

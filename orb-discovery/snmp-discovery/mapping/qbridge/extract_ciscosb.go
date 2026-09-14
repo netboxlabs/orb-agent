@@ -80,6 +80,7 @@ func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 		// CoerceVid rejects the 0 these columns default to, so an unconfigured
 		// column reads as "no opinion" rather than VLAN 0.
 		native := CoerceVid(rows.AccessVlan[ifIndex])
+		fromAccessColumn := native != nil
 		if native == nil {
 			if vid := CoerceVid(rows.NativeVlan[ifIndex]); vid != nil &&
 				(*vid != 1 || info.AdminMode == AdminTrunk) {
@@ -96,5 +97,20 @@ func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 
 		info.AccessVlan = native
 		info.NativeVlan = native
+
+		// vlanAccessPortModeVlanId says the port IS an access port on that
+		// VLAN, so it can supply the mode where nothing else could — which is
+		// every one of these switches whose generic rows give no membership
+		// masks and no VLAN catalog, leaving the default PVID refused upstream.
+		// Without this the overlay names a VLAN that no mode ever reaches, and
+		// the port these columns exist to classify is emitted as nothing at all.
+		//
+		// Only into a vacuum, and only from the access column. A port already
+		// read as a trunk keeps that, so this cannot demote one or drop its
+		// tagged VLANs, and the trunk-native column above is not access
+		// evidence. Same precedence ApplyCisco gives vmMembership.
+		if fromAccessColumn && info.AdminMode == AdminUnknown {
+			info.AdminMode = AdminAccess
+		}
 	}
 }
