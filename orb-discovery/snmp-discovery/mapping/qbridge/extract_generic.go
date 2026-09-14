@@ -78,6 +78,22 @@ type GenericRows struct {
 // a device that publishes no VLAN catalog has told us nothing.
 const defaultPvid = 1
 
+// operationalNativeDisplacesPvid reports whether an untagged VLAN derived from
+// the current table is about to overrule the port's own configured PVID.
+//
+// The branch that withdraws a PVID already refuses to read operational absence
+// as configuration. This is the same asymmetry the other way round: operational
+// presence must not overrule it either.
+func operationalNativeDisplacesPvid(rows GenericRows, native, pvid int) bool {
+	if native == pvid || pvid == defaultPvid {
+		return false
+	}
+	if CoerceVid(pvid) == nil {
+		return false
+	}
+	return fromCurrentTable(rows.VlanUntaggedFromCurrent, native)
+}
+
 // fromCurrentTable reports whether a VLAN's masks came from the operational
 // table rather than the configured one.
 func fromCurrentTable(current map[int]struct{}, vid int) bool {
@@ -205,21 +221,31 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			}
 		}
 
-		// Build allowed/native from membership masks.
-		allowed, isWildcard, native, err := membershipFromMasks(
+		// Build membership from the masks: the VLANs this port egresses, and
+		// the subset of those it egresses untagged.
+		egressVids, untaggedVids, isWildcard, err := membershipFromMasks(
 			ifIndex, ifIndexToBridge, egress, untagged,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("ifIndex %d: %w", ifIndex, err)
 		}
-		info.AllowedVlans = AllowedVlans{Vids: allowed, IsWildcard: isWildcard}
-		// Membership is the stronger evidence: a port the device places in a
-		// VLAN is bridged, however its PVID table reads. The routed inference
-		// from a missing PVID row stands only for a port with no membership.
-		if info.OperMode == OperRouted && (isWildcard || len(allowed) > 0) {
-			info.OperMode = OperUnknown
-		}
+		native := chooseNative(untaggedVids)
 		switch {
+		case native != nil && operationalNativeDisplacesPvid(rows, *native, pvid):
+			// The mask naming this port untagged came from the current table,
+			// which says what is forwarding now, while the port's own PVID is
+			// configuration and names a different VLAN. The configured answer
+			// wins: the reverse would report a port as tagged in the one VLAN
+			// its PVID says it is untagged in, and would move a port onto
+			// whichever VLAN happened to be forwarding untagged at poll time.
+			//
+			// Only a PVID the operator had to set. The default is the value
+			// this whole change exists to distrust, so it does not displace
+			// real membership.
+			v := pvid
+			info.NativeVlan = &v
+			info.AccessVlan = &v
+			native = &v
 		case native != nil:
 			info.NativeVlan = native
 			info.AccessVlan = native
@@ -241,6 +267,20 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 			// Arista walk, the very platform the PVID-only branch below cites.
 			info.NativeVlan = nil
 			info.AccessVlan = nil
+		}
+
+		// A VLAN this port egresses untagged is not one it carries tagged, so
+		// it cannot go in tagged_vlans. Only one such VLAN fits untagged_vlan;
+		// the rest are dropped rather than reported as the opposite of what
+		// the device said. This bites only where a port reads untagged in more
+		// than one VLAN, which the configured table alone does not produce.
+		allowed := withoutUntaggedOtherThan(egressVids, untaggedVids, native)
+		info.AllowedVlans = AllowedVlans{Vids: allowed, IsWildcard: isWildcard}
+		// Membership is the stronger evidence: a port the device places in a
+		// VLAN is bridged, however its PVID table reads. The routed inference
+		// from a missing PVID row stands only for a port with no membership.
+		if info.OperMode == OperRouted && (isWildcard || len(allowed) > 0) {
+			info.OperMode = OperUnknown
 		}
 
 		// Default mode hint, from the tagging evidence rather than from how
@@ -304,14 +344,15 @@ func hasRow(table map[int][]byte, vid int) bool {
 }
 
 // membershipFromMasks scans the VlanEgressPorts/VlanUntaggedPorts maps
-// and returns (egress VIDs for this port, wildcard?, untagged VID).
+// and returns (egress VIDs for this port, the subset of those the port
+// egresses untagged, wildcard?).
 //
 // Iterates the egress map keys (the VIDs that actually exist in the
 // device's dot1qVlanStaticEgressPorts) rather than walking 1..4094 —
 // this keeps work proportional to the discovered VLAN count instead of
 // the full 12-bit VID space, which matters on switches with thousands
-// of ports and only a handful of VLANs configured. Results are sorted
-// for deterministic output (Go map iteration is randomized).
+// of ports and only a handful of VLANs configured. Both results are
+// sorted for deterministic output (Go map iteration is randomized).
 //
 // When the same ifIndex maps to multiple bridge ports (rare but
 // permitted by BRIDGE-MIB), membership for the ifIndex is the union of
@@ -319,14 +360,18 @@ func hasRow(table map[int][]byte, vid int) bool {
 // port for that ifIndex is in its egress mask, and as untagged if any
 // bridge port is in the untagged mask. "wildcard" is set when the
 // resulting egress set covers all 4094 VIDs.
+//
+// Which of the untagged VIDs becomes the port's native VLAN is not
+// decided here: that needs the port's PVID and the provenance of the
+// masks, both of which live with the caller.
 func membershipFromMasks(
 	ifIndex int,
 	ifIndexToBridge map[int][]int,
 	egress, untagged map[int][]byte,
-) ([]int, bool, *int, error) {
+) ([]int, []int, bool, error) {
 	bridgePorts, ok := ifIndexToBridge[ifIndex]
 	if !ok || len(bridgePorts) == 0 {
-		return nil, false, nil, nil
+		return nil, nil, false, nil
 	}
 	allowed := make([]int, 0, len(egress))
 	for vid, mask := range egress {
@@ -339,17 +384,64 @@ func membershipFromMasks(
 		allowed = append(allowed, vid)
 	}
 	sort.Ints(allowed)
-	var nativeVid *int
+	var untaggedVids []int
 	for _, vid := range allowed {
 		if utg, ok := untagged[vid]; ok && anyBridgePortInMask(utg, bridgePorts) {
-			v := vid
-			nativeVid = &v
+			untaggedVids = append(untaggedVids, vid)
 		}
 	}
 	if len(allowed) == 4094 {
-		return nil, true, nativeVid, nil
+		return nil, untaggedVids, true, nil
 	}
-	return allowed, false, nativeVid, nil
+	return allowed, untaggedVids, false, nil
+}
+
+// chooseNative picks the port's untagged VLAN out of the VLANs whose
+// untagged masks name it.
+//
+// A port has one untagged VLAN, but a device can name several: some
+// devices leave a port in the default VLAN's untagged mask alongside
+// the one it actually carries, and the current table reports what is
+// forwarding untagged now rather than what is configured. Where the
+// masks alone cannot settle it, the highest VID wins. That is arbitrary
+// but it is the rule this has always applied, and it is stable across
+// polls where map order is not. The PVID does not break the tie here:
+// where it disagrees with an operational mask it overrules it outright,
+// which the caller decides, having the provenance this does not.
+func chooseNative(untaggedVids []int) *int {
+	if len(untaggedVids) == 0 {
+		return nil
+	}
+	v := untaggedVids[len(untaggedVids)-1]
+	return &v
+}
+
+// withoutUntaggedOtherThan removes from the egress set every VLAN the
+// port egresses untagged except the one that became its native VLAN.
+// Those VLANs are the one thing the masks rule out as tagged, so the
+// alternative is to publish the opposite of what the device reported.
+func withoutUntaggedOtherThan(egressVids, untaggedVids []int, native *int) []int {
+	if len(untaggedVids) == 0 || len(egressVids) == 0 {
+		return egressVids
+	}
+	drop := make(map[int]struct{}, len(untaggedVids))
+	for _, vid := range untaggedVids {
+		if native != nil && vid == *native {
+			continue
+		}
+		drop[vid] = struct{}{}
+	}
+	if len(drop) == 0 {
+		return egressVids
+	}
+	kept := make([]int, 0, len(egressVids))
+	for _, vid := range egressVids {
+		if _, ok := drop[vid]; ok {
+			continue
+		}
+		kept = append(kept, vid)
+	}
+	return kept
 }
 
 // anyBridgePortInMask reports whether any of the given bridge ports has

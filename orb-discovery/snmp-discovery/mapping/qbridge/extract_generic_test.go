@@ -648,3 +648,128 @@ func TestExtractGeneric_ACurrentBitmapIsNotDecodedAsText(t *testing.T) {
 		t.Errorf("the static text list must still decode: %+v", c)
 	}
 }
+
+// A port's untagged VLAN is configuration, and the current table is not. A
+// recorded switch answers dot1qPvid 1000 on five ports while the current
+// table's untagged mask still names them in VLAN 1: reading the mask as the
+// answer moved every one of them onto a VLAN their own PVID contradicts.
+func TestExtractGeneric_ACurrentUntaggedMaskDoesNotDisplaceAPvid(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:       map[int]int{1: 101},
+		PortPvid:                map[int]int{101: 1000},
+		VlanEgressPorts:         map[int][]byte{1: maskWithPorts(1)},
+		VlanUntaggedPorts:       map[int][]byte{1: maskWithPorts(1)},
+		VlanEgressFromCurrent:   map[int]struct{}{1: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{1: {}},
+		IfAdminStatus:           map[int]int{101: 1},
+		IfTypes:                 map[int]string{101: "ethernetCsmacd"},
+		VlanCatalogPresent:      true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	c := Classify(*got[101])
+	if c.Untagged == nil || *c.Untagged != 1000 {
+		t.Errorf("the configured PVID is the untagged VLAN: got %+v", c)
+	}
+	if len(c.Tagged) != 0 {
+		t.Errorf("the VLAN the port egresses untagged is not a tagged VLAN: got %+v", c)
+	}
+
+	// The same masks from the static table are configuration too, and there is
+	// then nothing to prefer the PVID over: the row wins as it always has.
+	rows.VlanEgressFromCurrent = map[int]struct{}{}
+	rows.VlanUntaggedFromCurrent = map[int]struct{}{}
+	got, err = ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 1 {
+		t.Errorf("a configured untagged row still outranks the PVID: got %+v", c)
+	}
+}
+
+// The default PVID is the value this whole change exists to distrust, so it
+// does not displace a VLAN the device actually reported the port untagged in.
+func TestExtractGeneric_TheDefaultPvidDisplacesNothing(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex:       map[int]int{1: 101},
+		PortPvid:                map[int]int{101: 1},
+		VlanEgressPorts:         map[int][]byte{20: maskWithPorts(1)},
+		VlanUntaggedPorts:       map[int][]byte{20: maskWithPorts(1)},
+		VlanEgressFromCurrent:   map[int]struct{}{20: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{20: {}},
+		IfAdminStatus:           map[int]int{101: 1},
+		IfTypes:                 map[int]string{101: "ethernetCsmacd"},
+		VlanCatalogPresent:      true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if c := Classify(*got[101]); c.Untagged == nil || *c.Untagged != 20 {
+		t.Errorf("the reported untagged VLAN stands against a default PVID: got %+v", c)
+	}
+}
+
+// One VLAN can be the untagged one. When several name the port, the PVID
+// settles which, and the rest are dropped rather than reported as tagged --
+// the masks are the device saying those are the VLANs it does not tag.
+func TestExtractGeneric_UntaggedInSeveralVlansKeepsOnlyThePvidsOwn(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{4: 104},
+		PortPvid:          map[int]int{104: 10},
+		VlanEgressPorts: map[int][]byte{
+			1: maskWithPorts(4), 10: maskWithPorts(4), 99: maskWithPorts(4),
+		},
+		VlanUntaggedPorts: map[int][]byte{
+			1: maskWithPorts(4), 10: maskWithPorts(4), 99: maskWithPorts(4),
+		},
+		VlanEgressFromCurrent:   map[int]struct{}{1: {}, 10: {}, 99: {}},
+		VlanUntaggedFromCurrent: map[int]struct{}{1: {}, 10: {}, 99: {}},
+		IfAdminStatus:           map[int]int{104: 1},
+		IfTypes:                 map[int]string{104: "ethernetCsmacd"},
+		VlanCatalogPresent:      true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	c := Classify(*got[104])
+	if c.Untagged == nil || *c.Untagged != 10 {
+		t.Errorf("the PVID picks which of them is untagged: got %+v", c)
+	}
+	if len(c.Tagged) != 0 {
+		t.Errorf("no VLAN the port egresses untagged may be reported tagged: got %+v", c)
+	}
+}
+
+// A VLAN the port is only in the egress mask of is genuinely tagged, and
+// dropping the untagged ones must not take it with them.
+func TestExtractGeneric_TaggedMembershipSurvivesTheUntaggedDrop(t *testing.T) {
+	rows := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 101},
+		PortPvid:          map[int]int{101: 312},
+		VlanEgressPorts: map[int][]byte{
+			1: maskWithPorts(1), 304: maskWithPorts(1), 312: maskWithPorts(1),
+		},
+		VlanUntaggedPorts: map[int][]byte{
+			1: maskWithPorts(1), 312: maskWithPorts(1),
+		},
+		IfAdminStatus:      map[int]int{101: 1},
+		IfTypes:            map[int]string{101: "ethernetCsmacd"},
+		VlanCatalogPresent: true,
+	}
+	got, err := ExtractGeneric(rows)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	c := Classify(*got[101])
+	if c.Mode != ModeTrunk || c.Untagged == nil || *c.Untagged != 312 {
+		t.Errorf("the highest untagged VLAN is still the native one: got %+v", c)
+	}
+	if len(c.Tagged) != 1 || c.Tagged[0] != 304 {
+		t.Errorf("only VLAN 1, which the port egresses untagged, is dropped: got %+v", c)
+	}
+}
