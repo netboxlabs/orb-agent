@@ -124,6 +124,10 @@ func operationalNativeDisplacesPvid(
 	if masksContradict {
 		return false
 	}
+	// The first conjunct is implied by the second, since everyPvidIsDefault is
+	// computed over every port including this one. It is written out because
+	// the rule is about the default value specifically, and a reader should not
+	// have to derive that from the other test's scope.
 	if pvid == defaultPvid && everyPvidIsDefault {
 		return false
 	}
