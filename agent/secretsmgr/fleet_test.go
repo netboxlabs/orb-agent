@@ -48,6 +48,35 @@ func TestFleetSecretsManager_processString(t *testing.T) {
 		assert.Equal(t, "secretvalue", result)
 	})
 
+	t.Run("valid generic secret reference", func(t *testing.T) {
+		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+		fm.ctx = ctx
+		fm.requestTopic = "test/request"
+		fm.responseTopic = "test/response"
+		fm.updatedTopic = "test/updated"
+
+		mockPub := &asyncMockPublisher{fm: fm}
+		fm.publisher = mockPub
+		fm.subscriber = &mockSubscriber{}
+
+		result, err := fm.processString("${secret://orb/agents/database/password}", "policy1")
+		assert.NoError(t, err)
+		assert.Equal(t, "secretvalue", result)
+	})
+
+	t.Run("empty body rejected", func(t *testing.T) {
+		// An empty body must produce a clear error rather than leaking the
+		// literal placeholder to the backend, for both reference forms.
+		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(1)})
+		fm.ctx = ctx
+
+		_, err := fm.processString("${fleet://}", "policy1")
+		assert.ErrorContains(t, err, "empty body")
+
+		_, err = fm.processString("${secret://}", "policy1")
+		assert.ErrorContains(t, err, "empty body")
+	})
+
 	t.Run("cached secret", func(t *testing.T) {
 		fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(1)})
 		fm.ctx = ctx
