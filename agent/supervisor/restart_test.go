@@ -1614,3 +1614,278 @@ func TestRestartAllReportsCancellationWhenStopAbortsTheSweep(t *testing.T) {
 		t.Fatal("RestartAll did not return after StopAll")
 	}
 }
+
+// A failed on-demand start is retried by the supervisor after RetryInterval
+// through the health restart: the restart is registered (under fleet the
+// count grows), the policies are marked and the backend started again.
+func TestFailedOnDemandStartIsRetriedAfterTheInterval(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 30 * time.Millisecond
+	lazy := newStub(rec, "lazy_retry")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_retry", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_retry": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	rec.reset()
+
+	_, err := s.EnsureStarted("sup_lazy_retry")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_retry"); return p == Running }, 5*time.Second, 5*time.Millisecond, "the retry brought the backend up")
+
+	assert.Equal(t, 1, rec.count("restart-registered:sup_lazy_retry:retry after failed start"))
+	assert.Equal(t, 1, rec.count("remove:sup_lazy_retry:permanently=false"))
+	assert.Equal(t, 1, rec.count("reset:lazy_retry"), "the retry goes through the health restart's reset")
+	require.Eventually(t, func() bool { return rec.count("monitor:sup_lazy_retry") == 1 }, 5*time.Second, 5*time.Millisecond, "the monitor is registered by the retry that succeeded")
+	require.Eventually(t, func() bool { return rec.count("apply:sup_lazy_retry") >= 1 }, 5*time.Second, 5*time.Millisecond)
+}
+
+// A retry that fails again re-arms: the attempts repeat once per interval.
+func TestFailedOnDemandRetryRearmsUntilItSucceeds(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	lazy := newStub(rec, "lazy_again")
+	lazy.startErrs = []error{errors.New("one"), errors.New("two"), errors.New("three")}
+	lazy.resetErrs = []error{errors.New("two"), errors.New("three")}
+	backend.Register("sup_lazy_again", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_again": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	rec.reset()
+
+	_, err := s.EnsureStarted("sup_lazy_again")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_again"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+
+	assert.Equal(t, 3, rec.count("restart-registered:sup_lazy_again:retry after failed start"), "two failed retries, then the one that succeeded")
+}
+
+// A restart from another source disarms the timer: the timer must not fire
+// a second restart into one already running or just completed.
+func TestRestartDisarmsAPendingRetry(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 2 * time.Second
+	lazy := newStub(rec, "lazy_disarm")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_disarm", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_disarm": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_disarm")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_disarm"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+	rec.reset()
+
+	require.NoError(t, s.Restart(context.Background(), "sup_lazy_disarm", "health"))
+
+	assert.Equal(t, 1, rec.count("restart-registered:sup_lazy_disarm:health"))
+	e, _ := s.entryFor("sup_lazy_disarm")
+	e.mu.Lock()
+	armed := e.retryTimer != nil
+	e.mu.Unlock()
+	assert.False(t, armed, "the restart disarmed the timer")
+	assert.Equal(t, 0, rec.count("restart-registered:sup_lazy_disarm:retry after failed start"))
+	p, _ := s.Phase("sup_lazy_disarm")
+	assert.Equal(t, Running, p)
+}
+
+// StopAll disarms the timer: no start follows a stop, even one the timer
+// would have fired right after.
+func TestStopAllDisarmsAPendingRetry(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 2 * time.Second
+	lazy := newStub(rec, "lazy_stopped")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_stopped", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_stopped": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_stopped")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_stopped"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+	rec.reset()
+
+	s.StopAll(context.Background())
+
+	e, _ := s.entryFor("sup_lazy_stopped")
+	e.mu.Lock()
+	armed := e.retryTimer != nil
+	e.mu.Unlock()
+	assert.False(t, armed, "StopAll disarmed the timer")
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 0, rec.count("restart-registered:"), "no retry after stop")
+	assert.Equal(t, 0, rec.count("reset:lazy_stopped"))
+	assert.Equal(t, int32(1), lazy.startCalls.Load())
+}
+
+// The retry's start is bounded by the same budget as the first attempt: the
+// reset's run context carries it.
+func TestOnDemandRetryCarriesTheReadinessBudget(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	lazy := newStub(rec, "lazy_budget_retry")
+	lazy.startErrs = []error{errors.New("no binary")}
+	var seen time.Duration
+	lazy.onReset = func(ctx context.Context) { seen = backend.ReadinessBudgetFrom(ctx) }
+	backend.Register("sup_lazy_budget_retry", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_budget_retry": map[string]any{"start_mode": "on_demand", "start_timeout": 9}}, config.BackendCommons{}, background))
+
+	_, err := s.EnsureStarted("sup_lazy_budget_retry")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_budget_retry"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+
+	assert.Equal(t, 9*time.Second, seen)
+}
+
+// A stop landing while a Failed on-demand entry's retry is inside its reset
+// keeps the entry Stopped: no timer is armed on it and nothing starts after
+// StopAll returned.
+func TestStopDuringAFailedRetryResetArmsNoTimer(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	lazy := newStub(rec, "lazy_stop_reset")
+	lazy.startErrs = []error{errors.New("no binary")}
+	entered := make(chan struct{})
+	lazy.onResetCtx = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	backend.Register("sup_lazy_stop_reset", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_stop_reset": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_stop_reset")
+	require.NoError(t, err)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the retry never entered the reset")
+	}
+
+	s.StopAll(context.Background())
+
+	p, _ := s.Phase("sup_lazy_stop_reset")
+	assert.Equal(t, Stopped, p, "the failed reset must not overwrite Stopped")
+	e, _ := s.entryFor("sup_lazy_stop_reset")
+	e.mu.Lock()
+	armed := e.retryTimer != nil
+	e.mu.Unlock()
+	assert.False(t, armed, "no timer is armed on a stopped entry")
+	time.Sleep(60 * time.Millisecond)
+	assert.Equal(t, 1, rec.count("reset:lazy_stop_reset"), "no retry after stop")
+}
+
+// A retry whose Configure fails leaves the on-demand entry Failed and armed
+// again, so the attempts keep coming.
+func TestOnDemandConfigureFailureRearmsTheRetry(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	lazy := newStub(rec, "lazy_cfg_fail")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_cfg_fail", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_cfg_fail": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	// Set before the start is launched: startDeclared does not call
+	// Configure, so only the retries see this, and no goroutine reads the
+	// field while the test writes it.
+	lazy.configureErr = errors.New("bad config")
+	_, err := s.EnsureStarted("sup_lazy_cfg_fail")
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		return rec.count("restart-registered:sup_lazy_cfg_fail:retry after failed start") >= 2
+	}, 5*time.Second, 5*time.Millisecond, "a retry that fails to configure arms the next")
+
+	p, _ := s.Phase("sup_lazy_cfg_fail")
+	assert.Equal(t, Failed, p)
+	assert.Equal(t, 0, rec.count("reset:lazy_cfg_fail"), "no reset while Configure fails")
+}
+
+// The timer is on-demand only: an eager entry is driven through the
+// prior == Failed branch on purpose (stamped Failed before the restart, the
+// way the Task 3 tests do), so its failed FullReset reaches armRetry; the
+// mode guard inside armRetry must still refuse to arm it, and the entry
+// stays Failed for the health monitor, as before.
+func TestEagerRestartFailureArmsNoRetry(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	eager := newStub(rec, "eager_norestart")
+	eager.resetErr = errors.New("reset failed")
+	backend.Register("sup_eager_norestart", eager)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_eager_norestart": nil}, config.BackendCommons{}, background))
+	e, ok := s.entryFor("sup_eager_norestart")
+	require.True(t, ok)
+	e.mu.Lock()
+	e.phase = Failed
+	e.mu.Unlock()
+	rec.reset()
+
+	require.NoError(t, s.Restart(context.Background(), "sup_eager_norestart", "health"))
+	time.Sleep(2 * s.opts.RetryInterval)
+
+	p, _ := s.Phase("sup_eager_norestart")
+	assert.Equal(t, Failed, p)
+	e.mu.Lock()
+	armed := e.retryTimer != nil
+	e.mu.Unlock()
+	assert.False(t, armed, "an eager entry's retry timer must never be armed")
+	assert.Equal(t, 1, rec.count("restart-registered:sup_eager_norestart:health"))
+	assert.Equal(t, 0, rec.count("restart-registered:sup_eager_norestart:retry after failed start"))
+}
+
+// A health restart of an on-demand entry that had no process and fails its
+// reset arms the timer, so the retry repeats without a policy arriving.
+func TestOnDemandHealthRestartFailureArmsTheRetry(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	lazy := newStub(rec, "lazy_reset_fail")
+	lazy.startErrs = []error{errors.New("no binary")}
+	lazy.resetErrs = []error{errors.New("still no binary")}
+	backend.Register("sup_lazy_reset_fail", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_reset_fail": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_reset_fail")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_reset_fail"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+
+	assert.Equal(t, 2, rec.count("restart-registered:sup_lazy_reset_fail:retry after failed start"), "the first retry failed its reset and armed the next")
+}
+
+// A binary upgrade restart that fails on an on-demand entry re-arms the
+// retry it disarmed: under git and local nothing else would start it.
+func TestUpgradeRestartFailureRearmsAnOnDemandRetry(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 2 * time.Second
+	lazy := newStub(rec, "lazy_upgrade")
+	lazy.startErrs = []error{errors.New("no binary"), errors.New("still none")}
+	backend.Register("sup_lazy_upgrade", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_upgrade": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_upgrade")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_upgrade"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+
+	e, _ := s.entryFor("sup_lazy_upgrade")
+	e.mu.Lock()
+	before := e.retryTimer
+	e.mu.Unlock()
+	require.NotNil(t, before, "the failed first start armed the retry")
+
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_lazy_upgrade"), "the upgrade body logs and returns nil on its give-up exits")
+
+	p, _ := s.Phase("sup_lazy_upgrade")
+	assert.Equal(t, Failed, p)
+	e.mu.Lock()
+	after := e.retryTimer
+	e.mu.Unlock()
+	require.NotNil(t, after, "the failed upgrade restart re-armed the retry")
+	assert.NotSame(t, before, after, "the upgrade restart disarmed the pending timer and armed a new one")
+}

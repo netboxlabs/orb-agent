@@ -72,6 +72,10 @@ type Options struct {
 	ReplayRetryInterval time.Duration
 	// DispatchInterval is how often queued binary-upgrade restarts are drained.
 	DispatchInterval time.Duration
+	// RetryInterval separates the attempts the supervisor makes to start an
+	// on-demand backend whose start failed; each attempt is a restart.
+	// Default backend.MinRestartTime.
+	RetryInterval time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -86,6 +90,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.DispatchInterval == 0 {
 		o.DispatchInterval = 500 * time.Millisecond
+	}
+	if o.RetryInterval == 0 {
+		o.RetryInterval = backend.MinRestartTime
 	}
 	return o
 }
@@ -216,6 +223,10 @@ type entry struct {
 	// lastErr is the last start error of an on-demand entry, answered to
 	// EnsureStarted while the entry is Failed.
 	lastErr error
+	// retryTimer is armed when an on-demand start fails and fires a restart
+	// after Options.RetryInterval; nil when disarmed. Every restart and
+	// StopAll disarm it, so a timer never doubles a restart in flight.
+	retryTimer *time.Timer
 
 	// restartMu is held across the initial configure and start and across a
 	// whole restart, including its replay and the replay's retries, so no
@@ -296,6 +307,22 @@ func (e *entry) setPhase(p Phase) (stopped bool) {
 	if p == Running {
 		e.lastErr = nil
 	}
+	return false
+}
+
+// failWith stamps Failed and remembers the start error, so EnsureStarted
+// answers the latest failure, unless the entry was stopped meanwhile, and
+// reports whether it was: a stop that lands during a failed retry's reset
+// must keep the entry Stopped, or the timer armed on it would start a
+// process after shutdown.
+func (e *entry) failWith(err error) (stopped bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.phase == Stopped {
+		return true
+	}
+	e.phase = Failed
+	e.lastErr = err
 	return false
 }
 
@@ -626,19 +653,16 @@ func (s *Supervisor) startDeclared(e *entry) {
 
 // recordStartFailure marks an on-demand start that failed: Failed, the
 // error registered with the state manager (under fleet the backend enters
-// the heartbeat as a backend error) and remembered for EnsureStarted. A
-// stop that began meanwhile leaves the entry Stopped and records nothing.
+// the heartbeat as a backend error) and remembered for EnsureStarted, and
+// arms the retry timer. A stop that began meanwhile leaves the entry
+// Stopped and records nothing.
 func (s *Supervisor) recordStartFailure(e *entry, err error) {
-	e.mu.Lock()
-	if e.phase == Stopped {
-		e.mu.Unlock()
+	if e.failWith(err) {
 		return
 	}
-	e.phase = Failed
-	e.lastErr = err
-	e.mu.Unlock()
 	s.logger.Error("on-demand start failed", "backend", e.name, "error", err)
 	s.state.RegisterError(e.name, err.Error())
+	s.armRetry(e)
 }
 
 // registerMonitorOnce registers the health monitor the first time an entry
@@ -733,6 +757,10 @@ func (s *Supervisor) StopAll(ctx context.Context) {
 			e.runCancel()
 		}
 		e.phase = Stopped
+		if e.retryTimer != nil {
+			e.retryTimer.Stop()
+			e.retryTimer = nil
+		}
 		e.mu.Unlock()
 	}
 	for _, e := range entries {

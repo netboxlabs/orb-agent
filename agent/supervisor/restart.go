@@ -9,6 +9,48 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 )
 
+// ReasonRetryAfterFailedStart is the restart reason the retry timer uses.
+const ReasonRetryAfterFailedStart = "retry after failed start"
+
+// armRetry arms an on-demand entry's retry timer under its field mutex; a
+// timer already armed is left alone. The timer restarts the entry through
+// Restart, which disarms it first, so a restart from any other source that
+// runs meanwhile is not doubled unless the timer already fired; a callback
+// already dispatched runs its restart after the other one, on an entry that
+// is Running again, which the plan accepts. An eager entry is never armed:
+// its failures are the health monitor's business.
+func (s *Supervisor) armRetry(e *entry) {
+	e.mu.Lock()
+	if e.mode != startOnDemand || e.phase != Failed || e.retryTimer != nil {
+		e.mu.Unlock()
+		return
+	}
+	e.retryTimer = time.AfterFunc(s.opts.RetryInterval, func() {
+		err := s.Restart(s.runContext(e.name), e.name, ReasonRetryAfterFailedStart)
+		switch {
+		case err == nil:
+		case errors.Is(err, ErrStopped):
+			s.logger.Info("on-demand start retry skipped, supervisor stopped", "backend", e.name)
+		default:
+			s.logger.Error("on-demand start retry failed", "backend", e.name, "error", err)
+		}
+	})
+	e.mu.Unlock()
+	// Logged outside the field mutex: a log handler is a call out (under
+	// fleet it exports over OTLP), and the field mutex makes none.
+	s.logger.Info("scheduling on-demand start retry", "backend", e.name, "in", s.opts.RetryInterval)
+}
+
+// disarmRetry stops a pending retry timer, if any, under the field mutex.
+func (e *entry) disarmRetry() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.retryTimer != nil {
+		e.retryTimer.Stop()
+		e.retryTimer = nil
+	}
+}
+
 // Restart restarts one declared backend by resetting it in place: see
 // restartHealth for the full sequence. The sequence holds the entry's
 // restart mutex across it, so no two restarts for the same backend
@@ -126,6 +168,7 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	if prior == Stopped {
 		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
+	e.disarmRetry()
 
 	s.logger.Info("restarting backend", "backend", e.name, "reason", reason)
 	s.state.RegisterRestart(e.name, reason)
@@ -148,6 +191,8 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 		if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 			s.scheduleReplay(e)
 		}
+		// A Failed on-demand entry stays Failed here; its retry repeats.
+		s.armRetry(e)
 		return err
 	}
 	s.logger.Info("resetting backend", "backend", e.name)
@@ -167,7 +212,7 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	// the previous process is stopped by FullReset itself, gracefully, not
 	// by a cancellation racing it. A stop that began first wins here the
 	// way it does in configureAndStart.
-	runCtx, cancel := context.WithCancel(s.runContext(e.name))
+	runCtx, cancel := context.WithCancel(backend.WithReadinessBudget(s.runContext(e.name), e.budget))
 	prevCancel, stopped := e.beginReset(cancel)
 	if stopped {
 		cancel()
@@ -188,7 +233,9 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 		// replay is scheduled here rather than left to a restart that may
 		// never come.
 		if prior == Failed {
-			e.setPhase(Failed)
+			if !e.failWith(err) {
+				s.armRetry(e)
+			}
 		} else {
 			e.setPhase(Running)
 		}
@@ -243,6 +290,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	if prior == Stopped {
 		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
+	e.disarmRetry()
 
 	binaryName := ""
 	if mb, ok := e.be.(backend.ManagedBinary); ok {
@@ -297,18 +345,21 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	if binaryName == "" {
 		s.logger.Error("filesmgr: cannot roll back, backend declares no managed binary", "backend", e.name)
 		e.setPhase(Failed)
+		s.armRetry(e)
 		s.scheduleReplay(e)
 		return nil
 	}
 	if s.files == nil {
 		s.logger.Error("filesmgr: cannot roll back, no files manager configured", "backend", e.name, "binary", binaryName)
 		e.setPhase(Failed)
+		s.armRetry(e)
 		s.scheduleReplay(e)
 		return nil
 	}
 	if err := s.files.Rollback(ctx, binaryName); err != nil {
 		s.logger.Error("filesmgr: rollback failed", "backend", e.name, "binary", binaryName, "error", err)
 		e.setPhase(Failed)
+		s.armRetry(e)
 		s.scheduleReplay(e)
 		return nil
 	}
@@ -324,6 +375,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	if err := e.be.Start(runCtx2, cancel2); err != nil {
 		s.logger.Error("filesmgr: backend Start failed even after rollback", "backend", e.name, "error", err)
 		e.setPhase(Failed)
+		s.armRetry(e)
 		s.scheduleReplay(e)
 		return nil
 	}

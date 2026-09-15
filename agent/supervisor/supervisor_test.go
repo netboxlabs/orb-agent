@@ -79,6 +79,7 @@ type stubBackend struct {
 	startBlocks  chan struct{} // when set, Start waits on it or on its context
 	ignoreCancel bool          // when set, Start ignores ctx and only waits on startBlocks
 	resetErr     error
+	resetErrs    []error // popped per FullReset; falls back to resetErr when exhausted
 	configureErr error
 	binary       string
 	onStart      func(ctx context.Context, cancel context.CancelFunc)
@@ -157,7 +158,16 @@ func (s *stubBackend) FullReset(ctx context.Context) error {
 	if s.onReset != nil {
 		s.onReset(ctx)
 	}
-	return s.resetErr
+	s.mu.Lock()
+	var err error
+	if len(s.resetErrs) > 0 {
+		err = s.resetErrs[0]
+		s.resetErrs = s.resetErrs[1:]
+	} else {
+		err = s.resetErr
+	}
+	s.mu.Unlock()
+	return err
 }
 
 func (s *stubBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
