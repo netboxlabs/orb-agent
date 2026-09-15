@@ -93,6 +93,9 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager, fm)
 
 	sup := supervisor.New(logger, backendStateManager, fm, pm, restartBackendChan, supervisor.Options{NotRunning: policymgr.ErrBackendNotRunning})
+	// The policy manager consults the supervisor before applying a policy:
+	// a declared on-demand backend is started by its first policy.
+	pm.SetStarter(sup)
 	// The fleet connection is built inside newFleetConfigManager, so it
 	// already exists here: a full agent reset restarts through the
 	// supervisor from the moment the fleet config manager can dispatch one.
