@@ -360,6 +360,11 @@ def _parse_ip_addresses(raw: str) -> list[dict]:
             # else the device prints are not address rows. Skipped rather than
             # fatal: an unrecognised line must not cost the addresses around it.
             continue
+        # Defensive, and no test distinguishes it: the continuation branch above
+        # already clears what it consumed, so this only bites if a comment line
+        # were followed by an indexed row and then a bare continuation, which
+        # RouterOS does not print. Carrying a stale flag onto an unrelated
+        # address would silently drop an active one, so it is cleared anyway.
         carried_flags = ""
 
         if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
