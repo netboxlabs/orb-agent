@@ -150,3 +150,50 @@ def test_column_padding_keeps_names_containing_spaces_intact():
     assert _driver_with_output(spaced_interface).get_interfaces_ip() == {
         "ether1 customer": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
     }
+
+
+def test_flags_survive_a_comment_line_before_the_address():
+    """
+    A line between the index line and its address must not take the flags.
+
+    RouterOS prints a commented address over two lines, and can print further
+    comment lines between them. Losing the flags there reports a disabled or
+    invalid address as active, which is the SSH and SNMP disagreement the flag
+    filtering exists to prevent.
+    """
+    output = (
+        "Flags: X - disabled, I - invalid\n"
+        "# ADDRESS        NETWORK      INTERFACE\n"
+        "0 X ;;; disabled address\n"
+        ";;; second comment line\n"
+        "    192.0.2.1/24   192.0.2.0    ether1\n"
+        "1 I ;;; invalid one\n"
+        ";;; and a note\n"
+        "    198.51.100.1/24 198.51.100.0 ether2\n"
+        "2   203.0.113.1/24  203.0.113.0  ether3\n"
+    )
+    assert _driver_with_output(output).get_interfaces_ip() == {
+        "ether3": {"ipv4": {"203.0.113.1": {"prefix_length": 24}}}
+    }
+
+
+def test_partial_reads_are_reported(caplog):
+    """
+    An unreadable row is worth saying so even when others were read.
+
+    A device printing one row in a format we know and another in one we do not
+    returns plausible partial data, which is harder to notice than returning
+    nothing at all.
+    """
+    import logging
+
+    mixed = (
+        "Flags: X - disabled\n"
+        "# ADDRESS        NETWORK      INTERFACE\n"
+        "0  192.0.2.1/24   192.0.2.0    ether1\n"
+        "somethingnew 198.51.100.1/24 198.51.100.0\n"
+    )
+    with caplog.at_level(logging.WARNING):
+        result = _driver_with_output(mixed).get_interfaces_ip()
+    assert result == {"ether1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
+    assert any("matched no known row format" in r.message for r in caplog.records)

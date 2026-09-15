@@ -410,9 +410,13 @@ def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
             flags = match.group("flags") or ""
         else:
             match = _IP_CONTINUED_ROW_RE.match(line)
-            # Only the flags from an index line immediately above belong to
-            # this address; anything else reaching here is its own row.
-            flags, carried_flags = carried_flags, ""
+            if match:
+                # The flags on the index line above belong to this address.
+                # Consumed only once an address is actually found, so a line
+                # in between that is neither, such as a second comment line,
+                # does not take them with it: losing an X or an I there would
+                # report a disabled address as an active one.
+                flags, carried_flags = carried_flags, ""
         if not match:
             # Flags legends, standalone comment rows (";;; text") and anything
             # else the device prints are not address rows. Skipped rather than
@@ -707,12 +711,17 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 exc_info=True,
             )
             return {}
-        if not interfaces_ip and unread:
+        if unread:
             # Only where the device printed something address-shaped that no
             # pattern matched. A switch with no addresses, or one whose every
             # address is disabled or invalid, reports nothing and is not a
             # problem; warning on those would put this line in every poll of
             # an ordinary device and teach operators to scroll past it.
+            #
+            # Raised whatever else was read. A device that prints one row in a
+            # format we know and another in one we do not returns plausible
+            # partial data, which is the harder case to notice and the one
+            # most worth saying out loud.
             logger.warning(
                 "mikrotik_routeros: %d line(s) of 'ip address print' look "
                 "like addresses but matched no known row format; the output "
