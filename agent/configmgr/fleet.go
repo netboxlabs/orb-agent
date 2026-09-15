@@ -401,9 +401,13 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 
 // runResetHandler processes signals from resetChan, performing a clean MQTT disconnect followed
 // by reconnect using the latest stored connection details. It uses connCtx (not monitorCtx) as
-// the disconnect timeout parent so the offline heartbeat goroutine still has a live context.
-// monitorCtx bounds the AwaitConnection wait during reconnect, so Stop() is never blocked by an
-// in-flight reset when the broker is unreachable.
+// the disconnect timeout parent so the offline heartbeat goroutine still has a live context,
+// but the disconnect is cut short when monitorCtx ends, since Stop() cancels monitorCtx and
+// waits for this handler before its own disconnect. monitorCtx bounds the AwaitConnection wait
+// during reconnect, so Stop() is never blocked by an in-flight reset when the broker is
+// unreachable. A signal received once shutdown began is dropped: the supervisor is stopped
+// before the config manager, so a reset finishing during that stop can still signal, and a
+// disconnect and reconnect during teardown would only delay it.
 func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 	for {
 		select {
@@ -412,6 +416,10 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 			return
 		case _, ok := <-fleetManager.resetChan:
 			if !ok {
+				return
+			}
+			if fleetManager.monitorCtx.Err() != nil {
+				fleetManager.logger.Info("reset handler stopped; dropping a reset signal received during shutdown")
 				return
 			}
 			fleetManager.logger.Info("agent reset requested, reconnecting MQTT connection")
@@ -429,10 +437,19 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 			// Disconnect first. Use connCtx for timeout so the offline heartbeat
 			// inside Disconnect() still has a live parent context.
 			disconnectCtx, cancel := context.WithTimeout(fleetManager.connCtx, timeout)
+			stopWatch := context.AfterFunc(fleetManager.monitorCtx, cancel)
 			err := fleetManager.connection.Disconnect(disconnectCtx, details.Topics.Heartbeat)
+			stopWatch()
 			cancel()
 			if err != nil {
 				fleetManager.logger.Error("failed to disconnect during reset", "error", err)
+			}
+			// Shutdown that began during the disconnect ends the reset here:
+			// a reconnect would create a connection during teardown, for
+			// Stop to disconnect again.
+			if fleetManager.monitorCtx.Err() != nil {
+				fleetManager.logger.Info("reset handler stopped; shutdown began during the reset's disconnect")
+				return
 			}
 
 			// Reconnect: connCtx governs the new connection's lifetime; monitorCtx
@@ -600,6 +617,11 @@ func (fleetManager *FleetConfigManager) BindFilesManager(fm filesmgr.Manager) er
 
 	fleetManager.logger.Info("Fleet files manager bound to MQTT")
 	return nil
+}
+
+// SetResetter installs the resetter a full agent reset restarts through.
+func (fleetManager *FleetConfigManager) SetResetter(r fleet.Resetter) {
+	fleetManager.connection.SetResetter(r)
 }
 
 // refreshAndReconnect refreshes the JWT token and reconnects to MQTT

@@ -78,6 +78,11 @@ func (connection *MQTTConnection) RegisterTopicHandler(topic string, handler Top
 	connection.topicHandlers[topic] = handler
 }
 
+// SetResetter installs the resetter a full agent reset restarts through.
+func (connection *MQTTConnection) SetResetter(r Resetter) {
+	connection.messaging.SetResetter(r)
+}
+
 // TopicActions are the actions to take on a topic
 type TopicActions struct {
 	Subscribe   func(topic string) error
@@ -109,6 +114,8 @@ type MQTTConnector interface {
 	Reconnect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
 	AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics))
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
+	// SetResetter installs the resetter a full agent reset restarts through.
+	SetResetter(r Resetter)
 }
 
 // startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.

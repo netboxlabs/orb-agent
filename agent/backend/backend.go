@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 
@@ -143,25 +142,4 @@ func HaveBackend(name string) bool {
 // GetBackend returns a registered backend
 func GetBackend(name string) Backend {
 	return registry[name]
-}
-
-// RestartAll resets every backend the agent has started. Every bundled
-// backend is registered, but only the ones the agent's configuration names
-// are configured and started; one that was never started has no process,
-// logger or arguments to reset with, reports Unknown, and is left alone.
-func RestartAll(ctx context.Context) error {
-	errs := make([]error, 0)
-	for _, be := range registry {
-		if state, _, _ := be.GetRunningStatus(); state == Unknown {
-			continue
-		}
-		err := be.FullReset(ctx)
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
 }

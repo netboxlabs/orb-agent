@@ -2,13 +2,13 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,13 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
-	"github.com/netboxlabs/orb-agent/agent/backend/snmptelemetry"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
+	"github.com/netboxlabs/orb-agent/agent/supervisor"
 )
 
 // mockConfigManager implements configmgr.Manager for testing Stop delegation
@@ -45,44 +45,63 @@ func (m *mockConfigManager) Stop(_ context.Context) error {
 	return nil
 }
 
-// Every bundled backend is registered; only the ones this agent started are
-// in its backends map. A restart asked for a registered backend the agent
-// never started, which has no process, logger or arguments, is refused
-// rather than reached for.
-func TestRestartBackendRefusesABackendTheAgentDidNotStart(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	snmptelemetry.Register()
-	require.True(t, backend.HaveBackend("snmp_telemetry"))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{},
-		policyManager:       &mockPolicyManager{repo: repo},
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-	}
-
-	var restartErr error
-	require.NotPanics(t, func() { restartErr = a.RestartBackend(context.Background(), "snmp_telemetry", "test") })
-	require.Error(t, restartErr)
-	assert.Contains(t, restartErr.Error(), "not started by this agent")
+// testAgentOptions selects what newTestAgent wires; zero values mean none.
+type testAgentOptions struct {
+	name          string          // the registry name the stub is declared under (unique per test)
+	be            backend.Backend // the stub; started by ConfigureAll
+	files         filesmgr.Manager
+	configManager configmgr.Manager
+	supervisor    supervisor.Options // NotRunning is always set to policymgr.ErrBackendNotRunning
 }
 
+// newTestAgent builds an agent the way New does, over a real policy manager
+// and a real supervisor with the stub backend registered under opts.name
+// and started; the supervisor is handed back so a test can reach it (its
+// own StopAll for the stop-mid-loop test, Restart for the others). Every
+// delay defaults to a millisecond and the replay interval to an hour unless
+// opts.supervisor sets them.
+func newTestAgent(t *testing.T, opts testAgentOptions) (*orbAgent, *supervisor.Supervisor) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
+	require.NoError(t, err)
+	pm, err := policymgr.New(logger, secrets, config.Config{})
+	require.NoError(t, err)
+	backend.Register(opts.name, opts.be)
+	restartChan := make(chan string, 1)
+	state := backend.NewStateManager("local", logger, restartChan, pm.GetRepo())
+	so := opts.supervisor
+	so.NotRunning = policymgr.ErrBackendNotRunning
+	if so.ReapplyRetryDelay == 0 {
+		so.ReapplyRetryDelay = time.Millisecond
+	}
+	if so.ReplayRetryInterval == 0 {
+		so.ReplayRetryInterval = time.Hour
+	}
+	sup := supervisor.New(logger, state, opts.files, pm, restartChan, so)
+	require.NoError(t, sup.ConfigureAll(map[string]any{opts.name: nil}, config.BackendCommons{}, func(string) context.Context { return context.Background() }))
+	a := &orbAgent{logger: logger, policyManager: pm, backendStateManager: state, filesManager: opts.files, configManager: opts.configManager, supervisor: sup, config: config.Config{}}
+	t.Cleanup(func() { sup.StopAll(context.Background()) })
+	return a, sup
+}
+
+// A supervisor whose stub backend records its own stop before Stop hands off
+// to the config manager, so the ordering (the supervisor is stopped first)
+// is observable, not just the config manager's own call.
 func TestAgentStop_DelegatesToConfigManagerStop(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	a := &orbAgent{logger: logger}
-
-	mockMgr := &mockConfigManager{}
-	// type assertion to satisfy compile-time check for interface
-	var _ configmgr.Manager = mockMgr
-	a.configManager = mockMgr
-
-	// no backends running
-	a.backends = map[string]backend.Backend{}
+	events := []string{}
+	be := &restartableBackend{events: &events}
+	mockMgr := &mockConfigManager{
+		onStop: func() {
+			assert.Contains(t, events, "stop", "the supervisor must stop its backends before the config manager stops")
+		},
+	}
+	a, _ := newTestAgent(t, testAgentOptions{name: "e2e_stop_delegates", be: be, configManager: mockMgr})
 
 	a.Stop(context.Background())
 
 	assert.True(t, mockMgr.stopCalled, "expected configManager.Stop to be called")
+	assert.Contains(t, events, "stop")
 }
 
 func TestAgentStop_FailNonTerminalRunsBeforeConfigManagerStop(t *testing.T) {
@@ -111,7 +130,6 @@ func TestAgentStop_FailNonTerminalRunsBeforeConfigManagerStop(t *testing.T) {
 	}
 	a := &orbAgent{
 		logger:        logger,
-		backends:      map[string]backend.Backend{},
 		policyManager: &mockPolicyManager{repo: repo},
 		configManager: cm,
 	}
@@ -148,12 +166,6 @@ type mockPolicyManager struct {
 	// onApply, when set, runs at the start of every ApplyBackendPolicies
 	// call, before the queued error is popped.
 	onApply func()
-
-	// agent, when set, makes ApplyBackendPolicies record whether the
-	// backend's restart mutex is held at call time (see ApplyBackendPolicies
-	// below), so a test can see a scheduled replay's attempt hold the
-	// mutex. Left nil, and so checked before use, by tests that do not care.
-	agent *orbAgent
 }
 
 func (m *mockPolicyManager) record(event string) {
@@ -162,20 +174,6 @@ func (m *mockPolicyManager) record(event string) {
 	if m.events != nil {
 		*m.events = append(*m.events, event)
 	}
-}
-
-// snapshotEvents returns a copy of the recorded events. Safe to call while a
-// scheduled replay goroutine may be recording concurrently, unlike reading
-// the shared slice directly.
-func (m *mockPolicyManager) snapshotEvents() []string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.events == nil {
-		return nil
-	}
-	out := make([]string, len(*m.events))
-	copy(out, *m.events)
-	return out
 }
 
 func (m *mockPolicyManager) ManagePolicy(_ config.PolicyPayload)                                 {}
@@ -205,29 +203,12 @@ func (m *mockPolicyManager) nextErr() error {
 	return nil
 }
 
-// ApplyBackendPolicies records a plain "apply:<name>" event, unless agent is
-// set: then it records whether the backend's restart mutex is held at call
-// time, as "apply:<name>:locked" or "apply:<name>:unlocked", using a
-// non-blocking TryLock, so a test can see a scheduled replay's attempt hold
-// the mutex.
+// ApplyBackendPolicies records a plain "apply:<name>" event.
 func (m *mockPolicyManager) ApplyBackendPolicies(_ context.Context, name string, _ backend.Backend) error {
 	if m.onApply != nil {
 		m.onApply()
 	}
-	if m.agent == nil {
-		m.record("apply:" + name)
-	} else {
-		mu := m.agent.backendRestartLock(name)
-		held := !mu.TryLock()
-		if !held {
-			mu.Unlock()
-		}
-		state := "unlocked"
-		if held {
-			state = "locked"
-		}
-		m.record(fmt.Sprintf("apply:%s:%s", name, state))
-	}
+	m.record("apply:" + name)
 	return m.nextErr()
 }
 
@@ -242,11 +223,25 @@ func (m *mockPolicyManager) RemovePolicy(_ string, _ string, _ string) error {
 
 func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
-// restartableBackend records, into the shared slice, the calls a restart makes.
+// restartableBackend records, into the shared slice, the calls a restart
+// makes. It reports Running unconditionally and no-ops Start and Stop: the
+// supervisor starts it through ConfigureAll and stops it through StopAll
+// (a test's t.Cleanup), neither of which any of these tests assert on
+// directly.
 type restartableBackend struct {
 	backend.Backend
 	events  *[]string
 	applied []policies.PolicyData
+}
+
+func (r *restartableBackend) Start(context.Context, context.CancelFunc) error {
+	*r.events = append(*r.events, "start")
+	return nil
+}
+
+func (r *restartableBackend) Stop(context.Context) error {
+	*r.events = append(*r.events, "stop")
+	return nil
 }
 
 func (r *restartableBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
@@ -274,574 +269,6 @@ func (r *restartableBackend) RemovePolicy(pd policies.PolicyData) error {
 	return nil
 }
 
-type failingResetBackend struct{ restartableBackend }
-
-func (f *failingResetBackend) FullReset(context.Context) error {
-	*f.events = append(*f.events, "reset")
-	return errors.New("reset failed")
-}
-
-type failingConfigureBackend struct{ restartableBackend }
-
-func (f *failingConfigureBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
-	*f.events = append(*f.events, "configure")
-	return errors.New("configure failed")
-}
-
-// A restart keeps the backend's policies and re-applies them once the
-// backend is back: they are marked unknown for the restart, not deleted,
-// and applied once, after the reset, while the restart mutex is still held.
-func TestRestartBackendReappliesItsOwnPolicies(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-		"apply:snmp_discovery",
-	}, events, "policies kept, removed before the reset, applied once after")
-}
-
-// Right after a reset or start, a backend's status probe can transiently
-// fail, so the applier answers ErrBackendNotRunning even though the backend
-// is on its way up. The replay must retry rather than leave the policies
-// unknown until some later restart that may not come.
-func TestRestartBackendRetriesTheReplayWhileTheBackendIsNotAnsweringYet(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, nil,
-	}}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-		"apply:snmp_discovery",
-		"apply:snmp_discovery",
-		"apply:snmp_discovery",
-	}, events, "the replay retries while the backend answers not-running, then succeeds on the third attempt")
-}
-
-// The replay is retried a bounded number of times: a backend that keeps
-// answering not-running must not be retried forever, since nothing else
-// would ever install its policies (the health monitor sees it as healthy).
-// The give-up schedules a replay (covered by
-// TestRestartBackendReschedulesAReplayThatGaveUp); replayRetryInterval is
-// set long here and torn down through Stop's own cancellation so that
-// background attempt cannot fire during this test and race its assertion.
-func TestRestartBackendGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
-	}}
-	be := &restartableBackend{events: &events}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-		replayRetryInterval: time.Hour,
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-		"apply:snmp_discovery",
-		"apply:snmp_discovery",
-		"apply:snmp_discovery",
-	}, events, "the replay gives up after three attempts and leaves the policies unknown")
-
-	a.stopCancel()
-	waitDone := make(chan struct{})
-	go func() { a.replayers.Wait(); close(waitDone) }()
-	select {
-	case <-waitDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("replayers.Wait did not return within 5s of shutdown")
-	}
-}
-
-// A failure that is not ErrBackendNotRunning is not transient in the same
-// way, so the replay must not retry it.
-func TestRestartBackendDoesNotRetryAReplayThatFailedForAnotherReason(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		errors.New("repo failure"),
-	}}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-		"apply:snmp_discovery",
-	}, events, "a non-transient failure must not be retried")
-}
-
-// A retry waits on the apply context, not a plain sleep, so a shutdown that
-// begins mid-wait ends the wait immediately instead of the replay sleeping
-// out a long retry delay.
-func TestRestartBackendStopsRetryingWhenStopBegins(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
-	}}
-	be := &restartableBackend{events: &events}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Hour,
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-	}
-	pm.onApply = func() { a.stopCancel() }
-
-	done := make(chan error, 1)
-	go func() { done <- a.RestartBackend(context.Background(), "snmp_discovery", "test") }()
-
-	select {
-	case err := <-done:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("RestartBackend did not return promptly once Stop began")
-	}
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-		"apply:snmp_discovery",
-	}, events, "the retry wait is cancelled the instant Stop begins, not slept out")
-}
-
-// countLockedApplies counts how many "apply:<name>:locked" events appear in
-// events, so a test can wait for a scheduled replay's own attempt (recorded
-// the same way as the restart's own attempts, since both hold the restart
-// mutex) without racing the goroutine that records it.
-func countLockedApplies(events []string, name string) int {
-	want := "apply:" + name + ":locked"
-	n := 0
-	for _, e := range events {
-		if e == want {
-			n++
-		}
-	}
-	return n
-}
-
-// A replay that gives up because the backend is still not answering must
-// not leave the restart marker set forever: nothing else asks for another
-// restart once the health monitor sees the backend running. The give-up is
-// rescheduled and keeps trying, at replayRetryInterval, until it completes.
-func TestRestartBackendReschedulesAReplayThatGaveUp(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, nil,
-	}}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-		replayRetryInterval: time.Millisecond,
-	}
-	pm.agent = a
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	require.Eventually(t, func() bool {
-		return countLockedApplies(pm.snapshotEvents(), "snmp_discovery") >= 4
-	}, 5*time.Second, time.Millisecond,
-		"the scheduled replay must make a fourth attempt, holding the restart mutex, and complete")
-
-	waitDone := make(chan struct{})
-	go func() { a.replayers.Wait(); close(waitDone) }()
-	select {
-	case <-waitDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("replayers.Wait did not return promptly once the scheduled replay completed")
-	}
-}
-
-// Once Stop began, no replay is admitted: a late restart from the health
-// monitor must not add a goroutine while Stop waits for the replayers.
-func TestScheduleReplayIsRefusedOnceStopBegan(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
-	be := &failingResetBackend{restartableBackend: restartableBackend{events: &events}}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-		replayRetryInterval: time.Millisecond,
-	}
-	stopCancel()
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "late restart"))
-
-	assert.Equal(t, int32(0), a.replayStarts.Load(), "no replay may be scheduled after Stop began")
-	a.replayers.Wait()
-}
-
-// The scheduled replay clears its per-backend flag while it still holds the
-// restart mutex, so a restart that takes the mutex right after it and gives
-// up is not told a replay is already scheduled by a goroutine about to exit.
-func TestScheduledReplayClearsItsFlagBeforeReleasingTheRestartMutex(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, nil,
-	}}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-		replayRetryInterval: time.Millisecond,
-	}
-	pm.agent = a
-	var applies atomic.Int32
-	observed := make(chan bool, 1)
-	pm.onApply = func() {
-		if applies.Add(1) != 4 {
-			return
-		}
-		// The fourth apply is the scheduled replay's, made under the restart
-		// mutex. Race for the mutex from here; whoever gets it after the
-		// scheduled replay releases it must see the flag already cleared.
-		go func() {
-			mu := a.backendRestartLock("snmp_discovery")
-			for !mu.TryLock() {
-				runtime.Gosched()
-			}
-			v, _ := a.replayScheduled.Load("snmp_discovery")
-			flag, _ := v.(*atomic.Bool)
-			observed <- flag != nil && flag.Load()
-			mu.Unlock()
-		}()
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	select {
-	case stillScheduled := <-observed:
-		assert.False(t, stillScheduled, "the flag must be cleared before the restart mutex is released")
-	case <-time.After(5 * time.Second):
-		t.Fatal("the scheduled replay never made its fourth attempt")
-	}
-	a.replayers.Wait()
-}
-
-// The wait between scheduled replay attempts is cancelled the instant Stop
-// begins, not slept out, even when the interval is long: the loop selects
-// on stopCtx rather than sleeping.
-func TestScheduledReplayStopsOnShutdown(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
-	}, repeatLastErr: true}
-	be := &restartableBackend{events: &events}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-		replayRetryInterval: time.Hour,
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-	}
-	pm.agent = a
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	a.stopCancel()
-
-	waitDone := make(chan struct{})
-	go func() { a.replayers.Wait(); close(waitDone) }()
-	select {
-	case <-waitDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("replayers.Wait did not return within 5s of shutdown")
-	}
-}
-
-// A second give-up for the same backend while a replay is already scheduled
-// must not start a second goroutine: the one already running keeps
-// retrying on its own.
-func TestScheduledReplayIsNotDuplicated(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
-		policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning, policymgr.ErrBackendNotRunning,
-	}, repeatLastErr: true}
-	be := &restartableBackend{events: &events}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-		replayRetryInterval: time.Hour,
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-	}
-	pm.agent = a
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, int32(1), a.replayStarts.Load(),
-		"a second give-up while one replay is already scheduled must not start a second goroutine")
-
-	a.stopCancel()
-	waitDone := make(chan struct{})
-	go func() { a.replayers.Wait(); close(waitDone) }()
-	select {
-	case <-waitDone:
-	case <-time.After(5 * time.Second):
-		t.Fatal("replayers.Wait did not return within 5s of shutdown")
-	}
-}
-
-// A failure that is not ErrBackendNotRunning is not transient, so it must
-// not be rescheduled either: nothing about it will change on its own.
-func TestRestartBackendDoesNotRescheduleANonRetryableFailure(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events, applyErrs: []error{
-		errors.New("repo failure"),
-	}}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		reapplyRetryDelay:   time.Millisecond,
-		replayRetryInterval: time.Millisecond,
-	}
-	pm.agent = a
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, int32(0), a.replayStarts.Load(), "a non-retryable failure must not be rescheduled")
-}
-
-// A reset that fails leaves the policies marked for the next restart and
-// does not apply them to a backend that is not back.
-func TestRestartBackendDoesNotReapplyWhenTheResetFails(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
-	be := &failingResetBackend{restartableBackend: restartableBackend{events: &events}}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-		replayRetryInterval: time.Hour,
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-	}, pm.snapshotEvents(), "the removal still runs and nothing past the failed reset does, until the scheduled replay")
-	stopCancel()
-	a.replayers.Wait()
-}
-
-// A reset that fails can leave the process running (a Stop that failed), in
-// which case the health monitor never asks for another restart and nothing
-// else would clear the restart marker: the replay is scheduled, keeps trying
-// under the restart mutex, and completes once the backend answers.
-func TestRestartBackendSchedulesAReplayWhenTheResetFails(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
-	be := &failingResetBackend{restartableBackend: restartableBackend{events: &events}}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-		replayRetryInterval: time.Millisecond,
-	}
-	pm.agent = a
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, int32(1), a.replayStarts.Load(), "a failed reset schedules a replay")
-	require.Eventually(t, func() bool {
-		return countLockedApplies(pm.snapshotEvents(), "snmp_discovery") >= 1
-	}, 5*time.Second, time.Millisecond, "the scheduled replay must run under the restart mutex and complete")
-	a.replayers.Wait()
-}
-
-// A Configure failure never stops the backend: it is still running its
-// previous configuration, so the policies removed for the restart are handed
-// back immediately rather than left marked unknown for a restart that may
-// not come again soon.
-func TestRestartBackendReappliesPoliciesWhenConfigureFails(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
-	be := &failingConfigureBackend{restartableBackend: restartableBackend{events: &events}}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-	}
-
-	restartErr := a.RestartBackend(context.Background(), "snmp_discovery", "test")
-
-	require.Error(t, restartErr)
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"apply:snmp_discovery",
-	}, events, "the backend never stopped, so the removed policies are reapplied immediately")
-}
-
-// End to end with the real policy manager: a policy the backend ran before
-// the restart is still in the repo afterwards, running, and was handed to
-// the backend once more in the remove-then-apply form.
-func TestRestartBackendReappliesPoliciesEndToEnd(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-	events := []string{}
-	be := &restartableBackend{events: &events}
-	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: "snmp_discovery", Version: 3, Data: map[string]any{"k": "v"}, State: policies.Running}))
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-	}
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	stored, err := pm.GetRepo().Get("kept")
-	require.NoError(t, err, "the policy survives the restart")
-	assert.Equal(t, policies.Running, stored.State)
-	assert.Equal(t, int32(3), stored.Version)
-	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=true"}, events,
-		"the backend is asked to drop the policy before the reset and handed it again after")
-	require.Len(t, be.applied, 1)
-	assert.Equal(t, int32(3), be.applied[0].Version)
-}
-
 // failOnceApplyBackend fails the first ApplyPolicy call and succeeds on any
 // call after, recording how many times it was called, so a test can prove a
 // replay does not retry a policy it already failed to apply.
@@ -853,7 +280,7 @@ type failOnceApplyBackend struct {
 func (f *failOnceApplyBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy bool) error {
 	f.calls++
 	if f.calls == 1 {
-		return errors.New("apply timed out")
+		return fmt.Errorf("apply timed out")
 	}
 	return f.restartableBackend.ApplyPolicy(pd, updatePolicy)
 }
@@ -861,144 +288,108 @@ func (f *failOnceApplyBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy 
 // End to end with the real policy manager: a policy the replay fails to
 // apply is stored failed to apply with the backend's own reason, and is not
 // retried within the same replay.
-func TestRestartBackendDoesNotRetryAPolicyItFailed(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
+func TestRestartDoesNotRetryAPolicyItFailed(t *testing.T) {
 	events := []string{}
 	be := &failOnceApplyBackend{restartableBackend: restartableBackend{events: &events}}
-	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "flaky", Name: "Flaky", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-	}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_no_retry", be: be})
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "flaky", Name: "Flaky", Backend: "e2e_no_retry", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	events = events[:0]
 
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
+	require.NoError(t, sup.Restart(context.Background(), "e2e_no_retry", "test"))
 
-	stored, err := pm.GetRepo().Get("flaky")
+	stored, err := a.policyManager.GetRepo().Get("flaky")
 	require.NoError(t, err)
 	assert.Equal(t, policies.FailedToApply, stored.State)
 	assert.Equal(t, "apply timed out", stored.BackendErr)
 	assert.Equal(t, 1, be.calls, "the replay must not retry a policy it already failed to apply")
 }
 
-// A Start (file-driven or otherwise) that is already blocked on the restart
-// mutex when Stop cancels the agent context can still succeed once the
-// mutex is free, but by then the agent is shutting down: the reset succeeds
-// and the policies stay marked unknown rather than being handed back to a
-// backend about to be torn down.
-func TestRestartBackendDoesNotReapplyAfterShutdownBegan(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
+// End to end with the real policy manager: a policy the backend ran before
+// the restart is still in the repo afterwards, running, and was handed to
+// the backend once more in the remove-then-apply form.
+func TestRestartReappliesPoliciesEndToEnd(t *testing.T) {
 	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
 	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-	}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_reapplies", be: be})
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "kept", Name: "Kept", Backend: "e2e_reapplies", Version: 3, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	events = events[:0]
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	require.NoError(t, sup.Restart(context.Background(), "e2e_reapplies", "test"))
 
-	require.NoError(t, a.RestartBackend(ctx, "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-	}, events, "shutdown already began, so the policies must stay unknown rather than be reapplied")
+	stored, err := a.policyManager.GetRepo().Get("kept")
+	require.NoError(t, err, "the policy survives the restart")
+	assert.Equal(t, policies.Running, stored.State)
+	assert.Equal(t, int32(3), stored.Version)
+	assert.Equal(t, []string{"remove-policy:kept", "configure", "reset", "apply-policy:kept:update=true"}, events,
+		"the backend is asked to drop the policy before the reset and handed it again after")
+	require.Len(t, be.applied, 1)
+	assert.Equal(t, int32(3), be.applied[0].Version)
 }
 
-// Stop cancels the dispatcher and the file-driven restart contexts, then
-// takes each backend's restart mutex to stop it, and only cancels the agent
-// context at the end, after every backend is stopped. A health or fleet
-// restart that already holds the restart mutex when Stop begins therefore
-// still sees a live context when it reaches the re-apply: ctx.Err() alone
-// would not catch it, so the stop context does.
-func TestRestartBackendDoesNotReapplyOnceStopBegan(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	events := []string{}
-	pm := &mockPolicyManager{repo: repo, events: &events}
-	be := &restartableBackend{events: &events}
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), repo),
-		config:              config.Config{},
-	}
-	a.stopCtx, a.stopCancel = context.WithCancel(context.Background())
-	a.stopCancel()
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	assert.Equal(t, []string{
-		"remove:snmp_discovery:permanently=false",
-		"configure",
-		"reset",
-	}, events, "Stop already began, so the policies must stay unknown rather than be reapplied")
-}
-
-// stopCancellingBackend calls the agent's stopCancel from every ApplyPolicy
-// call, simulating Stop beginning while a restart's replay of more than one
-// policy is mid-loop: once the first policy's apply triggers it, the loop's
-// own per-iteration context check must stop the replay before the second.
+// stopCancellingBackend starts the supervisor's own StopAll, on its own
+// goroutine, from the first ApplyPolicy call, simulating Stop beginning
+// while a restart's replay of more than one policy is mid-loop: once the
+// first policy's apply triggers it, the loop's own per-iteration context
+// check must stop the replay before the second. StopAll cancels the stop
+// context as its first statement and, without needing the restart mutex
+// this ApplyPolicy call's restart already holds, moves every entry
+// (including this one, already Running) to Stopped next; ApplyPolicy waits
+// for that before returning, so the cancellation is guaranteed to have
+// already happened by the time the replay's next per-iteration context
+// check runs, rather than racing the goroutine's own scheduling. StopAll
+// itself only reaches the restart mutex, and so returns, once this restart
+// does.
 type stopCancellingBackend struct {
 	restartableBackend
-	agent *orbAgent
+	sup      *supervisor.Supervisor
+	name     string
+	once     sync.Once
+	stopDone chan struct{}
 }
 
 func (s *stopCancellingBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy bool) error {
-	s.agent.stopCancel()
+	s.once.Do(func() {
+		go func() {
+			s.sup.StopAll(context.Background())
+			close(s.stopDone)
+		}()
+		for {
+			if p, ok := s.sup.Phase(s.name); ok && p == supervisor.Stopped {
+				break
+			}
+			runtime.Gosched()
+		}
+	})
 	return s.restartableBackend.ApplyPolicy(pd, updatePolicy)
 }
 
 // End to end with the real policy manager: Stop beginning mid-replay (through
-// the stop context, not the ctx argument, which stays live throughout) must
-// be observed between policies, the same way a cancelled ctx argument is.
-// Only one of the two stored policies reaches the backend; the other is left
-// as it was.
-func TestRestartBackendStopsReplayingWhenStopBeginsMidLoop(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-
+// the supervisor's stop context, not the ctx argument, which stays live
+// throughout) must be observed between policies, the same way a cancelled
+// ctx argument is. Only one of the two stored policies reaches the backend;
+// the other is left as it was.
+func TestRestartStopsReplayingWhenStopBeginsMidLoop(t *testing.T) {
 	events := []string{}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
+	be := &stopCancellingBackend{restartableBackend: restartableBackend{events: &events}, stopDone: make(chan struct{})}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_stop_mid_loop", be: be})
+	be.sup = sup
+	be.name = "e2e_stop_mid_loop"
+
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "one", Name: "one", Backend: "e2e_stop_mid_loop", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Unknown}))
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "two", Name: "two", Backend: "e2e_stop_mid_loop", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Unknown}))
+	events = events[:0]
+
+	require.NoError(t, sup.Restart(context.Background(), "e2e_stop_mid_loop", "test"))
+
+	select {
+	case <-be.stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the backend's own StopAll goroutine to finish")
 	}
-	be := &stopCancellingBackend{restartableBackend: restartableBackend{events: &events}, agent: a}
-	a.backends = map[string]backend.Backend{"snmp_discovery": be}
-	backend.Register("snmp_discovery", be)
-
-	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "one", Name: "one", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Unknown}))
-	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "two", Name: "two", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Unknown}))
-
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
 
 	require.Len(t, be.applied, 1, "the second policy must never reach the backend once Stop begins")
 
-	state, err := pm.GetPolicyState()
+	state, err := a.policyManager.GetPolicyState()
 	require.NoError(t, err)
 	var running, unknown int
 	for _, pd := range state {
@@ -1032,34 +423,21 @@ func (b *blockingResetBackend) FullReset(context.Context) error {
 // A policy delivered while a restart is in flight for its backend is stored
 // failed to apply with the reason the starter gives, is never handed to the
 // backend, and is applied exactly once, by the restart's own re-apply, once
-// the restart finishes. This is the window RestartBackend documents between
+// the restart finishes. This is the window the supervisor documents between
 // FullReset returning and the re-apply taking the policy manager's mutex.
 func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-
 	events := []string{}
 	be := &blockingResetBackend{
 		restartableBackend: restartableBackend{events: &events},
 		entered:            make(chan struct{}),
 		release:            make(chan struct{}),
 	}
-	backend.Register("snmp_discovery", be)
-
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-	}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_manage_during_restart", be: be})
+	events = events[:0]
 
 	restartDone := make(chan error, 1)
 	go func() {
-		restartDone <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+		restartDone <- sup.Restart(context.Background(), "e2e_manage_during_restart", "test")
 	}()
 
 	select {
@@ -1072,14 +450,14 @@ func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
 		Action:    "manage",
 		ID:        "during-restart",
 		Name:      "during-restart-policy",
-		Backend:   "snmp_discovery",
+		Backend:   "e2e_manage_during_restart",
 		DatasetID: "dataset-1",
 		Version:   1,
 		Data:      map[string]any{"k": "v"},
 	}
-	pm.ManagePolicy(payload)
+	a.policyManager.ManagePolicy(payload)
 
-	stored, err := pm.GetRepo().Get("during-restart")
+	stored, err := a.policyManager.GetRepo().Get("during-restart")
 	require.NoError(t, err)
 	assert.Equal(t, policies.FailedToApply, stored.State, "a manage during the restart must not apply")
 	assert.Equal(t, "backend starting", stored.BackendErr)
@@ -1091,10 +469,10 @@ func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
 	case restartErr := <-restartDone:
 		require.NoError(t, restartErr)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for RestartBackend to return")
+		t.Fatal("timed out waiting for the restart to return")
 	}
 
-	stored, err = pm.GetRepo().Get("during-restart")
+	stored, err = a.policyManager.GetRepo().Get("during-restart")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, stored.State, "the re-apply after the restart must apply the policy stored while it was in flight")
 	require.Len(t, be.applied, 1, "the backend must receive the policy exactly once")
@@ -1110,6 +488,10 @@ func TestManageDuringARestartIsAppliedExactlyOnce(t *testing.T) {
 type windowStampingBackend struct {
 	restartableBackend
 	repo policies.PolicyRepo
+	// backendName is the name the entry is declared under (set by
+	// newTestAgent, so it is filled in after construction), used to stamp
+	// the policy record with the backend the replay filters on.
+	backendName string
 }
 
 func (w *windowStampingBackend) FullReset(ctx context.Context) error {
@@ -1119,7 +501,7 @@ func (w *windowStampingBackend) FullReset(ctx context.Context) error {
 	return w.repo.Update(policies.PolicyData{
 		ID:         "during-window",
 		Name:       "during-window",
-		Backend:    "snmp_discovery",
+		Backend:    w.backendName,
 		Version:    1,
 		Data:       map[string]any{"k": "v"},
 		State:      policies.FailedToApply,
@@ -1134,28 +516,16 @@ func (w *windowStampingBackend) FullReset(ctx context.Context) error {
 // TestManageDuringARestartIsAppliedExactlyOnce proves the same "exactly
 // once" outcome through the real concurrent race; this test isolates the
 // running-skip's role in it.
-func TestRestartBackendHealsAPolicyStampedBackendStartingDuringTheRestart(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-
+func TestRestartHealsAPolicyStampedBackendStartingDuringTheRestart(t *testing.T) {
 	events := []string{}
-	be := &windowStampingBackend{restartableBackend: restartableBackend{events: &events}, repo: pm.GetRepo()}
-	backend.Register("snmp_discovery", be)
+	be := &windowStampingBackend{restartableBackend: restartableBackend{events: &events}, backendName: "e2e_heals_window"}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_heals_window", be: be})
+	be.repo = a.policyManager.GetRepo()
+	events = events[:0]
 
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-	}
+	require.NoError(t, sup.Restart(context.Background(), "e2e_heals_window", "test"))
 
-	require.NoError(t, a.RestartBackend(context.Background(), "snmp_discovery", "test"))
-
-	stored, err := pm.GetRepo().Get("during-window")
+	stored, err := a.policyManager.GetRepo().Get("during-window")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, stored.State, "the record stamped starting during the restart is healed by the restart's own replay")
 
@@ -1193,33 +563,19 @@ func (b *blockingApplyBackend) ApplyPolicy(pd policies.PolicyData, updatePolicy 
 // once it is free, applies directly to the backend, which is up; it is
 // never stored as starting and never replayed.
 func TestManageArrivingDuringTheReplayAppliesDirectlyOnce(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-
 	events := []string{}
 	be := &blockingApplyBackend{
 		restartableBackend: restartableBackend{events: &events},
 		entered:            make(chan struct{}),
 		release:            make(chan struct{}),
 	}
-	backend.Register("snmp_discovery", be)
-
-	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "seeded", Name: "seeded", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
-
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-	}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_manage_during_replay", be: be})
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "seeded", Name: "seeded", Backend: "e2e_manage_during_replay", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	events = events[:0]
 
 	restartDone := make(chan error, 1)
 	go func() {
-		restartDone <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+		restartDone <- sup.Restart(context.Background(), "e2e_manage_during_replay", "test")
 	}()
 
 	select {
@@ -1231,11 +587,11 @@ func TestManageArrivingDuringTheReplayAppliesDirectlyOnce(t *testing.T) {
 	manageDone := make(chan struct{})
 	go func() {
 		defer close(manageDone)
-		pm.ManagePolicy(config.PolicyPayload{
+		a.policyManager.ManagePolicy(config.PolicyPayload{
 			Action:    "manage",
 			ID:        "during-replay",
 			Name:      "during-replay-policy",
-			Backend:   "snmp_discovery",
+			Backend:   "e2e_manage_during_replay",
 			DatasetID: "dataset-1",
 			Version:   1,
 			Data:      map[string]any{"k": "v"},
@@ -1248,7 +604,7 @@ func TestManageArrivingDuringTheReplayAppliesDirectlyOnce(t *testing.T) {
 	case restartErr := <-restartDone:
 		require.NoError(t, restartErr)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for RestartBackend to return")
+		t.Fatal("timed out waiting for the restart to return")
 	}
 
 	select {
@@ -1257,7 +613,7 @@ func TestManageArrivingDuringTheReplayAppliesDirectlyOnce(t *testing.T) {
 		t.Fatal("timed out waiting for the manage to finish")
 	}
 
-	stored, err := pm.GetRepo().Get("during-replay")
+	stored, err := a.policyManager.GetRepo().Get("during-replay")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, stored.State, "a manage arriving during the replay must apply directly")
 
@@ -1271,7 +627,7 @@ func TestManageArrivingDuringTheReplayAppliesDirectlyOnce(t *testing.T) {
 	assert.Contains(t, events, "apply-policy:during-replay:update=false",
 		"a direct manage uses the plain apply form, not the replay's remove-then-apply form")
 
-	seededStored, err := pm.GetRepo().Get("seeded")
+	seededStored, err := a.policyManager.GetRepo().Get("seeded")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, seededStored.State)
 	var seededApplies int
@@ -1300,25 +656,11 @@ func (y *yieldingResetBackend) FullReset(ctx context.Context) error {
 // ends Running and was handed to the backend exactly twice, once per
 // restart, never lost to an interleaving between them.
 func TestBackToBackRestartsDoNotLoseAPolicy(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-
 	events := []string{}
 	be := &yieldingResetBackend{restartableBackend: restartableBackend{events: &events}}
-	backend.Register("snmp_discovery", be)
-
-	require.NoError(t, pm.GetRepo().Update(policies.PolicyData{ID: "seeded", Name: "seeded", Backend: "snmp_discovery", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
-
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-	}
+	a, sup := newTestAgent(t, testAgentOptions{name: "e2e_back_to_back", be: be})
+	require.NoError(t, a.policyManager.GetRepo().Update(policies.PolicyData{ID: "seeded", Name: "seeded", Backend: "e2e_back_to_back", Version: 1, Data: map[string]any{"k": "v"}, State: policies.Running}))
+	events = events[:0]
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
@@ -1326,7 +668,7 @@ func TestBackToBackRestartsDoNotLoseAPolicy(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+			errs <- sup.Restart(context.Background(), "e2e_back_to_back", "test")
 		}()
 	}
 
@@ -1346,7 +688,7 @@ func TestBackToBackRestartsDoNotLoseAPolicy(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	stored, err := pm.GetRepo().Get("seeded")
+	stored, err := a.policyManager.GetRepo().Get("seeded")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, stored.State)
 
@@ -1391,28 +733,18 @@ func (b *notRunningOnceBackend) GetRunningStatus() (backend.RunningStatus, strin
 // deferred: through the replay's own remove-then-apply form, not a manage
 // applying it directly.
 func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	secrets, err := secretsmgr.New(logger, config.ManagerSecrets{})
-	require.NoError(t, err)
-	pm, err := policymgr.New(logger, secrets, config.Config{})
-	require.NoError(t, err)
-
 	events := []string{}
 	be := &notRunningOnceBackend{restartableBackend: restartableBackend{events: &events}, notRunningSeen: make(chan struct{})}
-	backend.Register("snmp_discovery", be)
-
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"snmp_discovery": be},
-		policyManager:       pm,
-		backendStateManager: backend.NewStateManager("local", logger, make(chan string, 1), pm.GetRepo()),
-		config:              config.Config{},
-		reapplyRetryDelay:   50 * time.Millisecond,
-	}
+	a, sup := newTestAgent(t, testAgentOptions{
+		name:       "e2e_retry_delay",
+		be:         be,
+		supervisor: supervisor.Options{ReapplyRetryDelay: 50 * time.Millisecond},
+	})
+	events = events[:0]
 
 	restartDone := make(chan error, 1)
 	go func() {
-		restartDone <- a.RestartBackend(context.Background(), "snmp_discovery", "test")
+		restartDone <- sup.Restart(context.Background(), "e2e_retry_delay", "test")
 	}()
 
 	select {
@@ -1424,11 +756,11 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 	manageDone := make(chan struct{})
 	go func() {
 		defer close(manageDone)
-		pm.ManagePolicy(config.PolicyPayload{
+		a.policyManager.ManagePolicy(config.PolicyPayload{
 			Action:    "manage",
 			ID:        "during-retry-delay",
 			Name:      "during-retry-delay-policy",
-			Backend:   "snmp_discovery",
+			Backend:   "e2e_retry_delay",
 			DatasetID: "dataset-1",
 			Version:   1,
 			Data:      map[string]any{"k": "v"},
@@ -1439,7 +771,7 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 	case restartErr := <-restartDone:
 		require.NoError(t, restartErr)
 	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for RestartBackend to return")
+		t.Fatal("timed out waiting for the restart to return")
 	}
 	select {
 	case <-manageDone:
@@ -1447,7 +779,7 @@ func TestManageDuringTheReplayRetryDelayIsAppliedByTheRetry(t *testing.T) {
 		t.Fatal("timed out waiting for the manage to finish")
 	}
 
-	stored, err := pm.GetRepo().Get("during-retry-delay")
+	stored, err := a.policyManager.GetRepo().Get("during-retry-delay")
 	require.NoError(t, err)
 	assert.Equal(t, policies.Running, stored.State, "the manage must be healed by the retry, not left failed")
 
@@ -1473,13 +805,13 @@ func TestManageOutsideARestartAppliesAsToday(t *testing.T) {
 
 	events := []string{}
 	be := &restartableBackend{events: &events}
-	backend.Register("snmp_discovery", be)
+	backend.Register("e2e_outside", be)
 
 	payload := config.PolicyPayload{
 		Action:    "manage",
 		ID:        "outside-restart",
 		Name:      "outside-restart-policy",
-		Backend:   "snmp_discovery",
+		Backend:   "e2e_outside",
 		DatasetID: "dataset-1",
 		Version:   1,
 		Data:      map[string]any{"k": "v"},
@@ -1492,176 +824,6 @@ func TestManageOutsideARestartAppliesAsToday(t *testing.T) {
 	require.Len(t, be.applied, 1)
 	assert.Equal(t, "outside-restart", be.applied[0].ID)
 	assert.Contains(t, events, "apply-policy:outside-restart:update=false")
-}
-
-// filesmgrRestartBackend records, into the shared slice, the Stop/Start calls
-// a filesmgr-driven restart makes. startFailures controls how many of the
-// first calls to Start return an error before Start starts succeeding; a
-// zero value never fails.
-type filesmgrRestartBackend struct {
-	restartableBackend
-	binaryName    string
-	startFailures int
-	startCalls    int
-}
-
-func (r *filesmgrRestartBackend) ManagedBinaryName() string { return r.binaryName }
-
-func (r *filesmgrRestartBackend) Stop(context.Context) error {
-	*r.events = append(*r.events, "stop")
-	return nil
-}
-
-func (r *filesmgrRestartBackend) Start(context.Context, context.CancelFunc) error {
-	r.startCalls++
-	*r.events = append(*r.events, "start")
-	if r.startCalls <= r.startFailures {
-		return errors.New("start failed")
-	}
-	return nil
-}
-
-// A filesmgr-driven restart brackets its Stop/Start sequence the same way
-// RestartBackend does: policies are marked unknown before Stop and handed
-// back to the backend once, after Start succeeds, while the restart mutex is
-// still held.
-func TestRestartBackendWithFilesmgrRollback_ReappliesPoliciesAfterSuccessfulStart(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	events := []string{}
-	pm := &mockPolicyManager{events: &events}
-	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, binaryName: "orb-worker"}
-	a := &orbAgent{
-		logger:        logger,
-		backends:      map[string]backend.Backend{"worker": be},
-		policyManager: pm,
-		filesManager:  &mockFilesManager{},
-	}
-
-	a.restartBackendWithFilesmgrRollback(context.Background(), "worker")
-
-	assert.Equal(t, []string{
-		"remove:worker:permanently=false",
-		"stop",
-		"start",
-		"apply:worker",
-	}, events)
-}
-
-// A Start that fails, then succeeds after a rollback, is re-applied exactly
-// once, after the retry rather than the failed first attempt, with the
-// restart mutex still held.
-func TestRestartBackendWithFilesmgrRollback_ReappliesPoliciesAfterRollbackRetry(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	events := []string{}
-	pm := &mockPolicyManager{events: &events}
-	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, binaryName: "orb-worker", startFailures: 1}
-	a := &orbAgent{
-		logger:        logger,
-		backends:      map[string]backend.Backend{"worker": be},
-		policyManager: pm,
-		filesManager:  &mockFilesManager{},
-	}
-
-	a.restartBackendWithFilesmgrRollback(context.Background(), "worker")
-
-	assert.Equal(t, []string{
-		"remove:worker:permanently=false",
-		"stop",
-		"start",
-		"start",
-		"apply:worker",
-	}, events, "apply runs exactly once, after the successful retry")
-}
-
-// A Start that fails on a backend with no managed binary name cannot roll
-// back, so the restart gives up without ever reapplying the policies it
-// removed.
-func TestRestartBackendWithFilesmgrRollback_DoesNotReapplyWithoutAManagedBinary(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	events := []string{}
-	pm := &mockPolicyManager{events: &events}
-	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, startFailures: 1}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"worker": be},
-		policyManager:       pm,
-		filesManager:        &mockFilesManager{},
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-		replayRetryInterval: time.Hour,
-	}
-
-	a.restartBackendWithFilesmgrRollback(context.Background(), "worker")
-
-	assert.Equal(t, []string{
-		"remove:worker:permanently=false",
-		"stop",
-		"start",
-	}, pm.snapshotEvents())
-	assert.Equal(t, int32(1), a.replayStarts.Load(), "an upgrade restart that cannot roll back schedules the replay, since the old process may still be running")
-	stopCancel()
-	a.replayers.Wait()
-}
-
-// An upgrade restart whose retried Start fails too leaves the policies
-// unknown and the marker set; a scheduled replay keeps trying, because a
-// Stop that failed can leave the old process running with nothing else to
-// hand its policies back.
-func TestRestartBackendWithFilesmgrRollbackSchedulesAReplayWhenTheRetryFails(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	events := []string{}
-	pm := &mockPolicyManager{events: &events}
-	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, startFailures: 2, binaryName: "orb-worker"}
-	stopCtx, stopCancel := context.WithCancel(context.Background())
-	a := &orbAgent{
-		logger:              logger,
-		backends:            map[string]backend.Backend{"worker": be},
-		policyManager:       pm,
-		filesManager:        &mockFilesManager{},
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-		replayRetryInterval: time.Hour,
-	}
-
-	a.restartBackendWithFilesmgrRollback(context.Background(), "worker")
-
-	assert.Equal(t, []string{
-		"remove:worker:permanently=false",
-		"stop",
-		"start",
-		"start",
-	}, pm.snapshotEvents())
-	assert.Equal(t, int32(1), a.replayStarts.Load(), "the failed retry schedules the replay")
-	stopCancel()
-	a.replayers.Wait()
-}
-
-// A Start that succeeds after the agent context was already cancelled before
-// the call (Stop ran while this restart was blocked on the restart mutex)
-// must not hand the policies back: the agent is shutting down.
-func TestRestartBackendWithFilesmgrRollbackDoesNotReapplyAfterShutdownBegan(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	events := []string{}
-	pm := &mockPolicyManager{events: &events}
-	be := &filesmgrRestartBackend{restartableBackend: restartableBackend{events: &events}, binaryName: "orb-worker"}
-	a := &orbAgent{
-		logger:        logger,
-		backends:      map[string]backend.Backend{"worker": be},
-		policyManager: pm,
-		filesManager:  &mockFilesManager{},
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	a.restartBackendWithFilesmgrRollback(ctx, "worker")
-
-	assert.Equal(t, []string{
-		"remove:worker:permanently=false",
-		"stop",
-		"start",
-	}, events, "shutdown already began, so the policies must stay unknown rather than be reapplied")
 }
 
 // mockFilesManager implements filesmgr.Manager for testing (no-op), and
@@ -2059,96 +1221,141 @@ func TestStart_FleetConfig_UsesConfiguredHTTPPort(t *testing.T) {
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
 
-// stubCancelledStartBackend is a minimal backend.Backend and backend.ManagedBinary
-// whose Start always fails as if the agent's own shutdown had already cancelled
-// the context it was given, for testing that filesmgr's rollback gate treats
-// that as distinct from a bad binary.
-// selfCancellingStartBackend fails its first Start the way a backend that hits
-// a fatal startup error does: it cancels the run context it was handed and
-// returns an error wrapping the cancellation. The second Start succeeds.
-type selfCancellingStartBackend struct {
-	stubCancelledStartBackend
+// blockingStartBackend never comes up: its Start waits for its run context
+// and returns that context's error, the way a bundled backend blocked in its
+// readiness loop does when the stop cancels it.
+type blockingStartBackend struct {
+	restartableBackend
+	entered chan struct{}
 }
 
-func (s *selfCancellingStartBackend) Start(_ context.Context, cancel context.CancelFunc) error {
-	s.startCalls++
-	if s.startCalls == 1 {
-		cancel()
-		return fmt.Errorf("fatal startup error: %w", context.Canceled)
-	}
-	return nil
+func (b *blockingStartBackend) Start(ctx context.Context, _ context.CancelFunc) error {
+	close(b.entered)
+	<-ctx.Done()
+	return fmt.Errorf("start cancelled: %w", ctx.Err())
 }
 
-func (s *selfCancellingStartBackend) ManagedBinaryName() string { return "orb-stub" }
+func (b *blockingStartBackend) GetInitialState() backend.RunningStatus { return backend.Unknown }
 
-// A backend that cancels its own run context on a fatal start is not the
-// agent shutting down: the upgrade must be rolled back and Start retried,
-// not left with the bad binary installed.
-func TestFilesmgrRestartRollsBackWhenTheBackendCancelsItself(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	be := &selfCancellingStartBackend{}
-	fm := &mockFilesManager{}
-	a := &orbAgent{
-		logger:        logger,
-		policyManager: &mockPolicyManager{},
-		backends:      map[string]backend.Backend{"stub": be},
-		filesManager:  fm,
-	}
-
-	a.restartBackendWithFilesmgrRollback(context.Background(), "stub")
-
-	assert.Equal(t, 1, fm.rollbackCalls, "the binary must be rolled back")
-	assert.Equal(t, []string{"orb-stub"}, fm.rollbackNames)
-	assert.Equal(t, 2, be.startCalls, "Start is retried with the rolled-back binary")
-}
-
-type stubCancelledStartBackend struct {
-	startCalls int
-}
-
-func (s *stubCancelledStartBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
-	return nil
-}
-func (s *stubCancelledStartBackend) Version() (string, error) { return "", nil }
-func (s *stubCancelledStartBackend) Start(context.Context, context.CancelFunc) error {
-	s.startCalls++
-	return fmt.Errorf("stub start cancelled: %w", context.Canceled)
-}
-func (s *stubCancelledStartBackend) Stop(context.Context) error      { return nil }
-func (s *stubCancelledStartBackend) FullReset(context.Context) error { return nil }
-func (s *stubCancelledStartBackend) GetStartTime() time.Time         { return time.Time{} }
-func (s *stubCancelledStartBackend) GetCapabilities() (map[string]any, error) {
-	return nil, nil
-}
-
-func (s *stubCancelledStartBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
+func (b *blockingStartBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
 	return backend.Unknown, "", nil
 }
-func (s *stubCancelledStartBackend) GetInitialState() backend.RunningStatus      { return backend.Unknown }
-func (s *stubCancelledStartBackend) ApplyPolicy(policies.PolicyData, bool) error { return nil }
-func (s *stubCancelledStartBackend) RemovePolicy(policies.PolicyData) error      { return nil }
-func (s *stubCancelledStartBackend) ManagedBinaryName() string                   { return "stub-binary" }
 
-// A start the agent itself gave up on (its context was already cancelled,
-// typically by shutdown) is not evidence the managed binary is bad, so it
-// must not trigger a rollback to the previous version.
-func TestFilesmgrRestartDoesNotRollBackACancelledStart(t *testing.T) {
+// End to end through New and Start: a stop that lands while a backend is
+// still starting is a shutdown in progress, not a startup failure. Start
+// returns nil once the supervisor reports the stop, so main waits for the
+// stop path to finish and exits cleanly instead of exiting 1 while StopAll
+// is still stopping the backends that did come up.
+func TestStartReturnsNilWhenAStopWinsDuringStartup(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	be := &stubCancelledStartBackend{}
-	fm := &mockFilesManager{}
-
-	a := &orbAgent{
-		logger:        logger,
-		policyManager: &mockPolicyManager{},
-		backends:      map[string]backend.Backend{"stub": be},
-		filesManager:  fm,
-	}
+	be := &blockingStartBackend{restartableBackend: restartableBackend{events: &[]string{}}, entered: make(chan struct{})}
+	backend.Register("e2e_stop_wins_start", be)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends:      map[string]any{"e2e_stop_wins_start": nil},
+		ConfigManager: config.ManagerConfig{Active: "local"},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.configManager = &mockConfigManager{}
+	a.filesManager = &mockFilesManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	defer cancel()
+	started := make(chan error, 1)
+	go func() { started <- a.Start(ctx, cancel) }()
+	select {
+	case <-be.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backend's Start was never entered")
+	}
+	a.Stop(context.Background())
 
-	a.restartBackendWithFilesmgrRollback(ctx, "stub")
+	select {
+	case err := <-started:
+		require.NoError(t, err, "a stop winning against startup is not a startup error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+}
 
-	assert.Equal(t, 1, be.startCalls, "Start should be attempted exactly once")
-	assert.Equal(t, 0, fm.rollbackCalls, "a cancelled start must not trigger a rollback")
+// A stop that lands before Start reaches the backends is the same shutdown
+// in progress: the supervisor refuses to configure anything and reports the
+// stop, and Start returns nil so main waits for the stop path rather than
+// exiting 1 while it is still completing.
+func TestStartReturnsNilWhenStopPrecedesTheBackends(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &restartableBackend{events: &[]string{}}
+	backend.Register("e2e_stop_precedes_start", be)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends:      map[string]any{"e2e_stop_precedes_start": nil},
+		ConfigManager: config.ManagerConfig{Active: "local"},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.configManager = &mockConfigManager{}
+	a.filesManager = &mockFilesManager{}
+	a.Stop(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, a.Start(ctx, cancel), "a stop that precedes startup is not a startup error")
+	assert.NotContains(t, *be.events, "start", "nothing starts after the stop")
+}
+
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return port
+}
+
+// End to end through New and Start with the real fleet config manager: when
+// a stop wins during startup, the OTLP bridge Start bound is torn down once,
+// by the stop path (FleetConfigManager.Stop), not also by Start's own
+// failure cleanup, which would race it on the bridge (the race detector
+// catches the overlap).
+func TestStartLeavesTheBridgeTeardownToTheStopPathWhenAStopWinsDuringStartup(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &blockingStartBackend{restartableBackend: restartableBackend{events: &[]string{}}, entered: make(chan struct{})}
+	backend.Register("e2e_stop_wins_fleet", be)
+	grpcPort, httpPort := freeLoopbackPort(t), freeLoopbackPort(t)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends: map[string]any{"e2e_stop_wins_fleet": nil},
+		ConfigManager: config.ManagerConfig{
+			Active: "fleet",
+			Sources: config.Sources{Fleet: config.FleetManager{
+				OTLPBridgeGRPCPort: &grpcPort,
+				OTLPBridgeHTTPPort: &httpPort,
+				OTLPBridgeBindHost: "127.0.0.1",
+			}},
+		},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan error, 1)
+	go func() { started <- a.Start(ctx, cancel) }()
+	select {
+	case <-be.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backend's Start was never entered")
+	}
+	a.Stop(context.Background())
+
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+	_, err = net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(grpcPort)), time.Second)
+	assert.Error(t, err, "the bridge's gRPC listener is closed once the stop path has run")
 }
