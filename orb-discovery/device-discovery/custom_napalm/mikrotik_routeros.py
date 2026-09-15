@@ -273,6 +273,253 @@ def _ros_type_to_netbox(ros_type: str) -> str | None:
     return _ROS_TYPE_TO_NETBOX.get((ros_type or "").strip().lower())
 
 
+
+# 'ip address print' columns differ by RouterOS version: v6 prints ADDRESS,
+# NETWORK and INTERFACE, and v7 adds VRF. The device declares its own columns
+# in one of two header lines, so the count is read from the device rather than
+# guessed, and an interface name containing spaces still resolves.
+_IP_COLUMNS_RE = re.compile(r"^\s*Columns:\s*(?P<columns>.+?)\s*$", re.IGNORECASE)
+_IP_HEADER_RE = re.compile(r"^\s*#\s+ADDRESS\s+(?P<columns>.+?)\s*$", re.IGNORECASE)
+
+# One address row: an index, optional flag letters, the address and prefix,
+# then the remaining columns. Everything after the prefix is split positionally
+# against the column count, so a column RouterOS adds later is ignored rather
+# than fatal.
+_IP_ROW_RE = re.compile(
+    r"^\s*(?P<num>\d+)\s+"
+    r"(?:(?P<flags>[A-Za-z]+)\s+)?"
+    r"(?P<ip>\d{1,3}(?:\.\d{1,3}){3})/(?P<prefix>\d{1,2})\s+"
+    r"(?P<rest>\S.*?)\s*$"
+)
+
+# An address carrying a comment is printed over two lines: the index and flags
+# sit on the comment line, and the address follows on an unnumbered one.
+#
+#   0 D ;;; managed by dhcp
+#       192.0.2.1/24   192.0.2.0   ether1
+#
+# The flags belong to the address below them, so they are carried across. A
+# device whose addresses are all commented would otherwise report none at all,
+# which is the failure this parser was written to fix.
+_IP_COMMENT_ROW_RE = re.compile(
+    r"^\s*(?P<num>\d+)\s+(?:(?P<flags>[A-Za-z]+)\s+)?;{3}"
+)
+_IP_CONTINUED_ROW_RE = re.compile(
+    r"^\s*(?P<ip>\d{1,3}(?:\.\d{1,3}){3})/(?P<prefix>\d{1,2})\s+"
+    r"(?P<rest>\S.*?)\s*$"
+)
+
+# A line carrying something shaped like an address and a prefix. Used only to
+# tell "this device has no addresses" from "this device printed addresses we
+# could not read", which decide whether silence is worth reporting.
+_IP_LOOKS_LIKE_ADDRESS_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}")
+
+# RouterOS address flags. X is an address the operator disabled and I one the
+# device could not apply; neither is active, and SNMP does not report them, so
+# emitting them would make the two backends disagree about the same device.
+# D is a dynamic address, from DHCP or similar, which is active and is kept.
+_IP_FLAGS_NOT_ACTIVE = frozenset("XI")
+
+
+# Where no header gives column offsets, the VRF is taken as the last padded
+# column of the row and the interface as everything before it. That is right
+# until a name's own spacing is itself column-width, which this cannot tell
+# from padding; the header is used in preference for exactly that reason.
+_IP_INTERFACE_VRF_RE = re.compile(r"^(?P<interface>.*\S)\s{2,}(?P<vrf>\S.*)$")
+
+
+def _header_offsets(line: str) -> dict[str, int]:
+    """
+    Read the column offsets out of the "#  ADDRESS  NETWORK  ..." header.
+
+    These are the true column boundaries, and the only thing that can tell a
+    name's own spacing from the padding around it. Splitting on runs of spaces
+    cannot: two spaces inside a name and two between columns are the same two
+    spaces, so whichever column is read greedily swallows the other's value.
+    """
+    return {m.group(0).upper(): m.start() for m in re.finditer(r"\S+", line)}
+
+
+def _columns_by_offset(
+    match: "re.Match", has_vrf: bool, offsets: dict[str, int]
+) -> tuple[str, str | None] | None:
+    """
+    Slice a row at the header's column boundaries, or None if it does not fit.
+
+    The header omits the flags field, so it sits to the left of the data by
+    the width of that field. The shift is measured per row, from where the
+    address actually starts, which also carries a continuation row whose
+    indent differs from an indexed one.
+    """
+    if "ADDRESS" not in offsets or "INTERFACE" not in offsets:
+        return None
+    line = match.string
+    shift = match.start("ip") - offsets["ADDRESS"]
+    interface_at = offsets["INTERFACE"] + shift
+    if interface_at <= match.end("prefix"):
+        return None
+    if not has_vrf or "VRF" not in offsets:
+        # Returned as None, not as a row naming no interface: a row whose
+        # interface column is empty, as a truncated line leaves it, would
+        # otherwise key an address under None and take out the translation
+        # that sorts those keys. The caller counts it as unread instead.
+        interface = line[interface_at:].strip()
+        return (interface, None) if interface else None
+    vrf_at = offsets["VRF"] + shift
+    if vrf_at <= interface_at:
+        return None
+    interface = line[interface_at:vrf_at].strip()
+    return (interface, line[vrf_at:].strip() or None) if interface else None
+
+
+def _after_first_column(text: str) -> str:
+    """
+    Return everything after the first column of a row, spacing intact.
+
+    Empty where there is no second column. A row truncated after NETWORK has
+    only the one, and returning it would key the address to an interface
+    named after the network.
+    """
+    remainder = re.match(r"^\s*\S+\s+(?P<rest>.*)$", text)
+    return remainder.group("rest").strip() if remainder else ""
+
+
+def _address_row(
+    match: "re.Match", has_vrf: bool, offsets: dict[str, int] | None = None
+) -> dict | None:
+    """
+    Build one address row from a matched line.
+
+    Returns None where the row was recognised as an address but its columns
+    cannot be read, which the caller counts as unread: the device printed an
+    address and we could not say where it lives.
+    """
+    # NETWORK first, then INTERFACE, then VRF where the device has that column.
+    # Split on the column padding rather than on any whitespace, so a name
+    # containing a single space stays in one piece: RouterOS permits spaces in
+    # both interface and VRF names, and splitting on every space would move a
+    # word from one column into the other.
+    sliced = _columns_by_offset(match, has_vrf, offsets) if offsets else None
+    if sliced is not None:
+        interface, vrf = sliced
+        return {
+            "ip": match.group("ip"),
+            "prefix_length": int(match.group("prefix")),
+            "interface": interface,
+            "vrf": vrf,
+        }
+
+    after_network = _after_first_column(match.group("rest"))
+    if has_vrf:
+        columns = _IP_INTERFACE_VRF_RE.match(after_network)
+        if columns is None:
+            return None
+        interface, vrf = columns.group("interface"), columns.group("vrf")
+    else:
+        # With no VRF column everything after NETWORK is the interface name,
+        # whatever spacing it has, so it is taken verbatim.
+        interface, vrf = after_network, None
+    if not interface:
+        return None
+
+    return {
+        "ip": match.group("ip"),
+        "prefix_length": int(match.group("prefix")),
+        "interface": interface,
+        "vrf": vrf,
+    }
+
+
+def _match_address_row(
+    line: str, carried_flags: str
+) -> tuple["re.Match | None", str, str]:
+    """
+    Match one line as an address row and say which flags apply to it.
+
+    Returns the match, the flags belonging to that address, and the flags
+    still waiting for an address below. An indexed row carries its own. A
+    continuation row takes the ones from the index line above it, and only
+    then: a line that is neither leaves them waiting, so a second comment
+    line between the two does not take them with it. Losing an X or an I
+    that way would report a disabled address as an active one.
+    """
+    match = _IP_ROW_RE.match(line)
+    if match:
+        return match, match.group("flags") or "", ""
+    match = _IP_CONTINUED_ROW_RE.match(line)
+    if match:
+        return match, carried_flags, ""
+    return None, "", carried_flags
+
+
+def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
+    """
+    Parse 'ip address print' into address rows, across RouterOS 6 and 7.
+
+    Returns one dict per active address with "ip", "prefix_length",
+    "interface" and "vrf" (None where the device publishes no VRF column),
+    and a count of lines that carried something shaped like an address and
+    matched no row pattern.
+
+    Rows the device flags as disabled or invalid are skipped, and do not count
+    as unread: the device was understood and the address is not active. The
+    count exists so the caller can tell a device with nothing to report from
+    one whose output this no longer reads.
+    """
+    has_vrf = False
+    carried_flags = ""
+    offsets: dict[str, int] | None = None
+    rows: list[dict] = []
+    unread = 0
+
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+
+        header = _IP_COLUMNS_RE.match(line) or _IP_HEADER_RE.match(line)
+        if header:
+            has_vrf = "VRF" in header.group("columns").upper()
+            if _IP_HEADER_RE.match(line):
+                offsets = _header_offsets(line)
+            # Skipping is belt-and-braces: a header line has no leading row
+            # index, so the row patterns below reject it anyway and no test
+            # distinguishes the two. Written out because reading on from a
+            # line already consumed is a bug waiting for the next format.
+            continue
+
+        comment = _IP_COMMENT_ROW_RE.match(line)
+        if comment:
+            carried_flags = comment.group("flags") or ""
+            continue
+
+        match, flags, carried_flags = _match_address_row(line, carried_flags)
+        if match is None:
+            # Flags legends, standalone comment rows (";;; text") and anything
+            # else the device prints are not address rows. Skipped rather than
+            # fatal: an unrecognised line must not cost the addresses around it.
+            # One that looks like an address is counted, since that is the
+            # shape of a format we no longer read.
+            if _IP_LOOKS_LIKE_ADDRESS_RE.search(line):
+                unread += 1
+            continue
+
+        if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
+            # Understood, and not active. Not counted as unread: the device
+            # was read correctly and the address is simply not in service.
+            continue
+
+        row = _address_row(match, has_vrf, offsets)
+        if row is None:
+            # Recognised as an address, but its columns could not be read: a
+            # VRF column cut off by terminal width looks like this. Counted,
+            # so a row lost this way is reported rather than just missing.
+            unread += 1
+            continue
+        rows.append(row)
+
+    return rows, unread
+
+
 class ROSDriver(_napalm_base.NetworkDriver):
     """MikroTik RouterOS (ros) NAPALM driver (read-only subset for device-discovery)."""
 
@@ -374,7 +621,11 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 if row.get("serial_number"):
                     serial_number = row["serial_number"]
         except Exception:
-            logger.debug("Failed to parse 'system routerboard print'", exc_info=True)
+            logger.warning(
+                "mikrotik_routeros: could not parse 'system routerboard "
+                "print'; model and serial will be missing",
+                exc_info=True,
+            )
 
         return model, serial_number
 
@@ -398,7 +649,11 @@ class ROSDriver(_napalm_base.NetworkDriver):
             if parsed and parsed[0].get("name"):
                 return parsed[0]["name"]
         except Exception:
-            logger.debug("Failed to parse 'system identity print'", exc_info=True)
+            logger.warning(
+                "mikrotik_routeros: could not parse 'system identity print'; "
+                "the device hostname will be missing",
+                exc_info=True,
+            )
 
         return None
 
@@ -418,8 +673,10 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 try:
                     self._cached_interfaces_detail = _parse_interfaces_detail(raw)
                 except Exception:
-                    logger.debug(
-                        "Failed to parse 'interface print detail'", exc_info=True
+                    logger.warning(
+                        "mikrotik_routeros: could not parse 'interface print "
+                        "detail'; interface detail will be missing",
+                        exc_info=True,
                     )
                     self._cached_interfaces_detail = []
         return self._cached_interfaces_detail
@@ -493,39 +750,65 @@ class ROSDriver(_napalm_base.NetworkDriver):
         """
         Return IPv4 addresses per interface.
 
-        Parsed from 'ip address print' via the ntc-template (compatible with
-        both RouterOS v6 and v7).  IPv6 addresses are not returned because
-        there is no compatible ntc-template and RouterOS does not expose a
-        compact 'ipv6 address print' format that is stable across versions.
+        Parsed in this driver rather than through the shared ntc-template.
+        RouterOS 7 adds a fourth column, VRF, to 'ip address print', and the
+        template anchors its two header lines to exactly three columns, so the
+        parse aborts on the first of them and the device reports no addresses
+        at all.  Relaxing those anchors is not enough either: the template's
+        interface field runs to end of line, so it swallows the VRF value and
+        yields interface names like "Loopback           main".
+
+        IPv6 addresses are not returned.  There is no ntc-template for
+        'ipv6 address print' covering both RouterOS 6 and 7, and this driver
+        does not parse that command.
         """
+        raw = self.device.send_command("ip address print")
+        if not raw:
+            logger.warning(
+                "mikrotik_routeros: 'ip address print' returned no output; "
+                "no IP addresses will be discovered for this device"
+            )
+            return {}
+
         interfaces_ip: dict = {}
-
-        # IPv6 addresses are not collected: no ntc-template exists for
-        # 'ipv6 address print' that covers both v6 and v7 output formats.
-        ipv4_raw = self.device.send_command("ip address print")
-        if ipv4_raw:
-            try:
-                parsed = parse_output(
-                    platform="mikrotik_routeros",
-                    command="ip address print",
-                    data=ipv4_raw,
-                )
-                for row in parsed:
-                    ip = row.get("ip", "").strip()
-                    subnet = row.get("subnet", "").strip()
-                    intf = row.get("interface", "").strip()
-                    if not ip or not intf:
-                        continue
-                    try:
-                        prefix_length = int(subnet)
-                    except (ValueError, TypeError):
-                        continue
-                    interfaces_ip.setdefault(intf, {}).setdefault("ipv4", {})[ip] = {
-                        "prefix_length": prefix_length
-                    }
-            except Exception:
-                logger.debug("Failed to parse 'ip address print'", exc_info=True)
-
+        unread = 0
+        try:
+            addresses, unread = _parse_ip_addresses(raw)
+            for address in addresses:
+                interfaces_ip.setdefault(address["interface"], {}).setdefault(
+                    "ipv4", {}
+                )[address["ip"]] = {"prefix_length": address["prefix_length"]}
+        except Exception:
+            # Every getter in this file returns empty rather than raising. The
+            # runner calls this one outside any handler of its own, so an
+            # exception here fails the whole run for the device and loses its
+            # interfaces, VLANs and config as well as its addresses. Losing the
+            # addresses is the smaller harm, and the warning below is what makes
+            # it a reported one rather than a silent one.
+            logger.warning(
+                "mikrotik_routeros: could not parse 'ip address print'; no IP "
+                "addresses will be discovered for this device",
+                exc_info=True,
+            )
+            return {}
+        if unread:
+            # Only where the device printed something address-shaped that no
+            # pattern matched. A switch with no addresses, or one whose every
+            # address is disabled or invalid, reports nothing and is not a
+            # problem; warning on those would put this line in every poll of
+            # an ordinary device and teach operators to scroll past it.
+            #
+            # Raised whatever else was read. A device that prints one row in a
+            # format we know and another in one we do not returns plausible
+            # partial data, which is the harder case to notice and the one
+            # most worth saying out loud.
+            logger.warning(
+                "mikrotik_routeros: %d line(s) of 'ip address print' look "
+                "like addresses but matched no known row format; the output "
+                "format may have changed. First line: %r",
+                unread,
+                raw.splitlines()[0] if raw.splitlines() else "",
+            )
         return interfaces_ip
 
     def get_config(
@@ -568,5 +851,9 @@ class ROSDriver(_napalm_base.NetworkDriver):
         try:
             return _parse_vlans(raw)
         except Exception:
-            logger.debug("Failed to parse 'interface vlan print'", exc_info=True)
+            logger.warning(
+                "mikrotik_routeros: could not parse 'interface vlan print'; "
+                "no VLANs will be discovered for this device",
+                exc_info=True,
+            )
             return {}

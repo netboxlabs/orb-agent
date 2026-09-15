@@ -1,0 +1,51 @@
+{
+  "Loopback": {
+    "ipv4": {
+      "192.0.2.4": {
+        "prefix_length": 32
+      }
+    }
+  },
+  "sfp-sfpplus1.663": {
+    "ipv4": {
+      "198.51.100.194": {
+        "prefix_length": 30
+      }
+    }
+  },
+  "sfp-sfpplus2.665": {
+    "ipv4": {
+      "198.51.100.10": {
+        "prefix_length": 30
+      }
+    }
+  },
+  "br_Test01": {
+    "ipv4": {
+      "203.0.113.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "sfp-sfpplus1.160": {
+    "ipv4": {
+      "192.0.2.34": {
+        "prefix_length": 30
+      }
+    }
+  },
+  "sfp-sfpplus1.3333": {
+    "ipv4": {
+      "192.0.2.2": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "Loopback2": {
+    "ipv4": {
+      "203.0.113.217": {
+        "prefix_length": 32
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+Flags: X - disabled, I - invalid, D - dynamic
+Columns: ADDRESS, NETWORK, INTERFACE, VRF
+
+# ADDRESS           NETWORK        INTERFACE     VRF
+0 D ;;; managed by dhcp
+    192.0.2.1/24      192.0.2.0      ether1        main
+1 I ;;; interface removed
+    198.51.100.9/24   198.51.100.0   ether9        main
+2   203.0.113.5/24    203.0.113.0    ether2        main
+;;; standalone comment
+3   192.0.2.130/25    192.0.2.128    ether3        VRF_A
