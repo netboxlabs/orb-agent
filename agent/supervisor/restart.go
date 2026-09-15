@@ -184,15 +184,20 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	// live process through its context instead of stopping it gracefully in
 	// the second loop. Starting is stamped together with the context swap
 	// below, once the run context is the replacement's.
-	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
+	if err := s.configure(e); err != nil {
+		if prior == Failed {
+			// The retry could not even configure: remember why, and arm the
+			// next attempt before the replay below, which may take a while.
+			if !e.failWith(err) {
+				s.armRetry(e)
+			}
+		}
 		// The backend never stopped, so it is still running its previous
 		// configuration; hand its policies back rather than leave them
 		// unknown for a restart that may not come again soon.
 		if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 			s.scheduleReplay(e)
 		}
-		// A Failed on-demand entry stays Failed here; its retry repeats.
-		s.armRetry(e)
 		return err
 	}
 	s.logger.Info("resetting backend", "backend", e.name)
@@ -226,18 +231,19 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 		e.restoreRun(prevCancel)
 		cancel()
 		s.state.RegisterError(e.name, fmt.Sprintf("failed to reset backend: %v", err))
-		// A Running entry stays Running, a Failed one stays Failed, since no
-		// process came up for it either way. The policies stay marked
-		// unknown and manages stay deferred until a replay completes; the
-		// health monitor never asks for another restart on its own, so the
-		// replay is scheduled here rather than left to a restart that may
-		// never come.
-		if prior == Failed {
-			if !e.failWith(err) {
-				s.armRetry(e)
-			}
-		} else {
+		// The policies stay marked unknown and manages stay deferred until a
+		// replay completes; the health monitor never asks for another restart
+		// on its own, so the replay is scheduled here rather than left to a
+		// restart that may never come.
+		if prior == Running {
+			// A Running entry keeps its previous process: the reset failed
+			// before replacing it.
 			e.setPhase(Running)
+		} else if !e.failWith(err) {
+			// Failed, or Starting for a launched on-demand start that a
+			// restart got to first: no process came up either way, so the
+			// entry stays failed and its retry repeats.
+			s.armRetry(e)
 		}
 		s.scheduleReplay(e)
 		return nil
@@ -276,7 +282,9 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 // root context, not only by StopAll; ctx, the caller's own context, is used
 // only for the gated stop, the files manager rollback, and to tell a
 // caller-driven shutdown apart from the backend cancelling its own run
-// context on a fatal start.
+// context on a fatal start. Both the first Start and the rollback retry
+// carry the entry's readiness budget too, the same as the initial start; it
+// is zero for an eager entry, so wrapping the context there is a no-op.
 func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
@@ -307,7 +315,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	// that never came up is left alone.
 	s.gatedStop(ctx, e)
 
-	runCtx, cancel := context.WithCancel(s.runContext(e.name))
+	runCtx, cancel := context.WithCancel(backend.WithReadinessBudget(s.runContext(e.name), e.budget))
 	if e.beginStart(cancel) == Stopped {
 		cancel()
 		return fmt.Errorf("%w: %s", ErrStopped, e.name)
@@ -367,7 +375,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	// Retry Start with the rolled-back binary: a fresh context and cancel,
 	// again through beginStart, which cancels the failed first attempt's
 	// context before installing this one.
-	runCtx2, cancel2 := context.WithCancel(s.runContext(e.name))
+	runCtx2, cancel2 := context.WithCancel(backend.WithReadinessBudget(s.runContext(e.name), e.budget))
 	if e.beginStart(cancel2) == Stopped {
 		cancel2()
 		return fmt.Errorf("%w: %s", ErrStopped, e.name)

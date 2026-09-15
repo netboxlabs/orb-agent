@@ -1323,6 +1323,26 @@ func TestRestartUpgradedRunsUnderTheRunContextFactory(t *testing.T) {
 	assert.True(t, sawMarker, "the upgrade restart must run under s.runContext(name), not the caller's own ctx")
 }
 
+// An on-demand entry's readiness budget must survive a binary upgrade: the
+// upgrade restart's Start carries it the same way the first start did.
+func TestRestartUpgradedCarriesTheReadinessBudget(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_upgrade_budget")
+	var seen time.Duration
+	lazy.onStart = func(ctx context.Context, _ context.CancelFunc) { seen = backend.ReadinessBudgetFrom(ctx) }
+	backend.Register("sup_lazy_upgrade_budget", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_upgrade_budget": map[string]any{"start_mode": "on_demand", "start_timeout": 4}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_upgrade_budget")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_upgrade_budget"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_lazy_upgrade_budget"))
+
+	assert.Equal(t, 4*time.Second, seen, "the upgrade restart's start carries the on-demand entry's readiness budget")
+}
+
 // TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds
 // mirrors TestStartReportsErrStoppedWhenAStopWinsAfterStartSucceeds
 // (supervisor_test.go) for the upgrade path: a StopAll that stamps the
@@ -1666,7 +1686,7 @@ func TestRestartDisarmsAPendingRetry(t *testing.T) {
 	rec := &recorder{}
 	s := newTestSupervisor(t, rec, nil, nil)
 	t.Cleanup(func() { s.StopAll(context.Background()) })
-	s.opts.RetryInterval = 2 * time.Second
+	s.opts.RetryInterval = time.Hour
 	lazy := newStub(rec, "lazy_disarm")
 	lazy.startErrs = []error{errors.New("no binary")}
 	backend.Register("sup_lazy_disarm", lazy)
@@ -1695,7 +1715,7 @@ func TestStopAllDisarmsAPendingRetry(t *testing.T) {
 	rec := &recorder{}
 	s := newTestSupervisor(t, rec, nil, nil)
 	t.Cleanup(func() { s.StopAll(context.Background()) })
-	s.opts.RetryInterval = 2 * time.Second
+	s.opts.RetryInterval = time.Hour
 	lazy := newStub(rec, "lazy_stopped")
 	lazy.startErrs = []error{errors.New("no binary")}
 	backend.Register("sup_lazy_stopped", lazy)
@@ -1803,6 +1823,8 @@ func TestOnDemandConfigureFailureRearmsTheRetry(t *testing.T) {
 	p, _ := s.Phase("sup_lazy_cfg_fail")
 	assert.Equal(t, Failed, p)
 	assert.Equal(t, 0, rec.count("reset:lazy_cfg_fail"), "no reset while Configure fails")
+	_, err = s.EnsureStarted("sup_lazy_cfg_fail")
+	require.EqualError(t, err, "bad config")
 }
 
 // The timer is on-demand only: an eager entry is driven through the
@@ -1858,13 +1880,45 @@ func TestOnDemandHealthRestartFailureArmsTheRetry(t *testing.T) {
 	assert.Equal(t, 2, rec.count("restart-registered:sup_lazy_reset_fail:retry after failed start"), "the first retry failed its reset and armed the next")
 }
 
+// A restart that takes the restart mutex before a launched on-demand start
+// does, and whose reset then fails, leaves the entry Failed with the retry
+// armed: it never had a process, so restoring Running would strand it with
+// no start, no timer and no monitor.
+func TestFailedResetOnAJustLaunchedOnDemandStartLeavesItFailedAndArmed(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = time.Hour
+	lazy := newStub(rec, "lazy_raced_reset")
+	lazy.resetErr = errors.New("no binary")
+	backend.Register("sup_lazy_raced_reset", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_raced_reset": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	e, _ := s.entryFor("sup_lazy_raced_reset")
+
+	e.mu.Lock()
+	e.phase = Starting // what EnsureStarted stamps before launching the start
+	e.mu.Unlock()
+	// The restart wins the mutex: run it from here, as RestartAll would,
+	// while the launched goroutine is still queued behind it or already
+	// skipped.
+	require.NoError(t, s.Restart(context.Background(), "sup_lazy_raced_reset", "fleet reset"))
+
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_raced_reset"); return p == Failed }, 5*time.Second, 5*time.Millisecond, "an entry that never had a process is Failed after a failed reset")
+	e.mu.Lock()
+	armed := e.retryTimer != nil
+	e.mu.Unlock()
+	assert.True(t, armed, "the retry is armed")
+	_, err := s.EnsureStarted("sup_lazy_raced_reset")
+	require.Error(t, err, "a policy is told the backend is not up")
+}
+
 // A binary upgrade restart that fails on an on-demand entry re-arms the
 // retry it disarmed: under git and local nothing else would start it.
 func TestUpgradeRestartFailureRearmsAnOnDemandRetry(t *testing.T) {
 	rec := &recorder{}
 	s := newTestSupervisor(t, rec, nil, nil)
 	t.Cleanup(func() { s.StopAll(context.Background()) })
-	s.opts.RetryInterval = 2 * time.Second
+	s.opts.RetryInterval = time.Hour
 	lazy := newStub(rec, "lazy_upgrade")
 	lazy.startErrs = []error{errors.New("no binary"), errors.New("still none")}
 	backend.Register("sup_lazy_upgrade", lazy)

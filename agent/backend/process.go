@@ -50,16 +50,11 @@ func WithReadinessBudget(ctx context.Context, budget time.Duration) context.Cont
 	return context.WithValue(ctx, readinessBudgetKey{}, budget)
 }
 
-// readinessBudgetFrom reads the budget WithReadinessBudget attached, or
-// zero when the context carries none.
-func readinessBudgetFrom(ctx context.Context) time.Duration {
+// ReadinessBudgetFrom reads the budget WithReadinessBudget attached, or zero
+// when the context carries none.
+func ReadinessBudgetFrom(ctx context.Context) time.Duration {
 	budget, _ := ctx.Value(readinessBudgetKey{}).(time.Duration)
 	return budget
-}
-
-// ReadinessBudgetFrom reads the budget WithReadinessBudget attached, or zero.
-func ReadinessBudgetFrom(ctx context.Context) time.Duration {
-	return readinessBudgetFrom(ctx)
 }
 
 // StartSpec describes how to launch and validate a backend subprocess.
@@ -136,7 +131,7 @@ func StartProcess(spec StartSpec) error {
 		return fmt.Errorf("%s start cancelled: %w", spec.NameDisplay, err)
 	}
 	if spec.ReadinessBudget == 0 {
-		spec.ReadinessBudget = readinessBudgetFrom(ctx)
+		spec.ReadinessBudget = ReadinessBudgetFrom(ctx)
 	}
 
 	proc := NewCmdOptions(CmdOptions{

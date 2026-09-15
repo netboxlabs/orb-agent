@@ -736,23 +736,25 @@ func TestParseStartOptions(t *testing.T) {
 		budget time.Duration
 		errHas string
 	}{
-		"nil entry is eager":        {in: nil, mode: startEager},
-		"empty entry is eager":      {in: map[string]any{}, mode: startEager},
-		"explicit eager":            {in: map[string]any{"start_mode": "eager"}, mode: startEager},
-		"on demand default timeout": {in: map[string]any{"start_mode": "on_demand"}, mode: startOnDemand, budget: 30 * time.Second},
-		"on demand int timeout":     {in: map[string]any{"start_mode": "on_demand", "start_timeout": 5}, mode: startOnDemand, budget: 5 * time.Second},
-		"on demand float timeout":   {in: map[string]any{"start_mode": "on_demand", "start_timeout": 12.0}, mode: startOnDemand, budget: 12 * time.Second},
-		"on demand int64 timeout":   {in: map[string]any{"start_mode": "on_demand", "start_timeout": int64(300)}, mode: startOnDemand, budget: 300 * time.Second},
-		"unknown mode":              {in: map[string]any{"start_mode": "lazy"}, errHas: `start_mode "lazy"`},
-		"mode not a string":         {in: map[string]any{"start_mode": 1}, errHas: "start_mode"},
-		"timeout on eager":          {in: map[string]any{"start_timeout": 5}, errHas: "start_timeout is valid only with start_mode on_demand"},
-		"timeout zero":              {in: map[string]any{"start_mode": "on_demand", "start_timeout": 0}, errHas: "start_timeout 0"},
-		"timeout too big":           {in: map[string]any{"start_mode": "on_demand", "start_timeout": 301}, errHas: "start_timeout 301"},
-		"timeout fractional":        {in: map[string]any{"start_mode": "on_demand", "start_timeout": 1.5}, errHas: "start_timeout"},
-		"timeout string":            {in: map[string]any{"start_mode": "on_demand", "start_timeout": "5"}, errHas: "start_timeout"},
+		"nil entry is eager":         {in: nil, mode: startEager},
+		"empty entry is eager":       {in: map[string]any{}, mode: startEager},
+		"explicit eager":             {in: map[string]any{"start_mode": "eager"}, mode: startEager},
+		"on demand default timeout":  {in: map[string]any{"start_mode": "on_demand"}, mode: startOnDemand, budget: 30 * time.Second},
+		"on demand int timeout":      {in: map[string]any{"start_mode": "on_demand", "start_timeout": 5}, mode: startOnDemand, budget: 5 * time.Second},
+		"on demand float timeout":    {in: map[string]any{"start_mode": "on_demand", "start_timeout": 12.0}, mode: startOnDemand, budget: 12 * time.Second},
+		"on demand int64 timeout":    {in: map[string]any{"start_mode": "on_demand", "start_timeout": int64(300)}, mode: startOnDemand, budget: 300 * time.Second},
+		"unknown mode":               {in: map[string]any{"start_mode": "lazy"}, errHas: `start_mode "lazy"`},
+		"mode not a string":          {in: map[string]any{"start_mode": 1}, errHas: "start_mode"},
+		"timeout on eager":           {in: map[string]any{"start_timeout": 5}, errHas: "start_timeout is valid only with start_mode on_demand"},
+		"timeout zero":               {in: map[string]any{"start_mode": "on_demand", "start_timeout": 0}, errHas: "start_timeout 0"},
+		"timeout too big":            {in: map[string]any{"start_mode": "on_demand", "start_timeout": 301}, errHas: "start_timeout 301"},
+		"timeout fractional":         {in: map[string]any{"start_mode": "on_demand", "start_timeout": 1.5}, errHas: "start_timeout"},
+		"timeout string":             {in: map[string]any{"start_mode": "on_demand", "start_timeout": "5"}, mode: startOnDemand, budget: 5 * time.Second},
+		"timeout non-numeric string": {in: map[string]any{"start_mode": "on_demand", "start_timeout": "abc"}, errHas: "start_timeout"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			wantMode := tc.in["start_mode"]
 			mode, budget, stripped, err := parseStartOptions("sup_keys", tc.in)
 			if tc.errHas != "" {
 				require.Error(t, err)
@@ -767,10 +769,7 @@ func TestParseStartOptions(t *testing.T) {
 			_, hasTimeout := stripped["start_timeout"]
 			assert.False(t, hasMode, "start_mode is stripped from the copy")
 			assert.False(t, hasTimeout, "start_timeout is stripped from the copy")
-			if tc.in != nil {
-				_, stillThere := tc.in["start_mode"]
-				assert.Equal(t, tc.in["start_mode"] != nil, stillThere, "the caller's map is left as read")
-			}
+			assert.Equal(t, wantMode, tc.in["start_mode"], "the caller's map is left as read")
 		})
 	}
 }
@@ -964,7 +963,7 @@ func TestOnDemandStartFailureIsRememberedByEnsureStarted(t *testing.T) {
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_fail"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
 
-	assert.Equal(t, 1, rec.count("error:sup_lazy_fail:no binary"), "the start error is registered with the state manager")
+	require.Eventually(t, func() bool { return rec.count("error:sup_lazy_fail:no binary") == 1 }, 5*time.Second, 5*time.Millisecond, "the start error is registered with the state manager")
 	assert.Equal(t, 0, rec.count("monitor:sup_lazy_fail"))
 	_, err = s.EnsureStarted("sup_lazy_fail")
 	require.EqualError(t, err, "no binary")

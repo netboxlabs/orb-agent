@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -186,7 +188,8 @@ func parseStartOptions(name string, cEntity map[string]any) (mode startMode, bud
 	return mode, budget, stripped, nil
 }
 
-// wholeSeconds accepts the integer shapes a YAML decoder produces.
+// wholeSeconds accepts the integer shapes a YAML decoder produces and the
+// string the environment overlay delivers.
 func wholeSeconds(raw any) (int64, bool) {
 	switch v := raw.(type) {
 	case int:
@@ -198,6 +201,12 @@ func wholeSeconds(raw any) (int64, bool) {
 			return 0, false
 		}
 		return int64(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return int64(n), true
 	default:
 		return 0, false
 	}
@@ -631,7 +640,11 @@ func (s *Supervisor) startDeclared(e *entry) {
 	phase := e.phase
 	e.mu.Unlock()
 	if phase != Starting {
-		s.logger.Info("on-demand start skipped, backend already handled by a restart", "backend", e.name, "phase", phase)
+		if phase == Stopped {
+			s.logger.Info("on-demand start skipped, supervisor stopped", "backend", e.name, "phase", phase)
+		} else {
+			s.logger.Info("on-demand start skipped, backend already handled by a restart", "backend", e.name, "phase", phase)
+		}
 		return
 	}
 	runCtx, cancel := context.WithCancel(backend.WithReadinessBudget(s.runContext(e.name), e.budget))

@@ -1370,13 +1370,23 @@ type onDemandBackend struct {
 	starts  int
 	applied int
 	started atomic.Bool
+	// startBlocks, when set, makes Start wait on it, or on ctx.Done(),
+	// before counting the start; nil means Start returns at once.
+	startBlocks chan struct{}
 }
 
 func (b *onDemandBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
 	return nil
 }
 
-func (b *onDemandBackend) Start(context.Context, context.CancelFunc) error {
+func (b *onDemandBackend) Start(ctx context.Context, _ context.CancelFunc) error {
+	if b.startBlocks != nil {
+		select {
+		case <-b.startBlocks:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	b.mu.Lock()
 	b.starts++
 	b.mu.Unlock()
@@ -1435,12 +1445,16 @@ func TestManagePolicyStartsAnOnDemandBackendAndAppliesAfterIt(t *testing.T) {
 	t.Cleanup(func() { a.Stop(context.Background()) })
 	starts, _ := be.counts()
 	require.Equal(t, 0, starts, "declared on demand: not started by Start")
+	be.startBlocks = make(chan struct{})
 
 	a.policyManager.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "p1", Name: "p1", Backend: "e2e_on_demand", DatasetID: "d1", Version: 1, Data: map[string]any{"k": "v"}})
 
 	state, err := a.policyManager.GetPolicyState()
 	require.NoError(t, err)
 	require.Len(t, state, 1, "the policy is stored while the backend starts")
+	assert.Equal(t, policies.FailedToApply, state[0].State, "the policy is deferred, not yet applied, while the backend is still starting")
+	assert.Equal(t, policymgr.ReasonBackendStarting, state[0].BackendErr)
+	close(be.startBlocks)
 	require.Eventually(t, func() bool {
 		state, err := a.policyManager.GetPolicyState()
 		return err == nil && len(state) == 1 && state[0].State == policies.Running

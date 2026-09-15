@@ -81,6 +81,9 @@ Each backend entry may carry two lifecycle keys:
 
 ```yaml
   backends:
+    common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
     snmp_discovery:
     gnmi_telemetry:
       start_mode: on_demand
