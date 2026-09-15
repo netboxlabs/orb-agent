@@ -444,6 +444,13 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 			if err != nil {
 				fleetManager.logger.Error("failed to disconnect during reset", "error", err)
 			}
+			// Shutdown that began during the disconnect ends the reset here:
+			// a reconnect would create a connection during teardown, for
+			// Stop to disconnect again.
+			if fleetManager.monitorCtx.Err() != nil {
+				fleetManager.logger.Info("reset handler stopped; shutdown began during the reset's disconnect")
+				return
+			}
 
 			// Reconnect: connCtx governs the new connection's lifetime; monitorCtx
 			// bounds the AwaitConnection wait so Stop() isn't blocked if the broker

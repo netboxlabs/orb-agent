@@ -1865,4 +1865,5 @@ func TestFleetConfigManager_ResetHandler_DisconnectIsCutShortByShutdown(t *testi
 	case <-time.After(time.Second):
 		t.Fatal("runResetHandler did not exit after shutdown cut the disconnect short")
 	}
+	assert.False(t, mockConn.ConnectCalled(), "no reconnect after a disconnect that shutdown cut short: the connection would be created during teardown")
 }
