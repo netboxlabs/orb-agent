@@ -539,3 +539,53 @@ func TestStartProcess_StopsTheChildWhenCancelledDuringASuccessfulReadinessCheck(
 	assert.Equal(t, int32(1), checks.Load(), "the readiness check ran once")
 	assert.Equal(t, int32(1), fake.stopCalls.Load())
 }
+
+// A readiness budget attached to the start context bounds the readiness
+// phase the same way StartSpec.ReadinessBudget does, so the supervisor can
+// bound an on-demand start without every backend threading a field through.
+func TestStartProcess_ReadsTheReadinessBudgetFromTheContext(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 0
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+	start := time.Now()
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "", errors.New("not yet") },
+		Ctx:            WithReadinessBudget(context.Background(), 40*time.Millisecond),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "test-backend not ready within 40ms")
+	assert.Less(t, time.Since(start), time.Second, "the backoff was cut to the context's budget")
+	assert.Equal(t, int32(1), fake.stopCalls.Load(), "the child is stopped when the budget is spent")
+}
+
+// An explicit StartSpec.ReadinessBudget wins over the context's.
+func TestStartProcess_SpecBudgetWinsOverTheContextBudget(t *testing.T) {
+	origWait := startProcessStartupWait
+	startProcessStartupWait = 0
+	t.Cleanup(func() { startProcessStartupWait = origWait })
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+
+	err := StartProcess(StartSpec{
+		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck:  func() (string, error) { return "", errors.New("not yet") },
+		ReadinessBudget: 40 * time.Millisecond,
+		Ctx:             WithReadinessBudget(context.Background(), time.Hour),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not ready within 40ms")
+}
+
+// No budget anywhere keeps today's loop: the error names no budget.
+func TestReadinessBudgetFromAnUnmarkedContextIsZero(t *testing.T) {
+	assert.Equal(t, time.Duration(0), readinessBudgetFrom(context.Background()))
+	assert.Equal(t, 3*time.Second, readinessBudgetFrom(WithReadinessBudget(context.Background(), 3*time.Second)))
+}

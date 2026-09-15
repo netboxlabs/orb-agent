@@ -39,6 +39,24 @@ func sleepUnlessDone(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// readinessBudgetKey marks a start context that carries a readiness budget.
+type readinessBudgetKey struct{}
+
+// WithReadinessBudget attaches a readiness budget to a start context. A
+// backend passes its start context as StartSpec.Ctx, so a caller that
+// bounds a start (the supervisor, for an on-demand backend) needs no field
+// threaded through every backend; StartSpec.ReadinessBudget, when set, wins.
+func WithReadinessBudget(ctx context.Context, budget time.Duration) context.Context {
+	return context.WithValue(ctx, readinessBudgetKey{}, budget)
+}
+
+// readinessBudgetFrom reads the budget WithReadinessBudget attached, or
+// zero when the context carries none.
+func readinessBudgetFrom(ctx context.Context) time.Duration {
+	budget, _ := ctx.Value(readinessBudgetKey{}).(time.Duration)
+	return budget
+}
+
 // StartSpec describes how to launch and validate a backend subprocess.
 type StartSpec struct {
 	Logger         *slog.Logger
@@ -60,7 +78,8 @@ type StartSpec struct {
 	// ReadinessBudget bounds the readiness phase after the startup wait: the
 	// loop never sleeps past it and gives up when it is spent, overshooting by
 	// at most one check. It never adds attempts. Zero keeps the ten-attempt
-	// loop as it is.
+	// loop as it is. Zero also reads a budget attached to Ctx with
+	// WithReadinessBudget.
 	ReadinessBudget time.Duration
 }
 
@@ -110,6 +129,9 @@ func StartProcess(spec StartSpec) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("%s start cancelled: %w", spec.NameDisplay, err)
+	}
+	if spec.ReadinessBudget == 0 {
+		spec.ReadinessBudget = readinessBudgetFrom(ctx)
 	}
 
 	proc := NewCmdOptions(CmdOptions{
