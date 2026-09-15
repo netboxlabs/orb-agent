@@ -86,6 +86,8 @@ type stubBackend struct {
 	onResetCtx   func(ctx context.Context) error // when set, FullReset returns its result after recording
 	onStop       func()
 	mu           sync.Mutex
+
+	configuredWith map[string]any
 }
 
 func newStub(rec *recorder, name string) *stubBackend {
@@ -94,8 +96,9 @@ func newStub(rec *recorder, name string) *stubBackend {
 	return s
 }
 
-func (s *stubBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
+func (s *stubBackend) Configure(_ *slog.Logger, _ policies.PolicyRepo, cfg map[string]any, _ config.BackendCommons, _ filesmgr.Manager) error {
 	s.rec.add("configure:" + s.name)
+	s.configuredWith = cfg
 	if s.onConfigure != nil {
 		s.onConfigure()
 	}
@@ -710,4 +713,131 @@ func TestStartCancelledByStopAllReportsErrStopped(t *testing.T) {
 	assert.Equal(t, 0, rec.count("error:cancelled_start:"), "a cancelled start is not registered as a backend error")
 	p, _ := s.Phase("sup_cancelled_start")
 	assert.Equal(t, Stopped, p)
+}
+
+// The two lifecycle keys are parsed and stripped: the backend's Configure
+// never sees them, the defaults apply when absent, and every invalid value
+// is a configuration error named after the backend.
+func TestParseStartOptions(t *testing.T) {
+	cases := map[string]struct {
+		in     map[string]any
+		mode   startMode
+		budget time.Duration
+		errHas string
+	}{
+		"nil entry is eager":        {in: nil, mode: startEager},
+		"empty entry is eager":      {in: map[string]any{}, mode: startEager},
+		"explicit eager":            {in: map[string]any{"start_mode": "eager"}, mode: startEager},
+		"on demand default timeout": {in: map[string]any{"start_mode": "on_demand"}, mode: startOnDemand, budget: 30 * time.Second},
+		"on demand int timeout":     {in: map[string]any{"start_mode": "on_demand", "start_timeout": 5}, mode: startOnDemand, budget: 5 * time.Second},
+		"on demand float timeout":   {in: map[string]any{"start_mode": "on_demand", "start_timeout": 12.0}, mode: startOnDemand, budget: 12 * time.Second},
+		"on demand int64 timeout":   {in: map[string]any{"start_mode": "on_demand", "start_timeout": int64(300)}, mode: startOnDemand, budget: 300 * time.Second},
+		"unknown mode":              {in: map[string]any{"start_mode": "lazy"}, errHas: `start_mode "lazy"`},
+		"mode not a string":         {in: map[string]any{"start_mode": 1}, errHas: "start_mode"},
+		"timeout on eager":          {in: map[string]any{"start_timeout": 5}, errHas: "start_timeout is valid only with start_mode on_demand"},
+		"timeout zero":              {in: map[string]any{"start_mode": "on_demand", "start_timeout": 0}, errHas: "start_timeout 0"},
+		"timeout too big":           {in: map[string]any{"start_mode": "on_demand", "start_timeout": 301}, errHas: "start_timeout 301"},
+		"timeout fractional":        {in: map[string]any{"start_mode": "on_demand", "start_timeout": 1.5}, errHas: "start_timeout"},
+		"timeout string":            {in: map[string]any{"start_mode": "on_demand", "start_timeout": "5"}, errHas: "start_timeout"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			mode, budget, stripped, err := parseStartOptions("sup_keys", tc.in)
+			if tc.errHas != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errHas)
+				assert.Contains(t, err.Error(), "sup_keys", "the error names the backend")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.mode, mode)
+			assert.Equal(t, tc.budget, budget)
+			_, hasMode := stripped["start_mode"]
+			_, hasTimeout := stripped["start_timeout"]
+			assert.False(t, hasMode, "start_mode is stripped from the copy")
+			assert.False(t, hasTimeout, "start_timeout is stripped from the copy")
+			if tc.in != nil {
+				_, stillThere := tc.in["start_mode"]
+				assert.Equal(t, tc.in["start_mode"] != nil, stillThere, "the caller's map is left as read")
+			}
+		})
+	}
+}
+
+// Other keys survive the strip and reach Configure, in a copy.
+func TestParseStartOptionsKeepsTheOtherKeys(t *testing.T) {
+	in := map[string]any{"start_mode": "on_demand", "port": 8079, "log_level": "INFO"}
+	_, _, stripped, err := parseStartOptions("sup_keep", in)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"port": 8079, "log_level": "INFO"}, stripped)
+	assert.Equal(t, "on_demand", in["start_mode"], "the original map is untouched")
+}
+
+// An on-demand entry is configured at agent start but not started: no
+// process, no monitor, phase Declared, and the stripped map reaches
+// Configure. An eager sibling starts as before.
+func TestConfigureAllConfiguresAnOnDemandEntryWithoutStartingIt(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy")
+	eager := newStub(rec, "eager")
+	backend.Register("sup_lazy", lazy)
+	backend.Register("sup_eager", eager)
+
+	require.NoError(t, s.ConfigureAll(map[string]any{
+		"sup_lazy":  map[string]any{"start_mode": "on_demand", "start_timeout": 3, "port": 1},
+		"sup_eager": nil,
+	}, config.BackendCommons{}, background))
+
+	assert.Equal(t, 1, rec.count("configure:lazy"), "an on-demand entry is configured")
+	assert.Equal(t, 0, rec.count("start:lazy"), "but not started")
+	assert.Equal(t, 0, rec.count("monitor:sup_lazy"), "and not monitored")
+	assert.Equal(t, 1, rec.count("start:eager"))
+	assert.Equal(t, 1, rec.count("monitor:sup_eager"))
+	p, _ := s.Phase("sup_lazy")
+	assert.Equal(t, Declared, p)
+	e, _ := s.entryFor("sup_lazy")
+	assert.Equal(t, startOnDemand, e.mode)
+	assert.Equal(t, 3*time.Second, e.budget)
+	assert.Equal(t, map[string]any{"port": 1}, e.config, "the stripped copy is the entry's config")
+	assert.Equal(t, map[string]any{"port": 1}, lazy.configuredWith, "and the one Configure received")
+	s.StopAll(context.Background())
+	assert.Equal(t, 0, rec.count("stop:lazy"), "nothing to stop for an entry that never started")
+}
+
+// Validation happens before anything is configured or started: a bad key
+// on the second entry leaves the first untouched.
+func TestConfigureAllRefusesABadStartKeyBeforeStartingAnything(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	backend.Register("sup_good_key", newStub(rec, "good_key"))
+	backend.Register("sup_bad_key", newStub(rec, "bad_key"))
+
+	err := s.ConfigureAll(map[string]any{
+		"sup_good_key": nil,
+		"sup_bad_key":  map[string]any{"start_mode": "sometimes"},
+	}, config.BackendCommons{}, background)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `start_mode "sometimes"`)
+	assert.Empty(t, rec.snapshot(), "nothing is configured or started")
+	assert.Empty(t, s.Declared())
+}
+
+// A Configure failure on an on-demand entry aborts the start like an eager
+// one: a bad configuration must not wait for the first policy to surface.
+func TestConfigureAllFailsWhenAnOnDemandEntryDoesNotConfigure(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_bad")
+	lazy.configureErr = errors.New("bad port")
+	backend.Register("sup_lazy_bad", lazy)
+
+	err := s.ConfigureAll(map[string]any{"sup_lazy_bad": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background)
+
+	require.EqualError(t, err, "bad port")
+	assert.Equal(t, 0, rec.count("start:lazy_bad"))
 }

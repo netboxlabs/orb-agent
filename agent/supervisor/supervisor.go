@@ -106,11 +106,97 @@ func (p Phase) String() string {
 	return [...]string{"declared", "starting", "running", "failed", "stopped"}[p]
 }
 
+// startMode is how an entry comes up: at agent start, or when its first
+// policy arrives.
+type startMode int
+
+const (
+	startEager startMode = iota
+	startOnDemand
+)
+
+const (
+	startModeKey        = "start_mode"
+	startTimeoutKey     = "start_timeout"
+	defaultStartTimeout = 30 * time.Second
+	maxStartTimeout     = 300 * time.Second
+)
+
+// parseStartOptions reads the two lifecycle keys an entry may carry and
+// returns the entry's settings without them, in a copy, so the backend's
+// Configure never sees a key it does not know and the agent's own config
+// stays as read (the fleet capabilities config string shows it). A nil
+// entry is eager with no settings. start_timeout is valid only with
+// on_demand, so a stray value is an error rather than a silently ignored
+// key.
+func parseStartOptions(name string, cEntity map[string]any) (mode startMode, budget time.Duration, stripped map[string]any, err error) {
+	if cEntity == nil {
+		return startEager, 0, nil, nil
+	}
+	stripped = make(map[string]any, len(cEntity))
+	for k, v := range cEntity {
+		if k != startModeKey && k != startTimeoutKey {
+			stripped[k] = v
+		}
+	}
+	if raw, ok := cEntity[startModeKey]; ok {
+		v, isString := raw.(string)
+		switch {
+		case !isString:
+			return 0, 0, nil, fmt.Errorf("backend %s: %s must be a string", name, startModeKey)
+		case v == "eager":
+			mode = startEager
+		case v == "on_demand":
+			mode = startOnDemand
+		default:
+			return 0, 0, nil, fmt.Errorf("backend %s: %s %q is not eager or on_demand", name, startModeKey, v)
+		}
+	}
+	raw, hasTimeout := cEntity[startTimeoutKey]
+	if !hasTimeout {
+		if mode == startOnDemand {
+			budget = defaultStartTimeout
+		}
+		return mode, budget, stripped, nil
+	}
+	if mode != startOnDemand {
+		return 0, 0, nil, fmt.Errorf("backend %s: %s is valid only with %s on_demand", name, startTimeoutKey, startModeKey)
+	}
+	seconds, ok := wholeSeconds(raw)
+	if !ok {
+		return 0, 0, nil, fmt.Errorf("backend %s: %s must be a whole number of seconds", name, startTimeoutKey)
+	}
+	budget = time.Duration(seconds) * time.Second
+	if budget < time.Second || budget > maxStartTimeout {
+		return 0, 0, nil, fmt.Errorf("backend %s: %s %d is outside 1 to 300", name, startTimeoutKey, seconds)
+	}
+	return mode, budget, stripped, nil
+}
+
+// wholeSeconds accepts the integer shapes a YAML decoder produces.
+func wholeSeconds(raw any) (int64, bool) {
+	switch v := raw.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		if v != float64(int64(v)) {
+			return 0, false
+		}
+		return int64(v), true
+	default:
+		return 0, false
+	}
+}
+
 // entry is one declared backend.
 type entry struct {
 	name   string
 	be     backend.Backend
 	config map[string]any // the entry's own settings as declared; nil when it had none
+	mode   startMode      // eager (started by ConfigureAll) or on demand (started by EnsureStarted)
+	budget time.Duration  // readiness budget of an on-demand start; zero for eager
 
 	// mu guards phase and runCancel; the only call made under it is
 	// runCancel, which never calls back.
@@ -280,10 +366,11 @@ func New(logger *slog.Logger, state backend.StateManager, files filesmgr.Manager
 
 // ConfigureAll declares every backend in cfgBackends (the agent's backends
 // map without its "common" entry; an empty map is accepted and starts
-// nothing), then configures and starts each in map order, registering its
-// monitor: the first failure is returned and later entries are not started.
-// On success it starts the restart request loop and the upgrade dispatcher,
-// once. runCtxFor returns the context a backend's process runs under.
+// nothing), then configures each in map order and starts the eager ones,
+// registering its monitor: the first failure is returned and later entries
+// are not started. On success it starts the restart request loop and the
+// upgrade dispatcher, once. runCtxFor returns the context a backend's
+// process runs under.
 func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.BackendCommons, runCtxFor func(name string) context.Context) error {
 	declared := make(map[string]*entry, len(cfgBackends))
 	for name, configurationEntry := range cfgBackends {
@@ -298,7 +385,11 @@ func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.Bac
 		if !backend.HaveBackend(name) {
 			return errors.New("specified backend does not exist: " + name)
 		}
-		declared[name] = &entry{name: name, be: backend.GetBackend(name), config: cEntity, phase: Declared}
+		mode, budget, stripped, err := parseStartOptions(name, cEntity)
+		if err != nil {
+			return err
+		}
+		declared[name] = &entry{name: name, be: backend.GetBackend(name), config: stripped, mode: mode, budget: budget, phase: Declared}
 	}
 	s.entriesMu.Lock()
 	if s.configured {
@@ -317,7 +408,13 @@ func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.Bac
 	s.runCtxFor = runCtxFor
 	s.entriesMu.Unlock()
 	for _, e := range s.snapshot() {
-		if err := s.configureAndStart(e); err != nil {
+		var err error
+		if e.mode == startOnDemand {
+			err = s.configureOnly(e)
+		} else {
+			err = s.configureAndStart(e)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -363,6 +460,25 @@ func (s *Supervisor) runContext(name string) context.Context {
 	return f(name)
 }
 
+// configureOnly configures one backend under its restart mutex and leaves
+// it Declared: an on-demand entry comes up on its first policy, but a bad
+// configuration still fails the agent start, as an eager one does.
+func (s *Supervisor) configureOnly(e *entry) error {
+	e.restartMu.Lock()
+	defer e.restartMu.Unlock()
+	return s.configure(e)
+}
+
+// configure runs the backend's Configure with the entry's stripped settings
+// and the shared commons; callers hold the entry's restart mutex.
+func (s *Supervisor) configure(e *entry) error {
+	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
+		s.logger.Info("failed to configure backend", "backend", e.name, "error", err)
+		return err
+	}
+	return nil
+}
+
 // configureAndStart configures one backend and starts it under a fresh run
 // context, holding the entry's restart mutex across both so StopAll's
 // second loop cannot read or stop the backend mid-configure, and records
@@ -374,8 +490,7 @@ func (s *Supervisor) runContext(name string) context.Context {
 func (s *Supervisor) configureAndStart(e *entry) error {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
-	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
-		s.logger.Info("failed to configure backend", "backend", e.name, "error", err)
+	if err := s.configure(e); err != nil {
 		return err
 	}
 	runCtx, cancel := context.WithCancel(s.runContext(e.name))
