@@ -321,13 +321,50 @@ _IP_LOOKS_LIKE_ADDRESS_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}")
 _IP_FLAGS_NOT_ACTIVE = frozenset("XI")
 
 
-# The VRF is the last padded column of a row, so the interface is everything
-# before the final run of column padding. Greedy on the left, so a name whose
-# own spacing is two or more spaces stays whole and exactly as the device
-# printed it: get_interfaces reads names from a quoted field and keeps them
-# verbatim, so collapsing them here would key an address to an interface that
-# does not exist.
+# Where no header gives column offsets, the VRF is taken as the last padded
+# column of the row and the interface as everything before it. That is right
+# until a name's own spacing is itself column-width, which this cannot tell
+# from padding; the header is used in preference for exactly that reason.
 _IP_INTERFACE_VRF_RE = re.compile(r"^(?P<interface>.*\S)\s{2,}(?P<vrf>\S.*)$")
+
+
+def _header_offsets(line: str) -> dict[str, int]:
+    """
+    Read the column offsets out of the "#  ADDRESS  NETWORK  ..." header.
+
+    These are the true column boundaries, and the only thing that can tell a
+    name's own spacing from the padding around it. Splitting on runs of spaces
+    cannot: two spaces inside a name and two between columns are the same two
+    spaces, so whichever column is read greedily swallows the other's value.
+    """
+    return {m.group(0).upper(): m.start() for m in re.finditer(r"\S+", line)}
+
+
+def _columns_by_offset(
+    match: "re.Match", has_vrf: bool, offsets: dict[str, int]
+) -> tuple[str, str | None] | None:
+    """
+    Slice a row at the header's column boundaries, or None if it does not fit.
+
+    The header omits the flags field, so it sits to the left of the data by
+    the width of that field. The shift is measured per row, from where the
+    address actually starts, which also carries a continuation row whose
+    indent differs from an indexed one.
+    """
+    if "ADDRESS" not in offsets or "INTERFACE" not in offsets:
+        return None
+    line = match.string
+    shift = match.start("ip") - offsets["ADDRESS"]
+    interface_at = offsets["INTERFACE"] + shift
+    if interface_at <= match.end("prefix"):
+        return None
+    if not has_vrf or "VRF" not in offsets:
+        return line[interface_at:].strip() or None, None
+    vrf_at = offsets["VRF"] + shift
+    if vrf_at <= interface_at:
+        return None
+    interface = line[interface_at:vrf_at].strip()
+    return (interface, line[vrf_at:].strip() or None) if interface else None
 
 
 def _after_first_column(text: str) -> str:
@@ -336,7 +373,9 @@ def _after_first_column(text: str) -> str:
     return remainder.strip()
 
 
-def _address_row(match: "re.Match", has_vrf: bool) -> dict | None:
+def _address_row(
+    match: "re.Match", has_vrf: bool, offsets: dict[str, int] | None = None
+) -> dict | None:
     """
     Build one address row from a matched line.
 
@@ -349,6 +388,16 @@ def _address_row(match: "re.Match", has_vrf: bool) -> dict | None:
     # containing a single space stays in one piece: RouterOS permits spaces in
     # both interface and VRF names, and splitting on every space would move a
     # word from one column into the other.
+    sliced = _columns_by_offset(match, has_vrf, offsets) if offsets else None
+    if sliced is not None:
+        interface, vrf = sliced
+        return {
+            "ip": match.group("ip"),
+            "prefix_length": int(match.group("prefix")),
+            "interface": interface,
+            "vrf": vrf,
+        }
+
     after_network = _after_first_column(match.group("rest"))
     if has_vrf:
         columns = _IP_INTERFACE_VRF_RE.match(after_network)
@@ -408,6 +457,7 @@ def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
     """
     has_vrf = False
     carried_flags = ""
+    offsets: dict[str, int] | None = None
     rows: list[dict] = []
     unread = 0
 
@@ -418,6 +468,8 @@ def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
         header = _IP_COLUMNS_RE.match(line) or _IP_HEADER_RE.match(line)
         if header:
             has_vrf = "VRF" in header.group("columns").upper()
+            if _IP_HEADER_RE.match(line):
+                offsets = _header_offsets(line)
             # Skipping is belt-and-braces: a header line has no leading row
             # index, so the row patterns below reject it anyway and no test
             # distinguishes the two. Written out because reading on from a
@@ -445,7 +497,7 @@ def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
             # was read correctly and the address is simply not in service.
             continue
 
-        row = _address_row(match, has_vrf)
+        row = _address_row(match, has_vrf, offsets)
         if row is None:
             # Recognised as an address, but its columns could not be read: a
             # VRF column cut off by terminal width looks like this. Counted,

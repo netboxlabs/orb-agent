@@ -247,3 +247,42 @@ def test_a_row_whose_columns_cannot_be_read_is_reported(caplog):
         result = _driver_with_output(truncated).get_interfaces_ip()
     assert result == {"ether2": {"ipv4": {"198.51.100.1": {"prefix_length": 24}}}}
     assert any("matched no known row format" in r.message for r in caplog.records)
+
+
+def test_column_boundaries_come_from_the_header():
+    """
+    The header's column offsets settle what padding alone cannot.
+
+    Two spaces inside a name and two between columns are the same two spaces,
+    so any rule based on runs of whitespace lets one column swallow the
+    other's value. The header gives the real boundaries, and the row's own
+    address position gives the shift, since the header omits the flags field.
+    """
+    header = (
+        "Columns: ADDRESS, NETWORK, INTERFACE, VRF\n"
+        "# ADDRESS        NETWORK      INTERFACE          VRF\n"
+    )
+    # A VRF name spaced like padding.
+    spaced_vrf = header + "0  192.0.2.1/24   192.0.2.0    ether1             customer  blue\n"
+    assert _driver_with_output(spaced_vrf).get_interfaces_ip() == {
+        "ether1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
+    # An interface name spaced like padding.
+    spaced_intf = header + "0  192.0.2.1/24   192.0.2.0    ether1  customer   main\n"
+    assert _driver_with_output(spaced_intf).get_interfaces_ip() == {
+        "ether1  customer": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
+    # Both at once, which no whitespace rule can separate.
+    both = header + "0  192.0.2.1/24   192.0.2.0    ether1  customer   cust  blue\n"
+    assert _driver_with_output(both).get_interfaces_ip() == {
+        "ether1  customer": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
+    # A flags letter shifts the row; the offset is measured per row, not fixed.
+    flagged = (
+        "Flags: D - dynamic\n"
+        + header
+        + "0 D 192.0.2.1/24   192.0.2.0    ether1             main\n"
+    )
+    assert _driver_with_output(flagged).get_interfaces_ip() == {
+        "ether1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
