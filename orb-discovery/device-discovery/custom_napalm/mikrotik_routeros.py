@@ -608,10 +608,24 @@ class ROSDriver(_napalm_base.NetworkDriver):
             return {}
 
         interfaces_ip: dict = {}
-        for address in _parse_ip_addresses(raw):
-            interfaces_ip.setdefault(address["interface"], {}).setdefault("ipv4", {})[
-                address["ip"]
-            ] = {"prefix_length": address["prefix_length"]}
+        try:
+            for address in _parse_ip_addresses(raw):
+                interfaces_ip.setdefault(address["interface"], {}).setdefault(
+                    "ipv4", {}
+                )[address["ip"]] = {"prefix_length": address["prefix_length"]}
+        except Exception:
+            # Every getter in this file returns empty rather than raising. The
+            # runner calls this one outside any handler of its own, so an
+            # exception here fails the whole run for the device and loses its
+            # interfaces, VLANs and config as well as its addresses. Losing the
+            # addresses is the smaller harm, and the warning below is what makes
+            # it a reported one rather than a silent one.
+            logger.warning(
+                "mikrotik_routeros: could not parse 'ip address print'; no IP "
+                "addresses will be discovered for this device",
+                exc_info=True,
+            )
+            return {}
         if not interfaces_ip:
             logger.warning(
                 "mikrotik_routeros: no address rows read from 'ip address "
