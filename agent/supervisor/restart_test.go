@@ -1536,3 +1536,45 @@ func TestRestartRefusesTheResetOnceStopAllMarkedTheEntryStopped(t *testing.T) {
 		t.Fatal("StopAll did not return")
 	}
 }
+
+// A StopAll landing while a health restart is still configuring the backend
+// finds the entry's run context pointing at the live process: that context
+// must survive StopAll's first loop, so the process is stopped gracefully by
+// the gated stop in its second loop and not terminated by its own context.
+// Only the swap into the reset's fresh context stamps Starting.
+func TestStopAllDuringRestartConfigureKeepsTheLiveProcessContext(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "cfg_live")
+	backend.Register("sup_cfg_live", be)
+	var liveCtx context.Context
+	be.onStart = func(ctx context.Context, _ context.CancelFunc) { liveCtx = ctx }
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_cfg_live": nil}, config.BackendCommons{}, background))
+	require.NotNil(t, liveCtx)
+	be.status.Store(int32(backend.Running))
+	rec.reset()
+
+	stopped := make(chan struct{})
+	var liveErrAfterFirstLoop error
+	be.onConfigure = func() {
+		be.onConfigure = nil
+		go func() { s.StopAll(context.Background()); close(stopped) }()
+		require.Eventually(t, func() bool {
+			phase, _ := s.Phase("sup_cfg_live")
+			return phase == Stopped
+		}, 5*time.Second, 5*time.Millisecond, "StopAll's first loop marks the entry Stopped")
+		liveErrAfterFirstLoop = liveCtx.Err()
+	}
+
+	err := s.Restart(context.Background(), "sup_cfg_live", "health")
+
+	require.ErrorIs(t, err, errStopped)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll did not return")
+	}
+	assert.NoError(t, liveErrAfterFirstLoop, "the live process's context survives StopAll's first loop while the restart configures")
+	assert.Equal(t, 1, rec.count("stop:cfg_live"), "the live process is stopped gracefully by StopAll's second loop")
+	assert.ErrorIs(t, liveCtx.Err(), context.Canceled, "its context is released once it is stopped")
+}

@@ -120,24 +120,22 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 
 	s.logger.Info("restarting backend", "backend", e.name, "reason", reason)
 	s.state.RegisterRestart(e.name, reason)
-	e.setPhase(Starting)
 	s.logger.Info("marking policies for re-apply", "backend", e.name)
 	if err := s.applier.RemoveBackendPolicies(e.name, e.be, false); err != nil {
 		s.logger.Error("failed to remove policies", "backend", e.name, "error", err)
 	}
 
+	// The phase stays as it was through the configure: the entry's run
+	// context still belongs to the live process, and StopAll cancels the run
+	// context of every entry that is not Running in its first loop, so a
+	// Starting stamp here would have a stop landing meanwhile terminate the
+	// live process through its context instead of stopping it gracefully in
+	// the second loop. Starting is stamped together with the context swap
+	// below, once the run context is the replacement's.
 	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
 		// The backend never stopped, so it is still running its previous
 		// configuration; hand its policies back rather than leave them
-		// unknown for a restart that may not come again soon. That holds
-		// only when a process was up in the first place: an entry that
-		// entered the restart Failed has no process either way, so it stays
-		// Failed here exactly as the FullReset-failure exit below does.
-		if prior == Failed {
-			e.setPhase(Failed)
-		} else {
-			e.setPhase(Running)
-		}
+		// unknown for a restart that may not come again soon.
 		if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 			s.scheduleReplay(e)
 		}
@@ -161,7 +159,7 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	// by a cancellation racing it. A stop that began first wins here the
 	// way it does in configureAndStart.
 	runCtx, cancel := context.WithCancel(s.runContext(e.name))
-	prevCancel, stopped := e.swapRun(cancel)
+	prevCancel, stopped := e.beginReset(cancel)
 	if stopped {
 		cancel()
 		return fmt.Errorf("%w: %s", errStopped, e.name)
