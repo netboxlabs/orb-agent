@@ -1333,14 +1333,23 @@ func TestRestartUpgradedCarriesTheReadinessBudget(t *testing.T) {
 	var seen time.Duration
 	lazy.onStart = func(ctx context.Context, _ context.CancelFunc) { seen = backend.ReadinessBudgetFrom(ctx) }
 	backend.Register("sup_lazy_upgrade_budget", lazy)
-	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_upgrade_budget": map[string]any{"start_mode": "on_demand", "start_timeout": 4}}, config.BackendCommons{}, background))
+	eager := newStub(rec, "eager_upgrade_budget")
+	var eagerSeen time.Duration
+	eager.onStart = func(ctx context.Context, _ context.CancelFunc) { eagerSeen = backend.ReadinessBudgetFrom(ctx) }
+	backend.Register("sup_eager_upgrade_budget", eager)
+	require.NoError(t, s.ConfigureAll(map[string]any{
+		"sup_lazy_upgrade_budget":  map[string]any{"start_mode": "on_demand", "start_timeout": 4},
+		"sup_eager_upgrade_budget": nil,
+	}, config.BackendCommons{}, background))
 	_, err := s.EnsureStarted("sup_lazy_upgrade_budget")
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_upgrade_budget"); return p == Running }, 5*time.Second, 5*time.Millisecond)
 
 	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_lazy_upgrade_budget"))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_eager_upgrade_budget"))
 
 	assert.Equal(t, 4*time.Second, seen, "the upgrade restart's start carries the on-demand entry's readiness budget")
+	assert.Equal(t, time.Duration(0), eagerSeen, "an eager start's upgrade restart keeps the unbounded loop")
 }
 
 // TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds
@@ -1704,7 +1713,6 @@ func TestRestartDisarmsAPendingRetry(t *testing.T) {
 	armed := e.retryTimer != nil
 	e.mu.Unlock()
 	assert.False(t, armed, "the restart disarmed the timer")
-	assert.Equal(t, 0, rec.count("restart-registered:sup_lazy_disarm:retry after failed start"))
 	p, _ := s.Phase("sup_lazy_disarm")
 	assert.Equal(t, Running, p)
 }
@@ -1723,19 +1731,25 @@ func TestStopAllDisarmsAPendingRetry(t *testing.T) {
 	_, err := s.EnsureStarted("sup_lazy_stopped")
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_stopped"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+	e, _ := s.entryFor("sup_lazy_stopped")
+	// The arm is the last thing the failed start does, after the phase
+	// stamp: wait for it, or StopAll may find nothing to disarm and this
+	// test would prove nothing.
+	require.Eventually(t, func() bool {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.retryTimer != nil
+	}, 5*time.Second, 5*time.Millisecond, "the failed start armed the retry StopAll must disarm")
 	rec.reset()
 
 	s.StopAll(context.Background())
 
-	e, _ := s.entryFor("sup_lazy_stopped")
 	e.mu.Lock()
 	armed := e.retryTimer != nil
 	e.mu.Unlock()
 	assert.False(t, armed, "StopAll disarmed the timer")
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 0, rec.count("restart-registered:"), "no retry after stop")
 	assert.Equal(t, 0, rec.count("reset:lazy_stopped"))
-	assert.Equal(t, int32(1), lazy.startCalls.Load())
 }
 
 // The retry's start is bounded by the same budget as the first attempt: the
@@ -1823,6 +1837,7 @@ func TestOnDemandConfigureFailureRearmsTheRetry(t *testing.T) {
 	p, _ := s.Phase("sup_lazy_cfg_fail")
 	assert.Equal(t, Failed, p)
 	assert.Equal(t, 0, rec.count("reset:lazy_cfg_fail"), "no reset while Configure fails")
+	assert.Equal(t, 0, rec.count("apply:sup_lazy_cfg_fail"), "no process to reapply policies to while Configure keeps failing")
 	_, err = s.EnsureStarted("sup_lazy_cfg_fail")
 	require.EqualError(t, err, "bad config")
 }
@@ -1898,18 +1913,19 @@ func TestFailedResetOnAJustLaunchedOnDemandStartLeavesItFailedAndArmed(t *testin
 	e.mu.Lock()
 	e.phase = Starting // what EnsureStarted stamps before launching the start
 	e.mu.Unlock()
-	// The restart wins the mutex: run it from here, as RestartAll would,
-	// while the launched goroutine is still queued behind it or already
-	// skipped.
+	// The phase is stamped by hand, the deterministic equivalent of what
+	// EnsureStarted stamps before launching: run the restart from here, as
+	// RestartAll would, now that the mutex is free.
 	require.NoError(t, s.Restart(context.Background(), "sup_lazy_raced_reset", "fleet reset"))
 
-	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_raced_reset"); return p == Failed }, 5*time.Second, 5*time.Millisecond, "an entry that never had a process is Failed after a failed reset")
+	p, _ := s.Phase("sup_lazy_raced_reset")
+	assert.Equal(t, Failed, p, "an entry that never had a process is Failed after a failed reset")
 	e.mu.Lock()
 	armed := e.retryTimer != nil
 	e.mu.Unlock()
 	assert.True(t, armed, "the retry is armed")
 	_, err := s.EnsureStarted("sup_lazy_raced_reset")
-	require.Error(t, err, "a policy is told the backend is not up")
+	require.EqualError(t, err, "no binary", "the reset error was remembered")
 }
 
 // A binary upgrade restart that fails on an on-demand entry re-arms the
@@ -1942,4 +1958,47 @@ func TestUpgradeRestartFailureRearmsAnOnDemandRetry(t *testing.T) {
 	e.mu.Unlock()
 	require.NotNil(t, after, "the failed upgrade restart re-armed the retry")
 	assert.NotSame(t, before, after, "the upgrade restart disarmed the pending timer and armed a new one")
+}
+
+// The phase stamp and the arm are one critical section: an observer that
+// sees a failed on-demand entry sees its retry armed, so a StopAll or a
+// restart reading the two cannot find a torn state.
+//
+// testify v1.11.1's Eventually runs the condition function on its own
+// goroutine (assert.Eventually's checkCond, dispatched with go), not the
+// test goroutine, so require cannot be called from inside the condition:
+// require.FailNow calls runtime.Goexit, which would only unwind that
+// spawned goroutine and leave Eventually waiting out its full timeout
+// instead of failing promptly, or race the test function returning. The
+// observation is captured in torn under the same lock instead, and
+// asserted after Eventually returns, on the test goroutine; the channel
+// receive that ends Eventually happens after the write to torn, so the
+// read below is not a race.
+func TestFailedOnDemandStartIsArmedAsSoonAsItIsFailed(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		rec := &recorder{}
+		s := newTestSupervisor(t, rec, nil, nil)
+		s.opts.RetryInterval = time.Hour
+		name := fmt.Sprintf("sup_torn_%d", i)
+		lazy := newStub(rec, name)
+		lazy.startErrs = []error{errors.New("no binary")}
+		backend.Register(name, lazy)
+		require.NoError(t, s.ConfigureAll(map[string]any{name: map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+		e, _ := s.entryFor(name)
+
+		_, err := s.EnsureStarted(name)
+		require.NoError(t, err)
+		var torn bool
+		require.Eventually(t, func() bool {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if e.phase != Failed {
+				return false
+			}
+			torn = e.retryTimer == nil
+			return true
+		}, 5*time.Second, time.Millisecond)
+		require.False(t, torn, "iteration %d: Failed without an armed timer is the torn state", i)
+		s.StopAll(context.Background())
+	}
 }

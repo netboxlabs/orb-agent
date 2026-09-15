@@ -748,6 +748,7 @@ func TestParseStartOptions(t *testing.T) {
 		"timeout on eager":           {in: map[string]any{"start_timeout": 5}, errHas: "start_timeout is valid only with start_mode on_demand"},
 		"timeout zero":               {in: map[string]any{"start_mode": "on_demand", "start_timeout": 0}, errHas: "start_timeout 0"},
 		"timeout too big":            {in: map[string]any{"start_mode": "on_demand", "start_timeout": 301}, errHas: "start_timeout 301"},
+		"timeout absurd integer":     {in: map[string]any{"start_mode": "on_demand", "start_timeout": int64(36028797018963998)}, errHas: "outside 1 to 300"},
 		"timeout fractional":         {in: map[string]any{"start_mode": "on_demand", "start_timeout": 1.5}, errHas: "start_timeout"},
 		"timeout string":             {in: map[string]any{"start_mode": "on_demand", "start_timeout": "5"}, mode: startOnDemand, budget: 5 * time.Second},
 		"timeout non-numeric string": {in: map[string]any{"start_mode": "on_demand", "start_timeout": "abc"}, errHas: "start_timeout"},

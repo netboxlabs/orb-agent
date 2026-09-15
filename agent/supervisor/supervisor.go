@@ -181,10 +181,10 @@ func parseStartOptions(name string, cEntity map[string]any) (mode startMode, bud
 	if !ok {
 		return 0, 0, nil, fmt.Errorf("backend %s: %s must be a whole number of seconds", name, startTimeoutKey)
 	}
-	budget = time.Duration(seconds) * time.Second
-	if budget < time.Second || budget > maxStartTimeout {
+	if seconds < 1 || seconds > int64(maxStartTimeout/time.Second) {
 		return 0, 0, nil, fmt.Errorf("backend %s: %s %d is outside 1 to 300", name, startTimeoutKey, seconds)
 	}
+	budget = time.Duration(seconds) * time.Second
 	return mode, budget, stripped, nil
 }
 
@@ -316,22 +316,6 @@ func (e *entry) setPhase(p Phase) (stopped bool) {
 	if p == Running {
 		e.lastErr = nil
 	}
-	return false
-}
-
-// failWith stamps Failed and remembers the start error, so EnsureStarted
-// answers the latest failure, unless the entry was stopped meanwhile, and
-// reports whether it was: a stop that lands during a failed retry's reset
-// must keep the entry Stopped, or the timer armed on it would start a
-// process after shutdown.
-func (e *entry) failWith(err error) (stopped bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.phase == Stopped {
-		return true
-	}
-	e.phase = Failed
-	e.lastErr = err
 	return false
 }
 
@@ -670,12 +654,11 @@ func (s *Supervisor) startDeclared(e *entry) {
 // arms the retry timer. A stop that began meanwhile leaves the entry
 // Stopped and records nothing.
 func (s *Supervisor) recordStartFailure(e *entry, err error) {
-	if e.failWith(err) {
+	if s.failAndArm(e, err) {
 		return
 	}
 	s.logger.Error("on-demand start failed", "backend", e.name, "error", err)
 	s.state.RegisterError(e.name, err.Error())
-	s.armRetry(e)
 }
 
 // registerMonitorOnce registers the health monitor the first time an entry

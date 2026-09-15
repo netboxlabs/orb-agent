@@ -12,6 +12,19 @@ import (
 // ReasonRetryAfterFailedStart is the restart reason the retry timer uses.
 const ReasonRetryAfterFailedStart = "retry after failed start"
 
+// runRetry restarts one entry after its retry timer fired. A supervisor that
+// stopped meanwhile refuses the restart, which is not a failure.
+func (s *Supervisor) runRetry(e *entry) {
+	err := s.Restart(s.runContext(e.name), e.name, ReasonRetryAfterFailedStart)
+	switch {
+	case err == nil:
+	case errors.Is(err, ErrStopped):
+		s.logger.Info("on-demand start retry skipped, supervisor stopped", "backend", e.name)
+	default:
+		s.logger.Error("on-demand start retry failed", "backend", e.name, "error", err)
+	}
+}
+
 // armRetry arms an on-demand entry's retry timer under its field mutex; a
 // timer already armed is left alone. The timer restarts the entry through
 // Restart, which disarms it first, so a restart from any other source that
@@ -25,20 +38,37 @@ func (s *Supervisor) armRetry(e *entry) {
 		e.mu.Unlock()
 		return
 	}
-	e.retryTimer = time.AfterFunc(s.opts.RetryInterval, func() {
-		err := s.Restart(s.runContext(e.name), e.name, ReasonRetryAfterFailedStart)
-		switch {
-		case err == nil:
-		case errors.Is(err, ErrStopped):
-			s.logger.Info("on-demand start retry skipped, supervisor stopped", "backend", e.name)
-		default:
-			s.logger.Error("on-demand start retry failed", "backend", e.name, "error", err)
-		}
-	})
+	e.retryTimer = time.AfterFunc(s.opts.RetryInterval, func() { s.runRetry(e) })
 	e.mu.Unlock()
 	// Logged outside the field mutex: a log handler is a call out (under
 	// fleet it exports over OTLP), and the field mutex makes none.
 	s.logger.Info("scheduling on-demand start retry", "backend", e.name, "in", s.opts.RetryInterval)
+}
+
+// failAndArm stamps Failed, remembers the start error and arms the retry
+// timer in one critical section, so an observer that sees the entry Failed
+// sees its timer too; a second stamp while a timer is already armed leaves
+// that timer alone. A stop that landed meanwhile keeps the entry Stopped and
+// arms nothing, and reports it. An eager entry is never armed: its failures
+// are the health monitor's business. Callers hold the entry's restart mutex.
+func (s *Supervisor) failAndArm(e *entry, err error) (stopped bool) {
+	e.mu.Lock()
+	if e.phase == Stopped {
+		e.mu.Unlock()
+		return true
+	}
+	e.phase = Failed
+	e.lastErr = err
+	arm := e.mode == startOnDemand && e.retryTimer == nil
+	if arm {
+		e.retryTimer = time.AfterFunc(s.opts.RetryInterval, func() { s.runRetry(e) })
+	}
+	e.mu.Unlock()
+	if arm {
+		// Logged outside the field mutex: a log handler is a call out.
+		s.logger.Info("scheduling on-demand start retry", "backend", e.name, "in", s.opts.RetryInterval)
+	}
+	return false
 }
 
 // disarmRetry stops a pending retry timer, if any, under the field mutex.
@@ -185,19 +215,22 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	// the second loop. Starting is stamped together with the context swap
 	// below, once the run context is the replacement's.
 	if err := s.configure(e); err != nil {
-		if prior == Failed {
-			// The retry could not even configure: remember why, and arm the
-			// next attempt before the replay below, which may take a while.
-			if !e.failWith(err) {
-				s.armRetry(e)
+		if prior == Running {
+			// The backend never stopped, so it is still running its previous
+			// configuration; hand its policies back rather than leave them
+			// unknown for a restart that may not come again soon.
+			if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
+				s.scheduleReplay(e)
 			}
+			return err
 		}
-		// The backend never stopped, so it is still running its previous
-		// configuration; hand its policies back rather than leave them
-		// unknown for a restart that may not come again soon.
-		if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
-			s.scheduleReplay(e)
-		}
+		// Failed, or Starting for a launched on-demand start that a restart
+		// got to first: no process to hand the policies back to, so the
+		// entry stays failed with its retry armed and the policies stay
+		// marked for the next start, which the launched start or the retry
+		// performs.
+		s.failAndArm(e, err)
+		s.scheduleReplay(e)
 		return err
 	}
 	s.logger.Info("resetting backend", "backend", e.name)
@@ -239,11 +272,11 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 			// A Running entry keeps its previous process: the reset failed
 			// before replacing it.
 			e.setPhase(Running)
-		} else if !e.failWith(err) {
+		} else {
 			// Failed, or Starting for a launched on-demand start that a
 			// restart got to first: no process came up either way, so the
 			// entry stays failed and its retry repeats.
-			s.armRetry(e)
+			s.failAndArm(e, err)
 		}
 		s.scheduleReplay(e)
 		return nil
