@@ -77,3 +77,76 @@ def test_get_interfaces_ip_warns_when_the_device_returns_nothing(caplog):
     with caplog.at_level(logging.WARNING):
         assert driver.get_interfaces_ip() == {}
     assert any("returned no output" in r.message for r in caplog.records)
+
+
+def _driver_with_output(text):
+    from custom_napalm.mikrotik_routeros import ROSDriver
+
+    class _Device:
+        @staticmethod
+        def send_command(_cmd):
+            return text
+
+    driver = object.__new__(ROSDriver)
+    driver.device = _Device()
+    return driver
+
+
+def test_no_addresses_is_not_reported_as_a_format_change(caplog):
+    """
+    A device with nothing to report is ordinary, not a problem.
+
+    An L2-only switch, or one whose every address is disabled or invalid,
+    yields no addresses. Warning there would put the line in every poll of a
+    healthy device and teach operators to scroll past the one poll where it
+    means something.
+    """
+    import logging
+
+    empty = "Flags: X - disabled, I - invalid, D - dynamic\n# ADDRESS NETWORK INTERFACE\n"
+    all_inactive = (
+        "Flags: X - disabled, I - invalid\n"
+        "# ADDRESS        NETWORK      INTERFACE\n"
+        "0 X 192.0.2.1/24   192.0.2.0    ether1\n"
+        "1 I 198.51.100.1/24 198.51.100.0 ether2\n"
+    )
+    for output in (empty, all_inactive):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            assert _driver_with_output(output).get_interfaces_ip() == {}
+        assert not [r for r in caplog.records if "format may have changed" in r.message]
+
+
+def test_unreadable_address_rows_are_reported(caplog):
+    """Address-shaped lines that match no row format are worth a warning."""
+    import logging
+
+    unreadable = (
+        "Flags: X - disabled\n"
+        "# ADDRESS NETWORK INTERFACE\n"
+        "somethingnew 192.0.2.1/24 192.0.2.0\n"
+    )
+    with caplog.at_level(logging.WARNING):
+        assert _driver_with_output(unreadable).get_interfaces_ip() == {}
+    assert any("format may have changed" in r.message for r in caplog.records)
+
+
+def test_column_padding_keeps_names_containing_spaces_intact():
+    """A single space inside a name is not a column separator."""
+    spaced_vrf = (
+        "Columns: ADDRESS, NETWORK, INTERFACE, VRF\n"
+        "# ADDRESS        NETWORK      INTERFACE   VRF\n"
+        "0  192.0.2.1/24   192.0.2.0    ether1      customer blue\n"
+    )
+    assert _driver_with_output(spaced_vrf).get_interfaces_ip() == {
+        "ether1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
+
+    spaced_interface = (
+        "Columns: ADDRESS, NETWORK, INTERFACE, VRF\n"
+        "# ADDRESS        NETWORK      INTERFACE        VRF\n"
+        "0  192.0.2.1/24   192.0.2.0    ether1 customer  main\n"
+    )
+    assert _driver_with_output(spaced_interface).get_interfaces_ip() == {
+        "ether1 customer": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }

@@ -309,6 +309,11 @@ _IP_CONTINUED_ROW_RE = re.compile(
     r"(?P<rest>\S.*?)\s*$"
 )
 
+# A line carrying something shaped like an address and a prefix. Used only to
+# tell "this device has no addresses" from "this device printed addresses we
+# could not read", which decide whether silence is worth reporting.
+_IP_LOOKS_LIKE_ADDRESS_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}")
+
 # RouterOS address flags. X is an address the operator disabled and I one the
 # device could not apply; neither is active, and SNMP does not report them, so
 # emitting them would make the two backends disagree about the same device.
@@ -316,17 +321,70 @@ _IP_CONTINUED_ROW_RE = re.compile(
 _IP_FLAGS_NOT_ACTIVE = frozenset("XI")
 
 
-def _parse_ip_addresses(raw: str) -> list[dict]:
+def _split_columns(text: str) -> list[str]:
+    """
+    Split one row's remaining columns on the padding between them.
+
+    RouterOS pads 'print' output into aligned columns, so the separator is a
+    run of two or more spaces while a space inside a name is a single one.
+    Splitting on every space instead moves a word from one column to the next,
+    turning "ether1   customer blue" into interface "ether1 customer".
+
+    A device that pads with a single space would yield too few columns, so
+    that falls back to splitting on any whitespace: the old behaviour, which
+    is right whenever no name contains a space.
+    """
+    columns = [field for field in re.split(r"\s{2,}", text.strip()) if field]
+    if len(columns) < 2:
+        return text.split()
+    return columns
+
+
+def _address_row(match: "re.Match", flags: str, has_vrf: bool) -> dict | None:
+    """
+    Build one address row from a matched line.
+
+    Returns None where the row is not one to report: an address the device
+    flags as inactive, or one with too few columns to name an interface.
+    """
+    if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
+        return None
+
+    # NETWORK first, then INTERFACE, then VRF where the device has that column.
+    # Split on the column padding rather than on any whitespace, so a name
+    # containing a single space stays in one piece: RouterOS permits spaces in
+    # both interface and VRF names, and splitting on every space would move a
+    # word from one column into the other.
+    fields = _split_columns(match.group("rest"))
+    if len(fields) < 2 or not fields[1]:
+        return None
+
+    return {
+        "ip": match.group("ip"),
+        "prefix_length": int(match.group("prefix")),
+        "interface": fields[1],
+        "vrf": fields[2] if has_vrf and len(fields) >= 3 else None,
+    }
+
+
+def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
     """
     Parse 'ip address print' into address rows, across RouterOS 6 and 7.
 
     Returns one dict per active address with "ip", "prefix_length",
-    "interface" and "vrf" (None where the device publishes no VRF column).
-    Rows the device flags as disabled or invalid are skipped.
+    "interface" and "vrf" (None where the device publishes no VRF column),
+    and a count of lines that carried something shaped like an address and
+    matched no row pattern.
+
+    Rows the device flags as disabled or invalid are skipped, and do not count
+    as unread: the device was understood and the address is not active. The
+    count exists so the caller can tell a device with nothing to report from
+    one whose output this no longer reads.
     """
     has_vrf = False
     carried_flags = ""
     rows: list[dict] = []
+    unread = 0
 
     for line in raw.splitlines():
         if not line.strip():
@@ -359,6 +417,10 @@ def _parse_ip_addresses(raw: str) -> list[dict]:
             # Flags legends, standalone comment rows (";;; text") and anything
             # else the device prints are not address rows. Skipped rather than
             # fatal: an unrecognised line must not cost the addresses around it.
+            # One that looks like an address is counted, since that is the
+            # shape of a format we no longer read.
+            if _IP_LOOKS_LIKE_ADDRESS_RE.search(line):
+                unread += 1
             continue
         # Defensive, and no test distinguishes it: the continuation branch above
         # already clears what it consumed, so this only bites if a comment line
@@ -367,30 +429,11 @@ def _parse_ip_addresses(raw: str) -> list[dict]:
         # address would silently drop an active one, so it is cleared anyway.
         carried_flags = ""
 
-        if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
-            continue
+        row = _address_row(match, flags, has_vrf)
+        if row is not None:
+            rows.append(row)
 
-        fields = match.group("rest").split()
-        if len(fields) < 2:
-            continue
-        # NETWORK first, VRF last where the device has that column, and
-        # whatever lies between is the interface name, which RouterOS permits
-        # to contain spaces.
-        vrf = fields[-1] if has_vrf and len(fields) >= 3 else None
-        interface = " ".join(fields[1:-1] if vrf is not None else fields[1:])
-        if not interface:
-            continue
-
-        rows.append(
-            {
-                "ip": match.group("ip"),
-                "prefix_length": int(match.group("prefix")),
-                "interface": interface,
-                "vrf": vrf,
-            }
-        )
-
-    return rows
+    return rows, unread
 
 
 class ROSDriver(_napalm_base.NetworkDriver):
@@ -644,8 +687,10 @@ class ROSDriver(_napalm_base.NetworkDriver):
             return {}
 
         interfaces_ip: dict = {}
+        unread = 0
         try:
-            for address in _parse_ip_addresses(raw):
+            addresses, unread = _parse_ip_addresses(raw)
+            for address in addresses:
                 interfaces_ip.setdefault(address["interface"], {}).setdefault(
                     "ipv4", {}
                 )[address["ip"]] = {"prefix_length": address["prefix_length"]}
@@ -662,10 +707,17 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 exc_info=True,
             )
             return {}
-        if not interfaces_ip:
+        if not interfaces_ip and unread:
+            # Only where the device printed something address-shaped that no
+            # pattern matched. A switch with no addresses, or one whose every
+            # address is disabled or invalid, reports nothing and is not a
+            # problem; warning on those would put this line in every poll of
+            # an ordinary device and teach operators to scroll past it.
             logger.warning(
-                "mikrotik_routeros: no address rows read from 'ip address "
-                "print'; the output format may have changed. First line: %r",
+                "mikrotik_routeros: %d line(s) of 'ip address print' look "
+                "like addresses but matched no known row format; the output "
+                "format may have changed. First line: %r",
+                unread,
                 raw.splitlines()[0] if raw.splitlines() else "",
             )
         return interfaces_ip
