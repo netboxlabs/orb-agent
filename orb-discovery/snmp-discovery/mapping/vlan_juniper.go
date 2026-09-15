@@ -107,6 +107,22 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 	}
 	staticIndices := staticVlanIndices(all)
 	if len(staticIndices) == 0 {
+		// Nothing keyed by a VlanIndex in the static table. A device may still
+		// answer the current table, and its rows are keyed in the same space —
+		// but with no static row there is no name to put beside the enterprise
+		// table's, so the one thing that could tell an internally numbered
+		// device from a normally numbered one is unavailable.
+		//
+		// Left alone rather than rewritten or discarded, which is the answer
+		// every other unresolvable case gets. Rewriting would be the guess this
+		// translation exists to avoid, on the weakest possible evidence: #605
+		// established that publishing the enterprise table is not by itself a
+		// statement that the other tables are index-keyed. Discarding would
+		// delete membership from a device that may well be reporting it
+		// correctly. No measured device is in this position — every Juniper
+		// walk with an enterprise table also has a static table — and if one
+		// appears, its VLAN ids are wrong in NetBox in a way an operator can
+		// see rather than silently replaced.
 		return all
 	}
 	tagByIndex, nameByIndex, described := juniperVlanTable(all)
@@ -120,7 +136,12 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 			"reason", "the tag table is incomplete, keyed in a different space from the static table, or answered with a value that is not a tag")
 		return all
 	}
-	if tag, claimants, ambiguous := ambiguousStaticTag(staticIndices, tagByIndex); ambiguous {
+	// Every index about to be rewritten, not only the static table's. The
+	// current table is keyed in the same internal space and its rows are
+	// rekeyed alongside, so an index it uses is no longer one "the static
+	// table never used" and a tag two of them share is no longer harmless.
+	rewritten := indicesBeingRekeyed(all, staticIndices)
+	if tag, claimants, ambiguous := ambiguousStaticTag(rewritten, tagByIndex); ambiguous {
 		logger.Warn("vlan: not translating Juniper VLAN indices; two static rows claim one tag",
 			"tag", tag, "claimed_by_indices", claimants,
 			"reason", "the device reports one 802.1Q tag for more than one VLAN, so no row can be attributed to it")
@@ -140,10 +161,10 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		return all
 	}
 
-	resolved := resolvablePvidValues(staticIndices, described, tagByIndex)
+	resolved := resolvablePvidValues(indicesNamingAVlan(all, staticIndices), described, tagByIndex)
 
 	out := make(ObjectIDValueMap, len(all))
-	dropped, unnameable := 0, 0
+	dropped, droppedCurrent, unnameable := 0, 0, 0
 	for oid, v := range all {
 		if strings.HasPrefix(oid, oidDot1qPvid) {
 			if pvidIsUnnameable(v.Value, resolved) {
@@ -160,6 +181,30 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 				continue
 			}
 			out[oid] = v
+			continue
+		}
+		if col, mark, index, ok := splitCurrentVlanOID(oid); ok {
+			// The current table is keyed by dot1qVlanIndex, the SAME internal
+			// identifier the static table uses on these platforms, so it has
+			// to move with them. Left alone it would keep the device's
+			// internal number while the static rows moved to real tags — and
+			// the merge, finding that number absent from the static table,
+			// would insert the row under it. That fabricates a VLAN at an
+			// internal index, or lands on a real VLAN that happens to carry
+			// that number, which is the collision this whole translation
+			// exists to prevent.
+			//
+			// A row whose index the enterprise table cannot resolve is
+			// dropped rather than kept under a number that means nothing
+			// here. Its time mark is preserved: it selects between rows, and
+			// carries no VLAN identity.
+			tag, known := tagByIndex[index]
+			vid := qbridge.CoerceVid(tag)
+			if !known || vid == nil {
+				droppedCurrent++
+				continue
+			}
+			out[col+strconv.Itoa(mark)+"."+strconv.Itoa(*vid)] = v
 			continue
 		}
 		col, index, ok := splitStaticVlanOID(oid)
@@ -197,6 +242,14 @@ func ResolveJuniperVlanIndices(all ObjectIDValueMap, logger *slog.Logger) Object
 		// nobody reads.
 		logger.Debug("vlan: dropped Juniper static-table rows whose tag is not a VLAN ID",
 			"rows", dropped, "reason", "tag outside 1-4094, which is how Junos reports an untagged bridge domain")
+	}
+	if droppedCurrent > 0 {
+		// Counted apart from the static rows above. The two are dropped for
+		// different reasons and on different devices, so one number covering
+		// both would point at the wrong table when someone reads the log.
+		logger.Debug("vlan: dropped Juniper current-table rows the enterprise table does not resolve",
+			"rows", droppedCurrent,
+			"reason", "the row is keyed by an internal index with no usable tag, so it names no VLAN here")
 	}
 	if unnameable > 0 {
 		logger.Warn("vlan: reported Juniper PVIDs the rekeyed VLAN catalog cannot name as 0",
@@ -251,6 +304,12 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 	return !known
 }
 
+// untaggedBridgeDomainTag is the tag Junos reports for the untagged bridge
+// domain. CoerceVid rejects it like any other out-of-range VID, but dot1qPvid
+// uses the same value to say "bridged, nothing untagged", so it has to
+// survive PVID resolution.
+const untaggedBridgeDomainTag = 0
+
 // resolvablePvidValues is the set of dot1qPvid values that name exactly one
 // VLAN on a rekeyed device.
 //
@@ -262,6 +321,12 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 // protocol-learned bridge domain looks exactly like that). Such a tag names no
 // VLAN in the emitted catalog, so keeping a PVID for it fabricates the
 // placeholder this guard exists to prevent.
+//
+// The current table's rows are rekeyed too, and a VLAN it places a port in is
+// one the emitted catalog will carry, so those tags belong here as well. Only
+// the ones with a port in them: a row naming nobody is dropped before it
+// becomes membership, so a PVID kept for it would fabricate the same
+// placeholder as a tag with no row at all.
 //
 // And not a tag that is ALSO one of the device's internal indices, resolving
 // there to a different VLAN. This device numbers VLANs internally, so a PVID
@@ -287,13 +352,24 @@ func pvidIsUnnameable(value string, resolvable map[int]struct{}) bool {
 // cannot tell the two questions apart; a device with a protocol-learned bridge
 // domain can.
 //
-// Built from the raw tags rather than the coerced VIDs, so the untagged bridge
-// domain's tag 0 stays in the set: a PVID of 0 must survive, since the
-// Q-BRIDGE reader takes it as "bridged, nothing untagged".
-func resolvablePvidValues(staticIndices, describedIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
-	out := make(map[int]struct{}, len(staticIndices))
-	for index := range staticIndices {
+// Tag 0 stays in the set: that is the untagged bridge domain, and a PVID of 0
+// must survive because the Q-BRIDGE reader takes it as "bridged, nothing
+// untagged". pvidIsUnnameable short-circuits that value too, so removing the
+// exception here changes nothing and no test can tell the difference; it is
+// written out because this function's set is meant to be readable on its own,
+// and a reader should not have to find the second guard to know 0 is safe. Every other tag has to be a VID NetBox could hold. A row whose tag
+// is reserved is dropped by the rewrite, so keeping a PVID for it leaves a port
+// naming a VLAN that no longer exists anywhere in the walk: ExtractGeneric
+// reads the value as an access VLAN, Classify then rejects it through the same
+// CoerceVid, and the port is emitted as access with no untagged VLAN at all.
+// That overwrites the mode of whatever NetBox holds while supplying nothing.
+func resolvablePvidValues(namingIndices, describedIndices map[int]struct{}, tagByIndex map[int]int) map[int]struct{} {
+	out := make(map[int]struct{}, len(namingIndices))
+	for index := range namingIndices {
 		tag := tagByIndex[index]
+		if tag != untaggedBridgeDomainTag && qbridge.CoerceVid(tag) == nil {
+			continue
+		}
 		// An identity row is not ambiguous: both readings name it. An index
 		// whose own tag would not parse is, since nothing says what it means.
 		if _, alsoAnIndex := describedIndices[tag]; alsoAnIndex && tagByIndex[tag] != tag {
@@ -370,7 +446,90 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 	return missing, unreadable
 }
 
-// ambiguousStaticTag reports the first tag that more than one static row claims.
+// indicesBeingRekeyed is every internal index whose rows this translation will
+// rewrite: the static table's, plus any the current table uses.
+//
+// The ambiguity gate has to see all of them. It was written when only static
+// rows moved, and says so: an enterprise row for an index the static table
+// never used describes a VLAN nothing is about to be rewritten to, so letting
+// it collide would refuse a device over a row that does not matter. Once the
+// current table is rekeyed too, such an index IS being rewritten, and two of
+// them resolving to one tag would land two rows on the same OID — with which
+// survives decided by map iteration order, so the VLAN's membership would
+// differ between polls of identical data.
+// indicesNamingAVlan is the subset of the rekeyed indices whose VLAN will reach
+// NetBox: every static row, plus a current-table index whose resolved snapshot
+// puts a port somewhere.
+//
+// It is narrower than indicesBeingRekeyed, which answers a different question.
+// Ambiguity is about two rows landing on one OID, so it counts every row being
+// rewritten however empty. This asks whether a PVID naming the tag will find a
+// VLAN there, and a current row naming no port is dropped before it becomes
+// membership.
+//
+// Resolved the way the merge resolves it, one snapshot per index, rather than
+// by scanning the rows as walked. This table answers once per retained time
+// mark, so an index whose newest snapshot is empty has a non-empty older one
+// sitting beside it; reading that as "names a VLAN" keeps a PVID for a VLAN
+// the merge is about to discard, and the placeholder it then fabricates is
+// what this guard exists to prevent.
+func indicesNamingAVlan(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {
+	out := make(map[int]struct{}, len(staticIndices))
+	for index := range staticIndices {
+		out[index] = struct{}{}
+	}
+	egress := map[int]map[int]string{}
+	untagged := map[int]map[int]string{}
+	for oid, v := range all {
+		column, mark, index, ok := splitCurrentVlanOID(oid)
+		if !ok {
+			continue
+		}
+		byIndex := egress
+		if column == oidDot1qVlanCurrentUntaggedPorts {
+			byIndex = untagged
+		}
+		if byIndex[index] == nil {
+			byIndex[index] = map[int]string{}
+		}
+		byIndex[index][mark] = v.Value
+	}
+	for index := range egress {
+		if snapshotNamesAPort(egress[index], untagged[index]) {
+			out[index] = struct{}{}
+		}
+	}
+	for index := range untagged {
+		if snapshotNamesAPort(egress[index], untagged[index]) {
+			out[index] = struct{}{}
+		}
+	}
+	return out
+}
+
+// snapshotNamesAPort reports whether one index's resolved snapshot puts a port
+// in either column, applying the same resolution and the same empty-row test
+// the merge applies.
+func snapshotNamesAPort(egress, untagged map[int]string) bool {
+	eg, unt := oneSnapshot(egress, untagged)
+	return !isEmptyPortMask(eg) || !isEmptyPortMask(unt)
+}
+
+func indicesBeingRekeyed(all ObjectIDValueMap, staticIndices map[int]struct{}) map[int]struct{} {
+	out := make(map[int]struct{}, len(staticIndices))
+	for index := range staticIndices {
+		out[index] = struct{}{}
+	}
+	for oid := range all {
+		if _, _, index, ok := splitCurrentVlanOID(oid); ok {
+			out[index] = struct{}{}
+		}
+	}
+	return out
+}
+
+// ambiguousStaticTag reports the first tag that more than one rewritten row
+// claims.
 //
 // Judged over the static rows only. An enterprise row for an index the static
 // table never used describes a VLAN nothing is about to be rewritten to, so
@@ -378,9 +537,9 @@ func staticRowsUnresolved(staticIndices map[int]struct{}, tagByIndex map[int]int
 //
 // The smallest claimant is reported so the warning reads the same on every
 // poll rather than naming whichever index map iteration happened to yield.
-func ambiguousStaticTag(staticIndices map[int]struct{}, tagByIndex map[int]int) (tag, claimants int, ambiguous bool) {
+func ambiguousStaticTag(rewritten map[int]struct{}, tagByIndex map[int]int) (tag, claimants int, ambiguous bool) {
 	count := map[int]int{}
-	for index := range staticIndices {
+	for index := range rewritten {
 		// Tags no row will be rewritten TO are not contested. Junos reports an
 		// untagged bridge domain with tag 0 and a switch may have more than
 		// one, which would otherwise refuse the whole device over rows that are
@@ -584,6 +743,37 @@ func maybeCutAtColumnBound(name string, tag int) bool {
 		return false
 	}
 	return len(name) == dot1qVlanStaticNameMax || len(name) == dot1qVlanStaticNameMax-1
+}
+
+// dot1qVlanCurrentColumns are the columns of dot1qVlanCurrentTable this backend
+// walks. Keyed by { dot1qVlanTimeMark, dot1qVlanIndex }, and that index is the
+// same internal identifier dot1qVlanStaticTable uses, so these rows are rekeyed
+// alongside the static ones.
+var dot1qVlanCurrentColumns = []string{
+	oidDot1qVlanCurrentEgressPorts,
+	oidDot1qVlanCurrentUntaggedPorts,
+}
+
+// splitCurrentVlanOID splits a dot1qVlanCurrentTable OID into its column
+// prefix, its time mark and its VlanIndex. Reports false for anything else.
+func splitCurrentVlanOID(oid string) (column string, mark, index int, ok bool) {
+	for _, col := range dot1qVlanCurrentColumns {
+		if !strings.HasPrefix(oid, col) {
+			continue
+		}
+		suffix := strings.TrimPrefix(oid, col)
+		dot := strings.IndexByte(suffix, '.')
+		if dot < 0 {
+			return "", 0, 0, false
+		}
+		mark, okMark := atoi(suffix[:dot])
+		index, okIndex := atoi(suffix[dot+1:])
+		if !okMark || !okIndex {
+			return "", 0, 0, false
+		}
+		return col, mark, index, true
+	}
+	return "", 0, 0, false
 }
 
 // splitStaticVlanOID splits a dot1qVlanStaticTable OID into its column prefix

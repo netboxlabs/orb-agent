@@ -31,6 +31,8 @@ type stubBundleRetriever struct {
 func (s stubBundleRetriever) List() []filesmgr.FileEntry        { return s.entries }
 func (s stubBundleRetriever) ListPending() []filesmgr.FileEntry { return s.pending }
 
+var testFixedLastRestartTS = time.Date(2026, 3, 19, 13, 0, 0, 0, time.UTC)
+
 func init() {
 	heartbeatTickInterval = 50 * time.Millisecond
 }
@@ -127,6 +129,7 @@ func createTestHeartbeater() *heartbeater {
 		backendState:   &mockBackendState{},
 		policyManager:  mockPMgr,
 		groupRetriever: &groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 	}
 }
 
@@ -140,6 +143,7 @@ func createTestHeartbeaterWithBackendState(backendState *mockBackendState) *hear
 		backendState:   backendState,
 		policyManager:  mockPMgr,
 		groupRetriever: &groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 	}
 }
 
@@ -151,6 +155,7 @@ func createTestHeartbeaterWithPolicyManager(backendState *mockBackendState, poli
 		backendState:   backendState,
 		policyManager:  policyManager,
 		groupRetriever: &groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 	}
 }
 
@@ -190,6 +195,7 @@ func TestHeartbeater_SendSingleHeartbeat_Success(t *testing.T) {
 	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, hbMsg.SchemaVersion)
 	assert.Equal(t, messages.State(messages.Online), hbMsg.State)
 	assert.False(t, hbMsg.TimeStamp.IsZero())
+	assert.True(t, testFixedLastRestartTS.Equal(hbMsg.LastRestartTS))
 }
 
 func TestHeartbeater_SendSingleHeartbeat_OfflineState(t *testing.T) {
@@ -243,6 +249,7 @@ func TestHeartbeater_OfflineHeartbeat_IncludesFailedRunsAfterFailNonTerminalRuns
 		backendState:   &mockBackendState{},
 		policyManager:  pm,
 		groupRetriever: &groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 	}
 
 	var captured []byte
@@ -323,6 +330,55 @@ func TestHeartbeater_SendSingleHeartbeat_HeartbeatContent(t *testing.T) {
 	assert.Equal(t, messages.CurrentHeartbeatSchemaVersion, heartbeat.SchemaVersion)
 	assert.Equal(t, messages.State(1), heartbeat.State)
 	assert.False(t, heartbeat.TimeStamp.IsZero())
+}
+
+func TestHeartbeater_SendSingleHeartbeat_IncludesLastRestartTS(t *testing.T) {
+	hb := createTestHeartbeater()
+
+	var capturedPayload []byte
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	}
+
+	hb.sendSingleHeartbeat(context.Background(), "test/heartbeat", publishFunc, "test-agent-id", time.Now(), messages.Online, nil)
+
+	require.NotNil(t, capturedPayload)
+
+	var heartbeat messages.Heartbeat
+	require.NoError(t, json.Unmarshal(capturedPayload, &heartbeat))
+
+	assert.Equal(t, "1.3", heartbeat.SchemaVersion)
+	assert.True(t, testFixedLastRestartTS.Equal(heartbeat.LastRestartTS))
+	assert.Contains(t, string(capturedPayload), `"last_restart_ts":"2026-03-19T13:00:00Z"`)
+}
+
+func TestHeartbeater_SendSingleHeartbeat_LastRestartTSStableAcrossPublishes(t *testing.T) {
+	hb := createTestHeartbeater()
+
+	var payloads [][]byte
+	publishFunc := func(_ context.Context, _ string, payload []byte) error {
+		payloadCopy := make([]byte, len(payload))
+		copy(payloadCopy, payload)
+		payloads = append(payloads, payloadCopy)
+		return nil
+	}
+
+	ctx := context.Background()
+	hb.sendSingleHeartbeat(ctx, "test/heartbeat", publishFunc, "test-agent-id", time.Now(), messages.Online, nil)
+	time.Sleep(2 * time.Millisecond)
+	hb.sendSingleHeartbeat(ctx, "test/heartbeat", publishFunc, "test-agent-id", time.Now(), messages.Online, nil)
+
+	require.Len(t, payloads, 2)
+
+	var hb1, hb2 messages.Heartbeat
+	require.NoError(t, json.Unmarshal(payloads[0], &hb1))
+	require.NoError(t, json.Unmarshal(payloads[1], &hb2))
+
+	assert.True(t, testFixedLastRestartTS.Equal(hb1.LastRestartTS))
+	assert.True(t, testFixedLastRestartTS.Equal(hb2.LastRestartTS))
+	assert.True(t, hb1.LastRestartTS.Equal(hb2.LastRestartTS))
+	assert.NotEqual(t, hb1.TimeStamp, hb2.TimeStamp)
 }
 
 func TestHeartbeater_SendHeartbeats_InitialHeartbeat(t *testing.T) {
@@ -1156,6 +1212,7 @@ func createTestHeartbeaterWithGroupManager(groupManager *GroupManager) *heartbea
 		backendState:   &mockBackendState{},
 		policyManager:  mockPMgr,
 		groupRetriever: groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 	}
 }
 
@@ -1283,6 +1340,7 @@ func TestHeartbeater_SendSingleHeartbeat_WithCompleteState(t *testing.T) {
 		backendState:   backendState,
 		policyManager:  mockPMgr,
 		groupRetriever: &gm,
+		lastRestartTS:  testFixedLastRestartTS,
 	}
 
 	var capturedPayload []byte
@@ -1861,6 +1919,7 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesBundleState(t *testing.T) {
 		backendState:   &mockBackendState{},
 		policyManager:  &mockPolicyManagerForHeartbeat{},
 		groupRetriever: &groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 		bundleRetriever: stubBundleRetriever{entries: []filesmgr.FileEntry{
 			{
 				Name:        "nbl_cisco_meraki",
@@ -1913,6 +1972,7 @@ func TestHeartbeater_SendSingleHeartbeat_SerializesFailedBundleState(t *testing.
 		backendState:   &mockBackendState{},
 		policyManager:  &mockPolicyManagerForHeartbeat{},
 		groupRetriever: &groupManager,
+		lastRestartTS:  testFixedLastRestartTS,
 		bundleRetriever: stubBundleRetriever{
 			entries: []filesmgr.FileEntry{
 				{

@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -24,12 +25,17 @@ const (
 	// dot1qVlanStaticName in the default SNMP context, so this is the only
 	// place their VLAN database is readable. Indexed by
 	// (managementDomainIndex, vlanIndex), so the VID is the LAST element.
-	oidCiscoVtpVlanName             = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
-	oidDot1qVlanStaticEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
-	oidDot1qVlanStaticUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
-	oidDot1qVlanStaticRowStatus     = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
-	oidIfAdminStatus                = ".1.3.6.1.2.1.2.2.1.7."
-	oidIfType                       = ".1.3.6.1.2.1.2.2.1.3."
+	oidCiscoVtpVlanName = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4."
+	// dot1qVlanCurrentTable, the VLANs the device is actually running. Same
+	// per-VLAN masks the static table carries, but INDEX { dot1qVlanTimeMark,
+	// dot1qVlanIndex }, so the VLAN id is the LAST index element.
+	oidDot1qVlanCurrentEgressPorts   = ".1.3.6.1.2.1.17.7.1.4.2.1.4."
+	oidDot1qVlanCurrentUntaggedPorts = ".1.3.6.1.2.1.17.7.1.4.2.1.5."
+	oidDot1qVlanStaticEgressPorts    = ".1.3.6.1.2.1.17.7.1.4.3.1.2."
+	oidDot1qVlanStaticUntaggedPorts  = ".1.3.6.1.2.1.17.7.1.4.3.1.4."
+	oidDot1qVlanStaticRowStatus      = ".1.3.6.1.2.1.17.7.1.4.3.1.5."
+	oidIfAdminStatus                 = ".1.3.6.1.2.1.2.2.1.7."
+	oidIfType                        = ".1.3.6.1.2.1.2.2.1.3."
 	// ifDescr / ifName, consulted by ResolveSviVlans (svi_vlan.go). Both are
 	// already walked for the interface-name resolver; SVI resolution reuses
 	// them rather than requiring a separate walk.
@@ -312,6 +318,292 @@ func setVLANGroupScope(group *diode.VLANGroup, g config.VLANGroupParameters, def
 	}
 }
 
+// recordRow stores one dot1qVlanCurrentTable row under its VLAN and time mark.
+func recordRow(rows map[int]map[int]string, vid, mark int, mask string) {
+	byMark := rows[vid]
+	if byMark == nil {
+		byMark = map[int]string{}
+		rows[vid] = byMark
+	}
+	byMark[mark] = mask
+}
+
+// allCurrentVlans is every VLAN either column mentions.
+func allCurrentVlans(egress, untagged map[int]map[int]string) map[int]struct{} {
+	out := make(map[int]struct{}, len(egress)+len(untagged))
+	for vid := range egress {
+		out[vid] = struct{}{}
+	}
+	for vid := range untagged {
+		out[vid] = struct{}{}
+	}
+	return out
+}
+
+// oneSnapshot picks the egress and untagged masks of one VLAN from the SAME
+// moment in time.
+//
+// dot1qVlanCurrentTable is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, and a
+// TimeFilter index means the same VLAN is answered once per time mark the agent
+// still holds — with different masks, since a mark is when that row last
+// changed. Taking whichever the walk map yielded last made membership depend on
+// Go's map iteration order, so a switch answering VLAN 1 under two marks
+// alternated between two NetBox states on every poll. Observed on recorded
+// walks from three vendors. This is the same collect-then-resolve the VLAN name
+// and VTP readers use, and for the same reason.
+//
+// The two columns are walked separately, so a VLAN that changes between the two
+// walks answers one column before the change and the other after. Taking each
+// column's own latest row would then combine halves of two different snapshots
+// and report a port as tagged where it is untagged, or the reverse, until the
+// next poll.
+//
+// The newest mark both columns share is therefore preferred. Where they share
+// none — a VLAN only one column mentions, or an agent that has already aged one
+// of them out — each column's own newest is used, which is the best available
+// and no worse than not reading the table at all.
+func oneSnapshot(egress, untagged map[int]string) (string, string) {
+	if egress == nil || untagged == nil {
+		return newestMask(egress), newestMask(untagged)
+	}
+	shared := make([]int, 0, len(egress))
+	for mark := range egress {
+		if _, ok := untagged[mark]; ok {
+			shared = append(shared, mark)
+		}
+	}
+	common, found := newestMark(shared)
+	if !found {
+		// Both columns answered and no mark is common to them. Taking each
+		// one's newest is the very pairing this function exists to prevent,
+		// just narrower: the masks would come from two moments, and the port
+		// would be published tagged where it is untagged or the reverse. There
+		// is no snapshot here, so the VLAN contributes none; the caller drops
+		// it. Losing a VLAN is recoverable at the next poll, a wrong tagging
+		// mode written over NetBox is not.
+		return "", ""
+	}
+	return egress[common], untagged[common]
+}
+
+// newestMask returns the mask under the newest time mark in one column.
+func newestMask(byMark map[int]string) string {
+	marks := make([]int, 0, len(byMark))
+	for mark := range byMark {
+		marks = append(marks, mark)
+	}
+	newest, found := newestMark(marks)
+	if !found {
+		return ""
+	}
+	return byMark[newest]
+}
+
+// newestMark folds markIsNewer over a set of time marks.
+//
+// The marks are sorted first. markIsNewer is a wrap-aware comparison, not an
+// ordering: three marks spread more than half the space apart are each "newer"
+// than the next, so folding over them in the order a Go map happens to yield
+// picks a different winner from run to run. Sorting makes the answer the same
+// every poll, which is the whole point of resolving a snapshot at all. A device
+// holding marks that far apart would have to keep a row for months; the sort
+// costs nothing on the handful of marks a real agent retains.
+func newestMark(marks []int) (int, bool) {
+	if len(marks) == 0 {
+		return 0, false
+	}
+	sort.Ints(marks)
+	newest := marks[0]
+	for _, mark := range marks[1:] {
+		if markIsNewer(mark, newest) {
+			newest = mark
+		}
+	}
+	return newest, true
+}
+
+// isEmptyPortMask reports whether a port list names no port: a PortList bitmap
+// of zero bytes, or no value at all.
+//
+// Tested on the bytes, not on how they would read as text. A bitmap byte can
+// be any value, and several of the low ones are printable: 0x20 is the ASCII
+// space and sets port 3, 0x30 is "0" and sets ports 3 and 4. Treating those as
+// empty would discard real membership, which is what this guard exists to
+// avoid doing.
+//
+// A Junos text list of "0" is therefore read as naming a port here. That errs
+// toward merging a row rather than dropping one, which is the safe direction,
+// and the combination is unobserved: no Junos device is known to publish this
+// table at all.
+func isEmptyPortMask(mask string) bool {
+	for i := 0; i < len(mask); i++ {
+		if mask[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// timeMarkWrap is where dot1qVlanTimeMark restarts. It is a TimeFilter over
+// TimeTicks, hundredths of a second since the agent came up, so it wraps after
+// a little under 497 days of uptime.
+const timeMarkWrap = 1 << 32
+
+// markIsNewer compares two time marks allowing for that wrap.
+//
+// A plain comparison is wrong on a switch up long enough to have wrapped: a row
+// changed just before the wrap holds a mark near the ceiling while one changed
+// just after holds a small one, so the larger number is the older row and
+// membership would revert to a stale snapshot whenever two rows straddle it.
+//
+// Compared the way serial numbers are (RFC 1982): a is newer when the forward
+// distance to it is less than half the space. That is exact for marks closer
+// together than half the wrap, which is any pair a device could plausibly hold
+// — the agent keeps snapshots for minutes, not months — and degrades to plain
+// magnitude for everything else.
+func markIsNewer(a, b int) bool {
+	if a == b {
+		return false
+	}
+	forward := (a - b) % timeMarkWrap
+	if forward < 0 {
+		forward += timeMarkWrap
+	}
+	return forward < timeMarkWrap/2
+}
+
+// currentVlanRow reads the VLAN id and time mark out of a
+// dot1qVlanCurrentTable OID.
+//
+// The table is INDEX { dot1qVlanTimeMark, dot1qVlanIndex }, so the suffix is
+// two elements and the id is the second. Taking the first, as the static
+// table's single-element suffix allows, would read every row as the time mark
+// — usually 0, which is not a VLAN, so every row would be discarded.
+func currentVlanRow(oid, prefix string) (vid, mark int, ok bool) {
+	suffix := strings.TrimPrefix(oid, prefix)
+	dot := strings.IndexByte(suffix, '.')
+	if dot < 0 {
+		return 0, 0, false
+	}
+	mark, okMark := atoi(suffix[:dot])
+	vid, okVid := atoi(suffix[dot+1:])
+	if !okMark || !okVid {
+		return 0, 0, false
+	}
+	return vid, mark, true
+}
+
+// vlanCatalogPresent reports whether this device named a VLAN of its own.
+//
+// The sources are every place the walk could learn a VLAN identity from: the
+// static table's names, row statuses and membership masks, the current table's
+// membership masks, the Cisco VTP catalog, the Huawei catalog and the Juniper
+// enterprise table's names.
+//
+// dot1qPvid is deliberately not among them. Whether a PVID means anything is
+// the question this answers, so counting it would make every device its own
+// corroboration.
+//
+// The current table counts because a device publishing it has told us which
+// VLANs it is running and which ports are in them — more than the static table
+// gives on some switches. Such a device is normally classified from that
+// membership and never reaches the default-PVID question.
+//
+// A row only counts when something usable can be read out of it. Every source
+// but one is keyed by a VLAN id, so the row is evidence only if that id names a
+// VLAN NetBox could hold: a table answering nothing but an out-of-range index,
+// or a suffix that will not parse, has named no VLAN however many rows it has,
+// and letting it pass would bypass the refusal and hand those ports back the
+// access VLAN 1 it exists to withhold.
+//
+// The exception is the Juniper enterprise table, whose suffix is the device's
+// internal index rather than a VLAN id. There the name itself is the evidence.
+//
+// Read from the walked OIDs rather than from what the merge kept, so a static
+// row naming a VLAN counts even where no port is in it: the VLAN is in the
+// device's database whether or not anything is using it today. The current
+// table's two columns are the exception, being masks rather than names, and one
+// naming no port is not read as a catalog entry.
+// vlanCatalogSource is one place a VLAN identity can be read from, with the
+// shape of the index its rows carry.
+type vlanCatalogSource struct {
+	prefix string
+	// elements the index must have. The VLAN id is the last of them: the
+	// VLAN-keyed tables carry one, the VTP catalog's (domain, vlan) and the
+	// current table's (timeMark, vlan) carry two.
+	elements int
+	// maskRow says the value is a port mask rather than a name or a status.
+	maskRow bool
+}
+
+var vlanCatalogSources = []vlanCatalogSource{
+	{prefix: oidDot1qVlanStaticName, elements: 1},
+	{prefix: oidDot1qVlanStaticRowStatus, elements: 1},
+	{prefix: oidDot1qVlanStaticEgressPorts, elements: 1},
+	{prefix: oidDot1qVlanStaticUntaggedPorts, elements: 1},
+	// The Huawei catalog is a VLAN catalog like any other: a device publishing
+	// it has named VLANs of its own, whether or not it answers Q-BRIDGE at all.
+	{prefix: oidHwVlanIndex, elements: 1},
+	{prefix: oidHwVlanName, elements: 1},
+	{prefix: oidHwVlanRowStatus, elements: 1},
+	{prefix: oidCiscoVtpVlanName, elements: 2},
+}
+
+// The current table is deliberately absent from that list. Unlike every other
+// source its rows are masks rather than names or row statuses, so whether one
+// names a VLAN depends on which snapshot is read, and it is answered in
+// buildGenericRows from the snapshot the merge resolved rather than from the
+// rows as walked.
+
+func vlanCatalogPresent(all ObjectIDValueMap) bool {
+	for oid, v := range all {
+		// The Juniper enterprise table is keyed by the device's internal index
+		// rather than a VLAN id, so there the name itself is the evidence.
+		if strings.HasPrefix(oid, oidJnxExVlanName) {
+			if trimSNMPString(v.Value) != "" {
+				return true
+			}
+			continue
+		}
+		for _, src := range vlanCatalogSources {
+			if !strings.HasPrefix(oid, src.prefix) {
+				continue
+			}
+			if !namesAVlanAt(strings.TrimPrefix(oid, src.prefix), src.elements) {
+				break
+			}
+			if src.maskRow && isEmptyPortMask(v.Value) {
+				break
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// namesAVlanAt reports whether an OID suffix is an index of exactly the
+// expected shape whose last element is a VLAN id NetBox could hold.
+//
+// The arity is checked, not just the last element. A suffix with one component
+// too many is a row the readers reject — currentVlanRow will not parse
+// "0.10.1" — and reading a VLAN id off the end of it would count as a catalog
+// a row from which nothing can be derived, waiving the default-PVID refusal on
+// the strength of a malformed OID.
+func namesAVlanAt(suffix string, elements int) bool {
+	parts := strings.Split(suffix, ".")
+	if len(parts) != elements {
+		return false
+	}
+	return namesAVlan(parts[elements-1])
+}
+
+// namesAVlan reports whether an OID suffix element is a VLAN id NetBox could
+// hold, using the same range the rest of the package does.
+func namesAVlan(element string) bool {
+	vid, ok := atoi(element)
+	return ok && qbridge.CoerceVid(vid) != nil
+}
+
 // buildGenericRows extracts Q-BRIDGE + BRIDGE-MIB rows from the host's
 // flat ObjectIDValueMap.
 func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows {
@@ -322,12 +614,16 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		VlanUntaggedPorts: map[int][]byte{},
 		IfAdminStatus:     map[int]int{},
 		IfTypes:           map[int]string{},
+
+		VlanEgressFromCurrent:   map[int]struct{}{},
+		VlanUntaggedFromCurrent: map[int]struct{}{},
 	}
 	// dot1qPortVlanTable is INDEX { dot1dBasePort } per RFC 4363, so the OID
 	// suffix is a bridge port number, NOT an ifIndex. Collect raw bridge-port-
 	// keyed PVIDs first; translate to ifIndex after the loop once
 	// BasePortToIfIndex is fully populated.
 	bridgePortPvid := map[int]int{}
+	currentEgress, currentUntagged := map[int]map[int]string{}, map[int]map[int]string{}
 	for oid, v := range all {
 		switch {
 		case strings.HasPrefix(oid, oidDot1dBasePortIfIndex):
@@ -352,6 +648,14 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			if ok {
 				rows.VlanUntaggedPorts[vid] = []byte(v.Value)
 			}
+		case strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts):
+			if vid, mark, ok := currentVlanRow(oid, oidDot1qVlanCurrentEgressPorts); ok {
+				recordRow(currentEgress, vid, mark, v.Value)
+			}
+		case strings.HasPrefix(oid, oidDot1qVlanCurrentUntaggedPorts):
+			if vid, mark, ok := currentVlanRow(oid, oidDot1qVlanCurrentUntaggedPorts); ok {
+				recordRow(currentUntagged, vid, mark, v.Value)
+			}
 		case strings.HasPrefix(oid, oidIfAdminStatus):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidIfAdminStatus))
 			s, ok2 := atoi(v.Value)
@@ -374,9 +678,73 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			rows.PortPvid[ifx] = vid
 		}
 	}
-	// Same sysObjectID test the VLAN index translation uses, so a padded or
-	// dot-prefixed value cannot make one fire and not the other.
 	rows.TextPortLists = isJuniper(all)
+
+	// The static table is the configured intent and wins wherever it speaks.
+	// The current table fills VLANs it never mentions, which is the case this
+	// exists for: a switch can run a VLAN, and place ports in it untagged,
+	// while listing neither in dot1qVlanStaticTable nor in dot1qPvid. Merged
+	// per VLAN rather than per table, so a device whose static table covers
+	// some VLANs and whose current table covers others is read from both.
+	//
+	// A VLAN the current table mentions but places nobody in is skipped: such
+	// a row is not membership.
+	//
+	// It was added because the extractor read the mere presence of an untagged
+	// row for a port's PVID as "the device publishes one for that VLAN and left
+	// this port out", withdrawing the PVID; a ProCurve publishing six all-zero
+	// VLANs beside 23 ports with real PVIDs lost every one of them. Every
+	// consumer of a merged row now gates on provenance instead, so removing
+	// this skip changes no port on any recorded walk. It stays for what it
+	// costs: two of them publish all 4094 VLANs empty, and merging those means
+	// carrying 4094 masks and scanning them once per port, for rows that say
+	// nothing.
+	currentNamedAVlan := false
+	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
+		egress, untagged := oneSnapshot(currentEgress[vid], currentUntagged[vid])
+		if isEmptyPortMask(egress) && isEmptyPortMask(untagged) {
+			continue
+		}
+		if _, ok := rows.VlanEgressPorts[vid]; !ok && currentEgress[vid] != nil {
+			rows.VlanEgressPorts[vid] = []byte(egress)
+			rows.VlanEgressFromCurrent[vid] = struct{}{}
+		}
+		if _, ok := rows.VlanUntaggedPorts[vid]; !ok && currentUntagged[vid] != nil {
+			rows.VlanUntaggedPorts[vid] = []byte(untagged)
+			rows.VlanUntaggedFromCurrent[vid] = struct{}{}
+		}
+		// This VLAN survived resolution with a port in it, which is what makes
+		// it evidence the device has VLANs of its own. Judged here rather than
+		// over the walked rows so the answer is the snapshot that was actually
+		// used: a VLAN whose newest snapshot is empty is dropped above, and a
+		// stale non-empty row from an older mark must not go on licensing the
+		// default PVID after every port has left the VLAN.
+		//
+		// Still only for an id NetBox could hold. RFC 4363 lets this table be
+		// keyed by an internal identifier, and a row under one names no VLAN
+		// however many ports are in it.
+		if qbridge.CoerceVid(vid) != nil {
+			currentNamedAVlan = true
+		}
+	}
+
+	// An untagged member is an egress member: RFC 4363 defines the untagged
+	// ports as those that transmit this VLAN's egress packets untagged, so
+	// they are a subset. membershipFromMasks walks the egress map and only
+	// consults untagged masks for VIDs it finds there, so a VLAN whose egress
+	// column is unsupported or whose separate walk was truncated would have
+	// its untagged membership ignored entirely.
+	for vid, mask := range rows.VlanUntaggedPorts {
+		if _, ok := rows.VlanEgressPorts[vid]; ok {
+			continue
+		}
+		rows.VlanEgressPorts[vid] = mask
+		if _, ok := rows.VlanUntaggedFromCurrent[vid]; ok {
+			rows.VlanEgressFromCurrent[vid] = struct{}{}
+		}
+	}
+
+	rows.VlanCatalogPresent = vlanCatalogPresent(all) || currentNamedAVlan
 	return rows
 }
 
@@ -782,6 +1150,8 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 		oidDot1qVlanStaticEgressPorts,
 		oidDot1qVlanStaticUntaggedPorts,
 		oidDot1qVlanStaticRowStatus,
+		oidDot1qVlanCurrentEgressPorts,
+		oidDot1qVlanCurrentUntaggedPorts,
 		oidDot1qPvid,
 		oidCiscoVMVlan,
 		oidCiscoVMVoiceVlanID,

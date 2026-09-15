@@ -209,6 +209,28 @@ entries:
         entity: "vlan"
         field: "rowStatus"
 
+  # Q-BRIDGE-MIB dot1qVlanCurrentTable — the VLANs the device is actually
+  # running, with the same per-VLAN egress/untagged masks the static table
+  # carries. A switch can report membership here that appears nowhere in
+  # dot1qVlanStaticTable and has no dot1qPvid row either: an Eltex MES2324FB
+  # reports its port-channels as untagged members of VLAN 1 in this table
+  # alone, so without it those ports reach NetBox with no VLAN at all.
+  #
+  # INDEX is { dot1qVlanTimeMark, dot1qVlanIndex }, so the VLAN id is the LAST
+  # index element, not the first. identifier_size 2 keeps both.
+  - oid: ".1.3.6.1.2.1.17.7.1.4.2"
+    entity: "vlan"
+    field: "_id"
+    identifier_size: 2
+    description: "Q-BRIDGE-MIB dot1qVlanCurrentTable (per-VLAN egress masks as currently running)"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.17.7.1.4.2.1.4"
+        entity: "vlan"
+        field: "currentEgressPorts"
+      - oid: ".1.3.6.1.2.1.17.7.1.4.2.1.5"
+        entity: "vlan"
+        field: "currentUntaggedPorts"
+
   # Q-BRIDGE-MIB dot1qPortVlanTable — per-port PVID.
   - oid: ".1.3.6.1.2.1.17.7.1.4.5"
     entity: "interface_vlan"
