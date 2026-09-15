@@ -103,6 +103,10 @@ type MockMQTTConnection struct {
 	DisconnectError error
 	ReconnectError  error
 
+	// OnDisconnect, when set, runs inside Disconnect with its context, so a
+	// test can hold the disconnect until that context ends.
+	OnDisconnect func(ctx context.Context)
+
 	// guarded by mu — written from the goroutine under test, read from test goroutines
 	connectCalled      bool
 	disconnectCalled   bool
@@ -144,10 +148,13 @@ func (m *MockMQTTConnection) Connect(_ context.Context, _ context.Context, detai
 }
 
 // Disconnect disconnects from the MQTT broker
-func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
+func (m *MockMQTTConnection) Disconnect(ctx context.Context, _ string) error {
 	m.mu.Lock()
 	m.disconnectCalled = true
 	m.mu.Unlock()
+	if m.OnDisconnect != nil {
+		m.OnDisconnect(ctx)
+	}
 	return m.DisconnectError
 }
 

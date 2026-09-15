@@ -1799,3 +1799,70 @@ func TestFleetOTLPBindHost_Validation(t *testing.T) {
 		assert.Contains(t, err.Error(), "localhost")
 	}
 }
+
+// A reconnect signal that is already queued when shutdown begins is dropped:
+// the handler must not start a disconnect and reconnect during teardown,
+// whichever of its two ready cases the select picks. Stop's own disconnect
+// follows. Repeated because the select between a cancelled context and a
+// buffered signal is random.
+func TestFleetConfigManager_ResetHandler_DropsASignalOnceShutdownBegan(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		mockConn := &fleet.MockMQTTConnection{}
+		mgr := newResetHandlerManager(t, mockConn)
+		mgr.resetChan <- struct{}{}
+		mgr.monitorCancel()
+
+		done := make(chan struct{})
+		go func() {
+			mgr.runResetHandler(5 * time.Second)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("runResetHandler did not exit after monitorCtx was cancelled")
+		}
+		require.False(t, mockConn.DisconnectCalled(), "iteration %d: a signal received once shutdown began must not disconnect", i)
+		require.False(t, mockConn.ConnectCalled(), "iteration %d: nor reconnect", i)
+	}
+}
+
+// A disconnect the handler is running when shutdown begins is cut short:
+// Stop cancels monitorCtx and waits for the handler, so the disconnect must
+// observe that cancellation instead of running to its own timeout, and
+// Stop's own disconnect takes over.
+func TestFleetConfigManager_ResetHandler_DisconnectIsCutShortByShutdown(t *testing.T) {
+	entered := make(chan struct{})
+	observed := make(chan error, 1)
+	mockConn := &fleet.MockMQTTConnection{OnDisconnect: func(ctx context.Context) {
+		close(entered)
+		<-ctx.Done()
+		observed <- ctx.Err()
+	}}
+	mgr := newResetHandlerManager(t, mockConn)
+
+	done := make(chan struct{})
+	go func() {
+		mgr.runResetHandler(time.Minute)
+		close(done)
+	}()
+	mgr.resetChan <- struct{}{}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("the handler never entered Disconnect")
+	}
+	mgr.monitorCancel()
+
+	select {
+	case err := <-observed:
+		require.ErrorIs(t, err, context.Canceled, "the disconnect's context is cancelled by shutdown, not by its own timeout")
+	case <-time.After(time.Second):
+		t.Fatal("the disconnect did not observe shutdown; Stop would wait for the disconnect timeout")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runResetHandler did not exit after shutdown cut the disconnect short")
+	}
+}
