@@ -1329,6 +1329,53 @@ func TestRestartUpgradedRunsUnderTheRunContextFactory(t *testing.T) {
 // the race even though that Start goes on to report success, stopping the
 // process that came up through the gated stop rather than leaving it
 // running unsupervised.
+// A health-driven reset in flight observes the supervisor's stop: the
+// context handed to FullReset is cancelled when StopAll begins, so a
+// shutdown that overlaps a reset does not wait out the backend's readiness
+// loop; Restart returns and StopAll gets the restart mutex.
+func TestRestartResetObservesStopAll(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "reset_ctx")
+	backend.Register("sup_reset_ctx", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_reset_ctx": nil}, config.BackendCommons{}, background))
+	entered := make(chan struct{})
+	observed := make(chan error, 1)
+	be.onResetCtx = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		observed <- ctx.Err()
+		return ctx.Err()
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.Restart(context.Background(), "sup_reset_ctx", "health") }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reset was never entered")
+	}
+	stopped := make(chan struct{})
+	go func() { s.StopAll(context.Background()); close(stopped) }()
+
+	select {
+	case err := <-observed:
+		require.ErrorIs(t, err, context.Canceled, "the reset's context is cancelled when StopAll begins")
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reset never observed the stop; shutdown would wait out the readiness loop")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Restart did not return after the stop")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll did not return")
+	}
+}
+
 func TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *testing.T) {
 	rec := &recorder{}
 	applier := &stubApplier{rec: rec}

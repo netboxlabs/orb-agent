@@ -82,6 +82,7 @@ type stubBackend struct {
 	binary       string
 	onStart      func(ctx context.Context, cancel context.CancelFunc)
 	onReset      func(ctx context.Context)
+	onResetCtx   func(ctx context.Context) error // when set, FullReset returns its result after recording
 	onStop       func()
 	mu           sync.Mutex
 }
@@ -142,6 +143,9 @@ func (s *stubBackend) Stop(context.Context) error {
 
 func (s *stubBackend) FullReset(ctx context.Context) error {
 	s.rec.add("reset:" + s.name)
+	if s.onResetCtx != nil {
+		return s.onResetCtx(ctx)
+	}
 	if s.onReset != nil {
 		s.onReset(ctx)
 	}

@@ -148,7 +148,18 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	// The apply mutex is deliberately not held across the reset: a manage
 	// landing on this backend meanwhile may be stamped failed to apply, and
 	// the re-apply below heals it by re-applying every stored policy.
-	if err := e.be.FullReset(ctx); err != nil {
+	//
+	// The reset runs under a context that the supervisor's stop cancels as
+	// well as the caller's: backends derive their replacement process's
+	// start context from it, and StopAll can only cancel the run context it
+	// holds, which is the one from before the reset. Without the merge a
+	// shutdown that overlaps a reset would wait out the readiness loop.
+	resetCtx, cancelReset := context.WithCancel(ctx)
+	stopWatch := context.AfterFunc(s.stopCtx, cancelReset)
+	err := e.be.FullReset(resetCtx)
+	stopWatch()
+	cancelReset()
+	if err != nil {
 		s.state.RegisterError(e.name, fmt.Sprintf("failed to reset backend: %v", err))
 		// The process may still be up (a Stop that failed): a Running entry
 		// stays Running, a Failed one stays Failed, since no process came up
