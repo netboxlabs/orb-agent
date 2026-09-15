@@ -259,39 +259,86 @@ func ma5608tIfNames() ObjectIDValueMap {
 	return oids
 }
 
-func TestDecodeHuaweiPortList(t *testing.T) {
-	// The reporting device: VLAN 682 on ethernet 0/2/2 and 0/2/3. Octet 16
-	// = 0x0C = bits 2 and 3, and the MIB's low-bit-first order puts those on
-	// ports 2 and 3 of slot 2. Read MSB-first (the RFC PortList order) the
-	// same octet would name ports 4 and 5 — a clock port and a port the
-	// board does not have, which is how the two orders were told apart.
-	got, err := decodeHuaweiPortList(ma5608tPortBitmap(map[int]byte{16: 0x0C}))
-	require.NoError(t, err)
-	assert.Equal(t, []slotPort{{2, 2}, {2, 3}}, got)
+func TestHwVlanPortsCandidates(t *testing.T) {
+	// The reporting device: VLAN 682 on ethernet 0/2/2 and 0/2/3, sent as
+	// hex text. Octet 16 = 0x0C = bits 2 and 3, and the MIB's low-bit-first
+	// order puts those on ports 2 and 3 of slot 2. Read MSB-first (the RFC
+	// PortList order) the same octet would name ports 4 and 5 — a clock
+	// port and a port the board does not have, which is how the two orders
+	// were told apart. The text form is also 416 octets, a whole number of
+	// slots, so it admits a raw reading too: 416 ASCII '0's and one 'C'
+	// scatter bits across 52 phantom slots. Both are returned; the caller
+	// decides.
+	text := ma5608tPortBitmap(map[int]byte{16: 0x0C})
+	cands := hwVlanPortsCandidates(text)
+	require.Len(t, cands, 2)
+	assert.Contains(t, cands, []slotPort{{2, 2}, {2, 3}})
 
 	// Lower-case hex text decodes the same.
-	got, err = decodeHuaweiPortList(strings.ToLower(ma5608tPortBitmap(map[int]byte{16: 0x0C})))
-	require.NoError(t, err)
-	assert.Equal(t, []slotPort{{2, 2}, {2, 3}}, got)
+	assert.Contains(t, hwVlanPortsCandidates(strings.ToLower(text)), []slotPort{{2, 2}, {2, 3}})
 
-	// Raw octets, as the MIB declares them: slot 7 port 0 and slot 7 port 63.
+	// Raw octets, as the MIB declares them: slot 7 port 0 and slot 7 port
+	// 63. 0x01 and 0x80 are not hex-digit ASCII, so only one reading.
 	raw := make([]byte, 8*8)
 	raw[7*8] = 0x01
 	raw[7*8+7] = 0x80
-	got, err = decodeHuaweiPortList(string(raw))
-	require.NoError(t, err)
-	assert.Equal(t, []slotPort{{7, 0}, {7, 63}}, got)
+	assert.Equal(t, [][]slotPort{{{7, 0}, {7, 63}}}, hwVlanPortsCandidates(string(raw)))
 
-	// All zero is a VLAN with no uplink ports (the reporter's VLAN 50).
-	got, err = decodeHuaweiPortList(ma5608tPortBitmap(nil))
-	require.NoError(t, err)
-	assert.Empty(t, got)
+	// Not a whole number of slots under either reading: no candidates.
+	assert.Empty(t, hwVlanPortsCandidates(string(make([]byte, 12))))
+	assert.Empty(t, hwVlanPortsCandidates("0C0C0C"))
+	assert.Empty(t, hwVlanPortsCandidates(""))
+}
 
-	// Not a whole number of slots: refused, not truncated.
-	_, err = decodeHuaweiPortList(string(make([]byte, 12)))
-	assert.Error(t, err)
-	_, err = decodeHuaweiPortList("0C0C0C")
-	assert.Error(t, err, "3 octets of hex text is not a slot either")
+func TestResolveHuaweiPortList(t *testing.T) {
+	index, ok := huaweiPortIndex(ma5608tIfNames())
+	require.True(t, ok)
+
+	// The reporting device's value: the text reading names real ports, the
+	// raw reading names 52 slots the chassis does not have. One winner.
+	ports, resolved, ambiguous := resolveHuaweiPortList(hwVlanPortsCandidates(ma5608tPortBitmap(map[int]byte{16: 0x0C})), index)
+	assert.True(t, resolved)
+	assert.False(t, ambiguous)
+	assert.Equal(t, []slotPort{{2, 2}, {2, 3}}, ports)
+
+	// A raw bitmap whose every octet is hex-digit ASCII — the case the
+	// heuristic could not tell apart on its own. 16 octets of 0x30 read raw
+	// are ports 4 and 5 of every 8-port group on slots 0 and 1; read as text
+	// they are eight zero octets, i.e. no ports. On this device slot 0 has
+	// only GPON 0/0/0..15 and slot 1 has nothing, so the raw reading names
+	// ports the device lacks and the text reading (no ports) is the answer.
+	sixteen30 := strings.Repeat("0", 16)
+	ports, resolved, ambiguous = resolveHuaweiPortList(hwVlanPortsCandidates(sixteen30), index)
+	assert.True(t, resolved)
+	assert.False(t, ambiguous)
+	assert.Empty(t, ports)
+
+	// The same octets on a device that really has ports 4 and 5 in every
+	// group of slots 0 and 1 would make both readings resolve to different
+	// port sets: ambiguous, refused.
+	dense := map[slotPort]int{}
+	for slot := 0; slot < 2; slot++ {
+		for group := 0; group < 8; group++ {
+			dense[slotPort{slot, group*8 + 4}] = 1000 + slot*100 + group*2
+			dense[slotPort{slot, group*8 + 5}] = 1001 + slot*100 + group*2
+		}
+	}
+	_, resolved, ambiguous = resolveHuaweiPortList(hwVlanPortsCandidates(sixteen30), dense)
+	assert.False(t, resolved)
+	assert.True(t, ambiguous)
+
+	// All zero, sent as text: the raw reading (208 '0' octets = ports 4,5
+	// everywhere) fails the inventory, the text reading names no ports and
+	// resolves — a VLAN with no uplink ports (the reporter's VLAN 50).
+	ports, resolved, ambiguous = resolveHuaweiPortList(hwVlanPortsCandidates(ma5608tPortBitmap(nil)), index)
+	assert.True(t, resolved)
+	assert.False(t, ambiguous)
+	assert.Empty(t, ports)
+
+	// Neither reading resolves.
+	_, resolved, ambiguous = resolveHuaweiPortList(hwVlanPortsCandidates(ma5608tPortBitmap(map[int]byte{16: 0x30})), index)
+	assert.False(t, resolved)
+	assert.False(t, ambiguous)
 }
 
 func TestHuaweiPortIndex(t *testing.T) {
@@ -302,14 +349,30 @@ func TestHuaweiPortIndex(t *testing.T) {
 	assert.Equal(t, 4194307840, idx[slotPort{0, 15}], "GPON names carry a space before frame/slot/port")
 	assert.Len(t, idx, 21, "logical interfaces (vlanif, meth0, loopbacks) are not ports")
 
+	// Uplink boards that name their ports by speed lead with digits.
+	fast := ma5608tIfNames()
+	fast[oidIfName+"235001856"] = Value{Value: "10GE0/19/0"}
+	fast[oidIfName+"235001920"] = Value{Value: "40GE0/19/1"}
+	idx, ok = huaweiPortIndex(fast)
+	require.True(t, ok)
+	assert.Equal(t, 235001856, idx[slotPort{19, 0}])
+	assert.Equal(t, 235001920, idx[slotPort{19, 1}])
+
+	// A bare frame/slot/port with no type word is not taken for a port.
+	bare := ma5608tIfNames()
+	bare[oidIfName+"77"] = Value{Value: "0/5/0"}
+	idx, _ = huaweiPortIndex(bare)
+	_, found := idx[slotPort{5, 0}]
+	assert.False(t, found)
+
 	// No physical port names at all: nothing to translate with.
 	_, ok = huaweiPortIndex(ObjectIDValueMap{oidIfName + "1": {Value: "vlanif10"}})
 	assert.False(t, ok)
 
-	// Two frames would put the same slot/port on two interfaces, and the
-	// bitmap cannot say which frame it means.
+	// A second frame makes every slot/port ambiguous, even when the two
+	// frames' slot/port sets do not overlap: the bitmap has no frame.
 	two := ma5608tIfNames()
-	two[oidIfName+"999"] = Value{Value: "ethernet1/2/2"}
+	two[oidIfName+"999"] = Value{Value: "ethernet1/5/0"}
 	_, ok = huaweiPortIndex(two)
 	assert.False(t, ok)
 }
