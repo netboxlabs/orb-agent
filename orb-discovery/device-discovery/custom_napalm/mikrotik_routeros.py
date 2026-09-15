@@ -340,6 +340,12 @@ def _split_columns(text: str) -> list[str]:
     return columns
 
 
+def _after_first_column(text: str) -> str:
+    """Return everything after the first column of a row, spacing intact."""
+    remainder = re.sub(r"^\s*\S+\s+", "", text, count=1)
+    return remainder.strip()
+
+
 def _address_row(match: "re.Match", flags: str, has_vrf: bool) -> dict | None:
     """
     Build one address row from a matched line.
@@ -355,15 +361,30 @@ def _address_row(match: "re.Match", flags: str, has_vrf: bool) -> dict | None:
     # containing a single space stays in one piece: RouterOS permits spaces in
     # both interface and VRF names, and splitting on every space would move a
     # word from one column into the other.
-    fields = _split_columns(match.group("rest"))
-    if len(fields) < 2 or not fields[1]:
+    rest = match.group("rest")
+    if not has_vrf:
+        # With no VRF column everything after NETWORK is the interface name,
+        # whatever spacing it has, so it is taken verbatim rather than split.
+        interface, vrf = _after_first_column(rest), None
+    else:
+        fields = _split_columns(rest)
+        if len(fields) < 3:
+            return None
+        # The VRF is the last column. What lies between it and NETWORK is the
+        # interface, rejoined, so a name broken up by two or more spaces is
+        # kept rather than half of it being read as the VRF and the remainder
+        # dropped. A name whose own padding is indistinguishable from the
+        # column's cannot be recovered from this output at all: two spaces
+        # inside a name and two between columns are the same two spaces.
+        interface, vrf = " ".join(fields[1:-1]), fields[-1]
+    if not interface:
         return None
 
     return {
         "ip": match.group("ip"),
         "prefix_length": int(match.group("prefix")),
-        "interface": fields[1],
-        "vrf": fields[2] if has_vrf and len(fields) >= 3 else None,
+        "interface": interface,
+        "vrf": vrf,
     }
 
 

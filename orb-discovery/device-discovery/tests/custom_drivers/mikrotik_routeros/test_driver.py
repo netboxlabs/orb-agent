@@ -197,3 +197,31 @@ def test_partial_reads_are_reported(caplog):
         result = _driver_with_output(mixed).get_interfaces_ip()
     assert result == {"ether1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}}
     assert any("matched no known row format" in r.message for r in caplog.records)
+
+
+def test_interface_names_broken_up_by_column_padding():
+    """
+    An interface name spaced like column padding is recovered where it can be.
+
+    With no VRF column everything after NETWORK is the name, so it survives
+    whatever spacing it has. With one, the VRF is the last column and the
+    interface is what lies between, rejoined: half the name being read as the
+    VRF, and the real VRF dropped, is worse than collapsing its spacing.
+    """
+    no_vrf = (
+        "Columns: ADDRESS, NETWORK, INTERFACE\n"
+        "# ADDRESS        NETWORK      INTERFACE\n"
+        "0  192.0.2.1/24   192.0.2.0    ether1  customer\n"
+    )
+    assert _driver_with_output(no_vrf).get_interfaces_ip() == {
+        "ether1  customer": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
+
+    with_vrf = (
+        "Columns: ADDRESS, NETWORK, INTERFACE, VRF\n"
+        "# ADDRESS        NETWORK      INTERFACE          VRF\n"
+        "0  192.0.2.1/24   192.0.2.0    ether1  customer   main\n"
+    )
+    assert _driver_with_output(with_vrf).get_interfaces_ip() == {
+        "ether1 customer": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
+    }
