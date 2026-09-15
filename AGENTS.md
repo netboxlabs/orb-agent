@@ -66,7 +66,7 @@ After editing, always run `make fix-lint` — gci (import ordering) and gofumpt 
 2. **FilesManager** — fetches, verifies, and tracks files on disk at runtime (binaries, plugin bundles)
 3. **PolicyManager** — owns the in-memory `PolicyRepo`, applies policies to backends
 4. **BackendStateManager** — tracks backend health; triggers restarts in fleet mode (no-op in local/git mode); also restarts backends when their managed file changes via FilesManager events
-5. **Supervisor** (`agent/supervisor`) — owns backend lifecycle: declares each configured backend as an entry with a phase, starts them at agent start, restarts them on health, fleet or binary-upgrade requests (re-applying their policies after the restart), runs the fleet full reset, and stops them at shutdown through one gated stop
+5. **Supervisor** (`agent/supervisor`) — owns backend lifecycle: declares each configured backend as an entry with a phase, starts the eager ones at agent start and the on-demand ones when their first policy arrives (retrying a failed on-demand start on a timer), restarts them on health, fleet or binary-upgrade requests (re-applying their policies after the restart), runs the fleet full reset, and stops them at shutdown through one gated stop
 6. **ConfigManager** — drives policy lifecycle (local / git / fleet strategies)
 
 `agent.Start()` sequences: start secrets → start backends → start config manager. The config manager is started *last* so all backends are ready to receive the initial policy push.

@@ -72,6 +72,23 @@ orb:
     ...
 ```
 
+Each backend entry may carry two lifecycle keys:
+
+| Key | Values | Default | Description |
+|:---:|:------:|:-------:|:------------|
+| start_mode | `eager`, `on_demand` | `eager` | `eager` starts the backend at agent start and a start failure aborts the agent. `on_demand` configures it at agent start (a bad configuration still aborts) but starts it when the first policy for it arrives; a failed start is retried every five minutes. |
+| start_timeout | 1 to 300 | 30 | Seconds an on-demand start may take to answer its API before it is treated as failed. Only valid with `start_mode: on_demand`. |
+
+```yaml
+  backends:
+    snmp_discovery:
+    gnmi_telemetry:
+      start_mode: on_demand
+      start_timeout: 60
+```
+
+The image's default configuration declares `snmp_telemetry` and `gnmi_telemetry` on demand, so a telemetry policy starts its backend and an agent without one runs nothing extra.
+
 #### Discovery Backends
 Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and `gnmi_discovery` backends are currently supported. They do not require any special configuration.
 - [Device Discovery](./docs/backends/device_discovery/README.md) ([supported platforms](./docs/backends/device_discovery/supported_platforms.md))
