@@ -273,6 +273,86 @@ def _ros_type_to_netbox(ros_type: str) -> str | None:
     return _ROS_TYPE_TO_NETBOX.get((ros_type or "").strip().lower())
 
 
+
+# 'ip address print' columns differ by RouterOS version: v6 prints ADDRESS,
+# NETWORK and INTERFACE, and v7 adds VRF. The device declares its own columns
+# in one of two header lines, so the count is read from the device rather than
+# guessed, and an interface name containing spaces still resolves.
+_IP_COLUMNS_RE = re.compile(r"^\s*Columns:\s*(?P<columns>.+?)\s*$", re.IGNORECASE)
+_IP_HEADER_RE = re.compile(r"^\s*#\s+ADDRESS\s+(?P<columns>.+?)\s*$", re.IGNORECASE)
+
+# One address row: an index, optional flag letters, the address and prefix,
+# then the remaining columns. Everything after the prefix is split positionally
+# against the column count, so a column RouterOS adds later is ignored rather
+# than fatal.
+_IP_ROW_RE = re.compile(
+    r"^\s*(?P<num>\d+)\s+"
+    r"(?:(?P<flags>[A-Za-z]+)\s+)?"
+    r"(?P<ip>\d{1,3}(?:\.\d{1,3}){3})/(?P<prefix>\d{1,2})\s+"
+    r"(?P<rest>\S.*?)\s*$"
+)
+
+# RouterOS address flags. X is an address the operator disabled and I one the
+# device could not apply; neither is active, and SNMP does not report them, so
+# emitting them would make the two backends disagree about the same device.
+# D is a dynamic address, from DHCP or similar, which is active and is kept.
+_IP_FLAGS_NOT_ACTIVE = frozenset("XI")
+
+
+def _parse_ip_addresses(raw: str) -> list[dict]:
+    """
+    Parse 'ip address print' into address rows, across RouterOS 6 and 7.
+
+    Returns one dict per active address with "ip", "prefix_length",
+    "interface" and "vrf" (None where the device publishes no VRF column).
+    Rows the device flags as disabled or invalid are skipped.
+    """
+    has_vrf = False
+    rows: list[dict] = []
+
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+
+        header = _IP_COLUMNS_RE.match(line) or _IP_HEADER_RE.match(line)
+        if header:
+            has_vrf = "VRF" in header.group("columns").upper()
+            continue
+
+        match = _IP_ROW_RE.match(line)
+        if not match:
+            # Flags legends, comment rows (";;; text") and anything else the
+            # device prints are not address rows. Skipped rather than fatal:
+            # an unrecognised line must not cost the addresses around it.
+            continue
+
+        flags = match.group("flags") or ""
+        if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
+            continue
+
+        fields = match.group("rest").split()
+        if len(fields) < 2:
+            continue
+        # NETWORK first, VRF last where the device has that column, and
+        # whatever lies between is the interface name, which RouterOS permits
+        # to contain spaces.
+        vrf = fields[-1] if has_vrf and len(fields) >= 3 else None
+        interface = " ".join(fields[1:-1] if vrf is not None else fields[1:])
+        if not interface:
+            continue
+
+        rows.append(
+            {
+                "ip": match.group("ip"),
+                "prefix_length": int(match.group("prefix")),
+                "interface": interface,
+                "vrf": vrf,
+            }
+        )
+
+    return rows
+
+
 class ROSDriver(_napalm_base.NetworkDriver):
     """MikroTik RouterOS (ros) NAPALM driver (read-only subset for device-discovery)."""
 
@@ -374,7 +454,11 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 if row.get("serial_number"):
                     serial_number = row["serial_number"]
         except Exception:
-            logger.debug("Failed to parse 'system routerboard print'", exc_info=True)
+            logger.warning(
+                "mikrotik_routeros: could not parse 'system routerboard "
+                "print'; model and serial will be missing",
+                exc_info=True,
+            )
 
         return model, serial_number
 
@@ -398,7 +482,11 @@ class ROSDriver(_napalm_base.NetworkDriver):
             if parsed and parsed[0].get("name"):
                 return parsed[0]["name"]
         except Exception:
-            logger.debug("Failed to parse 'system identity print'", exc_info=True)
+            logger.warning(
+                "mikrotik_routeros: could not parse 'system identity print'; "
+                "the device hostname will be missing",
+                exc_info=True,
+            )
 
         return None
 
@@ -418,8 +506,10 @@ class ROSDriver(_napalm_base.NetworkDriver):
                 try:
                     self._cached_interfaces_detail = _parse_interfaces_detail(raw)
                 except Exception:
-                    logger.debug(
-                        "Failed to parse 'interface print detail'", exc_info=True
+                    logger.warning(
+                        "mikrotik_routeros: could not parse 'interface print "
+                        "detail'; interface detail will be missing",
+                        exc_info=True,
                     )
                     self._cached_interfaces_detail = []
         return self._cached_interfaces_detail
@@ -493,39 +583,37 @@ class ROSDriver(_napalm_base.NetworkDriver):
         """
         Return IPv4 addresses per interface.
 
-        Parsed from 'ip address print' via the ntc-template (compatible with
-        both RouterOS v6 and v7).  IPv6 addresses are not returned because
-        there is no compatible ntc-template and RouterOS does not expose a
-        compact 'ipv6 address print' format that is stable across versions.
+        Parsed in this driver rather than through the shared ntc-template.
+        RouterOS 7 adds a fourth column, VRF, to 'ip address print', and the
+        template anchors its two header lines to exactly three columns, so the
+        parse aborts on the first of them and the device reports no addresses
+        at all.  Relaxing those anchors is not enough either: the template's
+        interface field runs to end of line, so it swallows the VRF value and
+        yields interface names like "Loopback           main".
+
+        IPv6 addresses are not returned.  There is no ntc-template for
+        'ipv6 address print' covering both RouterOS 6 and 7, and this driver
+        does not parse that command.
         """
+        raw = self.device.send_command("ip address print")
+        if not raw:
+            logger.warning(
+                "mikrotik_routeros: 'ip address print' returned no output; "
+                "no IP addresses will be discovered for this device"
+            )
+            return {}
+
         interfaces_ip: dict = {}
-
-        # IPv6 addresses are not collected: no ntc-template exists for
-        # 'ipv6 address print' that covers both v6 and v7 output formats.
-        ipv4_raw = self.device.send_command("ip address print")
-        if ipv4_raw:
-            try:
-                parsed = parse_output(
-                    platform="mikrotik_routeros",
-                    command="ip address print",
-                    data=ipv4_raw,
-                )
-                for row in parsed:
-                    ip = row.get("ip", "").strip()
-                    subnet = row.get("subnet", "").strip()
-                    intf = row.get("interface", "").strip()
-                    if not ip or not intf:
-                        continue
-                    try:
-                        prefix_length = int(subnet)
-                    except (ValueError, TypeError):
-                        continue
-                    interfaces_ip.setdefault(intf, {}).setdefault("ipv4", {})[ip] = {
-                        "prefix_length": prefix_length
-                    }
-            except Exception:
-                logger.debug("Failed to parse 'ip address print'", exc_info=True)
-
+        for address in _parse_ip_addresses(raw):
+            interfaces_ip.setdefault(address["interface"], {}).setdefault("ipv4", {})[
+                address["ip"]
+            ] = {"prefix_length": address["prefix_length"]}
+        if not interfaces_ip:
+            logger.warning(
+                "mikrotik_routeros: no address rows read from 'ip address "
+                "print'; the output format may have changed. First line: %r",
+                raw.splitlines()[0] if raw.splitlines() else "",
+            )
         return interfaces_ip
 
     def get_config(
@@ -568,5 +656,9 @@ class ROSDriver(_napalm_base.NetworkDriver):
         try:
             return _parse_vlans(raw)
         except Exception:
-            logger.debug("Failed to parse 'interface vlan print'", exc_info=True)
+            logger.warning(
+                "mikrotik_routeros: could not parse 'interface vlan print'; "
+                "no VLANs will be discovered for this device",
+                exc_info=True,
+            )
             return {}
