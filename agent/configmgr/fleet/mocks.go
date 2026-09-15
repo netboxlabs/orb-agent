@@ -109,6 +109,8 @@ type MockMQTTConnection struct {
 	lastConnectDetails ConnectionDetails
 
 	hooks []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+
+	resetter Resetter
 }
 
 // ConnectCalled returns whether Connect has been called (safe for concurrent use).
@@ -164,11 +166,20 @@ func (m *MockMQTTConnection) RegisterTopicHandler(_ string, _ TopicMessageHandle
 	// No-op for mock
 }
 
-// SetResetter is a no-op for the mock.
-func (m *MockMQTTConnection) SetResetter(_ Resetter) {}
+// SetResetter records the resetter it was given.
+func (m *MockMQTTConnection) SetResetter(r Resetter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetter = r
+}
 
-// Resetter always returns nil for the mock.
-func (m *MockMQTTConnection) Resetter() Resetter { return nil }
+// ResetterForTest returns the resetter most recently passed to SetResetter,
+// for tests to observe (safe for concurrent use).
+func (m *MockMQTTConnection) ResetterForTest() Resetter {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resetter
+}
 
 // TriggerOnReadyHook triggers all registered onReady hooks (for testing)
 func (m *MockMQTTConnection) TriggerOnReadyHook(cm *autopaho.ConnectionManager, topics TokenResponseTopics) {

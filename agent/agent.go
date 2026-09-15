@@ -34,7 +34,6 @@ const (
 type Agent interface {
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context)
-	RestartBackend(ctx context.Context, backend string, reason string) error
 }
 
 type orbAgent struct {
@@ -152,7 +151,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		}
 	}
 
-	return a.supervisor.ConfigureAll(agentCtx, cfgBackends, a.backendsCommon, func(name string) context.Context {
+	return a.supervisor.ConfigureAll(cfgBackends, a.backendsCommon, func(name string) context.Context {
 		return a.configManager.GetContext(context.WithValue(agentCtx, routineKey, name))
 	})
 }
@@ -393,12 +392,4 @@ func (a *orbAgent) shutdownOTLP() {
 		}
 		a.logger.Debug("shut down OTLP log exporter")
 	})
-}
-
-// RestartBackend delegates to the supervisor: see
-// (*supervisor.Supervisor).Restart for the restart's exact behavior (the
-// policy re-apply semantics, the refusals for an undeclared or stopped
-// backend, and the binary-upgrade body selected by reason).
-func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
-	return a.supervisor.Restart(ctx, name, reason)
 }

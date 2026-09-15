@@ -9,41 +9,44 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 )
 
-// ReasonBinaryUpgraded is the reason Restart is called with from the upgrade
-// dispatcher; every other reason runs the health/fleet restart body.
-const ReasonBinaryUpgraded = "binary upgraded"
-
-// Restart restarts one declared backend, selecting the body by reason: a
-// binary upgrade runs restartUpgraded, which stops the old process (through
-// the gated stop) before starting the new one; any other reason runs
-// restartHealth, which resets the backend in place. Both bodies hold the
-// entry's restart mutex across the whole sequence, so no two restarts for
-// the same backend interleave and no stop runs mid-flight. A name this
-// supervisor never declared is refused; a declared entry that never started,
-// or one a StopAll already stopped, is refused too, with the same message an
-// agent's own lookup produced before.
+// Restart restarts one declared backend by resetting it in place: see
+// restartHealth for the full sequence. The sequence holds the entry's
+// restart mutex across it, so no two restarts for the same backend
+// interleave and no stop runs mid-flight. A name this supervisor never
+// declared is refused; a declared entry that never started, or one a
+// StopAll already stopped, is refused too, with the same message
+// RestartUpgraded gives for the same conditions.
 func (s *Supervisor) Restart(ctx context.Context, name string, reason string) error {
 	e, ok := s.entryFor(name)
 	if !ok {
 		return errors.New("backend is not started by this agent: " + name)
 	}
-	if reason == ReasonBinaryUpgraded {
-		return s.restartUpgraded(ctx, e)
-	}
 	return s.restartHealth(ctx, e, reason)
+}
+
+// RestartUpgraded restarts one declared backend after a binary upgrade: see
+// restartUpgraded for the full sequence (a gated stop, then Start, with a
+// rollback and one retry if Start fails). dispatchUpgrades calls this
+// instead of Restart. A name this supervisor never declared is refused; a
+// declared entry that never started, or one a StopAll already stopped, is
+// refused too, with the same message Restart gives for the same conditions.
+func (s *Supervisor) RestartUpgraded(ctx context.Context, name string) error {
+	e, ok := s.entryFor(name)
+	if !ok {
+		return errors.New("backend is not started by this agent: " + name)
+	}
+	return s.restartUpgraded(ctx, e)
 }
 
 // RestartAll restarts every entry that has started: Running, Starting or
 // Failed (a failed entry restarts as a retry). An entry that was only
 // declared, or one a StopAll already stopped, is skipped, since neither has
 // a process a restart could reach. Failures are logged, not returned, the
-// same way the per-backend loop it replaces logged them. The caller's ctx
-// ends the sweep: it is checked before each entry, so a cancelled request
-// restarts nothing further. Each restart itself runs under
-// s.runContext(e.name), the per-backend context factory
-// serveRestartRequests uses too; the agent's own sweep derived that context
-// from the caller's, which kept the cancellation in the chain, and the
-// check here is what keeps that property.
+// same way the per-backend loop it replaces logged them. The caller's
+// context is checked before each entry, so a cancelled request starts no
+// further restarts; it does not interrupt one already in flight, which runs
+// under s.runContext(e.name), the per-backend context factory
+// serveRestartRequests uses too.
 func (s *Supervisor) RestartAll(ctx context.Context, reason string) error {
 	s.logger.Info("restarting comms", "reason", reason)
 	for _, e := range s.snapshot() {
@@ -185,6 +188,14 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 // answering is rescheduled the same way restartHealth reschedules one, and
 // keeps retrying at ReplayRetryInterval until it completes, so a manage
 // stored as starting is not deferred forever.
+//
+// Each run context comes from s.runContext(e.name), the same per-backend
+// factory start uses, so an upgrade-restarted backend's context carries the
+// same values (its routine name among them) and is cancelled by the agent's
+// root context, not only by StopAll; ctx, the caller's own context, is used
+// only for the gated stop, the files manager rollback, and to tell a
+// caller-driven shutdown apart from the backend cancelling its own run
+// context on a fatal start.
 func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
@@ -214,7 +225,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	// that never came up is left alone.
 	s.gatedStop(ctx, e)
 
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(s.runContext(e.name))
 	if e.beginStart(cancel) == Stopped {
 		cancel()
 		return fmt.Errorf("%w: %s", errStopped, e.name)
@@ -223,7 +234,13 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	startErr := e.be.Start(runCtx, cancel)
 	if startErr == nil {
 		s.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", e.name, "binary", binaryName)
-		e.setPhase(Running)
+		// A stop that began meanwhile wins: stoppedDuringStart leaves the
+		// phase at Stopped and returns errStopped; StopAll's second loop
+		// stops the process that came up once it gets the mutex, the way
+		// configureAndStart handles the same race.
+		if err := s.stoppedDuringStart(e); err != nil {
+			return err
+		}
 		if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 			s.scheduleReplay(e)
 		}
@@ -265,7 +282,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	// Retry Start with the rolled-back binary: a fresh context and cancel,
 	// again through beginStart, which cancels the failed first attempt's
 	// context before installing this one.
-	runCtx2, cancel2 := context.WithCancel(ctx)
+	runCtx2, cancel2 := context.WithCancel(s.runContext(e.name))
 	if e.beginStart(cancel2) == Stopped {
 		cancel2()
 		return fmt.Errorf("%w: %s", errStopped, e.name)
@@ -277,7 +294,10 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 		return nil
 	}
 	s.logger.Info("filesmgr: backend restarted with rolled-back binary", "backend", e.name, "binary", binaryName)
-	e.setPhase(Running)
+	// Same race as the first attempt: a stop that began meanwhile wins.
+	if err := s.stoppedDuringStart(e); err != nil {
+		return err
+	}
 	if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
 		s.scheduleReplay(e)
 	}
@@ -305,13 +325,12 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 // asks for another restart on its own.
 //
 // The apply context is cancelled by whichever of the caller's context or
-// the supervisor's stop context is cancelled first, since the stop context
-// (unlike the agent context of old) is cancelled as the first statement of
-// StopAll, so a restart that already holds the entry's restart mutex when a
-// stop begins observes it here at once. The caller's context is folded in
-// through context.AfterFunc, whose callback runs in its own goroutine, so
-// it is checked directly up front rather than relied on to interrupt a loop
-// already in flight.
+// the supervisor's stop context is cancelled first. The stop context is
+// cancelled as the first statement of StopAll, so a restart that already
+// holds the entry's restart mutex when a stop begins observes it here at
+// once. The caller's context is folded in through context.AfterFunc, whose
+// callback runs in its own goroutine, so it is checked directly up front
+// rather than relied on to interrupt a loop already in flight.
 //
 // completed is true only when ApplyBackendPolicies returns nil. Otherwise
 // completed is false, and retryable tells the caller whether to reschedule:
@@ -468,20 +487,13 @@ func (s *Supervisor) dispatchUpgrades(ctx context.Context) {
 				default:
 				}
 				s.logger.Info("filesmgr: dispatched restart", "backend", name)
-				if err := s.Restart(ctx, name, ReasonBinaryUpgraded); err != nil {
+				if err := s.RestartUpgraded(ctx, name); err != nil {
 					s.logger.Error("filesmgr: dispatched restart failed", "backend", name, "error", err)
 				}
 			}
 		}
 	}
 }
-
-// BeginStop cancels the stop context without stopping anything: the first
-// step of StopAll on its own, for a caller that must signal shutdown to an
-// in-flight replay before it can take the entry's restart mutex (the agent's
-// signal handler could use it to make a long restart notice shutdown before
-// StopAll can get the mutex). StopAll still has to run afterwards.
-func (s *Supervisor) BeginStop() { s.stopCancel() }
 
 // waitReplays waits for every rescheduled replay goroutine to exit. Called
 // once stopCtx is already cancelled, so every scheduled replay either

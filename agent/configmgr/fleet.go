@@ -607,13 +607,6 @@ func (fleetManager *FleetConfigManager) SetResetter(r fleet.Resetter) {
 	fleetManager.connection.SetResetter(r)
 }
 
-// Resetter returns the resetter installed through SetResetter, for tests
-// that need to observe it was wired up without reaching into unexported
-// fields.
-func (fleetManager *FleetConfigManager) Resetter() fleet.Resetter {
-	return fleetManager.connection.Resetter()
-}
-
 // refreshAndReconnect refreshes the JWT token and reconnects to MQTT
 func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context, timeout time.Duration) error {
 	// Refresh JWT token

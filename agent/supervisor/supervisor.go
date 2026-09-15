@@ -44,10 +44,13 @@ type PolicyApplier interface {
 }
 
 // Options tunes the supervisor. New fills every zero field with the
-// production value.
+// production value, except NotRunning, which is required.
 type Options struct {
 	// NotRunning is the error the applier returns when the backend cannot
-	// take a replay yet; the replay retries it and nothing else.
+	// take a replay yet; the replay retries it and nothing else. Required:
+	// New panics if it is nil, since a replay could otherwise never tell a
+	// transient not-running answer from a permanent failure and would give
+	// up without ever rescheduling.
 	NotRunning error
 	// ReapplyAttempts bounds the replay attempts one restart makes while the
 	// backend keeps answering NotRunning; ReapplyRetryDelay separates them.
@@ -110,9 +113,9 @@ type entry struct {
 	phase     Phase
 	runCancel context.CancelFunc
 
-	// restartMu is held across the initial start and across a whole
-	// restart, including its replay and the replay's retries, so no two of
-	// those interleave for one backend and no stop runs mid-flight.
+	// restartMu is held across the initial configure and start and across a
+	// whole restart, including its replay and the replay's retries, so no
+	// two of those interleave for one backend and no stop runs mid-flight.
 	restartMu sync.Mutex
 
 	// replayScheduled tracks whether a scheduleReplay goroutine is currently
@@ -214,8 +217,11 @@ type Supervisor struct {
 
 // New builds a supervisor over the state manager, the files manager (nil
 // when the agent has none), the policy applier and the channel the state
-// manager sends restart requests on.
+// manager sends restart requests on. It panics if opts.NotRunning is nil.
 func New(logger *slog.Logger, state backend.StateManager, files filesmgr.Manager, applier PolicyApplier, restartRequests <-chan string, opts Options) *Supervisor {
+	if opts.NotRunning == nil {
+		panic("supervisor: Options.NotRunning is required and must not be nil")
+	}
 	stopCtx, stopCancel := context.WithCancel(context.Background())
 	dispatcherCtx, dispatcherCancel := context.WithCancel(stopCtx)
 	return &Supervisor{
@@ -236,11 +242,10 @@ func New(logger *slog.Logger, state backend.StateManager, files filesmgr.Manager
 // ConfigureAll declares every backend in cfgBackends (the agent's backends
 // map without its "common" entry; an empty map is accepted and starts
 // nothing), then configures and starts each in map order, registering its
-// monitor, exactly as the agent's own start loop did: the first failure is
-// returned and later entries are not started. On success it starts the
-// restart request loop and the upgrade dispatcher, once. runCtxFor returns
-// the context a backend's process runs under.
-func (s *Supervisor) ConfigureAll(ctx context.Context, cfgBackends map[string]any, commons config.BackendCommons, runCtxFor func(name string) context.Context) error {
+// monitor: the first failure is returned and later entries are not started.
+// On success it starts the restart request loop and the upgrade dispatcher,
+// once. runCtxFor returns the context a backend's process runs under.
+func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.BackendCommons, runCtxFor func(name string) context.Context) error {
 	declared := make(map[string]*entry, len(cfgBackends))
 	for name, configurationEntry := range cfgBackends {
 		var cEntity map[string]any
@@ -271,11 +276,7 @@ func (s *Supervisor) ConfigureAll(ctx context.Context, cfgBackends map[string]an
 	s.runCtxFor = runCtxFor
 	s.entriesMu.Unlock()
 	for _, e := range s.snapshot() {
-		if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
-			s.logger.Info("failed to configure backend", "backend", e.name, "error", err)
-			return err
-		}
-		if err := s.start(ctx, e); err != nil {
+		if err := s.configureAndStart(e); err != nil {
 			return err
 		}
 	}
@@ -321,16 +322,21 @@ func (s *Supervisor) runContext(name string) context.Context {
 	return f(name)
 }
 
-// start runs one backend's Start under a fresh run context, holding the
-// entry's restart mutex so a restart cannot interleave with it, and records
+// configureAndStart configures one backend and starts it under a fresh run
+// context, holding the entry's restart mutex across both so StopAll's
+// second loop cannot read or stop the backend mid-configure, and records
 // the outcome: Running and the monitor on success; Failed and the state
 // manager's error on failure (with the message only when the backend
-// reports BackendError as its initial state, as before). A stop that began
-// meanwhile wins: the phase stays Stopped and a process that came up is
-// stopped through the gated stop.
-func (s *Supervisor) start(ctx context.Context, e *entry) error {
+// reports BackendError as its initial state). A stop that began meanwhile
+// wins: the phase stays Stopped, this returns errStopped, and StopAll's
+// second loop stops the process that came up once it gets the mutex.
+func (s *Supervisor) configureAndStart(e *entry) error {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
+	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
+		s.logger.Info("failed to configure backend", "backend", e.name, "error", err)
+		return err
+	}
 	runCtx, cancel := context.WithCancel(s.runContext(e.name))
 	if e.beginStart(cancel) == Stopped {
 		cancel()
@@ -345,12 +351,28 @@ func (s *Supervisor) start(ctx context.Context, e *entry) error {
 		e.setPhase(Failed)
 		return err
 	}
-	if e.setPhase(Running) {
-		s.gatedStop(ctx, e)
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+	if err := s.stoppedDuringStart(e); err != nil {
+		return err
 	}
 	s.state.StartBackendMonitor(e.name, e.be)
 	return nil
+}
+
+// stoppedDuringStart reports whether a stop won the race with a Start that
+// just reported success: it returns errStopped and leaves the entry's phase
+// at Stopped. The process that came up is stopped by StopAll's own second
+// loop, which is waiting for this caller's restart mutex and runs the gated
+// stop once the caller returns; nothing else sets Stopped, so no other
+// stop is needed here. It returns nil when no stop won the race, leaving the
+// phase at Running. configureAndStart and restartUpgraded both call it after
+// their own Start succeeds; what each does next differs (starting the health
+// monitor versus re-applying policies), so only this shared race check is
+// factored out.
+func (s *Supervisor) stoppedDuringStart(e *entry) error {
+	if !e.setPhase(Running) {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", errStopped, e.name)
 }
 
 // Declared returns the backends this supervisor declared, by name (every
@@ -396,8 +418,8 @@ func (s *Supervisor) gatedStop(ctx context.Context, e *entry) {
 // entry is moved to Stopped and one not running has its run context
 // cancelled at once so a blocked Start returns; then each entry that
 // reports Running is stopped through the gated stop under its restart
-// mutex and its run context is cancelled after the stop, as the agent
-// context did at the end of the agent's own Stop; finally every
+// mutex and its run context is cancelled after the stop, for both the
+// health-driven start and the binary-upgrade restart; finally every
 // rescheduled replay goroutine is waited for (restart.go).
 func (s *Supervisor) StopAll(ctx context.Context) {
 	s.stopCancel()

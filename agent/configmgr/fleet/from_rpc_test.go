@@ -1884,29 +1884,47 @@ func TestHandleAgentResetRunsTheResetterThenSignalsReconnect(t *testing.T) {
 	assert.Equal(t, []string{"test"}, r.reasons())
 }
 
-// A second full reset while one is running is coalesced: the resetter runs
-// once and one reconnect signal follows.
-func TestHandleAgentResetCoalescesAResetWhileOneRuns(t *testing.T) {
-	handlers, resetChan := newResetHandlers(t)
-	r := &stubResetter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+// A second full reset that arrives while one is running is queued, not
+// dropped: the same goroutine runs it once more, for the last reason
+// queued, after the current run finishes, with its own reconnect signal.
+// The reset channel is given a two-slot buffer so both signals land without
+// racing whichever one the test reads first.
+func TestHandleAgentResetQueuesAResetWhileOneRuns(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	resetChan := make(chan struct{}, 2)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager, nil)
+	r := &stubResetter{entered: make(chan struct{}, 2), release: make(chan struct{})}
 	handlers.SetResetter(r)
 
 	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "first"})
-	<-r.entered
+	select {
+	case <-r.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first reset never entered the resetter")
+	}
+
 	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "second"})
 	close(r.release)
+
 	select {
-	case <-resetChan:
+	case <-r.entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("no reconnect signal after the reset finished")
+		t.Fatal("the queued reset never ran")
 	}
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, []string{"first"}, r.reasons(), "the second reset is coalesced into the running one")
-	select {
-	case <-resetChan:
-		t.Fatal("a coalesced reset must not send a second reconnect signal")
-	default:
+
+	var signals int
+	for i := 0; i < 2; i++ {
+		select {
+		case <-resetChan:
+			signals++
+		case <-time.After(5 * time.Second):
+			t.Fatal("did not receive both reconnect signals")
+		}
 	}
+	assert.Equal(t, 2, signals, "one reconnect signal per run")
+	assert.Equal(t, []string{"first", "second"}, r.reasons(),
+		"two RPCs during a run produce exactly two resetter calls, for the first and the last reason")
 }
 
 // With no resetter set, the RPC is logged and ignored: no signal is sent.

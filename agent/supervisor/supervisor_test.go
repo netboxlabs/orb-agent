@@ -269,6 +269,20 @@ func newTestSupervisor(t *testing.T, rec *recorder, applier *stubApplier, files 
 
 func background(_ string) context.Context { return context.Background() }
 
+// Options.NotRunning is required: without it, errors.Is(err, nil) is false
+// for every non-nil error, so a replay could never tell the applier's
+// transient not-running answer from a permanent failure and would never
+// reschedule, leaving the restarting marker set forever. New panics rather
+// than build a supervisor with that trap.
+func TestNewPanicsWhenNotRunningIsNil(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	rec := &recorder{}
+	applier := &stubApplier{rec: rec}
+	require.Panics(t, func() {
+		New(logger, &stubState{rec: rec}, nil, applier, make(chan string, 1), Options{})
+	})
+}
+
 // The eager start ordering is unchanged from the agent's startBackends:
 // for each declared backend, Configure, Start, then the monitor; the
 // restart request loop and the upgrade dispatcher start once, after every
@@ -282,7 +296,7 @@ func TestConfigureAllStartsEveryDeclaredBackendInOrder(t *testing.T) {
 	backend.Register("sup_one", one)
 	backend.Register("sup_two", two)
 
-	err := s.ConfigureAll(context.Background(), map[string]any{"sup_one": map[string]any{"k": "v"}, "sup_two": nil}, config.BackendCommons{}, background)
+	err := s.ConfigureAll(map[string]any{"sup_one": map[string]any{"k": "v"}, "sup_two": nil}, config.BackendCommons{}, background)
 
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return rec.serveStarts.Load() == 1 && rec.dispatchStarts.Load() == 1 }, 5*time.Second, time.Millisecond)
@@ -332,7 +346,7 @@ func TestConfigureAllAbortsOnTheFirstStartFailure(t *testing.T) {
 	backend.Register("sup_bad", bad)
 	backend.Register("sup_other", other)
 
-	err := s.ConfigureAll(context.Background(), map[string]any{"sup_bad": nil, "sup_other": nil}, config.BackendCommons{}, background)
+	err := s.ConfigureAll(map[string]any{"sup_bad": nil, "sup_other": nil}, config.BackendCommons{}, background)
 
 	require.EqualError(t, err, "boom")
 	startedBad := bad.startCalls.Load() == 1
@@ -366,13 +380,13 @@ func TestConfigureAllRefusesUnknownOrMalformedEntries(t *testing.T) {
 	// (the once-only flag is set after the declaration loop), so one
 	// supervisor serves all three calls.
 	s := newTestSupervisor(t, rec, nil, nil)
-	err := s.ConfigureAll(context.Background(), map[string]any{"sup_missing": nil, "sup_known": nil}, config.BackendCommons{}, background)
+	err := s.ConfigureAll(map[string]any{"sup_missing": nil, "sup_known": nil}, config.BackendCommons{}, background)
 	require.EqualError(t, err, "specified backend does not exist: sup_missing")
-	err = s.ConfigureAll(context.Background(), map[string]any{"sup_known": "not a map"}, config.BackendCommons{}, background)
+	err = s.ConfigureAll(map[string]any{"sup_known": "not a map"}, config.BackendCommons{}, background)
 	require.EqualError(t, err, "invalid backend configuration format for backend: sup_known")
 	assert.Empty(t, rec.snapshot(), "nothing is configured when the declaration is refused")
 
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{}, config.BackendCommons{}, background))
 	assert.Empty(t, s.Declared())
 	s.StopAll(context.Background())
 }
@@ -383,9 +397,9 @@ func TestConfigureAllRunsOnce(t *testing.T) {
 	rec := &recorder{}
 	s := newTestSupervisor(t, rec, nil, nil)
 	backend.Register("sup_once", newStub(rec, "once"))
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_once": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_once": nil}, config.BackendCommons{}, background))
 
-	err := s.ConfigureAll(context.Background(), map[string]any{"sup_once": nil}, config.BackendCommons{}, background)
+	err := s.ConfigureAll(map[string]any{"sup_once": nil}, config.BackendCommons{}, background)
 
 	require.EqualError(t, err, "backends already configured")
 	assert.Equal(t, 1, rec.count("start:"), "the second call started nothing")
@@ -400,7 +414,7 @@ func TestStopAllStopsOnlyRunningBackends(t *testing.T) {
 	s := newTestSupervisor(t, rec, nil, nil)
 	up := newStub(rec, "up")
 	backend.Register("sup_up", up)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_up": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_up": nil}, config.BackendCommons{}, background))
 	down := newStub(rec, "down")
 	down.status.Store(int32(backend.Offline))
 	s.entriesMu.Lock()
@@ -428,7 +442,7 @@ func TestStopAllCancelsABlockedStart(t *testing.T) {
 	backend.Register("sup_slow", slow)
 	done := make(chan error, 1)
 	go func() {
-		done <- s.ConfigureAll(context.Background(), map[string]any{"sup_slow": nil}, config.BackendCommons{}, background)
+		done <- s.ConfigureAll(map[string]any{"sup_slow": nil}, config.BackendCommons{}, background)
 	}()
 	require.Eventually(t, func() bool { return slow.startCalls.Load() == 1 }, 5*time.Second, time.Millisecond)
 	p, ok := s.Phase("sup_slow")
@@ -471,7 +485,7 @@ func TestStopAllCancelsARunningBackendsContextAfterStoppingIt(t *testing.T) {
 		}
 	}
 	backend.Register("sup_ctx", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_ctx": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_ctx": nil}, config.BackendCommons{}, background))
 
 	s.StopAll(context.Background())
 
@@ -506,7 +520,7 @@ func TestStopAllJustBeforeBeginStartDoesNotDeadlock(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- s.ConfigureAll(context.Background(), map[string]any{"sup_seam": nil}, config.BackendCommons{}, seam)
+		done <- s.ConfigureAll(map[string]any{"sup_seam": nil}, config.BackendCommons{}, seam)
 	}()
 	select {
 	case <-stopped:
@@ -545,7 +559,7 @@ func TestConfigureAllAndStopAllRunConcurrentlyWithoutARace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			configureErr = s.ConfigureAll(context.Background(), map[string]any{name: nil}, config.BackendCommons{}, background)
+			configureErr = s.ConfigureAll(map[string]any{name: nil}, config.BackendCommons{}, background)
 		}()
 		go func() {
 			defer wg.Done()
@@ -571,7 +585,7 @@ func TestConfigureAllRefusesAfterStopAll(t *testing.T) {
 	backend.Register("sup_after_stop", newStub(rec, "after_stop"))
 	s.StopAll(context.Background())
 
-	err := s.ConfigureAll(context.Background(), map[string]any{"sup_after_stop": nil}, config.BackendCommons{}, background)
+	err := s.ConfigureAll(map[string]any{"sup_after_stop": nil}, config.BackendCommons{}, background)
 
 	require.EqualError(t, err, "supervisor is stopped")
 	assert.Empty(t, rec.snapshot(), "nothing is configured or started once the supervisor is stopped")
@@ -605,7 +619,7 @@ func TestStartReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- s.ConfigureAll(context.Background(), map[string]any{"sup_raced": nil}, config.BackendCommons{}, background)
+		done <- s.ConfigureAll(map[string]any{"sup_raced": nil}, config.BackendCommons{}, background)
 	}()
 
 	require.Eventually(t, func() bool {

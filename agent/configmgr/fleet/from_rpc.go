@@ -44,10 +44,14 @@ type Messaging struct {
 	// installs it once, before the dispatch worker that calls
 	// handleAgentReset is reachable, so it is read here without a lock.
 	resetter Resetter
-	// resetMu guards resetRunning, coalescing a reset RPC that arrives while
-	// one is already running into the one in flight.
-	resetMu      sync.Mutex
-	resetRunning bool
+	// resetMu guards resetRunning, resetPending and resetPendingReason. A
+	// reset RPC that arrives while one is already running is not dropped: it
+	// is remembered here and the same goroutine runs it once more, for the
+	// last reason queued, after the current run finishes.
+	resetMu            sync.Mutex
+	resetRunning       bool
+	resetPending       bool
+	resetPendingReason string
 }
 
 // SetResetter installs the resetter a full agent reset restarts through.
@@ -304,25 +308,31 @@ func (messaging *Messaging) handleAgentReset(ctx context.Context, payload messag
 	}
 	messaging.resetMu.Lock()
 	if messaging.resetRunning {
+		messaging.resetPending = true
+		messaging.resetPendingReason = payload.Reason
 		messaging.resetMu.Unlock()
-		messaging.logger.Info("agent reset already running; coalescing", "reason", payload.Reason)
+		messaging.logger.Info("agent reset already running; queued", "reason", payload.Reason)
 		return
 	}
 	messaging.resetRunning = true
 	messaging.resetMu.Unlock()
 	// Off the dispatch worker: restarting every backend takes minutes and
-	// the worker must keep serving policies meanwhile. The reconnect signal
-	// follows the restarts, so the capabilities republished on reconnect see
-	// every backend answering. ctx is context.Background() from the worker
-	// (as it was for backend.RestartAll); shutdown interrupts the restarts
-	// through the supervisor's own stop context.
-	go func() {
-		defer func() {
-			messaging.resetMu.Lock()
-			messaging.resetRunning = false
-			messaging.resetMu.Unlock()
-		}()
-		if err := messaging.resetter.RestartAll(ctx, payload.Reason); err != nil {
+	// the worker must keep serving policies meanwhile. ctx is
+	// context.Background() from the worker; shutdown interrupts the
+	// restarts through the supervisor's own stop context.
+	go messaging.runResets(ctx, payload.Reason)
+}
+
+// runResets runs the resetter for reason, sends the reconnect signal (so the
+// capabilities republished on reconnect see every backend answering), then
+// checks whether another full reset arrived while this one ran: if so, it
+// runs once more, for the last reason queued, with its own reconnect signal;
+// otherwise it clears resetRunning and returns. One reconnect signal follows
+// each run, never one for a run that was itself replaced by a later one
+// before it started.
+func (messaging *Messaging) runResets(ctx context.Context, reason string) {
+	for {
+		if err := messaging.resetter.RestartAll(ctx, reason); err != nil {
 			messaging.logger.Error("RestartAll failure", "error", err)
 		}
 		select {
@@ -331,7 +341,17 @@ func (messaging *Messaging) handleAgentReset(ctx context.Context, payload messag
 		default:
 			messaging.logger.Warn("reset channel is full, skipping reset signal")
 		}
-	}()
+		messaging.resetMu.Lock()
+		if !messaging.resetPending {
+			messaging.resetRunning = false
+			messaging.resetMu.Unlock()
+			return
+		}
+		reason = messaging.resetPendingReason
+		messaging.resetPending = false
+		messaging.resetPendingReason = ""
+		messaging.resetMu.Unlock()
+	}
 }
 
 func (messaging *Messaging) handleAgentStop(payload messages.AgentStopRPCPayload) {

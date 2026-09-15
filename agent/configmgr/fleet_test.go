@@ -1606,6 +1606,29 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 		"reset goroutine should use the refreshed token, not the stale initial token")
 }
 
+// stubManagerResetter is a minimal fleet.Resetter used only to prove identity
+// through FleetConfigManager.SetResetter.
+type stubManagerResetter struct{}
+
+func (*stubManagerResetter) RestartAll(_ context.Context, _ string) error { return nil }
+
+// TestFleetConfigManager_SetResetter_ReachesTheConnection verifies that
+// FleetConfigManager.SetResetter passes its argument through to the
+// underlying connection's SetResetter instead of discarding it.
+func TestFleetConfigManager_SetResetter_ReachesTheConnection(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	stub := &stubManagerResetter{}
+	mgr.SetResetter(stub)
+
+	require.NotNil(t, mockConn.ResetterForTest(), "SetResetter on the manager must reach the connection's SetResetter")
+	assert.Same(t, stub, mockConn.ResetterForTest(),
+		"SetResetter on the manager must reach the connection's SetResetter")
+}
+
 // newResetHandlerManager creates a FleetConfigManager wired with a mock MQTT connection and
 // pre-initialised contexts so that runResetHandler can be invoked directly in tests.
 func newResetHandlerManager(t *testing.T, mockConn *fleet.MockMQTTConnection) *FleetConfigManager {

@@ -83,13 +83,6 @@ func (connection *MQTTConnection) SetResetter(r Resetter) {
 	connection.messaging.SetResetter(r)
 }
 
-// Resetter returns the resetter installed through SetResetter, for tests
-// that need to observe it was wired up without reaching into unexported
-// fields.
-func (connection *MQTTConnection) Resetter() Resetter {
-	return connection.messaging.resetter
-}
-
 // TopicActions are the actions to take on a topic
 type TopicActions struct {
 	Subscribe   func(topic string) error
@@ -123,10 +116,6 @@ type MQTTConnector interface {
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 	// SetResetter installs the resetter a full agent reset restarts through.
 	SetResetter(r Resetter)
-	// Resetter returns the resetter installed through SetResetter, for tests
-	// that need to observe it was wired up without reaching into unexported
-	// fields.
-	Resetter() Resetter
 }
 
 // startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.

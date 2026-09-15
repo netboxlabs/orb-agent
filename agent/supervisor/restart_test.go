@@ -38,7 +38,7 @@ func TestRestartReappliesItsOwnPolicies(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "discovery")
 	backend.Register("sup_restart_reapply", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_restart_reapply": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_restart_reapply": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_restart_reapply", "test"))
@@ -62,7 +62,7 @@ func TestRestartDoesNotReapplyWhenTheResetFails(t *testing.T) {
 	be := newStub(rec, "reset-fails")
 	be.resetErr = errors.New("reset failed")
 	backend.Register("sup_reset_fails", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_reset_fails": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_reset_fails": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_reset_fails", "test"))
@@ -93,7 +93,7 @@ func TestRestartSchedulesAReplayWhenTheResetFails(t *testing.T) {
 	be := newStub(rec, "reset-fail-replay")
 	be.resetErr = errors.New("reset failed")
 	backend.Register("sup_replay_scheduled", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_scheduled": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_scheduled": nil}, config.BackendCommons{}, background))
 	e, ok := s.entryFor("sup_replay_scheduled")
 	require.True(t, ok)
 	applier.onApply = func() {
@@ -123,7 +123,7 @@ func TestRestartReappliesPoliciesWhenConfigureFails(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "configure-fails")
 	backend.Register("sup_configure_fails", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_configure_fails": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_configure_fails": nil}, config.BackendCommons{}, background))
 	be.configureErr = errors.New("configure failed")
 	rec.reset()
 
@@ -145,7 +145,7 @@ func TestRestartRefusesAnUndeclaredBackend(t *testing.T) {
 	// source: TestRestartBackendRefusesABackendTheAgentDidNotStart (agent_test.go)
 	rec := &recorder{}
 	s := newTestSupervisor(t, rec, nil, nil)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{}, config.BackendCommons{}, background))
 
 	var err error
 	require.NotPanics(t, func() { err = s.Restart(context.Background(), "sup_never_declared", "test") })
@@ -164,7 +164,7 @@ func TestRestartDoesNotReapplyAfterShutdownBegan(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "shutdown-began")
 	backend.Register("sup_health_shutdown_began", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_health_shutdown_began": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_health_shutdown_began": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -190,7 +190,7 @@ func TestRestartDoesNotReapplyOnceStopBegan(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "stop-began")
 	backend.Register("sup_health_stop_began", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_health_stop_began": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_health_stop_began": nil}, config.BackendCommons{}, background))
 	rec.reset()
 	s.stopCancel()
 
@@ -217,7 +217,7 @@ func TestRestartRetriesTheReplayWhileTheBackendIsNotAnsweringYet(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "retries")
 	backend.Register("sup_replay_retries", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_retries": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_retries": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_replay_retries", "test"))
@@ -243,7 +243,7 @@ func TestRestartGivesUpTheReplayAfterThreeAttempts(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "gives-up")
 	backend.Register("sup_replay_gives_up", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_gives_up": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_gives_up": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_replay_gives_up", "test"))
@@ -277,7 +277,7 @@ func TestRestartDoesNotRetryAReplayThatFailedForAnotherReason(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "non-transient")
 	backend.Register("sup_replay_non_transient", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_non_transient": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_non_transient": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_replay_non_transient", "test"))
@@ -302,7 +302,7 @@ func TestRestartStopsRetryingWhenStopBegins(t *testing.T) {
 	s.opts.ReapplyRetryDelay = time.Hour
 	be := newStub(rec, "stops-retrying")
 	backend.Register("sup_replay_stops_retrying", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_stops_retrying": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_stops_retrying": nil}, config.BackendCommons{}, background))
 	applier.onApply = func() { s.stopCancel() }
 	rec.reset()
 
@@ -338,7 +338,7 @@ func TestRestartReschedulesAReplayThatGaveUp(t *testing.T) {
 	s.opts.ReplayRetryInterval = time.Millisecond
 	be := newStub(rec, "reschedule")
 	backend.Register("sup_replay_reschedules", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_reschedules": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_reschedules": nil}, config.BackendCommons{}, background))
 	e, ok := s.entryFor("sup_replay_reschedules")
 	require.True(t, ok)
 	applier.onApply = func() {
@@ -368,7 +368,7 @@ func TestScheduleReplayIsRefusedOnceStopBegan(t *testing.T) {
 	be := newStub(rec, "refused")
 	be.resetErr = errors.New("reset failed")
 	backend.Register("sup_replay_refused", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_refused": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_refused": nil}, config.BackendCommons{}, background))
 	rec.reset()
 	s.stopCancel()
 
@@ -390,7 +390,7 @@ func TestScheduledReplayClearsItsFlagBeforeReleasingTheRestartMutex(t *testing.T
 	s.opts.ReplayRetryInterval = time.Millisecond
 	be := newStub(rec, "clears-flag")
 	backend.Register("sup_replay_clears_flag", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_clears_flag": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_clears_flag": nil}, config.BackendCommons{}, background))
 	e, ok := s.entryFor("sup_replay_clears_flag")
 	require.True(t, ok)
 	rec.reset()
@@ -434,7 +434,7 @@ func TestScheduledReplayStopsOnShutdown(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "stops-on-shutdown")
 	backend.Register("sup_replay_stops_on_shutdown", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_stops_on_shutdown": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_stops_on_shutdown": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_replay_stops_on_shutdown", "test"))
@@ -462,7 +462,7 @@ func TestScheduledReplayIsNotDuplicated(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "not-duplicated")
 	backend.Register("sup_replay_not_duplicated", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_not_duplicated": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_not_duplicated": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_replay_not_duplicated", "test"))
@@ -492,7 +492,7 @@ func TestRestartDoesNotRescheduleANonRetryableFailure(t *testing.T) {
 	s.opts.ReplayRetryInterval = time.Millisecond
 	be := newStub(rec, "non-retryable")
 	backend.Register("sup_replay_non_retryable", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_replay_non_retryable": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_replay_non_retryable": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	require.NoError(t, s.Restart(context.Background(), "sup_replay_non_retryable", "test"))
@@ -515,10 +515,10 @@ func TestRestartUpgradedReappliesPoliciesAfterSuccessfulStart(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_success", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_success": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_success": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_success", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_success"))
 
 	assert.Equal(t, []string{
 		"remove:sup_upgrade_success:permanently=false",
@@ -540,11 +540,11 @@ func TestRestartUpgradedReappliesPoliciesAfterRollbackRetry(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_retry", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_retry": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_retry": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("start failed")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_retry", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_retry"))
 
 	assert.Equal(t, []string{
 		"remove:sup_upgrade_retry:permanently=false",
@@ -567,11 +567,11 @@ func TestRestartUpgradedDoesNotReapplyWithoutAManagedBinary(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, files)
 	be := newStub(rec, "worker")
 	backend.Register("sup_upgrade_no_binary", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_no_binary": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_no_binary": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("start failed")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_no_binary", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_no_binary"))
 
 	assert.Equal(t, []string{
 		"remove:sup_upgrade_no_binary:permanently=false",
@@ -597,11 +597,11 @@ func TestRestartUpgradedSchedulesAReplayWhenTheRetryFails(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_retry_fails", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_retry_fails": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_retry_fails": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("start failed"), errors.New("start failed again")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_retry_fails", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_retry_fails"))
 
 	assert.Equal(t, []string{
 		"remove:sup_upgrade_retry_fails:permanently=false",
@@ -628,13 +628,13 @@ func TestRestartUpgradedDoesNotReapplyAfterShutdownBegan(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_shutdown", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_shutdown": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_shutdown": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, s.Restart(ctx, "sup_upgrade_shutdown", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(ctx, "sup_upgrade_shutdown"))
 
 	assert.Equal(t, []string{
 		"remove:sup_upgrade_shutdown:permanently=false",
@@ -655,14 +655,14 @@ func TestRestartUpgradedDoesNotRollBackACancelledStart(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "stub-binary"
 	backend.Register("sup_upgrade_cancelled", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_cancelled": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_cancelled": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{fmt.Errorf("stub start cancelled: %w", context.Canceled)}
 	rec.reset()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, s.Restart(ctx, "sup_upgrade_cancelled", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(ctx, "sup_upgrade_cancelled"))
 
 	assert.Equal(t, 1, rec.count("start:worker"), "Start should be attempted exactly once")
 	assert.Equal(t, 0, rec.count("rollback:"), "a cancelled start must not trigger a rollback")
@@ -680,7 +680,7 @@ func TestRestartUpgradedRollsBackWhenTheBackendCancelsItself(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-stub"
 	backend.Register("sup_upgrade_self_cancel", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_self_cancel": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_self_cancel": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{fmt.Errorf("fatal startup error: %w", context.Canceled)}
 	var cancelledFirstAttempt bool
 	be.onStart = func(_ context.Context, cancel context.CancelFunc) {
@@ -691,7 +691,7 @@ func TestRestartUpgradedRollsBackWhenTheBackendCancelsItself(t *testing.T) {
 	}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_self_cancel", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_self_cancel"))
 
 	assert.Equal(t, 2, rec.count("start:worker"), "Start is retried with the rolled-back binary")
 	assert.Equal(t, 1, rec.count("rollback:orb-stub"), "the binary must be rolled back")
@@ -717,7 +717,7 @@ func TestRestartMutexSerializesConcurrentRestarts(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_restart_mutex", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_restart_mutex": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_restart_mutex": nil}, config.BackendCommons{}, background))
 	e, ok := s.entryFor("sup_restart_mutex")
 	require.True(t, ok)
 	rec.reset()
@@ -730,7 +730,7 @@ func TestRestartMutexSerializesConcurrentRestarts(t *testing.T) {
 	go func() {
 		defer close(doneB)
 		close(startedB)
-		assert.NoError(t, s.Restart(context.Background(), "sup_restart_mutex", ReasonBinaryUpgraded))
+		assert.NoError(t, s.RestartUpgraded(context.Background(), "sup_restart_mutex"))
 		record("B-done")
 	}()
 
@@ -824,11 +824,11 @@ func TestRestartUpgradedFirstInstallFailureFallsBackToBaked(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_baked_fallback", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_baked_fallback": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_baked_fallback": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("simulated start failure")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_baked_fallback", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_baked_fallback"))
 
 	assert.Equal(t, 2, rec.count("start:worker"), "Start must be called twice: initial failure + retry after rollback")
 
@@ -849,7 +849,7 @@ func TestRestartUpgradedNoCancelLeakOnRollbackRetry(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_no_cancel_leak", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_no_cancel_leak": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_no_cancel_leak": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("simulated start failure for cancel-leak test")}
 	var mu sync.Mutex
 	var runCtxs []context.Context
@@ -860,7 +860,7 @@ func TestRestartUpgradedNoCancelLeakOnRollbackRetry(t *testing.T) {
 	}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_no_cancel_leak", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_no_cancel_leak"))
 
 	mu.Lock()
 	got := runCtxs
@@ -882,11 +882,11 @@ func TestRestartUpgradedRetriesAfterFailure(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_retries_after_failure", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_retries_after_failure": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_retries_after_failure": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("simulated start failure")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_retries_after_failure", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_retries_after_failure"))
 
 	assert.Equal(t, 2, rec.count("start:worker"), "Start must be called twice: initial attempt + post-rollback retry")
 	assert.Equal(t, 1, rec.count("rollback:orb-worker"), "Rollback must be called exactly once")
@@ -905,7 +905,7 @@ func TestDispatchUpgradesStopsOnDispatcherCancel(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_dispatch_stops_on_cancel", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_dispatch_stops_on_cancel": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_dispatch_stops_on_cancel": nil}, config.BackendCommons{}, background))
 	require.Eventually(t, func() bool { return rec.dispatchStarts.Load() == 1 }, 5*time.Second, time.Millisecond)
 
 	// Cancel the dispatcher context immediately, well before its (default,
@@ -972,7 +972,7 @@ func TestDispatchUpgradesProcessesRestartsSequentially(t *testing.T) {
 		backend.Register(name, be)
 		backends[name] = nil
 	}
-	require.NoError(t, s.ConfigureAll(context.Background(), backends, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(backends, config.BackendCommons{}, background))
 
 	for _, n := range names {
 		s.QueueUpgrade(n)
@@ -1024,7 +1024,7 @@ func TestDispatchUpgradesCtxCancelMidDrain(t *testing.T) {
 		backend.Register(name, be)
 		backends[name] = nil
 	}
-	require.NoError(t, s.ConfigureAll(context.Background(), backends, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(backends, config.BackendCommons{}, background))
 
 	for _, n := range names {
 		s.QueueUpgrade(n)
@@ -1070,7 +1070,7 @@ func TestDispatchUpgradesCoalescesAndDeliversReliably(t *testing.T) {
 	be := newStub(rec, "worker")
 	be.binary = "orb-worker"
 	backend.Register("sup_dispatch_coalesces", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_dispatch_coalesces": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_dispatch_coalesces": nil}, config.BackendCommons{}, background))
 	rec.reset()
 
 	for i := 0; i < 10; i++ {
@@ -1111,7 +1111,7 @@ func TestRestartAllStopsWhenTheCallersContextIsCancelled(t *testing.T) {
 	s := newTestSupervisor(t, rec, nil, nil)
 	be := newStub(rec, "cancelled-sweep")
 	backend.Register("sup_cancelled_sweep", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_cancelled_sweep": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_cancelled_sweep": nil}, config.BackendCommons{}, background))
 	rec.reset()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1135,7 +1135,7 @@ func TestRestartAllRestartsOnlyStartedEntries(t *testing.T) {
 	runCtxFor := func(string) context.Context {
 		return context.WithValue(context.Background(), restartAllCtxMarkerKey{}, true)
 	}
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{
+	require.NoError(t, s.ConfigureAll(map[string]any{
 		"sup_restartall_running": nil,
 		"sup_restartall_failed":  nil,
 	}, config.BackendCommons{}, runCtxFor))
@@ -1201,11 +1201,11 @@ func TestRestartUpgradedDoesNotStopABackendWithoutAProcess(t *testing.T) {
 	be := newStub(rec, "no-process")
 	be.binary = "orb-worker"
 	backend.Register("sup_upgrade_no_process", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_upgrade_no_process": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_no_process": nil}, config.BackendCommons{}, background))
 	be.status.Store(int32(backend.Unknown))
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_upgrade_no_process", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_no_process"))
 
 	assert.Equal(t, 0, rec.count("stop:no-process"), "gatedStop must not stop a backend that reports no process")
 	assert.Equal(t, 1, rec.count("start:no-process"))
@@ -1219,7 +1219,7 @@ func TestRestartIsRefusedForAStoppedEntry(t *testing.T) {
 	s := newTestSupervisor(t, rec, applier, nil)
 	be := newStub(rec, "stopped-entry")
 	backend.Register("sup_restart_stopped_entry", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_restart_stopped_entry": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_restart_stopped_entry": nil}, config.BackendCommons{}, background))
 	s.StopAll(context.Background())
 	rec.reset()
 
@@ -1241,11 +1241,11 @@ func TestAFailedUpgradeStaysRestartable(t *testing.T) {
 	be := newStub(rec, "flaky")
 	be.binary = "orb-worker"
 	backend.Register("sup_failed_upgrade_restartable", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_failed_upgrade_restartable": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_failed_upgrade_restartable": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("start failed"), errors.New("start failed again")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_failed_upgrade_restartable", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_failed_upgrade_restartable"))
 
 	p, _ := s.Phase("sup_failed_upgrade_restartable")
 	assert.Equal(t, Failed, p, "a failed upgrade leaves the entry failed")
@@ -1270,11 +1270,11 @@ func TestConfigureFailureKeepsFailedWhenEnteredFailed(t *testing.T) {
 	be := newStub(rec, "flaky")
 	be.binary = "orb-worker"
 	backend.Register("sup_configure_fails_while_failed", be)
-	require.NoError(t, s.ConfigureAll(context.Background(), map[string]any{"sup_configure_fails_while_failed": nil}, config.BackendCommons{}, background))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_configure_fails_while_failed": nil}, config.BackendCommons{}, background))
 	be.startErrs = []error{errors.New("start failed"), errors.New("start failed again")}
 	rec.reset()
 
-	require.NoError(t, s.Restart(context.Background(), "sup_configure_fails_while_failed", ReasonBinaryUpgraded))
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_configure_fails_while_failed"))
 
 	p, _ := s.Phase("sup_configure_fails_while_failed")
 	require.Equal(t, Failed, p, "a failed upgrade leaves the entry failed")
@@ -1285,4 +1285,105 @@ func TestConfigureFailureKeepsFailedWhenEnteredFailed(t *testing.T) {
 	require.Error(t, err)
 	p, _ = s.Phase("sup_configure_fails_while_failed")
 	assert.Equal(t, Failed, p, "a Configure failure on an entry that entered the restart Failed must not claim Running")
+}
+
+// The upgrade restart's run context comes from s.runContext(e.name), the
+// same per-backend factory the health-driven start and
+// TestRestartAllRestartsOnlyStartedEntries prove RestartAll uses, not the
+// caller's own ctx: the factory installed below stamps a marker
+// context.Background() does not carry, and the backend's Start observes it.
+// Without this, an upgrade-restarted backend's run context is rooted at the
+// caller's ctx instead, so it carries none of the per-backend values (its
+// routine name among them) and is cancelled only by StopAll, not by the
+// agent's root context.
+func TestRestartUpgradedRunsUnderTheRunContextFactory(t *testing.T) {
+	rec := &recorder{}
+	applier := &stubApplier{rec: rec}
+	files := &stubFiles{rec: rec}
+	s := newTestSupervisor(t, rec, applier, files)
+	be := newStub(rec, "worker")
+	be.binary = "orb-worker"
+	backend.Register("sup_upgrade_runctx", be)
+	runCtxFor := func(string) context.Context {
+		return context.WithValue(context.Background(), restartAllCtxMarkerKey{}, true)
+	}
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_runctx": nil}, config.BackendCommons{}, runCtxFor))
+
+	var sawMarker bool
+	be.onStart = func(ctx context.Context, _ context.CancelFunc) {
+		if v, _ := ctx.Value(restartAllCtxMarkerKey{}).(bool); v {
+			sawMarker = true
+		}
+	}
+	rec.reset()
+
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_runctx"))
+
+	assert.True(t, sawMarker, "the upgrade restart must run under s.runContext(name), not the caller's own ctx")
+}
+
+// TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds
+// mirrors TestStartReportsErrStoppedWhenAStopWinsAfterStartSucceeds
+// (supervisor_test.go) for the upgrade path: a StopAll that stamps the
+// entry Stopped while the upgrade's own Start is still in flight must win
+// the race even though that Start goes on to report success, stopping the
+// process that came up through the gated stop rather than leaving it
+// running unsupervised.
+func TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *testing.T) {
+	rec := &recorder{}
+	applier := &stubApplier{rec: rec}
+	files := &stubFiles{rec: rec}
+	s := newTestSupervisor(t, rec, applier, files)
+	be := newStub(rec, "raced")
+	be.binary = "orb-worker"
+	backend.Register("sup_upgrade_raced", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_raced": nil}, config.BackendCommons{}, background))
+
+	be.startBlocks = make(chan struct{})
+	be.ignoreCancel = true
+	started := make(chan struct{})
+	be.onStart = func(context.Context, context.CancelFunc) {
+		// The upgrade's own gated stop (of the pre-upgrade process) has
+		// already run by the time Start is called; reset here so the
+		// assertion below counts only the stop that follows this race.
+		rec.reset()
+		close(started)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.RestartUpgraded(context.Background(), "sup_upgrade_raced")
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the upgrade's Start was never called")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		s.StopAll(context.Background())
+		close(stopDone)
+	}()
+
+	require.Eventually(t, func() bool {
+		p, ok := s.Phase("sup_upgrade_raced")
+		return ok && p == Stopped
+	}, 5*time.Second, time.Millisecond, "StopAll's first loop must stamp the entry Stopped before the upgrade's start is released")
+	close(be.startBlocks)
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, errStopped)
+	case <-time.After(5 * time.Second):
+		t.Fatal("RestartUpgraded never returned")
+	}
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll never completed")
+	}
+
+	assert.Equal(t, 1, rec.count("stop:raced"), "the process that came up from the raced Start must be gated-stopped exactly once")
 }
