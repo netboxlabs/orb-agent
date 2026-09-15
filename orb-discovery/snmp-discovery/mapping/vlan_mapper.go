@@ -113,6 +113,23 @@ func (m *VlanMapper) PostMap(
 		// condition (warn). Otherwise this is a routine non-switch
 		// target (router, WLC, host, …) and the message is just noise
 		// at debug.
+		//
+		// A vendor whose private VLAN table carries its own port
+		// membership and its own way of naming ports (see
+		// vendorTaggedMembership) does not need the bridge table, and
+		// is applied here instead.
+		vlanEntities := m.emitVLANs(allObjectIDs, defaults)
+		if membership := vendorTaggedMembership(allObjectIDs, m.logger); len(membership) > 0 {
+			ensureVLAN := m.vlanIndex(&vlanEntities, defaults)
+			for ifIndex, vids := range membership {
+				iface := verifiedInterface(registry, ifIndex)
+				if iface == nil {
+					continue
+				}
+				applyClassification(iface, qbridge.Classification{Mode: qbridge.ModeTrunk, Tagged: vids}, ensureVLAN)
+			}
+			return vlanEntities
+		}
 		if hasVLANSignal(allObjectIDs) {
 			m.logger.Warn("vlan: missing dot1dBasePortIfIndex; skipping interface mutations",
 				"reason", "bridge-port-translation-unavailable")
@@ -120,7 +137,7 @@ func (m *VlanMapper) PostMap(
 			m.logger.Debug("vlan: no bridge port table and no VLAN OIDs walked; nothing to do",
 				"reason", "non-switch-target")
 		}
-		return m.emitVLANs(allObjectIDs, defaults)
+		return vlanEntities
 	}
 
 	infos, err := qbridge.ExtractGeneric(gen)
@@ -148,24 +165,45 @@ func (m *VlanMapper) PostMap(
 
 	// Build VLAN entities first — interface refs link to them by VID.
 	vlanEntities := m.emitVLANs(allObjectIDs, defaults)
-	vlanByVid := make(map[int]*diode.VLAN, len(vlanEntities))
-	for _, e := range vlanEntities {
+	ensureVLAN := m.vlanIndex(&vlanEntities, defaults)
+
+	// Mutate interfaces in place. The registry holds *diode.Interface
+	// instances InterfaceMapper produced; we look them up by ifIndex
+	// using string-form ifIndex as ObjectIDIndex.
+	for ifIndex, info := range infos {
+		iface := verifiedInterface(registry, ifIndex)
+		if iface == nil {
+			continue
+		}
+		c := qbridge.Classify(*info)
+		applyClassification(iface, c, ensureVLAN)
+	}
+	return vlanEntities
+}
+
+// vlanIndex indexes the emitted VLAN entities by VID and returns the
+// ensureVLAN lookup interface mutation uses.
+//
+// ensureVLAN returns the *diode.VLAN for vid, creating a stub when:
+//   - no static-name entry exists for vid, AND
+//   - options.CreateUnknownVlans is true.
+//
+// This mirrors device-discovery PR #378's translate._ensure_vlan behavior:
+// classic Cisco IOS exposes vmVlan/dot1qPvid VIDs without advertising them
+// via dot1qVlanStaticName, so ports classify as access but the index is
+// empty — the stub ensures NetBox never receives mode=access with a nil
+// untagged_vlan reference. Stubs are appended to *vlanEntities so the
+// caller's returned slice carries them.
+func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults) func(int) *diode.VLAN {
+	vlanByVid := make(map[int]*diode.VLAN, len(*vlanEntities))
+	for _, e := range *vlanEntities {
 		v, ok := e.(*diode.VLAN)
 		if !ok || v.Vid == nil {
 			continue
 		}
 		vlanByVid[int(*v.Vid)] = v
 	}
-
-	// ensureVLAN returns the *diode.VLAN for vid, creating a stub when:
-	//   - no static-name entry exists for vid, AND
-	//   - options.CreateUnknownVlans is true.
-	// This mirrors device-discovery PR #378's translate._ensure_vlan behavior:
-	// classic Cisco IOS exposes vmVlan/dot1qPvid VIDs without advertising them
-	// via dot1qVlanStaticName, so ports classify as access but vlanByVid is
-	// empty — the stub ensures NetBox never receives mode=access with a nil
-	// untagged_vlan reference.
-	ensureVLAN := func(vid int) *diode.VLAN {
+	return func(vid int) *diode.VLAN {
 		if existing, ok := vlanByVid[vid]; ok {
 			return existing
 		}
@@ -179,32 +217,23 @@ func (m *VlanMapper) PostMap(
 		}
 		applyVLANDefaults(stub, defaults)
 		vlanByVid[vid] = stub
-		vlanEntities = append(vlanEntities, stub)
+		*vlanEntities = append(*vlanEntities, stub)
 		return stub
 	}
+}
 
-	// Mutate interfaces in place. The registry holds *diode.Interface
-	// instances InterfaceMapper produced; we look them up by ifIndex
-	// using string-form ifIndex as ObjectIDIndex.
-	for ifIndex, info := range infos {
-		key := ObjectIDIndex(strconv.Itoa(ifIndex))
-		raw := registry.GetEntity(InterfaceEntityType, key)
-		iface, ok := raw.(*diode.Interface)
-		if !ok || iface == nil {
-			continue
-		}
-		// Skip placeholder interfaces fabricated by GetOrCreateEntity
-		// for ipAddressIfIndex references that no interface PDUs ever
-		// populated. Mutating those would leak VLAN/mode fields into
-		// nested IPAddress.AssignedObject payloads and ingest
-		// incomplete interface data.
-		if !registry.IsInterfaceVerified(iface) {
-			continue
-		}
-		c := qbridge.Classify(*info)
-		applyClassification(iface, c, ensureVLAN)
+// verifiedInterface returns the walked *diode.Interface for ifIndex, or
+// nil. Placeholder interfaces fabricated by GetOrCreateEntity for
+// ipAddressIfIndex references that no interface PDUs ever populated are
+// skipped: mutating those would leak VLAN/mode fields into nested
+// IPAddress.AssignedObject payloads and ingest incomplete interface data.
+func verifiedInterface(registry *EntityRegistry, ifIndex int) *diode.Interface {
+	raw := registry.GetEntity(InterfaceEntityType, ObjectIDIndex(strconv.Itoa(ifIndex)))
+	iface, ok := raw.(*diode.Interface)
+	if !ok || iface == nil || !registry.IsInterfaceVerified(iface) {
+		return nil
 	}
-	return vlanEntities
+	return iface
 }
 
 // applyClassification mutates iface to carry the classified VLAN refs.

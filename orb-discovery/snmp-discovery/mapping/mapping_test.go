@@ -2268,6 +2268,7 @@ func TestMappingYAML_HuaweiVlanCatalogPresent(t *testing.T) {
 	wantCols := map[string]bool{
 		".1.3.6.1.4.1.2011.5.6.1.1.1.1":  false, // hwVlanIndex
 		".1.3.6.1.4.1.2011.5.6.1.1.1.2":  false, // hwVlanName
+		".1.3.6.1.4.1.2011.5.6.1.1.1.3":  false, // hwVlanPorts
 		".1.3.6.1.4.1.2011.5.6.1.1.1.13": false, // hwVlanRowStatus
 	}
 	found := false
