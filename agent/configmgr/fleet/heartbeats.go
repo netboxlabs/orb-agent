@@ -37,6 +37,7 @@ type heartbeater struct {
 	policyManager   policymgr.PolicyManager
 	groupRetriever  GroupRetriever
 	bundleRetriever BundleStateRetriever
+	lastRestartTS   time.Time
 
 	mu            sync.Mutex
 	sessionCancel context.CancelFunc
@@ -50,6 +51,7 @@ func newHeartbeater(logger *slog.Logger, backendState backend.StateRetriever, po
 		policyManager:   policyManager,
 		groupRetriever:  groupRetriever,
 		bundleRetriever: bundleRetriever,
+		lastRestartTS:   time.Now().UTC(),
 	}
 }
 
@@ -117,6 +119,7 @@ func (hb *heartbeater) sendSingleHeartbeat(ctx context.Context, heartbeatTopic s
 		SchemaVersion: messages.CurrentHeartbeatSchemaVersion,
 		TimeStamp:     time.Now().UTC(),
 		State:         messages.State(state),
+		LastRestartTS: hb.lastRestartTS,
 		BackendState:  hb.getBackendState(),
 		PolicyState:   hb.getPolicyState(),
 		GroupState:    hb.getGroupState(),
