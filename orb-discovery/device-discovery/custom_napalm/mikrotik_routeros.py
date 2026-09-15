@@ -317,6 +317,10 @@ def _parse_ip_addresses(raw: str) -> list[dict]:
         header = _IP_COLUMNS_RE.match(line) or _IP_HEADER_RE.match(line)
         if header:
             has_vrf = "VRF" in header.group("columns").upper()
+            # Skipping is belt-and-braces: a header line has no leading row
+            # index, so the row pattern below rejects it anyway and no test
+            # distinguishes the two. Written out because reading on from a
+            # line already consumed is a bug waiting for the next format.
             continue
 
         match = _IP_ROW_RE.match(line)
