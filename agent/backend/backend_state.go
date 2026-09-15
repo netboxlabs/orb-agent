@@ -120,10 +120,15 @@ func (n nullStateManager) RegisterRestart(_ string, _ string) {}
 // StartBackendMonitor starts monitoring a backend and manages its state
 func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 	manager.mu.Lock()
-	manager.backendState[name] = &State{
-		Status:        be.GetInitialState(),
-		LastRestartTS: time.Now(),
+	state, ok := manager.backendState[name]
+	if !ok {
+		state = &State{LastRestartTS: time.Now()}
+		manager.backendState[name] = state
 	}
+	// Registration means the backend just came up: the failure recorded
+	// before it is over, and the monitor never clears LastError itself.
+	state.Status = be.GetInitialState()
+	state.LastError = ""
 	manager.mu.Unlock()
 
 	ticks, stop := manager.tick(BackendMonitorInterval)
@@ -140,8 +145,10 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 			manager.backendState[name].Status = backendStatus
 			if backendStatus == Running {
 				// The restart worked, or nothing was wrong: release any slot
-				// this backend was holding.
+				// this backend was holding, and drop the failure it recovered
+				// from, which nothing else clears while the monitor runs.
 				delete(manager.queued, name)
+				manager.backendState[name].LastError = ""
 			} else {
 				if err != nil {
 					manager.backendState[name].LastError = fmt.Sprintf("failed to retrieve backend status: %v", err)

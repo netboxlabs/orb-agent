@@ -32,6 +32,14 @@ func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, pub
 func (messaging *Messaging) sendCapabilities(ctx context.Context, backends map[string]backend.Backend, labels map[string]string, config string, publishFunc func(ctx context.Context, payload []byte) error) {
 	backendsInfo := make(map[string]messages.BackendInfo)
 	for name, be := range backends {
+		// A backend declared but never started is announced to fleet only
+		// through the agent config string in this message, and it is not
+		// re-announced when a policy starts it later, until the next
+		// connect.
+		if state, _, _ := be.GetRunningStatus(); state == backend.Unknown {
+			messaging.logger.Debug("backend declared but not started, skipping capabilities", "backend", name)
+			continue
+		}
 		ver, err := be.Version()
 		if err != nil {
 			messaging.logger.Error("backend failed to retrieve version, skipping", "backend", name, "error", err)

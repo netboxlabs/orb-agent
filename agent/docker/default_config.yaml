@@ -22,3 +22,7 @@ orb:
     device_discovery:
     snmp_discovery:
     worker:
+    snmp_telemetry:
+      start_mode: on_demand
+    gnmi_telemetry:
+      start_mode: on_demand

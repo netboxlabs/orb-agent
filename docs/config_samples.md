@@ -21,7 +21,12 @@ orb:
   backends:
     network_discovery:
     device_discovery:
+    # on demand: configured at start, started by its first policy; needs common.otlp.grpc
+    gnmi_telemetry:
+      start_mode: on_demand
     common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
       diode:
         target: grpc://192.168.0.100:8080/diode
         client_id: ${DIODE_CLIENT_ID}

@@ -769,3 +769,31 @@ func TestBackendStateManager_PolicyStatusPolling_NonProviderBackend(t *testing.T
 	// Assert - Should not panic and should not call GetPolicyStatus
 	mockBe.AssertExpectations(t)
 }
+
+// A backend whose restarts were registered before its monitor (an on-demand
+// backend that came up on a retry) keeps its restart count and reason when
+// the monitor is registered; only the status is reset to the initial one
+// until the first tick.
+func TestBackendStateManager_StartBackendMonitor_KeepsRegisteredRestarts(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	manager := backend.NewStateManager("fleet", logger, make(chan string, 5), repo)
+	manager.RegisterError("late-backend", "no binary")
+	manager.RegisterRestart("late-backend", "retry after failed start")
+	manager.RegisterRestart("late-backend", "retry after failed start")
+	mockBe := &mockBackend{}
+	mockBe.On("GetInitialState").Return(backend.Running)
+	mockBe.On("GetStartTime").Return(time.Now()).Maybe()
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	mockBe.On("GetPolicyStatus").Return([]backend.PolicyStatus{}, nil).Maybe()
+
+	manager.StartBackendMonitor("late-backend", mockBe)
+
+	state := manager.Get()["late-backend"]
+	require.NotNil(t, state)
+	assert.Equal(t, int64(2), state.RestartCount, "the restarts registered before the monitor survive it")
+	assert.Equal(t, "retry after failed start", state.LastRestartReason)
+	assert.Equal(t, backend.Running, state.Status, "the status is the initial one until the first tick")
+	assert.Empty(t, state.LastError, "a start that succeeded clears the failure before it")
+}

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1358,4 +1359,112 @@ func TestStartLeavesTheBridgeTeardownToTheStopPathWhenAStopWinsDuringStartup(t *
 	}
 	_, err = net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(grpcPort)), time.Second)
 	assert.Error(t, err, "the bridge's gRPC listener is closed once the stop path has run")
+}
+
+// onDemandBackend counts its lifecycle calls under its own mutex (the
+// supervisor's goroutine and the test read them concurrently) and reports
+// Unknown until started, the way a bundled backend with no process does.
+type onDemandBackend struct {
+	backend.Backend
+	mu      sync.Mutex
+	starts  int
+	applied int
+	started atomic.Bool
+	// startBlocks, when set, makes Start wait on it, or on ctx.Done(),
+	// before counting the start; nil means Start returns at once.
+	startBlocks chan struct{}
+}
+
+func (b *onDemandBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
+	return nil
+}
+
+func (b *onDemandBackend) Start(ctx context.Context, _ context.CancelFunc) error {
+	if b.startBlocks != nil {
+		select {
+		case <-b.startBlocks:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	b.mu.Lock()
+	b.starts++
+	b.mu.Unlock()
+	b.started.Store(true)
+	return nil
+}
+
+func (b *onDemandBackend) Stop(context.Context) error { b.started.Store(false); return nil }
+
+func (b *onDemandBackend) FullReset(ctx context.Context) error { return b.Start(ctx, nil) }
+
+func (b *onDemandBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
+	if b.started.Load() {
+		return backend.Running, "", nil
+	}
+	return backend.Unknown, "", nil
+}
+
+func (b *onDemandBackend) GetInitialState() backend.RunningStatus { return backend.Unknown }
+
+func (b *onDemandBackend) ApplyPolicy(policies.PolicyData, bool) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.applied++
+	return nil
+}
+
+func (b *onDemandBackend) RemovePolicy(policies.PolicyData) error { return nil }
+
+func (b *onDemandBackend) counts() (starts, applied int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.starts, b.applied
+}
+
+// End to end through New, Start and the real policy manager: a policy for
+// a declared on-demand backend is stored "backend starting", the supervisor
+// starts the backend, and the replay applies the policy; a second policy
+// after that applies directly.
+func TestManagePolicyStartsAnOnDemandBackendAndAppliesAfterIt(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &onDemandBackend{}
+	backend.Register("e2e_on_demand", be)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends:      map[string]any{"e2e_on_demand": map[string]any{"start_mode": "on_demand", "start_timeout": 5}},
+		ConfigManager: config.ManagerConfig{Active: "local"},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.configManager = &mockConfigManager{}
+	a.filesManager = &mockFilesManager{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, a.Start(ctx, cancel))
+	t.Cleanup(func() { a.Stop(context.Background()) })
+	starts, _ := be.counts()
+	require.Equal(t, 0, starts, "declared on demand: not started by Start")
+	be.startBlocks = make(chan struct{})
+
+	a.policyManager.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "p1", Name: "p1", Backend: "e2e_on_demand", DatasetID: "d1", Version: 1, Data: map[string]any{"k": "v"}})
+
+	state, err := a.policyManager.GetPolicyState()
+	require.NoError(t, err)
+	require.Len(t, state, 1, "the policy is stored while the backend starts")
+	assert.Equal(t, policies.FailedToApply, state[0].State, "the policy is deferred, not yet applied, while the backend is still starting")
+	assert.Equal(t, policymgr.ReasonBackendStarting, state[0].BackendErr)
+	close(be.startBlocks)
+	require.Eventually(t, func() bool {
+		state, err := a.policyManager.GetPolicyState()
+		return err == nil && len(state) == 1 && state[0].State == policies.Running
+	}, 5*time.Second, 5*time.Millisecond, "the policy is applied once the backend is up")
+	starts, applied := be.counts()
+	assert.Equal(t, 1, starts)
+	assert.Equal(t, 1, applied)
+
+	a.policyManager.ManagePolicy(config.PolicyPayload{Action: "manage", ID: "p2", Name: "p2", Backend: "e2e_on_demand", DatasetID: "d2", Version: 1, Data: map[string]any{"k": "v"}})
+	require.Eventually(t, func() bool { _, applied := be.counts(); return applied == 2 }, 5*time.Second, 5*time.Millisecond, "a policy after the start applies directly")
+	starts, _ = be.counts()
+	assert.Equal(t, 1, starts, "the backend is started once")
 }

@@ -2,15 +2,22 @@
 // it configures and starts them, restarts them on request, replays their
 // policies after a restart, and stops them at shutdown. The agent delegates
 // to it and the policy manager reaches it only through the interfaces
-// declared here, so neither package imports the other.
+// declared here; the policy manager never imports the supervisor; the
+// supervisor imports it only for the two start-state constants its starter
+// seam answers.
 //
 // Lock order: an entry's restart mutex is taken before the policy manager's
 // apply mutex (through the applier), never after; an entry's field mutex is
-// innermost, guards the phase and the run cancel only, and the only call
-// made under it is the run cancel function, which never calls back; the
-// state manager's mutex is never held across a call out. The entries map
-// is guarded by entriesMu: written once by ConfigureAll after every entry
-// is declared, and snapshotted by every reader before it calls out.
+// innermost, guards the phase, the run cancel, the monitor and error
+// bookkeeping and the retry timer, and the only calls made under it are the
+// run cancel function and the timer's own AfterFunc and Stop, none of which
+// calls back into the supervisor; the
+// state manager's mutex is never held across a call out. EnsureStarted is
+// called under the policy manager's apply mutex and takes only an entry's
+// field mutex, never the restart mutex, so it cannot wait on a start or
+// restart in flight; the field mutex still makes no call out. The entries
+// map is guarded by entriesMu: written once by ConfigureAll after every
+// entry is declared, and snapshotted by every reader before it calls out.
 package supervisor
 
 import (
@@ -18,6 +25,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -26,6 +35,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // ErrStopped is the sentinel a start reports when the supervisor was, or
@@ -66,6 +76,10 @@ type Options struct {
 	ReplayRetryInterval time.Duration
 	// DispatchInterval is how often queued binary-upgrade restarts are drained.
 	DispatchInterval time.Duration
+	// RetryInterval separates the attempts the supervisor makes to start an
+	// on-demand backend whose start failed; each attempt is a restart.
+	// Default backend.MinRestartTime.
+	RetryInterval time.Duration
 }
 
 func (o Options) withDefaults() Options {
@@ -80,6 +94,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.DispatchInterval == 0 {
 		o.DispatchInterval = 500 * time.Millisecond
+	}
+	if o.RetryInterval == 0 {
+		o.RetryInterval = backend.MinRestartTime
 	}
 	return o
 }
@@ -106,17 +123,128 @@ func (p Phase) String() string {
 	return [...]string{"declared", "starting", "running", "failed", "stopped"}[p]
 }
 
+// startMode is how an entry comes up: at agent start, or when its first
+// policy arrives.
+type startMode int
+
+const (
+	startEager startMode = iota
+	startOnDemand
+)
+
+const (
+	startModeKey        = "start_mode"
+	startTimeoutKey     = "start_timeout"
+	defaultStartTimeout = 30 * time.Second
+	maxStartTimeout     = 300 * time.Second
+)
+
+// parseStartOptions reads the two lifecycle keys an entry may carry and
+// returns the entry's settings without them, in a copy, so the backend's
+// Configure never sees a key it does not know and the agent's own config
+// stays as read (the fleet capabilities config string shows it). A nil
+// entry is eager with no settings. start_timeout is valid only with
+// on_demand, so a stray value is an error rather than a silently ignored
+// key.
+func parseStartOptions(name string, cEntity map[string]any) (mode startMode, budget time.Duration, stripped map[string]any, err error) {
+	if cEntity == nil {
+		return startEager, 0, nil, nil
+	}
+	stripped = make(map[string]any, len(cEntity))
+	for k, v := range cEntity {
+		if k != startModeKey && k != startTimeoutKey {
+			stripped[k] = v
+		}
+	}
+	if raw, ok := cEntity[startModeKey]; ok {
+		v, isString := raw.(string)
+		switch {
+		case !isString:
+			return 0, 0, nil, fmt.Errorf("backend %s: %s must be a string", name, startModeKey)
+		case v == "eager":
+			mode = startEager
+		case v == "on_demand":
+			mode = startOnDemand
+		default:
+			return 0, 0, nil, fmt.Errorf("backend %s: %s %q is not eager or on_demand", name, startModeKey, v)
+		}
+	}
+	raw, hasTimeout := cEntity[startTimeoutKey]
+	if !hasTimeout {
+		if mode == startOnDemand {
+			budget = defaultStartTimeout
+		}
+		return mode, budget, stripped, nil
+	}
+	if mode != startOnDemand {
+		return 0, 0, nil, fmt.Errorf("backend %s: %s is valid only with %s on_demand", name, startTimeoutKey, startModeKey)
+	}
+	seconds, ok := wholeSeconds(raw)
+	if !ok {
+		return 0, 0, nil, fmt.Errorf("backend %s: %s must be a whole number of seconds", name, startTimeoutKey)
+	}
+	if seconds < 1 || seconds > int64(maxStartTimeout/time.Second) {
+		return 0, 0, nil, fmt.Errorf("backend %s: %s %d is outside 1 to 300", name, startTimeoutKey, seconds)
+	}
+	budget = time.Duration(seconds) * time.Second
+	return mode, budget, stripped, nil
+}
+
+// wholeSeconds accepts the integer shapes a YAML decoder produces and the
+// string the environment overlay delivers.
+func wholeSeconds(raw any) (int64, bool) {
+	switch v := raw.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		if v != float64(int64(v)) {
+			return 0, false
+		}
+		return int64(v), true
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil {
+			return 0, false
+		}
+		return int64(n), true
+	default:
+		return 0, false
+	}
+}
+
 // entry is one declared backend.
 type entry struct {
 	name   string
 	be     backend.Backend
-	config map[string]any // the entry's own settings as declared; nil when it had none
+	config map[string]any // the entry's own settings as declared, without the lifecycle keys; nil when it had none
+	mode   startMode      // eager (started by ConfigureAll) or on demand (started by EnsureStarted)
+	budget time.Duration  // readiness budget of an on-demand start; zero for eager
 
 	// mu guards phase and runCancel; the only call made under it is
 	// runCancel, which never calls back.
 	mu        sync.Mutex
 	phase     Phase
 	runCancel context.CancelFunc
+	// startedOnce records that the monitor was registered for this entry;
+	// the monitor binds the backend object, so a restart never registers
+	// it again.
+	startedOnce bool
+	// lastErr is the last start error of an on-demand entry, answered to
+	// EnsureStarted while the entry is Failed.
+	lastErr error
+	// retryTimer is armed when an on-demand start fails and fires a restart
+	// after Options.RetryInterval; nil when disarmed. Every restart and
+	// StopAll disarm it, so a timer never doubles a restart in flight.
+	retryTimer *time.Timer
+	// retryGen identifies the retry currently armed. Every arm and every
+	// disarm bumps it, so a timer callback that had already fired when its
+	// timer was disarmed sees a generation that is no longer its own and
+	// does nothing: Stop cannot recall a callback that is already running,
+	// and without this the disarming restart would be followed by the
+	// retry's own, a second back to back restart and replay.
+	retryGen uint64
 
 	// restartMu is held across the initial configure and start and across a
 	// whole restart, including its replay and the replay's retries, so no
@@ -184,7 +312,9 @@ func (e *entry) restoreRun(prev context.CancelFunc) {
 }
 
 // setPhase stores the phase unless the entry was stopped meanwhile, and
-// reports whether it was.
+// reports whether it was. Reaching Running clears lastErr: a start that
+// answered EnsureStarted's Failed case is over, and a later Failed reached
+// by another route must not answer that stale error.
 func (e *entry) setPhase(p Phase) (stopped bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -192,6 +322,9 @@ func (e *entry) setPhase(p Phase) (stopped bool) {
 		return true
 	}
 	e.phase = p
+	if p == Running {
+		e.lastErr = nil
+	}
 	return false
 }
 
@@ -216,6 +349,11 @@ type Supervisor struct {
 	// and the upgrade dispatcher; tests count goroutine starts through them.
 	onServe    func()
 	onDispatch func()
+
+	// onRetry, when set, runs at the top of a retry timer's callback, before
+	// it takes the entry's restart mutex; a test uses it to know the callback
+	// is in flight.
+	onRetry func()
 
 	// restartRequests carries health-driven restart requests from the state
 	// manager; serveRestartRequests drains it until stop begins.
@@ -280,10 +418,11 @@ func New(logger *slog.Logger, state backend.StateManager, files filesmgr.Manager
 
 // ConfigureAll declares every backend in cfgBackends (the agent's backends
 // map without its "common" entry; an empty map is accepted and starts
-// nothing), then configures and starts each in map order, registering its
-// monitor: the first failure is returned and later entries are not started.
-// On success it starts the restart request loop and the upgrade dispatcher,
-// once. runCtxFor returns the context a backend's process runs under.
+// nothing), then configures each in map order and starts the eager ones,
+// registering its monitor: the first failure is returned and later entries
+// are not started. On success it starts the restart request loop and the
+// upgrade dispatcher, once. runCtxFor returns the context a backend's
+// process runs under.
 func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.BackendCommons, runCtxFor func(name string) context.Context) error {
 	declared := make(map[string]*entry, len(cfgBackends))
 	for name, configurationEntry := range cfgBackends {
@@ -298,7 +437,11 @@ func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.Bac
 		if !backend.HaveBackend(name) {
 			return errors.New("specified backend does not exist: " + name)
 		}
-		declared[name] = &entry{name: name, be: backend.GetBackend(name), config: cEntity, phase: Declared}
+		mode, budget, stripped, err := parseStartOptions(name, cEntity)
+		if err != nil {
+			return err
+		}
+		declared[name] = &entry{name: name, be: backend.GetBackend(name), config: stripped, mode: mode, budget: budget, phase: Declared}
 	}
 	s.entriesMu.Lock()
 	if s.configured {
@@ -317,7 +460,13 @@ func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.Bac
 	s.runCtxFor = runCtxFor
 	s.entriesMu.Unlock()
 	for _, e := range s.snapshot() {
-		if err := s.configureAndStart(e); err != nil {
+		var err error
+		if e.mode == startOnDemand {
+			err = s.configureOnly(e)
+		} else {
+			err = s.configureAndStart(e)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -363,6 +512,25 @@ func (s *Supervisor) runContext(name string) context.Context {
 	return f(name)
 }
 
+// configureOnly configures one backend under its restart mutex and leaves
+// it Declared: an on-demand entry comes up on its first policy, but a bad
+// configuration still fails the agent start, as an eager one does.
+func (s *Supervisor) configureOnly(e *entry) error {
+	e.restartMu.Lock()
+	defer e.restartMu.Unlock()
+	return s.configure(e)
+}
+
+// configure runs the backend's Configure with the entry's stripped settings
+// and the shared commons; callers hold the entry's restart mutex.
+func (s *Supervisor) configure(e *entry) error {
+	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
+		s.logger.Info("failed to configure backend", "backend", e.name, "error", err)
+		return err
+	}
+	return nil
+}
+
 // configureAndStart configures one backend and starts it under a fresh run
 // context, holding the entry's restart mutex across both so StopAll's
 // second loop cannot read or stop the backend mid-configure, and records
@@ -374,8 +542,7 @@ func (s *Supervisor) runContext(name string) context.Context {
 func (s *Supervisor) configureAndStart(e *entry) error {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
-	if err := e.be.Configure(s.logger, s.applier.GetRepo(), e.config, s.backendCommons(), s.files); err != nil {
-		s.logger.Info("failed to configure backend", "backend", e.name, "error", err)
+	if err := s.configure(e); err != nil {
 		return err
 	}
 	runCtx, cancel := context.WithCancel(s.runContext(e.name))
@@ -401,8 +568,129 @@ func (s *Supervisor) configureAndStart(e *entry) error {
 	if err := s.stoppedDuringStart(e); err != nil {
 		return err
 	}
-	s.state.StartBackendMonitor(e.name, e.be)
+	s.registerMonitorOnce(e)
 	return nil
+}
+
+// EnsureStarted implements the policy manager's starter: called under that
+// backend's apply mutex when a policy for it arrives, it never blocks and
+// never calls the applier. It answers from the phase: a Declared entry is
+// stamped Starting and its start launched in a goroutine, in one critical
+// section, so concurrent calls launch once; a Failed entry answers its last
+// start error, and the retry timer, not the policy, drives the next
+// attempt; a Stopped entry is refused.
+func (s *Supervisor) EnsureStarted(name string) (policymgr.StartState, error) {
+	e, ok := s.entryFor(name)
+	if !ok {
+		return policymgr.StartStarting, errors.New("backend is not declared: " + name)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	switch e.phase {
+	case Running:
+		return policymgr.StartRunning, nil
+	case Starting:
+		return policymgr.StartStarting, nil
+	case Failed:
+		// An entry can reach Failed with no remembered error: the upgrade
+		// restart's shutdown-cancelled exit stamps the phase alone. The
+		// policy still needs a non-nil answer, or it would be deferred with
+		// nothing to replay it.
+		if e.lastErr != nil {
+			return policymgr.StartStarting, e.lastErr
+		}
+		return policymgr.StartStarting, errors.New("backend failed to start: " + name)
+	case Stopped:
+		return policymgr.StartStarting, fmt.Errorf("%w: %s", ErrStopped, name)
+	default: // Declared
+		if e.mode != startOnDemand {
+			// An eager entry is Declared only while ConfigureAll is still
+			// running; it is started there, never by a policy.
+			return policymgr.StartStarting, errors.New("backend is not started yet: " + name)
+		}
+		e.phase = Starting
+		go s.startDeclared(e)
+		return policymgr.StartStarting, nil
+	}
+}
+
+// startDeclared starts one declared backend under its restart mutex, so it
+// serialises with any restart, with the entry's readiness budget on the
+// start context. On success it registers the monitor once, marks the entry
+// Running and replays the policies stored while it was starting; on failure
+// it registers the error, marks the entry Failed and remembers the error
+// for EnsureStarted. A stop that began meanwhile wins, as in
+// configureAndStart: the phase stays Stopped and StopAll's second loop
+// stops whatever came up.
+//
+// A restart can take the restart mutex before this goroutine does: Restart,
+// RestartAll and the upgrade dispatcher all accept a Starting entry (that is
+// what EnsureStarted just stamped it), and restartHealth reads the phase
+// only after taking the mutex, so its own refusal never sees this launch.
+// Once the mutex is ours, the phase is re-read under e.mu: only Starting
+// still means this goroutine's own launch is the one to run; anything else
+// means a restart got there first and already handled the entry, and
+// starting now would cancel the run context that restart installed and
+// start the backend a second time.
+func (s *Supervisor) startDeclared(e *entry) {
+	e.restartMu.Lock()
+	defer e.restartMu.Unlock()
+	e.mu.Lock()
+	phase := e.phase
+	e.mu.Unlock()
+	if phase != Starting {
+		if phase == Stopped {
+			s.logger.Info("on-demand start skipped, supervisor stopped", "backend", e.name, "phase", phase)
+		} else {
+			s.logger.Info("on-demand start skipped, backend already handled by a restart", "backend", e.name, "phase", phase)
+		}
+		return
+	}
+	runCtx, cancel := context.WithCancel(backend.WithReadinessBudget(s.runContext(e.name), e.budget))
+	if e.beginStart(cancel) == Stopped {
+		cancel()
+		return
+	}
+	s.logger.Info("starting backend on demand", "backend", e.name, "start_timeout", e.budget)
+	if err := e.be.Start(runCtx, cancel); err != nil {
+		s.recordStartFailure(e, err)
+		return
+	}
+	if err := s.stoppedDuringStart(e); err != nil {
+		return
+	}
+	s.registerMonitorOnce(e)
+	s.replayAfterStart(runCtx, e)
+}
+
+// recordStartFailure marks an on-demand start that failed: Failed, the
+// error registered with the state manager (under fleet the backend enters
+// the heartbeat as a backend error) and remembered for EnsureStarted, and
+// arms the retry timer. A stop that began meanwhile leaves the entry
+// Stopped and records nothing.
+func (s *Supervisor) recordStartFailure(e *entry, err error) {
+	stopped, armed := s.failAndArm(e, err)
+	if stopped {
+		return
+	}
+	s.logger.Error("on-demand start failed", "backend", e.name, "error", err)
+	s.state.RegisterError(e.name, err.Error())
+	// Announced after the failure it retries, so the operator reads them in
+	// the order they happened.
+	s.logArmed(e, armed)
+}
+
+// registerMonitorOnce registers the health monitor the first time an entry
+// comes up; the monitor binds the backend object, so a later restart does
+// not register it again. Callers hold the restart mutex.
+func (s *Supervisor) registerMonitorOnce(e *entry) {
+	e.mu.Lock()
+	first := !e.startedOnce
+	e.startedOnce = true
+	e.mu.Unlock()
+	if first {
+		s.state.StartBackendMonitor(e.name, e.be)
+	}
 }
 
 // stoppedDuringStart reports whether a stop won the race with a Start that
@@ -484,6 +772,11 @@ func (s *Supervisor) StopAll(ctx context.Context) {
 			e.runCancel()
 		}
 		e.phase = Stopped
+		e.retryGen++
+		if e.retryTimer != nil {
+			e.retryTimer.Stop()
+			e.retryTimer = nil
+		}
 		e.mu.Unlock()
 	}
 	for _, e := range entries {
