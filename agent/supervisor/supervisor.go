@@ -399,12 +399,15 @@ func (s *Supervisor) Phase(name string) (Phase, bool) {
 	return e.phase, true
 }
 
-// gatedStop is the one place a backend is stopped: only when it reports
-// Running, since a start that failed or was cancelled leaves it Offline or
-// with no process at all, and most backends panic on a Stop then. Callers
-// hold the entry's restart mutex.
+// gatedStop is the one place a backend is stopped: only when a process
+// exists. Running means it is up and answering; BackendError means a process
+// handle exists but it is not answering its API (or its state could not be
+// read), and it must be stopped too, or it outlives the agent and an upgrade
+// restart starts a second process beside it. Unknown (never started) and
+// Offline (the process ended) mean there is nothing to stop, and most
+// backends panic on a Stop then. Callers hold the entry's restart mutex.
 func (s *Supervisor) gatedStop(ctx context.Context, e *entry) {
-	if state, _, _ := e.be.GetRunningStatus(); state != backend.Running {
+	if state, _, _ := e.be.GetRunningStatus(); state != backend.Running && state != backend.BackendError {
 		return
 	}
 	s.logger.Debug("stopping backend", "backend", e.name)

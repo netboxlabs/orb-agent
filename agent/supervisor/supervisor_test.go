@@ -435,6 +435,29 @@ func TestStopAllStopsOnlyRunningBackends(t *testing.T) {
 	assert.Equal(t, Stopped, p)
 }
 
+// A process that is alive but not answering its API reports BackendError,
+// not Running; it still has to be stopped, or it outlives the agent (and an
+// upgrade restart would start a second process beside it). Only the two
+// no-process states, Unknown and Offline, skip the stop.
+func TestGatedStopStopsALiveProcessWhoseAPIIsDown(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	sick := newStub(rec, "sick")
+	backend.Register("sup_sick", sick)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_sick": nil}, config.BackendCommons{}, background))
+	sick.status.Store(int32(backend.BackendError))
+	ended := newStub(rec, "ended")
+	ended.status.Store(int32(backend.Offline))
+	s.entriesMu.Lock()
+	s.entries["sup_ended"] = &entry{name: "sup_ended", be: ended, phase: Running}
+	s.entriesMu.Unlock()
+	rec.reset()
+
+	s.StopAll(context.Background())
+
+	assert.Equal(t, []string{"stop:sick"}, rec.snapshot(), "a live process with its API down is stopped; an ended one is not")
+}
+
 // StopAll cancels a start still blocked in Start, which returns with the
 // context error; the entry ends Stopped, not Failed, and a backend that
 // never reported Running is not stopped.
