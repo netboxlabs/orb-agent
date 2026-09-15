@@ -360,9 +360,13 @@ entries:
   # decorates them. hwVlanRowStatus is a standard RowStatus and feeds the
   # same active/reserved derivation dot1qVlanStaticRowStatus does.
   #
-  # Only the catalog is read. hwVlanPorts is a PortList keyed by bridge
-  # port, and these devices expose no dot1dBasePortIfIndex to translate it
-  # with, so per-interface mode / tagged / untagged stays unresolved.
+  # hwVlanPorts is the per-VLAN port membership. Its own DESCRIPTION lays it
+  # out as eight octets per slot and sixty-four ports per slot rather than as
+  # an RFC PortList, and these devices publish no dot1dBasePortIfIndex, so the
+  # slot/port positions are translated through ifName (which carries
+  # frame/slot/port on this platform) — see mapping/vlan_huawei.go. Membership
+  # is applied as tagged VLANs; the device exposes no PVID source, so the
+  # untagged VLAN stays unset.
   #
   # Scoped to the huawei vendor gate (sysObjectID prefix .1.3.6.1.4.1.2011.,
   # see policy/vendor.go). Huawei switches that do implement Q-BRIDGE keep
@@ -381,6 +385,9 @@ entries:
       - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.2"
         entity: "vlan"
         field: "hwVlanName"
+      - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.3"
+        entity: "vlan"
+        field: "hwVlanPorts"
       - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.13"
         entity: "vlan"
         field: "hwVlanRowStatus"
