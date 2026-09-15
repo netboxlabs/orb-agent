@@ -247,3 +247,28 @@ func TestEachMonitorHasItsOwnTickSource(t *testing.T) {
 	require.Eventually(t, func() bool { return first.polls.Load() == 3 }, time.Second, time.Millisecond)
 	require.Eventually(t, func() bool { return second.polls.Load() == 1 }, time.Second, time.Millisecond)
 }
+
+// A backend that failed and then recovers stops reporting the failure: the
+// monitor clears the error when it sees the backend running, so a heartbeat
+// carries no stale error for a backend that is up. An on-demand backend
+// whose retry succeeds makes this routine, where it used to need a restart
+// that registered the monitor again.
+func TestMonitorClearsTheErrorWhenABackendRecovers(t *testing.T) {
+	manager, channels := newTestManager(t, make(chan string, 5))
+	be := &countingBackend{status: BackendError, started: time.Now()}
+	manager.StartBackendMonitor("recovering", be)
+	require.Len(t, *channels, 1)
+	tick := (*channels)[0]
+	manager.RegisterError("recovering", "no binary")
+
+	sendTick(t, tick)
+	be.setStatus(Running)
+	sendTick(t, tick)
+	// The next tick is only accepted once the previous iteration finished.
+	sendTick(t, tick)
+
+	state := manager.Get()["recovering"]
+	require.NotNil(t, state)
+	require.Equal(t, Running, state.Status)
+	require.Empty(t, state.LastError, "a backend that is up carries no error")
+}

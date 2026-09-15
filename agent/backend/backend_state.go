@@ -145,8 +145,10 @@ func (manager *stateManager) StartBackendMonitor(name string, be Backend) {
 			manager.backendState[name].Status = backendStatus
 			if backendStatus == Running {
 				// The restart worked, or nothing was wrong: release any slot
-				// this backend was holding.
+				// this backend was holding, and drop the failure it recovered
+				// from, which nothing else clears while the monitor runs.
 				delete(manager.queued, name)
+				manager.backendState[name].LastError = ""
 			} else {
 				if err != nil {
 					manager.backendState[name].LastError = fmt.Sprintf("failed to retrieve backend status: %v", err)
