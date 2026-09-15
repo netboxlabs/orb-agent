@@ -319,6 +319,10 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		// while backends are still being stopped gracefully.
 		if errors.Is(err, supervisor.ErrStopped) {
 			a.logger.Info("startup interrupted by a stop; the stop completes the shutdown", "error", err)
+			// The stop path owns the teardown of everything Start brought
+			// up, the OTLP bridge included (the config manager's Stop), so
+			// the failure cleanup deferred above must not run alongside it.
+			err = nil
 			return nil
 		}
 		return err

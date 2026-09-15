@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -1300,4 +1302,60 @@ func TestStartReturnsNilWhenStopPrecedesTheBackends(t *testing.T) {
 	defer cancel()
 	require.NoError(t, a.Start(ctx, cancel), "a stop that precedes startup is not a startup error")
 	assert.NotContains(t, *be.events, "start", "nothing starts after the stop")
+}
+
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	port := l.Addr().(*net.TCPAddr).Port
+	require.NoError(t, l.Close())
+	return port
+}
+
+// End to end through New and Start with the real fleet config manager: when
+// a stop wins during startup, the OTLP bridge Start bound is torn down once,
+// by the stop path (FleetConfigManager.Stop), not also by Start's own
+// failure cleanup, which would race it on the bridge (the race detector
+// catches the overlap).
+func TestStartLeavesTheBridgeTeardownToTheStopPathWhenAStopWinsDuringStartup(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &blockingStartBackend{restartableBackend: restartableBackend{events: &[]string{}}, entered: make(chan struct{})}
+	backend.Register("e2e_stop_wins_fleet", be)
+	grpcPort, httpPort := freeLoopbackPort(t), freeLoopbackPort(t)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends: map[string]any{"e2e_stop_wins_fleet": nil},
+		ConfigManager: config.ManagerConfig{
+			Active: "fleet",
+			Sources: config.Sources{Fleet: config.FleetManager{
+				OTLPBridgeGRPCPort: &grpcPort,
+				OTLPBridgeHTTPPort: &httpPort,
+				OTLPBridgeBindHost: "127.0.0.1",
+			}},
+		},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan error, 1)
+	go func() { started <- a.Start(ctx, cancel) }()
+	select {
+	case <-be.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backend's Start was never entered")
+	}
+	a.Stop(context.Background())
+
+	select {
+	case err := <-started:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+	_, err = net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(grpcPort)), time.Second)
+	assert.Error(t, err, "the bridge's gRPC listener is closed once the stop path has run")
 }
