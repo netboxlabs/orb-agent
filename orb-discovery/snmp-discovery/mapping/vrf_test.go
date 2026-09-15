@@ -455,11 +455,18 @@ func TestTranslateVrfs_StandardMembershipWinsOverJuniper(t *testing.T) {
 	for oid, v := range jnxVpnIfOids(t) {
 		oids[oid] = v
 	}
+	// A Juniper row for a VRF the standard tier already placed, on an
+	// interface the standard tier did not. Without it the lower tier is
+	// unobservable here: its own names are adopted by nothing, so running
+	// it anyway would look identical to not running it.
+	oids[oidJnxVpnIfRowStatus+".2."+oidIdx("RED")+".99"] = octets("1")
+
 	entities, byIfIndex := TranslateVrfs(oids, nil, slog.Default())
 
 	require.Len(t, entities, 2, "only the standard tier's VRFs")
 	require.Equal(t, map[int]string{10: "RED", 11: "RED", 20: "MGM"},
-		namesByIfIndex(byIfIndex))
+		namesByIfIndex(byIfIndex),
+		"the standard tier answered, so the Juniper table is not consulted")
 }
 
 func namesByIfIndex(byIfIndex map[int]*diode.VRF) map[int]string {
