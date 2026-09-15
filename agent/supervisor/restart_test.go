@@ -2033,3 +2033,48 @@ func TestConfigureFailureOnAJustLaunchedOnDemandStartLeavesItFailedAndArmed(t *t
 	_, err := s.EnsureStarted("sup_lazy_cfg_raced")
 	require.EqualError(t, err, "bad config", "the configure failure is what a policy is told")
 }
+
+// A restart that disarms the retry while the timer's callback is already
+// waiting for the restart mutex supersedes it: Stop cannot recall a callback
+// that has begun, so without the generation the disarming restart would be
+// followed by the retry's own, a second back to back restart that re-runs
+// one-shot policies.
+func TestARestartSupersedesARetryWhoseTimerAlreadyFired(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = 20 * time.Millisecond
+	fired := make(chan struct{})
+	var once sync.Once
+	s.onRetry = func() { once.Do(func() { close(fired) }) }
+	lazy := newStub(rec, "lazy_superseded")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_superseded", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_superseded": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	_, err := s.EnsureStarted("sup_lazy_superseded")
+	require.NoError(t, err)
+	e, _ := s.entryFor("sup_lazy_superseded")
+	require.Eventually(t, func() bool {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.retryTimer != nil
+	}, 5*time.Second, time.Millisecond, "the failed start armed the retry")
+
+	// Hold the restart mutex the way a fleet reset or a health restart does,
+	// let the timer fire into it, then disarm as that restart's first act.
+	e.restartMu.Lock()
+	select {
+	case <-fired:
+	case <-time.After(5 * time.Second):
+		e.restartMu.Unlock()
+		t.Fatal("the retry timer never fired")
+	}
+	rec.reset()
+	e.disarmRetry()
+	e.restartMu.Unlock()
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, 0, rec.count("restart-registered:sup_lazy_superseded:"+ReasonRetryAfterFailedStart),
+		"the superseded retry must not restart the backend a second time")
+	assert.Equal(t, 0, rec.count("reset:lazy_superseded"), "and must not reset it")
+}

@@ -12,10 +12,34 @@ import (
 // ReasonRetryAfterFailedStart is the restart reason the retry timer uses.
 const ReasonRetryAfterFailedStart = "retry after failed start"
 
-// runRetry restarts one entry after its retry timer fired. A supervisor that
-// stopped meanwhile refuses the restart, which is not a failure.
-func (s *Supervisor) runRetry(e *entry) {
-	err := s.Restart(s.runContext(e.name), e.name, ReasonRetryAfterFailedStart)
+// runRetry restarts one entry after its retry timer fired, under the entry's
+// restart mutex, so a restart that is running when the timer fires finishes
+// first and this one then sees the disarm it performed: the retry it
+// superseded does not run a second time. Stop cannot recall a callback that
+// has already begun, so the generation it was armed with is what tells it
+// whether it still owns the retry. A supervisor that stopped meanwhile
+// refuses the restart, which is not a failure.
+func (s *Supervisor) runRetry(e *entry, gen uint64) {
+	if s.onRetry != nil {
+		s.onRetry()
+	}
+	e.restartMu.Lock()
+	defer e.restartMu.Unlock()
+
+	e.mu.Lock()
+	superseded := e.retryGen != gen
+	if !superseded {
+		// It has fired: the entry is no longer armed, and the restart below
+		// arms the next attempt if it fails again.
+		e.retryTimer = nil
+	}
+	e.mu.Unlock()
+	if superseded {
+		s.logger.Info("on-demand start retry skipped, another restart ran first", "backend", e.name)
+		return
+	}
+
+	err := s.restartHealthLocked(s.runContext(e.name), e, ReasonRetryAfterFailedStart)
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrStopped):
@@ -43,7 +67,9 @@ func (s *Supervisor) failAndArm(e *entry, err error) (stopped, armed bool) {
 	e.lastErr = err
 	arm := e.mode == startOnDemand && e.retryTimer == nil
 	if arm {
-		e.retryTimer = time.AfterFunc(s.opts.RetryInterval, func() { s.runRetry(e) })
+		e.retryGen++
+		gen := e.retryGen
+		e.retryTimer = time.AfterFunc(s.opts.RetryInterval, func() { s.runRetry(e, gen) })
 	}
 	e.mu.Unlock()
 	return false, arm
@@ -58,10 +84,13 @@ func (s *Supervisor) logArmed(e *entry, armed bool) {
 	}
 }
 
-// disarmRetry stops a pending retry timer, if any, under the field mutex.
+// disarmRetry stops a pending retry timer, if any, under the field mutex,
+// and bumps the generation so a callback that already fired knows another
+// restart took its place.
 func (e *entry) disarmRetry() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.retryGen++
 	if e.retryTimer != nil {
 		e.retryTimer.Stop()
 		e.retryTimer = nil
@@ -175,7 +204,14 @@ func (s *Supervisor) QueueUpgrade(name string) {
 func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string) error {
 	e.restartMu.Lock()
 	defer e.restartMu.Unlock()
+	return s.restartHealthLocked(ctx, e, reason)
+}
 
+// restartHealthLocked is restartHealth's body; the retry timer's callback
+// calls it directly, having taken the entry's restart mutex itself so its
+// ownership check and the restart it guards are one critical section.
+// Callers hold the entry's restart mutex.
+func (s *Supervisor) restartHealthLocked(ctx context.Context, e *entry, reason string) error {
 	e.mu.Lock()
 	prior := e.phase
 	e.mu.Unlock()

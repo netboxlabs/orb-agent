@@ -238,6 +238,13 @@ type entry struct {
 	// after Options.RetryInterval; nil when disarmed. Every restart and
 	// StopAll disarm it, so a timer never doubles a restart in flight.
 	retryTimer *time.Timer
+	// retryGen identifies the retry currently armed. Every arm and every
+	// disarm bumps it, so a timer callback that had already fired when its
+	// timer was disarmed sees a generation that is no longer its own and
+	// does nothing: Stop cannot recall a callback that is already running,
+	// and without this the disarming restart would be followed by the
+	// retry's own, a second back to back restart and replay.
+	retryGen uint64
 
 	// restartMu is held across the initial configure and start and across a
 	// whole restart, including its replay and the replay's retries, so no
@@ -342,6 +349,11 @@ type Supervisor struct {
 	// and the upgrade dispatcher; tests count goroutine starts through them.
 	onServe    func()
 	onDispatch func()
+
+	// onRetry, when set, runs at the top of a retry timer's callback, before
+	// it takes the entry's restart mutex; a test uses it to know the callback
+	// is in flight.
+	onRetry func()
 
 	// restartRequests carries health-driven restart requests from the state
 	// manager; serveRestartRequests drains it until stop begins.
@@ -760,6 +772,7 @@ func (s *Supervisor) StopAll(ctx context.Context) {
 			e.runCancel()
 		}
 		e.phase = Stopped
+		e.retryGen++
 		if e.retryTimer != nil {
 			e.retryTimer.Stop()
 			e.retryTimer = nil
