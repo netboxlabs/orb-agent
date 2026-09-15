@@ -602,7 +602,7 @@ func TestConfigureAllAndStopAllRunConcurrentlyWithoutARace(t *testing.T) {
 
 		if configureErr != nil {
 			assert.True(t,
-				errors.Is(configureErr, ErrStopped) || errors.Is(configureErr, context.Canceled) || configureErr.Error() == "supervisor is stopped",
+				errors.Is(configureErr, ErrStopped),
 				"iteration %d: unexpected ConfigureAll error racing StopAll: %v", i, configureErr)
 		}
 	}
@@ -618,7 +618,8 @@ func TestConfigureAllRefusesAfterStopAll(t *testing.T) {
 
 	err := s.ConfigureAll(map[string]any{"sup_after_stop": nil}, config.BackendCommons{}, background)
 
-	require.EqualError(t, err, "supervisor is stopped")
+	require.ErrorIs(t, err, ErrStopped, "a stop that precedes the configure is the stop, not a configuration failure")
+	require.EqualError(t, err, "supervisor is stopped: backend is stopped")
 	assert.Empty(t, rec.snapshot(), "nothing is configured or started once the supervisor is stopped")
 	assert.Empty(t, s.Declared())
 }

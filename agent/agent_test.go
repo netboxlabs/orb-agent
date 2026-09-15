@@ -1276,3 +1276,28 @@ func TestStartReturnsNilWhenAStopWinsDuringStartup(t *testing.T) {
 		t.Fatal("Start did not return after Stop")
 	}
 }
+
+// A stop that lands before Start reaches the backends is the same shutdown
+// in progress: the supervisor refuses to configure anything and reports the
+// stop, and Start returns nil so main waits for the stop path rather than
+// exiting 1 while it is still completing.
+func TestStartReturnsNilWhenStopPrecedesTheBackends(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &restartableBackend{events: &[]string{}}
+	backend.Register("e2e_stop_precedes_start", be)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends:      map[string]any{"e2e_stop_precedes_start": nil},
+		ConfigManager: config.ManagerConfig{Active: "local"},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.configManager = &mockConfigManager{}
+	a.filesManager = &mockFilesManager{}
+	a.Stop(context.Background())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, a.Start(ctx, cancel), "a stop that precedes startup is not a startup error")
+	assert.NotContains(t, *be.events, "start", "nothing starts after the stop")
+}

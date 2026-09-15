@@ -307,7 +307,9 @@ func (s *Supervisor) ConfigureAll(cfgBackends map[string]any, commons config.Bac
 	}
 	if s.stopCtx.Err() != nil {
 		s.entriesMu.Unlock()
-		return errors.New("supervisor is stopped")
+		// A stop that precedes the configure is the stop, not a configuration
+		// failure: the agent treats ErrStopped as a shutdown in progress.
+		return fmt.Errorf("supervisor is stopped: %w", ErrStopped)
 	}
 	s.configured = true
 	s.entries = declared
