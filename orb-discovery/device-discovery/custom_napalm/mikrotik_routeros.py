@@ -321,23 +321,13 @@ _IP_LOOKS_LIKE_ADDRESS_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}/\d{1,2}")
 _IP_FLAGS_NOT_ACTIVE = frozenset("XI")
 
 
-def _split_columns(text: str) -> list[str]:
-    """
-    Split one row's remaining columns on the padding between them.
-
-    RouterOS pads 'print' output into aligned columns, so the separator is a
-    run of two or more spaces while a space inside a name is a single one.
-    Splitting on every space instead moves a word from one column to the next,
-    turning "ether1   customer blue" into interface "ether1 customer".
-
-    A device that pads with a single space would yield too few columns, so
-    that falls back to splitting on any whitespace: the old behaviour, which
-    is right whenever no name contains a space.
-    """
-    columns = [field for field in re.split(r"\s{2,}", text.strip()) if field]
-    if len(columns) < 2:
-        return text.split()
-    return columns
+# The VRF is the last padded column of a row, so the interface is everything
+# before the final run of column padding. Greedy on the left, so a name whose
+# own spacing is two or more spaces stays whole and exactly as the device
+# printed it: get_interfaces reads names from a quoted field and keeps them
+# verbatim, so collapsing them here would key an address to an interface that
+# does not exist.
+_IP_INTERFACE_VRF_RE = re.compile(r"^(?P<interface>.*\S)\s{2,}(?P<vrf>\S.*)$")
 
 
 def _after_first_column(text: str) -> str:
@@ -346,37 +336,29 @@ def _after_first_column(text: str) -> str:
     return remainder.strip()
 
 
-def _address_row(match: "re.Match", flags: str, has_vrf: bool) -> dict | None:
+def _address_row(match: "re.Match", has_vrf: bool) -> dict | None:
     """
     Build one address row from a matched line.
 
-    Returns None where the row is not one to report: an address the device
-    flags as inactive, or one with too few columns to name an interface.
+    Returns None where the row was recognised as an address but its columns
+    cannot be read, which the caller counts as unread: the device printed an
+    address and we could not say where it lives.
     """
-    if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
-        return None
-
     # NETWORK first, then INTERFACE, then VRF where the device has that column.
     # Split on the column padding rather than on any whitespace, so a name
     # containing a single space stays in one piece: RouterOS permits spaces in
     # both interface and VRF names, and splitting on every space would move a
     # word from one column into the other.
-    rest = match.group("rest")
-    if not has_vrf:
-        # With no VRF column everything after NETWORK is the interface name,
-        # whatever spacing it has, so it is taken verbatim rather than split.
-        interface, vrf = _after_first_column(rest), None
-    else:
-        fields = _split_columns(rest)
-        if len(fields) < 3:
+    after_network = _after_first_column(match.group("rest"))
+    if has_vrf:
+        columns = _IP_INTERFACE_VRF_RE.match(after_network)
+        if columns is None:
             return None
-        # The VRF is the last column. What lies between it and NETWORK is the
-        # interface, rejoined, so a name broken up by two or more spaces is
-        # kept rather than half of it being read as the VRF and the remainder
-        # dropped. A name whose own padding is indistinguishable from the
-        # column's cannot be recovered from this output at all: two spaces
-        # inside a name and two between columns are the same two spaces.
-        interface, vrf = " ".join(fields[1:-1]), fields[-1]
+        interface, vrf = columns.group("interface"), columns.group("vrf")
+    else:
+        # With no VRF column everything after NETWORK is the interface name,
+        # whatever spacing it has, so it is taken verbatim.
+        interface, vrf = after_network, None
     if not interface:
         return None
 
@@ -386,6 +368,28 @@ def _address_row(match: "re.Match", flags: str, has_vrf: bool) -> dict | None:
         "interface": interface,
         "vrf": vrf,
     }
+
+
+def _match_address_row(
+    line: str, carried_flags: str
+) -> tuple["re.Match | None", str, str]:
+    """
+    Match one line as an address row and say which flags apply to it.
+
+    Returns the match, the flags belonging to that address, and the flags
+    still waiting for an address below. An indexed row carries its own. A
+    continuation row takes the ones from the index line above it, and only
+    then: a line that is neither leaves them waiting, so a second comment
+    line between the two does not take them with it. Losing an X or an I
+    that way would report a disabled address as an active one.
+    """
+    match = _IP_ROW_RE.match(line)
+    if match:
+        return match, match.group("flags") or "", ""
+    match = _IP_CONTINUED_ROW_RE.match(line)
+    if match:
+        return match, carried_flags, ""
+    return None, "", carried_flags
 
 
 def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
@@ -425,20 +429,8 @@ def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
             carried_flags = comment.group("flags") or ""
             continue
 
-        match = _IP_ROW_RE.match(line)
-        flags = ""
-        if match:
-            flags = match.group("flags") or ""
-        else:
-            match = _IP_CONTINUED_ROW_RE.match(line)
-            if match:
-                # The flags on the index line above belong to this address.
-                # Consumed only once an address is actually found, so a line
-                # in between that is neither, such as a second comment line,
-                # does not take them with it: losing an X or an I there would
-                # report a disabled address as an active one.
-                flags, carried_flags = carried_flags, ""
-        if not match:
+        match, flags, carried_flags = _match_address_row(line, carried_flags)
+        if match is None:
             # Flags legends, standalone comment rows (";;; text") and anything
             # else the device prints are not address rows. Skipped rather than
             # fatal: an unrecognised line must not cost the addresses around it.
@@ -447,16 +439,20 @@ def _parse_ip_addresses(raw: str) -> tuple[list[dict], int]:
             if _IP_LOOKS_LIKE_ADDRESS_RE.search(line):
                 unread += 1
             continue
-        # Defensive, and no test distinguishes it: the continuation branch above
-        # already clears what it consumed, so this only bites if a comment line
-        # were followed by an indexed row and then a bare continuation, which
-        # RouterOS does not print. Carrying a stale flag onto an unrelated
-        # address would silently drop an active one, so it is cleared anyway.
-        carried_flags = ""
 
-        row = _address_row(match, flags, has_vrf)
-        if row is not None:
-            rows.append(row)
+        if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
+            # Understood, and not active. Not counted as unread: the device
+            # was read correctly and the address is simply not in service.
+            continue
+
+        row = _address_row(match, has_vrf)
+        if row is None:
+            # Recognised as an address, but its columns could not be read: a
+            # VRF column cut off by terminal width looks like this. Counted,
+            # so a row lost this way is reported rather than just missing.
+            unread += 1
+            continue
+        rows.append(row)
 
     return rows, unread
 
