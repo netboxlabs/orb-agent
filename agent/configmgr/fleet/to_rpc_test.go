@@ -73,12 +73,14 @@ func TestMessaging_SendCapabilities_Success(t *testing.T) {
 	mockBackend2 := &mockBackend{}
 
 	// Set up backend expectations
+	mockBackend1.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend1.On("Version").Return("1.2.3", nil)
 	mockBackend1.On("GetCapabilities").Return(map[string]any{
 		"feature1": "enabled",
 		"feature2": "disabled",
 	}, nil)
 
+	mockBackend2.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend2.On("Version").Return("2.0.0", nil)
 	mockBackend2.On("GetCapabilities").Return(map[string]any{
 		"protocol":   "mqtt",
@@ -160,9 +162,11 @@ func TestMessaging_SendCapabilities_BackendVersionError(t *testing.T) {
 	mockBackend1 := &mockBackend{}
 	mockBackend2 := &mockBackend{}
 
+	mockBackend1.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend1.On("Version").Return("1.2.3", nil)
 	mockBackend1.On("GetCapabilities").Return(map[string]any{"feature": "enabled"}, nil)
 
+	mockBackend2.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend2.On("Version").Return("", errors.New("version retrieval failed"))
 
 	backends := map[string]backend.Backend{
@@ -224,9 +228,11 @@ func TestMessaging_SendCapabilities_BackendCapabilitiesError(t *testing.T) {
 	mockBackend1 := &mockBackend{}
 	mockBackend2 := &mockBackend{}
 
+	mockBackend1.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend1.On("Version").Return("1.2.3", nil)
 	mockBackend1.On("GetCapabilities").Return(map[string]any{"feature": "enabled"}, nil)
 
+	mockBackend2.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend2.On("Version").Return("2.0.0", nil)
 	mockBackend2.On("GetCapabilities").Return(map[string]any(nil), errors.New("capabilities retrieval failed"))
 
@@ -285,6 +291,7 @@ func TestMessaging_SendCapabilities_PublishError(t *testing.T) {
 	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	mockBackend1 := &mockBackend{}
+	mockBackend1.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend1.On("Version").Return("1.0.0", nil)
 	mockBackend1.On("GetCapabilities").Return(map[string]any{"test": "value"}, nil)
 
@@ -382,7 +389,9 @@ func TestMessaging_SendCapabilities_AllBackendsFail(t *testing.T) {
 
 	labels := map[string]string{}
 
+	mockBackend1.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend1.On("Version").Return("", errors.New("version error"))
+	mockBackend2.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend2.On("Version").Return("1.0.0", nil)
 	mockBackend2.On("GetCapabilities").Return(map[string]any(nil), errors.New("capabilities error"))
 
@@ -426,6 +435,7 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
 
 	mockBackend1 := &mockBackend{}
+	mockBackend1.On("GetRunningStatus").Return(backend.Running, "", nil)
 	mockBackend1.On("Version").Return("test-version", nil)
 	mockBackend1.On("GetCapabilities").Return(map[string]any{
 		"string_val":  "test",
@@ -477,6 +487,39 @@ func TestMessaging_SendCapabilities_CapabilitiesStructure(t *testing.T) {
 	assert.IsType(t, map[string]interface{}{}, backendInfo.Data["object_val"])
 
 	mockBackend1.AssertExpectations(t)
+}
+
+// A declared backend that has no process (on demand, not started yet) is
+// left out of the capabilities without a version call: it is expected
+// there now, so no warning or error line per connect.
+func TestMessaging_SendCapabilities_SkipsADeclaredBackendWithNoProcess(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForToRPC{}
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	messaging := NewMessaging(logger, mockPMgr, resetChan, &groupManager, nil)
+
+	running := &mockBackend{}
+	running.On("GetRunningStatus").Return(backend.Running, "", nil)
+	running.On("Version").Return("1.2.3", nil)
+	running.On("GetCapabilities").Return(map[string]any{"feature": "enabled"}, nil)
+	declared := &mockBackend{}
+	declared.On("GetRunningStatus").Return(backend.Unknown, "", nil)
+
+	var capturedPayload []byte
+	messaging.sendCapabilities(context.Background(), map[string]backend.Backend{"running": running, "declared": declared}, map[string]string{}, "orb:\n", func(_ context.Context, payload []byte) error {
+		capturedPayload = payload
+		return nil
+	})
+
+	require.NotNil(t, capturedPayload)
+	var capabilities messages.Capabilities
+	require.NoError(t, json.Unmarshal(capturedPayload, &capabilities))
+	assert.Len(t, capabilities.Backends, 1)
+	assert.Contains(t, capabilities.Backends, "running")
+	running.AssertExpectations(t)
+	declared.AssertExpectations(t)
+	declared.AssertNotCalled(t, "Version")
 }
 
 func TestSendGroupMembershipsRequest_Success(t *testing.T) {
