@@ -286,3 +286,33 @@ def test_column_boundaries_come_from_the_header():
     assert _driver_with_output(flagged).get_interfaces_ip() == {
         "ether1": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}}
     }
+
+
+def test_a_truncated_row_never_yields_an_interface_it_does_not_have(caplog):
+    """
+    A row cut off before its interface column reports nothing and says so.
+
+    Keying an address under None takes out the translation that sorts those
+    keys, and keying it under the NETWORK value invents an interface. Either
+    is worse than the row being counted as unread, which is what it is.
+    """
+    import logging
+
+    for output in (
+        # RouterOS 6 layout, no VRF column
+        "Columns: ADDRESS, NETWORK, INTERFACE\n"
+        "# ADDRESS        NETWORK      INTERFACE\n"
+        "0  192.0.2.1/24   192.0.2.0\n",
+        # RouterOS 7 layout
+        "Columns: ADDRESS, NETWORK, INTERFACE, VRF\n"
+        "# ADDRESS        NETWORK      INTERFACE   VRF\n"
+        "0  192.0.2.1/24   192.0.2.0\n",
+        # no header at all, so the fallback rule decides
+        "0  192.0.2.1/24   192.0.2.0\n",
+    ):
+        caplog.clear()
+        with caplog.at_level(logging.WARNING):
+            result = _driver_with_output(output).get_interfaces_ip()
+        assert result == {}
+        assert None not in result
+        assert any("matched no known row format" in r.message for r in caplog.records)

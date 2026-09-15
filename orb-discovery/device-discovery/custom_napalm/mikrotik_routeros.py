@@ -359,7 +359,12 @@ def _columns_by_offset(
     if interface_at <= match.end("prefix"):
         return None
     if not has_vrf or "VRF" not in offsets:
-        return line[interface_at:].strip() or None, None
+        # Returned as None, not as a row naming no interface: a row whose
+        # interface column is empty, as a truncated line leaves it, would
+        # otherwise key an address under None and take out the translation
+        # that sorts those keys. The caller counts it as unread instead.
+        interface = line[interface_at:].strip()
+        return (interface, None) if interface else None
     vrf_at = offsets["VRF"] + shift
     if vrf_at <= interface_at:
         return None
@@ -368,9 +373,15 @@ def _columns_by_offset(
 
 
 def _after_first_column(text: str) -> str:
-    """Return everything after the first column of a row, spacing intact."""
-    remainder = re.sub(r"^\s*\S+\s+", "", text, count=1)
-    return remainder.strip()
+    """
+    Return everything after the first column of a row, spacing intact.
+
+    Empty where there is no second column. A row truncated after NETWORK has
+    only the one, and returning it would key the address to an interface
+    named after the network.
+    """
+    remainder = re.match(r"^\s*\S+\s+(?P<rest>.*)$", text)
+    return remainder.group("rest").strip() if remainder else ""
 
 
 def _address_row(
