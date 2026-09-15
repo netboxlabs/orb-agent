@@ -41,18 +41,23 @@ func (s *Supervisor) RestartUpgraded(ctx context.Context, name string) error {
 // RestartAll restarts every entry that has started: Running, Starting or
 // Failed (a failed entry restarts as a retry). An entry that was only
 // declared, or one a StopAll already stopped, is skipped, since neither has
-// a process a restart could reach. Failures are logged, not returned, the
-// same way the per-backend loop it replaces logged them. The caller's
-// context is checked before each entry, so a cancelled request starts no
-// further restarts; it does not interrupt one already in flight, which runs
-// under s.runContext(e.name), the per-backend context factory
-// serveRestartRequests uses too.
+// a process a restart could reach. Per-backend failures are logged, not
+// returned, the same way the per-backend loop it replaces logged them. The
+// caller's context is checked before each entry, so a cancelled request
+// starts no further restarts; it does not interrupt one already in flight,
+// which runs under s.runContext(e.name), the per-backend context factory
+// serveRestartRequests uses too. A sweep that did not complete, because
+// the caller's context was cancelled or because StopAll began, returns an
+// error satisfying errors.Is(err, context.Canceled) (and ErrStopped for
+// the stop), so the fleet reset handler sends no reconnect signal for it:
+// there is no connection to refresh, and the handler that signal wakes is
+// on its way down.
 func (s *Supervisor) RestartAll(ctx context.Context, reason string) error {
 	s.logger.Info("restarting comms", "reason", reason)
 	for _, e := range s.snapshot() {
 		if err := ctx.Err(); err != nil {
 			s.logger.Info("restart sweep cancelled by the caller", "reason", reason, "error", err)
-			break
+			return fmt.Errorf("restart sweep cancelled by the caller: %w", err)
 		}
 		e.mu.Lock()
 		phase := e.phase
@@ -66,6 +71,10 @@ func (s *Supervisor) RestartAll(ctx context.Context, reason string) error {
 		default:
 			s.logger.Debug("skipping restart for a backend that never started", "backend", e.name, "phase", phase)
 		}
+	}
+	if err := s.stopCtx.Err(); err != nil {
+		s.logger.Info("restart sweep aborted by stop", "reason", reason)
+		return fmt.Errorf("%w: restart sweep aborted by stop: %w", ErrStopped, err)
 	}
 	s.logger.Info("all backends and comms were restarted")
 	return nil

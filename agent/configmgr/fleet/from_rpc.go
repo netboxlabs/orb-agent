@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"sync"
@@ -21,6 +22,10 @@ import (
 // connection that dispatches resets exists, so the field is read without
 // a lock on the dispatch worker.
 type Resetter interface {
+	// RestartAll restarts every started backend. A sweep that did not
+	// complete, because ctx was cancelled or because the agent is
+	// shutting down, returns an error satisfying
+	// errors.Is(err, context.Canceled); no reconnect signal follows it.
 	RestartAll(ctx context.Context, reason string) error
 }
 
@@ -332,14 +337,24 @@ func (messaging *Messaging) handleAgentReset(ctx context.Context, payload messag
 // before it started.
 func (messaging *Messaging) runResets(ctx context.Context, reason string) {
 	for {
-		if err := messaging.resetter.RestartAll(ctx, reason); err != nil {
-			messaging.logger.Error("RestartAll failure", "error", err)
-		}
-		select {
-		case messaging.resetChan <- struct{}{}:
-			messaging.logger.Info("sent reset signal to channel")
+		err := messaging.resetter.RestartAll(ctx, reason)
+		switch {
+		case errors.Is(err, context.Canceled):
+			// Shutdown (or a cancelled request) aborted the sweep: there is
+			// no connection to refresh, and the reset handler the signal
+			// wakes is on its way down and could sit in Disconnect for its
+			// whole timeout, holding the config manager's stop.
+			messaging.logger.Info("agent reset did not complete; no reconnect signal", "error", err)
 		default:
-			messaging.logger.Warn("reset channel is full, skipping reset signal")
+			if err != nil {
+				messaging.logger.Error("RestartAll failure", "error", err)
+			}
+			select {
+			case messaging.resetChan <- struct{}{}:
+				messaging.logger.Info("sent reset signal to channel")
+			default:
+				messaging.logger.Warn("reset channel is full, skipping reset signal")
+			}
 		}
 		messaging.resetMu.Lock()
 		if !messaging.resetPending {

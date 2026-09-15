@@ -1116,8 +1116,9 @@ func TestRestartAllStopsWhenTheCallersContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.NoError(t, s.RestartAll(ctx, "cancelled"))
+	err := s.RestartAll(ctx, "cancelled")
 
+	require.ErrorIs(t, err, context.Canceled, "a sweep the caller cancelled reports the cancellation, so the fleet handler sends no reconnect signal for it")
 	assert.Equal(t, 0, rec.count("restart-registered:"), "no entry is restarted once the caller's context is cancelled")
 	assert.Equal(t, 0, rec.count("reset:"))
 	s.StopAll(context.Background())
@@ -1577,4 +1578,39 @@ func TestStopAllDuringRestartConfigureKeepsTheLiveProcessContext(t *testing.T) {
 	assert.NoError(t, liveErrAfterFirstLoop, "the live process's context survives StopAll's first loop while the restart configures")
 	assert.Equal(t, 1, rec.count("stop:cfg_live"), "the live process is stopped gracefully by StopAll's second loop")
 	assert.ErrorIs(t, liveCtx.Err(), context.Canceled, "its context is released once it is stopped")
+}
+
+// A sweep that shutdown aborts reports it as both the stop sentinel and a
+// cancellation: the fleet reset handler, which cannot see the supervisor's
+// sentinel, recognises the cancellation and sends no reconnect signal for a
+// reset that never completed.
+func TestRestartAllReportsCancellationWhenStopAbortsTheSweep(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "aborted_sweep")
+	backend.Register("sup_aborted_sweep", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_aborted_sweep": nil}, config.BackendCommons{}, background))
+	entered := make(chan struct{})
+	be.onResetCtx = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- s.RestartAll(context.Background(), "fleet reset") }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reset was never entered")
+	}
+	s.StopAll(context.Background())
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrStopped)
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(5 * time.Second):
+		t.Fatal("RestartAll did not return after StopAll")
+	}
 }

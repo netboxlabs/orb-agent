@@ -1822,6 +1822,7 @@ type stubResetter struct {
 	calls   []string
 	entered chan struct{}
 	release chan struct{}
+	err     error // returned by RestartAll after the release, when set
 }
 
 func (r *stubResetter) RestartAll(_ context.Context, reason string) error {
@@ -1834,7 +1835,7 @@ func (r *stubResetter) RestartAll(_ context.Context, reason string) error {
 	if r.release != nil {
 		<-r.release
 	}
-	return nil
+	return r.err
 }
 
 func (r *stubResetter) reasons() []string {
@@ -1938,4 +1939,28 @@ func TestHandleAgentResetWithoutAResetterIsIgnored(t *testing.T) {
 		t.Fatal("no reconnect signal without a resetter")
 	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+// A reset that shutdown aborted (the resetter reports a cancellation) sends
+// no reconnect signal: there is no connection to refresh, and the reset
+// handler it would wake is on its way down and could sit in Disconnect for
+// its whole timeout. The run still clears resetRunning.
+func TestHandleAgentResetSkipsTheReconnectSignalWhenShutdownAbortsTheReset(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+	r := &stubResetter{err: fmt.Errorf("restart sweep aborted by stop: %w", context.Canceled)}
+	handlers.SetResetter(r)
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "test"})
+
+	require.Eventually(t, func() bool {
+		handlers.resetMu.Lock()
+		defer handlers.resetMu.Unlock()
+		return !handlers.resetRunning
+	}, 5*time.Second, 5*time.Millisecond, "the run must finish and clear resetRunning")
+	select {
+	case <-resetChan:
+		t.Fatal("no reconnect signal after a reset that shutdown aborted")
+	default:
+	}
+	assert.Equal(t, []string{"test"}, r.reasons())
 }
