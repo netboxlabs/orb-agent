@@ -654,11 +654,15 @@ func (s *Supervisor) startDeclared(e *entry) {
 // arms the retry timer. A stop that began meanwhile leaves the entry
 // Stopped and records nothing.
 func (s *Supervisor) recordStartFailure(e *entry, err error) {
-	if s.failAndArm(e, err) {
+	stopped, armed := s.failAndArm(e, err)
+	if stopped {
 		return
 	}
 	s.logger.Error("on-demand start failed", "backend", e.name, "error", err)
 	s.state.RegisterError(e.name, err.Error())
+	// Announced after the failure it retries, so the operator reads them in
+	// the order they happened.
+	s.logArmed(e, armed)
 }
 
 // registerMonitorOnce registers the health monitor the first time an entry

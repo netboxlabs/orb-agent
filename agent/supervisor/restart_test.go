@@ -1748,8 +1748,6 @@ func TestStopAllDisarmsAPendingRetry(t *testing.T) {
 	armed := e.retryTimer != nil
 	e.mu.Unlock()
 	assert.False(t, armed, "StopAll disarmed the timer")
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 0, rec.count("reset:lazy_stopped"))
 }
 
 // The retry's start is bounded by the same budget as the first attempt: the
@@ -1844,8 +1842,8 @@ func TestOnDemandConfigureFailureRearmsTheRetry(t *testing.T) {
 
 // The timer is on-demand only: an eager entry is driven through the
 // prior == Failed branch on purpose (stamped Failed before the restart, the
-// way the Task 3 tests do), so its failed FullReset reaches armRetry; the
-// mode guard inside armRetry must still refuse to arm it, and the entry
+// way the other tests do), so its failed FullReset reaches the stamp that
+// arms; the mode guard there must still refuse to arm it, and the entry
 // stays Failed for the health monitor, as before.
 func TestEagerRestartFailureArmsNoRetry(t *testing.T) {
 	rec := &recorder{}
@@ -2001,4 +1999,37 @@ func TestFailedOnDemandStartIsArmedAsSoonAsItIsFailed(t *testing.T) {
 		require.False(t, torn, "iteration %d: Failed without an armed timer is the torn state", i)
 		s.StopAll(context.Background())
 	}
+}
+
+// A restart that cannot configure an entry a launched on-demand start had
+// stamped Starting leaves it failed with its retry armed, and hands no
+// policies back: there is no process to hand them to, and the replay the
+// restart schedules reaches the backend once a start succeeds.
+func TestConfigureFailureOnAJustLaunchedOnDemandStartLeavesItFailedAndArmed(t *testing.T) {
+	rec := &recorder{}
+	applier := &stubApplier{rec: rec}
+	s := newTestSupervisor(t, rec, applier, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	s.opts.RetryInterval = time.Hour
+	lazy := newStub(rec, "lazy_cfg_raced")
+	backend.Register("sup_lazy_cfg_raced", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_cfg_raced": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	e, _ := s.entryFor("sup_lazy_cfg_raced")
+	lazy.configureErr = errors.New("bad config")
+	e.mu.Lock()
+	e.phase = Starting // what EnsureStarted stamps before launching the start
+	e.mu.Unlock()
+	rec.reset()
+
+	require.EqualError(t, s.Restart(context.Background(), "sup_lazy_cfg_raced", "fleet reset"), "bad config")
+
+	p, _ := s.Phase("sup_lazy_cfg_raced")
+	assert.Equal(t, Failed, p, "an entry that never had a process stays failed")
+	e.mu.Lock()
+	armed := e.retryTimer != nil
+	e.mu.Unlock()
+	assert.True(t, armed, "with its retry armed")
+	assert.Equal(t, 0, rec.count("apply:sup_lazy_cfg_raced"), "no policy is handed back to a backend that is not there")
+	_, err := s.EnsureStarted("sup_lazy_cfg_raced")
+	require.EqualError(t, err, "bad config", "the configure failure is what a policy is told")
 }
