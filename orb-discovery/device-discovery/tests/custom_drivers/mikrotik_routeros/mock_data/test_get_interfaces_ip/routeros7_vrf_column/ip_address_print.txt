@@ -1,0 +1,13 @@
+Flags: I - INVALID
+Columns: ADDRESS, NETWORK, INTERFACE, VRF
+
+# ADDRESS            NETWORK         INTERFACE          VRF
+0   192.0.2.4/32       192.0.2.4       Loopback           main
+1   198.51.100.194/30  198.51.100.192  sfp-sfpplus1.663   main
+2   198.51.100.10/30   198.51.100.8    sfp-sfpplus2.665   main
+3 I 198.51.100.225/30  198.51.100.224  ether12            main
+4 I 192.0.2.68/32      192.0.2.68      vrrp1              main
+5   203.0.113.1/24     203.0.113.0     br_Test01          VRF_A
+6   192.0.2.34/30      192.0.2.32      sfp-sfpplus1.160   VRF_A
+7   192.0.2.2/24       192.0.2.0       sfp-sfpplus1.3333  main
+8   203.0.113.217/32   203.0.113.217   Loopback2          main
