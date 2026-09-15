@@ -292,6 +292,23 @@ _IP_ROW_RE = re.compile(
     r"(?P<rest>\S.*?)\s*$"
 )
 
+# An address carrying a comment is printed over two lines: the index and flags
+# sit on the comment line, and the address follows on an unnumbered one.
+#
+#   0 D ;;; managed by dhcp
+#       192.0.2.1/24   192.0.2.0   ether1
+#
+# The flags belong to the address below them, so they are carried across. A
+# device whose addresses are all commented would otherwise report none at all,
+# which is the failure this parser was written to fix.
+_IP_COMMENT_ROW_RE = re.compile(
+    r"^\s*(?P<num>\d+)\s+(?:(?P<flags>[A-Za-z]+)\s+)?;{3}"
+)
+_IP_CONTINUED_ROW_RE = re.compile(
+    r"^\s*(?P<ip>\d{1,3}(?:\.\d{1,3}){3})/(?P<prefix>\d{1,2})\s+"
+    r"(?P<rest>\S.*?)\s*$"
+)
+
 # RouterOS address flags. X is an address the operator disabled and I one the
 # device could not apply; neither is active, and SNMP does not report them, so
 # emitting them would make the two backends disagree about the same device.
@@ -308,6 +325,7 @@ def _parse_ip_addresses(raw: str) -> list[dict]:
     Rows the device flags as disabled or invalid are skipped.
     """
     has_vrf = False
+    carried_flags = ""
     rows: list[dict] = []
 
     for line in raw.splitlines():
@@ -318,19 +336,32 @@ def _parse_ip_addresses(raw: str) -> list[dict]:
         if header:
             has_vrf = "VRF" in header.group("columns").upper()
             # Skipping is belt-and-braces: a header line has no leading row
-            # index, so the row pattern below rejects it anyway and no test
+            # index, so the row patterns below reject it anyway and no test
             # distinguishes the two. Written out because reading on from a
             # line already consumed is a bug waiting for the next format.
             continue
 
-        match = _IP_ROW_RE.match(line)
-        if not match:
-            # Flags legends, comment rows (";;; text") and anything else the
-            # device prints are not address rows. Skipped rather than fatal:
-            # an unrecognised line must not cost the addresses around it.
+        comment = _IP_COMMENT_ROW_RE.match(line)
+        if comment:
+            carried_flags = comment.group("flags") or ""
             continue
 
-        flags = match.group("flags") or ""
+        match = _IP_ROW_RE.match(line)
+        flags = ""
+        if match:
+            flags = match.group("flags") or ""
+        else:
+            match = _IP_CONTINUED_ROW_RE.match(line)
+            # Only the flags from an index line immediately above belong to
+            # this address; anything else reaching here is its own row.
+            flags, carried_flags = carried_flags, ""
+        if not match:
+            # Flags legends, standalone comment rows (";;; text") and anything
+            # else the device prints are not address rows. Skipped rather than
+            # fatal: an unrecognised line must not cost the addresses around it.
+            continue
+        carried_flags = ""
+
         if set(flags.upper()) & _IP_FLAGS_NOT_ACTIVE:
             continue
 
