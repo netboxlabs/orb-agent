@@ -164,6 +164,12 @@ func (m *MockMQTTConnection) RegisterTopicHandler(_ string, _ TopicMessageHandle
 	// No-op for mock
 }
 
+// SetResetter is a no-op for the mock.
+func (m *MockMQTTConnection) SetResetter(_ Resetter) {}
+
+// Resetter always returns nil for the mock.
+func (m *MockMQTTConnection) Resetter() Resetter { return nil }
+
 // TriggerOnReadyHook triggers all registered onReady hooks (for testing)
 func (m *MockMQTTConnection) TriggerOnReadyHook(cm *autopaho.ConnectionManager, topics TokenResponseTopics) {
 	for _, hook := range m.hooks {

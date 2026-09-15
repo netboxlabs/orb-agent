@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -20,6 +19,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
+	"github.com/netboxlabs/orb-agent/agent/supervisor"
 	"github.com/netboxlabs/orb-agent/agent/telemetry"
 	"github.com/netboxlabs/orb-agent/agent/version"
 )
@@ -28,18 +28,12 @@ const (
 	routineKey             config.ContextKey = "routine"
 	otlpShutdownTimeout    time.Duration     = 5 * time.Second
 	restartBackendChanSize int               = 5
-
-	// reapplyAttempts bounds how many times reapplyBackendPolicies calls
-	// ApplyBackendPolicies for a single restart while it keeps answering
-	// ErrBackendNotRunning.
-	reapplyAttempts int = 3
 )
 
 // Agent is the interface that all agents must implement
 type Agent interface {
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context)
-	RestartAll(ctx context.Context, reason string) error
 	RestartBackend(ctx context.Context, backend string, reason string) error
 }
 
@@ -47,18 +41,8 @@ type orbAgent struct {
 	logger *slog.Logger
 	config config.Config
 
-	// backends maps backend names to their Backend implementations.
-	//
-	// Invariant: this map is populated exactly once during startBackends and is
-	// read-only after Start returns. Multiple goroutines (subscribeFilesmgr's
-	// callback, restartBackendWithFilesmgrRollback) read it concurrently
-	// without synchronization, which is safe ONLY because of this invariant.
-	// Any future code path that mutates a.backends after Start MUST add a
-	// mutex to protect concurrent access.
-	backends         map[string]backend.Backend
 	backendsCommon   config.BackendCommons
 	debug            bool
-	ctx              context.Context
 	cancelFunction   context.CancelFunc
 	otlpShutdown     func(context.Context) error
 	otlpShutdownOnce sync.Once
@@ -69,72 +53,12 @@ type orbAgent struct {
 	backendStateManager backend.StateManager
 	filesManager        filesmgr.Manager
 	filesmgrUnsubscribe func()
-	restartBackendChan  chan string
 
-	// pendingRestarts holds backend names that need to be restarted.
-	// The restartDispatcher goroutine drains this map and sends to
-	// restartBackendChan, coalescing rapid successive upgrade events
-	// into a single restart.
-	pendingRestarts   map[string]struct{}
-	pendingRestartsMu sync.Mutex
-
-	// restartCancels stores the cancel functions for backend contexts created
-	// by restartBackendWithFilesmgrRollback. The prior cancel is called before
-	// each new restart to avoid leaking contexts across multiple upgrade cycles.
-	// Note: startBackends does not store its cancel functions (pre-existing
-	// pattern); only the new restartBackendWithFilesmgrRollback code paths are
-	// guarded here.
-	restartCancels   map[string]context.CancelFunc
-	restartCancelsMu sync.Mutex
-
-	// dispatcherCancel stops the restartDispatcher goroutine independently of
-	// the root agent context. Cancelled in Stop() before iterating backends so
-	// the dispatcher cannot fire a restart after backends have been stopped.
-	dispatcherCancel context.CancelFunc
-
-	// backendRestartMu serializes Stop+Start sequences per backend across
-	// both restart paths (file-driven via restartDispatcher and health/fleet-
-	// driven via waitForRestartRequests). Without this, a file event and a
-	// health-driven restart for the same backend can interleave Stop/Start
-	// operations.
-	backendRestartMu sync.Map // name -> *sync.Mutex
-
-	// stopCancel is called as the first statement of Stop. The agent context
-	// is only cancelled at the end of Stop, after every backend is stopped,
-	// so a restart already holding a backend's restart mutex when Stop
-	// begins still sees a live context; stopCtx is what it observes instead.
-	stopCtx    context.Context
-	stopCancel context.CancelFunc
-
-	// reapplyRetryDelay separates the attempts a restart's replay makes while
-	// the backend is not yet answering its status probe. New sets it; tests
-	// shorten it.
-	reapplyRetryDelay time.Duration
-
-	// replayScheduled tracks, per backend name, whether a scheduleReplay
-	// goroutine is currently waiting or attempting for that backend: a
-	// sync.Map of *atomic.Bool, same rationale as backendRestartMu for never
-	// deleting entries.
-	replayScheduled sync.Map
-
-	// replayers tracks every goroutine scheduleReplay starts, so Stop can
-	// wait for all of them to exit before returning.
-	replayers sync.WaitGroup
-	// replayAdmitMu orders replay admission against Stop: scheduleReplay
-	// checks stopCtx and adds to replayers under it, and Stop takes it once
-	// after cancelling stopCtx, so no replayer is added after Stop started
-	// waiting for them.
-	replayAdmitMu sync.Mutex
-
-	// replayRetryInterval separates the attempts a scheduled replay makes
-	// after a restart's own replay gave up because the backend was still not
-	// answering. New sets it to time.Minute; tests shorten it.
-	replayRetryInterval time.Duration
-
-	// replayStarts counts how many scheduleReplay calls actually started a
-	// goroutine, for tests to assert a second call for a backend that
-	// already has one scheduled is a no-op.
-	replayStarts atomic.Int32
+	// supervisor owns every declared backend's lifecycle: configuring and
+	// starting them, restarting them on request, replaying their policies
+	// after a restart, and stopping them at shutdown. The agent delegates to
+	// it instead of tracking backends, restarts and replays itself.
+	supervisor *supervisor.Supervisor
 }
 
 var _ Agent = (*orbAgent)(nil)
@@ -165,7 +89,14 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 	// runtime context supplied in Agent.Start.
 	cm := configmgr.New(logger, pm, c.OrbAgent.ConfigManager.Active, backendStateManager, fm)
 
-	stopCtx, stopCancel := context.WithCancel(context.Background())
+	sup := supervisor.New(logger, backendStateManager, fm, pm, restartBackendChan, supervisor.Options{NotRunning: policymgr.ErrBackendNotRunning})
+	// The fleet connection is built inside newFleetConfigManager, so it
+	// already exists here: a full agent reset restarts through the
+	// supervisor from the moment the fleet config manager can dispatch one.
+	if fleetCM, ok := cm.(*configmgr.FleetConfigManager); ok {
+		fleetCM.SetResetter(sup)
+	}
+
 	a := &orbAgent{
 		logger:              logger,
 		config:              c,
@@ -175,11 +106,7 @@ func New(logger *slog.Logger, c config.Config, debug bool) (Agent, error) {
 		secretsManager:      sm,
 		backendStateManager: backendStateManager,
 		filesManager:        fm,
-		restartBackendChan:  restartBackendChan,
-		stopCtx:             stopCtx,
-		stopCancel:          stopCancel,
-		reapplyRetryDelay:   10 * time.Second,
-		replayRetryInterval: time.Minute,
+		supervisor:          sup,
 	}
 	return a, nil
 }
@@ -189,8 +116,6 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	if len(cfgBackends) == 0 {
 		return errors.New("no backends specified")
 	}
-	a.ctx = agentCtx
-	a.backends = make(map[string]backend.Backend, len(cfgBackends))
 	var commonConfig config.BackendCommons
 	if v, prs := cfgBackends["common"]; prs {
 		bytes, err := yaml.Marshal(v)
@@ -227,68 +152,21 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 		}
 	}
 
-	for name, configurationEntry := range cfgBackends {
-		var cEntity map[string]any
-		if configurationEntry != nil {
-			var ok bool
-			cEntity, ok = configurationEntry.(map[string]any)
-			if !ok {
-				return errors.New("invalid backend configuration format for backend: " + name)
-			}
-		}
-		if !backend.HaveBackend(name) {
-			return errors.New("specified backend does not exist: " + name)
-		}
-		be := backend.GetBackend(name)
-
-		if err := be.Configure(a.logger, a.policyManager.GetRepo(), cEntity, a.backendsCommon, a.filesManager); err != nil {
-			a.logger.Info("failed to configure backend", "backend", name, "error", err)
-			return err
-		}
-		backendCtx := context.WithValue(agentCtx, routineKey, name)
-		backendCtx = a.configManager.GetContext(backendCtx)
-		a.backends[name] = be
-		// Create a cancellable context for the backend and ensure we pass both
-		// the context and its cancel function to Start, matching the Backend
-		// interface.
-		runCtx, cancel := context.WithCancel(backendCtx)
-		if err := be.Start(runCtx, cancel); err != nil {
-			var errMessage string
-			if be.GetInitialState() == backend.BackendError {
-				errMessage = err.Error()
-			}
-			a.backendStateManager.RegisterError(name, errMessage)
-			return err
-		}
-		a.backendStateManager.StartBackendMonitor(name, be)
-	}
-
-	// Start the restart workers once, after all backends are registered.
-	// Use a dedicated context for the dispatcher so Stop() can cancel it before
-	// iterating backends, preventing a restart from firing after shutdown begins.
-	//
-	// waitForRestartRequests is started exactly once per agent lifetime.
-	// If startBackends is ever invoked again for the same agent (e.g., a
-	// future reload path), a second listener would be started, leading to
-	// duplicate consumption and panics on channel close. This mirrors the
-	// write-once invariant on a.backends.
-	go a.waitForRestartRequests()
-	dispatcherCtx, dispatcherCancel := context.WithCancel(agentCtx)
-	a.dispatcherCancel = dispatcherCancel
-	go a.restartDispatcher(dispatcherCtx)
-
-	return nil
+	return a.supervisor.ConfigureAll(agentCtx, cfgBackends, a.backendsCommon, func(name string) context.Context {
+		return a.configManager.GetContext(context.WithValue(agentCtx, routineKey, name))
+	})
 }
 
-// subscribeFilesmgr wires FilesManager upgrade events to the backend
-// restart channel. When a file's logical name matches the ManagedBinaryName
-// of a registered backend, the backend (identified by its backend name, NOT
-// the file name) is enqueued for restart. This decouples backend identity
-// from binary identity. The unsubscribe function stored in
-// a.filesmgrUnsubscribe must be called on Stop().
+// subscribeFilesmgr wires FilesManager upgrade events to the supervisor's
+// upgrade queue. When a file's logical name matches the ManagedBinaryName of
+// a declared backend, the backend (identified by its backend name, NOT the
+// file name) is queued for restart. This decouples backend identity from
+// binary identity. The unsubscribe function stored in a.filesmgrUnsubscribe
+// must be called on Stop().
 //
-// Must be called after startBackends has populated a.backends; the subscriber
-// callback reads a.backends from the FileEvent goroutine.
+// Must be called after startBackends has declared every backend with the
+// supervisor; the subscriber callback reads the supervisor's declared
+// backends from the FileEvent goroutine.
 func (a *orbAgent) subscribeFilesmgr() {
 	if a.filesManager == nil {
 		return
@@ -304,356 +182,17 @@ func (a *orbAgent) subscribeFilesmgr() {
 			// on them would create duplicate restart cycles.
 			return
 		}
-		for name, be := range a.backends {
+		for name, be := range a.supervisor.Declared() {
 			mb, ok := be.(backend.ManagedBinary)
 			if !ok {
 				continue
 			}
 			if mb.ManagedBinaryName() == ev.Entry.Name {
-				a.pendingRestartsMu.Lock()
-				if a.pendingRestarts == nil {
-					a.pendingRestarts = make(map[string]struct{})
-				}
-				a.pendingRestarts[name] = struct{}{}
-				a.pendingRestartsMu.Unlock()
+				a.supervisor.QueueUpgrade(name)
 				a.logger.Info("filesmgr: queued restart", "backend", name, "file", ev.Entry.Name, "version", ev.Entry.Version)
 			}
 		}
 	})
-}
-
-// backendRestartLock returns a per-backend mutex that serializes concurrent
-// Stop+Start sequences. Both restartBackendWithFilesmgrRollback (file-driven)
-// and RestartBackend (health/fleet-driven) acquire this mutex before touching
-// a backend, ensuring only one restart sequence runs at a time per backend.
-// Entries are never deleted — same race rationale as filesmgr.perNameMu.
-func (a *orbAgent) backendRestartLock(name string) *sync.Mutex {
-	v, _ := a.backendRestartMu.LoadOrStore(name, &sync.Mutex{})
-	mu, _ := v.(*sync.Mutex) // LoadOrStore stored a *sync.Mutex; assertion cannot fail.
-	return mu
-}
-
-// reapplyBackendPolicies hands the backend its own policies again after a
-// restart. A backend that has just come back from a reset or a start may not
-// answer its first status probe or two, so ApplyBackendPolicies can return
-// ErrBackendNotRunning transiently even though the backend is on its way up.
-// The replay retries that specific error, up to reapplyAttempts times,
-// reapplyRetryDelay apart, because nothing else would install the policies:
-// the health monitor sees a healthy backend and never asks for another
-// restart. Any other failure is logged, not returned: the policies stay
-// marked unknown for the next successful restart, and manages for the
-// backend stay deferred until the next successful restart, because the
-// policy manager's own restarting marker (set by the removal that precedes
-// this replay) is cleared only by an attempt whose gate confirms the backend
-// is answering, which none of these did. Once the context is done the agent
-// is shutting down and no new work is launched; the policies stay unknown.
-// The policy manager itself re-checks the context before every policy in its
-// loop, so a shutdown that begins mid-replay stops launching further HTTP
-// calls instead of running the whole backlog.
-//
-// Giving up after reapplyAttempts is different from every other failure:
-// the caller is told, through the returned retryable flag, to reschedule the
-// replay via scheduleReplay, which keeps attempting it, at
-// replayRetryInterval, until it completes. Without that, the restarting
-// marker set by the removal above would stay set forever and every later
-// manage for the backend would stay deferred, since a healthy backend never
-// asks for another restart on its own.
-//
-// The restart mutex stays held across the retries, which is intended: no
-// other restart for this backend may interleave with a replay in progress,
-// and a shutdown cancels the wait rather than blocking it.
-//
-// The apply context is cancelled by whichever of the caller's context or the
-// agent's stop context is cancelled first, since the agent context (unlike
-// stopCtx) is only cancelled at the end of Stop, after every backend has
-// been stopped, so a restart that already holds a backend's restart mutex
-// when Stop begins still sees a live agent context here. The merge makes
-// stopCtx the direct parent of the apply context, so a cancellation of
-// stopCtx (Stop beginning, including mid-replay) is observed synchronously
-// by every check against the apply context, in this function and inside the
-// policy manager's loop alike; the caller's context is folded in through
-// context.AfterFunc, whose callback runs in its own goroutine, so it is
-// checked directly up front rather than relied on to interrupt a loop
-// already in flight.
-//
-// completed is true only when ApplyBackendPolicies returns nil. Otherwise
-// completed is false, and retryable tells the caller whether to reschedule:
-// true when every attempt answered ErrBackendNotRunning and reapplyAttempts
-// was reached, false for any other failure and for a replay that never ran
-// because the context was already done.
-func (a *orbAgent) reapplyBackendPolicies(ctx context.Context, name string, be backend.Backend) (completed, retryable bool) {
-	stopCtx := a.stopCtx
-	if stopCtx == nil {
-		stopCtx = context.Background()
-	}
-	applyCtx, cancel := context.WithCancel(stopCtx)
-	defer cancel()
-	defer context.AfterFunc(ctx, cancel)()
-	if err := ctx.Err(); err != nil {
-		a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", err)
-		return false, false
-	}
-	if err := applyCtx.Err(); err != nil {
-		a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", err)
-		return false, false
-	}
-	for attempt := 1; ; attempt++ {
-		err := a.policyManager.ApplyBackendPolicies(applyCtx, name, be)
-		if err == nil {
-			return true, false
-		}
-		if !errors.Is(err, policymgr.ErrBackendNotRunning) {
-			a.logger.Error("backend policies left unapplied after restart; they stay unknown until the next successful restart",
-				"backend", name, "attempts", attempt, "error", err)
-			return false, false
-		}
-		if attempt == reapplyAttempts {
-			a.logger.Error("backend policies left unapplied after restart; the replay will be rescheduled until it completes",
-				"backend", name, "attempts", attempt, "error", err)
-			return false, true
-		}
-		a.logger.Warn("backend not answering yet after restart; retrying the policy replay",
-			"backend", name, "attempt", attempt, "retry_in", a.reapplyRetryDelay)
-		select {
-		case <-applyCtx.Done():
-			a.logger.Info("shutting down; backend policies left unknown", "backend", name, "error", applyCtx.Err())
-			return false, false
-		case <-time.After(a.reapplyRetryDelay):
-		}
-	}
-}
-
-// scheduleReplay ensures a replay that gave up because the backend was still
-// not answering keeps being attempted until it completes. Nothing else would
-// ask for another one: the health monitor sees the backend as healthy once
-// it does answer and never requests another restart on its own, so a
-// give-up would otherwise leave the restarting marker set and every later
-// manage for the backend deferred indefinitely.
-//
-// One scheduled replay per backend runs at a time; a second call while one
-// is already scheduled for that backend is a no-op, since the loop already
-// running keeps retrying on its own.
-//
-// Each attempt takes the backend's restart mutex before calling
-// reapplyBackendPolicies, so it cannot interleave with a restart of the same
-// backend. The wait between attempts does not hold the mutex, so a restart
-// can run in between; that restart performs its own replay and clears the
-// restarting marker itself, and this loop's next attempt then completes at
-// once, because a replay with nothing left deferred is a no-op that returns
-// nil.
-func (a *orbAgent) scheduleReplay(name string, be backend.Backend) {
-	a.replayAdmitMu.Lock()
-	defer a.replayAdmitMu.Unlock()
-	if a.stopCtx != nil && a.stopCtx.Err() != nil {
-		a.logger.Info("shutting down; no policy replay scheduled", "backend", name)
-		return
-	}
-	v, _ := a.replayScheduled.LoadOrStore(name, &atomic.Bool{})
-	scheduled, _ := v.(*atomic.Bool) // LoadOrStore stored an *atomic.Bool; assertion cannot fail.
-	if !scheduled.CompareAndSwap(false, true) {
-		return
-	}
-	a.replayStarts.Add(1)
-	a.replayers.Add(1)
-	go func() {
-		defer a.replayers.Done()
-		stopCtx := a.stopCtx
-		if stopCtx == nil {
-			stopCtx = context.Background()
-		}
-		for attempt := 1; ; attempt++ {
-			select {
-			case <-stopCtx.Done():
-				scheduled.Store(false)
-				return
-			case <-time.After(a.replayRetryInterval):
-			}
-			restartMu := a.backendRestartLock(name)
-			restartMu.Lock()
-			completed, retryable := a.reapplyBackendPolicies(stopCtx, name, be)
-			done := completed || !retryable
-			if done {
-				// Cleared while the restart mutex is still held: a restart
-				// that takes the mutex next and gives up must be able to
-				// schedule its own replay rather than be told one is pending
-				// by a goroutine about to exit.
-				scheduled.Store(false)
-			}
-			restartMu.Unlock()
-			if completed {
-				return
-			}
-			if !retryable {
-				a.logger.Error("scheduled policy replay failed and will not be retried",
-					"backend", name, "attempt", attempt)
-				return
-			}
-			a.logger.Warn("scheduled policy replay gave up again; retrying",
-				"backend", name, "attempt", attempt, "retry_in", a.replayRetryInterval)
-		}
-	}()
-}
-
-// restartBackendWithFilesmgrRollback performs a Stop + Start sequence for a
-// backend after a FilesManager event upgraded its managed binary. If Start
-// fails, asks FilesManager to roll back the binary to its previous version,
-// then retries Start once. On second failure, gives up and logs the error —
-// no infinite loop.
-//
-// Like RestartBackend, it marks the backend's policies unknown before Stop
-// and re-applies them once, after whichever Start succeeds (the first
-// attempt or the rollback retry), under the same restart mutex the policy
-// manager's own apply mutex is taken after, never before. The policy
-// manager owns the restarting marker itself: its non-permanent removal
-// below sets it, and the re-apply's entry gate clears it once the backend
-// answers, so a manage arriving before the clear is stored as starting for
-// the re-apply to pick up, and one arriving after applies directly to the
-// backend, which is up by then. A re-apply that gives up because the
-// backend still is not answering is rescheduled the same way RestartBackend
-// reschedules one, and keeps retrying at replayRetryInterval until it
-// completes, so a manage stored as starting is not deferred forever.
-func (a *orbAgent) restartBackendWithFilesmgrRollback(ctx context.Context, backendName string) {
-	// Serialize concurrent Stop+Start sequences for the same backend across
-	// both restart paths (file-driven and health/fleet-driven).
-	restartMu := a.backendRestartLock(backendName)
-	restartMu.Lock()
-	defer restartMu.Unlock()
-
-	be, ok := a.backends[backendName]
-	if !ok {
-		a.logger.Warn("filesmgr: backend not registered for restart", "backend", backendName)
-		return
-	}
-	binaryName := ""
-	if mb, ok := be.(backend.ManagedBinary); ok {
-		binaryName = mb.ManagedBinaryName()
-	}
-
-	// The removal here is bookkeeping symmetry with RestartBackend, not
-	// because the process about to be stopped needs it.
-	if err := a.policyManager.RemoveBackendPolicies(backendName, be, false); err != nil {
-		a.logger.Error("filesmgr: failed to remove policies", "backend", backendName, "error", err)
-	}
-
-	if err := be.Stop(ctx); err != nil {
-		a.logger.Warn("filesmgr: backend Stop returned error", "backend", backendName, "error", err)
-	}
-
-	// Cancel any prior per-backend context from a previous restart cycle to
-	// avoid leaking contexts across multiple upgrade events for the same backend.
-	a.restartCancelsMu.Lock()
-	if a.restartCancels == nil {
-		a.restartCancels = make(map[string]context.CancelFunc)
-	}
-	if prior, ok := a.restartCancels[backendName]; ok {
-		prior()
-	}
-	a.restartCancelsMu.Unlock()
-
-	// Derive a fresh per-backend context from the same ctx parameter so that
-	// if the backend calls its own cancel (self-termination pattern), it does NOT
-	// tear down the whole agent. Both the initial attempt and the rollback retry
-	// use ctx as the parent for consistency.
-	runCtx, runCancel := context.WithCancel(ctx)
-	a.restartCancelsMu.Lock()
-	a.restartCancels[backendName] = runCancel
-	a.restartCancelsMu.Unlock()
-
-	startErr := be.Start(runCtx, runCancel)
-	if startErr == nil {
-		a.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", backendName, "binary", binaryName)
-		if completed, retryable := a.reapplyBackendPolicies(ctx, backendName, be); !completed && retryable {
-			a.scheduleReplay(backendName, be)
-		}
-		return
-	}
-	// Only the agent's own context tells shutdown apart from a backend that
-	// cancelled its run context on a fatal start: the latter also returns an
-	// error wrapping the cancellation, and it must be rolled back.
-	if ctx.Err() != nil {
-		a.logger.Info("filesmgr: backend start cancelled during restart, leaving the binary as it is", "backend", backendName, "error", startErr)
-		return
-	}
-	a.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", backendName, "error", startErr)
-
-	// Every failure exit after the removal schedules the replay: a Stop that
-	// failed can leave the old process running, and then the health monitor
-	// never asks for another restart and nothing else would hand the
-	// policies back or clear the restart marker.
-	if binaryName == "" {
-		a.logger.Error("filesmgr: cannot roll back, backend declares no managed binary", "backend", backendName)
-		a.scheduleReplay(backendName, be)
-		return
-	}
-	if err := a.filesManager.Rollback(ctx, binaryName); err != nil {
-		a.logger.Error("filesmgr: rollback failed", "backend", backendName, "binary", binaryName, "error", err)
-		a.scheduleReplay(backendName, be)
-		return
-	}
-
-	// Retry Start with the rolled-back binary — fresh context derived from ctx again.
-	// Cancel the prior runCancel before storing runCancel2 to avoid leaking the
-	// context created for the first (failed) Start attempt.
-	runCtx2, runCancel2 := context.WithCancel(ctx)
-	a.restartCancelsMu.Lock()
-	if prior, ok := a.restartCancels[backendName]; ok {
-		prior()
-	}
-	a.restartCancels[backendName] = runCancel2
-	a.restartCancelsMu.Unlock()
-
-	if err := be.Start(runCtx2, runCancel2); err != nil {
-		a.logger.Error("filesmgr: backend Start failed even after rollback", "backend", backendName, "error", err)
-		a.scheduleReplay(backendName, be)
-		return
-	}
-	a.logger.Info("filesmgr: backend restarted with rolled-back binary", "backend", backendName, "binary", binaryName)
-	if completed, retryable := a.reapplyBackendPolicies(ctx, backendName, be); !completed && retryable {
-		a.scheduleReplay(backendName, be)
-	}
-}
-
-// restartDispatcher runs as a background goroutine and drains pendingRestarts
-// every 500 ms, spawning a dedicated goroutine per backend that handles
-// upgrade-driven restart with automatic rollback on Start failure.
-// Coalescing semantics: multiple upgrade events for the same backend within
-// a 500 ms window result in exactly one restart.
-func (a *orbAgent) restartDispatcher(ctx context.Context) {
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			a.pendingRestartsMu.Lock()
-			pending := a.pendingRestarts
-			a.pendingRestarts = nil
-			a.pendingRestartsMu.Unlock()
-			for name := range pending {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				a.logger.Info("filesmgr: dispatched restart", "backend", name)
-				// Run synchronously so concurrent Stop+Start sequences for the
-				// same backend cannot overlap across ticks. The dispatcher
-				// is on its own goroutine; the rest of the agent is unaffected.
-				a.restartBackendWithFilesmgrRollback(ctx, name)
-			}
-		}
-	}
-}
-
-func (a *orbAgent) waitForRestartRequests() {
-	for name := range a.restartBackendChan {
-		a.logger.Info("restarting backend", "backend", name)
-		err := a.RestartBackend(a.ctx, name, "restart requested by fleet")
-		if err != nil {
-			a.logger.Error("failed to restart backend", "backend", name, "error", err)
-		}
-	}
 }
 
 func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) error {
@@ -772,12 +311,13 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
-	// Subscribe after startBackends has populated a.backends so the subscriber
-	// callback reads a fully-initialized map. Must be called after startBackends
-	// returns; reads a.backends from the FileEvent goroutine.
+	// Subscribe after startBackends has declared every backend with the
+	// supervisor so the subscriber callback reads a fully-populated set.
+	// Must be called after startBackends returns; reads the supervisor's
+	// declared backends from the FileEvent goroutine.
 	a.subscribeFilesmgr()
 
-	if err = a.configManager.Start(agentCtx, a.config, a.backends); err != nil {
+	if err = a.configManager.Start(agentCtx, a.config, a.supervisor.Declared()); err != nil {
 		return err
 	}
 
@@ -785,46 +325,14 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {
-	// Cancelled first, ahead of every other teardown step, so an in-flight
-	// restart's replay observes shutdown as soon as it checks stopCtx. Guarded
-	// against nil for tests that build an orbAgent literal without going
-	// through New.
-	if a.stopCancel != nil {
-		a.stopCancel()
-	}
 	a.logger.Info("routine call for stop agent", "routine", ctx.Value(routineKey))
-	// Cancel the restart dispatcher first so it cannot fire a restart after we
-	// begin stopping backends. The dispatcher's select loop respects cancellation
-	// and will exit on the next tick.
-	if a.dispatcherCancel != nil {
-		a.dispatcherCancel()
-	}
-	// Explicitly cancel all in-flight file-driven restart contexts. While ctx
-	// propagation from a.ctx → dispatcherCtx → runCtx would also cancel these,
-	// making teardown explicit ensures correctness even if the context chain is
-	// ever refactored.
-	a.restartCancelsMu.Lock()
-	for name, cancel := range a.restartCancels {
-		cancel()
-		a.logger.Debug("filesmgr restart context canceled", "backend", name)
-	}
-	clear(a.restartCancels)
-	a.restartCancelsMu.Unlock()
-	for name, b := range a.backends {
-		// Acquire the per-backend restart lock before calling Stop so that any
-		// in-flight file-driven restart (restartBackendWithFilesmgrRollback) that
-		// has already passed its ctx-done check is allowed to finish before we
-		// attempt to stop the backend. Without this, Stop could race with a
-		// concurrent Start from the dispatcher goroutine.
-		mu := a.backendRestartLock(name)
-		mu.Lock()
-		if state, _, _ := b.GetRunningStatus(); state == backend.Running {
-			a.logger.Debug("stopping backend", "backend", name)
-			if err := b.Stop(ctx); err != nil {
-				a.logger.Error("error while stopping the backend", "backend", name)
-			}
-		}
-		mu.Unlock()
+	// Guarded against nil for tests that build an orbAgent literal without
+	// going through New. StopAll cancels the supervisor's own stop context as
+	// its first statement, so an in-flight restart's replay observes
+	// shutdown as soon as it checks it, then stops every running backend and
+	// waits for every rescheduled replay to exit.
+	if a.supervisor != nil {
+		a.supervisor.StopAll(ctx)
 	}
 	a.shutdownOTLP()
 	if a.policyManager != nil {
@@ -855,15 +363,6 @@ func (a *orbAgent) Stop(ctx context.Context) {
 			a.cancelFunction()
 		}
 	}()
-	// stopCtx was cancelled first, above, so every scheduled replay goroutine
-	// either already exited or is about to, on its next check. Taking the
-	// admission mutex once here lets any admission already in flight finish
-	// its Add, and every later one sees the cancelled context and refuses,
-	// so Wait cannot race an Add. Then wait for all of them so none outlives
-	// the agent.
-	a.replayAdmitMu.Lock()
-	a.replayAdmitMu.Unlock() //nolint:staticcheck // the empty critical section is the barrier
-	a.replayers.Wait()
 }
 
 // fleetBridgePort resolves a configured bridge port (nil means the default)
@@ -896,99 +395,10 @@ func (a *orbAgent) shutdownOTLP() {
 	})
 }
 
-// RestartBackend keeps the backend's policies and re-applies them once the
-// reset succeeds: they are marked unknown for the restart, not deleted, and
-// handed back to the backend after it is running again. Every stored policy
-// for the backend is handed back, including one whose run already finished,
-// so a one-shot policy runs again. Any return after the removal re-applies
-// immediately if the backend never stopped (a bad backend config, a
-// Configure failure), or leaves the policies marked unknown for the next
-// successful restart if the reset itself failed.
-//
-// The whole sequence runs under the backend's restart mutex, taken before
-// the policy manager's apply mutex, never after. The policy manager's own
-// restarting marker is set by the removal below, the first thing it does
-// under its own mutex, and cleared by the re-apply's entry gate once it
-// confirms the backend answers: a manage arriving before the clear is
-// stored as starting for that re-apply to pick up, and one arriving after
-// applies directly to the backend, which is up by then; the re-apply itself
-// skips anything already Running, so neither path ever applies a policy
-// twice. A re-apply that gives up because the backend still is not
-// answering is rescheduled and keeps trying, at replayRetryInterval, until
-// it completes, so deferred manages are not stuck behind a marker nothing
-// else would ever clear.
+// RestartBackend delegates to the supervisor: see
+// (*supervisor.Supervisor).Restart for the restart's exact behavior (the
+// policy re-apply semantics, the refusals for an undeclared or stopped
+// backend, and the binary-upgrade body selected by reason).
 func (a *orbAgent) RestartBackend(ctx context.Context, name string, reason string) error {
-	// Every bundled backend is registered; only the ones this agent started
-	// are in a.backends, and only those have a process to restart.
-	be, ok := a.backends[name]
-	if !ok {
-		return errors.New("backend is not started by this agent: " + name)
-	}
-
-	// Serialize concurrent Stop+Start sequences for the same backend across
-	// both restart paths (file-driven and health/fleet-driven).
-	restartMu := a.backendRestartLock(name)
-	restartMu.Lock()
-	defer restartMu.Unlock()
-
-	a.logger.Info("restarting backend", "backend", name, "reason", reason)
-	a.backendStateManager.RegisterRestart(name, reason)
-	a.logger.Info("marking policies for re-apply", "backend", name)
-	if err := a.policyManager.RemoveBackendPolicies(name, be, false); err != nil {
-		a.logger.Error("failed to remove policies", "backend", name, "error", err)
-	}
-	var beConfig map[string]any
-	if a.config.OrbAgent.Backends[name] != nil {
-		var ok bool
-		beConfig, ok = a.config.OrbAgent.Backends[name].(map[string]any)
-		if !ok {
-			// The backend was never stopped, so it is still running with
-			// nothing applied; hand its policies back rather than leave
-			// them unknown for a restart that may not come again soon.
-			if completed, retryable := a.reapplyBackendPolicies(ctx, name, be); !completed && retryable {
-				a.scheduleReplay(name, be)
-			}
-			return errors.New("backend not found: " + name)
-		}
-	}
-	if err := be.Configure(a.logger, a.policyManager.GetRepo(), beConfig, a.backendsCommon, a.filesManager); err != nil {
-		if completed, retryable := a.reapplyBackendPolicies(ctx, name, be); !completed && retryable {
-			a.scheduleReplay(name, be)
-		}
-		return err
-	}
-	a.logger.Info("resetting backend", "backend", name)
-
-	// The apply mutex is deliberately not held across the reset: a manage
-	// landing on this backend meanwhile may be stamped failed to apply, and
-	// the re-apply below heals it by re-applying every stored policy.
-	if err := be.FullReset(ctx); err != nil {
-		a.backendStateManager.RegisterError(name, fmt.Sprintf("failed to reset backend: %v", err))
-		// The policies stay marked unknown and manages stay deferred until a
-		// replay completes. A failed reset can leave the process running (a
-		// Stop that failed), and then the health monitor never asks for
-		// another restart, so the replay is scheduled here rather than left
-		// to a restart that may never come.
-		a.scheduleReplay(name, be)
-		return nil
-	}
-	if completed, retryable := a.reapplyBackendPolicies(ctx, name, be); !completed && retryable {
-		a.scheduleReplay(name, be)
-	}
-	return nil
-}
-
-func (a *orbAgent) RestartAll(ctx context.Context, reason string) error {
-	ctx = a.configManager.GetContext(ctx)
-	a.logger.Info("restarting comms", "reason", reason)
-	for name := range a.backends {
-		a.logger.Info("restarting backend", "backend", name, "reason", reason)
-		err := a.RestartBackend(ctx, name, reason)
-		if err != nil {
-			a.logger.Error("failed to restart backend", "error", err)
-		}
-	}
-	a.logger.Info("all backends and comms were restarted")
-
-	return nil
+	return a.supervisor.Restart(ctx, name, reason)
 }

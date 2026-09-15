@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -14,6 +15,14 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
+
+// Resetter restarts every backend the agent started; the supervisor
+// implements it and the agent installs it after construction, before the
+// connection that dispatches resets exists, so the field is read without
+// a lock on the dispatch worker.
+type Resetter interface {
+	RestartAll(ctx context.Context, reason string) error
+}
 
 // bundleInstaller is implemented by the fleet files-manager type
 // (*filesmgr.FleetFilesManager): it installs bundles delivered via
@@ -30,6 +39,20 @@ type Messaging struct {
 	groupManager  *GroupManager
 	resetChan     chan struct{}
 	filesManager  filesmgr.Manager
+
+	// resetter restarts every backend for a full agent reset; SetResetter
+	// installs it once, before the dispatch worker that calls
+	// handleAgentReset is reachable, so it is read here without a lock.
+	resetter Resetter
+	// resetMu guards resetRunning, coalescing a reset RPC that arrives while
+	// one is already running into the one in flight.
+	resetMu      sync.Mutex
+	resetRunning bool
+}
+
+// SetResetter installs the resetter a full agent reset restarts through.
+func (messaging *Messaging) SetResetter(r Resetter) {
+	messaging.resetter = r
 }
 
 // NewMessaging creates a new Messaging
@@ -272,21 +295,43 @@ func (messaging *Messaging) handleDatasetRemoval(rpc messages.DatasetRemovedRPCP
 
 func (messaging *Messaging) handleAgentReset(ctx context.Context, payload messages.AgentResetRPCPayload) {
 	messaging.logger.Info("handling agent reset", "reason", payload.Reason, "full_reset", payload.FullReset)
-	if payload.FullReset {
-		err := backend.RestartAll(ctx)
-		if err != nil {
+	if !payload.FullReset {
+		return
+	}
+	if messaging.resetter == nil {
+		messaging.logger.Warn("agent reset requested but no resetter is installed; ignoring")
+		return
+	}
+	messaging.resetMu.Lock()
+	if messaging.resetRunning {
+		messaging.resetMu.Unlock()
+		messaging.logger.Info("agent reset already running; coalescing", "reason", payload.Reason)
+		return
+	}
+	messaging.resetRunning = true
+	messaging.resetMu.Unlock()
+	// Off the dispatch worker: restarting every backend takes minutes and
+	// the worker must keep serving policies meanwhile. The reconnect signal
+	// follows the restarts, so the capabilities republished on reconnect see
+	// every backend answering. ctx is context.Background() from the worker
+	// (as it was for backend.RestartAll); shutdown interrupts the restarts
+	// through the supervisor's own stop context.
+	go func() {
+		defer func() {
+			messaging.resetMu.Lock()
+			messaging.resetRunning = false
+			messaging.resetMu.Unlock()
+		}()
+		if err := messaging.resetter.RestartAll(ctx, payload.Reason); err != nil {
 			messaging.logger.Error("RestartAll failure", "error", err)
 		}
-		// Send reset message to channel
 		select {
 		case messaging.resetChan <- struct{}{}:
 			messaging.logger.Info("sent reset signal to channel")
 		default:
 			messaging.logger.Warn("reset channel is full, skipping reset signal")
 		}
-	}
-	// TODO backend specific restart
-	// a.RestartBackend()
+	}()
 }
 
 func (messaging *Messaging) handleAgentStop(payload messages.AgentStopRPCPayload) {

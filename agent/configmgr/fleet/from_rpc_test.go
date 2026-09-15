@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -1401,7 +1403,7 @@ func TestMessageHandlers_DispatchToHandlers_AgentReset(t *testing.T) {
 		SchemaVersion: "1.0",
 		Func:          messages.AgentResetRPCFunc,
 		Payload: messages.AgentResetRPCPayload{
-			FullReset: false, // Set to false to avoid calling backend.RestartAll
+			FullReset: false, // Set to false to avoid exercising the resetter
 			Reason:    "test dispatch",
 		},
 	}
@@ -1810,4 +1812,112 @@ func TestHandleGroupMemberships_SubscribeError(_ *testing.T) {
 		Groups:   []messages.GroupMembershipData{{GroupID: "group1", Name: "Group 1"}},
 	}
 	handlers.handleGroupMemberships(context.Background(), payload, "org1", "agent1", topicActions)
+}
+
+// stubResetter is a Resetter that records the reason of every call it
+// receives and, when entered/release are set, signals entry and blocks
+// until released, so a test can observe the reset in flight.
+type stubResetter struct {
+	mu      sync.Mutex
+	calls   []string
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *stubResetter) RestartAll(_ context.Context, reason string) error {
+	r.mu.Lock()
+	r.calls = append(r.calls, reason)
+	r.mu.Unlock()
+	if r.entered != nil {
+		r.entered <- struct{}{}
+	}
+	if r.release != nil {
+		<-r.release
+	}
+	return nil
+}
+
+func (r *stubResetter) reasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+func newResetHandlers(t *testing.T) (*Messaging, chan struct{}) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	return NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager, nil), resetChan
+}
+
+// A full reset runs the resetter off the dispatch worker and sends the
+// reconnect signal only when the restarts have finished, so capabilities
+// republished on reconnect see every backend answering.
+func TestHandleAgentResetRunsTheResetterThenSignalsReconnect(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+	r := &stubResetter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	handlers.SetResetter(r)
+
+	done := make(chan struct{})
+	go func() {
+		handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "test"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler must return before the reset finishes, off the dispatch worker")
+	}
+	<-r.entered
+	select {
+	case <-resetChan:
+		t.Fatal("the reconnect signal must not be sent before the restarts finish")
+	default:
+	}
+	close(r.release)
+	select {
+	case <-resetChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reconnect signal was not sent after the restarts finished")
+	}
+	assert.Equal(t, []string{"test"}, r.reasons())
+}
+
+// A second full reset while one is running is coalesced: the resetter runs
+// once and one reconnect signal follows.
+func TestHandleAgentResetCoalescesAResetWhileOneRuns(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+	r := &stubResetter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	handlers.SetResetter(r)
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "first"})
+	<-r.entered
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "second"})
+	close(r.release)
+	select {
+	case <-resetChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no reconnect signal after the reset finished")
+	}
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, []string{"first"}, r.reasons(), "the second reset is coalesced into the running one")
+	select {
+	case <-resetChan:
+		t.Fatal("a coalesced reset must not send a second reconnect signal")
+	default:
+	}
+}
+
+// With no resetter set, the RPC is logged and ignored: no signal is sent.
+func TestHandleAgentResetWithoutAResetterIsIgnored(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "test"})
+
+	select {
+	case <-resetChan:
+		t.Fatal("no reconnect signal without a resetter")
+	case <-time.After(100 * time.Millisecond):
+	}
 }
