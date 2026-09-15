@@ -28,11 +28,16 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
-// errStopped is the sentinel a start reports when the supervisor was, or
+// ErrStopped is the sentinel a start reports when the supervisor was, or
 // became, stopped instead of the backend's own error; always wrapped with
 // the entry's name, so a caller tells a stop-induced abort from a real
 // start failure with errors.Is instead of string matching.
-var errStopped = errors.New("backend is stopped")
+// ErrStopped is returned, wrapped, when a stop won against the operation:
+// ConfigureAll returns it when StopAll began before every backend came up,
+// Restart and RestartUpgraded when the entry was stopped first. The caller
+// treats it as a stop in progress, not as a failure: StopAll stops whatever
+// process came up and the stop path completes the shutdown.
+var ErrStopped = errors.New("backend is stopped")
 
 // PolicyApplier is what the supervisor needs from the policy manager: mark a
 // backend's policies for a restart, hand them back after it, and the repo
@@ -362,7 +367,7 @@ func (s *Supervisor) runContext(name string) context.Context {
 // the outcome: Running and the monitor on success; Failed and the state
 // manager's error on failure (with the message only when the backend
 // reports BackendError as its initial state). A stop that began meanwhile
-// wins: the phase stays Stopped, this returns errStopped, and StopAll's
+// wins: the phase stays Stopped, this returns ErrStopped, and StopAll's
 // second loop stops the process that came up once it gets the mutex.
 func (s *Supervisor) configureAndStart(e *entry) error {
 	e.restartMu.Lock()
@@ -374,15 +379,21 @@ func (s *Supervisor) configureAndStart(e *entry) error {
 	runCtx, cancel := context.WithCancel(s.runContext(e.name))
 	if e.beginStart(cancel) == Stopped {
 		cancel()
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
 	if err := e.be.Start(runCtx, cancel); err != nil {
+		// A stop that began meanwhile cancelled this start: that is the
+		// stop, not a start failure, so nothing is registered and the
+		// caller learns which through ErrStopped, with the backend's own
+		// error kept in the chain.
+		if e.setPhase(Failed) {
+			return fmt.Errorf("%w: %s: %w", ErrStopped, e.name, err)
+		}
 		var errMessage string
 		if e.be.GetInitialState() == backend.BackendError {
 			errMessage = err.Error()
 		}
 		s.state.RegisterError(e.name, errMessage)
-		e.setPhase(Failed)
 		return err
 	}
 	if err := s.stoppedDuringStart(e); err != nil {
@@ -393,7 +404,7 @@ func (s *Supervisor) configureAndStart(e *entry) error {
 }
 
 // stoppedDuringStart reports whether a stop won the race with a Start that
-// just reported success: it returns errStopped and leaves the entry's phase
+// just reported success: it returns ErrStopped and leaves the entry's phase
 // at Stopped. The process that came up is stopped by StopAll's own second
 // loop, which is waiting for this caller's restart mutex and runs the gated
 // stop once the caller returns; nothing else sets Stopped, so no other
@@ -406,7 +417,7 @@ func (s *Supervisor) stoppedDuringStart(e *entry) error {
 	if !e.setPhase(Running) {
 		return nil
 	}
-	return fmt.Errorf("%w: %s", errStopped, e.name)
+	return fmt.Errorf("%w: %s", ErrStopped, e.name)
 }
 
 // Declared returns the backends this supervisor declared, by name (every

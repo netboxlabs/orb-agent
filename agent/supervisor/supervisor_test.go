@@ -602,7 +602,7 @@ func TestConfigureAllAndStopAllRunConcurrentlyWithoutARace(t *testing.T) {
 
 		if configureErr != nil {
 			assert.True(t,
-				errors.Is(configureErr, errStopped) || errors.Is(configureErr, context.Canceled) || configureErr.Error() == "supervisor is stopped",
+				errors.Is(configureErr, ErrStopped) || errors.Is(configureErr, context.Canceled) || configureErr.Error() == "supervisor is stopped",
 				"iteration %d: unexpected ConfigureAll error racing StopAll: %v", i, configureErr)
 		}
 	}
@@ -625,7 +625,7 @@ func TestConfigureAllRefusesAfterStopAll(t *testing.T) {
 
 // A start that already returned successfully, but loses the race to claim
 // Running because StopAll stamped the entry Stopped first, must not report
-// success: ConfigureAll aborts with errStopped, the backend that came up is
+// success: ConfigureAll aborts with ErrStopped, the backend that came up is
 // gated-stopped once, and it is never handed to the state manager's
 // monitor. The stub's Start ignores the run context (as a blocking,
 // uninterruptible external call might), and only returns once this test has
@@ -661,7 +661,7 @@ func TestStartReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *testing.T) {
 
 	select {
 	case err := <-done:
-		require.ErrorIs(t, err, errStopped)
+		require.ErrorIs(t, err, ErrStopped)
 	case <-time.After(5 * time.Second):
 		t.Fatal("ConfigureAll never returned")
 	}
@@ -672,4 +672,41 @@ func TestStartReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *testing.T) {
 	}
 	assert.Equal(t, []string{"configure:raced", "start:raced", "stop:raced"}, rec.snapshot(),
 		"the backend that raced is gated-stopped once and never monitored")
+}
+
+// A start that StopAll cancels while it is blocked reports ErrStopped, not
+// the backend's own cancellation error, so the agent can tell a stop that
+// won against startup apart from a backend that failed to start: the first
+// is a shutdown in progress and exits cleanly once StopAll finishes; the
+// second is a startup failure. Nothing is registered as a backend error.
+func TestStartCancelledByStopAllReportsErrStopped(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "cancelled_start")
+	be.startBlocks = make(chan struct{})
+	entered := make(chan struct{})
+	be.onStart = func(context.Context, context.CancelFunc) { close(entered) }
+	backend.Register("sup_cancelled_start", be)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- s.ConfigureAll(map[string]any{"sup_cancelled_start": nil}, config.BackendCommons{}, background)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start was never entered")
+	}
+	s.StopAll(context.Background())
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, ErrStopped, "a start cancelled by the stop is reported as the stop, not as a start failure")
+		require.ErrorIs(t, err, context.Canceled, "the backend's own cancellation error stays in the chain")
+	case <-time.After(5 * time.Second):
+		t.Fatal("ConfigureAll did not return after StopAll cancelled the start")
+	}
+	assert.Equal(t, 0, rec.count("error:cancelled_start:"), "a cancelled start is not registered as a backend error")
+	p, _ := s.Phase("sup_cancelled_start")
+	assert.Equal(t, Stopped, p)
 }

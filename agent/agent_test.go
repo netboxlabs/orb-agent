@@ -1218,3 +1218,61 @@ func TestStart_FleetConfig_UsesConfiguredHTTPPort(t *testing.T) {
 	assert.Equal(t, "http://localhost:4338", orbAgent.backendsCommon.Otlp.HTTP, "a user-supplied http URL is replaced by the bridge listener in fleet mode")
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 }
+
+// blockingStartBackend never comes up: its Start waits for its run context
+// and returns that context's error, the way a bundled backend blocked in its
+// readiness loop does when the stop cancels it.
+type blockingStartBackend struct {
+	restartableBackend
+	entered chan struct{}
+}
+
+func (b *blockingStartBackend) Start(ctx context.Context, _ context.CancelFunc) error {
+	close(b.entered)
+	<-ctx.Done()
+	return fmt.Errorf("start cancelled: %w", ctx.Err())
+}
+
+func (b *blockingStartBackend) GetInitialState() backend.RunningStatus { return backend.Unknown }
+
+func (b *blockingStartBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
+	return backend.Unknown, "", nil
+}
+
+// End to end through New and Start: a stop that lands while a backend is
+// still starting is a shutdown in progress, not a startup failure. Start
+// returns nil once the supervisor reports the stop, so main waits for the
+// stop path to finish and exits cleanly instead of exiting 1 while StopAll
+// is still stopping the backends that did come up.
+func TestStartReturnsNilWhenAStopWinsDuringStartup(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	be := &blockingStartBackend{restartableBackend: restartableBackend{events: &[]string{}}, entered: make(chan struct{})}
+	backend.Register("e2e_stop_wins_start", be)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends:      map[string]any{"e2e_stop_wins_start": nil},
+		ConfigManager: config.ManagerConfig{Active: "local"},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	a := agent.(*orbAgent)
+	a.configManager = &mockConfigManager{}
+	a.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan error, 1)
+	go func() { started <- a.Start(ctx, cancel) }()
+	select {
+	case <-be.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the backend's Start was never entered")
+	}
+	a.Stop(context.Background())
+
+	select {
+	case err := <-started:
+		require.NoError(t, err, "a stop winning against startup is not a startup error")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+}

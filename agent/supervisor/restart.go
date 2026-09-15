@@ -115,7 +115,7 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 		return errors.New("backend is not started by this agent: " + e.name)
 	}
 	if prior == Stopped {
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
 
 	s.logger.Info("restarting backend", "backend", e.name, "reason", reason)
@@ -162,7 +162,7 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	prevCancel, stopped := e.beginReset(cancel)
 	if stopped {
 		cancel()
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
 	err := e.be.FullReset(runCtx)
 	if err != nil {
@@ -232,7 +232,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 		return errors.New("backend is not started by this agent: " + e.name)
 	}
 	if prior == Stopped {
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
 
 	binaryName := ""
@@ -253,14 +253,14 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	runCtx, cancel := context.WithCancel(s.runContext(e.name))
 	if e.beginStart(cancel) == Stopped {
 		cancel()
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
 
 	startErr := e.be.Start(runCtx, cancel)
 	if startErr == nil {
 		s.logger.Info("filesmgr: backend restarted with upgraded binary", "backend", e.name, "binary", binaryName)
 		// A stop that began meanwhile wins: stoppedDuringStart leaves the
-		// phase at Stopped and returns errStopped; StopAll's second loop
+		// phase at Stopped and returns ErrStopped; StopAll's second loop
 		// stops the process that came up once it gets the mutex, the way
 		// configureAndStart handles the same race.
 		if err := s.stoppedDuringStart(e); err != nil {
@@ -310,7 +310,7 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 	runCtx2, cancel2 := context.WithCancel(s.runContext(e.name))
 	if e.beginStart(cancel2) == Stopped {
 		cancel2()
-		return fmt.Errorf("%w: %s", errStopped, e.name)
+		return fmt.Errorf("%w: %s", ErrStopped, e.name)
 	}
 	if err := e.be.Start(runCtx2, cancel2); err != nil {
 		s.logger.Error("filesmgr: backend Start failed even after rollback", "backend", e.name, "error", err)

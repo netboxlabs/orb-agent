@@ -32,6 +32,10 @@ const (
 
 // Agent is the interface that all agents must implement
 type Agent interface {
+	// Start starts the managers and every declared backend. It returns nil
+	// when startup completed, and also when a Stop that began meanwhile won
+	// against a backend still starting: that stop finishes the shutdown, so
+	// the caller waits for it as it would after a completed startup.
 	Start(ctx context.Context, cancelFunc context.CancelFunc) error
 	Stop(ctx context.Context)
 }
@@ -307,6 +311,16 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
+		// A stop that began while the backends were still starting is a
+		// shutdown in progress, not a startup failure: Stop has already
+		// been called and finishes the shutdown (StopAll stops whatever
+		// came up, then the managers stop), so Start returns nil and main
+		// waits for that stop to complete instead of exiting with an error
+		// while backends are still being stopped gracefully.
+		if errors.Is(err, supervisor.ErrStopped) {
+			a.logger.Info("startup interrupted by a stop; the stop completes the shutdown", "error", err)
+			return nil
+		}
 		return err
 	}
 

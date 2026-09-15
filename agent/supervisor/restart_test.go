@@ -1422,7 +1422,7 @@ func TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *test
 
 	select {
 	case err := <-done:
-		require.ErrorIs(t, err, errStopped)
+		require.ErrorIs(t, err, ErrStopped)
 	case <-time.After(5 * time.Second):
 		t.Fatal("RestartUpgraded never returned")
 	}
@@ -1507,7 +1507,7 @@ func TestRestartFailedResetKeepsThePreviousRunContext(t *testing.T) {
 }
 
 // A StopAll that marks the entry Stopped after the restart began but before
-// its reset wins: the reset is refused with errStopped, so no replacement
+// its reset wins: the reset is refused with ErrStopped, so no replacement
 // process is started for StopAll's second loop to have to stop again.
 func TestRestartRefusesTheResetOnceStopAllMarkedTheEntryStopped(t *testing.T) {
 	rec := &recorder{}
@@ -1528,7 +1528,7 @@ func TestRestartRefusesTheResetOnceStopAllMarkedTheEntryStopped(t *testing.T) {
 
 	err := s.Restart(context.Background(), "sup_reset_late_stop", "health")
 
-	require.ErrorIs(t, err, errStopped)
+	require.ErrorIs(t, err, ErrStopped)
 	assert.Equal(t, 0, rec.count("reset:reset_late_stop"), "no reset once the entry is stopped")
 	select {
 	case <-stopped:
@@ -1568,7 +1568,7 @@ func TestStopAllDuringRestartConfigureKeepsTheLiveProcessContext(t *testing.T) {
 
 	err := s.Restart(context.Background(), "sup_cfg_live", "health")
 
-	require.ErrorIs(t, err, errStopped)
+	require.ErrorIs(t, err, ErrStopped)
 	select {
 	case <-stopped:
 	case <-time.After(5 * time.Second):
