@@ -34,7 +34,22 @@ const (
 	// cvVrfInterfaceType is indexed by vrfId + ifIndex. No RD here.
 	oidCvVrfName      = "1.3.6.1.4.1.9.9.711.1.1.1.1.2"
 	oidCvVrfInterface = "1.3.6.1.4.1.9.9.711.1.2.1.1.2"
+	// Tier 4 — JUNIPER-VPN-MIB jnxVpnIfTable, for Junos platforms that
+	// publish the standard VRF table but not the standard membership one.
+	// The column walked is jnxVpnIfRowStatus: the three index columns are
+	// accessible-for-notify, so they are never returned and the row status
+	// is the first column an agent answers. Its index is
+	// { jnxVpnIfVpnType, jnxVpnIfVpnName, jnxVpnIfIndex }, so the OID
+	// carries everything needed and the value itself is not read.
+	oidJnxVpnIfRowStatus = "1.3.6.1.4.1.2636.3.26.1.3.1.4"
 )
+
+// jnxVpnTypeBgpIPVpn is JnxVpnType bgpIpVpn, the L3 VPN. The same table
+// carries l2Circuit, bgpL2Vpn and bgpVpls rows, which are not VRFs and whose
+// names are not VRF names: on the reported switch the l2Circuit rows are named
+// after interfaces. Feeding those into the membership map would attach an L2
+// circuit's interfaces to whatever VRF happened to share its name.
+const jnxVpnTypeBgpIPVpn = 2
 
 // Display-form route distinguishers some agents return instead of the
 // RFC 4382 8-byte encoding: "65000:100", "10.1.1.1:55".
@@ -84,6 +99,9 @@ func TranslateVrfs(
 	}
 	if !hasVrfMembership(records) {
 		mergeVrfRecords(records, collectCiscoVrfs(oids, logger))
+	}
+	if !hasVrfMembership(records) {
+		mergeVrfRecords(records, collectJuniperVrfs(oids, logger))
 	}
 	if len(records) == 0 {
 		return nil, nil
@@ -379,6 +397,51 @@ func collectCiscoVrfs(oids ObjectIDValueMap, logger *slog.Logger) map[string]*vr
 			rec.ifIndexes[ifIndex] = struct{}{}
 		}
 		records[name] = rec
+	}
+	return records
+}
+
+// collectJuniperVrfs reads interface membership from JUNIPER-VPN-MIB's
+// jnxVpnIfTable, which some Junos platforms publish where the standard
+// mplsL3VpnIfConfTable is absent. A reported EX4550 on 15.1 answers the
+// standard VRF table with all 17 of its VRFs and "No Such Object" for the
+// standard membership table, and the same for the pre-standard one, so its
+// addresses reached NetBox with no VRF at all.
+//
+// The index is { vpnType, vpnName, ifIndex }, which is the standard tier's
+// { vrfName, ifIndex } with a type in front, so the same decoder reads it
+// once the type is removed.
+//
+// Only bgpIpVpn rows. Names are carried so that a device publishing this
+// table and no standard one still yields VRFs; where the standard table has
+// already named them, mergeVrfRecords adds the membership and adopts nothing
+// new, which keeps this table's L2 entries out of the emitted catalog.
+func collectJuniperVrfs(oids ObjectIDValueMap, logger *slog.Logger) map[string]*vrfRecord {
+	records := make(map[string]*vrfRecord)
+	for oid := range oids {
+		suffix, ok := oidSuffix(oid, oidJnxVpnIfRowStatus)
+		if !ok {
+			continue
+		}
+		vpnType, rest, ok := strings.Cut(suffix, ".")
+		if !ok {
+			logger.Debug("vrf: jnxVpnIf index carries no name, skipping row", "oid", oid)
+			continue
+		}
+		if vpnType != strconv.Itoa(jnxVpnTypeBgpIPVpn) {
+			continue
+		}
+		name, tail, decoded := decodeOctetStringIndexWithTail(rest, 1)
+		if !decoded {
+			logger.Debug("vrf: undecodable jnxVpnIf index, skipping row", "oid", oid)
+			continue
+		}
+		rec, ok := records[name]
+		if !ok {
+			rec = &vrfRecord{name: name, ifIndexes: make(map[int]struct{})}
+			records[name] = rec
+		}
+		rec.ifIndexes[tail[0]] = struct{}{}
 	}
 	return records
 }

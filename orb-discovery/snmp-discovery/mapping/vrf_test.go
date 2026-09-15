@@ -2,7 +2,10 @@ package mapping
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -373,4 +376,96 @@ func TestVrfWalkGating(t *testing.T) {
 	require.NoError(t, err)
 	_, walked = on.GenericObjectIDs()["1.3.6.1.2.1.10.166.11.1.2.2.1.4"]
 	assert.True(t, walked, "vrf column must be walked with discover_vrfs on")
+}
+
+// jnxVpnIfOids loads the recorded jnxVpnIfTable capture from a Junos EX4550
+// that answers the standard VRF table and "No Such Object" for the standard
+// membership table. Names in the capture were replaced by the reporter, each
+// with one of the same byte length so the length prefixes stay valid.
+func jnxVpnIfOids(t *testing.T) ObjectIDValueMap {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "jnx_vpn_if_table.txt"))
+	require.NoError(t, err)
+	oids := ObjectIDValueMap{}
+	for _, line := range strings.Split(string(raw), "\n") {
+		oid, value, ok := strings.Cut(line, " = ")
+		if !ok {
+			continue
+		}
+		oids[strings.TrimPrefix(strings.TrimSpace(oid), ".")] = octets(
+			strings.TrimSpace(strings.TrimPrefix(value, "INTEGER:")),
+		)
+	}
+	return oids
+}
+
+// The recorded table carries both L3 VPNs and l2Circuits. Only the former are
+// VRFs, and on this device the l2Circuit rows are named after interfaces, so
+// taking them would attach an interface-named VPN's members to any VRF that
+// happened to share the name.
+func TestCollectJuniperVrfs_ReadsOnlyL3VpnRows(t *testing.T) {
+	records := collectJuniperVrfs(jnxVpnIfOids(t), slog.Default())
+
+	require.Len(t, records, 13, "13 unique bgpIpVpn names in the capture")
+	members := 0
+	for _, rec := range records {
+		members += len(rec.ifIndexes)
+	}
+	require.Equal(t, 28, members, "28 of the 31 rows are bgpIpVpn")
+	for name := range records {
+		require.NotEmpty(t, name)
+	}
+}
+
+// End to end on the reported shape: the standard table names the VRFs, the
+// standard membership table is absent, and the Juniper table supplies the
+// interfaces. Every address on those interfaces then inherits its VRF.
+func TestTranslateVrfs_JuniperTierSuppliesMembershipTheStandardTableOmits(t *testing.T) {
+	oids := jnxVpnIfOids(t)
+	juniperOnly := collectJuniperVrfs(oids, slog.Default())
+	// The same device also answers mplsL3VpnVrfTable, with the same names.
+	for name := range juniperOnly {
+		oids[oidMplsL3VpnVrfRD+"."+oidIdx(name)] = octets("65000:1")
+	}
+	// And one VRF the standard table names with no membership row anywhere,
+	// which must still reach NetBox as a VRF carrying no interfaces.
+	oids[oidMplsL3VpnVrfRD+"."+oidIdx("LONELY")] = octets("65000:2")
+
+	entities, byIfIndex := TranslateVrfs(oids, nil, slog.Default())
+
+	require.Len(t, entities, 14, "13 with membership plus the one without")
+	require.Len(t, byIfIndex, 28, "every bgpIpVpn row maps one interface")
+
+	var lonely *diode.VRF
+	for _, e := range entities {
+		if v, ok := e.(*diode.VRF); ok && v.Name != nil && *v.Name == "LONELY" {
+			lonely = v
+		}
+	}
+	require.NotNil(t, lonely, "a VRF with no membership is still emitted")
+	for _, vrf := range byIfIndex {
+		require.NotEqual(t, "LONELY", *vrf.Name)
+	}
+}
+
+// Where the standard membership table answers, it decides, and the Juniper
+// table is not consulted: the tiers are ordered, not merged.
+func TestTranslateVrfs_StandardMembershipWinsOverJuniper(t *testing.T) {
+	oids := stdTierOids()
+	for oid, v := range jnxVpnIfOids(t) {
+		oids[oid] = v
+	}
+	entities, byIfIndex := TranslateVrfs(oids, nil, slog.Default())
+
+	require.Len(t, entities, 2, "only the standard tier's VRFs")
+	require.Equal(t, map[int]string{10: "RED", 11: "RED", 20: "MGM"},
+		namesByIfIndex(byIfIndex))
+}
+
+func namesByIfIndex(byIfIndex map[int]*diode.VRF) map[int]string {
+	out := make(map[int]string, len(byIfIndex))
+	for ifIndex, vrf := range byIfIndex {
+		out[ifIndex] = *vrf.Name
+	}
+	return out
 }

@@ -424,3 +424,9 @@ entries:
     identifier_size: 1
     vendor: "cisco"
     description: "CISCO-VRF-MIB cvVrfInterfaceTable (VRF-lite interface membership)"
+  - oid: ".1.3.6.1.4.1.2636.3.26.1.3.1.4"
+    entity: "vrf"
+    field: "jnxVpnIfRowStatus"
+    identifier_size: 1
+    vendor: "juniper"
+    description: "JUNIPER-VPN-MIB jnxVpnIfTable (VRF interface membership on Junos platforms without mplsL3VpnIfConfTable)"
