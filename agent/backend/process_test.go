@@ -586,6 +586,6 @@ func TestStartProcess_SpecBudgetWinsOverTheContextBudget(t *testing.T) {
 
 // No budget anywhere keeps today's loop: the error names no budget.
 func TestReadinessBudgetFromAnUnmarkedContextIsZero(t *testing.T) {
-	assert.Equal(t, time.Duration(0), readinessBudgetFrom(context.Background()))
-	assert.Equal(t, 3*time.Second, readinessBudgetFrom(WithReadinessBudget(context.Background(), 3*time.Second)))
+	assert.Equal(t, time.Duration(0), ReadinessBudgetFrom(context.Background()))
+	assert.Equal(t, 3*time.Second, ReadinessBudgetFrom(WithReadinessBudget(context.Background(), 3*time.Second)))
 }

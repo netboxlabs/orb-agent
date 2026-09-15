@@ -2,15 +2,20 @@
 // it configures and starts them, restarts them on request, replays their
 // policies after a restart, and stops them at shutdown. The agent delegates
 // to it and the policy manager reaches it only through the interfaces
-// declared here, so neither package imports the other.
+// declared here; the policy manager never imports the supervisor; the
+// supervisor imports it only for the two start-state constants its starter
+// seam answers.
 //
 // Lock order: an entry's restart mutex is taken before the policy manager's
 // apply mutex (through the applier), never after; an entry's field mutex is
 // innermost, guards the phase and the run cancel only, and the only call
 // made under it is the run cancel function, which never calls back; the
-// state manager's mutex is never held across a call out. The entries map
-// is guarded by entriesMu: written once by ConfigureAll after every entry
-// is declared, and snapshotted by every reader before it calls out.
+// state manager's mutex is never held across a call out. EnsureStarted is
+// called under the policy manager's apply mutex and takes only an entry's
+// field mutex, never the restart mutex, so it cannot wait on a start or
+// restart in flight; the field mutex still makes no call out. The entries
+// map is guarded by entriesMu: written once by ConfigureAll after every
+// entry is declared, and snapshotted by every reader before it calls out.
 package supervisor
 
 import (
@@ -26,6 +31,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // ErrStopped is the sentinel a start reports when the supervisor was, or
@@ -194,7 +200,7 @@ func wholeSeconds(raw any) (int64, bool) {
 type entry struct {
 	name   string
 	be     backend.Backend
-	config map[string]any // the entry's own settings as declared; nil when it had none
+	config map[string]any // the entry's own settings as declared, without the lifecycle keys; nil when it had none
 	mode   startMode      // eager (started by ConfigureAll) or on demand (started by EnsureStarted)
 	budget time.Duration  // readiness budget of an on-demand start; zero for eager
 
@@ -203,6 +209,13 @@ type entry struct {
 	mu        sync.Mutex
 	phase     Phase
 	runCancel context.CancelFunc
+	// startedOnce records that the monitor was registered for this entry;
+	// the monitor binds the backend object, so a restart never registers
+	// it again.
+	startedOnce bool
+	// lastErr is the last start error of an on-demand entry, answered to
+	// EnsureStarted while the entry is Failed.
+	lastErr error
 
 	// restartMu is held across the initial configure and start and across a
 	// whole restart, including its replay and the replay's retries, so no
@@ -270,7 +283,9 @@ func (e *entry) restoreRun(prev context.CancelFunc) {
 }
 
 // setPhase stores the phase unless the entry was stopped meanwhile, and
-// reports whether it was.
+// reports whether it was. Reaching Running clears lastErr: a start that
+// answered EnsureStarted's Failed case is over, and a later Failed reached
+// by another route must not answer that stale error.
 func (e *entry) setPhase(p Phase) (stopped bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -278,6 +293,9 @@ func (e *entry) setPhase(p Phase) (stopped bool) {
 		return true
 	}
 	e.phase = p
+	if p == Running {
+		e.lastErr = nil
+	}
 	return false
 }
 
@@ -516,8 +534,124 @@ func (s *Supervisor) configureAndStart(e *entry) error {
 	if err := s.stoppedDuringStart(e); err != nil {
 		return err
 	}
-	s.state.StartBackendMonitor(e.name, e.be)
+	s.registerMonitorOnce(e)
 	return nil
+}
+
+// EnsureStarted implements the policy manager's starter: called under that
+// backend's apply mutex when a policy for it arrives, it never blocks and
+// never calls the applier. It answers from the phase: a Declared entry is
+// stamped Starting and its start launched in a goroutine, in one critical
+// section, so concurrent calls launch once; a Failed entry answers its last
+// start error, and the retry timer, not the policy, drives the next
+// attempt; a Stopped entry is refused.
+func (s *Supervisor) EnsureStarted(name string) (policymgr.StartState, error) {
+	e, ok := s.entryFor(name)
+	if !ok {
+		return policymgr.StartStarting, errors.New("backend is not declared: " + name)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	switch e.phase {
+	case Running:
+		return policymgr.StartRunning, nil
+	case Starting:
+		return policymgr.StartStarting, nil
+	case Failed:
+		// An eager entry reaches Failed through a failed upgrade restart
+		// without a remembered error; the policy still needs a non-nil
+		// answer, or it would be deferred with nothing to replay it.
+		if e.lastErr != nil {
+			return policymgr.StartStarting, e.lastErr
+		}
+		return policymgr.StartStarting, errors.New("backend failed to start: " + name)
+	case Stopped:
+		return policymgr.StartStarting, fmt.Errorf("%w: %s", ErrStopped, name)
+	default: // Declared
+		if e.mode != startOnDemand {
+			// An eager entry is Declared only while ConfigureAll is still
+			// running; it is started there, never by a policy.
+			return policymgr.StartStarting, errors.New("backend is not started yet: " + name)
+		}
+		e.phase = Starting
+		go s.startDeclared(e)
+		return policymgr.StartStarting, nil
+	}
+}
+
+// startDeclared starts one declared backend under its restart mutex, so it
+// serialises with any restart, with the entry's readiness budget on the
+// start context. On success it registers the monitor once, marks the entry
+// Running and replays the policies stored while it was starting; on failure
+// it registers the error, marks the entry Failed and remembers the error
+// for EnsureStarted. A stop that began meanwhile wins, as in
+// configureAndStart: the phase stays Stopped and StopAll's second loop
+// stops whatever came up.
+//
+// A restart can take the restart mutex before this goroutine does: Restart,
+// RestartAll and the upgrade dispatcher all accept a Starting entry (that is
+// what EnsureStarted just stamped it), and restartHealth reads the phase
+// only after taking the mutex, so its own refusal never sees this launch.
+// Once the mutex is ours, the phase is re-read under e.mu: only Starting
+// still means this goroutine's own launch is the one to run; anything else
+// means a restart got there first and already handled the entry, and
+// starting now would cancel the run context that restart installed and
+// start the backend a second time.
+func (s *Supervisor) startDeclared(e *entry) {
+	e.restartMu.Lock()
+	defer e.restartMu.Unlock()
+	e.mu.Lock()
+	phase := e.phase
+	e.mu.Unlock()
+	if phase != Starting {
+		s.logger.Info("on-demand start skipped, backend already handled by a restart", "backend", e.name, "phase", phase)
+		return
+	}
+	runCtx, cancel := context.WithCancel(backend.WithReadinessBudget(s.runContext(e.name), e.budget))
+	if e.beginStart(cancel) == Stopped {
+		cancel()
+		return
+	}
+	s.logger.Info("starting backend on demand", "backend", e.name, "start_timeout", e.budget)
+	if err := e.be.Start(runCtx, cancel); err != nil {
+		s.recordStartFailure(e, err)
+		return
+	}
+	if err := s.stoppedDuringStart(e); err != nil {
+		return
+	}
+	s.registerMonitorOnce(e)
+	s.replayAfterStart(runCtx, e)
+}
+
+// recordStartFailure marks an on-demand start that failed: Failed, the
+// error registered with the state manager (under fleet the backend enters
+// the heartbeat as a backend error) and remembered for EnsureStarted. A
+// stop that began meanwhile leaves the entry Stopped and records nothing.
+func (s *Supervisor) recordStartFailure(e *entry, err error) {
+	e.mu.Lock()
+	if e.phase == Stopped {
+		e.mu.Unlock()
+		return
+	}
+	e.phase = Failed
+	e.lastErr = err
+	e.mu.Unlock()
+	s.logger.Error("on-demand start failed", "backend", e.name, "error", err)
+	s.state.RegisterError(e.name, err.Error())
+}
+
+// registerMonitorOnce registers the health monitor the first time an entry
+// comes up; the monitor binds the backend object, so a later restart does
+// not register it again. Callers hold the restart mutex.
+func (s *Supervisor) registerMonitorOnce(e *entry) {
+	e.mu.Lock()
+	first := !e.startedOnce
+	e.startedOnce = true
+	e.mu.Unlock()
+	if first {
+		s.state.StartBackendMonitor(e.name, e.be)
+	}
 }
 
 // stoppedDuringStart reports whether a stop won the race with a Start that

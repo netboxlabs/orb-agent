@@ -198,10 +198,10 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	if prevCancel != nil {
 		prevCancel()
 	}
-	e.setPhase(Running)
-	if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
-		s.scheduleReplay(e)
+	if stopped := e.setPhase(Running); !stopped {
+		s.registerMonitorOnce(e)
 	}
+	s.replayAfterStart(ctx, e)
 	return nil
 }
 
@@ -539,4 +539,15 @@ func (s *Supervisor) waitReplays() {
 	s.replayAdmitMu.Lock()
 	s.replayAdmitMu.Unlock() //nolint:staticcheck // the empty critical section is the barrier
 	s.replayers.Wait()
+}
+
+// replayAfterStart is the tail a successful start and a successful reset
+// share: the entry is Running, and the policies stored while it was not
+// (unknown for a restart, "backend starting" for an on-demand start) are
+// handed back to the backend, with the bounded retries and the
+// rescheduling a replay that gives up gets. Callers hold the restart mutex.
+func (s *Supervisor) replayAfterStart(ctx context.Context, e *entry) {
+	if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {
+		s.scheduleReplay(e)
+	}
 }

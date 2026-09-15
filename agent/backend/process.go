@@ -57,6 +57,11 @@ func readinessBudgetFrom(ctx context.Context) time.Duration {
 	return budget
 }
 
+// ReadinessBudgetFrom reads the budget WithReadinessBudget attached, or zero.
+func ReadinessBudgetFrom(ctx context.Context) time.Duration {
+	return readinessBudgetFrom(ctx)
+}
+
 // StartSpec describes how to launch and validate a backend subprocess.
 type StartSpec struct {
 	Logger         *slog.Logger
