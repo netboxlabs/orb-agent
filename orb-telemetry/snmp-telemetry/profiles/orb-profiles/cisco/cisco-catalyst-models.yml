@@ -1,0 +1,80 @@
+# Additional Catalyst sysObjectIDs for the bundled cisco/cisco-catalyst.yml profile.
+# IDs and model names from DataDog/integrations-core default_profiles/cisco-catalyst.yaml
+# at c545ca5b168e1ccbffba82121cda46fa09459a46 (BSD-3-Clause, see ../LICENSE).
+# Metrics are inherited from the Kentik profile; only the device list is added.
+---
+extends:
+  - cisco-catalyst.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.150              # catalyst116T
+  - 1.3.6.1.4.1.9.1.151              # catalyst116C
+  - 1.3.6.1.4.1.9.1.152              # catalyst1116
+  - 1.3.6.1.4.1.9.1.190              # cisco8510
+  - 1.3.6.1.4.1.9.1.196              # cisco8515
+  - 1.3.6.1.4.1.9.1.310              # cat6509Sp
+  - 1.3.6.1.4.1.9.1.386              # cat2948gL3Dc
+  - 1.3.6.1.4.1.9.1.387              # cat4908gL3Dc
+  - 1.3.6.1.4.1.9.1.868              # ciscoUC500
+  - 1.3.6.1.4.1.9.1.946              # ciscoCBS3100
+  - 1.3.6.1.4.1.9.1.947              # ciscoCBS3110
+  - 1.3.6.1.4.1.9.1.949              # ciscoCBS3130
+  - 1.3.6.1.4.1.9.1.1278             # cat2960cPD8TT
+  - 1.3.6.1.4.1.9.1.2278             # catWsC365012X48UR
+  - 1.3.6.1.4.1.9.1.2279             # catWsC36508X24UQ
+  - 1.3.6.1.4.1.9.1.2280             # catWsC365012X48UZ
+  - 1.3.6.1.4.1.9.1.2281             # catWsC365012X48UQ
+  - 1.3.6.1.4.1.9.1.2290             # catWsC365048FQM
+  - 1.3.6.1.4.1.9.1.2291             # catWsC365024PDM
+  - 1.3.6.1.4.1.9.1.2418             # ciscoCat950012Q
+  - 1.3.6.1.4.1.9.1.2435             # catC930024T
+  - 1.3.6.1.4.1.9.1.2436             # catC930024P
+  - 1.3.6.1.4.1.9.1.2440             # ciscoCat930048P
+  - 1.3.6.1.4.1.9.1.2441             # ciscoCat930048U
+  - 1.3.6.1.4.1.9.1.2566             # ciscoCat950032C
+  - 1.3.6.1.4.1.9.1.2574             # ciscoCat9200L24P4X
+  - 1.3.6.1.4.1.9.1.2575             # ciscoCat9200L48P4X
+  - 1.3.6.1.4.1.9.1.2576             # ciscoCat9200L24PXG4X
+  - 1.3.6.1.4.1.9.1.2577             # ciscoCat9200L24PXG2Y
+  - 1.3.6.1.4.1.9.1.2578             # ciscoCat9200L48PXG4X
+  - 1.3.6.1.4.1.9.1.2579             # ciscoCat9200L48PXG2Y
+  - 1.3.6.1.4.1.9.1.2580             # ciscoCat920024T
+  - 1.3.6.1.4.1.9.1.2581             # ciscoCat9200L24T4G
+  - 1.3.6.1.4.1.9.1.2582             # ciscoCat9200L48T4G
+  - 1.3.6.1.4.1.9.1.2583             # ciscoCat9200L24T4X
+  - 1.3.6.1.4.1.9.1.2584             # ciscoCat9200L48T4X
+  - 1.3.6.1.4.1.9.1.2585             # ciscoCat9200L24P4G
+  - 1.3.6.1.4.1.9.1.2586             # ciscoCat9200L48P4G
+  - 1.3.6.1.4.1.9.1.2587             # ciscoCat920048T
+  - 1.3.6.1.4.1.9.1.2588             # ciscoCat920024P
+  - 1.3.6.1.4.1.9.1.2589             # ciscoCat920048P
+  - 1.3.6.1.4.1.9.1.2590             # ciscoCat920024PXG
+  - 1.3.6.1.4.1.9.1.2591             # ciscoCat920048PXG
+  - 1.3.6.1.4.1.9.1.2592             # ciscoCat950016X
+  - 1.3.6.1.4.1.9.1.2648             # ciscoC9606R
+  - 1.3.6.1.4.1.9.1.2780             # ciscoCat930024S
+  - 1.3.6.1.4.1.9.1.2781             # ciscoCat930048S
+  - 1.3.6.1.4.1.9.1.2792             # ciscoCat9300L24T4G
+  - 1.3.6.1.4.1.9.1.2793             # ciscoCat9300L48T4G
+  - 1.3.6.1.4.1.9.1.2794             # ciscoCat9300L24T4X
+  - 1.3.6.1.4.1.9.1.2795             # ciscoCat9300L48T4X
+  - 1.3.6.1.4.1.9.1.2796             # ciscoCat9300L24P4G
+  - 1.3.6.1.4.1.9.1.2797             # ciscoCat9300L48P4G
+  - 1.3.6.1.4.1.9.1.2798             # ciscoCat9300L24P4X
+  - 1.3.6.1.4.1.9.1.2799             # ciscoCat9300L48P4X
+  - 1.3.6.1.4.1.9.1.2800             # ciscoCat9300L24UXG4X
+  - 1.3.6.1.4.1.9.1.2801             # ciscoCat9300L48UXG4X
+  - 1.3.6.1.4.1.9.1.2802             # ciscoCat9300L24UXG2Q
+  - 1.3.6.1.4.1.9.1.2803             # ciscoCat9300L48UXG2Q
+  - 1.3.6.1.4.1.9.1.2850             # ciscoC9120AXME
+  - 1.3.6.1.4.1.9.1.2871             # ciscoC9606RVirtualStack
+  - 1.3.6.1.4.1.9.1.2963             # ciscoC83002N2S4T2X
+  - 1.3.6.1.4.1.9.1.2992             # ciscoCat9300L48PF4X
+  - 1.3.6.1.4.1.9.1.2993             # ciscoCat9300L48PF4G
+  - 1.3.6.1.4.1.9.1.3021             # ciscoC1000FE24T4GL
+  - 1.3.6.1.4.1.9.1.3022             # ciscoC1000FE24P4GL
+  - 1.3.6.1.4.1.9.1.3023             # ciscoC1000FE48T4GL
+  - 1.3.6.1.4.1.9.1.3024             # ciscoC1000FE48P4GL
+  - 1.3.6.1.4.1.9.1.3069             # ciscoC8500L8S4X
