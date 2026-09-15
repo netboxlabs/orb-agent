@@ -149,24 +149,37 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 	// landing on this backend meanwhile may be stamped failed to apply, and
 	// the re-apply below heals it by re-applying every stored policy.
 	//
-	// The reset runs under a context that the supervisor's stop cancels as
-	// well as the caller's: backends derive their replacement process's
-	// start context from it, and StopAll can only cancel the run context it
-	// holds, which is the one from before the reset. Without the merge a
-	// shutdown that overlaps a reset would wait out the readiness loop.
-	resetCtx, cancelReset := context.WithCancel(ctx)
-	stopWatch := context.AfterFunc(s.stopCtx, cancelReset)
-	err := e.be.FullReset(resetCtx)
-	stopWatch()
-	cancelReset()
+	// The reset runs under a fresh run context from the same per-backend
+	// factory the start uses: backends derive their replacement process's
+	// start context from it, so it is the replacement's run context and has
+	// to outlive this restart, until the next one replaces it or StopAll
+	// cancels it. It is installed as the entry's run context before the
+	// reset, so a StopAll landing meanwhile cancels it (the entry is
+	// Starting) and a Start blocked in its readiness loop returns; the
+	// previous run context is released only after FullReset returns, so
+	// the previous process is stopped by FullReset itself, gracefully, not
+	// by a cancellation racing it. A stop that began first wins here the
+	// way it does in configureAndStart.
+	runCtx, cancel := context.WithCancel(s.runContext(e.name))
+	prevCancel, stopped := e.swapRun(cancel)
+	if stopped {
+		cancel()
+		return fmt.Errorf("%w: %s", errStopped, e.name)
+	}
+	err := e.be.FullReset(runCtx)
 	if err != nil {
+		// The previous process may still be up (a Stop that failed), so its
+		// context stays the entry's run context and the unused replacement
+		// context is released.
+		e.restoreRun(prevCancel)
+		cancel()
 		s.state.RegisterError(e.name, fmt.Sprintf("failed to reset backend: %v", err))
-		// The process may still be up (a Stop that failed): a Running entry
-		// stays Running, a Failed one stays Failed, since no process came up
-		// for it either way. The policies stay marked unknown and manages
-		// stay deferred until a replay completes; the health monitor never
-		// asks for another restart on its own, so the replay is scheduled
-		// here rather than left to a restart that may never come.
+		// A Running entry stays Running, a Failed one stays Failed, since no
+		// process came up for it either way. The policies stay marked
+		// unknown and manages stay deferred until a replay completes; the
+		// health monitor never asks for another restart on its own, so the
+		// replay is scheduled here rather than left to a restart that may
+		// never come.
 		if prior == Failed {
 			e.setPhase(Failed)
 		} else {
@@ -174,6 +187,9 @@ func (s *Supervisor) restartHealth(ctx context.Context, e *entry, reason string)
 		}
 		s.scheduleReplay(e)
 		return nil
+	}
+	if prevCancel != nil {
+		prevCancel()
 	}
 	e.setPhase(Running)
 	if completed, retryable := s.reapply(ctx, e.name, e.be); !completed && retryable {

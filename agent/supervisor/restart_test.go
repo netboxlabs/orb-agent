@@ -1434,3 +1434,105 @@ func TestRestartUpgradedReportsErrStoppedWhenAStopWinsAfterStartSucceeds(t *test
 
 	assert.Equal(t, 1, rec.count("stop:raced"), "the process that came up from the raced Start must be gated-stopped exactly once")
 }
+
+// The context handed to FullReset is the replacement process's run context:
+// bundled backends derive the replacement's start context from it, and a
+// backend that follows the cancellation contract stops on Done. It therefore
+// has to outlive the restart and be cancelled by shutdown, not the moment
+// FullReset returns.
+func TestRestartResetContextOutlivesTheRestartUntilStopAll(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "reset_lives")
+	backend.Register("sup_reset_lives", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_reset_lives": nil}, config.BackendCommons{}, background))
+	var resetCtx context.Context
+	be.onReset = func(ctx context.Context) { resetCtx = ctx }
+
+	require.NoError(t, s.Restart(context.Background(), "sup_reset_lives", "health"))
+
+	require.NotNil(t, resetCtx)
+	require.NoError(t, resetCtx.Err(), "the replacement process's context is alive after the restart")
+	s.StopAll(context.Background())
+	assert.ErrorIs(t, resetCtx.Err(), context.Canceled, "shutdown cancels the replacement process's context")
+}
+
+// The next restart releases the previous replacement's context, but only
+// after its FullReset returns: the previous process is stopped by that
+// FullReset, gracefully, not by a context cancellation racing it.
+func TestRestartResetContextIsReleasedByTheNextRestart(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "reset_next")
+	backend.Register("sup_reset_next", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_reset_next": nil}, config.BackendCommons{}, background))
+	var first context.Context
+	be.onReset = func(ctx context.Context) { first = ctx }
+	require.NoError(t, s.Restart(context.Background(), "sup_reset_next", "health"))
+	require.NotNil(t, first)
+
+	var firstErrAtSecondReset error
+	be.onReset = func(context.Context) { firstErrAtSecondReset = first.Err() }
+	require.NoError(t, s.Restart(context.Background(), "sup_reset_next", "health"))
+
+	assert.NoError(t, firstErrAtSecondReset, "the previous context is still alive while the next FullReset stops its process")
+	assert.ErrorIs(t, first.Err(), context.Canceled, "the previous context is released once the next restart replaced it")
+}
+
+// A reset that fails may have left the previous process up (its Stop
+// failed), so the previous context stays the entry's run context and the
+// unused replacement context is released; shutdown then cancels the
+// previous one.
+func TestRestartFailedResetKeepsThePreviousRunContext(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "reset_keep")
+	backend.Register("sup_reset_keep", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_reset_keep": nil}, config.BackendCommons{}, background))
+	var first context.Context
+	be.onReset = func(ctx context.Context) { first = ctx }
+	require.NoError(t, s.Restart(context.Background(), "sup_reset_keep", "health"))
+	require.NotNil(t, first)
+
+	var second context.Context
+	be.onReset = func(ctx context.Context) { second = ctx }
+	be.resetErr = errors.New("stop failed")
+	require.NoError(t, s.Restart(context.Background(), "sup_reset_keep", "health"))
+
+	require.NotNil(t, second)
+	assert.ErrorIs(t, second.Err(), context.Canceled, "the replacement context of a failed reset is released")
+	require.NoError(t, first.Err(), "the previous process's context survives a failed reset")
+	s.StopAll(context.Background())
+	assert.ErrorIs(t, first.Err(), context.Canceled, "shutdown cancels the previous process's context")
+}
+
+// A StopAll that marks the entry Stopped after the restart began but before
+// its reset wins: the reset is refused with errStopped, so no replacement
+// process is started for StopAll's second loop to have to stop again.
+func TestRestartRefusesTheResetOnceStopAllMarkedTheEntryStopped(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	be := newStub(rec, "reset_late_stop")
+	backend.Register("sup_reset_late_stop", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_reset_late_stop": nil}, config.BackendCommons{}, background))
+	rec.reset()
+	stopped := make(chan struct{})
+	be.onConfigure = func() {
+		be.onConfigure = nil
+		go func() { s.StopAll(context.Background()); close(stopped) }()
+		require.Eventually(t, func() bool {
+			phase, _ := s.Phase("sup_reset_late_stop")
+			return phase == Stopped
+		}, 5*time.Second, 5*time.Millisecond, "StopAll's first loop marks the entry Stopped")
+	}
+
+	err := s.Restart(context.Background(), "sup_reset_late_stop", "health")
+
+	require.ErrorIs(t, err, errStopped)
+	assert.Equal(t, 0, rec.count("reset:reset_late_stop"), "no reset once the entry is stopped")
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll did not return")
+	}
+}

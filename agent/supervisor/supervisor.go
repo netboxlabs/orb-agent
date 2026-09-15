@@ -144,6 +144,35 @@ func (e *entry) beginStart(cancel context.CancelFunc) Phase {
 	return prior
 }
 
+// swapRun installs a new run cancel without calling the previous one,
+// which it hands back for the caller to release once the process running
+// under it has been stopped; it refuses, reporting stopped, once the entry
+// is Stopped, so a StopAll that already ran its first loop cannot miss the
+// new context. restartHealth uses it around FullReset, which stops the
+// previous process and starts the replacement in one call.
+func (e *entry) swapRun(cancel context.CancelFunc) (prev context.CancelFunc, stopped bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.phase == Stopped {
+		return nil, true
+	}
+	prev = e.runCancel
+	e.runCancel = cancel
+	return prev, false
+}
+
+// restoreRun puts the previous run cancel back, for a reset that failed and
+// may have left the previous process up. Only the holder of the entry's
+// restart mutex replaces the run cancel (StopAll only calls it), so there is
+// nothing else to have installed meanwhile; the caller releases the cancel
+// it swapped in itself. A StopAll that stopped the entry meanwhile cancels
+// whatever is installed in its second loop, so the restored one too.
+func (e *entry) restoreRun(prev context.CancelFunc) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.runCancel = prev
+}
+
 // setPhase stores the phase unless the entry was stopped meanwhile, and
 // reports whether it was.
 func (e *entry) setPhase(p Phase) (stopped bool) {

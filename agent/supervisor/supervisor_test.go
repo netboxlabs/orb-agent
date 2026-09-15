@@ -81,6 +81,7 @@ type stubBackend struct {
 	configureErr error
 	binary       string
 	onStart      func(ctx context.Context, cancel context.CancelFunc)
+	onConfigure  func()
 	onReset      func(ctx context.Context)
 	onResetCtx   func(ctx context.Context) error // when set, FullReset returns its result after recording
 	onStop       func()
@@ -95,6 +96,9 @@ func newStub(rec *recorder, name string) *stubBackend {
 
 func (s *stubBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
 	s.rec.add("configure:" + s.name)
+	if s.onConfigure != nil {
+		s.onConfigure()
+	}
 	return s.configureErr
 }
 
