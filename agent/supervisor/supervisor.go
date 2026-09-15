@@ -8,8 +8,10 @@
 //
 // Lock order: an entry's restart mutex is taken before the policy manager's
 // apply mutex (through the applier), never after; an entry's field mutex is
-// innermost, guards the phase and the run cancel only, and the only call
-// made under it is the run cancel function, which never calls back; the
+// innermost, guards the phase, the run cancel, the monitor and error
+// bookkeeping and the retry timer, and the only calls made under it are the
+// run cancel function and the timer's own AfterFunc and Stop, none of which
+// calls back into the supervisor; the
 // state manager's mutex is never held across a call out. EnsureStarted is
 // called under the policy manager's apply mutex and takes only an entry's
 // field mutex, never the restart mutex, so it cannot wait on a start or
@@ -578,9 +580,10 @@ func (s *Supervisor) EnsureStarted(name string) (policymgr.StartState, error) {
 	case Starting:
 		return policymgr.StartStarting, nil
 	case Failed:
-		// An eager entry reaches Failed through a failed upgrade restart
-		// without a remembered error; the policy still needs a non-nil
-		// answer, or it would be deferred with nothing to replay it.
+		// An entry can reach Failed with no remembered error: the upgrade
+		// restart's shutdown-cancelled exit stamps the phase alone. The
+		// policy still needs a non-nil answer, or it would be deferred with
+		// nothing to replay it.
 		if e.lastErr != nil {
 			return policymgr.StartStarting, e.lastErr
 		}
