@@ -1,11 +1,9 @@
 package mapping
 
 import (
+	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -378,23 +376,48 @@ func TestVrfWalkGating(t *testing.T) {
 	assert.True(t, walked, "vrf column must be walked with discover_vrfs on")
 }
 
-// jnxVpnIfOids loads the recorded jnxVpnIfTable capture from a Junos EX4550
-// that answers the standard VRF table and "No Such Object" for the standard
-// membership table. Names in the capture were replaced by the reporter, each
-// with one of the same byte length so the length prefixes stay valid.
-func jnxVpnIfOids(t *testing.T) ObjectIDValueMap {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("testdata", "jnx_vpn_if_table.txt"))
-	require.NoError(t, err)
+// jnxVpnIfOids builds a jnxVpnIfTable in the shape a Junos EX4550 on 15.1
+// answers: 31 rows, 28 of them bgpIpVpn across 13 VRFs, and three l2Circuit
+// rows whose names are interface-shaped rather than VRF-shaped.
+//
+// Name lengths are varied on purpose. The index is length-prefixed, so a
+// decoder that miscounts the prefix only shows it on names whose length
+// differs from the rest, and the reported device carries names from 4 to 21
+// bytes.
+func jnxVpnIfOids() ObjectIDValueMap {
+	rows := []struct {
+		vpnType   int
+		name      string
+		ifIndexes []int
+	}{
+		{2, "VRF-A", []int{539, 561, 563, 564, 607, 618}},
+		{2, "VRF-BETA", []int{559, 560}},
+		{2, "VRF-GAMM", []int{619, 621}},
+		{2, "VRF-DELTA", []int{541}},
+		{2, "VRF-EPSIL", []int{645}},
+		{2, "VRF-ZETAX", []int{648}},
+		{2, "VRF-ETA-XY", []int{565, 566}},
+		{2, "VRF-THETA-XYZ", []int{513, 556}},
+		{2, "VRF-IOTA-ABCDEFG", []int{554}},
+		{2, "VRF-KAPPA-ABCDEFGH", []int{555}},
+		{2, "VRF-LAMBDA-ABCDEF", []int{551, 552, 629, 636, 647}},
+		{2, "VRF-MU-ABCDEFGHIJKLM", []int{631, 646}},
+		{2, "VRF-NU-ABCDEFGHIJKLMN", []int{628, 639}},
+		// l2Circuit rows, named after interfaces on the reported device.
+		{5, "xe-0/0/11.100", []int{545}},
+		{5, "xe-0/0/12.200", []int{604}},
+		{5, "ge-0/0/3.300", []int{640}},
+	}
 	oids := ObjectIDValueMap{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		oid, value, ok := strings.Cut(line, " = ")
-		if !ok {
-			continue
+	for _, row := range rows {
+		for _, ifIndex := range row.ifIndexes {
+			oid := fmt.Sprintf("%s.%d.%s.%d",
+				oidJnxVpnIfRowStatus, row.vpnType, oidIdx(row.name), ifIndex)
+			// jnxVpnIfRowStatus, the first column an agent answers: the three
+			// index columns are accessible-for-notify. Its value is not read,
+			// the OID index carries everything.
+			oids[oid] = octets("1")
 		}
-		oids[strings.TrimPrefix(strings.TrimSpace(oid), ".")] = octets(
-			strings.TrimSpace(strings.TrimPrefix(value, "INTEGER:")),
-		)
 	}
 	return oids
 }
@@ -404,9 +427,9 @@ func jnxVpnIfOids(t *testing.T) ObjectIDValueMap {
 // taking them would attach an interface-named VPN's members to any VRF that
 // happened to share the name.
 func TestCollectJuniperVrfs_ReadsOnlyL3VpnRows(t *testing.T) {
-	records := collectJuniperVrfs(jnxVpnIfOids(t), slog.Default())
+	records := collectJuniperVrfs(jnxVpnIfOids(), slog.Default())
 
-	require.Len(t, records, 13, "13 unique bgpIpVpn names in the capture")
+	require.Len(t, records, 13, "13 unique bgpIpVpn names")
 	members := 0
 	for _, rec := range records {
 		members += len(rec.ifIndexes)
@@ -421,7 +444,7 @@ func TestCollectJuniperVrfs_ReadsOnlyL3VpnRows(t *testing.T) {
 // standard membership table is absent, and the Juniper table supplies the
 // interfaces. Every address on those interfaces then inherits its VRF.
 func TestTranslateVrfs_JuniperTierSuppliesMembershipTheStandardTableOmits(t *testing.T) {
-	oids := jnxVpnIfOids(t)
+	oids := jnxVpnIfOids()
 	juniperOnly := collectJuniperVrfs(oids, slog.Default())
 	// The same device also answers mplsL3VpnVrfTable, with the same names.
 	for name := range juniperOnly {
@@ -452,7 +475,7 @@ func TestTranslateVrfs_JuniperTierSuppliesMembershipTheStandardTableOmits(t *tes
 // table is not consulted: the tiers are ordered, not merged.
 func TestTranslateVrfs_StandardMembershipWinsOverJuniper(t *testing.T) {
 	oids := stdTierOids()
-	for oid, v := range jnxVpnIfOids(t) {
+	for oid, v := range jnxVpnIfOids() {
 		oids[oid] = v
 	}
 	// A Juniper row for a VRF the standard tier already placed, on an
