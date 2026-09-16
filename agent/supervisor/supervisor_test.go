@@ -18,6 +18,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // recorder is the shared event log every stub appends to, so one test can
@@ -78,6 +79,7 @@ type stubBackend struct {
 	startBlocks  chan struct{} // when set, Start waits on it or on its context
 	ignoreCancel bool          // when set, Start ignores ctx and only waits on startBlocks
 	resetErr     error
+	resetErrs    []error // popped per FullReset; falls back to resetErr when exhausted
 	configureErr error
 	binary       string
 	onStart      func(ctx context.Context, cancel context.CancelFunc)
@@ -86,6 +88,8 @@ type stubBackend struct {
 	onResetCtx   func(ctx context.Context) error // when set, FullReset returns its result after recording
 	onStop       func()
 	mu           sync.Mutex
+
+	configuredWith map[string]any
 }
 
 func newStub(rec *recorder, name string) *stubBackend {
@@ -94,8 +98,9 @@ func newStub(rec *recorder, name string) *stubBackend {
 	return s
 }
 
-func (s *stubBackend) Configure(*slog.Logger, policies.PolicyRepo, map[string]any, config.BackendCommons, filesmgr.Manager) error {
+func (s *stubBackend) Configure(_ *slog.Logger, _ policies.PolicyRepo, cfg map[string]any, _ config.BackendCommons, _ filesmgr.Manager) error {
 	s.rec.add("configure:" + s.name)
+	s.configuredWith = cfg
 	if s.onConfigure != nil {
 		s.onConfigure()
 	}
@@ -153,7 +158,16 @@ func (s *stubBackend) FullReset(ctx context.Context) error {
 	if s.onReset != nil {
 		s.onReset(ctx)
 	}
-	return s.resetErr
+	s.mu.Lock()
+	var err error
+	if len(s.resetErrs) > 0 {
+		err = s.resetErrs[0]
+		s.resetErrs = s.resetErrs[1:]
+	} else {
+		err = s.resetErr
+	}
+	s.mu.Unlock()
+	return err
 }
 
 func (s *stubBackend) GetRunningStatus() (backend.RunningStatus, string, error) {
@@ -710,4 +724,404 @@ func TestStartCancelledByStopAllReportsErrStopped(t *testing.T) {
 	assert.Equal(t, 0, rec.count("error:cancelled_start:"), "a cancelled start is not registered as a backend error")
 	p, _ := s.Phase("sup_cancelled_start")
 	assert.Equal(t, Stopped, p)
+}
+
+// The two lifecycle keys are parsed and stripped: the backend's Configure
+// never sees them, the defaults apply when absent, and every invalid value
+// is a configuration error named after the backend.
+func TestParseStartOptions(t *testing.T) {
+	cases := map[string]struct {
+		in     map[string]any
+		mode   startMode
+		budget time.Duration
+		errHas string
+	}{
+		"nil entry is eager":         {in: nil, mode: startEager},
+		"empty entry is eager":       {in: map[string]any{}, mode: startEager},
+		"explicit eager":             {in: map[string]any{"start_mode": "eager"}, mode: startEager},
+		"on demand default timeout":  {in: map[string]any{"start_mode": "on_demand"}, mode: startOnDemand, budget: 30 * time.Second},
+		"on demand int timeout":      {in: map[string]any{"start_mode": "on_demand", "start_timeout": 5}, mode: startOnDemand, budget: 5 * time.Second},
+		"on demand float timeout":    {in: map[string]any{"start_mode": "on_demand", "start_timeout": 12.0}, mode: startOnDemand, budget: 12 * time.Second},
+		"on demand int64 timeout":    {in: map[string]any{"start_mode": "on_demand", "start_timeout": int64(300)}, mode: startOnDemand, budget: 300 * time.Second},
+		"unknown mode":               {in: map[string]any{"start_mode": "lazy"}, errHas: `start_mode "lazy"`},
+		"mode not a string":          {in: map[string]any{"start_mode": 1}, errHas: "start_mode"},
+		"timeout on eager":           {in: map[string]any{"start_timeout": 5}, errHas: "start_timeout is valid only with start_mode on_demand"},
+		"timeout zero":               {in: map[string]any{"start_mode": "on_demand", "start_timeout": 0}, errHas: "start_timeout 0"},
+		"timeout too big":            {in: map[string]any{"start_mode": "on_demand", "start_timeout": 301}, errHas: "start_timeout 301"},
+		"timeout absurd integer":     {in: map[string]any{"start_mode": "on_demand", "start_timeout": int64(36028797018963998)}, errHas: "outside 1 to 300"},
+		"timeout fractional":         {in: map[string]any{"start_mode": "on_demand", "start_timeout": 1.5}, errHas: "start_timeout"},
+		"timeout string":             {in: map[string]any{"start_mode": "on_demand", "start_timeout": "5"}, mode: startOnDemand, budget: 5 * time.Second},
+		"timeout non-numeric string": {in: map[string]any{"start_mode": "on_demand", "start_timeout": "abc"}, errHas: "start_timeout"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			wantMode := tc.in["start_mode"]
+			mode, budget, stripped, err := parseStartOptions("sup_keys", tc.in)
+			if tc.errHas != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errHas)
+				assert.Contains(t, err.Error(), "sup_keys", "the error names the backend")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.mode, mode)
+			assert.Equal(t, tc.budget, budget)
+			_, hasMode := stripped["start_mode"]
+			_, hasTimeout := stripped["start_timeout"]
+			assert.False(t, hasMode, "start_mode is stripped from the copy")
+			assert.False(t, hasTimeout, "start_timeout is stripped from the copy")
+			assert.Equal(t, wantMode, tc.in["start_mode"], "the caller's map is left as read")
+		})
+	}
+}
+
+// Other keys survive the strip and reach Configure, in a copy.
+func TestParseStartOptionsKeepsTheOtherKeys(t *testing.T) {
+	in := map[string]any{"start_mode": "on_demand", "port": 8079, "log_level": "INFO"}
+	_, _, stripped, err := parseStartOptions("sup_keep", in)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"port": 8079, "log_level": "INFO"}, stripped)
+	assert.Equal(t, "on_demand", in["start_mode"], "the original map is untouched")
+}
+
+// An on-demand entry is configured at agent start but not started: no
+// process, no monitor, phase Declared, and the stripped map reaches
+// Configure. An eager sibling starts as before.
+func TestConfigureAllConfiguresAnOnDemandEntryWithoutStartingIt(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy")
+	eager := newStub(rec, "eager")
+	backend.Register("sup_lazy", lazy)
+	backend.Register("sup_eager", eager)
+
+	require.NoError(t, s.ConfigureAll(map[string]any{
+		"sup_lazy":  map[string]any{"start_mode": "on_demand", "start_timeout": 3, "port": 1},
+		"sup_eager": nil,
+	}, config.BackendCommons{}, background))
+
+	assert.Equal(t, 1, rec.count("configure:lazy"), "an on-demand entry is configured")
+	assert.Equal(t, 0, rec.count("start:lazy"), "but not started")
+	assert.Equal(t, 0, rec.count("monitor:sup_lazy"), "and not monitored")
+	assert.Equal(t, 1, rec.count("start:eager"))
+	assert.Equal(t, 1, rec.count("monitor:sup_eager"))
+	p, _ := s.Phase("sup_lazy")
+	assert.Equal(t, Declared, p)
+	e, _ := s.entryFor("sup_lazy")
+	assert.Equal(t, startOnDemand, e.mode)
+	assert.Equal(t, 3*time.Second, e.budget)
+	assert.Equal(t, map[string]any{"port": 1}, e.config, "the stripped copy is the entry's config")
+	assert.Equal(t, map[string]any{"port": 1}, lazy.configuredWith, "and the one Configure received")
+	s.StopAll(context.Background())
+	assert.Equal(t, 0, rec.count("stop:lazy"), "nothing to stop for an entry that never started")
+}
+
+// Validation happens before anything is configured or started: a bad key
+// on the second entry leaves the first untouched.
+func TestConfigureAllRefusesABadStartKeyBeforeStartingAnything(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	backend.Register("sup_good_key", newStub(rec, "good_key"))
+	backend.Register("sup_bad_key", newStub(rec, "bad_key"))
+
+	err := s.ConfigureAll(map[string]any{
+		"sup_good_key": nil,
+		"sup_bad_key":  map[string]any{"start_mode": "sometimes"},
+	}, config.BackendCommons{}, background)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `start_mode "sometimes"`)
+	assert.Empty(t, rec.snapshot(), "nothing is configured or started")
+	assert.Empty(t, s.Declared())
+}
+
+// A Configure failure on an on-demand entry aborts the start like an eager
+// one: a bad configuration must not wait for the first policy to surface.
+func TestConfigureAllFailsWhenAnOnDemandEntryDoesNotConfigure(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_bad")
+	lazy.configureErr = errors.New("bad port")
+	backend.Register("sup_lazy_bad", lazy)
+
+	err := s.ConfigureAll(map[string]any{"sup_lazy_bad": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background)
+
+	require.EqualError(t, err, "bad port")
+	assert.Equal(t, 0, rec.count("start:lazy_bad"))
+}
+
+// EnsureStarted answers from the phase and launches at most one start for a
+// Declared entry, without blocking its caller (it is called under the policy
+// manager's apply mutex).
+func TestEnsureStartedLaunchesOneStartForConcurrentCalls(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_once")
+	lazy.startBlocks = make(chan struct{})
+	backend.Register("sup_lazy_once", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_once": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	rec.reset()
+
+	var wg sync.WaitGroup
+	states := make([]policymgr.StartState, 20)
+	errs := make([]error, 20)
+	for i := range states {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			states[i], errs[i] = s.EnsureStarted("sup_lazy_once")
+		}(i)
+	}
+	wg.Wait()
+
+	for i := range states {
+		require.NoError(t, errs[i])
+		assert.Equal(t, policymgr.StartStarting, states[i], "every caller is told the backend is starting")
+	}
+	require.Eventually(t, func() bool { return lazy.startCalls.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(1), lazy.startCalls.Load(), "exactly one start is launched")
+	p, _ := s.Phase("sup_lazy_once")
+	assert.Equal(t, Starting, p)
+	close(lazy.startBlocks)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_once"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+	state, err := s.EnsureStarted("sup_lazy_once")
+	require.NoError(t, err)
+	assert.Equal(t, policymgr.StartRunning, state)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(1), lazy.startCalls.Load(), "the other callers launched nothing: one goroutine, one start")
+}
+
+// A successful on-demand start registers the monitor once, marks the entry
+// Running and hands the deferred policies to the applier; a restart later
+// does not register the monitor again.
+func TestOnDemandStartRegistersTheMonitorOnceAndReplays(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_ok")
+	backend.Register("sup_lazy_ok", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_ok": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	rec.reset()
+
+	state, err := s.EnsureStarted("sup_lazy_ok")
+	require.NoError(t, err)
+	assert.Equal(t, policymgr.StartStarting, state)
+	require.Eventually(t, func() bool { return rec.count("apply:sup_lazy_ok") == 1 }, 5*time.Second, 5*time.Millisecond, "the deferred policies are replayed after the start")
+
+	assert.Equal(t, 1, rec.count("start:lazy_ok"))
+	assert.Equal(t, 1, rec.count("monitor:sup_lazy_ok"))
+	assert.Equal(t, 0, rec.count("configure:lazy_ok"), "configured at agent start, not again")
+	require.NoError(t, s.Restart(context.Background(), "sup_lazy_ok", "health"))
+	assert.Equal(t, 1, rec.count("monitor:sup_lazy_ok"), "the monitor binds the backend object once")
+}
+
+// The budget reaches the backend through its start context.
+func TestOnDemandStartCarriesTheReadinessBudget(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_budget")
+	var seen time.Duration
+	lazy.onStart = func(ctx context.Context, _ context.CancelFunc) { seen = backend.ReadinessBudgetFrom(ctx) }
+	backend.Register("sup_lazy_budget", lazy)
+	eager := newStub(rec, "eager_budget")
+	var eagerSeen time.Duration
+	eager.onStart = func(ctx context.Context, _ context.CancelFunc) { eagerSeen = backend.ReadinessBudgetFrom(ctx) }
+	backend.Register("sup_eager_budget", eager)
+	require.NoError(t, s.ConfigureAll(map[string]any{
+		"sup_lazy_budget":  map[string]any{"start_mode": "on_demand", "start_timeout": 7},
+		"sup_eager_budget": nil,
+	}, config.BackendCommons{}, background))
+
+	_, err := s.EnsureStarted("sup_lazy_budget")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_budget"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+
+	assert.Equal(t, 7*time.Second, seen)
+	assert.Equal(t, time.Duration(0), eagerSeen, "an eager start keeps the unbounded loop")
+}
+
+// A failed on-demand start leaves the entry Failed with the error registered
+// and remembered: the next EnsureStarted answers that error instead of
+// launching again (the retry timer, not the policy, drives the next
+// attempt).
+func TestOnDemandStartFailureIsRememberedByEnsureStarted(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_fail")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_fail", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_fail": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	rec.reset()
+
+	_, err := s.EnsureStarted("sup_lazy_fail")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_fail"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+
+	require.Eventually(t, func() bool { return rec.count("error:sup_lazy_fail:no binary") == 1 }, 5*time.Second, 5*time.Millisecond, "the start error is registered with the state manager")
+	assert.Equal(t, 0, rec.count("monitor:sup_lazy_fail"))
+	_, err = s.EnsureStarted("sup_lazy_fail")
+	require.EqualError(t, err, "no binary")
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(1), lazy.startCalls.Load(), "a Failed entry is not started again by a policy")
+}
+
+// A restart that brings a Failed on-demand entry up to Running clears the
+// remembered start error; a later Failed reached by another route must not
+// answer that stale error.
+func TestEnsureStartedDoesNotAnswerAStaleErrorAfterARestartClearsIt(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_stale_fail")
+	lazy.startErrs = []error{errors.New("no binary")}
+	backend.Register("sup_lazy_stale_fail", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_stale_fail": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+
+	_, err := s.EnsureStarted("sup_lazy_stale_fail")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_stale_fail"); return p == Failed }, 5*time.Second, 5*time.Millisecond)
+	_, err = s.EnsureStarted("sup_lazy_stale_fail")
+	require.EqualError(t, err, "no binary", "the old error is remembered before the restart")
+
+	require.NoError(t, s.Restart(context.Background(), "sup_lazy_stale_fail", "operator retry"))
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_stale_fail"); return p == Running }, 5*time.Second, 5*time.Millisecond)
+
+	e, _ := s.entryFor("sup_lazy_stale_fail")
+	e.mu.Lock()
+	e.phase = Failed
+	e.mu.Unlock()
+
+	_, err = s.EnsureStarted("sup_lazy_stale_fail")
+	require.EqualError(t, err, "backend failed to start: sup_lazy_stale_fail", "the restart cleared the old error, so this Failed has none of its own")
+}
+
+// EnsureStarted on an undeclared name, on a stopped entry, and on an eager
+// entry that is already running.
+func TestEnsureStartedAnswersByPhase(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	backend.Register("sup_eager_es", newStub(rec, "eager_es"))
+	lazy := newStub(rec, "lazy_es")
+	backend.Register("sup_lazy_es", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_eager_es": nil, "sup_lazy_es": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+
+	_, err := s.EnsureStarted("sup_unknown_es")
+	require.EqualError(t, err, "backend is not declared: sup_unknown_es")
+	state, err := s.EnsureStarted("sup_eager_es")
+	require.NoError(t, err)
+	assert.Equal(t, policymgr.StartRunning, state)
+
+	s.StopAll(context.Background())
+	_, err = s.EnsureStarted("sup_lazy_es")
+	require.ErrorIs(t, err, ErrStopped)
+	time.Sleep(20 * time.Millisecond)
+	assert.Equal(t, int32(0), lazy.startCalls.Load(), "nothing starts after stop")
+}
+
+// A Failed entry with no remembered error (an eager one whose upgrade
+// restart failed) still answers an error, never a nil that would defer
+// the policy with nothing to replay it.
+func TestEnsureStartedAnswersAnErrorForAFailedEntryWithoutOne(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	backend.Register("sup_eager_failed", newStub(rec, "eager_failed"))
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_eager_failed": nil}, config.BackendCommons{}, background))
+	e, _ := s.entryFor("sup_eager_failed")
+	e.mu.Lock()
+	e.phase = Failed
+	e.mu.Unlock()
+
+	_, err := s.EnsureStarted("sup_eager_failed")
+
+	require.EqualError(t, err, "backend failed to start: sup_eager_failed")
+}
+
+// An eager entry is Declared only while ConfigureAll is configuring it; a
+// policy arriving in that window must not launch a second start.
+func TestEnsureStartedDoesNotStartAnEagerEntryStillBeingConfigured(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	eager := newStub(rec, "eager_cfg")
+	var seen error
+	eager.onConfigure = func() { _, seen = s.EnsureStarted("sup_eager_cfg") }
+	backend.Register("sup_eager_cfg", eager)
+
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_eager_cfg": nil}, config.BackendCommons{}, background))
+
+	require.EqualError(t, seen, "backend is not started yet: sup_eager_cfg")
+	assert.Equal(t, int32(1), eager.startCalls.Load(), "started once, by ConfigureAll")
+}
+
+// A stop landing during an on-demand start wins: the entry stays Stopped,
+// the process that came up is stopped by StopAll's second loop, and no
+// monitor or replay follows.
+func TestOnDemandStartYieldsToStopAll(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_stop")
+	lazy.startBlocks = make(chan struct{})
+	lazy.ignoreCancel = true
+	backend.Register("sup_lazy_stop", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_stop": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	rec.reset()
+	_, err := s.EnsureStarted("sup_lazy_stop")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return lazy.startCalls.Load() == 1 }, 5*time.Second, 5*time.Millisecond)
+
+	stopped := make(chan struct{})
+	go func() { s.StopAll(context.Background()); close(stopped) }()
+	require.Eventually(t, func() bool { p, _ := s.Phase("sup_lazy_stop"); return p == Stopped }, 5*time.Second, 5*time.Millisecond)
+	close(lazy.startBlocks)
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("StopAll did not return")
+	}
+
+	assert.Equal(t, 1, rec.count("stop:lazy_stop"), "the process that came up is stopped by StopAll")
+	assert.Equal(t, 0, rec.count("monitor:sup_lazy_stop"))
+	assert.Equal(t, 0, rec.count("apply:sup_lazy_stop"))
+}
+
+// A restart that takes the entry's restart mutex before the launched
+// on-demand start does brings the backend up itself; the start then finds
+// the entry Running and starts nothing, instead of cancelling the run
+// context the restart installed and starting a second process.
+func TestStartDeclaredSkipsAnEntryARestartBroughtUp(t *testing.T) {
+	rec := &recorder{}
+	s := newTestSupervisor(t, rec, nil, nil)
+	t.Cleanup(func() { s.StopAll(context.Background()) })
+	lazy := newStub(rec, "lazy_raced")
+	backend.Register("sup_lazy_raced", lazy)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_lazy_raced": map[string]any{"start_mode": "on_demand"}}, config.BackendCommons{}, background))
+	e, _ := s.entryFor("sup_lazy_raced")
+	rec.reset()
+
+	// Hold the restart mutex as a restart in flight would, launch the
+	// on-demand start, then bring the entry up the way that restart does.
+	e.restartMu.Lock()
+	state, err := s.EnsureStarted("sup_lazy_raced")
+	require.NoError(t, err)
+	assert.Equal(t, policymgr.StartStarting, state)
+	e.mu.Lock()
+	e.phase = Running
+	e.mu.Unlock()
+	e.restartMu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, int32(0), lazy.startCalls.Load(), "the launched start must not start a backend a restart brought up")
+	p, _ := s.Phase("sup_lazy_raced")
+	assert.Equal(t, Running, p)
+	assert.Equal(t, 0, rec.count("apply:sup_lazy_raced"), "and it replays nothing: the restart's own replay covered the deferred policies")
 }

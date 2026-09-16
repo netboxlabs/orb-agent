@@ -13,6 +13,7 @@ orb:
       otlp:
         grpc: "grpc://otel-collector:4317"
     snmp_telemetry:
+      start_mode: on_demand              # the image declares this backend on demand; see the README's Backends section
       host: 127.0.0.1                    # default localhost
       port: 8078                         # default 8078
       log_level: INFO                    # default INFO (DEBUG, INFO, WARN, ERROR)
