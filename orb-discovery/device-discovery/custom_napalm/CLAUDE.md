@@ -334,6 +334,45 @@ empty/no-VRFs scenario; pin any output variant your parser specifically
 handles. Also add the driver to the ownership pin matrix in
 `tests/test_runner_vrf_dispatch.py`.
 
+## Optional method: `get_modules`
+
+A driver MAY implement `get_modules()` to populate NetBox `Module` /
+`ModuleBay` entities, gated behind the `discover_modules` policy option
+(`off` / `linecards` / `full`). The runner calls it via `getattr(...)` so
+drivers without it are silently skipped. See
+`docs/backends/device_discovery/README.md#modules--modulebays` for the
+emission contract, the three modes, and the canonical envelope shape.
+
+**Optics without a parent module.** Do not require a parent slot / linecard / FRU
+bay in order to emit a transceiver. Fixed-port platforms report optics with nothing
+above them, and optics in the fixed ports of a partly-modular chassis have no parent
+either. Collect optics independently of the bay walk, attach the ones whose parent
+resolves, and promote the rest with `orphan_optic_bay(ifname, optic)` (imported
+directly from `custom_napalm._modules`). Gate on "no bays AND no optics", never on
+"no bays" alone.
+
+**Promote a row only when you can name the part.** A model and a serial is the
+straightforward case. A row the device serialised but did not identify — a blank PID,
+or a placeholder such as the `Unspecified` a 2960S prints — may still be promoted
+**if it carries a description**: set `identified=False` on the `ModuleEntry` and use
+the description as the model. `_modules._validate_bay` enforces that pairing, and
+translate files the result under a generic manufacturer so it stays distinguishable
+from genuinely identified parts. See "Modules the device cannot identify" in the
+backend README.
+
+**Do not promote a row carrying only a serial** — a DOM or cage reading with no PID
+*and* no description. `_validate_bay` requires only a serial, so before the
+`identified` flag existed such a row survived validation and landed in NetBox as
+`ModuleType(model="Unknown")`, collapsing every unidentified optic across every
+device into one bogus module type. That collapse is still the thing to avoid, and it
+is exactly why the description rather than a placeholder stands in for the model — a
+placeholder IS the collapse. A row with neither is skipped at debug: nothing can name
+it, and there is nothing an operator could act on.
+
+Relaxing a driver's filter is per-driver work gated on real device evidence, never a
+blanket change. Only `ios` is relaxed today; `identified` defaults to `True`, so every
+other driver keeps its `pid and sn` precondition unchanged.
+
 ## Mock fakes for structured-API drivers
 
 For drivers that use a non-CLI transport, use these test fakes:

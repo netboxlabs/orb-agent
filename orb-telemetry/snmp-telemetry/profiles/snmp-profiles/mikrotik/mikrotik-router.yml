@@ -1,0 +1,113 @@
+# http://oidref.com/1.3.6.1.4.1.14988.1
+
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-router
+
+sysobjectid:
+- 1.3.6.1.4.1.14988.1.*    # Mikrotik Router
+
+metrics:
+  # Scalar metrics
+  - MIB: MIKROTIK-MIB
+    symbols:
+      # CPU temperature in C
+      - name: mtxrHlCpuTemperature
+        OID: 1.3.6.1.4.1.14988.1.1.3.6
+      # Device temperature in C
+      - name: mtxrHlTemperature
+        OID: 1.3.6.1.4.1.14988.1.1.3.10
+      # Power Supply voltage
+      - name: mtxrHlVoltage
+        OID: 1.3.6.1.4.1.14988.1.1.3.8
+      # Fan 1 speed (rpm)
+      - name: mtxrHlFanSpeed1
+        OID: 1.3.6.1.4.1.14988.1.1.3.17
+      # Fan 2 speed (rpm)
+      - name: mtxrHlFanSpeed2
+        OID: 1.3.6.1.4.1.14988.1.1.3.18
+
+  # Optical Table
+  - MIB: MIKROTIK-MIB
+    table:
+      OID: 1.3.6.1.4.1.14988.1.1.19.1
+      name: mtxrOpticalTable
+      description: SFP and GPON information
+    symbols:
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.6
+        name: mtxrOpticalTemperature
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.10
+        name: mtxrOpticalRxPower
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.4
+        name: mtxrOpticalTxFault
+        enum:
+          "false": 0
+          "true": 1
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.3
+        name: mtxrOpticalRxLoss
+        enum:
+          "false": 0
+          "true": 1
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.7
+        name: mtxrOpticalSupplyVoltage
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.8
+        name: mtxrOpticalTxBiasCurrent
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.5
+        name: mtxrOpticalWavelength
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.1
+        name: mtxrOpticalIndex
+      - OID: 1.3.6.1.4.1.14988.1.1.19.1.1.9
+        name: mtxrOpticalTxPower
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.14988.1.1.19.1.1.2
+          name: mtxrOpticalName
+
+  # Power Over Ethernet table
+  - MIB: MIKROTIK-MIB
+    table:
+      OID: 1.3.6.1.4.1.14988.1.1.15.1
+      name: mtxrPOETable
+      description: Power Over Ethernet
+    symbols:
+      - OID: 1.3.6.1.4.1.14988.1.1.15.1.1.6
+        name: mtxrPOEPower
+        description: W
+      - OID: 1.3.6.1.4.1.14988.1.1.15.1.1.4
+        name: mtxrPOEVoltage
+        description: V
+      - OID: 1.3.6.1.4.1.14988.1.1.15.1.1.1
+        name: mtxrPOEInterfaceIndex
+      - OID: 1.3.6.1.4.1.14988.1.1.15.1.1.3
+        name: mtxrPOEStatus
+        enum:
+          "disabled": 1
+          "waitingForLoad": 2
+          "poweredOn": 3
+          "overload": 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.14988.1.1.15.1.1.5
+          name: mtxrPOECurrent
+          description: mA
+      - column:
+          OID: 1.3.6.1.4.1.14988.1.1.15.1.1.2
+          name: mtxrPOEName
+
+  # CPU and Memory
+  - MIB: HOST-RESOURCES-MIB
+    symbols:
+      - OID: 1.3.6.1.2.1.25.3.3.1.2.1
+        name: cpu1Min
+        poll_time_sec: 60
+        tag: CPU
+      - OID: 1.3.6.1.2.1.25.2.3.1.5
+        name: hrTotalMemory
+        poll_time_sec: 60
+        tag: MemoryTotal
+      - OID: 1.3.6.1.2.1.25.2.3.1.6
+        name: hrUsedMemory
+        poll_time_sec: 60
+        tag: MemoryUsed

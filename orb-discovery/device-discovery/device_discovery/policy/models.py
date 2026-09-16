@@ -10,8 +10,13 @@ from enum import Enum
 from typing import Any, Literal
 
 from croniter import CroniterBadCronError, croniter
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from device_discovery.policy.portscan import (
+    MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
+)
+from device_discovery.policy.portscan import count_hostnames
+from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
     stack_template_problem,
@@ -100,10 +105,49 @@ class VrfParameters(ObjectParameters):
     rd: str | None = Field(default=None, description="Route distinguisher, optional")
 
 
+class VlanGroupParameters(BaseModel):
+    """
+    VLAN group discovered VLANs are attached to, and the NetBox object it is scoped to.
+
+    At most one ``scope_*`` may be set. With none, the group is scoped to
+    ``defaults.site``, as a bare group name is. Unknown keys are rejected: a
+    misspelled scope would otherwise fall back to a site-scoped group that
+    then persists in NetBox.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    scope_site: str | None = Field(default=None, description="Scope the group to this site")
+    scope_site_group: str | None = Field(default=None, description="Scope the group to a site group")
+    scope_region: str | None = Field(default=None, description="Scope the group to a region")
+    scope_location: str | None = Field(
+        default=None,
+        description="Scope the group to a location; ``defaults.site`` is sent with it",
+    )
+
+    @model_validator(mode="after")
+    def _single_scope(self) -> "VlanGroupParameters":
+        scopes = [
+            self.scope_site,
+            self.scope_site_group,
+            self.scope_region,
+            self.scope_location,
+        ]
+        if sum(1 for scope in scopes if scope) > 1:
+            raise ValueError(
+                "only one scope may be set (scope_site, scope_site_group, scope_region, scope_location)"
+            )
+        return self
+
+
 class VlanParameters(ObjectParameters):
     """Model for VLAN parameters."""
 
-    group: str | None = Field(default=None, description="VLAN group, optional")
+    group: str | VlanGroupParameters | None = Field(
+        default=None,
+        description="VLAN group: a bare name, or a map with name and one optional scope_*",
+    )
     tenant: str | TenantParameters | None = Field(
         default=None, description="VLAN tenant, optional"
     )
@@ -141,12 +185,26 @@ class PrefixParameters(IpamParameters):
     scope_location: str | None = Field(default=None, description="Prefix scope location, optional")
 
 
+#: Stand-in used when the operator configured no site or role. NetBox requires
+#: both on a Device, so a create has to carry something; everywhere else this
+#: string means "no value was configured" and is suppressed rather than sent.
+#: See translate_device and the prefix-scope cascade in interface.py.
+UNDEFINED_PLACEHOLDER = "undefined"
+
+
+#: Re-exported so a policy's budget and a single target's backstop are the same
+#: number, and so callers have one place to import it from.
+MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
+
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
-    site: str | None = Field(default="undefined", description="Site name, optional")
+    site: str | None = Field(
+        default=UNDEFINED_PLACEHOLDER, description="Site name, optional"
+    )
     role: str | None = Field(
-        default="undefined", description="Device Role name, optional"
+        default=UNDEFINED_PLACEHOLDER, description="Device Role name, optional"
     )
     if_type: str | None = Field(default="other", description="Interface type, optional")
     interface_patterns: list[InterfacePattern] | None = Field(
@@ -237,7 +295,7 @@ class Defaults(BaseModel):
         return v
 
 
-class Options(BaseModel):
+class Options(WarnUnknownKeys):
     """Model for discovery options."""
 
     platform_omit_version: bool | None = Field(
@@ -296,6 +354,80 @@ class Options(BaseModel):
             "Default False preserves the no-cascade behavior."
         ),
     )
+    emit_prefix_vlan: Literal["off", "svi-name"] = Field(
+        default="off",
+        description=(
+            "Associate a derived prefix with the VLAN of the SVI-style "
+            "interface its address lives on. 'off' or 'svi-name'. Off by "
+            "default because the association cannot be retracted once sent. "
+            "The value is trimmed and lowercased; an unrecognized value "
+            "resolves to 'off' rather than erroring."
+        ),
+    )
+
+    @field_validator("emit_prefix_vlan", mode="before")
+    @classmethod
+    def _normalize_emit_prefix_vlan(cls, v: object) -> str:
+        """
+        Normalize the mode string the way the snmp-discovery twin does.
+
+        Trim, lowercase, then fall back to 'off' for anything unrecognized so
+        a typo disables the feature instead of writing a guess into NetBox.
+
+        YAML 1.1 reads a bare ``off`` as the boolean False and ``on``/``yes``
+        as True, so both arrive here as booleans. Neither may raise, and nor
+        may any other scalar: the Go twin decodes into a string field, and
+        gopkg.in/yaml.v3 coerces an int or float scalar into it, so
+        ``emit_prefix_vlan: 1`` resolves to 'off' there. Erroring on it here
+        would make one policy text valid for one backend and fatal for the
+        other.
+
+        A sequence or mapping is different: yaml.v3 refuses to decode either
+        into a string, so the policy is rejected on both sides and this raises
+        to match.
+        """
+        if v is None:
+            return "off"
+        if isinstance(v, bool):
+            if v:
+                logger.warning(
+                    "emit_prefix_vlan was read as a boolean — YAML treats a "
+                    "bare on/yes/true that way. It names no mode, so the "
+                    "feature stays off; quote 'svi-name' to enable it."
+                )
+            return "off"
+        if isinstance(v, (list, tuple, set, dict)):
+            # yaml.v3 refuses to decode a sequence or mapping into the Go
+            # twin's string field, so the policy fails there too.
+            raise ValueError(
+                f"emit_prefix_vlan must be 'off' or 'svi-name', "
+                f"got {type(v).__name__}"
+            )
+        if isinstance(v, str):
+            text = v
+        elif isinstance(v, bytes):
+            # A !!binary scalar. yaml.v3 hands the decoded bytes to the string
+            # field, so the Go twin reads its text; do the same rather than
+            # diverge on it.
+            try:
+                text = v.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning("emit_prefix_vlan is not decodable text; using 'off'")
+                return "off"
+        else:
+            # Every remaining scalar: int, float, and the date / datetime a
+            # YAML timestamp produces. The Go decoder coerces each into its
+            # string field, so read the same text instead of rejecting a
+            # policy the other backend accepts.
+            text = str(v)
+        normalized = text.strip().lower()
+        if normalized == "svi-name":
+            return "svi-name"
+        if normalized not in ("off", ""):
+            logger.warning(
+                "unrecognized emit_prefix_vlan %r; using 'off'", v
+            )
+        return "off"
     discover_vrfs: bool = Field(
         default=False,
         description=(
@@ -310,7 +442,9 @@ class Options(BaseModel):
     emit_device_name: bool = Field(
         default=True,
         description=(
-            "Emit Device.name from the hostname the driver reported. "
+            "Emit Device.name from the discovered device name — the "
+            "hostname fact, or the fqdn fact under device_name_source: "
+            "fqdn. "
             "Defaults to True. Set False to suppress the name on the matched "
             "device so continual discovery stops proposing a hostname rename "
             "when the discovered hostname differs from the NetBox name. Only "
@@ -321,6 +455,61 @@ class Options(BaseModel):
             "stack_member_name_template."
         ),
     )
+    device_name_source: Literal["hostname", "fqdn"] = Field(
+        default="hostname",
+        description=(
+            "Fact used for Device.name. 'hostname' (default) keeps the "
+            "driver-reported hostname. 'fqdn' uses the fqdn fact instead, "
+            "but only when it positively looks like a domain-qualified "
+            "form of the hostname: no whitespace and, case-insensitively, "
+            "the hostname followed by a dot and at least one more "
+            "character. Anything else — placeholders such as 'None', "
+            "'Unknown', 'N/A' or ios's '<hostname>.not set', an fqdn "
+            "equal to the hostname, or a hostname that already contains "
+            "a dot (several drivers blindly append the domain again) — "
+            "falls back to the hostname. Does not apply to "
+            "virtual-chassis stacks: every member's name, the master's "
+            "included, comes from stack_member_name_template. Diode "
+            "matches devices by name, so switching an existing "
+            "deployment to 'fqdn' creates new records unless the NetBox "
+            "devices are renamed first. An unrecognized value logs a "
+            "warning and resolves to 'hostname'."
+        ),
+    )
+
+    @field_validator("device_name_source", mode="before")
+    @classmethod
+    def _normalize_device_name_source(cls, v: object) -> str:
+        """
+        Normalize the source string the way _normalize_emit_prefix_vlan does.
+
+        Trim and lowercase, then fall back to 'hostname' for anything
+        unrecognized so a typo keeps today's naming instead of failing the
+        whole policy. A boolean arrives from a bare YAML on/off/yes/no and
+        names no source; other scalars are coerced by the Go twin's string
+        decoding — none may raise. A sequence or mapping is rejected by
+        both sides, so raising here matches.
+        """
+        if v is None:
+            return "hostname"
+        if isinstance(v, bool):
+            logger.warning(
+                "device_name_source was read as a boolean — YAML treats a "
+                "bare on/off/yes/no that way. It names no source, so the "
+                "default 'hostname' is used; quote 'fqdn' to enable it."
+            )
+            return "hostname"
+        if isinstance(v, (list, tuple, set, dict)):
+            raise ValueError(
+                f"device_name_source must be 'hostname' or 'fqdn', "
+                f"got {type(v).__name__}"
+            )
+        text = v.decode() if isinstance(v, bytes) else str(v)
+        text = text.strip().lower()
+        if text in ("hostname", "fqdn"):
+            return text
+        logger.warning("Unrecognized device_name_source %r — using 'hostname'.", v)
+        return "hostname"
     emit_host_prefixes: bool = Field(
         default=False,
         description=(
@@ -335,7 +524,7 @@ class Options(BaseModel):
     )
 
 
-class Config(BaseModel):
+class Config(WarnUnknownKeys):
     """Model for discovery configuration."""
 
     schedule: str | None = Field(default=None, description="cron interval, optional")
@@ -394,6 +583,32 @@ class Policy(BaseModel):
 
     config: Config | None = Field(default=None, description="Configuration data")
     scope: list[Napalm]
+
+    @model_validator(mode="after")
+    def validate_expansion_budget(self):
+        """
+        Reject a policy whose scopes together expand past MAX_EXPANDED_HOSTS.
+
+        The budget spans the policy rather than one scope entry. A per-entry
+        ceiling bounds one entry and nothing else: sixteen /16 scopes each sit
+        under it while the policy expands to about a million addresses, and
+        every one of those becomes a port-scan target and then possibly an SSH
+        session. There is one number rather than a per-entry ceiling and a
+        larger policy-wide one, so there is one thing to reason about.
+
+        Charged from ``count_hostnames``, which reads a target the way
+        ``expand_hostnames`` does rather than parsing the notation a second
+        time, so no target shape can mean one thing here and another to the
+        expander. Rejecting at validation means a policy this large fails the
+        write instead of failing later inside a scheduled job.
+        """
+        total = sum(count_hostnames(entry.hostname) for entry in self.scope)
+        if total > MAX_EXPANDED_HOSTS:
+            raise ValueError(
+                f"policy scopes expand to {total} addresses in total, "
+                f"more than the limit of {MAX_EXPANDED_HOSTS}"
+            )
+        return self
 
 
 class PolicyRequest(BaseModel):

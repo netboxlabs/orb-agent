@@ -1,0 +1,34 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "Ethernet1/1",
+          "position": "Ethernet1/1",
+          "module": {
+            "model": "QSFP-100G-SR4",
+            "serial": "OPT50001001",
+            "description": "QSFP-100G-SR4",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "Ethernet1/2",
+          "position": "Ethernet1/2",
+          "module": {
+            "model": "QSFP-100G-LR4",
+            "serial": "OPT50001002",
+            "description": "QSFP-100G-LR4",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "Ethernet1/1": ["Ethernet1/1"],
+        "Ethernet1/2": ["Ethernet1/2"]
+      }
+    }
+  }
+}

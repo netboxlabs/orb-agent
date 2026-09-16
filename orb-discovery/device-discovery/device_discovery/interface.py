@@ -14,6 +14,8 @@ from device_discovery.defaults import DEFAULT_INTERFACE_PATTERNS
 from device_discovery.interface_types import VALID_INTERFACE_TYPES
 from device_discovery.policy.models import Defaults, Options
 from device_discovery.proto_presence import blank_to_none
+from device_discovery.stubs import vrf_match_key
+from device_discovery.svi_vlan import svi_vlan_id
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +214,14 @@ def _resolve_non_subinterface_type(
     matched = match_interface_type(if_name, DEFAULT_INTERFACE_PATTERNS, 0)
     if matched:
         return matched
+
+    # Tier 4b: an SVI name, by the same predicate the prefix-VLAN resolver uses.
+    # Keeping a second list of SVI spellings in DEFAULT_INTERFACE_PATTERNS let
+    # the two drift: a name could be trusted enough to associate a VLAN with a
+    # prefix while still being typed from its speed. Reuse the one definition,
+    # so an interface whose name yields a VLAN id is virtual by construction.
+    if svi_vlan_id(if_name) is not None:
+        return "virtual"
 
     # Tier 5: speed-based detection
     speed = interface_info.get("speed")
@@ -425,12 +435,35 @@ def _undesirable_prefix_reason(
     return None
 
 
+def _resolve_prefix_vlan_candidate(
+    interface_name: str,
+    vlan_cache: dict[int, pb.VLAN] | None,
+) -> pb.VLAN | None:
+    """
+    Return the VLAN this interface proposes for a derived prefix, or None.
+
+    Only an SVI-style name (per ``svi_vlan_id``) resolved to a cache entry
+    that carries a device-provided name is a candidate. A VID absent from
+    the cache, or present only as a nameless stub, is deliberately treated
+    the same as "not an SVI at all" — the caller must never call
+    ``_ensure_vlan``, which would synthesize (and thereby rename) a stub.
+    """
+    vid = svi_vlan_id(interface_name)
+    if vid is None:
+        return None
+    vlan = (vlan_cache or {}).get(vid)
+    if vlan is None or not vlan.name:
+        return None
+    return vlan
+
+
 def translate_interface_ips(
     interface: Interface,
     interfaces_ip: dict,
     defaults: Defaults,
     options: "Options | None" = None,
     iface_vrf_map: dict[str, pb.VRF] | None = None,
+    vlan_cache: dict[int, pb.VLAN] | None = None,
 ) -> Iterable[Entity]:
     """
     Translate IP address and Prefixes information for an interface.
@@ -448,6 +481,13 @@ def translate_interface_ips(
             VRF map built from get_network_instances(). When the interface
             appears in the map, the discovered VRF wins over the defaults
             vrf / vrf_ipv4 / vrf_ipv6 for both IPAddress and Prefix.
+        vlan_cache (dict[int, pb.VLAN] | None): vid → pb.VLAN cache (see
+            ``translate._build_vlan_cache``), consulted only when
+            ``options.emit_prefix_vlan == "svi-name"``. Each emitted
+            Prefix carries the interface's resolved candidate VLAN
+            (``_resolve_prefix_vlan_candidate``); this is provisional and
+            the same object's contributing addresses are reconciled to
+            unanimity once by the caller, ``build_interface_entities``.
 
     Returns:
     -------
@@ -511,6 +551,18 @@ def translate_interface_ips(
     # prefixes. Interfaces outside the map keep the defaults fallback.
     discovered_vrf = (iface_vrf_map or {}).get(interface.name)
 
+    # Opt-in: a provisional VLAN candidate for every prefix this interface
+    # contributes. The same VLAN applies to every address on this interface
+    # (the candidate is derived from the interface name, not the address),
+    # so it is resolved once here rather than per-address below. It is only
+    # provisional — build_interface_entities reconciles it against every
+    # other contributor to the same (prefix, vrf) before it can survive.
+    prefix_vlan_candidate = None
+    if options and options.emit_prefix_vlan == "svi-name":
+        prefix_vlan_candidate = _resolve_prefix_vlan_candidate(
+            interface.name, vlan_cache
+        )
+
     ip_entities = []
 
     for if_ip_name, ip_info in interfaces_ip.items():
@@ -553,6 +605,7 @@ def translate_interface_ips(
                                     tags=prefix_tags,
                                     comments=prefix_comments,
                                     description=prefix_description,
+                                    vlan=prefix_vlan_candidate,
                                     **scope_kwargs,
                                 )
                             )
@@ -620,6 +673,51 @@ def _attach_module_ref(
         iface.module.CopyFrom(module)
 
 
+def _reconcile_prefix_vlans(entities: list[Entity]) -> None:
+    """
+    Enforce vlan unanimity across Prefix entities describing the same object.
+
+    device-discovery has no prefix dedupe: two interfaces on one network
+    already emit two Prefix entities today, harmless only because every
+    field matches. translate_interface_ips attaches a provisional VLAN
+    candidate per contributing address; here, once, group by (prefix, vrf)
+    and keep it only where every contributor that proposed one agreed AND
+    none of the group's contributors abstained. A no-op when nothing
+    proposed a VLAN (the common case — most interfaces are not SVI-named,
+    and the option defaults to off), so this never logs or mutates unless
+    ``emit_prefix_vlan`` actually put a candidate on at least one entity.
+    """
+    # Group by what Diode will resolve these to, which is the prefix plus the
+    # VRF's matcher identity. Serializing the whole VRF message splits two
+    # contributors that differ only in a non-matcher field, such as one
+    # interface carrying a discovered VRF while another falls back to
+    # defaults.prefix.vrf under the same name: each group would then be
+    # unanimous by itself, the SVI candidate would survive an abstention it
+    # should have lost to, and Diode would still resolve both to one Prefix.
+    groups: dict[tuple[str, tuple[str, ...]], list[pb.Prefix]] = {}
+    for entity in entities:
+        if not entity.HasField("prefix"):
+            continue
+        prefix = entity.prefix
+        key = (prefix.prefix, vrf_match_key(prefix.vrf))
+        groups.setdefault(key, []).append(prefix)
+
+    for (prefix_str, _vrf_key), prefixes in groups.items():
+        proposed_vids = [p.vlan.vid for p in prefixes if p.HasField("vlan")]
+        if not proposed_vids:
+            continue
+        unanimous = len(proposed_vids) == len(prefixes) and len(set(proposed_vids)) == 1
+        if unanimous:
+            continue
+        logger.warning(
+            "%s: withholding VLAN association — contributing addresses "
+            "disagree on the VLAN, or one has no resolvable VLAN.",
+            prefix_str,
+        )
+        for p in prefixes:
+            p.ClearField("vlan")
+
+
 def build_interface_entities(
     device: Device,
     interfaces: dict,
@@ -628,6 +726,7 @@ def build_interface_entities(
     iface_module_map: dict[str, pb.Module] | None = None,
     options: "Options | None" = None,
     iface_vrf_map: dict[str, pb.VRF] | None = None,
+    vlan_cache: dict[int, pb.VLAN] | None = None,
 ) -> list[Entity]:
     """
     Create interface entities from interface definitions and IP data.
@@ -641,6 +740,12 @@ def build_interface_entities(
     When ``iface_vrf_map`` is provided (populated by
     ``vrf.build_discovered_vrfs``), IP addresses and prefixes on a mapped
     interface carry that discovered VRF instead of the configured defaults.
+
+    When ``options.emit_prefix_vlan == "svi-name"``, each derived Prefix
+    carries the VLAN of the SVI-style interface its address lives on
+    (resolved against ``vlan_cache``) — but only once every interface
+    contributing to that same (prefix, vrf) agrees; see
+    ``_reconcile_prefix_vlans``.
     """
     exclude_patterns = _compile_exclude_patterns(defaults.interface_exclude_patterns or [])
     iface_module_map = iface_module_map or {}
@@ -683,6 +788,7 @@ def build_interface_entities(
                 defaults,
                 options=options,
                 iface_vrf_map=iface_vrf_map,
+                vlan_cache=vlan_cache,
             )
         )
 
@@ -703,7 +809,9 @@ def build_interface_entities(
                 defaults,
                 options=options,
                 iface_vrf_map=iface_vrf_map,
+                vlan_cache=vlan_cache,
             )
         )
 
+    _reconcile_prefix_vlans(entities)
     return entities

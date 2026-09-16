@@ -1,0 +1,31 @@
+# <vendor name> traps definition
+# <link to online tool with trap and field definitions> https://oidref.com/1.3.6.1.4.1.6876.4.3.0
+# Note: ktranslate will still process incoming traps even if there is no profile.  The trap profile's main purpose is
+# to change the UI in New Relic so that instead of seeing the raw OID numbers as column headers you see the human friendly names.
+---
+
+traps:
+  - trap_oid: 1.3.6.1.4.1.6876.4.3         # This is the main OID associated with the trap event
+    trap_name: vmwVCNotifications          # Name of the trap event, taken from the MIB definition
+    drop_undefined: true                   # When set to true any varbind that is not included in the profile will be dropped
+    events:                                # These are the varbinds we expect to see within the trap payload
+      - name: vmwVpxdOldStatus             # Field name, taken from the MIB definition
+        OID: 1.3.6.1.4.1.6876.4.3.304.0    # OID number 
+        tag: old_status                    # <Optional> Tags allow you rename the field to something more friendly
+      - name: vmwVpxdNewStatus
+        OID: 1.3.6.1.4.1.6876.4.3.305.0
+        tag: new_status
+      - name: vmwVpxdObjValue
+        OID: 1.3.6.1.4.1.6876.4.3.306.0
+        tag: object_value
+      - name: vmwVpxdTargetObj
+        OID: 1.3.6.1.4.1.6876.4.3.307.0
+        tag: object_name
+      - name: vmwVpxdTargetObjType
+        OID: 1.3.6.1.4.1.6876.4.3.308.0
+        enum:                              # <Optional> Enumeration translates values from integers into more human friendly strings
+          unknown: 1
+          host: 2
+          vm: 3
+          other: 4
+        tag: object_type

@@ -1,0 +1,109 @@
+name: ruckus_wireless_controller
+sysObjectID:
+  - .1.3.6.1.4.1.25053.*
+metrics:
+  - name: ruckusSystemStatsNumAP
+    oid: .1.3.6.1.4.1.25053.1.3.1.1.1.15.1
+    type: gauge
+    help: Total number of access points
+
+  - name: ruckusCtrlSystemNodeNumApConnected
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.1.1.19
+    type: gauge
+    help: Number of connected access points
+
+  - name: ruckusSCGAPDisconnectedTrap
+    oid: 1.3.6.1.4.1.25053.2.10.1.23
+    type: trap
+    help: Trap for disconnected APs
+
+  - name: ruckusCtrlDomainNumApDisconnected
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.2.1.11
+    type: gauge
+    help: Number of disconnected APs per domain
+
+  - name: ruckusSCGAPRebootTrap
+    oid: .1.3.6.1.4.1.25053.2.10.1.25
+    type: trap
+    help: Trap for AP reboots
+
+  - name: ruckusSCGAPLostHeartbeatTrap
+    oid: .1.3.6.1.4.1.25053.2.10.1.24
+    type: trap
+    help: Trap for lost AP heartbeat
+
+  - name: ruckusCtrlApUptime
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.1.1.41
+    type: gauge
+    help: AP uptime
+
+  - name: ruckusCtrlApCpuUtilization
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.1.1.50
+    type: gauge
+    help: AP CPU utilization
+
+  - name: ruckusCtrlApTotalMemory
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.1.1.51
+    type: gauge
+    help: AP total memory
+
+  - name: ruckusCtrlSummaryApEntry
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.8.1
+    type: table
+    help: Summary of AP entries
+
+  - name: ruckusCtrlApRadioStatsBusyAirtime
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.3.1.31
+    type: gauge
+    help: Channel utilization (busy airtime)
+
+  - name: ruckusCtrlApClientEntry
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.9.1
+    type: table
+    help: AP client metrics
+
+  - name: ruckusCtrlClientEntry
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.8.1
+    type: table
+    help: Client metrics
+
+  - name: ruckusWLANNumSta
+    oid: .1.3.6.1.4.1.25053.1.3.2.1.1.1.1.1.12
+    type: gauge
+    help: Number of client stations per WLAN
+
+  - name: ruckusCtrlClientStatsRxDataBytes
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.8.1.49
+    type: counter
+    help: Received data bytes per client
+
+  - name: ruckusCtrlClientStatsTxDataBytes
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.2.8.1.50
+    type: counter
+    help: Transmitted data bytes per client
+
+  - name: ruckusSCGCPUPerc
+    oid: .1.3.6.1.4.1.25053.2.10.2.17
+    type: gauge
+    help: Controller CPU usage
+
+  - name: ruckusSCGMemoryPerc
+    oid: .1.3.6.1.4.1.25053.2.10.2.18
+    type: gauge
+    help: Controller memory usage
+
+  - name: ruckusSCGDiskPerc
+    oid: 1.3.6.1.4.1.25053.2.10.2.19
+    type: gauge
+    help: Controller disk usage
+
+  - name: ruckusCtrlSystemNodeUptime
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.1.1.16
+    type: gauge
+    help: Controller uptime
+
+  - name: ruckusCtrlSystemNodeNumApLicense
+    oid: 1.3.6.1.4.1.25053.1.8.1.1.1.1.1.1.10
+    type: gauge
+    help: Number of AP licenses
+ 

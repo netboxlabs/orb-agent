@@ -66,7 +66,7 @@ func TestTranslateVlanDefinitions(t *testing.T) {
 func TestVlanBuilder(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
 	defs := map[int64]vlanDef{10: {name: "users", status: "ACTIVE"}, 20: {name: "voice", status: "SUSPENDED"}}
-	defaults := &config.Defaults{Tags: []string{"global"}, Vlan: config.VlanDefaults{Group: "Lab VLANs", Tenant: "acme", Role: "data", Tags: []string{"managed"}}}
+	defaults := &config.Defaults{Tags: []string{"global"}, Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "Lab VLANs"}, Tenant: "acme", Role: "data", Tags: []string{"managed"}}}
 	b := newVlanBuilder(dev, defaults, defs)
 
 	v10 := b.get(10)
@@ -111,7 +111,7 @@ func TestVlanBuilder(t *testing.T) {
 // would serialize as a bogus empty-site scope).
 func TestVlanBuilderGroupNilSiteScope(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1")} // no Site
-	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: "g"}}, nil)
+	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "g"}}}, nil)
 	v := b.get(10)
 	require.NotNil(t, v.Group)
 	require.Nil(t, v.Group.Scope)
@@ -123,16 +123,62 @@ func TestVlanBuilderGroupNilSiteScope(t *testing.T) {
 // non-empty VLANGroup.slug, so no group must be created (VLANs stay ungrouped).
 func TestVlanBuilderGroupEmptySlugSkipped(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
-	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: "!!!"}}, nil)
+	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "!!!"}}}, nil)
 	v := b.get(10)
 	require.Nil(t, v.Group, "group with empty slug must not be created")
 }
 
 func TestVlanGroupNoReferenceCycle(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
-	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: "g"}}, nil)
+	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "g"}}}, nil)
 	v := b.get(10)
 	iface := &diode.Interface{Device: dev, Name: strptr("Ethernet1"), UntaggedVlan: v}
 	require.NotNil(t, iface.ConvertToProtoMessage())
+	require.NotNil(t, v.ConvertToProtoMessage())
+}
+
+// The map form of vlan.group picks the scope NetBox attaches the group to.
+// An explicit scope wins over the device site; a map without one keeps the
+// device site, like the string form.
+func TestVlanBuilderGroupExplicitScope(t *testing.T) {
+	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
+	build := func(g config.VlanGroupParameters) *diode.VLANGroup {
+		v := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: g}}, nil).get(10)
+		require.NotNil(t, v.Group)
+		require.Equal(t, "g", *v.Group.Slug)
+		return v.Group
+	}
+
+	sg, ok := build(config.VlanGroupParameters{Name: "g", ScopeSiteGroup: "Brussels"}).Scope.(*diode.SiteGroup)
+	require.True(t, ok)
+	require.Equal(t, "Brussels", *sg.Name)
+
+	region, ok := build(config.VlanGroupParameters{Name: "g", ScopeRegion: "Benelux"}).Scope.(*diode.Region)
+	require.True(t, ok)
+	require.Equal(t, "Benelux", *region.Name)
+
+	site, ok := build(config.VlanGroupParameters{Name: "g", ScopeSite: "other"}).Scope.(*diode.Site)
+	require.True(t, ok)
+	require.Equal(t, "other", *site.Name, "explicit scope_site wins over the device site")
+
+	loc, ok := build(config.VlanGroupParameters{Name: "g", ScopeLocation: "Floor 2"}).Scope.(*diode.Location)
+	require.True(t, ok)
+	require.Equal(t, "Floor 2", *loc.Name)
+	require.NotNil(t, loc.Site, "a location scope carries the device site")
+	require.Equal(t, "lab", *loc.Site.Name)
+
+	fallback, ok := build(config.VlanGroupParameters{Name: "g"}).Scope.(*diode.Site)
+	require.True(t, ok)
+	require.Equal(t, "lab", *fallback.Name)
+}
+
+// A location scope with no device site is emitted without one rather than
+// with a typed-nil site that would serialize as an empty site.
+func TestVlanBuilderGroupLocationScopeNilSite(t *testing.T) {
+	dev := &diode.Device{Name: strptr("r1")}
+	v := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "g", ScopeLocation: "Floor 2"}}}, nil).get(10)
+	loc, ok := v.Group.Scope.(*diode.Location)
+	require.True(t, ok)
+	require.Nil(t, loc.Site)
 	require.NotNil(t, v.ConvertToProtoMessage())
 }

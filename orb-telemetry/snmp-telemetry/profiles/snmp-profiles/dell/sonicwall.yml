@@ -1,0 +1,135 @@
+# https://mibs.observium.org/mib/SONICWALL-FIREWALL-IP-STATISTICS-MIB/
+# https://mibs.observium.org/mib/SNWL-COMMON-MIB/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.8741.1    # SonicWALL TZ 400
+
+provider: kentik-firewall
+
+metrics:
+  # Instantaneous CPU Utilization in percent
+  # CPU Utilization - polled at 60s to support anomaly detection
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicCurrentCPUUtil
+      OID: 1.3.6.1.4.1.8741.1.3.1.3.0
+      poll_time_sec: 60
+      tag: CPU
+  # Instantaneous RAM Utilization in percent
+  # Memory Utilization - polled at 60s to support anomaly detection
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicCurrentRAMUtil
+      OID: 1.3.6.1.4.1.8741.1.3.1.4.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # Maximum number of connection cache entries allowed through the firewall
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicMaxConnCacheEntries
+      OID: 1.3.6.1.4.1.8741.1.3.1.1.0
+  # Number of active connection cache entries through the firewall
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicCurrentConnCacheEntries
+      OID: 1.3.6.1.4.1.8741.1.3.1.2.0
+  # Current number of dynamic NAT translations being performed
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicNatTranslationCount
+      OID: 1.3.6.1.4.1.8741.1.3.1.5.0
+  # This table provides statistics for each Security Association.
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    table:
+      name: sonicSAStatTable
+      OID: 1.3.6.1.4.1.8741.1.3.2.1.1
+    symbols:
+      # Total encrypted packet count for this phase2 SA
+      - name: sonicSAStatEncryptPktCount
+        OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.8
+      # Total encrypted byte count for this phase2 SA
+      - name: sonicSAStatEncryptByteCount
+        OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.9
+      # Total decrypted packet count for this phase2 SA
+      - name: sonicSAStatDecryptPktCount
+        OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.10
+      # Total decrypted byte count for this phase2 SA
+      - name: sonicSAStatDecryptByteCount
+        OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.11
+      # Incoming Fragmented packet count for this phase2 SA
+      - name: sonicSAStatInFragPktCount
+        OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.12
+      # Outgoing Fragmented packet count for this phase2 SA
+      - name: sonicSAStatOutFragPktCount
+        OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.13
+    metric_tags:
+      # Peer gateway address where the tunnel gets terminated
+      - column:
+          name: sonicSAStatPeerGateway
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.2
+          conversion: hextoip
+      # First address of the Source network for the phase2 SA
+      - column:
+          name: sonicSAStatSrcAddrBegin
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.3
+          conversion: hextoip
+      # Last address of the Source network for the phase2 SA
+      - column:
+          name: sonicSAStatSrcAddrEnd
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.4
+          conversion: hextoip
+      # First address of the destination network for the phase2 SA
+      - column:
+          name: sonicSAStatDstAddrBegin
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.5
+          conversion: hextoip
+      # Last address of the destination network for the phase2 SA
+      - column:
+          name: sonicSAStatDstAddrEnd
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.6
+          conversion: hextoip
+      # Time this phase2 SA was actually created in GMT
+      - column:
+          name: sonicSAStatCreateTime
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.7
+      # Name of the security policy used for creating this phase2 SA
+      - column:
+          name: sonicSAStatUserName
+          OID: 1.3.6.1.4.1.8741.1.3.2.1.1.1.14
+  # Current SSL-inspected connections through the firewall
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicDpiSslConnCountCur
+      OID: 1.3.6.1.4.1.8741.1.3.5.1.0
+  # Highwater SSL-inspected connections through the firewall
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicDpiSslConnCountHighWater
+      OID: 1.3.6.1.4.1.8741.1.3.5.2.0
+  # Maximum SSL-inspected connections through the firewall
+  - MIB: SONICWALL-FIREWALL-IP-STATISTICS-MIB
+    symbol:
+      name: sonicDpiSslConnCountMax
+      OID: 1.3.6.1.4.1.8741.1.3.5.3.0
+metric_tags:
+  # System model name and number
+  - column:
+      name: snwlSysModel
+      OID: 1.3.6.1.4.1.8741.2.1.1.1.0
+  # System serial number for this device
+  - column:
+      name: snwlSysSerialNumber
+      OID: 1.3.6.1.4.1.8741.2.1.1.2.0
+      tag: entity_serial
+  # Current system firmware version
+  - column:
+      name: snwlSysFirmwareVersion
+      OID: 1.3.6.1.4.1.8741.2.1.1.3.0
+  # Current system ROM version
+  - column:
+      name: snwlSysROMVersion
+      OID: 1.3.6.1.4.1.8741.2.1.1.4.0

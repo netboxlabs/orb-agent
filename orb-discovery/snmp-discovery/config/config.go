@@ -1,7 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"reflect"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -254,13 +257,71 @@ type DeviceDefaults struct {
 	Platform     string   `yaml:"platform,omitempty"`
 }
 
+// VLANGroupParameters names the VLAN group discovered VLANs are attached
+// to and the NetBox object the group is scoped to. A bare string is the
+// group name; the mapping form adds at most one scope_* field. With no
+// scope the group is scoped to defaults.site, as the string form is.
+type VLANGroupParameters struct {
+	Name           string `yaml:"name,omitempty"`
+	ScopeSite      string `yaml:"scope_site,omitempty"`
+	ScopeSiteGroup string `yaml:"scope_site_group,omitempty"`
+	ScopeRegion    string `yaml:"scope_region,omitempty"`
+	ScopeLocation  string `yaml:"scope_location,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar group name or a mapping.
+//
+// An unknown key in the mapping is an error rather than the warning the
+// rest of the policy gets: the warning pass cannot see inside a custom
+// decoder, and a misspelled scope would otherwise fall back to a
+// site-scoped group that then persists in NetBox.
+func (g *VLANGroupParameters) UnmarshalYAML(node *yaml.Node) error {
+	*g = VLANGroupParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return nil
+		}
+		g.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		known := yamlFieldNames(reflect.TypeFor[VLANGroupParameters]())
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if key := node.Content[i].Value; !known[key] {
+				return fmt.Errorf("vlan.group: unknown key %s", key)
+			}
+		}
+		type alias VLANGroupParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		if a.Name == "" {
+			return errors.New("vlan.group: name is required")
+		}
+		scopes := 0
+		for _, v := range []string{a.ScopeSite, a.ScopeSiteGroup, a.ScopeRegion, a.ScopeLocation} {
+			if v != "" {
+				scopes++
+			}
+		}
+		if scopes > 1 {
+			return errors.New("vlan.group: only one scope may be set (scope_site, scope_site_group, scope_region, scope_location)")
+		}
+		*g = VLANGroupParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("vlan.group: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
 // VLANDefaults represents default values applied to discovered VLAN entities.
 type VLANDefaults struct {
-	Description string   `yaml:"description,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Group       string   `yaml:"group,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Status      string   `yaml:"status,omitempty"`
+	Description string              `yaml:"description,omitempty"`
+	Tags        []string            `yaml:"tags,omitempty"`
+	Group       VLANGroupParameters `yaml:"group,omitempty"`
+	Tenant      string              `yaml:"tenant,omitempty"`
+	Status      string              `yaml:"status,omitempty"`
 }
 
 // Defaults represents the supported default values for a policy
@@ -278,6 +339,9 @@ type Defaults struct {
 	VLAN                     VLANDefaults       `yaml:"vlan,omitempty"`
 	InterfacePatterns        []InterfacePattern `yaml:"interface_patterns,omitempty"`
 	InterfaceExcludePatterns []string           `yaml:"interface_exclude_patterns,omitempty"`
+	// StackMemberNameTemplate names non-master virtual-chassis members.
+	// Empty means DefaultStackMemberTemplate; see stack_naming.go.
+	StackMemberNameTemplate string `yaml:"stack_member_name_template,omitempty"`
 }
 
 // mergeVrfParameters overlays non-zero override fields onto dst in place.
@@ -321,6 +385,9 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.AssetTag != "" {
 		merged.AssetTag = overrideDefaults.AssetTag
+	}
+	if overrideDefaults.StackMemberNameTemplate != "" {
+		merged.StackMemberNameTemplate = overrideDefaults.StackMemberNameTemplate
 	}
 	mergeTenantParameters(&merged.Tenant, &overrideDefaults.Tenant)
 	if len(overrideDefaults.Tags) > 0 {
@@ -417,7 +484,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if len(overrideDefaults.VLAN.Tags) > 0 {
 		merged.VLAN.Tags = overrideDefaults.VLAN.Tags
 	}
-	if overrideDefaults.VLAN.Group != "" {
+	if overrideDefaults.VLAN.Group.Name != "" {
 		merged.VLAN.Group = overrideDefaults.VLAN.Group
 	}
 	if overrideDefaults.VLAN.Tenant != "" {
@@ -527,6 +594,16 @@ type Options struct {
 	// empty for a given interface. Unknown values normalize to "auto"
 	// (with a warning) at policy parse.
 	InterfaceNameSource *string `yaml:"interface_name_source,omitempty"`
+
+	// Associates a derived prefix with the VLAN of the SVI-style interface
+	// its address lives on. "off" (default) or "svi-name", which emits
+	// only when the parsed VLAN exists in the device's own VLAN database.
+	//
+	// Off by default because the association cannot be retracted: the
+	// reconciler never diffs a field the payload omits, so a value written
+	// once cannot later be cleared by discovery, and while this is on any
+	// manual correction is overwritten on the next poll.
+	EmitPrefixVlan *string `yaml:"emit_prefix_vlan,omitempty"`
 }
 
 // PrefixEmissionEnabled returns the effective emit_prefixes toggle,
@@ -547,6 +624,21 @@ func (o *Options) HostPrefixEmissionEnabled() bool {
 // toggle, defaulting to TRUE.
 func (o *Options) DeviceNameEmissionEnabled() bool {
 	return o == nil || o.EmitDeviceName == nil || *o.EmitDeviceName
+}
+
+// PrefixVlanMode returns the effective emit_prefix_vlan mode, defaulting to
+// "off". An unrecognised value returns "off" rather than erroring, so a typo
+// disables the feature instead of writing guesses into NetBox.
+func (o *Options) PrefixVlanMode() string {
+	if o == nil || o.EmitPrefixVlan == nil {
+		return "off"
+	}
+	switch strings.ToLower(strings.TrimSpace(*o.EmitPrefixVlan)) {
+	case "svi-name":
+		return "svi-name"
+	default:
+		return "off"
+	}
 }
 
 // PrefixScopeCascadeEnabled returns the effective

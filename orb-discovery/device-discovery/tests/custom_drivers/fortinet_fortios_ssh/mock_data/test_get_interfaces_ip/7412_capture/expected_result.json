@@ -1,0 +1,58 @@
+{
+  "dmz": {
+    "ipv4": {
+      "10.10.10.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "mgmt": {
+    "ipv4": {
+      "192.168.1.99": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "wan1": {
+    "ipv4": {
+      "203.0.113.10": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "port6": {
+    "ipv4": {
+      "10.20.30.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "VLAN446-SW": {
+    "ipv4": {
+      "10.44.6.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "VLAN447-SW": {
+    "ipv4": {
+      "10.44.7.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "VLAN2101": {
+    "ipv4": {
+      "10.21.1.1": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "point1": {
+    "ipv4": {
+      "10.99.0.1": {
+        "prefix_length": 32
+      }
+    }
+  }
+}

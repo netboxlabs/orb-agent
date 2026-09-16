@@ -1,0 +1,200 @@
+# http://www.circitor.fr/Mibs/Html/C/CISCO-PRODUCTS-MIB.php
+# http://www.circitor.fr/Mibs/Html/O/OLD-CISCO-CPU-MIB.php
+# http://www.circitor.fr/Mibs/Html/C/CISCO-PROCESS-MIB.php
+# http://www.circitor.fr/Mibs/Html/C/CISCO-MEMORY-POOL-MIB.php
+---
+extends:
+  - bgp4-mib.yml
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-router
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.1537    # Cisco CSR 1000V
+  - 1.3.6.1.4.1.9.1.3004    # Cisco Catalyst 8000V
+
+metrics:
+  - MIB: OLD-CISCO-CPU-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.9.2.1.57.0
+      name: avgBusy1
+      poll_time_sec: 60
+      tag: CPU
+  - MIB: CISCO-PROCESS-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.109.1.1.1
+      name: cpmCPUTotalTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.109.1.1.1.1.7
+        name: cpmCPUTotal1minRev
+        tag: dataPlane_CPU
+      - OID: 1.3.6.1.4.1.9.9.109.1.1.1.1.12
+        name: cpmCPUMemoryUsed
+        tag: dataPlane_MemoryUsed
+      - OID: 1.3.6.1.4.1.9.9.109.1.1.1.1.13
+        name: cpmCPUMemoryFree
+        tag: dataPlane_MemoryFree
+  - MIB: CISCO-MEMORY-POOL-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.48.1.1
+      name: ciscoMemoryPoolTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.48.1.1.1.5
+        name: ciscoMemoryPoolUsed
+        poll_time_sec: 60
+        tag: MemoryUsed
+      - OID: 1.3.6.1.4.1.9.9.48.1.1.1.6
+        name: ciscoMemoryPoolFree
+        poll_time_sec: 60
+        tag: MemoryFree
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.48.1.1.1.2
+          name: ciscoMemoryPoolName
+        tag: memory_pool_name
+  - MIB: CISCO-RTTMON-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.42.1.2.10
+      name: rttMonLatestRttOperTable
+    symbols:
+      - OID: 1.3.6.1.4.1.9.9.42.1.2.10.1.1
+        name: rttMonLatestRttOperCompletionTime
+      - OID: 1.3.6.1.4.1.9.9.42.1.2.9.1.6
+        name: rttMonCtrlOperTimeoutOccurred
+        enum:
+          true: 1
+          false: 2
+        tag: rtt_operation_timed_out
+      - OID: 1.3.6.1.4.1.9.9.42.1.2.9.1.7
+        name: rttMonCtrlOperOverThresholdOccurred
+        enum:
+          true: 1
+          false: 2
+        tag: rtt_operation_threshold_violated
+      - OID: 1.3.6.1.4.1.9.9.42.1.2.9.1.10
+        name: rttMonCtrlOperState
+        enum:
+          reset: 1
+          orderlyStop: 2
+          immediateStop: 3
+          pending: 4
+          inactive: 5
+          active: 6
+          restart: 7
+      - OID: 1.3.6.1.4.1.9.9.42.1.2.10.1.2
+        name: rttMonLatestRttOperSense
+        enum:
+          other: 0
+          ok: 1
+          disconnected: 2
+          overThreshold: 3
+          timeout: 4
+          busy: 5
+          notConnected: 6
+          dropped: 7
+          sequenceError: 8
+          verifyError: 9
+          applicationSpecific: 10
+          dnsServerTimeout: 11
+          tcpConnectTimeout: 12
+          httpTransactionTimeout: 13
+          dnsQueryError: 14
+          httpError: 15
+          error: 16
+          mplsLspEchoTxError: 17
+          mplsLspUnreachable: 18
+          mplsLspMalformedReq: 19
+          mplsLspReachButNotFEC: 20
+          enableOk: 21
+          enableNoConnect: 22
+          enableVersionFail: 23
+          enableInternalError: 24
+          enableAbort: 25
+          enableFail: 26
+          enableAuthFail: 27
+          enableFormatError: 28
+          enablePortInUse: 29
+          statsRetrieveOk: 30
+          statsRetrieveNoConnect: 31
+          statsRetrieveVersionFail: 32
+          statsRetrieveInternalError: 33
+          statsRetrieveAbort: 34
+          statsRetrieveFail: 35
+          statsRetrieveAuthFail: 36
+          statsRetrieveFormatError: 37
+          statsRetrievePortInUse: 38
+        tag: rtt_operation_sense
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.1.1.3
+          name: rttMonCtrlAdminTag
+        tag: rtt_operation_tag
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.1.1.4
+          name: rttMonCtrlAdminRttType
+          enum:
+            echo: 1
+            pathEcho: 2
+            fileIO: 3
+            script: 4
+            udpEcho: 5
+            tcpConnect: 6
+            http: 7
+            dns: 8
+            jitter: 9
+            dlsw: 10
+            dhcp: 11
+            ftp: 12
+            voip: 13
+            rtp: 14
+            lspGroup: 15
+            icmpjitter: 16
+            lspPing: 17
+            lspTrace: 18
+            ethernetPing: 19
+            ethernetJitter: 20
+            lspPingPseudowire: 21
+            video: 22
+            y1731Delay: 23
+            y1731Loss: 24
+            mcastJitter: 25
+            fabricPathEcho: 26
+        tag: rtt_operation_type
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.1.1.9
+          name: rttMonCtrlAdminStatus
+          enum:
+            active: 1
+            notInService: 2
+            notReady: 3
+            createAndGo: 4
+            createAndWait: 5
+            destroy: 6
+        tag: rtt_operation_admin_status
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.2.1.2
+          name: rttMonEchoAdminTargetAddress
+          conversion: hextoip
+        tag: rtt_echo_target_ip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.2.1.5
+          name: rttMonEchoAdminTargetPort
+        tag: rtt_echo_target_port
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.2.1.6
+          name: rttMonEchoAdminSourceAddress
+        tag: rtt_echo_source_address
+        conversion: hextoip
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.2.1.7
+          name: rttMonEchoAdminSourcePort
+        tag: rtt_echo_source_port
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.2.1.12
+          name: rttMonEchoAdminNameServer
+        tag: rtt_echo_name_server
+      - column:
+          OID: 1.3.6.1.4.1.9.9.42.1.2.2.1.15
+          name: rttMonEchoAdminURL
+        tag: rtt_echo_url

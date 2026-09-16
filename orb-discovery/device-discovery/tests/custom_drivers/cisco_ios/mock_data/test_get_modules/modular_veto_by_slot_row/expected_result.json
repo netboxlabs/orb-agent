@@ -1,0 +1,22 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "1",
+          "position": "1",
+          "module": {
+            "model": "C9400-SUP-1",
+            "serial": "JAE6666601",
+            "description": "Cisco Catalyst 9400 Series Supervisor 1 Module",
+            "type": "supervisor",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "1": []
+      }
+    }
+  }
+}

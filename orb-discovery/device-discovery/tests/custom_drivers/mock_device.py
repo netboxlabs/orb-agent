@@ -279,8 +279,23 @@ class FakeNetconfConn:
         """Return empty capabilities — driver treats this as a modern (non-R19) device."""
         return []
 
+    # Drivers that issue more than one subtree filter can answer each one from
+    # its own file, so a scenario proves which filter supplied which fields. A
+    # scenario that does not split its replies keeps using response.xml.
+    _FILTER_REPLIES = (
+        ("<card>", "modules_response.xml"),
+        ("<transceiver>", "ports_transceiver_response.xml"),
+    )
+
     def get(self, filter=None, with_defaults=None, **kwargs) -> "_Response":
-        """Return ``response.xml`` from the mock directory."""
+        """Return this filter's own reply when the scenario splits them, else ``response.xml``."""
+        filter_text = str(filter or "")
+        for marker, filename in self._FILTER_REPLIES:
+            if marker in filter_text:
+                path = self._mock_dir / filename
+                if path.exists():
+                    return self._Response(path.read_text(encoding="utf-8"))
+                break
         path = self._mock_dir / "response.xml"
         xml = path.read_text(encoding="utf-8") if path.exists() else "<data/>"
         return self._Response(xml)
@@ -419,7 +434,17 @@ class _FakePyEZRpc:
         candidates = [f"{kebab}.xml", f"{name}.xml"]
 
         def _call(*_args, **_kwargs):
-            for fname in candidates:
+            # A boolean RPC argument becomes a bare child element on the wire
+            # (detail=True -> <detail/>), and Junos often answers a different
+            # shape for it. Serve "<rpc-name>-<arg>.xml" when the scenario
+            # provides one, so a fixture can distinguish the two replies; fall
+            # back to the plain file, which is what every existing scenario has.
+            flagged = [
+                f"{kebab}-{key.replace('_', '-')}.xml"
+                for key, value in sorted(_kwargs.items())
+                if value is True
+            ]
+            for fname in [*flagged, *candidates]:
                 path = self._mock_dir / fname
                 if path.exists():
                     return etree.fromstring(path.read_text(encoding="utf-8").encode("utf-8"))
@@ -442,6 +467,13 @@ class FakePyEZDevice:
         device.rpc.get_ethernet_switching_interface_information()
             → get-ethernet-switching-interface-information.xml
     """
+
+    # PyEZ Table construction reads both of these off the device before it
+    # touches the RPC: Table.__init__ reads _use_filter, and the SAX-parser
+    # decorator reads and writes transform. Upstream getters that go through a
+    # Table (get_interfaces_ip) cannot run against this fake without them.
+    _use_filter = False
+    transform = None
 
     def __init__(self, mock_dir: Path) -> None:
         """Store the directory and create the RPC proxy."""

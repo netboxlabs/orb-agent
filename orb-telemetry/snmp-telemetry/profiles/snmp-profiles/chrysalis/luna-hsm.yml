@@ -1,0 +1,56 @@
+# https://docs.vistanet.jp/about/supported-resources/templates-in-detail/safenet-utsp-luna-sa/
+---
+extends:
+  - system-mib.yml
+  - ucd-mib.yml
+  - tcp-mib.yml
+
+provider: kentik-hardware-security-module
+
+sysobjectid:
+  - 1.3.6.1.4.1.12383.3.1.1     # Thales Luna HSM
+
+metrics:
+  - MIB: CHRYSALIS-UTSP-MIB
+    symbols:
+      # It represents the rate of HSM (Hardware Security Modules) operations requested.
+      - OID: 1.3.6.1.4.1.12383.3.1.1.1.0
+        name: hsmOperationRequests
+        poll_time_sec: 60
+        tag: requests
+      # It represents the HSM operations requested, which have resulted in errors.
+      - OID: 1.3.6.1.4.1.12383.3.1.1.2.0
+        name: hsmOperationErrors
+      # It represents the critical HSM events detected.
+      - OID: 1.3.6.1.4.1.12383.3.1.1.3.0
+        name: hsmCriticalEvents
+      # It represents the non-critical HSM events detected. 
+      - OID: 1.3.6.1.4.1.12383.3.1.1.4.0
+        name: hsmNonCriticalEvents
+      # It indicates the current operational state of the NTLS. 
+      - OID: 1.3.6.1.4.1.12383.3.1.2.1.0
+        name: ntlsOperStatus
+        enum:
+          up: 1
+          down: 2
+          unknown: 3
+      # It indicates the current number of connected clients of the NTLS. 
+      - OID: 1.3.6.1.4.1.12383.3.1.2.2.0
+        name: ntlsConnectedClients
+        poll_time_sec: 60
+        tag: currentClients
+      # It represents the current number of links of the NTLS. 
+      - OID: 1.3.6.1.4.1.12383.3.1.2.3.0
+        name: ntlsLinks
+      # Number of successful client connections of the NTLS.
+      - OID: 1.3.6.1.4.1.12383.3.1.2.4.0
+        name: ntlsSuccessfulClientConnections
+      # Number of unsuccessful client connections of the NTLS. 
+      - OID: 1.3.6.1.4.1.12383.3.1.2.5.0
+        name: ntlsFailedClientConnections
+
+metric_tags:
+  # This DisplayString objects' indicates the expiry date of the NTLS server certificate.
+  - column:
+      OID: 1.3.6.1.4.1.12383.3.1.2.6.0
+      name: ntlsCertExpireDay

@@ -93,11 +93,14 @@ orb:
 | `url` | string | Yes | Git repository URL |
 | `branch` | string | No | Branch to use (default: repository default branch) |
 | `schedule` | cron | No | How often to poll for changes. If omitted, policies are fetched once at startup |
-| `auth` | string | No | `basic` (password or token) or `ssh`. Omit for public repositories |
+| `auth` | string | No | `basic` (password or token), `ssh`, or `github_app`. Omit for public repositories |
 | `username` | string | No | Username for basic auth |
 | `password` | string | No | Password or token for basic auth; passphrase for SSH keys |
 | `private_key` | string | No | Path to SSH private key file |
 | `skip_tls` | bool | No | Skip TLS certificate verification (default: `false`) |
+| `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
+| `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
+| `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
 
 ---
 
@@ -140,12 +143,12 @@ Optional OpenTelemetry export for backend metrics.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `grpc` | string | No | gRPC endpoint for OTLP export, e.g. `grpc://collector:4317` |
-| `http` | string | No | HTTP endpoint for OTLP export |
+| `http` | string | No | HTTP endpoint for OTLP export, e.g. `http://collector:4318` (used by pktvisor) |
 | `agent_labels` | map | No | Extra key/value labels attached to all exported telemetry |
 
 ### Backend keys
 
-Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends accept optional `host` and `port` overrides.
+Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends, `snmp_telemetry` and `gnmi_telemetry` accept optional `host` and `port` overrides.
 
 | Key | Backend | Default port | Notes |
 |-----|---------|-------------|-------|
@@ -155,6 +158,8 @@ Each backend key enables that backend. An empty value (no sub-keys) uses all def
 | `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
 | `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor.md) |
 | `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
+| `snmp_telemetry` | SNMP metrics and traps | 8078 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [SNMP Telemetry docs](../backends/snmp_telemetry.md) |
+| `gnmi_telemetry` | gNMI streaming telemetry metrics | 8079 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [gNMI Telemetry docs](../backends/gnmi_telemetry.md) |
 
 ---
 
@@ -184,11 +189,23 @@ orb:
           targets: [192.168.1.0/24]
 ```
 
+### Policy names
+
+The key beneath a backend is the policy name. `my_policy` and `scan_policy` above are names, not reserved words.
+
+- **Forwarded verbatim.** Nothing along the path slugifies, trims or case-folds the name, and it is the name that appears in backend status and in telemetry.
+- **Spaces and non-ASCII are supported.** `My Office Network #2` and `café` are valid. The agent percent-escapes the name when it addresses the policy over the backend's API, so `#`, `?` and `%` are safe to use.
+- **A name must not contain `/`.** It is the one character escaping cannot carry: the backend decodes the escape before routing, so the name would address a different policy. The agent refuses such a policy at apply time and reports it as failed, rather than starting one it could never remove.
+- **Must be distinct within a backend.** The name is a YAML mapping key, and a duplicate key is a YAML error, so the agent rejects the whole configuration file rather than starting with one of the two.
+- **Best kept distinct across backends too.** The agent indexes policies by name alone, so the same name under two backends can attach one policy's dataset IDs to the other's telemetry.
+
 For the full list of parameters per backend, see:
 - [Device Discovery](../backends/device_discovery/README.md)
 - [SNMP Discovery](../backends/snmp_discovery/README.md)
 - [Network Discovery](../backends/network_discovery.md)
 - [Worker](../backends/worker.md)
+- [SNMP Telemetry](../backends/snmp_telemetry.md)
+- [gNMI Telemetry](../backends/gnmi_telemetry.md)
 
 ---
 
@@ -341,6 +358,8 @@ Values can reference environment variables using `${VAR_NAME}` syntax. Resolutio
 | CyberArk secrets manager | `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key` | Go agent at startup |
 | `device_discovery` policy (all fields) | Any string value in `scope` and `defaults` | Python backend at policy execution |
 | `snmp_discovery` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, `context_name` | Go SNMP backend at policy execution |
+| `snmp_telemetry` policy authentication | `community`, `username`, `auth_passphrase`, `priv_passphrase`, only for variables named in `backends.snmp_telemetry.policy_env_vars`; unset refuses every reference | Go SNMP telemetry backend at policy execution |
+| `gnmi_telemetry` policy credentials | `username`, `password`, `tls.ca`, `tls.cert`, `tls.key`, only for variables named in `backends.gnmi_telemetry.policy_env_vars`; unset refuses every reference | Go gNMI telemetry backend at policy execution |
 
 ```yaml
 # Git config (resolved by Go agent)

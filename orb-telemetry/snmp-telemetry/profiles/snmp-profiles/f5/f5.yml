@@ -1,0 +1,456 @@
+# https://techdocs.f5.com/kb/en-us/products/big-ip_ltm/manuals/product/bigip-external-monitoring-implementations-12-1-2/12.html
+# http://www.circitor.fr/Mibs/Html/F/F5-BIGIP-SYSTEM-MIB.php
+# http://www.circitor.fr/Mibs/Html/F/F5-BIGIP-LOCAL-MIB.php
+# Hardware sensors: F5 K4026 / K000149096 (F5-BIGIP-SYSTEM-MIB sysChassis* / sysCpuSensor*).
+# VE and vCMP guests have no physical sensors; those tables stay empty. VIPRION chassis
+# temp is often empty — use sysBladeTempTable / sysBladeVoltageTable on blades.
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-load-balancer
+
+sysobjectid:
+  - 1.3.6.1.4.1.3375.2.1.2.4.*
+  - 1.3.6.1.4.1.3375.2.1.3.4.*     # F5
+  - 1.3.6.1.4.1.3375.2.1.3.4.43    # BIG-IP Virtual Edition
+  - 1.3.6.1.4.1.3375.2.1.3.4.94    # BIG-IP Vcmp Guest
+  - 1.3.6.1.4.1.3375.2.1.3.4.111   # BIG-IP
+  - 1.3.6.1.4.1.3375.2.1.3.4.113   # BIG-IP i10800
+
+metrics:
+# System-wide metrics
+  # This is average usage ratio of CPU for the system in the last one minute
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.20.29.0
+      name: sysGlobalHostCpuUsageRatio1m
+      poll_time_sec: 60
+      tag: CPU
+  # The total memory available in bytes for TMM (Traffic Management Module)
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.44.0
+      name: sysStatMemoryTotal
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # The memory in use in bytes for TMM (Traffic Management Module)
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.45.0
+      name: sysStatMemoryUsed
+      poll_time_sec: 60
+      tag: MemoryUsed
+  # Chassis Serial Number
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.3.3.3.0
+      name: sysGeneralChassisSerialNum
+      tag: chassis_serial_number
+  # The number of bytes received by the system from server-side
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.10.0
+      name: sysStatServerBytesIn
+      tag: server_side_bytes_in
+  # The number of bytes sent to server-side from the system
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.12.0
+      name: sysStatServerBytesOut
+      tag: server_side_bytes_out
+  # The number of bytes received by the system from client-side
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.3.0
+      name: sysStatClientBytesIn
+      tag: client_side_bytes_in
+  # The number of bytes sent to client-side from the system
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.5.0
+      name: sysStatClientBytesOut
+      tag: client_side_bytes_out
+  # The total connections from client-side to the system
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.7.0
+      name: sysStatClientTotConns
+      tag: client_side_total_connections
+  # The current connections from client-side to the system
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.1.8.0
+      name: sysStatClientCurConns
+      tag: client_side_current_connections
+  # The current number of concurrent native connections with established SSL sessions being maintained by the filter
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.9.4.0
+      name: sysClientsslStatCurNativeConns
+      tag: current_native_connections
+  # The current number of concurrent COMPAT connections with established SSL sessions being maintained by the filter
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.3375.2.1.1.2.9.7.0
+      name: sysClientsslStatCurCompatConns
+      tag: current_compat_connections
+
+# Hardware sensors (physical BIG-IP only; empty on VE / vCMP guests)
+  # Chassis fans — INDEX sysChassisFanIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2
+      name: sysChassisFanTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2.1.2
+        name: sysChassisFanStatus
+        enum:
+          bad: 0
+          good: 1
+          notpresent: 2
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2.1.3
+        name: sysChassisFanSpeed
+        tag: FanRPM
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.1.2.1.1
+          name: sysChassisFanIndex
+        tag: fan_index
+  # Chassis power supplies — INDEX sysChassisPowerSupplyIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.2.2
+      name: sysChassisPowerSupplyTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.2.2.1.2
+        name: sysChassisPowerSupplyStatus
+        enum:
+          bad: 0
+          good: 1
+          notpresent: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.2.2.1.1
+          name: sysChassisPowerSupplyIndex
+        tag: psu_index
+  # Chassis temperature sensors (Celsius) — INDEX sysChassisTempIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.3.2
+      name: sysChassisTempTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.3.2.1.2
+        name: sysChassisTempTemperature
+        tag: Temperature
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.3.2.1.1
+          name: sysChassisTempIndex
+        tag: temp_index
+  # Per-CPU temperature and fan — INDEX sysCpuSensorSlot, sysCpuSensorIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.6.2
+      name: sysCpuSensorTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.2
+        name: sysCpuSensorTemperature
+      - OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.3
+        name: sysCpuSensorFanSpeed
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.4
+          name: sysCpuSensorName
+        tag: cpu_sensor_name
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.5
+          name: sysCpuSensorSlot
+        tag: cpu_sensor_slot
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.6.2.1.1
+          name: sysCpuSensorIndex
+        tag: cpu_sensor_index
+  # VIPRION blade temperature (Celsius) — INDEX sysBladeTempIndex, sysBladeTempSlot
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2
+      name: sysBladeTempTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.2
+        name: sysBladeTempTemperature
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.3
+          name: sysBladeTempLocation
+        tag: blade_temp_location
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.4
+          name: sysBladeTempSlot
+        tag: blade_slot
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.4.2.1.1
+          name: sysBladeTempIndex
+        tag: blade_temp_index
+  # VIPRION blade voltage (mV) — INDEX sysBladeVoltageIndex
+  - MIB: F5-BIGIP-SYSTEM-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2
+      name: sysBladeVoltageTable
+    symbols:
+      - OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2.1.2
+        name: sysBladeVoltageVoltage
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2.1.1
+          name: sysBladeVoltageIndex
+        tag: blade_voltage_index
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.3.2.5.2.1.3
+          name: sysBladeVoltageSlot
+        tag: blade_slot
+
+  - MIB: F5-BIGIP-LOCAL-MIB
+    # A table containing system statistics information of the host, such as memory usage, cpu type, etc.
+    table:
+      OID: 1.3.6.1.4.1.3375.2.1.7.4.2
+      name: sysMultiHostTable
+    symbols:
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.2
+        name: sysMultiHostTotal
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.3
+        name: sysMultiHostUsed
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.6
+        name: sysMultiHostActiveCpuCount
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.7
+        name: sysMultiHostOtherMemoryTotal
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.8
+        name: sysMultiHostOtherMemoryUsed
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.9
+        name: sysMultiHostSwapTotal
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.10
+        name: sysMultiHostSwapUsed
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.11
+        name: sysMultiHostTotalKb
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.12
+        name: sysMultiHostUsedKb
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.13
+        name: sysMultiHostOtherMemoryTotalKb
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.14
+        name: sysMultiHostOtherMemoryUsedKb
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.15
+        name: sysMultiHostSwapTotalKb
+      # 
+      - OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.16
+        name: sysMultiHostSwapUsedKb
+    metric_tags:
+      # 
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.1.7.4.2.1.5
+          name: sysMultiHostCpuCount
+
+# Node metrics
+  - MIB: F5-BIGIP-LOCAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.2.4.3.2
+      name: ltmNodeAddrStatusTable
+    symbols:
+      # The availability of the specified node address
+      - OID: 1.3.6.1.4.1.3375.2.2.4.3.2.1.3
+        name: ltmNodeAddrStatusAvailState
+        tag: node_address_availability
+        enum:
+          error: 0
+          available: 1
+          notCurrentlyAvailable: 2
+          notAvailable: 3
+          unknown: 4
+          unlicensed: 5
+      # The activity status of the specified node address, as specified by the user
+      - OID: 1.3.6.1.4.1.3375.2.2.4.3.2.1.4
+        name: ltmNodeAddrStatusEnabledState
+        tag: node_address_enabled
+        enum:
+          none: 0
+          enabled: 1
+          disabled: 2
+          disabledbyparent: 3
+    metric_tags:
+      # Node name
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.4.3.2.1.7
+          name: ltmNodeAddrName
+        tag: node_name
+      # The IP address of a node
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.4.3.2.1.2
+          name: ltmNodeAddrAddr
+        tag: node_address
+
+# Pool metrics
+  - MIB: F5-BIGIP-LOCAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.2.5.5.2
+      name: ltmPoolStatusTable
+    symbols:
+      # The availability of the specified pool indicated
+      - OID: 1.3.6.1.4.1.3375.2.2.5.5.2.1.2
+        name: ltmPoolStatusAvailState
+        tag: pool_availability
+        enum:
+          error: 0
+          available: 1
+          notCurrentlyAvailable: 2
+          notAvailable: 3
+          unknown: 4
+          unlicensed: 5
+      # The activity status of the specified pool, as specified by the user
+      - OID: 1.3.6.1.4.1.3375.2.2.5.5.2.1.3
+        name: ltmPoolStatusEnabledState
+        tag: pool_enabled
+        enum:
+          none: 0
+          enabled: 1
+          disabled: 2
+          disabledbyparent: 3
+    metric_tags:
+      # The name of a pool
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.5.5.2.1.1
+          name: ltmPoolStatusName
+        tag: pool_name
+      # The load balance method for this pool
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.5.1.2.1.2
+          name: ltmPoolLbMode
+          enum:
+            roundRobin: 0
+            ratioMember: 1
+            leastConnMember: 2
+            observedMember: 3
+            predictiveMember: 4
+            ratioNodeAddress: 5
+            leastConnNodeAddress: 6
+            fastestNodeAddress: 7
+            observedNodeAddress: 8
+            predictiveNodeAddress: 9
+            dynamicRatio: 10
+            fastestAppResponse: 11
+            leastSessions: 12
+            dynamicRatioMember: 13
+            l3Addr: 14
+            weightedLeastConnMember: 15
+            weightedLeastConnNodeAddr: 16
+            ratioSession: 17
+        tag: pool_lb_mode
+
+# Pool Member metrics
+  - MIB: F5-BIGIP-LOCAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.2.5.6.2
+      name: ltmPoolMbrStatusTable
+    symbols:
+      # The availability of the specified pool member indicated
+      - OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.5
+        name: ltmPoolMbrStatusAvailState
+        tag: pool_mbr_availability
+        enum:
+          error: 0
+          available: 1
+          notCurrentlyAvailable: 2
+          notAvailable: 3
+          unknown: 4
+          unlicensed: 5
+      # The activity status of the specified pool member, as specified by the user
+      - OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.6
+        name: ltmPoolMbrStatusEnabledState
+        tag: pool_mbr_enabled
+        enum:
+          none: 0
+          enabled: 1
+          disabled: 2
+          disabledbyparent: 3
+      # The detail description of the specified pool member's status
+      - OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.8
+        name: ltmPoolMbrStatusDetailReason
+        tag: pool_mbr_status_detail
+        conversion: to_one
+    metric_tags:
+      # The name of a pool
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.1
+          name: ltmPoolMbrStatusPoolName
+        tag: pool_name
+      # The IP address of a pool member in the specified pool
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.3
+          name: ltmPoolMbrStatusAddr
+          conversion: hextoip
+        tag: pool_mbr_address
+      # The port number of the specified pool member
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.4
+          name: ltmPoolMbrStatusPort
+        tag: pool_mbr_port
+      # The name of associated node
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.5.6.2.1.9
+          name: ltmPoolMbrStatusNodeName
+        tag: pool_node_name
+
+# Virtual Server metrics
+  - MIB: F5-BIGIP-LOCAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.3375.2.2.10.13.2
+      name: ltmVsStatusTable
+    symbols:
+      # The availability of the specified virtual server indicated
+      - OID: 1.3.6.1.4.1.3375.2.2.10.13.2.1.2
+        name: ltmVsStatusAvailState
+        tag: vs_availability
+        enum:
+          error: 0
+          available: 1
+          notCurrentlyAvailable: 2
+          notAvailable: 3
+          unknown: 4
+          unlicensed: 5
+      # The activity status of the specified virtual server, as specified by the user
+      - OID: 1.3.6.1.4.1.3375.2.2.10.13.2.1.3
+        name: ltmVsStatusEnabledState
+        tag: vs_enabled
+        enum:
+          none: 0
+          enabled: 1
+          disabled: 2
+          disabledbyparent: 3
+    metric_tags:
+      # The name of a virtual server
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.10.13.2.1.1
+          name: ltmVsStatusName
+        tag: vs_name
+      # The IP address of the specified virtual server
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.10.1.2.1.3
+          name: ltmVirtualServAddr
+          conversion: hextoip
+        tag: vs_address
+      # The port number of the specified virtual server
+      - column:
+          OID: 1.3.6.1.4.1.3375.2.2.10.1.2.1.6
+          name: ltmVirtualServPort
+        tag: vs_port

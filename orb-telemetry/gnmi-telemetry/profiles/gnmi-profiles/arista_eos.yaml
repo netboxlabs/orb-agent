@@ -1,0 +1,5 @@
+# Placeholder inheriting _base: this profile has not been validated against a
+# device of this vendor. Vendor-specific paths go here once observed.
+extends: _base
+match:
+  vendor: arista

@@ -1,0 +1,4 @@
+== [ port1 ]
+name: port1 mode: static ip: 0.0.0.0 0.0.0.0 status: up netbios-forward: disable type: physical ring-rx: 0 ring-tx: 0 netflow-sampler: disable sflow-sampler: disable src-check: enable explicit-web-proxy: disable explicit-ftp-proxy: disable proxy-captive-portal: disable trunk: disable wccp: disable drop-overlapped-fragment: disable drop-fragment: disable mtu-override: disable
+== [ port2 ]
+name: port2 mode: static ip: 10.10.10.1 255.255.255.0 status: up netbios-forward: disable type: physical ring-rx: 0 ring-tx: 0 netflow-sampler: disable sflow-sampler: disable src-check: enable explicit-web-proxy: disable explicit-ftp-proxy: disable proxy-captive-portal: disable trunk: disable switch: sw0 wccp: disable drop-overlapped-fragment: disable drop-fragment: disable mtu-override: disable

@@ -1,0 +1,35 @@
+# Based on SNMP walk from Protectli VP2410
+# CPU metrics are not found on this device
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-router
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.3.2.8.opnsense
+
+metrics:
+  # Memory Utilization - polled at 60s to support anomaly detection
+  # Memory Total
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      name: hrStorageUsed
+      tag: MemoryTotal
+      poll_time_sec: 60
+  # Memory Buffers
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.6
+      tag: MemoryBuffer
+      poll_time_sec: 60
+  # Memory Cache
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsed
+      OID: 1.3.6.1.2.1.25.2.3.1.6.7
+      tag: MemoryCache
+      poll_time_sec: 60

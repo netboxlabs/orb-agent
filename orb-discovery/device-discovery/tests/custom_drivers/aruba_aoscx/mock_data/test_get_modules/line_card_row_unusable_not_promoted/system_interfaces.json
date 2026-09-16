@@ -1,0 +1,4 @@
+{
+  "1/3/1": {"name": "1/3/1", "hw_intf_info": {"mac_addr": "70:4d:7b:aa:bb:01", "max_speed": "10000", "pluggable": "true", "connector": "SFP+", "product_number": "SFP-10G-LR", "serial_number": "OPTICCASEB01"}},
+  "1/4/1": {"name": "1/4/1", "hw_intf_info": {"mac_addr": "70:4d:7b:aa:bb:02", "max_speed": "10000", "pluggable": "true", "connector": "SFP+", "product_number": "SFP-10G-LR", "serial_number": "OPTICCASEB02"}}
+}

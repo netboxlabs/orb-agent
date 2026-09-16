@@ -1,0 +1,47 @@
+# Nutanix vendor traps definition
+# https://mibs.observium.org/mib/NUTANIX-MIB/
+---
+
+traps:
+  - trap_oid: 1.3.6.1.4.1.41263.999
+    trap_name: ntxAlert
+    drop_undefined: false
+    events:
+      # Alert creation Timestamp in seconds from epoch.
+      - name: ntxAlertCreationTime
+        OID: 1.3.6.1.4.1.41263.999.1
+      # Display message for the sent alert.
+      - name: ntxAlertDisplayMsg
+        OID: 1.3.6.1.4.1.41263.999.2
+      # Alert Title for the sent alert.
+      - name: ntxAlertTitle
+        OID: 1.3.6.1.4.1.41263.999.3
+      # Alert Severity for the sent alert.
+      - name: ntxAlertSeverity
+        OID: 1.3.6.1.4.1.41263.999.4
+        enum:
+          informational: 1
+          warning: 2
+          critical: 3
+          audit: 4
+      # This object indicates the Alert Uuid
+      - name: ntxAlertUuid
+        OID: 1.3.6.1.4.1.41263.999.5
+      # This object indicates the time when an alert was resolved. It is the timestamp in seconds from epoch.
+      - name: ntxAlertResolvedTime
+        OID: 1.3.6.1.4.1.41263.999.6
+      # The name of the cluster generating the alert.
+      - name: ntxAlertClusterName
+        OID: 1.3.6.1.4.1.41263.999.7
+      # UUID of the source entity of the alert.
+      - name: ntxAlertSourceEntityUuid
+        OID: 1.3.6.1.4.1.41263.999.8
+      # Name of the source entity of the alert.
+      - name: ntxAlertSourceEntityName
+        OID: 1.3.6.1.4.1.41263.999.9
+      # Source entity type of the alert.
+      - name: ntxAlertSourceEntityType
+        OID: 1.3.6.1.4.1.41263.999.10
+      # This object indicates the name of MIB object which is a trap and has been resolved.
+      - name: ntxTrapName
+        OID: 1.3.6.1.4.1.41263.992

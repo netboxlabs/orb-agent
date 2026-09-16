@@ -2,7 +2,6 @@ package backend
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"time"
 
@@ -13,15 +12,22 @@ import (
 
 // PolicyStatusRun represents a run in the backend status response
 type PolicyStatusRun struct {
-	ID          string            `json:"id"`
-	Status      string            `json:"status"`
-	Reason      string            `json:"reason"`
-	EntityCount int64             `json:"entity_count,omitzero"`
-	CreatedAt   int64             `json:"created_at"` // nanoseconds since epoch
-	UpdatedAt   int64             `json:"updated_at"` // nanoseconds since epoch
-	Targets     []string          `json:"targets,omitempty"`
-	Driver      string            `json:"driver,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
+	ID          string   `json:"id"`
+	Status      string   `json:"status"`
+	Reason      string   `json:"reason"`
+	EntityCount int64    `json:"entity_count,omitzero"`
+	CreatedAt   int64    `json:"created_at"` // nanoseconds since epoch
+	UpdatedAt   int64    `json:"updated_at"` // nanoseconds since epoch
+	Targets     []string `json:"targets,omitempty"`
+	Driver      string   `json:"driver,omitempty"`
+	// Kind distinguishes runs that describe different work, where a backend
+	// emits more than one shape. gnmi-discovery emits "sweep" for a policy-wide
+	// target sweep and "flush" for a per-device ingest; they can carry the same
+	// target list and both report completed, and a sweep completes well before
+	// the first flush, so without this a consumer cannot tell whether a completed
+	// run means anything was ingested.
+	Kind     string            `json:"kind,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // PolicyStatus represents policy status from backend status endpoint
@@ -89,6 +95,10 @@ type Backend interface {
 
 	GetStartTime() time.Time
 	GetCapabilities() (map[string]any, error)
+	// GetRunningStatus reports Unknown only for a backend the agent never
+	// started: every bundled backend is registered, but only the ones the
+	// configuration names are configured and started, and a full reset or
+	// a policy removal treats Unknown as nothing to talk to.
 	GetRunningStatus() (RunningStatus, string, error)
 	GetInitialState() RunningStatus
 
@@ -132,19 +142,4 @@ func HaveBackend(name string) bool {
 // GetBackend returns a registered backend
 func GetBackend(name string) Backend {
 	return registry[name]
-}
-
-// RestartAll restarts all backends
-func RestartAll(ctx context.Context) error {
-	errs := make([]error, 0)
-	for _, be := range registry {
-		err := be.FullReset(ctx)
-		if err != nil {
-			errs = append(errs, err)
-		}
-	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-	return nil
 }

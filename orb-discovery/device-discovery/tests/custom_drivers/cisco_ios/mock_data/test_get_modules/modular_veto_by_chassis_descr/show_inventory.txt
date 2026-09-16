@@ -1,0 +1,5 @@
+NAME: "Chassis", DESCR: "Cisco Catalyst 9400 Series 4 Slot Chassis"
+PID: C9404R            , VID: V01 , SN: FXS7777701
+
+NAME: "Te2/0/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: OPT7777701

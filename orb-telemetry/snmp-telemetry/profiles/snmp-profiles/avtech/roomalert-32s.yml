@@ -1,0 +1,340 @@
+# MIB Provided by customers
+# Based on customer provided data AVtech uses the same sysoid for multiple models with mutually incompatible OID lists
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-envir-sensor
+
+sysobjectid:
+  - 1.3.6.1.4.1.20916   # Avtech Room Alert
+
+# This sysoid is the same for a variety of AVtech product lines
+# If the sysDesc matches this regex, use the corresponding profile.
+# Regex is run on _lower case_ version of the sysDesc string.
+matches:
+  "roomalert 3s": roomalert-3s.yml
+
+metrics:
+  - MIB: ROOMALERT32S-MIB
+    symbols:
+      # The internal temperature reading in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.1.1.0
+        name: internal-tempf
+      # The internal temperature reading in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.1.2.0
+        name: internal-tempc
+      # The internal relative humidity reading in %RH.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.2.1.0
+        name: internal-humidity
+      # The current status of the Room Alert 32S power supply. A '1' indicates the unit is running on AC/Utility power. A '0' indicates the unit is running on battery backup power.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.3.1.0
+        name: internal-power
+        enum:
+          battery: 0
+          ac: 1
+      # The internal heat index reading in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.4.1.0
+        name: internal-heat-index
+      # The internal heat index reading in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.4.2.0
+        name: internal-heat-indexC
+      # The current status of the Room Alert 32S analog input (0-5VDC).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.5.1.0
+        name: internal-analog1
+      #  The current status of the Room Alert 32S analog input (0-5VDC).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.5.2.0
+        name: internal-analog2
+      # The status of the on-board relay output
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.6.1.0
+        name: internal-relay1
+      # The status of the on-board relay output
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.6.2.0
+        name: internal-relay2
+      # The internal dew-point reading in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.7.1.0
+        name: internal-dew-point-c
+      # The internal dew-point reading in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.1.7.2.0
+        name: internal-dew-point-f
+
+      # Digital Sensor 1
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.1.0
+        name: digital-sen1-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.2.0
+        name: digital-sen1-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.3.0
+        name: digital-sen1-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.4.0
+        name: digital-sen1-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.5.0
+        name: digital-sen1-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.6.0
+        name: digital-sen1-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.1.7.0
+        name: digital-sen1-7
+
+      # Digital Sensor 2
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.1.0
+        name: digital-sen2-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.2.0
+        name: digital-sen2-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.3.0
+        name: digital-sen2-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.4.0
+        name: digital-sen2-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.5.0
+        name: digital-sen2-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.6.0
+        name: digital-sen2-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.2.7.0
+        name: digital-sen2-7
+
+      # Digital Sensor 3
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.1.0
+        name: digital-sen3-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.2.0
+        name: digital-sen3-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.3.0
+        name: digital-sen3-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.4.0
+        name: digital-sen3-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.5.0
+        name: digital-sen3-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.6.0
+        name: digital-sen3-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.3.7.0
+        name: digital-sen3-7
+
+      # Digital Sensor 4
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.1.0
+        name: digital-sen4-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.2.0
+        name: digital-sen4-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.3.0
+        name: digital-sen4-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.4.0
+        name: digital-sen4-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.5.0
+        name: digital-sen4-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.6.0
+        name: digital-sen4-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.4.7.0
+        name: digital-sen4-7
+
+      # Digital Sensor 5
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.1.0
+        name: digital-sen5-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.2.0
+        name: digital-sen5-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.3.0
+        name: digital-sen5-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.4.0
+        name: digital-sen5-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.5.0
+        name: digital-sen5-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.6.0
+        name: digital-sen5-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.5.7.0
+        name: digital-sen5-7
+
+      # Digital Sensor 6
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.1.0
+        name: digital-sen6-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.2.0
+        name: digital-sen6-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.3.0
+        name: digital-sen6-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.4.0
+        name: digital-sen6-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.5.0
+        name: digital-sen6-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.6.0
+        name: digital-sen6-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.6.7.0
+        name: digital-sen6-7
+
+      # Digital Sensor 7
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.1.0
+        name: digital-sen7-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.2.0
+        name: digital-sen7-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.3.0
+        name: digital-sen7-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.4.0
+        name: digital-sen7-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.5.0
+        name: digital-sen7-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.6.0
+        name: digital-sen7-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.7.7.0
+        name: digital-sen7-7
+
+      # Digital Sensor 8
+      # The sensor's current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.1.0
+        name: digital-sen8-1
+      # The sensor's current temperature in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.2.0
+        name: digital-sen8-2
+      # Varies by sensor type: current % relative humidity, voltage reading (V), power state (1=Power Detected, 0=No Power Detected), thermocouple temperature (C), or air speed (m/s).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.3.0
+        name: digital-sen8-3
+      # Varies by sensor type: current heat index (F), custom analog reading, thermocouple temperature (F), or air speed (f/m).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.4.0
+        name: digital-sen8-4
+      # Varies by sensor type: current heat index (C), thermocouple fault code (0=No Fault), or air flow (CMH).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.5.0
+        name: digital-sen8-5
+      # Varies by sensor type: current dew point (C) or air flow (CFM).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.6.0
+        name: digital-sen8-6
+      # Varies by sensor type: current dew point (F).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.2.8.7.0
+        name: digital-sen8-7
+
+      # The reading for switch sensor 1 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.1.0
+        name: switch-sen1
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 2 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.2.0
+        name: switch-sen2
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 3 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.3.0
+        name: switch-sen3
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 4 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.4.0
+        name: switch-sen4
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 5 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.5.0
+        name: switch-sen5
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 6 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.6.0
+        name: switch-sen6
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 7 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.7.0
+        name: switch-sen7
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 8 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.8.0
+        name: switch-sen8
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 9 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.9.0
+        name: switch-sen9
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 10 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.10.0
+        name: switch-sen10
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 11 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.11.0
+        name: switch-sen11
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 12 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.12.0
+        name: switch-sen12
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 13 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.13.0
+        name: switch-sen13
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 14 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.14.0
+        name: switch-sen14
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 15 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.15.0
+        name: switch-sen15
+        enum:
+          open: 0
+          closed: 1
+      # The reading for switch sensor 16 (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.11.1.3.16.0
+        name: switch-sen16
+        enum:
+          open: 0
+          closed: 1

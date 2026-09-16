@@ -85,6 +85,22 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return merged
 
 
+def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
+    """
+    Overlay a target's ``override_defaults`` onto the policy defaults.
+
+    Fields merge recursively, except ``vlan.group``: an override group replaces
+    the policy group as a whole so a scope set on the policy cannot leak into
+    a group the override named without one.
+    """
+    override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
+    merged = _deep_merge(base.model_dump(), override_dump)
+    override_group = override_dump.get("vlan", {}).get("group")
+    if override_group is not None:
+        merged["vlan"]["group"] = override_group
+    return Defaults.model_validate(merged)
+
+
 class PolicyRunner:
     """Policy Runner class."""
 
@@ -175,13 +191,9 @@ class PolicyRunner:
 
             config = self.config.model_copy(deep=True)
             if scope.override_defaults is not None:
-                merged = _deep_merge(
-                    config.defaults.model_dump(),
-                    scope.override_defaults.model_dump(
-                        exclude_unset=True, exclude_none=True
-                    ),
+                config.defaults = merge_override_defaults(
+                    config.defaults, scope.override_defaults
                 )
-                config.defaults = Defaults.model_validate(merged)
             hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
 
             if parsed_as_range:
@@ -477,8 +489,6 @@ class PolicyRunner:
         options = config.options or Options()
         ports = options.port_scan_ports
         timeout = options.port_scan_timeout
-        if not hostnames:
-            return
 
         # Get original hostname from scope for parent tracking
         original_hostname = scope.hostname.replace("\r\n", "").replace("\n", "")
@@ -489,6 +499,24 @@ class PolicyRunner:
             target=original_hostname,
             parent_target="",
         )
+
+        # Created BEFORE this check so a scope that expanded to nothing still
+        # leaves a run behind. expand_hostnames returns an empty list for a
+        # target over the expansion cap; returning silently here would report
+        # the policy as RUNNING with no history for it, which is less visible
+        # than a range that scans and finds nothing reachable (recorded as
+        # FAILED below).
+        if not hostnames:
+            self.run_store.update_run(
+                policy_name=self.name,
+                target=original_hostname,
+                run_id=scan_run.id,
+                status=RunStatus.FAILED,
+                error=Exception("Target expanded to no addresses"),
+                entity_count=0,
+                driver=None,
+            )
+            return
 
         try:
             results = find_reachable_hosts(hostnames, ports, timeout)

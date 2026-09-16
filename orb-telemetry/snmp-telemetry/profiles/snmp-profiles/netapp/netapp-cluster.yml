@@ -1,0 +1,1347 @@
+# http://oid-info.com/get/1.3.6.1.4.1.789.2.5
+# http://oidref.com/1.3.6.1.4.1.789.2.3
+# https://mibs.observium.org/mib/NETAPP-MIB/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-nas
+
+sysobjectid: 
+  - 1.3.6.1.4.1.789.2.3    # NetApp FAS2554A
+  - 1.3.6.1.4.1.789.2.5   # NetApp Cluster
+
+
+metrics:
+  # The product type representing the target platform.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.1.1.0
+      name: productType
+      enum:
+        eisa-based: 1
+        pci-based: 2
+  # Version string for the software running on this platform.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.1.2.0
+      name: productVersion
+  # The vendor id of this system, indicating the company that has supplied the product.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.1.4.0
+      name: productVendor
+      enum:
+        netapp: 1
+        dell: 2
+        ibm: 3
+  # Version string for the firmware running on this platform.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.1.6.0
+      name: productFirmwareVersion
+  # The product serial number. Returns unknown if it cannot be determined.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.1.9.0
+      name: productSerialNum
+  # The CPU architecture type of this appliance.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.1.11.0
+      name: productCPUArch
+      enum:
+        x86: 1
+        alpha: 2
+        mips: 3
+        sparc: 4
+  # The percent of time that the CPU has been doing useful work since the last time a client requested the cpuBusyTimePerCent.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.1.3.0
+      name: cpuBusyTimePerCent
+      poll_time_sec: 60
+      tag: CPU
+  # The number of CPUs in the system.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.1.6.0
+      name: cpuCount
+  # Table of the current CPU statistics on per node basis
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.2.1.14
+      name: cDOTCpuTable
+    symbols:
+      # The percent of time that the CPU has been doing useful work since the last time a client requested the cDOTCpuBusyTimePerCent.
+      - OID: 1.3.6.1.4.1.789.1.2.1.14.1.4
+        name: cDOTCpuBusyTimePerCent
+      # The percentage of time handling CP interrupts.
+      - OID: 1.3.6.1.4.1.789.1.2.1.14.1.12
+        name: cDOTCpuCPInterruptPercent
+    metric_tags:
+      # Node name
+      - column:
+          OID: 1.3.6.1.4.1.789.1.2.1.14.1.1
+          name: cDOTCpuNodeName
+      # The number of CPUs in the system.
+      - column:
+          OID: 1.3.6.1.4.1.789.1.2.1.14.1.7
+          name: cDOTCpuCount
+  # This indicates the overall status of the appliance. The algorithm to determine the value uses both hardware status (e.g. the number of failed fans) and volume status (e.g. number of volumes that are full).
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.2.4.0
+      name: miscGlobalStatus
+      enum:
+        other: 1
+        unknown: 2
+        ok: 3
+        nonCritical: 4
+        critical: 5
+        nonRecoverable: 6
+  # Age in minutes of the oldest read-only blocks in the buffer cache.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.2.23.0
+      name: miscCacheAge
+  # A string describing the global status, including a description of the condition (if any) that caused the status to be anything other than ok(3).
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.2.25.0
+      name: miscGlobalStatusMessage
+      conversion: to_one
+  # Clustered Failover state.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.3.2.0
+      name: cfState
+      enum:
+        dead: 1
+        canTakeover: 2
+        cannotTakeover: 3
+        takeover: 4
+  # This is the status last returned by the Clustered Failover partner.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.3.4.0
+      name: cfPartnerStatus
+      enum:
+        maybeDown: 1
+        ok: 2
+        dead: 3
+  # Hostname for Clustered Failover partner.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.3.6.0
+      name: cfPartnerName
+  # The current status of the interconnect. The partialFailure(3) status indicates that one of the links in the interconnect hardware is down.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.3.8.0
+      name: cfInterconnectStatus
+      enum:
+        notPresent: 1
+        down: 2
+        partialFailure: 3
+        up: 4
+  # The number of consistency point operations since boot that were caused by timer.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.2.0
+      name: cpFromTimerOps
+  # The number of consistency point operations since boot that were caused by snapshot operation.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.3.0
+      name: cpFromSnapshotOps
+  # The number of consistency point operations since boot that were caused by low water mark.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.4.0
+      name: cpFromLowWaterOps
+  # The number of consistency point operations since boot that were caused by high water mark.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.5.0
+      name: cpFromHighWaterOps
+  # The number of consistency point operations since boot that were caused by nv-log full.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.6.0
+      name: cpFromLogFullOps
+  # The number of back to back consistency point operations since boot.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.7.0
+      name: cpFromCpOps
+  # The total number of consistency point operations since boot.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.8.0
+      name: cpTotalOps
+  # The number of consistency point operations since boot that were caused by flushing unlogged write data.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.9.0
+      name: cpFromFlushOps
+  # The number of consistency point operations since boot that were caused by file system sync requests.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.10.0
+      name: cpFromSyncOps
+  # The number of back to back consistency point operations since boot that were deferred.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.12.0
+      name: cpFromCpDeferredOps
+  # The number of consistency point operations since boot that were caused by low datavecs.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.6.13.0
+      name: cpFromLowDatavecsOps
+  # An indication of the current status of autosupport on the appliance. describes the success or failure of most recent attempts to send autosupports.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.7.1.0
+      name: autosupportStatus
+      enum:
+        ok: 1
+        smtpFailure: 2
+        postFailure: 3
+        smtp-postFailure: 4
+        unknown: 5
+  # A string describing the autosupport status, including a description of the condition (if any) that caused the status to be anything other than ok(1).
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.7.2.0
+      name: autosupportStatusMessage
+      conversion: to_one
+  # Count of the number of autosupport messages successfully sent since the last reset.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.7.3.0
+      name: autosupportSuccessfulSends
+  # Count of the number of autosupport messages not sent successfully since the last reset.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.2.7.4.0
+      name: autosupportFailedSends
+  # Number of entries in the dfTable table.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.5.6.0
+      name: dfNumber
+  # Number of volumes in the volTable.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.5.9.0
+      name: volNumber
+  # Number of aggregates in the aggrTable.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.5.12.0
+      name: aggrNumber
+  # The total number of disks on the system.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.1.0
+      name: diskTotalCount
+  # The number of disks which are currently active, including parity disks.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.2.0
+      name: diskActiveCount
+  # The number of disks which are currently being reconstructed.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.3.0
+      name: diskReconstructingCount
+  # The number of parity disks which are currently being reconstructed.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.4.0
+      name: diskReconstructingParityCount
+  # The number of disks which are currently being verified.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.5.0
+      name: diskVerifyingParityCount
+  # The number of disks which are currently being scrubbed.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.6.0
+      name: diskScrubbingCount
+  # The number of disks which are currently broken.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.7.0
+      name: diskFailedCount
+  # The number of available spare disks.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.8.0
+      name: diskSpareCount
+  # The number of spare disks which are currently being added into a RAID group.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.9.0
+      name: diskAddingSpareCount
+  # If diskFailedCount is non-zero, this is a string describing the failed disk or disks. Each failed disk is described with a sentence like Parity disk in volume vol0, RAID group 1, failed. or Disk on adapter 8a, shelf 1, bay 0, failed. or Parity disk in aggregate aggr0, RAID group 1, failed.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.10.0
+      name: diskFailedMessage
+  # The number of disks which are prefailed and marked for rapid raid recovery.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.4.11.0
+      name: diskPrefailedCount
+  # Number of entries in the raidVTable table. This is the total number of traditional volumes and aggregates in the system.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.5.0
+      name: raidVNumber
+  # Number of entries in the spareTable table.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.6.0
+      name: spareNumber
+  # Number of entries in the otherDiskTable table.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.7.0
+      name: otherDiskNumber
+  # Number of entries in the raidPTable table. This is the total number of traditional volumes and aggregates in the system.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.8.0
+      name: raidPNumber
+  # Number of entries in the outOfDateDiskTable table.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.6.12.0
+      name: outOfDateDiskCount
+  # Number of currently active TCP/IP connections to HTTP clients
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.8.3.6.36.0
+      name: ncHttpActiveCliConns
+  # The number of storage enclosures in the storage subsystem.
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.21.1.1.0
+      name: enclNumber
+  # Indicates number of wafl buffers read from the external cache
+  - MIB: NETAPP-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.789.1.26.8.0
+      name: extcache64Hits
+  # Table of the current quota state of each volume in the system.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.4.4
+      name: qvStateTable
+    symbols:
+      # Indicates whether quotas are ON, OFF, initializing or corrupted
+      - OID: 1.3.6.1.4.1.789.1.4.4.1.3
+        name: qvStateStat
+        enum:
+          quotaStateOff: 1
+          quotaStateOn: 2
+          quotaStateInit: 3
+          quotaStateCorrupt: 4
+      # Indicates percentage of quota computation done while quotas are in initializing state.
+      - OID: 1.3.6.1.4.1.789.1.4.4.1.4
+        name: qvStateInitPercent
+    metric_tags:
+      # Indicates the name of this volume.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.4.4.1.2
+          name: qvStateName
+      # Indicates the vserver to which the volume belongs. Name from the cluster interfaces. Only applicable to cluster-mode volume.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.4.4.1.5
+          name: qvStateVserver
+  # Table of the available disk space on the file systems.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.5.4
+      name: dfTable
+    symbols:
+      # The percentage of disk space currently in use on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.6
+        name: dfPerCentKBytesCapacity
+      # The total number of inodes in use on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.7
+        name: dfInodesUsed
+      # The total number of inodes that are available for use on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.8
+        name: dfInodesFree
+      # The percentage of disk space currently in use based on inode counts, on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.9
+        name: dfPerCentInodeCapacity
+      # The count of the maximum number of files allowable on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.11
+        name: dfMaxFilesAvail
+      # The count of the number of files currently in use on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.12
+        name: dfMaxFilesUsed
+      # The status of the file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.20
+        name: dfStatus
+        enum:
+          unsupported: 0
+          unmounted: 1
+          mounted: 2
+          frozen: 3
+          destroying: 4
+          creating: 5
+          mounting: 6
+          unmounting: 7
+          nofsinfo: 8
+          replaying: 9
+          replayed: 10
+      # Overall mirror status of the file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.21
+        name: dfMirrorStatus
+        enum:
+          unsupported: 0
+          invalid: 1
+          uninitialized: 2
+          needcpcheck: 3
+          cpcheckwait: 4
+          unmirrored: 5
+          normal: 6
+          degraded: 7
+          resyncing: 8
+          failed: 9
+          limbo: 10
+      # Number of plexes in this file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.22
+        name: dfPlexCount
+      # The percentage of disk space saved by eliminating the duplicated blocks on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.28
+        name: dfPerCentSaved
+      # The total capacity in KBytes for the referenced file system. This object returns all of the 64 bit unsigned integer.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.29
+        name: df64TotalKBytes
+      # The total disk space in KBytes that is in use on the referenced file system. This object returns all of the 64 bit unsigned integer.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.30
+        name: df64UsedKBytes
+      # The total disk space in KBytes that is free for use on the referenced file system. This object returns all of the 64 bit unsigned integer.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.31
+        name: df64AvailKBytes
+      # The state of the cluster aggregates and volumes. If this is not true, all the values for the fields of this table are undefined. This field is returned only from the cluster interfaces.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.35
+        name: dfStateOnline
+        enum:
+          false: 0
+          true: 1
+      # The total disk space in KBytes that is reserved on the referenced file system.
+      - OID: 1.3.6.1.4.1.789.1.5.4.1.43
+        name: df64TotalReservedKBytes
+    metric_tags:
+      # The name for the referenced file system.
+      - column:
+          OID: 1.3.6.1.4.1.789.1.5.4.1.2
+          name: dfFileSys
+      # The name of the file on which this file system is mounted.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.4.1.10
+          name: dfMountedOn
+      # Indicates the type of container.
+      - column:
+          OID: 1.3.6.1.4.1.789.1.5.4.1.23
+          name: dfType
+          enum:
+            traditionalVolume: 1
+            flexibleVolume: 2
+            aggregate: 3
+            stripedAggregate: 4
+            stripedVolume: 5
+      # Name of the vserver to which the volume belongs. For aggregate and aggregate snapshot it will be an empty string. This field is returned only from the cluster interfaces.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.4.1.34 
+          name: dfVserver
+  # Table of the volumes defined on the system, including offline volumes.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.5.8
+      name: volTable
+    symbols:
+      # State of the volume, such as 'online' or 'offline'.
+      - OID: 1.3.6.1.4.1.789.1.5.8.1.5
+        name: volState
+        conversion: to_one
+      # Status of the volume, such as 'normal' or 'reconstructing'. May include several values separated by comma and space.
+      - OID: 1.3.6.1.4.1.789.1.5.8.1.6
+        name: volStatus
+        conversion: to_one
+      # Type of this volume, older volumes are traditional while newer volumes contained in aggregates are flexible.
+      - OID: 1.3.6.1.4.1.789.1.5.8.1.10
+        name: volType
+        enum:
+          traditional: 1
+          flexible: 2
+          striped: 3
+          asis: 4
+          snaplock: 5
+      # True indicates flexible volume is a clone.
+      - OID: 1.3.6.1.4.1.789.1.5.8.1.11
+        name: volClone
+        enum:
+          false: 1
+          true: 2
+    metric_tags:
+      # Name of the volume. This includes no /vol/ prefix.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.8.1.2
+          name: volName
+      # Unique identifier for this volume.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.8.1.3
+          name: volFSID
+      # Options associated with the volume, such as 'root' and 'nosnapdir=off'. May include several values separated by comma.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.8.1.7
+          name: volOptions
+      # A unique id associated with the volume.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.8.1.8
+          name: volUUID
+      # Name of the aggregate this flexible volume is a part of.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.8.1.9
+          name: volAggrName
+  # Table of the qtrees on the system. 
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.5.10
+      name: qtreeTable
+    symbols:
+      # The security style of the qtree.
+      - OID: 1.3.6.1.4.1.789.1.5.10.1.6
+        name: qtreeStyle
+        enum:
+          unix: 1
+          ntfs: 2
+          mixed: 3
+      # The status of the qtree.
+      - OID: 1.3.6.1.4.1.789.1.5.10.1.7
+        name: qtreeStatus
+        enum:
+          normal: 1
+          snapmirrored: 2
+          snapvaulted: 3
+      # An indication of whether the oplocks is enabled or not for this qtree.
+      - OID: 1.3.6.1.4.1.789.1.5.10.1.8
+        name: qtreeOplock
+        enum:
+          enabled: 1
+          disabled: 2
+    metric_tags:
+      # A number that identifies the volume that contains this qtree.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.10.1.2
+          name: qtreeVolume
+      # The name of the volume that contains this qtree. This includes no /vol/prefix.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.10.1.3
+          name: qtreeVolumeName
+      # The Id number of the qtree.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.10.1.4
+          name: qtreeId
+      # The name of the qtree.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.10.1.5
+          name: qtreeName
+  # Table of the aggregates defined on the system, including offline aggregates.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.5.11
+      name: aggrTable
+    symbols:
+      # State of the aggregate, such as 'online' or 'offline'.
+      - OID: 1.3.6.1.4.1.789.1.5.11.1.5
+        name: aggrState
+        conversion: to_one
+      # Status of the aggregate, such as 'normal' or 'reconstructing'. May include several values separated by comma and space.
+      - OID: 1.3.6.1.4.1.789.1.5.11.1.6
+        name: aggrStatus
+        conversion: to_one
+      # Type of this container, containers containing flexible volumes are aggregate.
+      - OID: 1.3.6.1.4.1.789.1.5.11.1.10
+        name: aggrType
+        enum:
+          unknown: 0
+          traditional: 1
+          aggregate: 2
+          striped: 3
+    metric_tags:
+      # Name of the aggregate. This includes no /vol/ prefix.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.11.1.2
+          name: aggrName
+      # Unique identifier for this aggregate.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.11.1.3
+          name: aggrFSID
+      # Options associated with the aggregate.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.11.1.7
+          name: aggrOptions
+      # A unique id associated with the aggregate.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.5.11.1.8
+          name: aggrUUID
+  # Table of RAIDv configuration information.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.6.2
+      name: raidVTable
+    symbols:
+      # The status of the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.2.1.3
+        name: raidVStatus
+        enum:
+          active: 1
+          reconstructionInProgress: 2
+          parityReconstructionInProgress: 3
+          parityVerificationInProgress: 4
+          scrubbingInProgress: 5
+          failed: 6
+          prefailed: 9
+          offline: 10
+      # The number of MBytes currently in use on the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.2.1.7
+        name: raidVUsedMb
+      # The number of MBytes physically available on the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.2.1.9
+        name: raidVTotalMb
+      # In the case when rapid raid recovery, disk copy, reconstruction/adding a spare, verification or scrubbing is in progress, the percent of such copy, reconstruction, verification or scrubbing that has been completed on the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.2.1.11
+        name: raidVCompletionPerCent
+    metric_tags:
+      # The name identifying the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.2
+          name: raidVDiskName
+      # A number that identifies the volume that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.12
+          name: raidVVol
+      # A number that identifies the RAID group within the given volume that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.13
+          name: raidVGroup
+      # The number of disks within this RAID group.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.14
+          name: raidVDiskNumber
+      # The number of RAID groups within this volume.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.15
+          name: raidVGroupNumber
+      # Number identifying the shelf where the disk is located.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.19
+          name: raidVShelf
+      # Number identifying the disk bay within the shelf where the disk is located.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.20
+          name: raidVBay
+      # A number that identifies the plex within the given volume that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.21
+          name: raidVPlex
+      # A number that identifies the RAID group within the given plex that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.22
+          name: raidVPlexGroup
+      # The number of plexes within this volume. This number is always 1 or 2.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.23
+          name: raidVPlexNumber
+      # A name that identifies the plex that this entry belongs to. A plex name can be anything, but is usually a string like 'plex0' or 'plex1'.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.24
+          name: raidVPlexName
+      # A number that specifies bytes per sector for this entry. Values are '512' or '520'.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.25
+          name: raidVSectorSize
+      # Serial number of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.26
+          name: raidVDiskSerialNumber
+      # The vendor of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.27
+          name: raidVDiskVendor
+      # Model string of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.28
+          name: raidVDiskModel
+      # Firmware revision number of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.29
+          name: raidVDiskFirmwareRevision
+      # RPM of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.30
+          name: raidVDiskRPM
+      # Interface type of the referenced disk drive. e.g SCSI, or ATA.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.31
+          name: raidVDiskType
+      # A name that identifies the disk pool that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.32
+          name: raidVDiskPool
+      # When raidVStatus value is prefailed, this string identifies the name of the disk which is the copy target of the referenced prefailed disk.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.2.1.33
+          name: raidVDiskCopyDestDiskName
+  # Table of spare disk configuration information.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.6.3
+      name: spareTable
+    symbols:
+      # The status of the referenced spare disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.3.1.3
+        name: spareStatus
+        enum:
+          spare: 1
+          addingspare: 2
+          bypassed: 3
+          unknown: 4
+          offline: 10
+      # The number of MBytes physically available on the referenced spare disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.3.1.7
+        name: spareTotalMb
+    metric_tags:
+      # The name identifying the referenced spare disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.2
+          name: spareDiskName
+      # Number identifying the shelf where the disk is located.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.12
+          name: spareShelf
+      # Number identifying the disk bay within the shelf where the disk is located.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.13
+          name: spareBay
+      # A name that identifies the disk pool that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.14
+          name: sparePool
+      # A number that specifies bytes per sector for this entry. Values are '512' or '520'.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.15
+          name: spareSectorSize
+      # Serial number of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.16
+          name: spareDiskSerialNumber
+      # The vendor of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.17
+          name: spareDiskVendor
+      # Model string of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.18
+          name: spareDiskModel
+      # Firmware revision number of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.19
+          name: spareDiskFirmwareRevision
+      # RPM of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.20
+          name: spareDiskRPM
+      # Interface type of the referenced disk drive. e.g SCSI, or ATA.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.3.1.21
+          name: spareDiskType
+  # Table of RAIDp configuration information.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.6.10
+      name: raidPTable
+    symbols:
+      # The status of the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.10.1.2
+        name: raidPStatus
+        enum:
+          active: 1
+          reconstructionInProgress: 2
+          parityReconstructionInProgress: 3
+          parityVerificationInProgress: 4
+          scrubbingInProgress: 5
+          failed: 6
+          prefailed: 9
+          offline: 10
+      # The number of MBytes currently in use on the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.10.1.20
+        name: raidPUsedMb
+      # The number of MBytes physically available on the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.10.1.22
+        name: raidPTotalMb
+      # In the case when rapid raid recovery, disk copy, reconstruction or adding a spare, verification or scrubbing is in progress, the percent of such copy, reconstruction, verification or scrubbing that has been completed on the referenced disk drive.
+      - OID: 1.3.6.1.4.1.789.1.6.10.1.24
+        name: raidPCompletionPerCent
+    metric_tags:
+      # A number that identifies the volume that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.3
+          name: raidPVol
+      # A number that identifies the plex that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.4
+          name: raidPPlex
+      # A number that identifies the RAID group within the given plex that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.5
+          name: raidPGroup
+      # The number of plexes within this volume. This number is always 1 or 2.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.6
+          name: raidPPlexNumber
+      # The number of RAID groups within this plex.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.7
+          name: raidPGroupNumber
+      # The number of disks within this RAID group.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.8
+          name: raidPDiskNumber
+      # A name that identifies the plex that this entry belongs to. A plex name can be anything, but is usually a string like 'plex0' or 'plex1'.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.9
+          name: raidPPlexName
+      # The name identifying the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.10
+          name: raidPDiskName
+      # Number identifying the shelf where the disk is located.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.17
+          name: raidPShelf
+      # Number identifying the disk bay within the shelf where the disk is located.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.18
+          name: raidPBay
+      # A number that specifies bytes per sector for this entry. Values are '512' or '520'.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.19
+          name: raidPSectorSize
+      # Serial number of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.25
+          name: raidPDiskSerialNumber
+      # The vendor of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.26
+          name: raidPDiskVendor
+      # Model string of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.27
+          name: raidPDiskModel
+      # Firmware revision number of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.28
+          name: raidPDiskFirmwareRevision
+      # RPM of the referenced disk drive.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.29
+          name: raidPDiskRPM
+      # Interface type of the referenced disk drive. e.g SCSI, or ATA.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.30
+          name: raidPDiskType
+      # A name that identifies the disk pool that this entry belongs to.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.31
+          name: raidPDiskPool
+      # When raidPStatus value is prefailed, this string identifies the name of the disk which is the copy target of the referenced prefailed disk.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.10.1.32
+          name: raidPDiskCopyDestDiskName
+  # Table of plex specific information.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.6.11
+      name: plexTable
+    symbols:
+      # The status of the plex.
+      - OID: 1.3.6.1.4.1.789.1.6.11.1.4
+        name: plexStatus
+        enum:
+          offline: 1
+          resyncing: 2
+          online: 3
+      # If the plex is resyncing, the percent completion of the resync.
+      - OID: 1.3.6.1.4.1.789.1.6.11.1.5
+        name: plexPercentResyncing
+    metric_tags:
+      # The identifier of the plex.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.11.1.2
+          name: plexName
+      # The volume to which this plex belongs.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.6.11.1.3
+          name: plexVolName
+  # Table of snapvault status.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.19.11
+      name: snapvaultStatusTable
+    symbols:
+      # Total number of failed or aborted transfer since the snapvault relationship was established. Persistent across reboot.
+      - OID: 1.3.6.1.4.1.789.1.19.11.1.9
+        name: svTotalFailures
+      # Current state of the snapvault relationship.
+      - OID: 1.3.6.1.4.1.789.1.19.11.1.5
+        name: svState
+        enum:
+          uninitialized: 1
+          snapvaulted: 2
+          brokenOff: 3
+          quiesced: 4
+          source: 5
+          unknown: 6
+          restoring: 7
+    metric_tags:
+      # Source of the snapvault relationship. :/vol/
+      - column:
+          OID: 1.3.6.1.4.1.789.1.19.11.1.2
+          name: svSrc
+      # Destination of the snapvault relationship. :/vol/
+      - column:
+          OID: 1.3.6.1.4.1.789.1.19.11.1.3
+          name: svDst
+  # Table of snapmirror status.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.9.20
+      name: snapmirrorStatusTable
+    symbols:
+      # Current transfer status of the snapmirror.
+      - OID: 1.3.6.1.4.1.789.1.9.20.1.4
+        name: snapmirrorStatus
+        enum:
+          idle: 1
+          transferring: 2
+          pending: 3
+          aborting: 4
+          migrating: 5
+          quiescing: 6
+          resyncing: 7
+          waiting: 8
+          syncing: 9
+          inSync: 10
+      # Current state of the snapmirror.
+      - OID: 1.3.6.1.4.1.789.1.9.20.1.5
+        name: snapmirrorState
+        enum:
+          uninitialized: 1
+          snapmirrored: 2
+          brokenOff: 3
+          quiesced: 4
+          source: 5
+          unknown: 6
+      # How far behind from the source the destination is in TimeTicks.
+      - OID: 1.3.6.1.4.1.789.1.9.20.1.6
+        name: snapmirrorLag
+      # Total number of failed or aborted transfer since the snapmirror is initialized. Persistent across reboot.
+      - OID: 1.3.6.1.4.1.789.1.9.20.1.9
+        name: snapmirrorTotalFailures
+      # Last successful transfer size in MB for the snapmirror.
+      - OID: 1.3.6.1.4.1.789.1.9.20.1.17
+        name: snapmirrorLastTransMBs
+      # Duration of last successful transfer in seconds for the snapmirror.
+      - OID: 1.3.6.1.4.1.789.1.9.20.1.18
+        name: snapmirrorLastTransTimeSeconds
+    metric_tags:
+      # Source of the snapmirror. : or :/vol/
+      - column:
+          OID: 1.3.6.1.4.1.789.1.9.20.1.2
+          name: snapmirrorSrc
+      # Destination of the snapmirror. : or :/vol/
+      - column:
+          OID: 1.3.6.1.4.1.789.1.9.20.1.3
+          name: snapmirrorDst
+      # Timestamp of the last snapshot successfully transferred from the source to the destination.
+      - column:
+          OID: 1.3.6.1.4.1.789.1.9.20.1.14
+          name: snapmirrorMirrorTimestamp
+      # The type of the previous successful transfer.
+      - column:
+          OID: 1.3.6.1.4.1.789.1.9.20.1.16
+          name: snapmirrorLastTransType
+  # Table of disk enclosure environmental information for disk shelves that support SCSI Enclosure Services.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.21.1.2
+      name: enclTable
+    symbols:
+      # The state of the communication between the filer or storage engine and the enclosure monitoring device in the enclosure.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.2
+        name: enclContactState
+        enum:
+          initializing: 1
+          transitioning: 2
+          active: 3
+          inactive: 4
+          reconfiguring: 5
+          nonexistent: 6
+      # The list of failed power supplies in this enclosure, numbered as in enclPowerSuppliesPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.15
+        name: enclPowerSuppliesFailed
+        conversion: to_one
+      # The list of failed fans or fan modules in this enclosure. Fans are numbered as described in enclFansPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.18
+        name: enclFansFailed
+        conversion: to_one
+      # The list of temperature sensors reporting overtemperature failure in this enclosure. Sensors are numbered as in TempSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.21
+        name: enclTempSensorsOverTempFail
+        conversion: to_one
+      # The list of temperature sensors reporting overtemperature warning in this enclosure. Sensors are numbered as in TempSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.22
+        name: enclTempSensorsOverTempWarn
+        conversion: to_one
+      # The list of temperature sensors reporting undertemperature failure in this enclosure. Sensors are numbered as in TempSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.23
+        name: enclTempSensorsUnderTempFail
+        conversion: to_one
+      # The list of temperature sensors reporting undertemperature warning in this enclosure. Sensors are numbered as in TempSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.24
+        name: enclTempSensorsUnderTempWarn
+        conversion: to_one
+      # The list of temperatures reported by all temperature sensors in the enclosure, including the ambient temperature. Sensors are numbered as in TempSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.25
+        name: enclTempSensorsCurrentTemp
+        conversion: to_one
+      # The list of failed electronics elements. Valid only if enclElectronicsPresent shows that some are present.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.33
+        name: enclElectronicsFailed
+        conversion: to_one
+      # The list of voltage sensors reporting overvoltage failure in this enclosure. Sensors are numbered as in VoltSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.36
+        name: enclVoltSensorsOverVoltFail
+        conversion: to_one
+      # The list of voltage sensors reporting overvoltage warning in this enclosure. Sensors are numbered as in VoltSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.37
+        name: enclVoltSensorsOverVoltWarn
+        conversion: to_one
+      # The list of voltage sensors reporting undervoltage failure in this enclosure. Sensors are numbered as in VoltSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.38
+        name: enclVoltSensorsUnderVoltFail
+        conversion: to_one
+      # The list of voltage sensors reporting undervoltage warning in this enclosure. Sensors are numbered as in VoltSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.39
+        name: enclVoltSensorsUnderVoltWarn
+        conversion: to_one
+      # The list of voltages reported by all voltage sensors in the enclosure, Sensors are numbered as in VoltSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.40
+        name: enclVoltSensorsCurrentVolt
+        conversion: to_one
+      # The list of current sensors reporting overcurrent failure in this enclosure. Sensors are numbered as in CurSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.47
+        name: enclCurSensorsOverCurFail
+        conversion: to_one
+      # The list of current sensors reporting overcurrent warning in this enclosure. Sensors are numbered as in CurSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.48
+        name: enclCurSensorsOverCurWarn
+        conversion: to_one
+      # The list of currents reported by all current sensors in the enclosure, Sensors are numbered as in CurSensorsPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.49
+        name: enclCurSensorsCurrentCur
+        conversion: to_one
+      # The list of fan speeds in revolutons per minute (RPM) for fans or fan modules present and for which speed status is known in this enclosure. Not all enclosure types report fan speeds. Fans are numbered as described in enclFansPresent.
+      - OID: 1.3.6.1.4.1.789.1.21.1.2.1.62
+        name: enclFansSpeed
+        conversion: to_one
+    metric_tags:
+      # The adapter number or switch name and the port number (together, called the channel), and shelf ID of this enclosure. Examples are 8a.1 and switch:5.1.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.3
+          name: enclChannelShelfAddr
+      # The logical identifier of this enclosure. This a form of the World-Wide Name (WWN).
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.4
+          name: enclProductLogicalID
+      # The product ID of the shelf hardware module that provides the enclosure monitoring function. Example is LRC.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.5
+          name: enclProductID
+      # The name of the vendor of this enclosure. Example is Xyratex.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.6
+          name: enclProductVendor
+      # The model name of this enclosure. Example is DiskShelf14.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.7
+          name: enclProductModel
+      # The revision number of this enclosure.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.8
+          name: enclProductRevision
+      # The serial number of this enclosure.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.9
+          name: enclProductSerialNo
+      # The number of disk bays in this enclosure.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.10
+          name: enclNumberDiskBays
+      # The list of disks present by bay number in this enclosure.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.11
+          name: enclDisksPresent
+      # Node to which this enclosure belongs.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.1.2.1.65
+          name: enclNodeName
+  # Table of High Availability configuration information.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.21.2
+      name: haTable
+    symbols:
+      # High Availability State.
+      - OID: 1.3.6.1.4.1.789.1.21.2.1.4
+        name: haState
+        enum:
+          dead: 1
+          canTakeover: 2
+          cannotTakeover: 3
+          takeover: 4
+          partialGiveback: 5
+      # The reason node cannot takeover its HA partner
+      - OID: 1.3.6.1.4.1.789.1.21.2.1.5
+        name: haCannotTakeoverCause
+        enum:
+          ok: 1
+          unknownReason: 2
+          disabledByOperator: 3
+          interconnectOffline: 4
+          disabledByPartner: 5
+          takeoverFailed: 6
+          mailboxIsInDegradedState: 7
+          partnermailboxIsInUninitialisedState: 8
+          mailboxVersionMismatch: 9
+          nvramSizeMismatch: 10
+          kernelVersionMismatch: 11
+          partnerIsInBootingStage: 12
+          diskshelfIsTooHot: 13
+          partnerIsPerformingRevert: 14
+          nodeIsPerformingRevert: 15
+          sametimePartnerIsAlsoTryingToTakeUsOver: 16
+          alreadyInTakenoverMode: 17
+          nvramLogUnsynchronized: 18
+          stateofBackupMailboxIsDoubtful: 19
+      # This is the status last returned by its HA partner.
+      - OID: 1.3.6.1.4.1.789.1.21.2.1.6
+        name: haPartnerStatus
+        enum:
+          maybeDown: 1
+          ok: 2
+          dead: 3
+      # The current status of the interconnect. The partialFailure(3) status indicates that one of the links in the interconnect hardware is down.
+      - OID: 1.3.6.1.4.1.789.1.21.2.1.10
+        name: haInterconnectStatus
+        enum:
+          notPresent: 1
+          down: 2
+          partialFailure: 3
+          up: 4
+    metric_tags:
+      # Name of the node.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.2.1.1
+          name: haNodeName
+      # Hostname of partner.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.21.2.1.8
+          name: haPartnerName
+  # Table of interface entries.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.22.1.2
+      name: netifTable
+    symbols:
+      # The total number of octets received on the interface, including framing characters.
+      - OID: 1.3.6.1.4.1.789.1.22.1.2.1.25
+        name: if64InOctets
+      # The number of inbound packets which were chosen to be discarded even though no errors had been detected to prevent their being deliverable to a higher-layer protocol. One possible reason for discarding such a packet could be to free up buffer space.
+      - OID: 1.3.6.1.4.1.789.1.22.1.2.1.28
+        name: if64InDiscards
+      # The number of inbound packets that contained errors preventing them from being deliverable to a higher-layer protocol.
+      - OID: 1.3.6.1.4.1.789.1.22.1.2.1.29
+        name: if64InErrors
+      # The total number of octets transmitted out of the interface, including framing characters.
+      - OID: 1.3.6.1.4.1.789.1.22.1.2.1.31
+        name: if64OutOctets
+      # The number of outbound packets which were chosen to be discarded even though no errors had been detected to prevent their being transmitted. One possible reason for discarding such a packet could be to free up buffer space.
+      - OID: 1.3.6.1.4.1.789.1.22.1.2.1.34
+        name: if64OutDiscards
+      # The number of outbound packets that could not be transmitted because of errors.
+      - OID: 1.3.6.1.4.1.789.1.22.1.2.1.35
+        name: if64OutErrors
+    metric_tags:
+      # A textual string containing information about the interface. This string should include the name of the manufacturer, the product name and the version of the hardware interface.
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.22.1.2.1.2
+          name: netifDesc
+  # Table of per-node statuses.
+  - MIB: NETAPP-MIB
+    table:
+      OID: 1.3.6.1.4.1.789.1.2.2.36
+      name: cDOTMiscTable
+    symbols:
+      # This indicates the overall status of the node.
+      - OID: 1.3.6.1.4.1.789.1.2.2.36.1.2
+        name: cDOTMiscGlobalStatus
+        enum:
+          other: 1
+          unknown: 2
+          ok: 3
+          nonCritical: 4
+          critical: 5
+          nonRecoverable: 6
+    metric_tags:
+      # Node name
+      - column: 
+          OID: 1.3.6.1.4.1.789.1.2.2.36.1.1
+          name: cDOTNodeName
+      # A string describing the global status, including a description of the condition (if any) that caused the status to be anything other than ok(3).
+      - column:
+          OID: 1.3.6.1.4.1.789.1.2.2.36.1.3
+          name: cDOTMiscGlobalStatusMessage
+  # Table of all nodes in the cluster.
+  - MIB: NETAPP-MIB
+    table:
+      name: nodeTable
+      OID: 1.3.6.1.4.1.789.1.25.2
+    symbols:
+      # Node Uptime. Same as sysUpTime for a specific node.
+      - name: nodeUptime
+        OID: 1.3.6.1.4.1.789.1.25.2.1.7
+      # Whether or not the node can communicate with the cluster.
+      - name: nodeHealth
+        OID: 1.3.6.1.4.1.789.1.25.2.1.11
+        enum:
+          false: 0
+          true: 1
+      # The time (in hundredths of a second) that the CPU has been up since the last boot.
+      - name: nodeCpuUptime
+        OID: 1.3.6.1.4.1.789.1.25.2.1.15
+      # An indication of the current status of the NVRAM battery or batteries.
+      - name: nodeNvramBatteryStatus
+        OID: 1.3.6.1.4.1.789.1.25.2.1.17
+        enum:
+          ok: 1
+          partiallyDischarged: 2
+          fullyDischarged: 3
+          notPresent: 4
+          nearEndOfLife: 5
+          atEndOfLife: 6
+          unknown: 7
+          overCharged: 8
+          fullyCharged: 9
+      # An indication of whether the hardware is currently operating outside of its recommended temperature range.
+      - name: nodeEnvOverTemperature
+        OID: 1.3.6.1.4.1.789.1.25.2.1.18
+        enum:
+          no: 1
+          yes: 2
+      # Count of the number of chassis fans which are not operating within the recommended RPM range.
+      - name: nodeEnvFailedFanCount
+        OID: 1.3.6.1.4.1.789.1.25.2.1.19
+      # Text message describing the current condition of chassis fans.
+      - name: nodeEnvFailedFanMessage
+        OID: 1.3.6.1.4.1.789.1.25.2.1.20
+        conversion: to_one
+      # Count of the number of power supplies which are in degraded mode.
+      - name: nodeEnvFailedPowerSupplyCount
+        OID: 1.3.6.1.4.1.789.1.25.2.1.21
+      # Text message describing the state of any power supplies which are currently degraded.
+      - name: nodeEnvFailedPowerSupplyMessage
+        OID: 1.3.6.1.4.1.789.1.25.2.1.22
+        conversion: to_one
+    metric_tags:
+      # Node name. Same as sysName for a specific node.
+      - column:
+          name: nodeName
+          OID: 1.3.6.1.4.1.789.1.25.2.1.1
+      # Node Product Version. Similar to productVersion for a specific node.
+      - column:
+          name: nodeProductVersion
+          OID: 1.3.6.1.4.1.789.1.25.2.1.23
+  # Table with list of SnapMirror Status
+  - MIB: NETAPP-MIB
+    table:
+      name: snapmirrorRelStatusTable
+      OID: 1.3.6.1.4.1.789.1.29.1
+    symbols:
+      # Current transfer status of this relationship.
+      - name: snapmirrorRelStatus
+        OID: 1.3.6.1.4.1.789.1.29.1.1.5
+        enum:
+          idle: 0
+          transferring: 1
+          restoring: 2
+          checking: 3
+          quiescing: 4
+          quiesced: 5
+          queued: 6
+          preparing: 7
+          waiting: 8
+          finalizing: 9
+          resyncing: 10
+          aborting: 11
+          breaking: 12
+      # Current state of this relationship.
+      - name: snapmirrorRelState
+        OID: 1.3.6.1.4.1.789.1.29.1.1.6
+        enum:
+          uninitialized: 0
+          snapmirrored: 1
+          brokenOff: 2
+      # Indicates whether this relationship is healthy or not.
+      - name: snapmirrorRelHealthy
+        OID: 1.3.6.1.4.1.789.1.29.1.1.16
+        enum:
+          fale: 0
+          true: 1
+      # Indicates the specific reason due to which this relationship is not healthy.
+      - name: snapmirrorRelUnHealthyReason
+        OID: 1.3.6.1.4.1.789.1.29.1.1.17
+        conversion: to_one
+    metric_tags:
+      # Source path of this relationship.
+      - column:
+          name: snapmirrorRelSrcPath
+          OID: 1.3.6.1.4.1.789.1.29.1.1.2
+      # Destination path of this relationship.
+      - column:
+          name: snapmirrorRelDestPath
+          OID: 1.3.6.1.4.1.789.1.29.1.1.3
+      # Relationship type of this relationship.
+      - column:
+          name: snapmirrorRelType
+          OID: 1.3.6.1.4.1.789.1.29.1.1.4
+          enum:
+            dp: 0
+            ls: 1
+            xdp: 2
+            rst: 3
+            tdp: 4

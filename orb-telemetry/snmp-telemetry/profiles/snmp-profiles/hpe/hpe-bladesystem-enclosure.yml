@@ -1,0 +1,468 @@
+# https://www.circitor.fr/Mibs/Html/C/CPQRACK-MIB.php
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.11.5.7.1.2    # HPE Onboard Administrator
+
+provider: kentik-server-chassis
+
+metrics:
+  - MIB: CPQRACK-MIB
+    # A table of rack enclosure temperature sensor information.
+    table:
+      name: cpqRackCommonEnclosureTempTable
+      OID: 1.3.6.1.4.1.232.22.2.3.1.2
+    symbols:
+      # This is the current temperature sensor reading in degrees celsius. If this value cannot be determined by software, then a value of -1 will be returned.
+      - name: cpqRackCommonEnclosureTempCurrent
+        OID: 1.3.6.1.4.1.232.22.2.3.1.2.1.6
+      # The Temperature sensor condition. This value will be one of the following: other(1) Temperature could not be determined. ok(2) The temperature sensor is within the normal operating range. degraded(3) The temperature sensor is outside of the normal operating range. failed(4) The temperature sensor detects a condition that could possibly damage the system. The system will automatically shutdown if the failed(4) condition results, so it is unlikely that this value will ever be returned by the agent.
+      - name: cpqRackCommonEnclosureTempCondition
+        OID: 1.3.6.1.4.1.232.22.2.3.1.2.1.8
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # This specifies the type of this instance of temperature sensor. This value will be one of the following: other(1) Temperature threshold type could not be determined. blowout(5) If a blowout(5) temperature sensor reaches its threshold, the fan or fans in the area of the temperature sensor will increase in speed in an attempt to reduce the temperature before a caution or critical threshold is reached. caution(9) If a caution(9) temperature sensor reaches its threshold, the cpqRackCommonEnclosureTempCondition will be set to degraded(3) and the system will either continue or shutdown depending on the user preferences. critical(15) If a critical(15) temperature sensor reaches its threshold, the cpqHeTemperatureCondition will be set to failed(4) and the system will shutdown.
+      - name: cpqRackCommonEnclosureTempType
+        OID: 1.3.6.1.4.1.232.22.2.3.1.2.1.9
+        enum:
+          other: 1
+          blowout: 5
+          caution: 9
+          critical: 15
+    metric_tags:
+      # The name of the enclosure. The string will be empty if the enclosure does not report the name or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.2.1.4
+          name: cpqRackCommonEnclosureTempSensorEnclosureName
+      # The location description of the temperature sensor within the enclosure. The string will be empty if the location could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.2.1.5
+          name: cpqRackCommonEnclosureTempLocation
+
+  - MIB: CPQRACK-MIB
+    # A table of rack enclosure fan information.
+    table:
+      name: cpqRackCommonEnclosureFanTable
+      OID: 1.3.6.1.4.1.232.22.2.3.1.3
+    symbols:
+      # The condition of the fan. This value will be one of the following: other(1) Fan status detection is not supported. ok(2) The fan is operating properly. degraded(2) A redundant fan is not operating properly. failed(4) A non-redundant fan is not operating properly.
+      - name: cpqRackCommonEnclosureFanCondition
+        OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.11
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+    metric_tags:
+      # The location description of the fan within the enclosure. The string will be empty if the location could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.5
+          name: cpqRackCommonEnclosureFanLocation
+      # The part number of the enclosure fan. The string will be empty if the part number could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.6
+          name: cpqRackCommonEnclosureFanPartNumber
+      # The spare part number of the enclosure fan. The string will be empty if the part number could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.7
+          name: cpqRackCommonEnclosureFanSparePartNumber
+      # This specifies if the fan described is present in the system.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.8
+          name: cpqRackCommonEnclosureFanPresent
+          enum:
+            other: 1
+            absent: 2
+            present: 3
+      # This specifies if the fan is in a redundant configuration.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.9
+          name: cpqRackCommonEnclosureFanRedundant
+          enum:
+            other: 1
+            notRedundant: 2
+            redundant: 3
+      # This specifies the group number for redundant fans within this enclosure.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.10
+          name: cpqRackCommonEnclosureFanRedundantGroupId
+      # The serial number of the enclosure containing the fan. The string will be empty if the enclosure does not report the serial number or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.3.1.12
+          name: cpqRackCommonEnclosureFanEnclosureSerialNum
+
+  - MIB: CPQRACK-MIB
+    # A table of rack enclosure fuse information.
+    table:
+      name: cpqRackCommonEnclosureFuseTable
+      OID: 1.3.6.1.4.1.232.22.2.3.1.4
+    symbols:
+      # This specifies if the fuse described is present in the system.
+      - name: cpqRackCommonEnclosureFusePresent
+        OID: 1.3.6.1.4.1.232.22.2.3.1.4.1.6
+        enum:
+          other: 1
+          absent: 2
+          present: 3
+      # The condition of the fuse. This value will be one of the following: other(1) Fuse status detection is not supported. ok(2) The fuse is operating properly. failed(4) A fuse has been tripped or is not operating properly.
+      - name: cpqRackCommonEnclosureFuseCondition
+        OID: 1.3.6.1.4.1.232.22.2.3.1.4.1.7
+        enum:
+          other: 1
+          ok: 2
+          failed: 4
+    metric_tags:
+      # The name of the enclosure. The string will be empty if the enclosure does not report the name or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.4.1.4
+          name: cpqRackCommonEnclosureFuseEnclosureName
+      # The location description of the fuse within the enclosure. The string will be empty if the location could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.4.1.5
+          name: cpqRackCommonEnclosureFuseLocation
+
+  - MIB: CPQRACK-MIB
+    # A table of rack enclosure manager information.
+    table:
+      name: cpqRackCommonEnclosureManagerTable
+      OID: 1.3.6.1.4.1.232.22.2.3.1.6
+    symbols:
+      # The condition of the manager. This value will be one of the following: other(1) Manager status detection is not supported. ok(2) The manager is operating properly. degraded(2) A redundant manager is not operating properly. failed(4) A non-redundant manager is not operating properly.
+      - name: cpqRackCommonEnclosureManagerCondition
+        OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.12
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+    metric_tags:
+      # The name of the enclosure. The string will be empty if the enclosure does not report the name or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.4
+          name: cpqRackCommonEnclosureManagerEnclosureName
+      # The location description of the manager within the enclosure. The string will be empty if the location could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.5
+          name: cpqRackCommonEnclosureManagerLocation
+      # The part number of the enclosure manager. The string will be empty if the part number could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.6
+          name: cpqRackCommonEnclosureManagerPartNumber
+      # The spare part number of the enclosure manager. The string will be empty if the part number could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.7
+          name: cpqRackCommonEnclosureManagerSparePartNumber
+      # The serial number of the enclosure manager. The string will be empty if the enclosure does not report the serial number or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.8
+          name: cpqRackCommonEnclosureManagerSerialNum
+      # This specifies the current role of the manager.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.9
+          name: cpqRackCommonEnclosureManagerRole
+          enum:
+            standby: 1
+            active: 2
+      # This specifies if the manager described is present in the system.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.10
+          name: cpqRackCommonEnclosureManagerPresent
+          enum:
+            other: 1
+            absent: 2
+            present: 3   
+      # This specifies if the manager is in a redundant configuration.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.1.6.1.11
+          name: cpqRackCommonEnclosureManagerRedundant
+          enum:
+            other: 1
+            notRedundant: 2
+            redundant: 3
+
+  - MIB: CPQRACK-MIB
+    # A table of rack power enclosure information.
+    table:
+      name: cpqRackPowerEnclosureTable
+      OID: 1.3.6.1.4.1.232.22.2.3.3.1
+    symbols:
+      # This indicates current condition of the power enclosure. other(1) The power enclosure condition could not be determined. ok(2) The power enclosure is operating normally. degraded(3) The power enclosure is in a degraded state. The power subsystem may not be load balanced or may have lost redundancy.
+      - OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.9
+        name: cpqRackPowerEnclosureCondition
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+    metric_tags:
+      # The name of the power enclosure. The string will be empty if the enclosure does not report the name or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.3
+          name: cpqRackPowerEnclosureName
+      # The serial number of the enclosure. The string will be empty if the enclosure does not report the serial number.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.4
+          name: cpqRackPowerEnclosureMgmtBoardSerialNum
+      # This indicates if the power supply enclosure is in a redundant state.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.5
+          name: cpqRackPowerEnclosureRedundant
+          enum:
+            other: 1
+            notRedundant: 2
+            redundant: 3
+      # This indicates if the power supply enclosure is in a load balanced state.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.6
+          name: cpqRackPowerEnclosureLoadBalanced
+          enum:
+            other: 1
+            notLoadBalanced: 2
+            loadBalanced: 3
+      # This indicates type of input facility power.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.7
+          name: cpqRackPowerEnclosureInputPwrType
+          enum:
+            other: 1
+            singlePhase: 2
+            threePhase: 3
+            directCurrent: 4
+      # This is the maximum facility power in watts. The maximum facility power being fed to this power enclosure. The value will be -1 if the power enclosure does not report the value or if the value is not known.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.8
+          name: cpqRackPowerEnclosurePwrFeedMax
+      # This indicates current condition of the power enclosure. other(1) The blade auto power on feature could not be determined. disabled(2) The enclosure will not automatically power on a blade when inserted. enabled(3) The enclosure will automatically power on a blade when inserted.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.3.3.1.1.10
+          name: cpqRackPowerEnclosureBladeAutopoweron
+          enum:
+            other: 1
+            disabled: 2
+            enabled: 3
+ 
+  - MIB: CPQRACK-MIB
+    # A table of rack server blade information.
+    table:
+      name: cpqRackServerBladeTable
+      OID: 1.3.6.1.4.1.232.22.2.4.1.1
+    symbols:
+      # The health status of the blade. This will be other(1) if the rack does not report the information or if it could not be determined.
+      - name: cpqRackServerBladeStatus
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.21
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # The major fault code of the blade fault reported by the enclosure manager. This will be -1 if the rack does not report the information or if it could not be determined.
+      - name: cpqRackServerBladeFaultMajor
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.22
+      # The minor fault code of the blade fault reported by the enclosure manager. This will be -1 if the rack does not report the information or if it could not be determined.
+      - name: cpqRackServerBladeFaultMinor  
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.23
+      # The server blade fault diagnostic string. This will contain a probable cause and potential diagnostic action to be taken to remedy the fault condition. The string will be empty if the blade does not report the diagnostic string or if it could not be determined.
+      - name: cpqRackServerBladeFaultDiagnosticString
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.24
+        conversion: to_one
+      # The power state of the blade. This will be other(1) if the rack does not report the information or if it could not be determined.
+      - name: cpqRackServerBladePowered
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.25
+        enum:
+          other: 1
+          on: 2
+          off: 3
+          powerStagedOff: 4
+          reboot: 5
+      # The Unit Identifier LED. This value will be one of the following: other(1) The state of the LED could not be determined. Setting the LED state is not allowed. none(2) The LED is not present. Setting LED state is not allowed. ledOn(3) The LED is present and ON. The LED can be turned off by setting the cpqRackServerBladeUIDState to ledOff(4). ledOff(4) The LED is present and OFF. The LED can be turned on by setting the cpqRackServerBladeUIDState to ledOn(3).
+      - name: cpqRackServerBladeUIDState
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.26
+        enum:
+          other: 1
+          none: 2
+          ledOn: 3
+          ledOff: 4
+      # Blade server power-on self test (POST) status. This value will be one of the following: other(1) The state of the blade POST could not be determined. started(2) Blade has started Power-on-self-test (POST) process. completed(3) Blade has finished Power-on-self-test (POST) process. failed(4) Blade has failed to complete Power-on-self-test (POST) process and halted. This will be other(1) if the rack does not report this information or if it could not be determined.
+      - name: cpqRackServerBladePOSTStatus
+        OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.35
+        enum:
+          other: 1
+          started: 2
+          completed: 3
+          failed: 4
+    metric_tags:
+      # The name of the server blade. The string will be empty if it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.4
+          name: cpqRackServerBladeName
+      # The part number of the server blade. The string will be empty if the part number could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.6
+          name: cpqRackServerBladePartNumber
+      # The spare part number of the server blade. The string will be empty if the part number could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.7
+          name: cpqRackServerBladeSparePartNumber
+      # The position or slot number of the server blade within the server enclosure. This will be -1 if the server enclosure does not report the information or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.8
+          name: cpqRackServerBladePosition
+      # This specifies if the server blade described is present in the enclosure.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.12
+          name: cpqRackServerBladePresent
+          enum:
+            other: 1
+            absent: 2
+            present: 3
+      # The server blade contains fuses. This will be true(2) is the server blade contains fuses. The cpqRackCommonEnclosureFuseTable will contain the fuse specific information. Match the cpqRackServerBladeEnclosureSerialNum in this table to the serial number in the cpqRackCommonEnclosureFanTable to get complete information on the fuses.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.13
+          name: cpqRackServerBladeHasFuses
+          enum:
+            false: 1
+            true: 2
+      # The serial number of the server blade. The string will be empty if the system does not report the serial number function.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.16
+          name: cpqRackServerBladeSerialNum
+      # The product id string of the server blade. The string will be empty if the system does not report the product id function.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.17
+          name: cpqRackServerBladeProductId
+      # The server blade unique identifier (UUID). The string will be empty if the blade does not report the UUID or if it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.1.1.1.18
+          name: cpqRackServerBladeUid
+
+  - MIB: CPQRACK-MIB
+    # A table of rack server temperature sensor information.
+    table:
+      name: cpqRackServerTempSensorTable
+      OID: 1.3.6.1.4.1.232.22.2.4.3.1
+    symbols:
+      # This is the current temperature sensor reading in degrees celsius. If this value cannot be determined by software, then a value of -1 will be returned.
+      - name: cpqRackServerTempSensorCurrent
+        OID: 1.3.6.1.4.1.232.22.2.4.3.1.1.8
+      # The Temperature sensor condition. This value will be one of the following: other(1) Temperature could not be determined. ok(2) The temperature sensor is within the normal operating range. degraded(3) The temperature sensor is outside of the normal operating range. failed(4) The temperature sensor detects a condition that could possibly overheat the system. The system will automatically shutdown if the failed(4) condition results, so it is unlikely that this value will ever be returned by the agent.
+      - name: cpqRackServerTempSensorCondition
+        OID: 1.3.6.1.4.1.232.22.2.4.3.1.1.10
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # This specifies the type of this instance of temperature sensor. This value will be one of the following: other(1) Temperature threshold type could not be determined. blowout(5) If a blowout(5) temperature sensor reaches its threshold, the fan or fans in the area of the temperature sensor will increase in speed in an attempt to reduce the temperature before a caution or critical threshold is reached. caution(9) If a caution(9) temperature sensor reaches its threshold, the cpqRackServerTempSensorCondition will be set to degraded(3) and the system will either continue or shutdown depending on the local blade server policy settings. critical(15) If a critical(15) temperature sensor reaches its threshold, cpqRackServerTempSensorCondition will be set to failed(4) and the blade server will shutdown.
+      - name: cpqRackServerTempSensorType
+        OID: 1.3.6.1.4.1.232.22.2.4.3.1.1.11
+        enum:
+          other: 1
+          blowout: 5
+          caution: 9
+          critical: 15
+    metric_tags:
+      # The name of the server. The string will be empty if it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.3.1.1.4
+          name: cpqRackServerTempSensorName
+      # The location description of the temperature sensor within the blade server. The string will be empty if it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.4.3.1.1.7
+          name: cpqRackServerTempSensorLocation
+
+  - MIB: CPQRACK-MIB
+    # A table of rack power supply information.
+    table:
+      name: cpqRackPowerSupplyTable
+      OID: 1.3.6.1.4.1.232.22.2.5.1.1
+    symbols:
+      # The current power output of the power supply in watts. The value will be -1 if the power supply does not report the value.
+      - name: cpqRackPowerSupplyCurPwrOutput
+        OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.10
+      # The current air temperature at the intake of the power supply in degrees celsius. The value will be -1 if the power supply does not report the value.
+      - name: cpqRackPowerSupplyIntakeTemp
+        OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.12
+      # The current air temperature at the exhaust of the power supply in degrees celsius. The value will be -1 if the power supply does not report the value.
+      - name: cpqRackPowerSupplyExhaustTemp
+        OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.13
+      # The status of the power supply.
+      - name: cpqRackPowerSupplyStatus
+        OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.14
+        enum:
+          noError: 1
+          generalFailure: 2
+          bistFailure: 3
+          fanFailure: 4
+          tempFailure: 5
+          interlockOpen: 6
+          epromFailed: 7
+          vrefFailed: 8
+          dacFailed: 9
+          ramTestFailed: 10
+          voltageChannelFailed: 11
+          orringdiodeFailed: 12
+          brownOut: 13
+          giveupOnStartup: 14
+          nvramInvalid: 15
+          calibrationTableInvalid: 16
+      # The status of line input power.
+      - name: cpqRackPowerSupplyInputLineStatus
+        OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.15
+        enum:
+          noError: 1
+          lineOverVoltage: 2
+          lineUnderVoltage: 3
+          lineHit: 4
+          brownOut: 5
+          linePowerLoss: 6
+      # The condition of the power supply. This value will be one of the following: other(1) The status could not be determined or not present. ok(2) The power supply is operating normally. degraded(3) A temperature sensor, fan or other power supply component is outside of normal operating range. failed(4) A power supply component detects a condition that could possibly damage the system.
+      - name: cpqRackPowerSupplyCondition
+        OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.17
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+    metric_tags:
+      # The name of the power supply enclosure in which this power supply resides. The string will be empty if the enclosure does not report the name or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.4
+          name: cpqRackPowerSupplyEnclosureName
+      # The serial number of the power supply. The string will be empty if the power supply does not report the serial number.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.5
+          name: cpqRackPowerSupplySerialNum
+      # The part number of the power supply. The string will be empty if the power supply does not report this function.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.6
+          name: cpqRackPowerSupplyPartNumber
+      # The spare part number of the power supply. The string will be empty if the power supply does not report this function.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.7
+          name: cpqRackPowerSupplySparePartNumber
+      # The firmware revision of the power supply. The string will be empty if the power supply does not report the firmware revision.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.8
+          name: cpqRackPowerSupplyFWRev
+      # The maximum power output of the power supply in watts. The value will be -1 if the power supply does not report the value.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.9
+          name: cpqRackPowerSupplyMaxPwrOutput
+      # This specifies if the power supply described is present in the enclosure.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.16
+          name: cpqRackPowerSupplyPresent
+          enum:
+            other: 1
+            absent: 2
+            present: 3
+      # The serial number of the power supply enclosure in which this power supply resides. The string will be empty if the enclosure does not report the serial number or it could not be determined.
+      - column:
+          OID: 1.3.6.1.4.1.232.22.2.5.1.1.1.18
+          name: cpqRackPowerSupplyEnclosureSerialNum

@@ -21,7 +21,12 @@ orb:
   backends:
     network_discovery:
     device_discovery:
+    # on demand: configured at start, started by its first policy; needs common.otlp.grpc
+    gnmi_telemetry:
+      start_mode: on_demand
     common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
       diode:
         target: grpc://192.168.0.100:8080/diode
         client_id: ${DIODE_CLIENT_ID}
@@ -103,6 +108,48 @@ Run command:
 docker run \
   -v /local/orb:/opt/orb \
   -e SSH_KNOWN_HOSTS=/opt/orb/known_hosts \
+  -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
+  -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+### GitHub App authentication (github.com)
+
+Create a GitHub App with `Contents: Read` on the policy repository, install it on the account that
+owns the repo, and download its private key. See [GitHub App Authentication](configs/git.md#github-app-authentication)
+for the full walkthrough.
+
+```yaml
+orb:
+  labels:
+    region: EU
+    pop: ams02
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        auth: github_app
+        github_app:
+          client_id: "Iv23liAbCdEfGhIjKlMn"
+          installation_id: "78901234"
+          private_key: "/opt/orb/github-app.pem"
+        schedule: "* * * * *"
+  backends:
+    network_discovery:
+    common:
+      diode:
+        target: grpc://192.168.0.100:8080/diode
+        client_id: ${DIODE_CLIENT_ID}
+        client_secret: ${DIODE_CLIENT_SECRET}
+        agent_name: agent01
+```
+
+Run command — note the private key is mounted read-only:
+```bash
+docker run \
+  -v /local/orb:/opt/orb \
+  -v /local/orb/github-app.pem:/opt/orb/github-app.pem:ro \
   -e DIODE_CLIENT_ID=${DIODE_CLIENT_ID} \
   -e DIODE_CLIENT_SECRET=${DIODE_CLIENT_SECRET} \
   netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
@@ -555,6 +602,107 @@ docker run --net=host \
     -e DIODE_CLIENT_SECRET=$DIODE_CLIENT_SECRET \
     netboxlabs/orb-agent:latest \
     run -c "/opt/orb/snmp-config.yaml"
+```
+
+## SNMP Telemetry Backend
+
+The SNMP telemetry backend polls SNMP devices and receives their traps, exporting metrics over OTLP to the collector named in `common.otlp`. It ingests nothing into Diode. See the [backend documentation](backends/snmp_telemetry.md) for every parameter.
+
+### Basic Configuration
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
+    snmp_telemetry:
+  policies:
+    snmp_telemetry:
+      core_metrics:
+        config:
+          metrics_interval: 60 # seconds between collection runs
+        scope:
+          targets:
+            - host: "192.168.1.0/24"
+          authentication:
+            protocol_version: "v2c"
+            community: "public"
+      core_traps: # receives traps only: no metrics_interval
+        scope:
+          targets:
+            - host: "192.168.1.0/24"
+          authentication:
+            protocol_version: "v2c"
+            community: "public"
+          traps:
+            listen: "0.0.0.0:162"
+```
+
+### Running the SNMP Telemetry Backend
+
+With host networking the trap port is already exposed:
+
+```bash
+docker run --net=host \
+    -v "/local/orb:/opt/orb/" \
+    netboxlabs/orb-agent:latest \
+    run -c "/opt/orb/snmp-telemetry-config.yaml"
+```
+
+In bridge mode publish the port the policy listens on:
+
+```bash
+docker run -p 162:162/udp \
+    -v "/local/orb:/opt/orb/" \
+    netboxlabs/orb-agent:latest \
+    run -c "/opt/orb/snmp-telemetry-config.yaml"
+```
+
+## gNMI Telemetry Backend
+
+The gNMI telemetry backend subscribes to streaming telemetry from network devices and exports the metrics over OTLP to the collector named in `common.otlp`. It ingests nothing into Diode. See the [backend documentation](backends/gnmi_telemetry.md) for every parameter.
+
+### Basic Configuration
+```yaml
+orb:
+  config_manager:
+    active: local
+  backends:
+    common:
+      otlp:
+        grpc: "grpc://otel-collector:4317"
+    gnmi_telemetry:
+      policy_env_vars: [GNMI_PASSWORD]
+  policies:
+    gnmi_telemetry:
+      core_metrics:
+        config:
+          metrics_interval: 30 # seconds, the SAMPLE cadence asked of the devices
+          # A CIDR target carries the credential to every address that answers,
+          # so with TLS not verifying the server the policy has to say so.
+          send_credentials_to_unverified_targets: true
+        scope:
+          username: "admin"
+          password: "${GNMI_PASSWORD}"
+          port: 57400
+          tls:
+            skip_verify: true # lab devices with self-signed certificates
+          targets:
+            - host: "192.168.1.0/24"
+```
+
+### Running the gNMI Telemetry Backend
+
+The backend opens no listener of its own toward the devices, so no port needs publishing; pass the environment variable the policy reads:
+
+```bash
+docker run \
+    -e GNMI_PASSWORD=admin-pass \
+    -v "/local/orb:/opt/orb/" \
+    netboxlabs/orb-agent:latest \
+    run -c "/opt/orb/gnmi-telemetry-config.yaml"
 ```
 
 ## Diode Dry Run Mode

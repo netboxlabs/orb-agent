@@ -1,0 +1,166 @@
+# https://downloads.wdc.com/nas/WDMYCLOUDEX2-MIB.txt
+---
+extends:
+  - host-resources-mib.yml
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.5127.1.1.1.8    # MyCloud EX2 Ultra
+
+provider: kentik-nas
+
+metrics:
+  # Memory Utilization
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageSizeRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.5.1
+      poll_time_sec: 60
+      tag: MemoryTotal
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsedRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      poll_time_sec: 60
+      tag: MemoryUsed
+  # CPU Utilization
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrProcessorLoadCombined
+      OID: 1.3.6.1.2.1.25.3.3.1.2.196608
+      poll_time_sec: 60
+      tag: CPU
+  # The temperature of the system.
+  - MIB: WDMYCLOUDEX2-MIB
+    symbol:
+      name: wdmycloudex2Temperature
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.7.0
+      conversion: to_one
+  # The status of the fan0.
+  - MIB: WDMYCLOUDEX2-MIB
+    symbol:
+      name: wdmycloudex2FanStatus
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.8.0
+      conversion: to_one
+  # A table of active volumes on the NAS device.
+  - MIB: WDMYCLOUDEX2-MIB
+    table:
+      name: wdmycloudex2VolumeTable
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9
+    symbols:
+      # The size of the volume in bytes.
+      - name: wdmycloudex2VolumeSize
+        OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9.1.5
+        conversion: to_one
+      # Free space on the volume in bytes.
+      - name: wdmycloudex2VolumeFreeSpace
+        OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9.1.6
+        conversion: to_one
+    metric_tags:
+      # Instance number of the volume entry.
+      - column:
+          name: wdmycloudex2VolumeNum
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9.1.1
+      # The name of the volume.
+      - column:
+          name: wdmycloudex2VolumeName
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9.1.2
+      # The type of file system of the volume.
+      - column:
+          name: wdmycloudex2VolumeFsType
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9.1.3
+      # The RAID level of the volume.
+      - column:
+          name: wdmycloudex2VolumeRaidLevel
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.9.1.4
+  # A table of physical disks attached to the NAS device.
+  - MIB: WDMYCLOUDEX2-MIB
+    table:
+      name: wdmycloudex2DiskTable
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10
+    symbols:
+      # The centigrade temperature of this disk.
+      - name: wdmycloudex2DiskTemperature
+        OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10.1.5
+        conversion: to_one
+      # The capacity of the disk in GB.
+      - name: wdmycloudex2DiskCapacity
+        OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10.1.6
+        conversion: to_one
+    metric_tags:
+      # Instance number of the disk entry.
+      - column:
+          name: wdmycloudex2DiskNum
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10.1.1
+      # The vendor of the disk drive.
+      - column:
+          name: wdmycloudex2DiskVendor
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10.1.2
+      # The disk drive's model name.
+      - column:
+          name: wdmycloudex2DiskModel
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10.1.3
+      # The disk drive's serial number.
+      - column:
+          name: wdmycloudex2DiskSerialNumber
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.10.1.4
+  # A table of UPS attached to the NAS device.
+  - MIB: WDMYCLOUDEX2-MIB
+    table:
+      name: wdmycloudex2UPSTable
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11
+    symbols:
+      # The battery charge of the UPS.
+      - name: wdmycloudex2UPSBatteryCharge
+        OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11.5
+      # The status of this UPS.
+      - name: wdmycloudex2UPSStatus
+        OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11.6
+    metric_tags:
+      # Instance number of the UPS entry.
+      - column:
+          name: wdmycloudex2UPSNum
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11.1
+      # The mode of the UPS.
+      - column:
+          name: wdmycloudex2UPSMode
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11.2
+      # The manufacturer of the UPS.
+      - column:
+          name: wdmycloudex2UPSManufacturer
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11.3
+      # The product name of the UPS.
+      - column:
+          name: wdmycloudex2UPSProduct
+          OID: 1.3.6.1.4.1.5127.1.1.1.8.1.11.4
+
+metric_tags:
+  # Version information for the agent of SNMP of WDMYCLOUDEX2.
+  - column:
+      name: wdmycloudex2AgentVer
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.1.0
+  # The device software version.
+  - column:
+      name: wdmycloudex2SoftwareVersion
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.2.0
+  # The device host name.
+  - column:
+      name: wdmycloudex2HostName
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.3.0
+  # Ftp Server status.
+  - column:
+      name: wdmycloudex2FTPServer
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.5.0
+      enum:
+        disable: 0
+        enable: 1
+  # The Network type.
+  - column:
+      name: wdmycloudex2NetType
+      OID: 1.3.6.1.4.1.5127.1.1.1.8.1.6.0
+      enum:
+        workgroup: 0
+        activeDirectory: 1

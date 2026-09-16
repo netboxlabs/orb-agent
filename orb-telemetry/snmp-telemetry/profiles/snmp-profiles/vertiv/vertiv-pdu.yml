@@ -1,0 +1,123 @@
+# https://mibs.observium.org/mib/VERTIV-V5-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid:
+  - 1.3.6.1.4.1.21239.42.1.53
+
+metrics:
+  - MIB: VERTIV-V5-MIB
+    table:
+      OID: 1.3.6.1.4.1.21239.5.2.3.1
+      name: pduMainTable
+    symbols:
+      - OID: 1.3.6.1.4.1.21239.5.2.3.1.1.10
+        name: pduTotalApparentPower
+      - OID: 1.3.6.1.4.1.21239.5.2.3.1.1.11
+        name: pduTotalPowerFactor
+      - OID: 1.3.6.1.4.1.21239.5.2.3.1.1.12
+        name: pduTotalEnergy
+      - OID: 1.3.6.1.4.1.21239.5.2.3.1.1.5
+        name: pduMainAvail
+        enum:
+          Unavailable: 0
+          Available: 1
+          PartiallyUnAvailable: 2
+
+  - MIB: VERTIV-V5-MIB
+    table:
+      OID: 1.3.6.1.4.1.21239.5.2.3.2
+      name: pduPhaseTable
+    symbols:
+      - OID: 1.3.6.1.4.1.21239.5.2.3.2.1.4
+        name: pduPhaseVoltage
+      - OID: 1.3.6.1.4.1.21239.5.2.3.2.1.8
+        name: pduPhaseCurrent
+      - OID: 1.3.6.1.4.1.21239.5.2.3.2.1.15
+        name: pduPhaseEnergy
+      - OID: 1.3.6.1.4.1.21239.5.2.3.2.1.12
+        name: pduPhaseRealPower
+      - OID: 1.3.6.1.4.1.21239.5.2.3.2.1.13
+        name: pduPhaseApparentPower
+      - OID: 1.3.6.1.4.1.21239.5.2.3.2.1.14
+        name: pduPhasePowerFactor
+    metric_tags:
+       - column:
+          OID: 1.3.6.1.4.1.21239.5.2.3.2.1.2
+          name: pduPhaseName
+  - MIB: VERTIV-V5-MIB
+    table:
+      OID: 1.3.6.1.4.1.21239.5.2.3.3
+      name: pduBreakerTable
+    symbols:
+      - OID: 1.3.6.1.4.1.21239.5.2.3.3.1.4
+        name: pduBreakerCurrent
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.2.3.3.1.2
+          name: pduBreakerName
+
+  - MIB: VERTIV-V5-MIB
+    table:
+      OID: 1.3.6.1.4.1.21239.5.2.3.4
+      name: pduLineTable
+    symbols:
+      - OID: 1.3.6.1.4.1.21239.5.2.3.4.1.4
+        name: pduLineCurrent
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.2.3.4.1.2
+          name: pduLineName
+
+  - MIB: VERTIV-V5-MIB
+    table:
+      OID: 1.3.6.1.4.1.21239.5.2.3.5
+      name: pduOutletSwitchTable
+    symbols:
+      - OID: 1.3.6.1.4.1.21239.5.2.3.5.1.4
+        name: pduOutletSwitchState
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.2.3.5.1.2
+          name: pduOutletSwitchName
+
+  - MIB: VERTIV-V5-MIB
+    table:
+      OID: 1.3.6.1.4.1.21239.5.2.3.6
+      name: pduOutletMeterTable
+    symbols:
+      - OID: 1.3.6.1.4.1.21239.5.2.3.6.1.12
+        name: pduOutletMeterRealPower
+      - OID: 1.3.6.1.4.1.21239.5.2.3.6.1.13
+        name: pduOutletMeterApparentPower
+      - OID: 1.3.6.1.4.1.21239.5.2.3.6.1.14
+        name: pduOutletMeterPowerFactor
+      - OID: 1.3.6.1.4.1.21239.5.2.3.6.1.15
+        name: pduOutletMeterEnergy
+      - OID: 1.3.6.1.4.1.21239.5.2.3.6.1.4
+        name: pduOutletMeterVoltage
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.21239.5.2.3.6.1.2
+          name: pduOutletMeterName
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.2.1.2
+      name: productVersion
+    tag: product_version
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.2.1.15
+      name: productManufacturer
+    tag: product_manufacturer
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.2.1.8
+      name: productModelNumber
+    tag: product_model
+  - column:
+      OID: 1.3.6.1.4.1.21239.5.2.1.10
+      name: productSerialNumber
+    tag: product_serial

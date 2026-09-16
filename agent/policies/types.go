@@ -16,6 +16,9 @@ type RunData struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
 	Driver      string    `json:"driver,omitempty"`
+	// Kind distinguishes runs describing different work, for a backend that
+	// emits more than one shape. See backend.PolicyStatusRun.Kind.
+	Kind string `json:"kind,omitempty"`
 }
 
 // PolicyData represents a policy

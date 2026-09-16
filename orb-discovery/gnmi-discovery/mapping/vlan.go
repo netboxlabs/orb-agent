@@ -105,8 +105,33 @@ func translateVlanDefinitions(snap map[string]any) map[int64]vlanDef {
 	return out
 }
 
+// setVlanGroupScope attaches the configured scope to a VLAN group. An
+// explicit scope_* wins; otherwise the device site applies, so the string
+// form of vlan.group keeps its site scope. NetBox Locations are unique
+// within their site, so a Location scope carries the device site when
+// there is one. Scope is only assigned a real value: a typed-nil *diode.Site
+// would make the interface non-nil and serialize as an empty site.
+func setVlanGroupScope(g *diode.VLANGroup, p config.VlanGroupParameters, site *diode.Site) {
+	switch {
+	case p.ScopeSiteGroup != "":
+		g.Scope = &diode.SiteGroup{Name: strptr(p.ScopeSiteGroup)}
+	case p.ScopeRegion != "":
+		g.Scope = &diode.Region{Name: strptr(p.ScopeRegion)}
+	case p.ScopeLocation != "":
+		loc := &diode.Location{Name: strptr(p.ScopeLocation)}
+		if site != nil {
+			loc.Site = site
+		}
+		g.Scope = loc
+	case p.ScopeSite != "":
+		g.Scope = &diode.Site{Name: strptr(p.ScopeSite)}
+	case site != nil:
+		g.Scope = site
+	}
+}
+
 // vlanBuilder constructs deduped *diode.VLAN entities with real-or-placeholder
-// name/status and the policy vlan defaults (site-scoped group, tenant, role, tags,
+// name/status and the policy vlan defaults (scoped group, tenant, role, tags,
 // description). The same rich VLAN is shared between interface refs and the
 // top-level entity (VLAN has no back-ref to Interface/Device -> DAG, no cycle).
 type vlanBuilder struct {
@@ -132,14 +157,9 @@ func newVlanBuilder(dev *diode.Device, defaults *config.Defaults, defs map[int64
 		// requires VLANGroup.slug to be non-empty, so a name with no [a-z0-9] runes
 		// (slug == "") would make ingestion fail. Skip the group in that case (the
 		// VLANs are still emitted, just ungrouped).
-		if slug := slugify(v.Group); v.Group != "" && slug != "" {
-			g := &diode.VLANGroup{Name: strptr(v.Group), Slug: strptr(slug)}
-			// Only set Scope when we have a real site. Assigning a typed-nil
-			// *diode.Site to the Scope interface would make it non-nil, causing the
-			// SDK to emit a bogus empty-site scope.
-			if b.site != nil {
-				g.Scope = b.site
-			}
+		if slug := slugify(v.Group.Name); v.Group.Name != "" && slug != "" {
+			g := &diode.VLANGroup{Name: strptr(v.Group.Name), Slug: strptr(slug)}
+			setVlanGroupScope(g, v.Group, b.site)
 			b.group = g
 		}
 		if v.Tenant != "" {

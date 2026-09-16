@@ -30,15 +30,20 @@ ND_VERSION ?= $(shell v=$$(git tag -l 'network-discovery/v[0-9]*' | sed 's|.*/v|
 SD_VERSION ?= $(shell v=$$(git tag -l 'snmp-discovery/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
 DD_VERSION ?= $(shell v=$$(git tag -l 'device-discovery/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
 WK_VERSION ?= $(shell v=$$(git tag -l 'worker/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
-BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --build-arg SNMP_DISCOVERY_VERSION=$(SD_VERSION) --build-arg DEVICE_DISCOVERY_VERSION=$(DD_VERSION) --build-arg WORKER_VERSION=$(WK_VERSION) --build-arg BUILD_COMMIT=$(COMMIT_HASH) --build-arg BUILD_TRACK=$(COMMIT_BRANCH)
+GD_VERSION ?= $(shell v=$$(git tag -l 'gnmi-discovery/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
+ST_VERSION ?= $(shell v=$$(git tag -l 'snmp-telemetry/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
+GT_VERSION ?= $(shell v=$$(git tag -l 'gnmi-telemetry/v[0-9]*' | sed 's|.*/v||' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$$' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1); echo $${v:-0.0.0})
+BACKEND_VERSION_ARGS = --build-arg NETWORK_DISCOVERY_VERSION=$(ND_VERSION) --build-arg SNMP_DISCOVERY_VERSION=$(SD_VERSION) --build-arg GNMI_DISCOVERY_VERSION=$(GD_VERSION) --build-arg SNMP_TELEMETRY_VERSION=$(ST_VERSION) --build-arg GNMI_TELEMETRY_VERSION=$(GT_VERSION) --build-arg DEVICE_DISCOVERY_VERSION=$(DD_VERSION) --build-arg WORKER_VERSION=$(WK_VERSION) --build-arg BUILD_COMMIT=$(COMMIT_HASH) --build-arg BUILD_TRACK=$(COMMIT_BRANCH)
 
 # Make targets operate on the agent (a single module), so never use a local
 # go.work — workspace mode is incompatible with the -mod=mod build flow. The
 # `work` target below re-enables it explicitly for generating the file.
 export GOWORK = off
 
-# Discovery backends, grouped by toolchain — used by the *-all aggregate targets.
-GO_BACKENDS = network-discovery snmp-discovery gnmi-discovery
+# Backends, grouped by toolchain — used by the *-all aggregate targets. Go
+# backends carry their parent directory since they are not all under
+# orb-discovery/ (snmp-telemetry lives under orb-telemetry/).
+GO_BACKENDS = orb-discovery/network-discovery orb-discovery/snmp-discovery orb-discovery/gnmi-discovery orb-telemetry/snmp-telemetry orb-telemetry/gnmi-telemetry
 PY_BACKENDS = device-discovery worker
 
 .PHONY: agent agent_bin
@@ -74,7 +79,7 @@ deps:
 .PHONY: work
 work:
 	@rm -f go.work go.work.sum
-	@GOWORK= go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery
+	@GOWORK= go work init . ./orb-discovery/network-discovery ./orb-discovery/snmp-discovery ./orb-discovery/gnmi-discovery ./orb-telemetry/snmp-telemetry ./orb-telemetry/gnmi-telemetry
 	@echo "go.work created (git-ignored). Use 'GOWORK=off' for single-module commands."
 
 agent_bin:
@@ -103,7 +108,7 @@ test-coverage:
 	@mkdir -p .coverage
 	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd|mocks" | tparse -format=markdown > .coverage/test-report.md
 	@cat .coverage/cover.out.tmp | grep -Ev "cmd|mocks" > .coverage/cover.out
-	@go tool cover -func=.coverage/cover.out | grep total | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
+	@go tool cover -func=.coverage/cover.out | grep -E '^total:' | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
 .PHONY: lint
 lint:
@@ -115,7 +120,7 @@ fix-lint:
 
 .PHONY: lint-all
 lint-all: lint
-	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b lint || exit 1; done
+	@for b in $(GO_BACKENDS); do $(MAKE) -C $$b lint || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
 		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check . ) || exit 1; \
@@ -123,7 +128,7 @@ lint-all: lint
 
 .PHONY: fix-lint-all
 fix-lint-all: fix-lint
-	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b fix-lint || exit 1; done
+	@for b in $(GO_BACKENDS); do $(MAKE) -C $$b fix-lint || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
 		( cd orb-discovery/$$b && . .venv/bin/activate && ruff check --fix . ) || exit 1; \
@@ -131,7 +136,7 @@ fix-lint-all: fix-lint
 
 .PHONY: test-all
 test-all: test
-	@for b in $(GO_BACKENDS); do $(MAKE) -C orb-discovery/$$b test || exit 1; done
+	@for b in $(GO_BACKENDS); do $(MAKE) -C $$b test || exit 1; done
 	@for b in $(PY_BACKENDS); do \
 		test -d orb-discovery/$$b/.venv || { echo "missing orb-discovery/$$b/.venv — run 'make install-dev-tools'"; exit 1; }; \
 		( cd orb-discovery/$$b && . .venv/bin/activate && pytest ) || exit 1; \

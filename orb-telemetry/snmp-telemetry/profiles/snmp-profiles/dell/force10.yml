@@ -1,0 +1,25 @@
+# http://www.oidview.com/mibs/6027/F10-S-SERIES-CHASSIS-MIB.html
+# Hardware info not available in SNMP
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.6027.1.3.* # Dell Networking S Family
+
+metrics:
+  - MIB: F10-S-SERIES-CHASSIS-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.6027.3.10.1.2.9.1.4
+      name: chStackUnitCpuUtil5Min
+      poll_time_sec: 60
+      tag: CPU
+  - MIB: F10-S-SERIES-CHASSIS-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.6027.3.10.1.2.9.1.5
+      name: chStackUnitMemUsageUtil
+      poll_time_sec: 60
+      tag: MemoryUtilization

@@ -1,0 +1,26 @@
+#https://mibs.observium.org/mib/CAMBIUM-MIB/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+
+provider: kentik-cambium-ap
+sysobjectid:
+  - 1.3.6.1.4.1.17713.60.1    # cnWave V1000
+
+metrics:
+  - MIB: TERRAGRAPH-RADIO-MIB
+    symbols:
+      - name: tgRadioInterfacesTable
+        OID: 1.3.6.1.4.1.17713.60.1.1
+      - name: mcs
+        OID: 1.3.6.1.4.1.17713.60.1.1.1.5
+      - name: snr
+        OID: 1.3.6.1.4.1.17713.60.1.1.1.6
+      - name: rssi
+        OID: 1.3.6.1.4.1.17713.60.1.1.1.7
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.17713.60.1.1.1.2
+          name: ifName

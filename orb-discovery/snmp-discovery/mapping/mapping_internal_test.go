@@ -4,6 +4,7 @@ package mapping
 import (
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -261,12 +262,121 @@ func TestInetAddressEntryFor_LongestPrefixWins(t *testing.T) {
 	short := &Entry{OID: ".1.3.6.1.2.1.4.34.1", IndexKind: "inet_address"}
 	long := &Entry{OID: ".1.3.6.1.2.1.4.34.1.X.Y", IndexKind: "inet_address"}
 	cfg := &Config{
-		inetAddressEntries: map[string]*Entry{
+		indexedEntries: map[string]*Entry{
 			short.OID: short,
 			long.OID:  long,
 		},
 	}
-	got := cfg.inetAddressEntryFor(".1.3.6.1.2.1.4.34.1.X.Y.suffix")
+	got := cfg.indexedEntryFor(".1.3.6.1.2.1.4.34.1.X.Y.suffix")
 	require.NotNil(t, got)
 	assert.Equal(t, long.OID, got.OID, "longest matching prefix must win")
+}
+
+// annotationColumnEntries builds a top-level ipAddressTable entry with
+// one IPV6-MIB annotation column attached, with both OIDs overridable so
+// the placement rules can be exercised.
+func annotationColumnEntries(tableOID, columnOID string, columnAtTopLevel bool) []config.MappingEntry {
+	column := config.MappingEntry{
+		OID: columnOID, Entity: "ipAddress", Field: "addressPrefixLength",
+		IndexKind: "ipv6_addr_prefix",
+	}
+	table := config.MappingEntry{
+		OID: tableOID, Entity: "ipAddress", Field: "_id", IndexKind: "inet_address",
+		MappingEntries: []config.MappingEntry{
+			{OID: tableOID + ".5", Entity: "ipAddress", Field: "addressPrefix"},
+		},
+	}
+	if columnAtTopLevel {
+		return []config.MappingEntry{table, column}
+	}
+	table.MappingEntries = append(table.MappingEntries, column)
+	return []config.MappingEntry{table}
+}
+
+// TestNewConfig_RejectsIPv6AddrPrefixAtTopLevel pins that the annotation
+// column may not stand on its own. Its rows describe another table's
+// rows and carry none of their own, so a top-level declaration would
+// group addresses the annotated table never reported.
+func TestNewConfig_RejectsIPv6AddrPrefixAtTopLevel(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := NewConfig(annotationColumnEntries(".1.3.6.1.2.1.4.34.1", ".1.3.6.1.2.1.55.1.8.1.2", true), logger, nil, nil, nil, config.Options{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must be declared on a child column")
+}
+
+// TestNewConfig_RejectsIPv6AddrPrefixInsideAnnotatedTable pins the
+// disjointness rule. An annotation column inside its parent's subtree
+// would win the longest-prefix scan against that parent and miscompute
+// the column boundary for every row of the annotated table.
+func TestNewConfig_RejectsIPv6AddrPrefixInsideAnnotatedTable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	_, err := NewConfig(annotationColumnEntries(".1.3.6.1.2.1.4.34.1", ".1.3.6.1.2.1.4.34.1.99", false), logger, nil, nil, nil, config.Options{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outside the annotated table")
+}
+
+// TestNewConfig_AcceptsIPv6AddrPrefixAnnotationColumn is the positive
+// case, and checks that the column is registered as its own index
+// anchor rather than resolving to the table it hangs off.
+func TestNewConfig_AcceptsIPv6AddrPrefixAnnotationColumn(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cfg, err := NewConfig(annotationColumnEntries(".1.3.6.1.2.1.4.34.1", ".1.3.6.1.2.1.55.1.8.1.2", false), logger, nil, nil, nil, config.Options{})
+	require.NoError(t, err)
+
+	entry := cfg.indexedEntryFor(".1.3.6.1.2.1.55.1.8.1.2.24.254.128.0.0.0.0.0.0.0.0.0.0.0.0.113.116.247")
+	require.NotNil(t, entry, "annotation rows must resolve to the annotation column")
+	assert.Equal(t, indexKindIPv6AddrPrefix, entry.IndexKind)
+
+	// The annotated table still anchors its own rows.
+	table := cfg.indexedEntryFor(".1.3.6.1.2.1.4.34.1.5.2.16.32.1.13.184.0.0.0.0.0.0.0.0.0.0.0.4")
+	require.NotNil(t, table)
+	assert.Equal(t, indexKindInetAddress, table.IndexKind)
+}
+
+// TestDecodeIPv6AddrPrefixIndex covers the index parser directly: the
+// ifIndex is separated from the address, the address is canonicalised
+// the same way an ipAddressTable index is so the two group together,
+// and a wrong-length index is refused rather than silently truncated.
+func TestDecodeIPv6AddrPrefixIndex(t *testing.T) {
+	suffix := strings.Split("24.254.192.0.0.0.0.0.0.0.10.0.0.0.0.0.4", ".")
+	ifIndex, canonical, ok := decodeIPv6AddrPrefixIndex(suffix)
+	require.True(t, ok)
+	assert.Equal(t, "24", ifIndex)
+	assert.Equal(t, "ipv6:fec0::a:0:0:4", canonical)
+
+	inet, ok := decodeInetAddressIndex(strings.Split("2.16.254.192.0.0.0.0.0.0.0.10.0.0.0.0.0.4", "."))
+	require.True(t, ok)
+	assert.Equal(t, inet, canonical, "both tables must key the same address identically")
+
+	_, _, ok = decodeIPv6AddrPrefixIndex(suffix[:16])
+	assert.False(t, ok, "an index that is not ifIndex plus 16 bytes is malformed")
+}
+
+// TestNewConfig_RejectsIPv6AddrPrefixNestedDeeper pins that an
+// annotation column attaches to the table it annotates and not to one of
+// that table's columns. Only a direct child is registered as its own
+// index anchor, so a deeper one would parse every row against the wrong
+// column boundary.
+func TestNewConfig_RejectsIPv6AddrPrefixNestedDeeper(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	entries := []config.MappingEntry{
+		{
+			OID: ".1.3.6.1.2.1.4.34.1", Entity: "ipAddress", Field: "_id",
+			IndexKind: "inet_address",
+			MappingEntries: []config.MappingEntry{
+				{
+					OID: ".1.3.6.1.2.1.4.34.1.5", Entity: "ipAddress", Field: "addressPrefix",
+					MappingEntries: []config.MappingEntry{
+						{
+							OID: ".1.3.6.1.2.1.55.1.8.1.2", Entity: "ipAddress",
+							Field: "addressPrefixLength", IndexKind: "ipv6_addr_prefix",
+						},
+					},
+				},
+			},
+		},
+	}
+	_, err := NewConfig(entries, logger, nil, nil, nil, config.Options{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "direct child of a top-level table entry")
 }

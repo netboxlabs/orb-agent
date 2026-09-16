@@ -31,6 +31,13 @@ from device_discovery.proto_presence import blank_to_none
 
 logger = logging.getLogger(__name__)
 
+#: Manufacturer for a part the device could not name. Segregates guessed parts
+#: from genuine ones, because dcim.moduletype matches on (manufacturer, model):
+#: filed under the chassis vendor they would interleave with real parts and be
+#: unpickable later. The string matches _manufacturer_from_device's own
+#: fallback, which is correct -- both mean the same thing.
+UNIDENTIFIED_MANUFACTURER = "Unknown"
+
 
 def emit_modules_if_requested(
     data: dict[str, Any],
@@ -218,6 +225,27 @@ def _manufacturer_from_device(device: pb.Device) -> pb.Manufacturer:
     return pb.Manufacturer(name="Unknown")
 
 
+def _module_manufacturer(
+    module_data: dict, device_manufacturer: pb.Manufacturer, identified: bool,
+) -> pb.Manufacturer:
+    """
+    Choose a module's manufacturer: its own, then the device's, then generic.
+
+    A part that names its own manufacturer is the best answer available, and
+    it is not the device's: a third-party optic in a Cisco switch reports its
+    own maker, and filing it under Cisco would put a part Cisco did not make
+    into Cisco's catalog. Only a part nothing named at all reaches the generic
+    name, which keeps those rows findable in one filter instead of scattered
+    through a real vendor's.
+    """
+    part_manufacturer = (module_data.get("manufacturer") or "").strip()
+    if part_manufacturer:
+        return pb.Manufacturer(name=part_manufacturer)
+    if identified:
+        return device_manufacturer
+    return pb.Manufacturer(name=UNIDENTIFIED_MANUFACTURER)
+
+
 def _emit_bay_recursive(
     *,
     bay_data: dict,
@@ -271,9 +299,14 @@ def _emit_bay_recursive(
     entities.append(Entity(module_bay=bay))
     _bump("module_bays_emitted", 1, {"vendor": manufacturer.name})
 
+    identified = module_data.get("identified", True)
+    module_manufacturer = _module_manufacturer(module_data, manufacturer, identified)
+    # No `or "Unknown"` fallback: _validate_bay guarantees a non-blank model
+    # reaches here, and substituting a placeholder is what collapsed every
+    # unidentifiable part into a single ModuleType.
     module_type = ModuleType(
-        manufacturer=manufacturer,
-        model=module_data["model"] or "Unknown",
+        manufacturer=module_manufacturer,
+        model=module_data["model"],
     )
     module_kwargs: dict[str, Any] = {
         "device": device,
@@ -287,7 +320,11 @@ def _emit_bay_recursive(
     entities.append(Entity(module=module))
     _bump(
         "modules_emitted", 1,
-        {"vendor": manufacturer.name, "type": module_data["type"]},
+        {
+            "vendor": module_manufacturer.name,
+            "type": module_data["type"],
+            "identified": "true" if identified else "false",
+        },
     )
 
     # Map interfaces owned by THIS bay (top-level or sub) to this module.

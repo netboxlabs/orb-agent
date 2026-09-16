@@ -160,7 +160,7 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Assert restart
-	err = be.FullReset(ctx)
+	err = be.FullReset(context.Background())
 	assert.NoError(t, err)
 
 	// Verify expectations

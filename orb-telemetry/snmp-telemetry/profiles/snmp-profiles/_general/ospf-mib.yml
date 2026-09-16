@@ -1,0 +1,66 @@
+# Profile is intended to be used in an extends block
+# http://oid-info.com/get/1.3.6.1.2.1.14
+---
+metrics:
+  - MIB: OSPF-MIB
+    table:
+      OID: 1.3.6.1.2.1.14.10
+      name: ospfNbrTable
+    symbols:
+      - OID: 1.3.6.1.2.1.14.10.1.6
+        name: ospfNbrState
+        enum:
+          down: 1
+          attempt: 2
+          init: 3
+          twoWay: 4
+          exchangeStart: 5
+          exchange: 6
+          loading: 7
+          full: 8
+      - OID: 1.3.6.1.2.1.14.10.1.7
+        name: ospfNbrEvents
+      - OID: 1.3.6.1.2.1.14.10.1.8
+        name: ospfNbrLsRetransQLen
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.2.1.14.10.1.3
+          name: ospfNbrRtrId
+          allow_duplicate: true
+        tag: neighbor_id
+      - column:
+          OID: 1.3.6.1.2.1.14.10.1.1
+          name: ospfNbrIpAddr
+          allow_duplicate: true
+        tag: neighbor_ip
+  - MIB: OSPF-MIB
+    table:
+      OID: 1.3.6.1.2.1.14.7
+      name: ospfIfTable
+    symbols:
+      - OID: 1.3.6.1.2.1.14.7.1.8
+        name: ospfIfRetransInterval
+      - OID: 1.3.6.1.2.1.14.7.1.12
+        name: ospfIfState
+        enum:
+          down: 1
+          loopback: 2
+          waiting: 3
+          pointToPoint: 4
+          designatedRouter: 5
+          backupDesignatedRouter: 6
+          otherDesignatedRouter: 7
+      - OID: 1.3.6.1.2.1.14.7.1.21
+        name: ospfIfLsaCount
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.2.1.14.7.1.1
+          name: ospfIfIpAddress
+        tag: ospf_ip_address
+      - column:
+          OID: 1.3.6.1.2.1.14.10.1.3
+          name: ospfNbrRtrId
+          allow_duplicate: true
+        table: ospfNbrTable
+        MIB: OSPF-MIB
+        tag: neighbor_id

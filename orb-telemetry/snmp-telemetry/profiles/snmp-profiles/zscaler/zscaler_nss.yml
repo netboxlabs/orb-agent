@@ -1,0 +1,279 @@
+# Zscaler SNMP Profile for Kentik (ktranslate)
+# MIBs Included:
+# - ZSCALER-ROLEHEALTH-MIB
+# - ZSCALER-PROCESSHEALTH-MIB
+# - ZSCALER-SWAPINFO-MIB
+# - ZSCALER-NSS-MIB
+# - ZSCALER-NSSFEED-MIB
+# - ZSCALER-PROCESSWATCHDOG-MIB
+# - ZSCALER-ZSCALERNIC-MIB
+# - ZSCALER-OSNIC-MIB
+---
+
+provider: kentik-znss
+
+sysobjectid:
+  - 1.3.6.1.4.1.46262.* # Wildcard match for Zscaler enterprise
+
+metrics:
+  # ZSCALER-ROLEHEALTH-MIB
+  # Provides overall OS/instance health (CPU, Memory, Filesystem)
+  - MIB: ZSCALER-ROLEHEALTH-MIB
+    table:
+      name: rolehealthTable
+      OID: 1.3.6.1.4.1.46262.4.2.1 # OID for rolehealthEntry
+    metric_tags:
+      - tag: zscaler_role_name
+        column:
+          OID: 1.3.6.1.4.1.46262.4.2.1.2 # rolehealthName
+          name: rolehealthName
+      - tag: zscaler_role
+        column:
+          OID: 1.3.6.1.4.1.46262.4.2.1.3 # rolehealthRole
+          name: rolehealthRole
+      - tag: zscaler_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.4.2.1.4 # rolehealthInstance
+          name: rolehealthInstance
+    symbols:
+      - OID: 1.3.6.1.4.1.46262.4.2.1.5 # os_cur_physical_memory_present_in_system_inMB
+        name: os_cur_physical_memory_present_in_system_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.6 # os_cur_physical_memory_free_inMB
+        name: os_cur_physical_memory_free_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.7 # os_cur_usable_physical_memory_free_inMB
+        name: os_cur_usable_physical_memory_free_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.8 # os_cur_physical_memory_wired_inMB
+        name: os_cur_physical_memory_wired_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.9 # os_cur_physical_memory_active_inMB
+        name: os_cur_physical_memory_active_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.10 # os_cur_physical_memory_inactive_inMB
+        name: os_cur_physical_memory_inactive_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.11 # os_cur_physical_memory_cached_inMB
+        name: os_cur_physical_memory_cached_inMB
+      - OID: 1.3.6.1.4.1.46262.4.2.1.12 # cpu_cur_use
+        name: cpu_cur_use
+        # NOTE: MIB says "To get the percentage value, divide by 100"
+      - OID: 1.3.6.1.4.1.46262.4.2.1.13 # sys_cur_rootfs_usedsizeinpercentage
+        name: sys_cur_rootfs_usedsizeinpercentage
+        # NOTE: MIB says "To get percentage value, divide by 100"
+      - OID: 1.3.6.1.4.1.46262.4.2.1.14 # sys_cur_varfs_usedsizeinpercentage
+        name: sys_cur_varfs_usedsizeinpercentage
+        # NOTE: MIB says "To get percentage value, divide by 100"
+      - OID: 1.3.6.1.4.1.46262.4.2.1.15 # sys_cur_scfs_usedsizeinpercentage
+        name: sys_cur_scfs_usedsizeinpercentage
+        # NOTE: MIB says "To get percentage value, divide by 100"
+      - OID: 1.3.6.1.4.1.46262.4.2.1.16 # tcp_sessions
+        name: tcp_sessions
+
+  # ZSCALER-PROCESSHEALTH-MIB
+  # Provides health for individual watched processes
+  - MIB: ZSCALER-PROCESSHEALTH-MIB
+    table:
+      name: processhealthTable
+      OID: 1.3.6.1.4.1.46262.5.2.1 # OID for processhealthEntry
+    metric_tags:
+      - tag: zscaler_process_name
+        column:
+          OID: 1.3.6.1.4.1.46262.5.2.1.2 # processhealthName
+          name: processhealthName
+      - tag: zscaler_process_role
+        column:
+          OID: 1.3.6.1.4.1.46262.5.2.1.3 # processhealthRole
+          name: processhealthRole
+      - tag: zscaler_process_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.5.2.1.4 # processhealthInstance
+          name: processhealthInstance
+    symbols:
+      - OID: 1.3.6.1.4.1.46262.5.2.1.5 # process_tot_execution_timeus
+        name: process_tot_execution_timeus
+      - OID: 1.3.6.1.4.1.46262.5.2.1.6 # process_cur_memory_size
+        name: process_cur_memory_size
+      - OID: 1.3.6.1.4.1.46262.5.2.1.7 # process_cur_memory_size_resident
+        name: process_cur_memory_size_resident
+      - OID: 1.3.6.1.4.1.46262.5.2.1.8 # process_msb_cur_allocated
+        name: process_msb_cur_allocated
+      - OID: 1.3.6.1.4.1.46262.5.2.1.9 # process_msb_cur_free
+        name: process_msb_cur_free
+      - OID: 1.3.6.1.4.1.46262.5.2.1.10 # module_cpu_use
+        name: module_cpu_use
+        # NOTE: MIB says "To get percentage value, divide by 100"
+
+  # ZSCALER-SWAPINFO-MIB
+  # Provides swap memory usage details
+  - MIB: ZSCALER-SWAPINFO-MIB
+    table:
+      name: swapinfoTable
+      OID: 1.3.6.1.4.1.46262.6.2.1 # OID for swapinfoEntry
+    metric_tags:
+      - tag: zscaler_swapinfo_name
+        column:
+          OID: 1.3.6.1.4.1.46262.6.2.1.2 # swapinfoName
+          name: swapinfoName
+      - tag: zscaler_swap_role
+        column:
+          OID: 1.3.6.1.4.1.46262.6.2.1.3 # swapinfoRole
+          name: swapinfoRole
+      - tag: zscaler_swap_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.6.2.1.4 # swapinfoInstance
+          name: swapinfoInstance
+      - tag: zscaler_swap_device_name
+        column:
+          OID: 1.3.6.1.4.1.46262.6.2.1.13 # osswap_cur_name
+          name: osswap_cur_name
+    symbols:
+      - OID: 1.3.6.1.4.1.46262.6.2.1.5 # osswap_cur_total_pages
+        name: osswap_cur_total_pages
+      - OID: 1.3.6.1.4.1.46262.6.2.1.6 # osswap_cur_total_MB
+        name: osswap_cur_total_MB
+      - OID: 1.3.6.1.4.1.46262.6.2.1.7 # osswap_cur_used_pages
+        name: osswap_cur_used_pages
+      - OID: 1.3.6.1.4.1.46262.6.2.1.8 # osswap_cur_free_pages
+        name: osswap_cur_free_pages
+      - OID: 1.3.6.1.4.1.46262.6.2.1.9 # osswap_cur_used_MB
+        name: osswap_cur_used_MB
+      - OID: 1.3.6.1.4.1.46262.6.2.1.10 # osswap_cur_free_MB
+        name: osswap_cur_free_MB
+      - OID: 1.3.6.1.4.1.46262.6.2.1.11 # osswap_cur_used_inpercentage
+        name: osswap_cur_used_inpercentage
+        # NOTE: MIB says "To get percentage value, divide by 100"
+      - OID: 1.3.6.1.4.1.46262.6.2.1.12 # osswap_cur_flags
+        name: osswap_cur_flags
+
+  # ZSCALER-NSS-MIB
+  # Provides metrics for the NSS instance itself
+  - MIB: ZSCALER-NSS-MIB
+    table:
+      name: nssTable
+      OID: 1.3.6.1.4.1.46262.7.2.1 # OID for nssEntry
+    metric_tags:
+      - tag: zscaler_nss_name
+        column:
+          OID: 1.3.6.1.4.1.46262.7.2.1.2 # nssName
+          name: nssName
+      - tag: zscaler_nss_role
+        column:
+          OID: 1.3.6.1.4.1.46262.7.2.1.3 # nssRole
+          name: nssRole
+      - tag: zscaler_nss_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.7.2.1.4 # nssInstance
+          name: nssInstance
+    symbols:
+      - OID: 1.3.6.1.4.1.46262.7.2.1.5 # smsm_cur_smca_conn_est
+        name: smsm_cur_smca_conn_est
+      - OID: 1.3.6.1.4.1.46262.7.2.1.6 # smsm_cur_weblog_time
+        name: smsm_cur_weblog_time
+      - OID: 1.3.6.1.4.1.46262.7.2.1.7 # smsm_nss_tot_transactions_processed
+        name: smsm_nss_tot_transactions_processed
+
+  # ZSCALER-NSSFEED-MIB
+  # Provides metrics for specific NSS feeds to SIEMs
+  - MIB: ZSCALER-NSSFEED-MIB
+    table:
+      name: nssfeedTable
+      OID: 1.3.6.1.4.1.46262.8.2.1 # OID for nssfeedEntry
+    metric_tags:
+      - tag: zscaler_nssfeed_name
+        column:
+          OID: 1.3.6.1.4.1.46262.8.2.1.2 # nssfeedName
+          name: nssfeedName
+      - tag: zscaler_nssfeed_role
+        column:
+          OID: 1.3.6.1.4.1.46262.8.2.1.3 # nssfeedRole
+          name: nssfeedRole
+      - tag: zscaler_nssfeed_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.8.2.1.4 # nssfeedInstance
+          name: nssfeedInstance
+    symbols:
+      - OID: 1.3.6.1.4.1.46262.8.2.1.5 # smsmclt_cur_datatimestamp
+        name: smsmclt_cur_datatimestamp
+      - OID: 1.3.6.1.4.1.46262.8.2.1.6 # smsmclt_tot_nss_buf_roff_overwritten
+        name: smsmclt_tot_nss_buf_roff_overwritten
+      - OID: 1.3.6.1.4.1.46262.8.2.1.7 # smsmclt_tot_transactions_count
+        name: smsmclt_tot_transactions_count
+      - OID: 1.3.6.1.4.1.46262.8.2.1.8 # smsmclt_tot_conn_closed
+        name: smsmclt_tot_conn_closed
+      - OID: 1.3.6.1.4.1.46262.8.2.1.9 # smsmclt_tot_nss_ratelimit_events_allowed
+        name: smsmclt_tot_nss_ratelimit_events_allowed
+      - OID: 1.3.6.1.4.1.46262.8.2.1.10 # smsmclt_tot_nss_ratelimit_yield_for_credits
+        name: smsmclt_tot_nss_ratelimit_yield_for_credits
+
+  # ZSCALER-PROCESSWATCHDOG-MIB
+  # Provides inventory of watched processes. No numeric metrics.
+  - MIB: ZSCALER-PROCESSWATCHDOG-MIB
+    table:
+      name: processwatchdogTable
+      OID: 1.3.6.1.4.1.46262.3.2.1 # OID for processwatchdogEntry
+    metric_tags:
+      - tag: zscaler_processwatchdog_name
+        column:
+          OID: 1.3.6.1.4.1.46262.3.2.1.2 # processwatchdogName
+          name: processwatchdogName
+      - tag: zscaler_processwatchdog_role
+        column:
+          OID: 1.3.6.1.4.1.46262.3.2.1.3 # processwatchdogRole
+          name: processwatchdogRole
+      - tag: zscaler_processwatchdog_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.3.2.1.4 # processwatchdogInstance
+          name: processwatchdogInstance
+    symbols:
+      # This MIB contains no numeric symbols, only tags.
+      # We use 'to_one' conversion on the row INDEX (which is numeric)
+      # to create a status gauge, which will be decorated with the tags above.
+      - OID: 1.3.6.1.4.1.46262.3.2.1.1 # processwatchdogIndex
+        name: zscaler_processwatchdog_status
+        conversion: to_one
+
+  # ZSCALER-ZSCALERNIC-MIB
+  # Provides inventory of NICs managed by Zscaler instances. No numeric metrics.
+  - MIB: ZSCALER-ZSCALERNIC-MIB
+    table:
+      name: zscalernicTable
+      OID: 1.3.6.1.4.1.46262.2.2.1 # OID for zscalernicEntry
+    metric_tags:
+      - tag: zscaler_nic_name
+        column:
+          OID: 1.3.6.1.4.1.46262.2.2.1.2 # zscalernicName
+          name: zscalernicName
+      - tag: zscaler_nic_role
+        column:
+          OID: 1.3.6.1.4.1.46262.2.2.1.3 # zscalernicRole
+          name: zscalernicRole
+      - tag: zscaler_nic_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.2.2.1.4 # zscalernicInstance
+          name: zscalernicInstance
+    symbols:
+      # This MIB contains no numeric symbols. Use 'to_one' on the INDEX.
+      - OID: 1.3.6.1.4.1.46262.2.2.1.1 # zscalernicIndex
+        name: zscaler_nic_status
+        conversion: to_one
+
+  # ZSCALER-OSNIC-MIB
+  # Provides inventory of NICs managed by the base OS. No numeric metrics.
+  - MIB: ZSCALER-OSNIC-MIB
+    table:
+      name: osnicTable
+      OID: 1.3.6.1.4.1.46262.1.2.1 # OID for osnicEntry
+    metric_tags:
+      - tag: zscaler_osnic_name
+        column:
+          OID: 1.3.6.1.4.1.46262.1.2.1.2 # osnicName
+          name: osnicName
+      - tag: zscaler_osnic_role
+        column:
+          OID: 1.3.6.1.4.1.46262.1.2.1.3 # osnicRole
+          name: osnicRole
+      - tag: zscaler_osnic_instance
+        column:
+          OID: 1.3.6.1.4.1.46262.1.2.1.4 # osnicInstance
+          name: osnicInstance
+    symbols:
+      # This MIB contains no numeric symbols. Use 'to_one' on the INDEX.
+      - OID: 1.3.6.1.4.1.46262.1.2.1.1 # osnicIndex
+        name: zscaler_osnic_status
+        conversion: to_one

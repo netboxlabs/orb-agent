@@ -1,0 +1,332 @@
+# https://www.circitor.fr/Mibs/Html/C/CPS-MIB.php
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid:
+  - 1.3.6.1.4.1.3808.1.1.3      # Cyberpower ePDU
+  - 1.3.6.1.4.1.3808.1.1.3.*    # Cyberpower ePDU
+  - 1.3.6.1.4.1.3808.1.1.6      # Cyberpower ePDU2
+  - 1.3.6.1.4.1.3808.1.1.6.*    # Cyberpower ePDU2
+
+metrics:
+  - MIB: CPS-MIB
+    # Allows for getting of status of each Rack PDU phase/bank. The number of entries is calculated by adding the number of phases (ePDULoadDevNumPhases OID) and the number of banks of outlets (ePDULoadDevNumBanks) Number of entries = #phases + #banks. NOTE: If a device has phase and bank information, all phase information shall precede the bank information.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1
+      name: ePDULoadStatusTable
+    symbols:
+      # Getting this OID will return the phase/bank load measured in tenths of Amps.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1.1.2
+        name: ePDULoadStatusLoad
+      # Getting this OID will return the phase/bank load state. loadNormal(1) indicates that the phase/bank is operating properly within the ePDULoadConfigLowLoadThreshold and ePDULoadConfigNearOverloadThreshold OID values. loadLow(2) indicates that the phase/bank load has dropped below the ePDULoadConfigLowLoadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. loadNearOverload(3) indicates that the phase/bank load is greater than or equal to the ePDULoadConfigNearOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. loadOverload(4) indicates that the phase/bank load is greater than or equal to the ePDULoadConfigOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1.1.3
+        name: ePDULoadStatusLoadState
+        enum:
+          loadNormal: 1
+          loadLow: 2
+          loadNearOverload: 3
+          loadOverload: 4
+      # Getting this OID will return the phase/bank voltage measured in 0.1 volts.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1.1.6
+        name: ePDULoadStatusVoltage
+      # Getting this OID will return the phase/bank active power measured in watts.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1.1.7
+        name: ePDULoadStatusActivePower
+      # Getting this OID will return the phase/bank apparent power measured in VA.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1.1.8
+        name: ePDULoadStatusApparentPower
+      # Getting this OID will return power factor of the output measured in hundredths. A value of 100 representing a unity power factor (1.00).
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.3.1.1.9
+        name: ePDULoadStatusPowerFactor
+
+  - MIB: CPS-MIB
+    # Allows for configuration of each Rack PDU bank. The number of entries is contained in the ePDULoadDevNumBanks OID.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.2.4.1
+      name: ePDULoadBankConfigTable
+    symbols:
+      # Getting this OID will return the current Bank Alarm.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.2.4.1.1.5
+        name: ePDULoadBankConfigAlarm
+        enum:
+          noLoadAlarm: 1
+          underCurrentAlarm: 2
+          nearOverCurrentAlarm: 3
+          overCurrentAlarm: 4
+
+  - MIB: CPS-MIB
+    # Allows for getting of status of individual outlets. The number of entries is contained in the ePDUOutletDevNumCntrlOutlets OID.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.3.5.1
+      name: ePDUOutletStatusTable
+    symbols:
+      # Getting this variable will return the outlet state. If the outlet is on, the outletStatusOn (1) value will be returned. If the outlet is off, the outletStatusOff (2) value will be returned.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.3.5.1.1.4
+        name: ePDUOutletStatusOutletState
+        enum:
+          outletStatusOn: 1
+          outletStatusOff: 2
+      # Getting this OID will return the measured Outlet load for an Outlet Monitored Rack PDU in tenths of Amps.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.3.5.1.1.7
+        name: ePDUOutletStatusLoad
+      # Getting this OID will return the measured Outlet load for an Outlet Monitored Rack PDU in watts
+      - OID: 1.3.6.1.4.1.3808.1.1.3.3.5.1.1.8
+        name: ePDUOutletStatusActivePower
+      #
+      - OID: 1.3.6.1.4.1.3808.1.1.3.3.5.1.1.9
+        name: ePDUOutletStatusAlarm
+        enum:
+          noLoadAlarm: 1
+          underCurrentAlarm: 2
+          nearOverCurrentAlarm: 3
+          overCurrentAlarm: 4
+    metric_tags:
+      # The name of the outlet. The maximum string size is device dependent. This OID is provided for informational purposes only.
+      - column:
+          OID: 1.3.6.1.4.1.3808.1.1.3.3.5.1.1.2
+          name: ePDUOutletStatusOutletName
+
+  - MIB: CPS-MIB
+    # Allows for management of outlets on a per bank basis.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.3.6.1
+      name: ePDUOutletBankTable
+    symbols:
+      # Getting this OID will return powerSupply1Ok(1) if power supply 1 is functioning normally. If not functioning normally, this OID will return powerSupply1Failed(2).
+      - OID: 1.3.6.1.4.1.3808.1.1.3.4.1.1
+        name: ePDUPowerSupply1Status
+        enum:
+          powerSupplyOneOk: 1
+          powerSupplyOneFailed: 2
+      # Getting this OID will return powerSupply2Ok(1) if power supply 2 is functioning normally. If not functioning normally, this OID will return powerSupply2Failed(2). Metered Rack PDUs do not have a redundant powersupply.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.4.1.2
+        name: ePDUPowerSupply2Status
+        enum:
+          powerSupplyTwoOk: 1
+          powerSupplyTwoFailed: 2
+          powerSupplyTwoNotPresent: 3
+      # Getting this OID will return powerSupply Alarm
+      - OID: 1.3.6.1.4.1.3808.1.1.3.4.1.3
+        name: ePDUPowerSupplyAlarm
+        enum:
+          allAvailablePowerSuppliesOK: 1
+          powerSupplyOneFailed: 2
+          powerSupplyTwoFailed: 3
+          powerSupplyOneandTwoFailed: 4
+
+  - MIB: CPS-MIB
+    # Allows for getting of status of each Rack PDU Bank
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.5.2
+      name: ePDUStatusBankTable
+    symbols:
+      # Getting this OID will return the bank load state. bankLoadNormal(1) indicates that the bank is operating properly within the ePDULoadBankConfigLowLoadThreshold and ePDULoadBankConfigNearOverloadThreshold OID values. bankLoadLow(2) indicates that the bank load has dropped below the ePDULoadBankConfigLowLoadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. bankLoadNearOverload(3) indicates that the bank load is greater than or equal to the ePDULoadBankConfigNearOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. bankLoadOverload(4) indicates that the bank load is greater than or equal to the ePDULoadBankConfigOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.5.2.1.3
+        name: ePDUStatusBankState
+        enum:
+          bankLoadNormal: 1
+          bankLoadLow: 2
+          bankLoadNearOverload: 3
+          bankLoadOverload: 4
+
+  - MIB: CPS-MIB
+    # Allows for getting of status of each Rack PDU Phase
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.5.4
+      name: ePDUStatusPhaseTable
+    symbols:
+      # Getting this OID will return the Phase load state. phaseLoadNormal(1) indicates that the Phase is operating properly within the ePDULoadPhaseConfigLowLoadThreshold and ePDULoadPhaseConfigNearOverloadThreshold OID values. phaseLoadLow(2) indicates that the Phase load has dropped below the ePDULoadPhaseConfigLowLoadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. phaseLoadNearOverload(3) indicates that the Phase load is greater than or equal to the ePDULoadPhaseConfigNearOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. phaseLoadOverload(4) indicates that the Phase load is greater than or equal to the ePDULoadPhaseConfigOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.5.4.1.3
+        name: ePDUStatusPhaseState
+        enum:
+          phaseLoadNormal: 1
+          phaseLoadLow: 2
+          phaseLoadNearOverload: 3
+          phaseLoadOverload: 4
+
+  - MIB: CPS-MIB
+    # Allows for getting of status of each Outlet of an Outlet Monitored Rack PDU.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.3.5.6
+      name: ePDUStatusOutletTable
+    symbols:
+      # Getting this OID will return the Outlet load state. outletLoadNormal(1) indicates that the Outlet is operating properly within the ePDUOutletConfigMonitoredLowLoadThreshold and ePDUOutletConfigMonitoredNearOverloadThreshold OID values. outletLoadLow(2) indicates that the Outlet load has dropped below the ePDUOutletConfigMonitoredLowLoadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. outletLoadNearOverload(3) indicates that the Outlet load is greater than or equal to the ePDUOutletConfigMonitoredNearOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared. outletLoadOverload(4) indicates that the Outlet load is greater than or equal to the ePDUOutletConfigMonitoredOverloadThreshold OID value. An SNMP trap will occur when this state is entered or cleared.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.5.6.1.3
+        name: ePDUStatusOutletState
+        enum:
+          outletLoadNormal: 1
+          outletLoadLow: 2
+          outletLoadNearOverload: 3
+          outletLoadOverload: 4
+      # The input voltage in 0.1 Volt.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.5.7
+        name: ePDUStatusInputVoltage
+      # The input frequency in 0.1 Hertz.
+      - OID: 1.3.6.1.4.1.3808.1.1.3.5.8
+        name: ePDUStatusInputFrequency
+
+  - MIB: CPS-MIB
+    # A table of Rack PDU current status.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.6.3.4
+      name: ePDU2DeviceStatusTable
+    symbols:
+      # Indicates the present load status of the Rack PDU.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.4
+        name: ePDU2DeviceStatusLoadState
+        enum:
+          noLoadAlarm: 1
+          underCurrentAlarm: 2
+          nearOverCurrentAlarm: 3
+          overCurrentAlarm: 4
+      # The power consumption of the Rack PDU load in tenths of amps.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.5
+        name: ePDU2DeviceStatusLoad
+      # The peak power consumption of the Rack PDU load in tenths of amps.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.6
+        name: ePDU2DeviceStatusPeakLoad
+      # Indicates a power supply alarm is active when value equals alarm (2).
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.12
+        name: ePDU2DeviceStatusPowerSupplyAlarm
+        enum:
+          normal: 1
+          alarm: 2
+      # Indicates whether or not an alarm is active in Power Supply 1.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.13
+        name: ePDU2DeviceStatusPowerSupply1Status
+        enum:
+          normal: 1
+          alarm: 2
+      # Indicates whether or not an alarm is active in Power Supply 2.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.14
+        name: ePDU2DeviceStatusPowerSupply2Status
+        enum:
+          normal: 1
+          alarm: 2
+      # The apparent power consumption of the Rack PDU load in VoltAmps (VA).
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.15
+        name: ePDU2DeviceStatusApparentPower
+      # The power factor of the Rack PDU load in hundredths.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.16
+        name: ePDU2DeviceStatusPowerFactor
+    metric_tags:
+      # A user-defined string identifying the name of the Rack PDU.
+      - column:
+          OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.3
+          name: ePDU2DeviceStatusName
+      # Get this oid shows the role the PDU played on Daisy Chain Group. The PDU as a Host can access whole ePDU2 content, and the PDU be standalong or a Slave can access itself instead.
+      - column:
+          OID: 1.3.6.1.4.1.3808.1.1.6.3.4.1.17
+          name: ePDU2DeviceStatusRoleType	
+          enum:
+            standalone: 1
+            host: 2
+            slave: 3
+
+  - MIB: CPS-MIB
+    # A table of Rack PDU phase status data
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.6.4.4
+      name: ePDU2PhaseStatusTable
+    symbols:
+      # Indicates the present load status of the Rack PDU phase being queried.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.4
+        name: ePDU2PhaseStatusLoadState
+        enum:
+          lowLoad: 1
+          normal: 2
+          nearOverload: 3
+          overload: 4
+      # Indicates the current draw, in tenths of Amps, of the load on the Rack PDU phase being queried.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.5
+        name: ePDU2PhaseStatusLoad
+      # Indicates the Voltage, in Volts, of the Rack PDU phase being queried
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.6
+        name: ePDU2PhaseStatusVoltage
+      # Indicates the load power, in watts (kW), consumed on the Rack PDU phase being queried
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.7
+        name: ePDU2PhaseStatusPower
+      # Indicates the load apparent power, in hundredths of kiloVoltAmps (kVA), consumed on the Rack PDU phase being queried
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.8
+        name: ePDU2PhaseStatusApparentPower
+      # Indicates the load power factor, in hundredths, of the Rack PDU phase being queried
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.9
+        name: ePDU2PhaseStatusPowerFactor
+      # The peak current of the Rack PDU phase load in tenths of Amps
+      - OID: 1.3.6.1.4.1.3808.1.1.6.4.4.1.10
+        name: ePDU2PhaseStatusPeakLoad
+
+  - MIB: CPS-MIB
+    # A table of Rack PDU bank status data
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.6.5.4
+      name: ePDU2BankStatusTable
+    symbols:
+      # Indicates the present load status of the Rack PDU bank being queried.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.5.4.1.4
+        name: ePDU2BankStatusLoadState
+        enum:
+          lowLoad: 1
+          normal: 2
+          nearOverload: 3
+          overload: 4
+      # Indicates the current draw, in tenths of Amps, of the load on the Rack PDU bank being queried.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.5.4.1.5
+        name: ePDU2BankStatusLoad
+      # The peak current of the Rack PDU bank load in tenths of Amps.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.5.4.1.6
+        name: ePDU2BankStatusPeakLoad
+
+  - MIB: CPS-MIB
+    # A table of Rack PDU switched outlet status information.
+    table:
+      OID: 1.3.6.1.4.1.3808.1.1.6.6.1.4
+      name: ePDU2OutletSwitchedStatusTable
+    symbols:
+      # Indicates the present switch state of the Rack PDU switched outlet being queried.
+      - OID: 1.3.6.1.4.1.3808.1.1.6.6.1.4.1.5
+        name: ePDU2OutletSwitchedStatusState
+        enum:
+          outletStatusOn: 1
+          outletStatusOff: 2
+    metric_tags:
+      # The user-defined switched outlet name string.
+      - column:
+          OID: 1.3.6.1.4.1.3808.1.1.6.6.1.4.1.4
+          name: ePDU2OutletSwitchedStatusName
+
+metric_tags:
+  # The name of the Rack PDU. The maximum string size is device dependent.
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.3.1.1.0
+      name: ePDUIdentName
+    tag: pdu_name
+  # A 10-character string identifying the model number of the Rack PDU. This value is set at the factory.
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.3.1.5.0
+      name: ePDUIdentModelNumber
+    tag: model
+  # A 12-character string identifying the serial number of the Rack PDU. This value is set at the factory.
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.3.1.6.0
+      name: ePDUIdentSerialNumber
+    tag: serial_number
+  # The name of the environment sensor. The maximum string size is device dependent.
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.4.1.1.0
+      name: envirIdentName
+  # The location of the environment sensor. The maximum string size is device dependent.
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.4.1.2.0
+      name: envirIdentLocation
+  # The environment temperature expressed in 1/10 Fahrenheit
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.4.2.1.0
+      name: envirTemperature
+  # The environment relative humidity expressed in persentage.
+  - column:
+      OID: 1.3.6.1.4.1.3808.1.1.4.3.1.0
+      name: envirHumidity

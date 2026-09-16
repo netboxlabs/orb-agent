@@ -1,0 +1,9 @@
+Flags: X - disabled, I - invalid, D - dynamic
+Columns: ADDRESS, NETWORK, INTERFACE, VRF
+
+# ADDRESS           NETWORK        INTERFACE     VRF
+0   192.0.2.1/24      192.0.2.0      ether1        main
+1 D 198.51.100.7/24   198.51.100.0   ether2        main
+2 X 203.0.113.9/24    203.0.113.0    ether3        main
+3 I 192.0.2.200/24    192.0.2.0      ether4        main
+4 DI 198.51.100.8/24  198.51.100.0   ether5        main

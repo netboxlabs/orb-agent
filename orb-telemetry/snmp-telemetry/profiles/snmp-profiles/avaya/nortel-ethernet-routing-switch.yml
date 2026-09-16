@@ -1,0 +1,93 @@
+# https://mibs.observium.org/mib/S5-CHASSIS-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.45.3.71.10    # 4526T
+
+metrics:
+  # This object returns the percentage of time the CPU has been busy over the last 1 minute.
+  # Polled at 60s to support anomaly detection
+  - MIB: S5-CHASSIS-MIB
+    symbol:
+      name: s5ChasUtilCPUUsageLast1Minute
+      OID: 1.3.6.1.4.1.45.1.6.3.8.1.1.5.3.10.0
+      poll_time_sec: 60
+      tag: CPU
+
+  # This object returns the total RAM of unit.
+  # Polled at 60s to support anomaly detection
+  - MIB: S5-CHASSIS-MIB
+    symbol:
+      name: s5ChasUtilMemoryTotalMB
+      OID: 1.3.6.1.4.1.45.1.6.3.8.1.1.12.3.10.0
+      poll_time_sec: 60
+      tag: MemoryTotal
+
+  # This object returns the available RAM of unit.
+  # Polled at 60s to support anomaly detection
+  - MIB: S5-CHASSIS-MIB
+    symbol:
+      name: s5ChasUtilMemoryAvailableMB
+      OID: 1.3.6.1.4.1.45.1.6.3.8.1.1.13.3.10.0
+      poll_time_sec: 60
+      tag: MemoryFree
+
+  # The current temperature value of the temperature sensor. 
+  # This is measured in units of a half degree centigrade, e.g. a value of 121 indicates a temperature of 60.5 degrees C.
+  - MIB: S5-CHASSIS-MIB
+    symbol:
+      name: s5ChasTmpSnrTmpValue
+      OID: 1.3.6.1.4.1.45.1.6.3.7.1.1.5.5.10.0
+
+  # A table that contains information about each chassis level component and sub-component.
+  - MIB: S5-CHASSIS-MIB
+    table:
+      name: s5ChasComTable
+      OID: 1.3.6.1.4.1.45.1.6.3.3.1
+    symbols:
+      # The desired state of the component/sub-component.
+      - name: s5ChasComAdminState
+        OID: 1.3.6.1.4.1.45.1.6.3.3.1.1.9
+        enum:
+          other: 1
+          notAvail: 2
+          disable: 3
+          enable: 4
+          reset: 5
+          test: 6
+      # The current operational state of the component.
+      - name: s5ChasComOperState
+        OID: 1.3.6.1.4.1.45.1.6.3.3.1.1.10
+        enum:
+          other: 1
+          notAvail: 2
+          removed: 3
+          disabled: 4
+          normal: 5
+          resetInProg: 6
+          testing: 7
+          warning: 8
+          nonFatalErr: 9
+          fatalErr: 10
+          notConfig: 11
+          obsoleted: 12
+    metric_tags:
+      # A description of the component/sub-component. If not available, the value is a zero length string.
+      - column:
+          name: s5ChasComDescr
+          OID: 1.3.6.1.4.1.45.1.6.3.3.1.1.5
+
+metric_tags:
+  # The version of the chassis in the form 'major.minor.maintenance[letters]'. 
+  - column:
+      name: s5ChasVer
+      OID: 1.3.6.1.4.1.45.1.6.3.1.5.0
+  # The serial number of the chassis.
+  - column:
+      name: s5ChasSerNum
+      OID: 1.3.6.1.4.1.45.1.6.3.1.6.0

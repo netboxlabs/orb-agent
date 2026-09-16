@@ -1,0 +1,259 @@
+# https://mibs.observium.org/mib/UTILIZATION-MANAGEMENT-MIB/
+# https://mibs.observium.org/mib/AVAYA-ENTITY-MIB/
+# https://mibs.observium.org/mib/AVAYA-RTP-MIB/
+# https://mibs.observium.org/mib/G700-MG-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - ospf-mib.yml
+  - entity-sensor-mib.yml
+
+provider: kentik-avaya-gateway
+
+sysobjectid:
+  - 1.3.6.1.4.1.6889.1.45.103.8     # G450 Media Gateway
+  - 1.3.6.1.4.1.6889.1.45.103.41    # G430 Media Gateway
+
+metrics:
+  # The current average CPU utilization in percentage if the monitoring is enabled and full window of results has been captured.
+  - MIB: UTILIZATION-MANAGEMENT-MIB
+    symbol:
+      name: genCpuAverageUtilization
+      OID: 1.3.6.1.4.1.6889.2.1.11.1.1.1.1.5.10
+      poll_time_sec: 60
+      tag: CPU
+
+  # The percentage of memory used
+  - MIB: UTILIZATION-MANAGEMENT-MIB
+    symbol:
+      name: genMemUtilizationPercentUsed
+      OID: 1.3.6.1.4.1.6889.2.1.11.1.2.6.1.3.10
+      poll_time_sec: 60
+      tag: MemoryUtilization
+
+  # Table depicting the status of chassis FRU units such as Power-Supplies and Fan-Tray
+  - MIB: AVAYA-ENTITY-MIB
+    table:
+      name: avEntPhyChFruTable
+      OID: 1.3.6.1.4.1.6889.2.1.99.5.1
+    symbols:
+      # Operational status of the chassis FRU unit.
+      - name: avEntPhyChFruOperStat
+        OID: 1.3.6.1.4.1.6889.2.1.99.5.1.1.1
+        enum:
+          ok: 1
+          fault: 2
+          notPresent: 3
+          unknown: 255
+      # Description of fault, in case an FRU has failed
+      - name: avEntPhyChFruFault
+        OID: 1.3.6.1.4.1.6889.2.1.99.5.1.1.2
+        enum:
+          none: 1
+          malfunction: 2
+          acFault: 3
+          malfunctionAndAcFault: 4
+          singleFanFault: 5
+          multipleFanFault: 6
+          badExpansionCable: 7
+          unknown: 255
+
+  # Enable RTP statistic collection by the device. If false, none of the AVAYA-RTP-MIB statistics will be available.
+  - MIB: AVAYA-RTP-MIB
+    symbol:
+      name: avRtpEnable
+      OID: 1.3.6.1.4.1.6889.2.7.1.2.0
+      enum:
+        true: 1
+        false: 2
+
+  # Specifies whether this processor should use the locally administered Quality of Service parameters,   or whether it should use the parameters downloaded from the controller. This affects both signaling and   voice traffic.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgQosControl
+      OID: 1.3.6.1.4.1.6889.2.9.1.2.2.1.0
+      enum:
+        local: 1
+        remote: 2
+
+  # DiffServ Code Point for signaling traffic on the H.248 link, received from the controller. If   cmgQosControl is local(1), this value is ignored.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgRemoteSigDscp
+      OID: 1.3.6.1.4.1.6889.2.9.1.2.2.2.0
+
+  # 802.1 Priority for signaling traffic on the H.248 link, received from the controller. If cmgQosControl is local(1), this value is ignored.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgRemoteSig802Priority
+      OID: 1.3.6.1.4.1.6889.2.9.1.2.2.3.0
+
+  # DiffServ Code Point for signaling traffic on the H.248 link, locally administered. If cmgQosControl is remote(2), this value is ignored.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgLocalSigDscp
+      OID: 1.3.6.1.4.1.6889.2.9.1.2.2.4.0
+
+  # 802.1 Priority for signaling traffic on the H.248 link, locally administered. If cmgQosControl is remote(2), this value is ignored.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgLocalSig802Priority
+      OID: 1.3.6.1.4.1.6889.2.9.1.2.2.5.0
+
+  # 802.1 VLAN ID currently in use for this processor
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgCurrent802Vlan
+      OID: 1.3.6.1.4.1.6889.2.9.1.2.2.7.0
+
+  # Shows whether this media gateway is currently registered with any call controller.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgRegistrationState
+      OID: 1.3.6.1.4.1.6889.2.9.1.3.1.0
+      enum:
+        registered: 1
+        notRegistered: 2
+
+  # IP Address of the call controller now serving this media gateway.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgActiveControllerAddress
+      OID: 1.3.6.1.4.1.6889.2.9.1.3.2.0
+      conversion: hextoip
+
+  # Status of the H.248 link connecting this media gateway to its active call controller.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgH248LinkStatus
+      OID: 1.3.6.1.4.1.6889.2.9.1.3.3.0
+      enum:
+        up: 1
+        down: 2
+
+  # Most recently received H.248 error code affecting the link between this media gateway and its active call controller.
+  - MIB: G700-MG-MIB
+    symbol:
+      name: cmgH248LinkErrorCode
+      OID: 1.3.6.1.4.1.6889.2.9.1.3.4.0
+
+  # Table of VoIP engines in the media gateway.
+  - MIB: G700-MG-MIB
+    table:
+      name: cmgVoipEngineTable
+      OID: 1.3.6.1.4.1.6889.2.9.1.4.5
+    symbols:
+      # Total channels available to this VoIP engine.
+      - name: cmgVoipTotalChannels
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.6
+      # Number of channels in use at this VoIP engine.
+      - name: cmgVoipChannelsInUse
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.7
+      # 5-minute average occupancy of this VoIP engine.
+      - name: cmgVoipAverageOccupancy
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.8
+      # Indicates whether hyperactivity has been detected by this VoIP engine.
+      - name: cmgVoipHyperactivity
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.9
+        enum:
+          normal: 1
+          hyperactive: 2
+          unknown: 255
+      # Maintenance busy-out state of this VoIP engine.
+      - name: cmgVoipAdminState
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.10
+        enum:
+          busy_out: 1
+          release: 2
+          camp_on: 3
+          unknown: 255
+      # Status of the DSP complex on this VoIP engine.
+      - name: cmgVoipDspStatus
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.12
+        enum:
+          idle: 1
+          inUse: 2
+          fault: 3
+    metric_tags:
+      # IP Address currently in use at this VoIP engine
+      - column:
+          name: cmgVoipCurrentIpAddress
+          OID: 1.3.6.1.4.1.6889.2.9.1.4.5.1.4
+          conversion: hextoip
+
+  # Table representing the DSP cores in VoIP engine of the media gateway.
+  - MIB: G700-MG-MIB
+    table:
+      name: cmgVoipDSPCoreTable
+      OID: 1.3.6.1.4.1.6889.2.9.1.4.6
+    symbols:
+      # Total channels available to this DSP core.
+      - name: cmgVoipDSPCoreTotalChannels
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.6.1.2
+      # Number of channels in use at this DSP core.
+      - name: cmgVoipDSPCoreChannelsInUse
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.6.1.3
+      # Maintenance busy-out state of this DSP core.
+      - name: cmgVoipDSPCoreAdminState
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.6.1.4
+        enum:
+          busy_out: 1
+          release: 2
+          camp_on: 3
+          unknown: 255
+      # Status of the DSP Core.
+      - name: cmgVoipDSPCoreStatus
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.6.1.5
+        enum:
+          idle: 1
+          inUse: 2
+          fault: 3
+      # Result of the on demand test for the DSP Core.
+      - name: cmgVoipDSPCoreDemandTestResult
+        OID: 1.3.6.1.4.1.6889.2.9.1.4.6.1.7
+        enum:
+          errorCode1: 1
+          errorCode2: 2
+          errorCode3: 3
+          errorCode4: 4
+          errorCode5: 5
+          errorCode6: 6
+          notResponding: 7
+          pass: 255
+
+metric_tags:
+  # Indicates the type of component
+  - column:
+      name: cmgHWType
+      OID: 1.3.6.1.4.1.6889.2.9.1.1.1.0
+      enum:
+        G700: 1
+        G350: 2
+        avayaG250: 3
+        avayaG250-BRI: 4
+        avayaG250-DS1: 5
+        avayaG250-DCP: 6
+        avayaG450: 7
+        avayaG250-A14: 8
+        avayaTGM550: 10
+        avayaCommunicationManagerBranchEditioni120: 28
+        avayaCommunicationManagerBranchEditioni40-Analog: 29
+        avayaCommunicationManagerBranchEditioni40-BRI: 30
+        avayaCommunicationManagerBranchEditioni40-DS1: 31
+        avayaCommunicationManagerBranchEditioni40-DCP: 32
+        avayaTRM480: 33
+        avayaCommunicationManagerBranchEditioni40-A14: 34
+        avayaCommunicationManagerBranchEditionG450: 35
+        avayaCommunicationManagerBranchEditionG430: 37
+        avayaG430: 41
+
+  # Model number of this component.
+  - column:
+      name: cmgModelNumber
+      OID: 1.3.6.1.4.1.6889.2.9.1.1.2.0
+
+  # Serial number of this gateway.
+  - column:
+      name: cmgSerialNumber
+      OID: 1.3.6.1.4.1.6889.2.9.1.1.4.0

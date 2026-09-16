@@ -1,0 +1,50 @@
+== [ dmz ]
+name: dmz   mode: static    ip: 10.10.10.1 255.255.255.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ mgmt ]
+name: mgmt   ip: 192.168.1.99 255.255.255.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ wan1 ]
+name: wan1   mode: static    ip: 203.0.113.10 255.255.255.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ wan2 ]
+name: wan2   mode: dhcp    ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ ha1 ]
+name: ha1   mode: static    ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ ha2 ]
+name: ha2   mode: static    ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ port1 ]
+name: port1   status: up    type: physical   src-check: enable    trunk: disable    aggregate: LAN-LAG    
+== [ port2 ]
+name: port2   status: up    type: physical   src-check: enable    trunk: disable    aggregate: LAN-LAG    
+== [ port3 ]
+name: port3   status: up    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch: Lab Backup    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ port4 ]
+name: port4   status: up    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch: Lab Backup    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ port5 ]
+name: port5   mode: static    ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ port6 ]
+name: port6   mode: static    ip: 10.20.30.1 255.255.255.0   status: up    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ port9 ]
+name: port9   status: up    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch: Lab Old Backup    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ port10 ]
+name: port10   status: up    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch: Lab Old Backup    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ modem ]
+name: modem   mode: pppoe    ip: 0.0.0.0 0.0.0.0   status: down    netbios-forward: disable    type: physical   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ naf.root ]
+name: naf.root   ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: tunnel   netflow-sampler: disable    sflow-sampler: disable    src-check: disable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    
+== [ l2t.root ]
+name: l2t.root   ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: tunnel   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    
+== [ ssl.root ]
+name: ssl.root   ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: tunnel   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    
+== [ VLAN446-SW ]
+name: VLAN446-SW   mode: static    ip: 10.44.6.1 255.255.255.0   status: up    netbios-forward: disable    type: switch   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ VLAN447-SW ]
+name: VLAN447-SW   mode: static    ip: 10.44.7.1 255.255.255.0   status: up    netbios-forward: disable    type: switch   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ LAN-LAG ]
+name: LAN-LAG   mode: static    ip: 0.0.0.0 0.0.0.0   status: up    netbios-forward: disable    type: aggregate   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ VLAN2101 ]
+name: VLAN2101   mode: static    ip: 10.21.1.1 255.255.255.0   status: up    netbios-forward: disable    type: vlan   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch-controller-feature: none    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ VLAN446 ]
+name: VLAN446   status: up    type: vlan   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch: VLAN446-SW    switch-controller-feature: none    wccp: disable    drop-overlapped-fragment: disable    drop-fragment: disable    mtu-override: disable    
+== [ point1 ]
+name: point1   ip: 10.99.0.1 255.255.255.255   status: up    netbios-forward: disable    type: tunnel   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    wccp: disable    mtu-override: disable    
+== [ VXLAN-446 ]
+name: VXLAN-446   status: up    type: vxlan   netflow-sampler: disable    sflow-sampler: disable    src-check: enable    explicit-web-proxy: disable    explicit-ftp-proxy: disable    proxy-captive-portal: disable    trunk: disable    switch: VLAN446-SW

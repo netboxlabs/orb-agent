@@ -1,0 +1,258 @@
+# https://mibs.observium.org/mib/HUAWEI-ENTITY-EXTENT-MIB/
+# https://mibs.observium.org/mib/HUAWEI-OSPFV2-MIB/
+# https://mibs.observium.org/mib/HUAWEI-DEVICE-MIB/
+# Note, CPU and Memory metrics are stored in the hwEntityStateTable under ambiguous index values
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.2011.2.*
+
+metrics:
+# This table contains one row per physical entity, there is always at least one row for an 'overall' physical entity.
+  - MIB: HUAWEI-ENTITY-EXTENT-MIB
+    table:
+      name: hwEntityStateTable
+      OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1
+    symbols:
+      # The administrative state for this object.
+      - name: hwEntityAdminStatus
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.1
+        enum:
+          notSupported: 1
+          locked: 2
+          shuttingDown: 3
+          unlocked: 4
+          up: 11
+          down: 12
+          loopback: 13
+      # The operational state for this object.
+      - name: hwEntityOperStatus
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.2
+        enum:
+          notSupported: 1
+          disabled: 2
+          enabled: 3
+          offline: 3
+          up: 11
+          down: 12
+          connect: 13
+          protocolUp: 15
+          linkUp: 16
+          linkDown: 17
+      # Some entity in a device can support standby mode, this object is used for monitoring standby status.
+      - name: hwEntityStandbyStatus
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.3
+        enum:
+          notSupported: 1
+          hotStandby: 2
+          coldStandby: 3
+          providingService: 4
+      # The CPU usage for this entity. Generally, the CPU usage will calculate the overall CPU usage on the entity, and it is not sensible with the number of CPU on the entity.
+      # Polled at 60s to support anomaly detection and filtered to only the active node of the cluster
+      - name: hwEntityCpuUsage
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5
+        tag: CPU
+        poll_time_sec: 60
+        condition: hwEntityStandbyStatus=4
+      # The memory usage for the entity. This object point out how many percent of memory has been used.
+      # Polled at 60s to support anomaly detection and filtered to only the active node of the cluster
+      - name: hwEntityMemUsage
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7
+        tag: MemoryUtilization
+        poll_time_sec: 60
+        condition: hwEntityStandbyStatus=4
+      # The temperature for the entity.
+      - name: hwEntityTemperature
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11
+      # The voltage for the entity.
+      - name: hwEntityVoltage
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.13
+      # The repair status for this entity.
+      - name: hwEntityFaultLight
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.42
+        enum:
+          notSupported: 1
+          normal: 2
+          underRepair: 3
+    metric_tags:
+      # The board name for this entity.
+      - column:
+          name: hwEntityBoardName
+          OID: 1.3.6.1.4.1.2011.5.25.31.1.1.1.1.43
+  # This table lists the status of fans.
+  - MIB: HUAWEI-ENTITY-EXTENT-MIB
+    table:
+      name: hwFanStatusTable
+      OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10
+    symbols:
+      # This object indicates the rotation speed (in percentage of the full speed) of the fan.
+      - name: hwEntityFanSpeed
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.5
+      # This object indicates the present information of the fan.
+      - name: hwEntityFanPresent
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.6
+        enum:
+          present: 1
+          absent: 2
+      # This object indicates the state of the fan.
+      - name: hwEntityFanState
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.7
+        enum:
+          normal: 1
+          abnormal: 2
+    metric_tags:
+      # This object indicates the slot ID of a fan.
+      - column:
+          name: hwEntityFanSlot
+          OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.1
+      # This object indicates the serial number of the fan in a certain slot.
+      - column:
+          name: hwEntityFanSn
+          OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.2
+      # This object indicates whether the fan is registered.
+      - column:
+          name: hwEntityFanReg
+          OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.3
+          enum:
+            yes: 1
+            no: 2
+      # This object indicates the speed adjustment mode of the fan.
+      - column:
+          name: hwEntityFanSpdAdjMode
+          OID: 1.3.6.1.4.1.2011.5.25.31.1.1.10.1.4
+          enum:
+            auto: 1
+            manual: 2
+            unknown: 3
+  # System power information table.
+  - MIB: HUAWEI-ENTITY-EXTENT-MIB
+    table:
+      name: hwSystemPowerTable
+      OID: 1.3.6.1.4.1.2011.5.25.31.1.1.14
+    symbols:
+      # System power information total power.
+      - name: hwSystemPowerTotalPower
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.14.1.2
+      # System power information used power.
+      - name: hwSystemPowerUsedPower
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.14.1.3
+      # System power information remain power.
+      - name: hwSystemPowerRemainPower
+        OID: 1.3.6.1.4.1.2011.5.25.31.1.1.14.1.4
+    metric_tags:
+      # System power information device ID.
+      - column:
+          name: hwSystemPowerDeviceID
+          OID: 1.3.6.1.4.1.2011.5.25.31.1.1.14.1.1
+  # This object indicates the configured parameters of the OSPF neighbors attached to the router.
+  - MIB: HUAWEI-OSPFV2-MIB
+    table:
+      name: hwOspfv2NeighborTable
+      OID: 1.3.6.1.4.1.2011.5.25.155.6
+    symbols:
+      # This object indicates the router ID of this neighbor.
+      - name: hwOspfv2NbrRouterId
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.9
+        conversion: hextoip
+        tag: neighbor_router_id
+      # This object indicates the state of the relationship with this neighbor.
+      - name: hwOspfv2NbrState
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.10
+        enum:
+          down: 1
+          attempt: 2
+          init: 3
+          twoWay: 4
+          exchangeStart: 5
+          exchange: 6
+          loading: 7
+          full: 8
+        tag: neighbor_state
+      # This object indicates whether this neighbor is master or slave through the DD negotiation.
+      - name: hwOspfv2NbrMode
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.11
+        enum:
+          master: 1
+          slave: 2
+        tag: neighbor_mode
+      # This object indicates the priority of this neighbor in the designated router election algorithm.
+      - name: hwOspfv2NbrPriority
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.12
+        tag: neighbor_priority
+      # This object indicates the time (in seconds) since the state of this neighbor has been full.
+      - name: hwOspfv2NbrUpTime
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.13
+        tag: neighbor_uptime_seconds
+      # This object indicates the period (in seconds) after which this neighbor is declared dead.
+      - name: hwOspfv2NbrDeadTimeLeft
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.15
+        tag: neighbor_deadtime_seconds
+      # This object indicates whether the neighbor performs GR or functions as a GR helper.
+      - name: hwOspfv2NbrGrStatus
+        OID: 1.3.6.1.4.1.2011.5.25.155.6.1.16
+        enum:
+          normal: 1
+          doingGR: 2
+          helper: 3
+          notSupported: 4
+        tag: neighbor_gr_status
+    metric_tags:
+      # This object indicates the 32-bit integer that uniquely identifies the router in the Autonomous System. It is the router ID of itself.
+      - tag: self_router_id
+        column:
+          name: hwOspfv2SelfRouterId
+          OID: 1.3.6.1.4.1.2011.5.25.155.6.1.3
+          conversion: hextoip
+      # This object indicates the IP address of the OSPF interface associated with this neighbor.
+      - tag: self_if_ip_address
+        column:
+          name: hwOspfv2SelfIfIpAddress
+          OID: 1.3.6.1.4.1.2011.5.25.155.6.1.4
+          conversion: hextoip
+      # The name of the OSPF interface associated with this neighbor.
+      - tag: self_if_name
+        column:
+          name: hwOspfv2SelfIfName
+          OID: 1.3.6.1.4.1.2011.5.25.155.6.1.5
+      # This object indicates the IP address of the designated router that is obtained from the DD packets from this neighbor.
+      - tag: designated_router
+        column:
+          name: hwOspfv2NbrIfDesignatedRouter
+          OID: 1.3.6.1.4.1.2011.5.25.155.6.1.6
+          conversion: hextoip
+      # This object indicates the IP address of the backup designated router which is obtained from the DD packets from this neighbor.
+      - tag: backup_designated_router
+        column:
+          name: hwOspfv2NbrIfBackupDesignatedRouter
+          OID: 1.3.6.1.4.1.2011.5.25.155.6.1.7
+          conversion: hextoip
+  # A table of CPU statistics.
+  - MIB: HUAWEI-DEVICE-MIB
+    table:
+      name: hwCpuDevTable
+      OID: 1.3.6.1.4.1.2011.6.3.4
+    symbols:
+      # The overall CPU duty percentage in the last 1 minute period.
+      - name: hwAvgDuty1min
+        OID: 1.3.6.1.4.1.2011.6.3.4.1.3
+  # This table contains memory information.
+  - MIB: HUAWEI-DEVICE-MIB
+    table:
+      name: hwMemoryDevTable
+      OID: 1.3.6.1.4.1.2011.6.3.5
+    symbols:
+      # Indicates the total size (bytes) of the memory module which is on the managed object.
+      - name: hwMemoryDevSize
+        OID: 1.3.6.1.4.1.2011.6.3.5.1.1.2
+      # Indicates the free size (bytes) of the memory module which is on the managed object.
+      - name: hwMemoryDevFree
+        OID: 1.3.6.1.4.1.2011.6.3.5.1.1.3
+
+metric_tags:
+  # Device model.
+  - column:
+      name: hwEntitySystemModel
+      OID: 1.3.6.1.4.1.2011.5.25.31.6.5.0

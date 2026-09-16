@@ -1,0 +1,1001 @@
+// Package collector holds one gNMI stream per target, matches its updates
+// to the profile's metrics, and exports the last value of every series.
+package collector
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math"
+	"net"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/config"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/gnmi"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/profiles"
+)
+
+// errEarlyStreamFailure marks a stream the target refused: one that reported
+// InvalidArgument or Unimplemented, and one that ended without an error or said
+// nothing at all before its first sync response or data. gnmic accepts the RPC
+// and reports an unsupported mode on the stream, so this is how a rejected mode
+// looks; the ladder moves on. A fault carrying any other code is a transport
+// failure the same rung recovers from, before the sync and after it: an
+// Unavailable under the initial dump is the connection going rather than the
+// mode being refused, and a subscription over a subtree with nothing in it
+// sends a sync and no data at all, so reading either as a refusal would walk
+// the target off a mode that works.
+var errEarlyStreamFailure = errors.New("subscription refused")
+
+// Options is what a policy hands the collector for each target.
+type Options struct {
+	MetricsInterval time.Duration
+	Mode            string
+	PolicyName      string
+	// ProbeTimeout bounds each probe the session dialed for this target runs
+	// under the loop's unbounded context: its Capabilities call and one
+	// subscription-path Get. Zero leaves the session on its own default.
+	ProbeTimeout time.Duration
+}
+
+// TargetStatus is one target's state for the API. LastErrorAt is when the
+// loop recorded LastError, not when the status was read: an error nothing has
+// refreshed keeps the instant it happened at, and the two fields are cleared
+// together the moment the target answers again.
+type TargetStatus struct {
+	Host             string    `json:"host"`
+	Mode             string    `json:"mode"`
+	Profile          string    `json:"profile"`
+	Up               bool      `json:"up"`
+	LastNotification time.Time `json:"last_notification"`
+	// LastSync is when a stream of this target last answered the sync response
+	// that closes its initial dump. It is activity of the same standing as a
+	// notification: a subscription over a subtree with nothing in it carries a
+	// sync and no data at all, for as long as the subtree stays empty.
+	LastSync    time.Time `json:"last_sync"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastErrorAt time.Time `json:"last_error_at,omitzero"`
+}
+
+type loopKey struct{ policy, host string }
+
+type loop struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	// upSlot is whether this loop holds the target_up series slot its point
+	// needs, and upWarned whether the refusal of one has been logged for this
+	// target already. Both are guarded by the collector's loopsMu, which the
+	// callback reading them holds too, so neither joins the status lock below.
+	upSlot   bool
+	upWarned bool
+	mu       sync.Mutex
+	status   TargetStatus
+}
+
+func (l *loop) update(fn func(*TargetStatus)) {
+	l.mu.Lock()
+	fn(&l.status)
+	l.mu.Unlock()
+}
+
+func (l *loop) snapshot() TargetStatus {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.status
+}
+
+// Collector drives targets. One instance serves every policy that shares a
+// profile set; series are keyed by policy so ForgetPolicy withdraws exactly
+// that policy's.
+type Collector struct {
+	dialer      gnmi.Dialer
+	profiles    *profiles.Store
+	logger      *slog.Logger
+	store       *store
+	budget      *Budget
+	schemas     *Schemas
+	exporter    *exporter
+	loopsMu     sync.Mutex
+	loops       map[loopKey]*loop
+	backoffBase time.Duration
+	closed      bool
+	upOnce      sync.Once
+}
+
+// New builds a collector over a profile store, with a series budget and a
+// schema registry of its own. A process running several collectors shares
+// both between them through NewWithShared.
+func New(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger) *Collector {
+	return NewWithShared(dialer, profileStore, logger, nil, nil)
+}
+
+// NewWithShared builds a collector on the process-level state every collector
+// has to agree on: the series budget, so they draw on a single allowance per
+// metric name, and the schema registry, so they export one kind and unit per
+// metric name. A nil budget or registry gives this collector a private one.
+func NewWithShared(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slog.Logger, budget *Budget, schemas *Schemas) *Collector {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if budget == nil {
+		budget = NewBudget()
+	}
+	if schemas == nil {
+		schemas = NewSchemas()
+	}
+	st := newStoreOn(budget)
+	return &Collector{
+		dialer: dialer, profiles: profileStore, logger: logger, store: st, budget: budget, schemas: schemas,
+		exporter: newExporter(st, logger, schemas), loops: map[loopKey]*loop{}, backoffBase: time.Second,
+	}
+}
+
+// Budget reports the series budget this collector bounds itself on, so a
+// caller sharing one across collectors can see which it got.
+func (c *Collector) Budget() *Budget { return c.budget }
+
+// Schemas reports the registry this collector registers its metric names
+// against, the counterpart of Budget for a caller sharing one.
+func (c *Collector) Schemas() *Schemas { return c.schemas }
+
+// targetUpSeries is gnmi.target_up as the series budget names it. The budget
+// is keyed on the metric name the exporter prefixes with "gnmi.", so the gauge
+// draws on the same allowance a profile metric of that name would. The name
+// comes from the package that lists the backend's health metrics, which is
+// what profile validation reserves, so no profile can name this gauge.
+const targetUpSeries = metrics.TargetUp
+
+// ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
+// has a live stream or poll, 0 while it reconnects. A collector built before
+// the meter exists registers nothing and keeps its once, so the first target
+// that arrives with a meter registers the gauge.
+func (c *Collector) ensureTargetUp() {
+	m := metrics.GetMeter()
+	if m == nil {
+		return
+	}
+	c.upOnce.Do(func() {
+		inst, err := m.Int64ObservableGauge("gnmi." + targetUpSeries)
+		if err != nil {
+			c.logger.Error("failed to create target_up", "error", err)
+			return
+		}
+		reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+			c.loopsMu.Lock()
+			defer c.loopsMu.Unlock()
+			for k, l := range c.loops {
+				// A loop refused a slot when it started asks again here: the
+				// allowance it wanted may since have been freed by a policy
+				// that was forgotten, and this is its next observation. A loop
+				// still without one observes nothing, so the point the SDK
+				// would fold into its overflow set is never handed over.
+				if !l.upSlot && !c.budget.take(targetUpSeries) {
+					continue
+				}
+				l.upSlot = true
+				s := l.snapshot()
+				v := int64(0)
+				if s.Up {
+					v = 1
+				}
+				o.ObserveInt64(inst, v, metric.WithAttributes(
+					attribute.String("device_ip", k.host), attribute.String("policy", k.policy), attribute.String("mode", s.Mode)))
+			}
+			return nil
+		}, inst)
+		if err != nil {
+			c.logger.Error("failed to register target_up", "error", err)
+			return
+		}
+		c.exporter.register(reg)
+	})
+}
+
+// CollectTarget starts the target's loop and returns. A second call for the
+// same policy and host stops the first loop and waits for it before starting.
+func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opts Options) error {
+	if opts.MetricsInterval <= 0 {
+		return errors.New("metrics interval must be positive")
+	}
+	switch opts.Mode {
+	case "", "auto", "on_change", "sample":
+	default:
+		return fmt.Errorf("mode %q is not auto, on_change or sample", opts.Mode)
+	}
+	c.ensureTargetUp()
+	k := loopKey{opts.PolicyName, target.Host}
+	loopCtx, cancel := context.WithCancel(ctx)
+	l := &loop{cancel: cancel, done: make(chan struct{}), status: TargetStatus{Host: target.Host}}
+	c.loopsMu.Lock()
+	if c.closed {
+		c.loopsMu.Unlock()
+		cancel()
+		return errors.New("collector is closed")
+	}
+	old := c.loops[k]
+	// The outgoing loop's slot is given back before the replacement asks for
+	// one, so replacing a target does not need the allowance to hold two
+	// points for it. The warning travels with the name rather than the loop,
+	// so a target refused a slot is logged once however often it restarts.
+	c.releaseUpSlot(old)
+	if old != nil {
+		l.upWarned = old.upWarned
+	}
+	l.upSlot = c.budget.take(targetUpSeries)
+	warn := !l.upSlot && !l.upWarned
+	if warn {
+		l.upWarned = true
+	}
+	c.loops[k] = l
+	c.loopsMu.Unlock()
+	if warn {
+		c.logger.Warn("gnmi target_up point refused by the series budget",
+			"policy", opts.PolicyName, "host", target.Host, "series", targetUpSeries)
+		metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropSeriesLimit)))
+	}
+	if old != nil {
+		old.cancel()
+		<-old.done
+	}
+	metrics.GetTargetsActive().Add(ctx, 1)
+	go func() {
+		defer close(l.done)
+		defer metrics.GetTargetsActive().Add(context.Background(), -1)
+		c.run(loopCtx, target, opts, l)
+	}()
+	return nil
+}
+
+// run is the per-target loop: dial, subscribe with the ladder, consume,
+// reconnect with backoff until the context ends.
+func (c *Collector) run(ctx context.Context, target config.Target, opts Options, l *loop) {
+	backoff := c.backoffBase
+	first := true
+	for ctx.Err() == nil {
+		if !first {
+			metrics.GetReconnects().Add(ctx, 1)
+		}
+		first = false
+		active := lastActivity(l.snapshot())
+		err := c.runOnce(ctx, target, opts, l)
+		l.update(func(s *TargetStatus) { s.Up = false })
+		if ctx.Err() != nil {
+			return
+		}
+		if lastActivity(l.snapshot()).After(active) {
+			// An attempt that served earns a fresh window: a target that
+			// failed twice at startup must not wait the cap after a day of
+			// healthy streaming.
+			backoff = c.backoffBase
+		}
+		if err != nil {
+			c.logger.Warn("gnmi target loop error", "policy", opts.PolicyName, "host", target.Host, "error", err)
+			l.update(func(s *TargetStatus) { s.LastError = err.Error(); s.LastErrorAt = time.Now() })
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+		backoff = time.Duration(math.Min(float64(backoff*2), float64(30*time.Second)))
+	}
+}
+
+// lastActivity is the later of the two things an attempt can show for itself:
+// a notification, and the sync response that closes a stream's initial dump. A
+// subscription over a subtree with nothing in it answers its sync and nothing
+// else, so reading the notification alone had a target of that shape wait the
+// climbed backoff after every drop, however long its stream had been healthy.
+func lastActivity(s TargetStatus) time.Time {
+	if s.LastSync.After(s.LastNotification) {
+		return s.LastSync
+	}
+	return s.LastNotification
+}
+
+func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Options, l *loop) error {
+	tls := target.ResolvedTLS()
+	sess, err := c.dialer.Dial(ctx, gnmi.TargetSpec{
+		Host: net.JoinHostPort(target.Host, strconv.Itoa(int(target.Port))), Username: target.ResolvedUsername(), Password: target.ResolvedPassword(),
+		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: target.ResolvedOrigin(),
+		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
+		ProbeTimeout: opts.ProbeTimeout,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = sess.Close() }()
+
+	caps, err := sess.Capabilities(ctx)
+	if err != nil {
+		return fmt.Errorf("capabilities: %w", err)
+	}
+	profile := c.selectProfile(target, caps)
+	// A target that comes back on another profile keeps nothing of the old
+	// one. The reconciliation a stream's sync response drives is scoped to the
+	// paths that stream carries, so a series of a metric only the previous
+	// profile named is never restated and never evicted: it would stand
+	// exported for as long as the policy runs. Withdrawing the target's series
+	// here, before the new stream opens, is what retires them and gives their
+	// budget slots back. What reaches this path is the device advertising
+	// other capabilities than it did before, a firmware upgrade changing the
+	// NOS above all: the profile set is loaded once with the collector, and a
+	// re-applied policy forgets its series before it starts again.
+	if previous := l.snapshot().Profile; previous != "" && previous != profile.Name {
+		c.logger.Info("gnmi profile changed, withdrawing the target's series",
+			"policy", opts.PolicyName, "host", target.Host, "from", previous, "to", profile.Name)
+		c.store.deleteMatching(nil, baseAttrs(target, opts))
+	}
+	l.update(func(s *TargetStatus) { s.Profile = profile.Name })
+
+	subs := c.subscriptions(profile, target, opts)
+	intervalMs := int(opts.MetricsInterval / time.Millisecond)
+	ladder := []string{"on_change", "sample"}
+	switch opts.Mode {
+	case "sample":
+		ladder = []string{"sample"}
+	case "on_change":
+		ladder = []string{"on_change"}
+	}
+	for _, rung := range ladder {
+		notes, errs, err := sess.SubscribeMany(ctx, forceMode(subs, rung, intervalMs))
+		if err != nil {
+			// A cancelled context refuses every rung; counting that as a
+			// fallback would report a downgrade on every clean stop.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			metrics.GetModeFallbacks().Add(ctx, 1)
+			c.logger.Info("gnmi subscribe refused, trying the next mode", "host", target.Host, "mode", rung, "error", err)
+			continue
+		}
+		l.update(func(s *TargetStatus) { s.Mode = rung; s.Up = true })
+		err = c.consume(ctx, notes, errs, rung, target, opts, profile, subscriptionPaths(subs), l)
+		// A target that accepts the RPC and then rejects on the stream has
+		// refused this rung as surely as one that refuses the RPC, so it walks
+		// the ladder the same way. A forced mode holds one rung, and past it
+		// the only step left is Get; leaving the stream refusal out here made
+		// the loop reopen the unsupported subscription for ever.
+		if errors.Is(err, errEarlyStreamFailure) && ctx.Err() == nil {
+			metrics.GetModeFallbacks().Add(ctx, 1)
+			c.logger.Info("gnmi stream refused the mode, trying the next one", "host", target.Host, "mode", rung, "error", err)
+			continue
+		}
+		return err
+	}
+	// Reaching here means every rung counted the step that left it, the last of
+	// them the step to Get, so the ladder is already fully accounted for.
+	l.update(func(s *TargetStatus) { s.Mode = "get"; s.Up = true })
+	// A target that rejected the subscription on the stream rather than on the
+	// RPC leaves a producer behind that retries its gRPC stream for the life of
+	// the poll loop; tearing it down keeps the connection to the poll alone.
+	sess.StopSubscribe()
+	return c.poll(ctx, sess, subs, target, opts, profile, l)
+}
+
+// subscriptions builds the profile's subscriptions for a target, with the
+// profile's per-subscription origin or the target's.
+func (c *Collector) subscriptions(p *profiles.Profile, target config.Target, opts Options) []gnmi.Subscription {
+	out := make([]gnmi.Subscription, 0, len(p.Subscriptions))
+	for _, s := range p.Subscriptions {
+		origin := target.ResolvedOrigin()
+		if s.Origin != nil {
+			origin = *s.Origin
+		}
+		mode := gnmi.Sample
+		if s.Mode == "on_change" {
+			mode = gnmi.OnChange
+		}
+		out = append(out, gnmi.Subscription{Path: s.Path, Origin: origin, Mode: mode, SampleIntervalMs: int(opts.MetricsInterval / time.Millisecond)})
+	}
+	return out
+}
+
+// subscriptionPaths is the path of every subscription an attempt asks for.
+func subscriptionPaths(subs []gnmi.Subscription) []string {
+	out := make([]string, 0, len(subs))
+	for _, s := range subs {
+		out = append(out, s.Path)
+	}
+	return out
+}
+
+// forceMode applies a ladder rung: "on_change" keeps the profile's modes,
+// "sample" makes every subscription SAMPLE at the interval.
+func forceMode(subs []gnmi.Subscription, rung string, intervalMs int) []gnmi.Subscription {
+	if rung != "sample" {
+		return subs
+	}
+	out := make([]gnmi.Subscription, len(subs))
+	for i, s := range subs {
+		s.Mode = gnmi.Sample
+		s.SampleIntervalMs = intervalMs
+		out[i] = s
+	}
+	return out
+}
+
+func (c *Collector) selectProfile(target config.Target, caps *gnmi.CapabilitiesResult) *profiles.Profile {
+	if target.Profile != "" {
+		if p, ok := c.profiles.Get(target.Profile); ok {
+			return p
+		}
+		c.logger.Warn("pinned profile not found, matching by capabilities", "host", target.Host, "profile", target.Profile)
+	}
+	p := c.profiles.Match(profiles.MatchInput{Vendor: caps.Vendor, NOS: caps.NOS, Organizations: caps.Organizations})
+	if p.Name == "_base" {
+		metrics.GetProfileFallbacks().Add(context.Background(), 1)
+	}
+	return p
+}
+
+// consume applies notifications until the stream ends or errors. A stream that
+// reports a mode rejection before it has delivered data is an early failure, and so
+// is one that closes cleanly or sends nothing at all within the probe deadline
+// before its first sync response or data. Every other error is returned plain,
+// for the loop to reconnect through on the rung it holds, an initial dump that
+// stalled after data and short of its sync response among them.
+func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification, errs <-chan error, rung string, target config.Target, opts Options, p *profiles.Profile, requested []string, l *loop) error {
+	productive := false
+	// synced is whether the stream answered the sync response that closes its
+	// initial dump, the target accepting the subscription: a stream over a
+	// subtree with nothing in it says that and nothing else, for as long as the
+	// subtree stays empty.
+	synced := false
+	// The stream's own start, against which its initial dump is judged: every
+	// series the dump refreshes arrives after it.
+	started := time.Now().UnixNano()
+	reconciled := false
+	// refused marks an attempt as the target turning this rung down, which is
+	// what sends the ladder on.
+	refused := func(err error) error {
+		return fmt.Errorf("%w: %v", errEarlyStreamFailure, err)
+	}
+	early := func(err error) error {
+		if productive {
+			return err
+		}
+		// A stream that failed is not refusing the mode by failing, whether it
+		// had answered its sync or not: only the codes a target reports a
+		// rejection under send the ladder on, and every other fault is one the
+		// same rung reconnects through. An Unavailable during the initial dump
+		// used to advance the ladder here, which left a target forced onto
+		// on_change polling by Get until the process restarted.
+		if !modeRejection(err) {
+			return err
+		}
+		return refused(err)
+	}
+	// reconcile withdraws, once per stream, the never-stale series of this
+	// target that the stream's initial dump did not restate: the sync response
+	// is what says the dump is complete, and a series with no age is refreshed
+	// only when the device sends the leaf. It runs after the notification's own
+	// updates are applied, so a sync response carrying updates cannot evict a
+	// series it has just written and then write it again, losing a counter's
+	// reset bookkeeping and churning the budget. Every rung reconciles: a
+	// target that reconnects onto the SAMPLE rung restates the elements it
+	// still carries as aged points, and the ones it does not restate would
+	// otherwise keep the ageless point an earlier on_change stream left. It is
+	// also where the sync itself is noted, this being the one place every sync
+	// response passes through.
+	reconcile := func(n gnmi.Notification) {
+		if !n.SyncDone {
+			return
+		}
+		synced = true
+		if reconciled {
+			return
+		}
+		reconciled = true
+		// The reconciliation covers every path this attempt asked for, the
+		// ones the target accepted, which the sync names, and the ones the
+		// probe pruned as definitively refused alike. A pruned path opened no
+		// stream, so nothing under it will be restated for as long as this
+		// session lives, and an ageless series left there would be exported for
+		// ever on a value no stream can refresh. Only a path never asked for,
+		// one with an origin of its own, is left alone. A sync that names no
+		// path speaks for the whole profile, which is the stream carrying it
+		// whole.
+		var covered map[string]struct{}
+		if n.Paths != nil {
+			covered = polledMetrics(profileMetrics(p), requested)
+		}
+		c.store.evictBefore(covered, baseAttrs(target, opts), started)
+		// A sync response is the stream saying its dump is complete, which is as
+		// good a sign of recovery as a value: a stream over a subtree with nothing
+		// in it carries no value at all, and the target would stand at the error of
+		// the attempt before it until something changed. Noting when it arrived is
+		// what lets the loop count the attempt as one that served, so a healthy
+		// stream of that shape backs off from its cap rather than waiting it.
+		l.update(func(s *TargetStatus) {
+			s.LastSync = time.Now()
+			s.LastError = ""
+			s.LastErrorAt = time.Time{}
+			s.Up = true
+		})
+	}
+	// A target that accepts the RPC and then sends nothing leaves this select on
+	// the loop's context, which lives as long as the policy, while the subscribe
+	// that opened the stream has already marked the target Up: no data, no
+	// error to back off from and no reconnect. Every response of the initial
+	// dump is due within the probe deadline of the one before it, the bound the
+	// session gives a call of its own, and the sync response is what closes the
+	// dump and takes the deadline away. A stream that answers one update and
+	// then stalls short of its sync is as unbounded as one that answers
+	// nothing, and holds a target Up on a dump that never completed. The next
+	// attempt tears the stalled subscription down itself: SubscribeMany stops
+	// the session's active subscription at its start.
+	dumpDeadline := dumpResponseDeadline(opts)
+	dumpTimer := time.NewTimer(dumpDeadline)
+	defer dumpTimer.Stop()
+	// dumpDue is that timer's channel until the sync response, and nil after
+	// it: a stream that completed its dump is bounded by nothing but the loop,
+	// since a stream with nothing to report is quiet by design.
+	dumpDue := dumpTimer.C
+	// armDump puts the deadline in front of the next piece of the dump, or
+	// takes it away once the sync has closed the dump. Stopping a timer says
+	// nothing about a value already in its channel, which a bare Reset would
+	// leave there to expire a dump that is still arriving.
+	armDump := func() {
+		if dumpDue == nil {
+			return
+		}
+		if !dumpTimer.Stop() {
+			select {
+			case <-dumpTimer.C:
+			default:
+			}
+		}
+		if synced {
+			dumpDue = nil
+			return
+		}
+		dumpTimer.Reset(dumpDeadline)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-dumpDue:
+			// The sync response takes this timer away, so it fires on a stream
+			// still inside its initial dump. Before any data there is no code
+			// to read and a rejection the target never spoke, which the ladder
+			// advances through. After data the target accepted the mode and
+			// began serving it, so the rung is not what failed: the error is
+			// returned plain, for the loop to record, back off from and open
+			// another stream on the same rung.
+			if productive {
+				return errors.New("the initial dump stalled before its sync response")
+			}
+			return refused(errors.New("the stream sent nothing within the probe deadline"))
+		case err, ok := <-errs:
+			if ok && err != nil {
+				return early(err)
+			}
+			if !ok {
+				errs = nil
+			}
+		case n, ok := <-notes:
+			if !ok {
+				select {
+				case err := <-errs:
+					if err != nil {
+						return early(err)
+					}
+				default:
+				}
+				// A stream that ended with no error before it answered
+				// anything left no code to read either, and a target dropping a
+				// subscription it will not serve is what it looks like. Past
+				// the sync, or past its first data, it is the stream ending,
+				// which the same rung reopens.
+				if !synced && !productive {
+					return refused(errors.New("stream closed"))
+				}
+				return errors.New("stream closed")
+			}
+			if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
+				reconcile(n)
+				armDump()
+				continue
+			}
+			productive = true
+			metrics.GetNotifications().Add(ctx, 1)
+			c.apply(ctx, n, rung, target, opts, p)
+			reconcile(n)
+			armDump()
+			l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
+		}
+	}
+}
+
+// dumpResponseDeadline is how long a stream's initial dump has to send its
+// next response, data or sync: what the policy gives one of the session's own
+// probes, or the gnmi package default when it named none, which is the
+// deadline that session would apply to a call of its own.
+func dumpResponseDeadline(opts Options) time.Duration {
+	if opts.ProbeTimeout > 0 {
+		return opts.ProbeTimeout
+	}
+	return gnmi.DefaultProbeTimeout
+}
+
+// poll is the last rung: Get at the interval. The session's origin is the
+// target's, so a subscription with another origin is skipped here and
+// logged once; a native overlay path is only reachable by streaming.
+func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Subscription, target config.Target, opts Options, p *profiles.Profile, l *loop) error {
+	paths := make([]string, 0, len(subs))
+	byPath := profileMetrics(p)
+	// The metrics each path this poll asks for carries. A snapshot says nothing
+	// about a subtree the poll skipped, nor about one whose own Get failed, so
+	// the reconciliation below names the metrics of the paths the snapshot
+	// actually fetched and leaves every other series where it is.
+	metricsByPath := make(map[string][]string, len(subs))
+	for _, s := range subs {
+		if s.Origin != target.ResolvedOrigin() {
+			c.logger.Info("gnmi get polling skips a subscription with its own origin", "host", target.Host, "path", s.Path)
+			continue
+		}
+		paths = append(paths, s.Path)
+		metricsByPath[s.Path] = byPath[s.Path]
+	}
+	if len(paths) == 0 {
+		const reason = "nothing to poll: every profile subscription uses another origin"
+		c.logger.Warn(reason, "policy", opts.PolicyName, "host", target.Host, "profile", p.Name)
+		return errors.New(reason)
+	}
+	ticker := time.NewTicker(opts.MetricsInterval)
+	defer ticker.Stop()
+	// The poll session's own start, against which its first snapshot is judged,
+	// the way a stream's initial dump is judged against the stream's start. A
+	// target that streamed on change, lost an element while it was disconnected
+	// and fell through to Get opens no stream to reconcile against, so the first
+	// snapshot is what withdraws the ageless series the earlier stream left: what
+	// the snapshot restates arrives after this and is aged as Get-delivered, so
+	// it survives, and what it omits goes.
+	started := time.Now().UnixNano()
+	// Reconciled per path rather than once per poll session: a snapshot speaks
+	// only for the paths it fetched, and a path the target failed on the first
+	// poll and answered on a later one is reconciled by the first snapshot that
+	// carries it. One flag for the session left such a path's ageless series
+	// standing for as long as the poll ran.
+	reconciled := map[string]bool{}
+	for {
+		// Each Get carries a deadline of its own rather than the loop's
+		// context, which lives as long as the policy: a target that stops
+		// replying without closing would otherwise hold the poll for ever,
+		// with Up still true and no error to back off from. A poll that
+		// outlasts the interval it is due again in has failed, so the
+		// interval is the deadline, and a miss returns like any other Get
+		// error, for the loop to record, back off from and reconnect through.
+		getCtx, cancelGet := context.WithTimeout(ctx, opts.MetricsInterval)
+		n, err := sess.GetOnce(getCtx, paths)
+		cancelGet()
+		if err != nil {
+			return err
+		}
+		c.apply(ctx, n, "get", target, opts, p)
+		// A Get that recovers path by path returns what answered as a success,
+		// so what the snapshot speaks for is the paths it reports having
+		// fetched. A target that answered with none of them reconciles nothing:
+		// there is no path whose omission means the device dropped an element.
+		var fresh []string
+		for _, fetched := range n.Paths {
+			if !reconciled[fetched] {
+				reconciled[fetched] = true
+				fresh = append(fresh, fetched)
+			}
+		}
+		if polled := polledMetrics(metricsByPath, fresh); len(polled) > 0 {
+			c.store.evictBefore(polled, baseAttrs(target, opts), started)
+		}
+		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+// modeRejection reports whether an error raised on a stream is the target
+// refusing the delivery mode it was asked for. gnmic surfaces such a refusal
+// as the status the target set on the stream, and only these two codes say the
+// request itself is one this target will not serve; anything else, an
+// Unavailable above all, is the connection failing, before the sync or after
+// it, under a subscription the target did not refuse.
+func modeRejection(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+// profileMetrics maps each subscription path of a profile to the metric names
+// it carries: what a dump over that path, streamed or polled, speaks for.
+func profileMetrics(p *profiles.Profile) map[string][]string {
+	out := make(map[string][]string, len(p.Subscriptions))
+	for i := range p.Subscriptions {
+		path := p.Subscriptions[i].Path
+		for j := range p.Subscriptions[i].Metrics {
+			out[path] = append(out[path], p.Subscriptions[i].Metrics[j].Name)
+		}
+	}
+	return out
+}
+
+// polledMetrics is the set of metric names carried by the given paths of one
+// poll, the metrics a snapshot over those paths speaks for.
+func polledMetrics(metricsByPath map[string][]string, paths []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		for _, name := range metricsByPath[path] {
+			out[name] = struct{}{}
+		}
+	}
+	return out
+}
+
+// apply matches every update to a profile metric and stores it; a delete
+// withdraws the series of every metric that sits at or below the deleted path,
+// so a container, a list element and a single leaf each withdraw exactly what
+// they name. The notification is stamped with its arrival here rather than with
+// the device's own timestamp: a device whose clock lags by more than the
+// staleness window would otherwise export nothing, silently.
+func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string, target config.Target, opts Options, p *profiles.Profile) {
+	base := baseAttrs(target, opts)
+	ts := time.Now().UnixNano()
+	// The deletes go first, as gNMI orders them within one notification: a
+	// target replacing a subtree sends the delete and the new values together,
+	// and applied the other way round the new values were stored and then
+	// withdrawn by the delete, with an on_change leaf never sent again.
+	// A delete is matched against the full path of every metric, the
+	// subscription path with the metric's leaf on the end, so one pass covers
+	// every level: an ancestor of the subscription matches all of its metrics,
+	// an exact leaf matches that metric alone, and a path in between, deeper
+	// than the subscription and shallower than a multi-element leaf, matches
+	// the metrics nested under it. Matching the subscription path alone left
+	// that middle ground to no pass at all, and the series stood until it went
+	// stale, which for an on_change series is for ever. No deepest-subscription
+	// preference is needed here: a full metric path names one series, so every
+	// subscription the delete matches has series the delete really covers.
+	for _, d := range n.Deletes {
+		for i := range p.Subscriptions {
+			sub := &p.Subscriptions[i]
+			for j := range sub.Metrics {
+				m := &sub.Metrics[j]
+				full := sub.Path
+				if m.Leaf != "." {
+					full = sub.Path + "/" + m.Leaf
+				}
+				keys, ok := profiles.MatchPrefix(full, d)
+				if !ok {
+					continue
+				}
+				c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
+			}
+		}
+	}
+	updates := make([]gnmi.Update, 0, len(n.Updates))
+	for _, u := range n.Updates {
+		updates = append(updates, flattenUpdate(u)...)
+	}
+	for _, u := range updates {
+		sub, m, keys, ok := matchUpdate(p, u.Path)
+		if !ok {
+			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unmatched_path")))
+			continue
+		}
+		attrs := append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...)
+		maxAge := maxAgeFor(rung, sub, opts.MetricsInterval)
+		var dropped string
+		switch m.Type {
+		case "counter":
+			v, ok := counterValue(*m, u.Value)
+			if !ok {
+				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
+				continue
+			}
+			dropped = c.exporter.observeCounter(m.Name, m.Unit, attrs, v, ts, maxAge)
+		default:
+			v, ok := gaugeValue(*m, u.Value)
+			if !ok {
+				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
+				continue
+			}
+			dropped = c.exporter.observeGauge(m.Name, m.Unit, attrs, v, ts, maxAge)
+		}
+		if dropped != "" {
+			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropped)))
+		}
+	}
+}
+
+// baseAttrs is what every series of one target and policy carries, and so
+// what selects them all: the device, the policy, and the NetBox id when the
+// target names one.
+func baseAttrs(target config.Target, opts Options) []attribute.KeyValue {
+	base := []attribute.KeyValue{attribute.String("device_ip", target.Host), attribute.String("policy", opts.PolicyName)}
+	if target.ID != "" {
+		base = append(base, attribute.String("netbox_id", target.ID))
+	}
+	return base
+}
+
+// flattenUpdate splits a container value into one update per scalar leaf,
+// keyed by the path the leaf sits at. A Get, and any target that serializes a
+// stream as JSON, answers with one update at the container path whose value
+// is a decoded object, while matching needs a path deeper than the
+// subscription's. A value that is not an object, and an object with no fields,
+// is one update as it stands: a list or an empty container is left whole so it
+// reaches the drop accounting rather than disappearing without a trace. Keys
+// are visited in order so one container always yields the same sequence.
+func flattenUpdate(u gnmi.Update) []gnmi.Update {
+	fields, ok := u.Value.(map[string]any)
+	if !ok || len(fields) == 0 {
+		return []gnmi.Update{u}
+	}
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]gnmi.Update, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, flattenUpdate(gnmi.Update{Path: u.Path + "/" + leafName(k), Value: fields[k]})...)
+	}
+	return out
+}
+
+// leafName drops the YANG module a JSON_IETF payload qualifies a key with, so
+// "openconfig-system:state" names the same element as the profile's "state".
+// This is the rule the gnmi package applies to a path element, applied to the
+// keys of a decoded object.
+func leafName(key string) string {
+	if i := strings.LastIndexByte(key, ':'); i >= 0 {
+		return key[i+1:]
+	}
+	return key
+}
+
+// maxAgeFor is the age past which a series is withheld from export and
+// evicted. A leaf the device streams on change only refreshes when it
+// changes, so its series carries no age; every other delivery refreshes at
+// the interval, so a gap of three of them means the device went quiet. The
+// rung decides it rather than the profile alone: the SAMPLE rung and Get
+// polling deliver an on_change path at the interval like any other. A series
+// with no age is withdrawn by a delete, by a reconnected stream whose initial
+// dump no longer carries it, by forgetting the policy, or by a replacement,
+// which is also how an ageless series left by an earlier stream is aged once
+// the target restates it on another rung.
+func maxAgeFor(rung string, sub *profiles.Subscription, interval time.Duration) time.Duration {
+	if rung == "on_change" && sub.Mode == "on_change" {
+		return 0
+	}
+	return staleAfterIntervals * interval
+}
+
+// matchUpdate finds the subscription and metric an update path names,
+// preferring the deepest subscription path so profile order is not
+// load-bearing. A "." leaf matches the subscription path itself.
+func matchUpdate(p *profiles.Profile, path string) (*profiles.Subscription, *profiles.Metric, map[string]string, bool) {
+	var bestSub *profiles.Subscription
+	var bestMetric *profiles.Metric
+	var bestKeys map[string]string
+	bestDepth := -1
+	for i := range p.Subscriptions {
+		sub := &p.Subscriptions[i]
+		depth := profiles.Depth(sub.Path)
+		if depth <= bestDepth {
+			continue
+		}
+		if len(sub.Metrics) == 1 && sub.Metrics[0].Leaf == "." {
+			if keys, ok := profiles.MatchPath(sub.Path, path); ok {
+				bestSub, bestMetric, bestKeys, bestDepth = sub, &sub.Metrics[0], keys, depth
+			}
+			continue
+		}
+		leaf, keys, ok := profiles.SplitLeaf(sub.Path, path)
+		if !ok {
+			continue
+		}
+		for j := range sub.Metrics {
+			if sub.Metrics[j].Leaf == leaf {
+				bestSub, bestMetric, bestKeys, bestDepth = sub, &sub.Metrics[j], keys, depth
+				break
+			}
+		}
+	}
+	return bestSub, bestMetric, bestKeys, bestSub != nil
+}
+
+// promoted turns the subscription's attribute map into attributes from the
+// update's path keys.
+func promoted(sub *profiles.Subscription, keys map[string]string) []attribute.KeyValue {
+	out := make([]attribute.KeyValue, 0, len(sub.Attributes))
+	for attr, key := range sub.Attributes {
+		if v, ok := keys[key]; ok {
+			out = append(out, attribute.String(attr, v))
+		}
+	}
+	return out
+}
+
+// releaseUpSlot gives a loop's target_up slot back to the budget, for the next
+// target to take. Called with loopsMu held, wherever a loop leaves the map: a
+// slot a departed loop kept would be one no collector in the process could
+// ever observe against again. A loop that never held one releases nothing.
+func (c *Collector) releaseUpSlot(l *loop) {
+	if l == nil || !l.upSlot {
+		return
+	}
+	l.upSlot = false
+	c.budget.release(targetUpSeries)
+}
+
+// ForgetPolicy stops the policy's loops, waits for them, and withdraws its
+// series, in that order, so no loop writes after the withdrawal.
+func (c *Collector) ForgetPolicy(policyName string) {
+	c.loopsMu.Lock()
+	var stopped []*loop
+	for k, l := range c.loops {
+		if k.policy == policyName {
+			l.cancel()
+			c.releaseUpSlot(l)
+			stopped = append(stopped, l)
+			delete(c.loops, k)
+		}
+	}
+	c.loopsMu.Unlock()
+	for _, l := range stopped {
+		<-l.done
+	}
+	c.store.forgetPolicy(policyName)
+}
+
+// TargetStatuses reports the policy's targets.
+func (c *Collector) TargetStatuses(policyName string) []TargetStatus {
+	c.loopsMu.Lock()
+	defer c.loopsMu.Unlock()
+	var out []TargetStatus
+	for k, l := range c.loops {
+		if k.policy == policyName {
+			out = append(out, l.snapshot())
+		}
+	}
+	return out
+}
+
+// Close stops every loop, waits, unregisters every instrument, and hands the
+// series it was holding back to the budget. The withdrawal runs after the
+// instruments are gone, so no callback can observe a store being emptied.
+func (c *Collector) Close() {
+	c.loopsMu.Lock()
+	c.closed = true
+	var all []*loop
+	for k, l := range c.loops {
+		l.cancel()
+		c.releaseUpSlot(l)
+		all = append(all, l)
+		delete(c.loops, k)
+	}
+	c.loopsMu.Unlock()
+	for _, l := range all {
+		<-l.done
+	}
+	c.exporter.close()
+	c.store.releaseAll()
+}

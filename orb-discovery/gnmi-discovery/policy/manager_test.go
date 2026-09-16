@@ -316,7 +316,7 @@ policies:
 `)
 	policies, err := m.ParsePolicies(data)
 	require.NoError(t, err)
-	require.Equal(t, "s3cret", policies["p1"].Scope.Targets[0].Password)
+	require.Equal(t, "s3cret", policies["p1"].Scope.Targets[0].ResolvedPassword())
 }
 
 func TestResolvesEnvInHostAndTLS(t *testing.T) {

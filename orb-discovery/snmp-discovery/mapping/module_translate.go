@@ -78,6 +78,12 @@ func TranslateModulesWithAlias(
 
 	var entities []diode.Entity
 	emittedModules := make(map[string]*diode.Module, len(inv.Modules))
+	// dcim.modulebay's matcher is name+device: two bays sharing a name on
+	// one member would merge into one NetBox object, taking their modules
+	// with them. Keyed by (MemberID, effective bay name) — MemberID is
+	// only populated by assignMemberID above, which is why this guard
+	// lives here and not in extractModuleInventory.
+	seenTransceiverBays := make(map[transceiverBayKey]string, len(inv.Modules))
 
 	for _, m := range inv.Modules {
 		// PSU / Fan are classified for labelling only — never emitted as
@@ -85,16 +91,51 @@ func TranslateModulesWithAlias(
 		if m.Type == ModuleTypePSU || m.Type == ModuleTypeFan {
 			continue
 		}
+		// A transceiver is full-mode-only. Modular optics are already
+		// excluded by the mode gate below because they live in SubModules;
+		// a fixed-port optic is a top-level module and needs this.
+		if m.Type == ModuleTypeTransceiver && mode != config.DiscoverModulesFull {
+			continue
+		}
 		// assignMemberID stamps MemberID=-1 on entries whose chassis
 		// ancestor isn't in the VC member set. Skip — already warn-logged.
 		if m.MemberID < 0 {
 			continue
 		}
+		// Resolve the device — and skip entries with no device — BEFORE
+		// consulting the duplicate-bay-name guard below. An entry with no
+		// device is never emitted regardless of the guard, so it must not
+		// claim a bay name: doing so would make a later, legitimate optic
+		// with that same effective bay name look like a duplicate and get
+		// dropped, even though nothing was ever emitted under that name.
 		device := memberDevices[m.MemberID]
 		if device == nil {
 			logger.Warn("module discovery: no device for member",
 				"member", m.MemberID, "ent", m.EntIndex, "model", m.Model)
 			continue
+		}
+		// No capture in the corpus has shown two fixed-port transceivers
+		// collide on the same member's bay name, but the merge this
+		// guards against is silent and Diode never retracts a wrong
+		// value, so refuse rather than risk it. Scoped to transceivers —
+		// bay-name collisions among other module types are pre-existing
+		// and out of scope here. Skip and warn rather than invent a
+		// disambiguated name: a fabricated value would itself become a
+		// permanent wrong value.
+		if m.Type == ModuleTypeTransceiver {
+			key := transceiverBayKey{member: m.MemberID, bay: effectiveBayName(m)}
+			if _, dup := seenTransceiverBays[key]; dup {
+				logger.Warn("module discovery: duplicate transceiver bay name dropped",
+					"bay", key.bay, "ent", m.EntIndex, "member", m.MemberID, "model", m.Model,
+					"reason", "dup_bay_name")
+				if c := metrics.GetModulesDropped(); c != nil {
+					c.Add(context.Background(), 1, metric.WithAttributes(
+						attribute.String("reason", "dup_bay_name"),
+					))
+				}
+				continue
+			}
+			seenTransceiverBays[key] = m.EntIndex
 		}
 		bay := emitModuleBay(device, m)
 		entities = append(entities, bay)
@@ -148,12 +189,38 @@ func TranslateModulesWithAlias(
 			if _, dup := emittedModules[tr.EntIndex]; dup {
 				continue
 			}
+			// Resolve the device — and skip entries with no device —
+			// BEFORE consulting the duplicate-bay-name guard below, same
+			// as the top-level loop above and for the same reason: an
+			// entry that is never emitted must not claim a bay name.
 			device := memberDevices[tr.MemberID]
 			if device == nil {
 				logger.Warn("module discovery: no device for transceiver member",
 					"member", tr.MemberID, "ent", tr.EntIndex, "model", tr.Model)
 				continue
 			}
+			// Same guard as the top-level loop above, against the SAME
+			// seenTransceiverBays map — deliberately shared rather than a
+			// second map. The collision domain is (device, bay name)
+			// regardless of whether the module is top-level or nested, so
+			// a top-level fixed-port bay and a submodule bay sharing a
+			// name on the same device collide in NetBox exactly as two
+			// submodule bays would; a separate map would miss that
+			// cross-tier case. See the top-level guard's comment for why
+			// this refuses rather than invents a disambiguated name.
+			key := transceiverBayKey{member: tr.MemberID, bay: effectiveBayName(tr)}
+			if _, dup := seenTransceiverBays[key]; dup {
+				logger.Warn("module discovery: duplicate transceiver bay name dropped",
+					"bay", key.bay, "ent", tr.EntIndex, "member", tr.MemberID, "model", tr.Model,
+					"reason", "dup_bay_name")
+				if c := metrics.GetModulesDropped(); c != nil {
+					c.Add(context.Background(), 1, metric.WithAttributes(
+						attribute.String("reason", "dup_bay_name"),
+					))
+				}
+				continue
+			}
+			seenTransceiverBays[key] = tr.EntIndex
 			// Sub-bay reconciler workaround (spec §Sub-bay emission
 			// workaround): emit transceiver sub-bays DEVICE-ROOTED
 			// (no Module=parent_linecard link). Linking the sub-bay to
@@ -182,8 +249,9 @@ func TranslateModulesWithAlias(
 		}
 	}
 
-	// Empty bays — class=5 rows with no class=9 child. Bare ModuleBay
-	// only; no Module entity.
+	// Empty bays — class=5 rows with no module or port child and no
+	// optic PID of their own (extractModuleInventory's harvest). Bare
+	// ModuleBay only; no Module entity.
 	for _, b := range inv.EmptyBays {
 		if b.MemberID < 0 {
 			continue
@@ -206,20 +274,36 @@ func TranslateModulesWithAlias(
 	return entities, ifaceMap
 }
 
+// transceiverBayKey is the (member, effective bay name) dedup key used
+// by the duplicate-bay-name guard in TranslateModulesWithAlias.
+type transceiverBayKey struct {
+	member int
+	bay    string
+}
+
+// effectiveBayName returns the name a ModuleBay will actually carry —
+// BayName, falling back to BayPosition, falling back to "Unknown". This
+// is the same fallback chain emitModuleBay applies, factored out so the
+// duplicate-bay-name guard compares the value Diode will actually see
+// rather than the raw (possibly blank) ModuleEntry field.
+func effectiveBayName(m ModuleEntry) string {
+	if m.BayName != "" {
+		return m.BayName
+	}
+	if m.BayPosition != "" {
+		return m.BayPosition
+	}
+	return "Unknown"
+}
+
 // emitModuleBay constructs a ModuleBay entity for a top-level
 // (chassis-slot) module. Always carries Device — the chassis device is
 // the matching scope for both ModuleBay and Module per Diode docs.
 func emitModuleBay(device *diode.Device, m ModuleEntry) *diode.ModuleBay {
-	name := m.BayName
-	if name == "" {
-		// Bay rows occasionally arrive without a name; fall back to
-		// position so we never ship an empty-string required field
-		// (Diode rejects "").
-		name = m.BayPosition
-	}
-	if name == "" {
-		name = "Unknown"
-	}
+	// Bay rows occasionally arrive without a name; effectiveBayName
+	// falls back to position, then "Unknown", so we never ship an
+	// empty-string required field (Diode rejects "").
+	name := effectiveBayName(m)
 	bay := &diode.ModuleBay{
 		Device: device,
 		Name:   &name,

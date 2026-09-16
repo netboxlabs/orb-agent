@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"strings"
@@ -12,10 +13,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockPolicyManagerForFleet implements the PolicyManager interface for fleet testing
@@ -27,8 +31,8 @@ func (m *mockPolicyManagerForFleet) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForFleet) GetPolicyState() ([]policies.PolicyData, error) {
@@ -41,12 +45,12 @@ func (m *mockPolicyManagerForFleet) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(_ context.Context, name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 
-func (m *mockPolicyManagerForFleet) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+func (m *mockPolicyManagerForFleet) RemoveBackendPolicies(_ string, be backend.Backend, permanently bool) error {
 	args := m.Called(be, permanently)
 	return args.Error(0)
 }
@@ -55,6 +59,8 @@ func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName str
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManagerForFleet) SetStarter(_ policymgr.BackendStarter) {}
 
 type mockBackendState struct {
 	backendState map[string]*backend.State
@@ -65,6 +71,61 @@ func (m *mockBackendState) Get() map[string]*backend.State {
 		return map[string]*backend.State{}
 	}
 	return m.backendState
+}
+
+// stubConnectionResetter records the reasons it was called with, so a test
+// can prove SetResetter on the connection reaches the reset it wires into
+// its own messaging.
+type stubConnectionResetter struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (r *stubConnectionResetter) RestartAll(_ context.Context, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, reason)
+	return nil
+}
+
+func (r *stubConnectionResetter) reasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+// SetResetter on the connection installs the resetter its own messaging
+// reaches for a full agent reset: driving a full-reset RPC through
+// DispatchToHandlers, the same entry point an incoming MQTT message goes
+// through, exercises the whole connection, not just a Messaging value built
+// directly with NewMessaging.
+func TestSetResetterOnTheConnectionReachesTheReset(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	resetChan := make(chan struct{}, 1)
+	reconnectChan := make(chan struct{}, 1)
+	connection := NewMQTTConnection(logger, mockPMgr, resetChan, reconnectChan, &mockBackendState{}, nil)
+	r := &stubConnectionResetter{}
+	connection.SetResetter(r)
+
+	rpc := messages.RPC{
+		SchemaVersion: messages.CurrentRPCSchemaVersion,
+		Func:          messages.AgentResetRPCFunc,
+		Payload:       messages.AgentResetRPCPayload{FullReset: true, Reason: "test"},
+	}
+	payload, err := json.Marshal(rpc)
+	require.NoError(t, err)
+
+	err = connection.messaging.DispatchToHandlers(context.Background(), payload, "org1", "agent1", TopicActions{
+		Subscribe:   func(string) error { return nil },
+		Publish:     func(context.Context, string, []byte) error { return nil },
+		Unsubscribe: func(string) error { return nil },
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool { return len(r.reasons()) == 1 }, 5*time.Second, time.Millisecond,
+		"the resetter installed through the connection's SetResetter must run a full reset")
+	assert.Equal(t, []string{"test"}, r.reasons())
 }
 
 func TestFleetConfigManager_Connect_InvalidURL(t *testing.T) {

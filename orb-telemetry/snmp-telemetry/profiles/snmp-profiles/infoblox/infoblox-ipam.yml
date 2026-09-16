@@ -1,0 +1,236 @@
+# http://www.circitor.fr/Mibs/Html/I/IB-SMI-MIB.php
+# http://www.circitor.fr/Mibs/Html/I/IB-PLATFORMONE-MIB.php
+# http://www.circitor.fr/Mibs/Html/I/IB-DHCPONE-MIB.php
+# http://www.circitor.fr/Mibs/Html/I/IB-DNSONE-MIB.php
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+  - host-resources-mib.yml
+  - ucd-mib.yml
+
+provider: kentik-ipam
+
+sysobjectid:
+  - 1.3.6.1.4.1.7779.1.1004    # Virtual Device
+  - 1.3.6.1.4.1.7779.1.1204    # IB-1552
+  - 1.3.6.1.4.1.7779.1.1301    # IB-550-A
+  - 1.3.6.1.4.1.7779.1.1302    # IB-1050-A
+  - 1.3.6.1.4.1.7779.1.1303    # IB-1550-A
+  - 1.3.6.1.4.1.7779.1.1401    # IB-810
+  - 1.3.6.1.4.1.7779.1.1402    # IB-820
+  - 1.3.6.1.4.1.7779.1.1403    # IB-1410
+  - 1.3.6.1.4.1.7779.1.1404    # IB-1420
+  - 1.3.6.1.4.1.7779.1.1405    # IB-1400
+  - 1.3.6.1.4.1.7779.1.1406    # IB-800
+  - 1.3.6.1.4.1.7779.1.1407    # PT-1400
+  - 1.3.6.1.4.1.7779.1.1411    # IB-2200
+  - 1.3.6.1.4.1.7779.1.1412    # IB-2210
+  - 1.3.6.1.4.1.7779.1.1413    # IB-2220
+  - 1.3.6.1.4.1.7779.1.1414    # PT-2200
+  - 1.3.6.1.4.1.7779.1.1421    # IB-4010
+  - 1.3.6.1.4.1.7779.1.1422    # IB-4030
+  - 1.3.6.1.4.1.7779.1.1423    # IB-4000
+  - 1.3.6.1.4.1.7779.1.1424    # PT-4000
+  - 1.3.6.1.4.1.7779.1.1425    # Infoblox, Model Unknown
+  - 1.3.6.1.4.1.7779.1.1431    # IB-100
+  - 1.3.6.1.4.1.7779.1.1441    # ND-800
+  - 1.3.6.1.4.1.7779.1.1442    # ND-1400
+  - 1.3.6.1.4.1.7779.1.1443    # ND-2200
+  - 1.3.6.1.4.1.7779.1.1444    # ND-4000
+  - 1.3.6.1.4.1.7779.1.1501    # IB-815
+  - 1.3.6.1.4.1.7779.1.1502    # IB-825
+  - 1.3.6.1.4.1.7779.1.1503    # IB-1415
+  - 1.3.6.1.4.1.7779.1.1504    # IB-1425
+  - 1.3.6.1.4.1.7779.1.1505    # IB-1405
+  - 1.3.6.1.4.1.7779.1.1506    # IB-805
+  - 1.3.6.1.4.1.7779.1.1507    # PT-1405
+  - 1.3.6.1.4.1.7779.1.1511    # IB-2205
+  - 1.3.6.1.4.1.7779.1.1512    # IB-2215
+  - 1.3.6.1.4.1.7779.1.1513    # IB-2225
+  - 1.3.6.1.4.1.7779.1.1514    # PT-2205
+  - 1.3.6.1.4.1.7779.1.1521    # IB-4015
+  - 1.3.6.1.4.1.7779.1.1522    # IB-4035
+  - 1.3.6.1.4.1.7779.1.1523    # IB-4005
+  - 1.3.6.1.4.1.7779.1.1524    # PT-4005
+  - 1.3.6.1.4.1.7779.1.1525    # IB-4025
+  - 1.3.6.1.4.1.7779.1.1541    # ND-805
+  - 1.3.6.1.4.1.7779.1.1542    # ND-1405
+  - 1.3.6.1.4.1.7779.1.1543    # ND-2205
+  - 1.3.6.1.4.1.7779.1.1544    # ND-4005
+  - 1.3.6.1.4.1.7779.2.2       # IB-1050
+  - 1.3.6.1.4.1.7779.2.4       # IB-1552
+  - 1.3.6.1.4.1.7779.3.4       # IB-1552-A
+  - 1.3.6.1.4.1.7779.3.7       # IB-2000-A
+
+metrics:
+  # Current average CPU usage
+  - MIB: IB-PLATFORMONE-MIB
+    symbol:
+      name: ibSystemMonitorCpuUsage
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.8.1.1.0
+      poll_time_sec: 60
+      tag: CPU
+  # Current Memory usage
+  - MIB: IB-PLATFORMONE-MIB
+    symbol:
+      name: ibSystemMonitorMemUsage
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.8.2.1.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # The size of deferred dynamic DNS update queue
+  - MIB: IB-DHCPONE-MIB
+    symbol:
+      name: ibDhcpDeferredQueueSize
+      OID: 1.3.6.1.4.1.7779.3.1.1.4.1.4.0
+  # A table of named ZONE statistics
+  - MIB: IB-DNSONE-MIB
+    table:
+      name: ibZoneStatisticsTable
+      OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1
+    symbols:
+      # Number of Successful responses since DNS process started.
+      - name: ibBindZoneSuccess
+        OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.2
+      # Number of DNS referrals since DNS process started.
+      - name: ibBindZoneReferral
+        OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.3
+      # Number of DNS query received for non-existent record.
+      - name: ibBindZoneNxRRset
+        OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.4
+      # Number of DNS query received for non-existent domain.
+      - name: ibBindZoneNxDomain
+        OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.5
+      # Number of Queries received using recursion since DNS process started.
+      - name: ibBindZoneRecursion
+        OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.6
+      # Number of Failed queries since DNS process started.
+      - name: ibBindZoneFailure
+        OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.7
+    metric_tags:
+      # DNS Zone name. The first one is global summary statistics. Index name for global statistics is 'summary'. All zones live in the default view.
+      - column:
+          name: ibBindZoneName
+          OID: 1.3.6.1.4.1.7779.3.1.1.3.1.1.1.1
+  # Number of successful dynamic DNS update.
+  - MIB: IB-DNSONE-MIB
+    symbol:
+      name: ibDDNSUpdateSuccess
+      OID: 1.3.6.1.4.1.7779.3.1.1.3.1.3.1.0
+  # Number of failure dynamic DNS update.
+  - MIB: IB-DNSONE-MIB
+    symbol:
+      name: ibDDNSUpdateFailure
+      OID: 1.3.6.1.4.1.7779.3.1.1.3.1.3.2.0
+  # Number of dynamic DNS update rejects maybe due to permission failure.
+  - MIB: IB-DNSONE-MIB
+    symbol:
+      name: ibDDNSUpdateReject
+      OID: 1.3.6.1.4.1.7779.3.1.1.3.1.3.3.0
+  # Number of dynamic DNS update rejects due to prerequisite failure.
+  - MIB: IB-DNSONE-MIB
+    symbol:
+      name: ibDDNSUpdatePrerequisiteReject
+      OID: 1.3.6.1.4.1.7779.3.1.1.3.1.3.4.0
+  # DNS queries per second
+  - MIB: IB-DNSONE-MIB
+    symbol:
+      name: ibDnsQueryRate
+      OID: 1.3.6.1.4.1.7779.3.1.1.3.1.6.0
+  # A table of Physical Node's Grid Replication Status.
+  - MIB: IB-PLATFORMONE-MIB
+    table:
+      name: ibClusterReplicationStatusTable
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.2
+    symbols:
+      # Sent queue size from master.
+      - name: ibNodeQueueFromMaster
+        OID: 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.3
+      # Receive queue size to master.
+      - name: ibNodeQueueToMaster
+        OID: 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.5
+    metric_tags:
+      # Physical node IP address.
+      - column:
+          name: ibNodeIPAddress
+          OID: 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.1
+      # Replication queue status for this node.
+      - column:
+          name: ibNodeReplicationStatus
+          OID: 1.3.6.1.4.1.7779.3.1.1.2.1.2.1.2
+  # A table of member service status.
+  - MIB: IB-PLATFORMONE-MIB
+    table:
+      name: ibMemberServiceStatusTable
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.9
+    symbols:
+      # Service Status
+      - name: ibServiceStatus
+        OID: 1.3.6.1.4.1.7779.3.1.1.2.1.9.1.2
+        enum:
+          working: 1
+          warning: 2
+          failed: 3
+          inactive: 4
+          unknown: 5
+    metric_tags:
+      # Service Name
+      - column:
+          name: ibServiceName
+          OID: 1.3.6.1.4.1.7779.3.1.1.2.1.9.1.1
+          enum:
+            dhcp: 1
+            dns: 2
+            ntp: 3
+            radius: 4
+            tftp: 5
+            http-file-dist: 6
+            ftp: 7
+            bloxtools-move: 8
+            bloxtools: 9
+            node-status: 10
+            disk-usage: 11
+            enet-lan: 12
+            enet-lan2: 13
+            enet-ha: 14
+            enet-mgmt: 15
+            lcd: 16
+            memory: 17
+            replication: 18
+            db-object: 19
+            raid-summary: 20
+            raid-disk1: 21
+            raid-disk2: 22
+            raid-disk3: 23
+            raid-disk4: 24
+            fan1: 25
+            fan2: 26
+            fan3: 27
+            power-supply: 28
+            ntp-sync: 29
+            cpu1-temp: 30
+            cpu2-temp: 31
+            sys-temp: 32
+            raid-battery: 33
+            cpu-usage: 34
+            ospf: 35
+            bgp: 36
+      # Service Description
+      - column:
+          name: ibServiceDescription
+          OID: 1.3.6.1.4.1.7779.3.1.1.2.1.9.1.3
+
+metric_tags:
+  # Infoblox One hardware type
+  - column:
+      name: ibHardwareType
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.4.0
+  # Infoblox One device serial number
+  - column:
+      name: ibSerialNumber
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.6.0
+    tag: serial_number
+  # Infoblox One NIOS version
+  - column:
+      name: ibNiosVersion
+      OID: 1.3.6.1.4.1.7779.3.1.1.2.1.7.0

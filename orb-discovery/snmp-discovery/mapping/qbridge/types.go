@@ -81,12 +81,28 @@ type AllowedVlans struct {
 // extractor produces one SwitchportInfo per ifIndex. Classify consumes it
 // and returns Classification.
 type SwitchportInfo struct {
-	Enabled           bool
-	AdminMode         AdminMode
-	OperMode          OperMode
-	AccessVlan        *int
-	NativeVlan        *int
-	AllowedVlans      AllowedVlans
+	Enabled      bool
+	AdminMode    AdminMode
+	OperMode     OperMode
+	AccessVlan   *int
+	NativeVlan   *int
+	AllowedVlans AllowedVlans
+
+	// TrunkFromOneTaggedVlan marks a trunk the generic extractor inferred
+	// from the weakest evidence it accepts, one VLAN the port is tagged in
+	// and nothing else. A vendor overlay holding positive access evidence
+	// for the port may override that inference; a trunk seen in several
+	// VLANs it may not.
+	TrunkFromOneTaggedVlan bool
+
+	// NativeUntaggedByMask says NativeVlan was read from a VLAN's untagged
+	// port mask, so the device stated the port egresses that VLAN untagged.
+	// A native derived from dot1qPvid instead carries no such statement: the
+	// PVID classifies ingress, and the port may well be a tagged member. An
+	// overlay replacing the native VLAN needs the difference, because only in
+	// the first case is the VLAN it displaces ruled out as a tagged one.
+	NativeUntaggedByMask bool
+
 	VoiceVlan         *int
 	BridgePortPresent bool
 }

@@ -1,0 +1,24 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "TenGigabitEthernet1/0/1",
+          "position": "TenGigabitEthernet1/0/1",
+          "module": {
+            "model": "SFP-10G-LR",
+            "serial": "OPT0002001",
+            "description": "SFP-10GBase-LR",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "TenGigabitEthernet1/0/1": [
+          "TenGigabitEthernet1/0/1"
+        ]
+      }
+    }
+  }
+}

@@ -298,8 +298,8 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 //   - VcPosition = member.ID; VirtualChassis = {Name: vcName, Master: masterRef}.
 //   - DeviceType from member.Model when populated, else inherit master's.
 //   - Site / Tenant / Role / Platform / Location inherited from master.
-func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *diode.Device, vcName string) *diode.Device {
-	name := fmt.Sprintf("%s-%d", vcName, member.ID)
+func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *diode.Device, vcName, nameTemplate string) *diode.Device {
+	name := config.RenderStackMemberName(nameTemplate, vcName, member.ID)
 	pos := int64(member.ID)
 	dev := &diode.Device{
 		Name:       &name,
@@ -359,6 +359,11 @@ func strDeref(p *string) string {
 func trimSNMPString(s string) string {
 	return strings.Trim(strings.ReplaceAll(s, "\x00", ""), " \t\r\n")
 }
+
+// TrimSNMPString is trimSNMPString for callers outside this package. Exported
+// so vendor dispatch sanitizes sysObjectID the same way every reader of a
+// device-provided string does, rather than keeping a second copy of the rule.
+func TrimSNMPString(s string) string { return trimSNMPString(s) }
 
 var trailingIntRe = regexp.MustCompile(`(\d+)\s*$`)
 
@@ -892,6 +897,7 @@ func TranslateAsStack(
 	oids ObjectIDValueMap,
 	ifIndexByIface map[*diode.Interface]int,
 	claimAssetTag func(tag string) bool,
+	memberNameTemplate string,
 	logger *slog.Logger,
 ) []diode.Entity {
 	master := CurrentDeviceFrom(entities)
@@ -1000,7 +1006,7 @@ func TranslateAsStack(
 	memberByID := map[int]*diode.Device{lowest.ID: master}
 	memberDevices := make([]*diode.Device, 0, len(inv.Members)-1)
 	for _, m := range inv.Members[1:] {
-		dev := buildMemberDevice(master, m, masterRef, vcName)
+		dev := buildMemberDevice(master, m, masterRef, vcName, memberNameTemplate)
 		if tag, ok := assetTags[m.ID]; ok && claim(tag) {
 			dev.AssetTag = StringPtr(tag)
 		}

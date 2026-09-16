@@ -1,0 +1,14 @@
+{
+  "TABLE_modinfo": {
+    "ROW_modinfo": [
+      {"modinf": "\"1\"", "modules": "\"1\"", "ports": "48", "type": "\"48x10G fixed module\"", "model": "\"N9K-C9396PX\"", "status": "active *"},
+      {"modinf": "\"2\"", "modules": "\"2\"", "ports": "12", "type": "\"12x40G uplink module\"", "model": "\"N9K-M12PQ\"", "status": "ok"}
+    ]
+  },
+  "TABLE_modwwninfo": {
+    "ROW_modwwninfo": [
+      {"modwwn": "1", "sn": "FOC80101FIX"},
+      {"modwwn": "2", "sn": "FOC80101UPL"}
+    ]
+  }
+}

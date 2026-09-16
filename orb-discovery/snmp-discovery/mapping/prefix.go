@@ -29,9 +29,22 @@ import (
 // the defaults.prefix vrf / vrf_ipv4 / vrf_ipv6 resolution for its
 // family. Note the prefix defaults are deliberately independent of the
 // ip_address ones.
+//
+// The prefix VLAN is corroborated rather than derived: sviVlanByIfIndex
+// (produced by ResolveSviVlans, keyed by ifIndex) and ifIndexByIface
+// (mapper.InterfacesByIfIndex) are only consulted when
+// options.PrefixVlanMode is "svi-name", and even then a prefix is
+// only tagged when every contributing address resolves to the SAME
+// VLAN. Any disagreement, or any contributing address with no VLAN,
+// leaves the prefix untagged — see the vote accumulation below for why
+// that check must span every address. The warning is reserved for a
+// prefix at least one address proposed a VLAN for: a prefix no address
+// proposed one for is an ordinary routed subnet, not a contest.
 func DerivePrefixes(
 	entities []diode.Entity,
 	vrfByAddress map[string]*diode.VRF,
+	sviVlanByIfIndex map[int]*diode.VLAN,
+	ifIndexByIface map[*diode.Interface]int,
 	defaults *config.Defaults,
 	options *config.Options,
 	logger *slog.Logger,
@@ -41,6 +54,24 @@ func DerivePrefixes(
 		vrf     *diode.VRF
 	}
 	seen := make(map[string]prefixSeed)
+	// Candidate VLANs per prefix key. A prefix is only associated when
+	// every address that formed it agrees, so this must be collected
+	// across ALL contributing addresses before the first-wins collapse
+	// below picks the surviving prefixSeed. Collecting only for the
+	// first address per key would make the association depend on Go map
+	// iteration order and flap between polls.
+	// proposed counts the contributors that actually named a VLAN, which
+	// is what separates a genuine disagreement from the ordinary case: on
+	// an L3 switch with one SVI and many routed subnets, most prefixes
+	// have no proposer at all and must be withheld silently.
+	type vlanVote struct {
+		vlan     *diode.VLAN
+		conflict bool
+		total    int
+		proposed int
+	}
+	votes := make(map[string]*vlanVote)
+	corroborateVlan := options.PrefixVlanMode() == "svi-name" && len(sviVlanByIfIndex) > 0
 	warnedNamelessVrf := false
 	for _, e := range entities {
 		ip, ok := e.(*diode.IPAddress)
@@ -119,6 +150,35 @@ func DerivePrefixes(
 			}
 		}
 		key := network.String() + "\x00" + vrfKey(vrf)
+		// Vote accumulation happens for EVERY contributing address, not
+		// only the one that wins the seen[key] first-wins guard below —
+		// see the vlanVote doc comment above for why that ordering
+		// matters.
+		if corroborateVlan {
+			var cand *diode.VLAN
+			if iface, ok := ip.AssignedObject.(*diode.Interface); ok && iface != nil {
+				if idx, known := ifIndexByIface[iface]; known {
+					cand = sviVlanByIfIndex[idx]
+				}
+			}
+			v := votes[key]
+			if v == nil {
+				v = &vlanVote{}
+				votes[key] = v
+			}
+			v.total++
+			if cand != nil {
+				v.proposed++
+			}
+			switch {
+			case cand == nil:
+				v.conflict = true
+			case v.vlan == nil && !v.conflict:
+				v.vlan = cand
+			case v.vlan != cand:
+				v.conflict = true
+			}
+		}
 		if _, dup := seen[key]; !dup {
 			seen[key] = prefixSeed{network: network.String(), vrf: vrf}
 		}
@@ -138,6 +198,19 @@ func DerivePrefixes(
 		seed := seen[k]
 		network := seed.network
 		prefix := &diode.Prefix{Prefix: &network, Vrf: seed.vrf}
+		if v := votes[k]; v != nil {
+			switch {
+			case !v.conflict && v.vlan != nil:
+				prefix.Vlan = v.vlan
+			case v.proposed > 0:
+				// Withheld despite a proposal: the contributors disagree,
+				// or some proposed while others had no resolvable VLAN.
+				logger.Warn("prefix vlan: contested or partial VLAN attribution; emitting no vlan",
+					"prefix", network,
+					"contributing_addresses", v.total,
+					"proposing_addresses", v.proposed)
+			}
+		}
 		applyPrefixDefaults(prefix, defaults, options)
 		prefixes = append(prefixes, prefix)
 	}
@@ -179,18 +252,33 @@ func prefixDefaultsVrf(d *config.PrefixDefaults, family string) (*diode.VRF, boo
 	return vrf, false
 }
 
-// vrfKey returns a stable dedupe key component for a VRF reference. The
-// NUL delimiter cannot appear in decoded VRF names (the index decoder
-// rejects control characters), so names can't collide with name+rd pairs.
+// vrfKey returns a stable dedupe key component for a VRF reference, keyed the
+// way the plugin resolves the VRF. Its matchers for ipam.vrf are, in precedence
+// order:
+//
+//	logical_vrf_name_no_tenant      name          rd IS NULL, tenant IS NULL
+//	logical_vrf_name_within_tenant  name, tenant  rd IS NULL, tenant NOT NULL
+//	unique_rd                       rd            always
+//
+// Both name matchers are conditional on rd being NULL, so an rd-bearing VRF is
+// resolved by its rd alone: two VRFs carrying one rd under different names are
+// one record. Keying on the name+rd pair split them, which emitted two Prefix
+// entities for a single object and, worse, split the VLAN vote so each half
+// could be unanimous on its own while the object ended up with one of them.
+//
+// A VRF tenant would join the no-rd branch, but the config exposes only name
+// and rd on a prefix VRF, so nothing can set one today.
+//
+// The "rd" / "name" tag keeps the two key spaces apart. NUL cannot appear in a
+// decoded VRF name, since the index decoder rejects control characters.
 func vrfKey(vrf *diode.VRF) string {
 	if vrf == nil || vrf.Name == nil {
 		return ""
 	}
-	key := *vrf.Name
-	if vrf.Rd != nil {
-		key += "\x00" + *vrf.Rd
+	if vrf.Rd != nil && *vrf.Rd != "" {
+		return "rd\x00" + *vrf.Rd
 	}
-	return key
+	return "name\x00" + *vrf.Name
 }
 
 // applyPrefixDefaults applies the defaults.prefix block plus the scope

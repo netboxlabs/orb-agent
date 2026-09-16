@@ -25,6 +25,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -40,6 +41,17 @@ _NXOS_SSH_PORT_RE = re.compile(r"^Ethernet(\d+)(?:/\d+)+$", re.IGNORECASE)
 _NXOS_SSH_SLOT_RE = re.compile(r"^Slot\s+(\d+)$", re.IGNORECASE)
 # K is optional: Nexus 7700 sups are N77-SUP2E/SUP3E (no K), while N9K-/N7K- have it.
 _NXOS_SSH_SUP_PID_RE = re.compile(r"^N\d+K?[-A-Z0-9]*-SUP", re.IGNORECASE)
+# FEX ids start at 100; every Nexus chassis slot (linecard, supervisor, or
+# fabric/xbar) stays well below that. ``_NXOS_SSH_PORT_RE`` matches both the
+# Fabric Extender's three- and four-tuple port forms (e.g. Ethernet101/1/1,
+# Ethernet101/1/0/1) and captures the FEX id as the "slot" — this threshold
+# is what tells those apart from a real chassis slot.
+_NXOS_SSH_FEX_MIN_ID = 100
+
+
+def _nxos_ssh_is_fex_slot(slot: str) -> bool:
+    """Return True when a captured port "slot" is actually a FEX id (>= 100)."""
+    return slot.isdigit() and int(slot) >= _NXOS_SSH_FEX_MIN_ID
 
 
 def classify_module_type_nexus_ssh(pid: str, name: str) -> str:
@@ -67,23 +79,36 @@ def classify_module_type_nexus_ssh(pid: str, name: str) -> str:
 
 def _nxos_ssh_parse_inventory(
     inv_rows: list[dict],
-) -> tuple[dict[str, dict[str, str]], dict[str, _ModuleEntry]]:
+) -> tuple[dict[str, dict[str, str]], dict[str, _ModuleEntry], set[str]]:
     """
     Split show-inventory rows into slot PID/serial lookup + transceiver map.
 
     ntc-templates yields lowercase keys (name / pid / sn / descr); a few
     template versions emit uppercase, so both are accepted.
+
+    Also returns ``claimed_slots``: every slot number the RAW inventory
+    names via ``Slot N``, recorded from the NAME field alone — before the
+    ``pid and sn`` usability filter below, and before any type/classification
+    filter. A slot lands in this set even when its own row turns out
+    unusable (blank PID or serial); the caller must then decline promoting
+    any optic that maps to that slot, because the slot's parent exists in
+    hardware — this row simply failed to describe it usably. Promoting the
+    optic to a device-rooted bay in that case would invent a chassis-level
+    parent for hardware that already has one.
     """
     inv_by_slot: dict[str, dict[str, str]] = {}
     transceivers_by_ifname: dict[str, _ModuleEntry] = {}
+    claimed_slots: set[str] = set()
     for row in inv_rows:
         name = (row.get("NAME") or row.get("name") or "").strip()
         pid = (row.get("PID") or row.get("pid") or "").strip()
         sn = (row.get("SN") or row.get("sn") or "").strip()
         descr = (row.get("DESCR") or row.get("descr") or "").strip()
+        slot_match = _NXOS_SSH_SLOT_RE.match(name)
+        if slot_match:
+            claimed_slots.add(slot_match.group(1))
         if not (pid and sn):
             continue
-        slot_match = _NXOS_SSH_SLOT_RE.match(name)
         if slot_match:
             inv_by_slot[slot_match.group(1)] = {
                 "pid": pid, "sn": sn, "descr": descr, "name": name,
@@ -93,11 +118,27 @@ def _nxos_ssh_parse_inventory(
             transceivers_by_ifname[name] = _ModuleEntry(
                 model=pid, serial=sn, type="transceiver", description=descr,
             )
-    return inv_by_slot, transceivers_by_ifname
+    return inv_by_slot, transceivers_by_ifname, claimed_slots
 
 
 _NXOS_SSH_XBAR_HDR_RE = re.compile(r"^Xbar\s+Ports\b", re.IGNORECASE)
 _NXOS_SSH_XBAR_ROW_RE = re.compile(r"^(\d+)\s+\d+\s+\S")
+
+
+def _nxos_ssh_chassis_pid(inv_rows: list[dict]) -> str | None:
+    """
+    Return the PID of the RAW 'Chassis' inventory row, or None if absent.
+
+    Read from the unfiltered rows (not ``inv_by_slot``, which only keeps
+    slots that already passed the pid/sn usability filter) so the caller
+    can compare it against a single surviving show-module row's slot PID
+    even when that slot's own inventory row happens to be usable.
+    """
+    for row in inv_rows:
+        name = (row.get("NAME") or row.get("name") or "").strip()
+        if name.lower() == "chassis":
+            return (row.get("PID") or row.get("pid") or "").strip() or None
+    return None
 
 
 def _nxos_ssh_xbar_slots(sm_out: str) -> list[str]:
@@ -123,6 +164,63 @@ def _nxos_ssh_xbar_slots(sm_out: str) -> list[str]:
         if row_match:
             slots.append(row_match.group(1))
     return slots
+
+
+def _nxos_ssh_module_slot_ids(sm_rows: list[dict]) -> set[str]:
+    """
+    Return every slot id the RAW show-module rows name, before any join.
+
+    ``show module`` is authoritative for slot occupancy: a row appearing
+    here means hardware occupies that slot even when ``show inventory``
+    omits — not merely mis-describes — the matching ``Slot N`` line. Fed
+    into ``claimed_slots``, which is now a secondary, log-only signal — see
+    ``_nxos_ssh_attach_transceivers``. The decision of whether to promote
+    an orphan optic is made by ``_nxos_ssh_is_chassis_baseboard`` instead.
+    """
+    return {
+        slot
+        for row in sm_rows
+        if (slot := str(row.get("module") or row.get("mod") or row.get("modinf") or "").strip())
+    }
+
+
+def _nxos_ssh_module_model_by_slot(sm_rows: list[dict]) -> dict[str, str]:
+    """
+    Map each RAW show-module slot to its own model field.
+
+    ntc-templates' ``cisco_nxos_show_module.textfsm`` declares a MODEL
+    value and exposes it under key ``model`` — populated on every parsed
+    row across all fixtures. Built directly from
+    ``show module`` — independent of whether that slot's ``show inventory``
+    ``NAME: Slot N`` line exists, is usable, or was even itemized (see
+    ``fixed_port_transceivers_only``). This is the sole input to
+    ``_nxos_ssh_is_chassis_baseboard``, the positive-evidence gate in
+    ``_nxos_ssh_attach_transceivers``.
+    """
+    result: dict[str, str] = {}
+    for row in sm_rows:
+        slot = str(row.get("module") or row.get("mod") or row.get("modinf") or "").strip()
+        if slot:
+            result[slot] = str(row.get("model") or "").strip()
+    return result
+
+
+def _nxos_ssh_is_chassis_baseboard(model: str | None, chassis_pid: str | None) -> bool:
+    """
+    Return True when a show-module row's Model is the chassis's own baseboard.
+
+    NX-OS models a fixed switch's port-bearing baseboard as a module row
+    whose Model IS the chassis PID — sometimes with a trailing suffix (a
+    5548UP baseboard reports ``N5K-C5548UP-SUP`` against chassis
+    ``N5K-C5548UP``, hence ``startswith`` rather than equality). A
+    linecard, supervisor or GEM expansion row's Model is always a
+    different PID. This is positive evidence the vendor states directly
+    in two commands already fetched — not an inference from the absence
+    of a claim.
+    """
+    if not model or not chassis_pid:
+        return False
+    return model.strip().casefold().startswith(chassis_pid.strip().casefold())
 
 
 def _nxos_ssh_build_slot_bays(
@@ -163,12 +261,36 @@ def _nxos_ssh_build_slot_bays(
 def _nxos_ssh_attach_transceivers(
     bays_by_slot: dict[str, _ModuleBay],
     transceivers_by_ifname: dict[str, _ModuleEntry],
+    claimed_slots: set[str],
+    module_model_by_slot: dict[str, str],
+    chassis_pid: str | None,
 ) -> dict[str, list[str]]:
     """
-    Attach each optic as a sub_bay under its parent linecard slot.
+    Attach each optic as a sub_bay under its parent linecard slot, or as a device-rooted bay when its own slot IS the chassis baseboard.
 
     ``interfaces_by_bay`` is keyed by the linecard SLOT NAME (= bay name) so
-    the translator can route ifnames into the matching bay.
+    the translator can route ifnames into the matching bay. Mutates
+    ``bays_by_slot`` in place — both the matched entries' parent
+    ``module.sub_bays`` and, for promoted orphans, ``bays_by_slot`` itself.
+
+    A FEX-attached optic (slot id >= 100) never gets promoted here even when
+    it has no parent bay on this device — it lives in the FEX, a separate
+    device, not on the parent Nexus.
+
+    An optic whose slot has no parent bay is promoted to a device-rooted bay
+    ONLY when ``_nxos_ssh_is_chassis_baseboard`` confirms that slot's OWN
+    show-module row Model equals the chassis PID — positive evidence this
+    really is a fixed switch's baseboard, not an inference from the absence
+    of a claim. No show-module row for the slot, or a Model that names a
+    different PID (linecard, supervisor, GEM expansion module), declines the
+    optic instead: promoting it would invent a chassis-level parent for
+    hardware whose real parent is either unrecognized or a linecard that
+    just didn't survive the join.
+
+    ``claimed_slots`` (see ``_nxos_ssh_parse_inventory`` / ``_nxos_ssh_module_slot_ids``)
+    is consulted only to enrich the decline log message — it named every
+    slot the raw inventory or show module already accounted for, but is no
+    longer the promotion decision itself.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, optic in transceivers_by_ifname.items():
@@ -178,11 +300,28 @@ def _nxos_ssh_attach_transceivers(
         slot = port_match.group(1)
         parent = bays_by_slot.get(slot)
         if parent is None or parent.module is None:
-            continue
-        parent.module.sub_bays.append(_ModuleBay(
-            name=ifname, position=ifname, module=optic,
-        ))
-        interfaces_by_bay.setdefault(slot, []).append(ifname)
+            if _nxos_ssh_is_fex_slot(slot):
+                logger.debug(
+                    "nxos_ssh.get_modules: skipping FEX-attached optic %s (fex %s has no bay on this device)",
+                    ifname, slot,
+                )
+                continue
+            if not _nxos_ssh_is_chassis_baseboard(module_model_by_slot.get(slot), chassis_pid):
+                logger.debug(
+                    "nxos_ssh.get_modules: declining promotion of %s onto slot %s "
+                    "(no positive evidence that slot's show-module row is the "
+                    "chassis baseboard%s)",
+                    ifname, slot,
+                    " ; inventory names the slot" if slot in claimed_slots else "",
+                )
+                continue
+            # Fixed switch: the slot's own show-module row IS the baseboard.
+            bays_by_slot[ifname] = orphan_optic_bay(ifname, optic)
+        else:
+            parent.module.sub_bays.append(_ModuleBay(
+                name=ifname, position=ifname, module=optic,
+            ))
+            interfaces_by_bay.setdefault(slot, []).append(ifname)
         # Self-route the optic under its own sub-bay name so the translator's
         # deepest-wins logic links the interface to the transceiver (not the
         # parent linecard) in full mode. Mirrors ios.py:_attach_transceivers.
@@ -204,8 +343,30 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     directly. The wrapper handles enable-mode escalation, banner stripping,
     and per-command timeout normalization the raw Netmiko session exposes.
 
-    Returns None when the SSH calls fail, show module reports a single
-    self-row (fixed switch), or no supervisor / linecard slots survive.
+    Fixed switches report exactly one show-module self-row and no populated
+    slot bays; their optics are promoted to device-rooted bays only when
+    that row's own model matches the chassis PID — positive evidence this
+    really is the chassis baseboard (see ``_nxos_ssh_is_chassis_baseboard`` /
+    ``_nxos_ssh_attach_transceivers``). Returns None when the SSH calls
+    fail, show inventory yields no rows, show module yields zero rows —
+    unsupported, truncated, or otherwise unparseable text is not proof of
+    a fixed switch, so module discovery is declined rather than promoting
+    a partial inventory — or no supervisor / linecard slots survive AND no
+    transceiver was recognized.
+
+    A single parsed show-module row is NOT by itself proof of a fixed
+    switch: the textfsm STATUS enum (see ``cisco_nxos_show_module.textfsm``)
+    silently drops any row whose status word it doesn't recognize, so a
+    modular chassis mid-upgrade or with a card in a transitional state can
+    parse down to exactly one surviving row too. The inventory join that
+    turns a show-module row into a real linecard/supervisor bay is skipped
+    for that lone row regardless of its model — a modular chassis reduced
+    to one surviving row by the STATUS-enum gap is exactly as ambiguous as
+    a genuine fixed switch, and inventing a linecard bay from it would be
+    worse than declining. Optic promotion for that row's own slot is
+    decided separately and unconditionally by
+    ``_nxos_ssh_is_chassis_baseboard``, which needs no inventory row at all
+    (see ``fixed_port_transceivers_only``).
     """
     try:
         sm_out = driver._send_command("show module") or ""
@@ -221,10 +382,6 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     except Exception as e:
         logger.warning("nxos_ssh.get_modules: show module parse failed: %s", e)
         return None
-    # Fixed switch heuristic: 0 or 1 show-module rows is the chassis acting
-    # as its own "slot 1".
-    if not sm_rows or len(sm_rows) <= 1:
-        return None
 
     try:
         inv_rows = parse_output(
@@ -236,15 +393,32 @@ def _nxos_ssh_get_modules_impl(driver) -> dict | None:
     if not inv_rows:
         return None
 
-    inv_by_slot, transceivers_by_ifname = _nxos_ssh_parse_inventory(inv_rows)
+    inv_by_slot, transceivers_by_ifname, claimed_slots = _nxos_ssh_parse_inventory(inv_rows)
 
     xbar_slots = _nxos_ssh_xbar_slots(sm_out)
-    bays_by_slot = _nxos_ssh_build_slot_bays(sm_rows, xbar_slots, inv_by_slot)
-    if not bays_by_slot:
+    if not sm_rows:
+        logger.warning("nxos_ssh.get_modules: show module returned no parseable rows")
+        return None
+
+    chassis_pid = _nxos_ssh_chassis_pid(inv_rows)
+    module_model_by_slot = _nxos_ssh_module_model_by_slot(sm_rows)
+    # Secondary/backstop only now — see _nxos_ssh_attach_transceivers. Row
+    # count is no longer what decides whether an optic promotes.
+    claimed_slots |= _nxos_ssh_module_slot_ids(sm_rows)
+
+    # A lone surviving show-module row does not, by itself, justify treating
+    # it as a real linecard/supervisor slot (see docstring above) — the
+    # inventory join is skipped for it and bays_by_slot stays empty.
+    if len(sm_rows) == 1:
+        bays_by_slot = {}
+    else:
+        bays_by_slot = _nxos_ssh_build_slot_bays(sm_rows, xbar_slots, inv_by_slot)
+    if not bays_by_slot and not transceivers_by_ifname:
         return None
 
     interfaces_by_bay = _nxos_ssh_attach_transceivers(
-        bays_by_slot, transceivers_by_ifname,
+        bays_by_slot, transceivers_by_ifname, claimed_slots,
+        module_model_by_slot, chassis_pid,
     )
 
     return _modules_to_payload({

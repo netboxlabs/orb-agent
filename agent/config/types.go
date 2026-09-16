@@ -21,16 +21,35 @@ type LocalManager struct {
 	Config string `yaml:"config"`
 }
 
+// GitHubAppAuth holds GitHub App installation credentials for the Git
+// ConfigManager. Only github.com is supported (including GitHub Enterprise
+// Cloud, which is served from github.com / api.github.com).
+type GitHubAppAuth struct {
+	// ClientID is the JWT issuer. Prefer the app's Client ID (Iv23li...), which is
+	// what the GitHub API documentation now specifies; the numeric App ID from
+	// the app's settings page is still accepted, but is the legacy form and may
+	// be dropped in a future API version.
+	ClientID string `yaml:"client_id"`
+	// InstallationID identifies the installation of the app on the account that
+	// owns the repository. It is the numeric id in the URL of the installation's
+	// settings page - not the App ID.
+	InstallationID string `yaml:"installation_id"`
+	// PrivateKey is the path to the app's .pem private key, or the PEM document
+	// itself when injected by ${VAR} or a secrets manager.
+	PrivateKey string `yaml:"private_key"`
+}
+
 // GitManager represents the Git ConfigManager configuration.
 type GitManager struct {
-	URL        string  `yaml:"url"`
-	Branch     string  `yaml:"branch"`
-	Auth       string  `yaml:"auth"`
-	Schedule   *string `yaml:"schedule,omitempty"`
-	Username   string  `yaml:"username"`
-	Password   string  `yaml:"password"`
-	PrivateKey string  `yaml:"private_key"`
-	SkipTLS    bool    `yaml:"skip_tls"`
+	URL        string        `yaml:"url"`
+	Branch     string        `yaml:"branch"`
+	Auth       string        `yaml:"auth"`
+	Schedule   *string       `yaml:"schedule,omitempty"`
+	Username   string        `yaml:"username"`
+	Password   string        `yaml:"password"`
+	PrivateKey string        `yaml:"private_key"`
+	SkipTLS    bool          `yaml:"skip_tls"`
+	GitHubApp  GitHubAppAuth `yaml:"github_app"`
 }
 
 // FleetManager represents the Fleet ConfigManager configuration.
@@ -44,6 +63,8 @@ type FleetManager struct {
 	TokenExpiryCheckInterval *int   `yaml:"token_expiry_check_interval,omitempty"` // Check interval in seconds (default: 30)
 	TokenReconnectBuffer     *int   `yaml:"token_reconnect_buffer,omitempty"`      // Reconnect buffer in seconds before expiry (default: 120)
 	OTLPBridgeGRPCPort       *int   `yaml:"otlp_bridge_grpc_port,omitempty"`       // GRPC port for the OTLP bridge (default: 4317)
+	OTLPBridgeHTTPPort       *int   `yaml:"otlp_bridge_http_port,omitempty"`       // HTTP port for the OTLP bridge (default: 4318)
+	OTLPBridgeBindHost       string `yaml:"otlp_bridge_bind_host,omitempty"`       // Host both bridge listeners bind to (default: localhost; set 0.0.0.0 or :: to expose them)
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.

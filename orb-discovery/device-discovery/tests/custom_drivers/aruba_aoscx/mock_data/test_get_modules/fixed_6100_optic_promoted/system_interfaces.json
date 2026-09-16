@@ -1,0 +1,4 @@
+{
+  "1/1/49": {"name": "1/1/49", "hw_intf_info": {"mac_addr": "70:4d:7b:99:61:01", "max_speed": "10000", "pluggable": "true", "connector": "SFP+", "product_number": "SFP-10G-LR", "serial_number": "OPTIC0006100"}},
+  "1/1/1": {"name": "1/1/1", "hw_intf_info": {"mac_addr": "70:4d:7b:99:61:02", "max_speed": "1000"}}
+}

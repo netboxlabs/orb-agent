@@ -1,0 +1,10 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "1", "position": "1", "module": {"model": "3HE09576AA", "serial": "NS-IOM1-001", "description": "iom4-e", "type": "linecard", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

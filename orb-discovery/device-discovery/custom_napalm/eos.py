@@ -24,6 +24,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -103,7 +104,12 @@ def _eos_port_to_switchport_info(port_data: dict) -> SwitchportInfo:
 _EOS_LINECARD_RE = re.compile(r"^Linecard(\d+)$", re.IGNORECASE)
 _EOS_SUPERVISOR_RE = re.compile(r"^Supervisor(\d+)$", re.IGNORECASE)
 _EOS_FABRIC_RE = re.compile(r"^Fabric(\d+)$", re.IGNORECASE)
-_EOS_PORT_RE = re.compile(r"^Ethernet(\d+)(?:/\d+)+$", re.IGNORECASE)
+_EOS_PORT_RE = re.compile(r"^Ethernet(\d+)(?:/\d+)*$", re.IGNORECASE)
+# Bare EthernetN (no slash) is Arista's fixed-switch signature: cardSlots is
+# always empty on those devices, and a slashed EthernetN/P name never occurs
+# without cardSlots populated. Distinguishes promotion (bare) from decline
+# (slashed) in _eos_attach_transceivers — matching stays on _EOS_PORT_RE.
+_EOS_BARE_PORT_RE = re.compile(r"^Ethernet\d+$", re.IGNORECASE)
 
 
 def classify_module_type_arista_eos(pid: str, name: str) -> str:
@@ -173,14 +179,50 @@ def _eos_extract_card_bays(card_slots: dict) -> tuple[dict[str, _ModuleBay], dic
     return sup_bays, lc_bays
 
 
-def _eos_attach_transceivers(xcvr_slots: dict, lc_bays: dict[str, _ModuleBay]) -> dict[str, list[str]]:
+def _eos_claimed_linecard_slots(card_slots: dict) -> set[str]:
+    """
+    Collect every ``LinecardN`` slot number the RAW ``cardSlots`` payload names.
+
+    Reads the keys of the raw payload directly — before ``_eos_extract_card_bays``
+    filters on ``pid and sn`` usability or on type classification — so a
+    linecard slot the device named but whose row was unusable still counts
+    as claimed. Fabric and Supervisor keys are excluded on purpose: ports
+    are named by LINECARD slot number, so e.g. a ``Fabric3`` key must not
+    claim slot 3 for an unrelated linecard.
+    """
+    claimed: set[str] = set()
+    for slot_name in card_slots:
+        match = _EOS_LINECARD_RE.match(slot_name)
+        if match:
+            claimed.add(match.group(1))
+    return claimed
+
+
+def _eos_attach_transceivers(
+    xcvr_slots: dict, lc_bays: dict[str, _ModuleBay], claimed_linecard_slots: set[str],
+) -> dict[str, list[str]]:
     """
     Attach optic sub-bays from ``xcvrSlots`` to their parent linecard.
 
     Matches each port's leading integer to the linecard's trailing slot
     integer (e.g. ``Ethernet1/1`` → ``Linecard1``); supervisors never
-    carry transceiver sub-bays. Mutates the matched ``lc_bays`` entries'
-    ``module.sub_bays`` in place and returns ``interfaces_by_bay``.
+    carry transceiver sub-bays. Fixed switches report bare port names with
+    no sub-slot (e.g. ``Ethernet1``) and no ``cardSlots`` entries at all;
+    when no linecard bay matches, the optic is promoted to a device-rooted
+    bay instead of being dropped. Mutates ``lc_bays`` in place — both the
+    matched entries' ``module.sub_bays`` and, for orphans, ``lc_bays``
+    itself — and returns ``interfaces_by_bay``.
+
+    ``claimed_linecard_slots`` (see ``_eos_get_modules_impl``) names every
+    ``LinecardN`` slot the RAW ``cardSlots`` payload already named. An optic
+    whose slot has no bay but IS claimed is declined rather than promoted —
+    the linecard exists in hardware, just missing from ``lc_bays`` because
+    its own row was unusable, so promoting the optic here would invent a
+    chassis-level topology instead of reporting the real modular one. This
+    is a second line of defence: the primary gate is the bare/slashed name
+    check below, which also catches a ``LinecardN`` slot ``cardSlots``
+    omits entirely (no row at all to claim it) rather than merely names
+    unusably.
     """
     interfaces_by_bay: dict[str, list[str]] = {}
     for ifname, entry in xcvr_slots.items():
@@ -197,15 +239,29 @@ def _eos_attach_transceivers(xcvr_slots: dict, lc_bays: dict[str, _ModuleBay]) -
         slot_num = port_match.group(1)
         parent_name = f"Linecard{slot_num}"
         parent = lc_bays.get(parent_name)
+        optic = _ModuleEntry(
+            model=pid, serial=sn, type="transceiver", description=descr,
+        )
         if parent is None or parent.module is None:
-            continue
-        parent.module.sub_bays.append(_ModuleBay(
-            name=ifname, position=ifname,
-            module=_ModuleEntry(
-                model=pid, serial=sn, type="transceiver", description=descr,
-            ),
-        ))
-        interfaces_by_bay.setdefault(parent_name, []).append(ifname)
+            if not _EOS_BARE_PORT_RE.match(ifname):
+                logger.debug(
+                    "eos.get_modules: declining promotion of %s (slashed port name implies a modular chassis; only a bare name promotes)",
+                    ifname,
+                )
+                continue
+            if slot_num in claimed_linecard_slots:
+                logger.debug(
+                    "eos.get_modules: declining promotion of %s onto slot %s (cardSlots claims %s but its row was unusable)",
+                    ifname, slot_num, parent_name,
+                )
+                continue
+            # Fixed switches report optics with no linecard above them.
+            lc_bays[ifname] = orphan_optic_bay(ifname, optic)
+        else:
+            parent.module.sub_bays.append(_ModuleBay(
+                name=ifname, position=ifname, module=optic,
+            ))
+            interfaces_by_bay.setdefault(parent_name, []).append(ifname)
         # Self-route the optic under its own sub-bay name so the translator's
         # deepest-wins logic links the interface to the transceiver (not the
         # parent linecard) in full mode. Mirrors ios.py:_attach_transceivers.
@@ -225,10 +281,23 @@ def _eos_get_modules_impl(driver) -> dict | None:
     name; the emitted bay ``name`` is the slot name (``"Supervisor1"``,
     ``"Linecard1"``) and ``position`` is the trailing integer.
 
-    Returns None on:
+    Fixed switches report empty ``cardSlots`` with optics listed directly
+    under BARE port names in ``xcvrSlots`` (``Ethernet1``, no slash) —
+    Arista is the only vendor that drops the slot element on a fixed
+    switch. Only a bare name promotes to a device-rooted bay (see
+    ``_EOS_BARE_PORT_RE`` in ``_eos_attach_transceivers``); a slashed
+    ``EthernetN/P`` name means a modular chassis and is never promoted,
+    even when the corresponding ``LinecardN`` is entirely absent from
+    ``cardSlots`` — Arista has no ``show module`` equivalent to cross-check
+    slot occupancy against, so the bare/slashed distinction stands in for
+    it. An optic whose slot IS named by the raw ``cardSlots`` payload
+    (``claimed_linecard_slots``, from ``_eos_claimed_linecard_slots``) but
+    has no usable bay is declined as a second line of defence — that
+    linecard exists in hardware, it just didn't survive
+    ``_eos_extract_card_bays``'s usability filter. Returns None on:
       - eAPI call failure.
-      - Empty cardSlots (fixed switch / unrecognized chassis).
-      - No Supervisor / Linecard / Fabric entries survive classification.
+      - No Supervisor / Linecard / Fabric entries survive classification
+        AND no transceiver was recognized either.
     """
     try:
         response = driver._run_commands(
@@ -243,11 +312,11 @@ def _eos_get_modules_impl(driver) -> dict | None:
     card_slots = payload.get("cardSlots") or {}
     xcvr_slots = payload.get("xcvrSlots") or {}
 
+    claimed_linecard_slots = _eos_claimed_linecard_slots(card_slots)
     sup_bays, lc_bays = _eos_extract_card_bays(card_slots)
+    interfaces_by_bay = _eos_attach_transceivers(xcvr_slots, lc_bays, claimed_linecard_slots)
     if not (sup_bays or lc_bays):
         return None
-
-    interfaces_by_bay = _eos_attach_transceivers(xcvr_slots, lc_bays)
 
     # Merge sup + linecard bays; supervisors listed first to match the
     # natural chassis presentation order.
@@ -301,7 +370,8 @@ class EOSDriver(NapalmEOSDriver):
         Return Module / ModuleBay inventory for an Arista modular chassis.
 
         Standalone modular only — Arista MLAG is peer-to-peer, not a
-        virtual chassis. Returns None for fixed switches and chassis
-        with no recognized cardSlots entries.
+        virtual chassis. Fixed switches report optics with no cardSlots
+        parent; those become device-rooted bays. Returns None only when
+        neither a card bay nor a transceiver was recognized.
         """
         return _eos_get_modules_impl(self)

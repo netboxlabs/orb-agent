@@ -19,6 +19,33 @@ from device_discovery.proto_presence import copy_scalar_if_set
 logger = logging.getLogger(__name__)
 
 
+def vrf_match_key(vrf: pb.VRF) -> tuple[str, ...]:
+    """
+    Return the identity the ipam.vrf matchers resolve this VRF by.
+
+    Anything that asks "do these two messages denote one NetBox VRF" has to use
+    this rather than the serialized message: two VRFs can carry different
+    descriptions or tags and still resolve to the same record.
+
+    The plugin's matchers for ipam.vrf are, in precedence order:
+
+        logical_vrf_name_no_tenant      name            rd IS NULL, tenant IS NULL
+        logical_vrf_name_within_tenant  name, tenant    rd IS NULL, tenant NOT NULL
+        unique_rd                       rd              always
+
+    Both name matchers are conditional on rd being NULL, so an rd-bearing VRF is
+    resolved by its rd alone. That makes the rd the whole identity when present:
+    two VRFs with one rd and different names are the same record, and keying on
+    the pair would treat them as two.
+
+    A VRF tenant would join the no-rd branch, but VrfParameters exposes only
+    name and rd, so nothing can set one today. Add it here if that changes.
+    """
+    if vrf.rd:
+        return ("rd", vrf.rd)
+    return ("name", vrf.name)
+
+
 def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
     """
     Return a VRF carrying only matcher identifiers (name, rd).

@@ -2,7 +2,10 @@
 # Copyright 2026 NetBox Labs Inc
 """NetBox Labs - Policy Models Unit Tests."""
 
+import logging
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from device_discovery.policy.models import Options
@@ -121,3 +124,103 @@ def test_options_propagate_defaults_to_prefix_scope_accepts_true():
 
     o = Options(propagate_defaults_to_prefix_scope=True)
     assert o.propagate_defaults_to_prefix_scope is True
+
+
+def test_options_emit_prefix_vlan_defaults_off():
+    """emit_prefix_vlan defaults to the 'off' mode string."""
+    assert Options().emit_prefix_vlan == "off"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The literal the README tells operators to write. YAML 1.1 parses a
+        # bare `off` as the boolean False, so the option must survive that.
+        ("emit_prefix_vlan: off", "off"),
+        ("emit_prefix_vlan: 'off'", "off"),
+        ("emit_prefix_vlan: svi-name", "svi-name"),
+        # Case and surrounding whitespace are normalised at the model
+        # boundary, exactly as the snmp-discovery twin does.
+        ("emit_prefix_vlan: SVI-Name", "svi-name"),
+        ("emit_prefix_vlan: SVI-NAME", "svi-name"),
+        ("emit_prefix_vlan: '  svi-name  '", "svi-name"),
+        # The mode was called `corroborated` while this was in review. It never
+        # shipped, so the old spelling is simply not a mode: it disables the
+        # feature with a warning rather than silently keeping the old meaning.
+        ("emit_prefix_vlan: corroborated", "off"),
+        ("emit_prefix_vlan: Off", "off"),
+        # An explicit null is the same as omitting the option.
+        ("emit_prefix_vlan:", "off"),
+    ],
+)
+def test_options_emit_prefix_vlan_from_policy_yaml(text, expected):
+    """The option loads from the literal policy YAML text, not just a dict."""
+    opts = Options(**yaml.safe_load(text))
+    assert opts.emit_prefix_vlan == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["emit_prefix_vlan: on", "emit_prefix_vlan: yes", "emit_prefix_vlan: true"],
+)
+def test_options_emit_prefix_vlan_boolean_true_disables_rather_than_raising(text, caplog):
+    """
+    A bare on/yes/true names no mode, so it disables the feature.
+
+    It must not raise. The snmp-discovery twin's decoder hands these to
+    PrefixVlanMode as the string they were written as, and anything
+    unrecognized there resolves to 'off'. Raising here would make one policy
+    text valid for that backend and fatal for this one.
+    """
+    with caplog.at_level(logging.WARNING):
+        opts = Options(**yaml.safe_load(text))
+    assert opts.emit_prefix_vlan == "off"
+    assert any("names no mode" in r.getMessage() for r in caplog.records), (
+        "a value that silently disables the feature must be discoverable in the log"
+    )
+
+
+def _scope(hostname: str) -> dict:
+    return {"hostname": hostname, "username": "u", "password": "p"}
+
+
+def test_policy_rejects_targets_that_together_exceed_the_budget():
+    """
+    The budget spans the policy, not one entry.
+
+    This is the hole a per-entry ceiling leaves: each of these scopes is well
+    under the limit on its own, so an entry-by-entry check waves the whole
+    policy through while it expands to roughly a million addresses.
+    """
+    from device_discovery.policy.models import MAX_EXPANDED_HOSTS, Policy
+
+    scopes = [_scope(f"10.{octet}.0.0/16") for octet in range(16)]
+    assert all(
+        h < MAX_EXPANDED_HOSTS
+        for h in (65534,) * len(scopes)
+    ), "each scope must be individually legal for this test to mean anything"
+
+    with pytest.raises(ValidationError) as excinfo:
+        Policy(scope=scopes)
+
+    message = str(excinfo.value)
+    assert "expand" in message
+    assert str(MAX_EXPANDED_HOSTS) in message
+
+
+def test_policy_accepts_targets_within_the_budget():
+    """A policy under the budget is untouched by the guard."""
+    from device_discovery.policy.models import Policy
+
+    policy = Policy(scope=[_scope("10.0.0.0/24"), _scope("10.1.0.0/24")])
+
+    assert len(policy.scope) == 2
+
+
+def test_policy_budget_ignores_plain_hostnames():
+    """A hostname counts as the single address it expands to, not as a range."""
+    from device_discovery.policy.models import Policy
+
+    policy = Policy(scope=[_scope(f"router-{n}.example.com") for n in range(200)])
+
+    assert len(policy.scope) == 200

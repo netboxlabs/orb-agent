@@ -103,12 +103,18 @@ type MockMQTTConnection struct {
 	DisconnectError error
 	ReconnectError  error
 
+	// OnDisconnect, when set, runs inside Disconnect with its context, so a
+	// test can hold the disconnect until that context ends.
+	OnDisconnect func(ctx context.Context)
+
 	// guarded by mu — written from the goroutine under test, read from test goroutines
 	connectCalled      bool
 	disconnectCalled   bool
 	lastConnectDetails ConnectionDetails
 
 	hooks []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+
+	resetter Resetter
 }
 
 // ConnectCalled returns whether Connect has been called (safe for concurrent use).
@@ -142,10 +148,13 @@ func (m *MockMQTTConnection) Connect(_ context.Context, _ context.Context, detai
 }
 
 // Disconnect disconnects from the MQTT broker
-func (m *MockMQTTConnection) Disconnect(_ context.Context, _ string) error {
+func (m *MockMQTTConnection) Disconnect(ctx context.Context, _ string) error {
 	m.mu.Lock()
 	m.disconnectCalled = true
 	m.mu.Unlock()
+	if m.OnDisconnect != nil {
+		m.OnDisconnect(ctx)
+	}
 	return m.DisconnectError
 }
 
@@ -162,6 +171,21 @@ func (m *MockMQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManag
 // RegisterTopicHandler registers a handler for a specific topic (mock implementation)
 func (m *MockMQTTConnection) RegisterTopicHandler(_ string, _ TopicMessageHandler) {
 	// No-op for mock
+}
+
+// SetResetter records the resetter it was given.
+func (m *MockMQTTConnection) SetResetter(r Resetter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetter = r
+}
+
+// ResetterForTest returns the resetter most recently passed to SetResetter,
+// for tests to observe (safe for concurrent use).
+func (m *MockMQTTConnection) ResetterForTest() Resetter {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resetter
 }
 
 // TriggerOnReadyHook triggers all registered onReady hooks (for testing)

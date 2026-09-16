@@ -41,6 +41,9 @@ type RunStateInfo struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	Targets     []string  `json:"targets,omitempty"`
 	Driver      string    `json:"driver,omitempty"`
+	// Kind distinguishes runs describing different work. See
+	// backend.PolicyStatusRun.Kind.
+	Kind string `json:"kind,omitempty"`
 }
 
 // PolicyStateInfo contains state information for a policy
@@ -100,6 +103,7 @@ type Heartbeat struct {
 	SchemaVersion string                      `json:"schema_version"`
 	TimeStamp     time.Time                   `json:"ts"`
 	State         State                       `json:"state"`
+	LastRestartTS time.Time                   `json:"last_restart_ts,omitempty"`
 	BackendState  map[string]BackendStateInfo `json:"backend_state"`
 	PolicyState   map[string]PolicyStateInfo  `json:"policy_state"`
 	GroupState    map[string]GroupStateInfo   `json:"group_state"`

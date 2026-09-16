@@ -1,0 +1,61 @@
+# Profile is intended to be used in an extends block
+# http://oid-info.com/get/1.3.6.1.2.1.25
+---
+metrics:
+  - MIB: HOST-RESOURCES-MIB
+    symbols:
+      - OID: 1.3.6.1.2.1.25.1.1.0
+        name: hrSystemUptime
+      - OID: 1.3.6.1.2.1.25.1.5.0
+        name: hrSystemNumUsers
+      - OID: 1.3.6.1.2.1.25.1.6.0
+        name: hrSystemProcesses
+      - OID: 1.3.6.1.2.1.25.1.7.0
+        name: hrSystemMaxProcesses
+
+  - MIB: HOST-RESOURCES-MIB
+    table:
+      OID: 1.3.6.1.2.1.25.2.3
+      name: hrStorageTable
+    symbols:
+      - OID: 1.3.6.1.2.1.25.2.3.1.4
+        name: hrStorageAllocationUnits
+      - OID: 1.3.6.1.2.1.25.2.3.1.5
+        name: hrStorageSize
+      - OID: 1.3.6.1.2.1.25.2.3.1.6
+        name: hrStorageUsed
+      - OID: 1.3.6.1.2.1.25.2.3.1.7
+        name: hrStorageAllocationFailures
+    metric_tags:
+      - tag: storage_description
+        column:
+          OID: 1.3.6.1.2.1.25.2.3.1.3
+          name: hrStorageDescr
+      - tag: storage_type
+        column:
+          OID: 1.3.6.1.2.1.25.2.3.1.2
+          name: hrStorageType
+          enum: 
+            Other: 1
+            Ram: 2
+            VirtualMemory: 3
+            FixedDisk: 4
+            RemovableDisk: 5
+            FloppyDisk: 6
+            CompactDisc: 7
+            RamDisk: 8
+            FlashMemory: 9
+            NetworkDisk: 10
+            
+  - MIB: HOST-RESOURCES-MIB
+    table:
+      OID: 1.3.6.1.2.1.25.3.3
+      name: hrProcessorTable
+    symbols:
+      - OID: 1.3.6.1.2.1.25.3.3.1.2
+        name: hrProcessorLoad
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.2.1.25.3.2.1.3
+          name: hrDeviceDescr
+        tag: processor_description

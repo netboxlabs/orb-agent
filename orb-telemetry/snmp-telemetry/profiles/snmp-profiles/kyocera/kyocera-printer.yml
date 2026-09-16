@@ -1,0 +1,74 @@
+# http://www.oidview.com/mibs/1347/KYOCERA.html
+---
+
+extends:
+  - system-mib.yml
+  - if32-mib.yml
+
+provider: kentik-printer
+
+sysobjectid: 1.3.6.1.4.1.1347.41   # Kyocera Printer
+
+metrics:
+  # No CPU load OID is available from walks or documented in MIB
+
+  # Alerts
+  - MIB: KYOCERA-PRIVATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.1347.43.18.2
+      name: kcprtAlertStateTable
+    symbols:
+      - OID: 1.3.6.1.4.1.1347.43.18.2.1.3
+        name: kcprtAlertStateCode
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.1347.43.18.2.1.2
+          name: kcprtAlertStateDisplay
+
+  # Memory devices
+  - MIB: KYOCERA-PRIVATE-MIB
+    table: 
+      OID: 1.3.6.1.4.1.1347.43.20
+      name: kcprtMemoryResource	
+    symbols:
+      - OID: 1.3.6.1.4.1.1347.43.20.1.1.4
+        name: kcprtMemoryDeviceTotalSize
+      - OID: 1.3.6.1.4.1.1347.43.20.1.1.5
+        name: kcprtMemoryDeviceUsedSize
+      - OID: 1.3.6.1.4.1.1347.43.20.1.1.6
+        name: kcprtMemoryDeviceStatus	
+        enum:
+          readyReadWrite: 0
+          readyReadOnly: 1
+          notAccessible: 2
+          lowBattery: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.1347.43.20.1.1.2
+          name: kcprtMemoryDeviceLocation	
+          enum:
+            IcCardSlot_A: 0
+            IcCardslot_B: 1
+            OptionROMsocket: 2
+            ResidentFont: 3
+            DownloadArea: 4
+            others: 255
+      - column:
+          OID: 1.3.6.1.4.1.1347.43.20.1.1.3
+          name: kcprtMemoryDeviceType	
+          enum:
+            rom: 0
+            flash: 1
+            sram: 2
+            dram: 3 
+            others: 255
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.1347.43.5.1.1.1.1
+      name: kcprtGeneralModelName
+    tag: model
+  - column:
+      OID: 1.3.6.1.4.1.1347.43.5.1.1.28.1
+      name: kcprtSerialNumber
+    tag: serial

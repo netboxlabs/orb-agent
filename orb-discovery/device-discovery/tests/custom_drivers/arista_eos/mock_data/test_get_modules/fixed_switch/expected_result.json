@@ -1,1 +1,20 @@
-null
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "Ethernet1",
+          "position": "Ethernet1",
+          "module": {
+            "model": "QSFP-40G-SR4",
+            "serial": "XCV12350001",
+            "description": "QSFP-40G-SR4",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {"Ethernet1": ["Ethernet1"]}
+    }
+  }
+}

@@ -1,0 +1,205 @@
+# http://oid-info.com/get/1.3.6.1.4.1.12124
+# https://circitor.fr/Mibs/Html/I/ISILON-MIB.php
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-nas
+
+sysobjectid: 
+  - 1.3.6.1.4.1.12124.*
+
+metrics:
+  # CPU and Memory
+  - MIB: ISILON-MIB
+    symbols:
+      # Average amount of idle CPU time (per mil) averaged for all nodes over the last 5 seconds.
+      # Polled at 60s to support anomaly detection.
+      - name: clusterCPUIdlePct
+        OID: 1.3.6.1.4.1.12124.1.2.3.5.0
+        poll_time_sec: 60
+        # This script converts the per mil results into a proper percentage for CPU
+        script: |
+          def main(n):
+            cpuim = n["clusterCPUIdlePct"]
+            if cpuim <= 1000:
+              n["CPU"] = (1000 - cpuim) * 0.1
+            return None
+  - MIB: UCD-SNMP-MIB
+    symbols:
+      # The total amount of real/physical memory installed on this host.
+      # Polled at 60s to support anomaly detection
+      - name: memTotalReal
+        OID: 1.3.6.1.4.1.2021.4.5.0
+        poll_time_sec: 60
+        tag: MemoryTotal
+      # The amount of real/physical memory currently unused or available.
+      # Polled at 60s to support anomaly detection
+      - name: memAvailReal
+        OID: 1.3.6.1.4.1.2021.4.6.0
+        poll_time_sec: 60
+        tag: MemoryFree
+
+  # Scalar OIDs
+  - MIB: ISILON-MIB
+    symbols:
+      # The overall health of the cluster.
+      - name: clusterHealth
+        OID: 1.3.6.1.4.1.12124.1.1.2.0
+        enum:
+          ok: 0
+          attn: 1
+          down: 2
+          invalid: 3
+      # The cumulative number of bytes into /ifs.
+      - name: clusterIfsInBytes
+        OID: 1.3.6.1.4.1.12124.1.2.1.1.0
+      # The cumulative number of bytes out of /ifs.
+      - name: clusterIfsOutBytes
+        OID: 1.3.6.1.4.1.12124.1.2.1.3.0
+      # The total cluster capacity of the /ifs filesystem in bytes.
+      - name: ifsTotalBytes
+        OID: 1.3.6.1.4.1.12124.1.3.1.0
+      # The number of bytes used in the /ifs filesystem.
+      - name: ifsUsedBytes
+        OID: 1.3.6.1.4.1.12124.1.3.2.0
+      # The overall health of the node.
+      - name: nodeHealth
+        OID: 1.3.6.1.4.1.12124.2.1.2.0
+        enum:
+          ok: 0
+          attn: 1
+          down: 2
+          invalid: 3
+      # The number of bytes into /ifs through this node.
+      - name: nodeIfsInBytes
+        OID: 1.3.6.1.4.1.12124.2.2.1.1.0
+      # The number of bytes out of /ifs through this node.
+      - name: nodeIfsOutBytes
+        OID: 1.3.6.1.4.1.12124.2.2.1.3.0
+
+  # A table of specific directory, user, and group quotas.
+  - MIB: ISILON-MIB
+    table:
+      name: quotaTable
+      OID: 1.3.6.1.4.1.12124.1.12.1
+    symbols:
+      # The hard threshold in bytes.
+      - name: quotaHardThreshold
+        OID: 1.3.6.1.4.1.12124.1.12.1.1.7
+      # The soft threshold in bytes.
+      - name: quotaSoftThreshold
+        OID: 1.3.6.1.4.1.12124.1.12.1.1.9
+      # The advisory threshold in bytes.
+      - name: quotaAdvisoryThreshold
+        OID: 1.3.6.1.4.1.12124.1.12.1.1.11
+      # The current quota usage in bytes.
+      - name: quotaUsage
+        OID: 1.3.6.1.4.1.12124.1.12.1.1.13
+    metric_tags:
+      # The type of quota.
+      - column:
+          name: quotaType
+          OID: 1.3.6.1.4.1.12124.1.12.1.1.2
+          enum:
+            defaultUser: 0
+            user: 1
+            defaultGroup: 2
+            group: 3
+            directory: 4
+            special: 5
+            max: 6
+      # The user or group ID governed by this quota, if this is a user or group quota; otherwise 0.
+      - column:
+          name: quotaID
+          OID: 1.3.6.1.4.1.12124.1.12.1.1.3
+
+  # A list of disk state and properties for all disk in the node including expansion chassis.
+  - MIB: ISILON-MIB
+    table:
+      name: diskTable
+      OID: 1.3.6.1.4.1.12124.2.52
+    symbols:
+      # The operational status of the disk. Gone drives are considered not part of /ifs.
+      # Commonly returned values include (but not limited to): HEALTHY, L3, DEAD, SMARTFAIL
+      - name: diskStatus
+        OID: 1.3.6.1.4.1.12124.2.52.1.5
+        conversion: to_one
+      # The size of the disk in bytes.
+      - name: diskSizeBytes
+        OID: 1.3.6.1.4.1.12124.2.52.1.9
+    metric_tags:
+      # The bay that contains the disk.
+      - column:
+          name: diskBay
+          OID: 1.3.6.1.4.1.12124.2.52.1.1
+      # The device name for this disk.
+      - column:
+          name: diskDeviceName
+          OID: 1.3.6.1.4.1.12124.2.52.1.4
+      # The manufacture and model name of the disk.
+      - column:
+          name: diskModel
+          OID: 1.3.6.1.4.1.12124.2.52.1.6
+      # The serial number of the disk.
+      - column:
+          name: diskSerialNumber
+          OID: 1.3.6.1.4.1.12124.2.52.1.7
+      # The firmware version installed on the disk.
+      - column:
+          name: diskFirmwareVersion
+          OID: 1.3.6.1.4.1.12124.2.52.1.8
+
+  # A table of fans in the node including expansion chassis.
+  - MIB: ISILON-MIB
+    table:
+      name: fanTable
+      OID: 1.3.6.1.4.1.12124.2.53
+    symbols:
+      # The current speed of the fan in revolutions per minute.
+      - name: fanSpeed
+        OID: 1.3.6.1.4.1.12124.2.53.1.4
+    metric_tags:
+      # The name of the fan.
+      - column:
+          name: fanName
+          OID: 1.3.6.1.4.1.12124.2.53.1.2
+      # The description of the fan.
+      - column:
+          name: fanDescription
+          OID: 1.3.6.1.4.1.12124.2.53.1.3
+
+  # Per-protocol performance metrics and statistics.
+  - MIB: ISILON-MIB
+    table:
+      name: nodeProtocolPerfTable
+      OID: 1.3.6.1.4.1.12124.2.2.10
+    symbols:
+      # The number of operations per second for the last 5 second.
+      - name: protocolOpsPerSecond
+        OID: 1.3.6.1.4.1.12124.2.2.10.1.3
+      # The average latency in microseconds for all operations for the protocol.
+      - name: latencyAverage
+        OID: 1.3.6.1.4.1.12124.2.2.10.1.16
+    metric_tags:
+      # The name of the protocol.
+      - column:
+          name: protocolName
+          OID: 1.3.6.1.4.1.12124.2.2.10.1.1
+
+metric_tags:
+  # The name of the cluster.
+  - column:
+      name: clusterName
+      OID: 1.3.6.1.4.1.12124.1.1.1.0
+  # The hostname of the node.
+  - column:
+      name: nodeName
+      OID: 1.3.6.1.4.1.12124.2.1.1.0
+  # The general type of the node.
+  - column:
+      name: nodeType
+      OID: 1.3.6.1.4.1.12124.2.1.3.0
+      enum:
+        storage: 0
+        accelerator: 1

@@ -6,7 +6,9 @@ Adds three optional extension methods on top of upstream NAPALM Junos:
 
 - ``get_interfaces_vlans()``: per-interface VLAN classification from the
   ``<get-ethernet-switching-interface-information>`` RPC, tolerating both
-  ELS and non-ELS XML wrappers. v1 skips voice VLAN (Junos voip semantics
+  ELS and non-ELS XML wrappers, and from
+  ``<get-ethernet-switching-interface-details>`` where an ELS switch refuses
+  the first as a syntax error. v1 skips voice VLAN (Junos voip semantics
   differ from the Cisco family).
 - ``get_chassis_members()``: Virtual Chassis topology from the
   ``<get-virtual-chassis-information>`` RPC, returning the vendor-neutral
@@ -37,6 +39,7 @@ XML parsing notes
 
 import logging
 import re
+from ipaddress import ip_address
 
 from jnpr.junos.exception import RpcError
 from lxml import etree
@@ -58,13 +61,23 @@ from custom_napalm._modules import (
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
 )
-from custom_napalm._vlan import SwitchportInfo, classify_switchport
+from custom_napalm._vlan import SwitchportInfo, classify_switchport, coerce_vid
 
 logger = logging.getLogger(__name__)
 
 
 def _localname(elem) -> str:
-    """Return the namespace-stripped local name of an element."""
+    """
+    Return the namespace-stripped local name of an element, or "" if it has none.
+
+    Comments and processing instructions carry a callable tag rather than a
+    string, and QName raises on those. They reach us because ncclient's Junos
+    reply transform copies them through, so every lookup built on this would
+    otherwise raise on a reply that merely carries a comment. Returning "" makes
+    them simply not match any name.
+    """
+    if not isinstance(elem.tag, str):
+        return ""
     return etree.QName(elem.tag).localname
 
 
@@ -99,7 +112,205 @@ def _maybe_int(s: str) -> int | None:
         return None
 
 
-def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
+def _physical_name(ifname: str) -> str:
+    """
+    Map a Junos logical unit 0 to its physical interface.
+
+    ELS reports switching per logical unit, ``xe-0/0/19.0``, while NetBox
+    carries switchport mode and VLANs on the port itself, which NAPALM
+    emits as ``xe-0/0/19`` beside the unit. Unit 0 is the port's one L2
+    unit, so it maps to the port; any other unit keeps its own name and
+    matches the logical interface NAPALM emits for it.
+    """
+    return ifname[:-2] if ifname.endswith(".0") else ifname
+
+
+def _els_details_rows(root) -> tuple[list[str], dict[str, str | None], dict[str, list[int]], dict[str, int | None]]:
+    """
+    Collect the interfaces and VLAN rows of an ELS ``show ethernet-switching interface`` reply.
+
+    Under ``<l2ng-l2ald-iff-interface-information>``, each routing instance
+    is an entry holding a run of entries: one with a non-empty
+    ``<l2iff-interface-name>`` opens an interface, and its own
+    ``<l2iff-interface-vlan-member-tagness>`` says what the port is; the
+    entries that follow with an empty name, or in the detail form the same
+    name, are its VLANs, each with ``<l2iff-interface-vlan-id>`` and its
+    tagness. Returns the interfaces in order, their modes, tagged VIDs and
+    untagged VID.
+    """
+    order: list[str] = []
+    modes: dict[str, str | None] = {}
+    tagged: dict[str, list[int]] = {}
+    untagged: dict[str, int | None] = {}
+
+    def open_interface(name: str) -> None:
+        if name not in modes:
+            order.append(name)
+            modes[name] = None
+            tagged[name] = []
+            untagged[name] = None
+
+    current: str | None = None
+    for elem in root.iter():
+        if _localname(elem) != "l2ng-l2ald-iff-interface-entry":
+            continue
+        name = _text(_find_child(elem, "l2iff-interface-name"))
+        vid = _maybe_int(_text(_find_child(elem, "l2iff-interface-vlan-id")))
+        tagness = _text(_find_child(elem, "l2iff-interface-vlan-member-tagness")).lower()
+        if vid is None:
+            if name:
+                current = _physical_name(name)
+                open_interface(current)
+                modes[current] = {"tagged": "trunk", "untagged": "access"}.get(tagness)
+            continue
+        owner = _physical_name(name) if name else current
+        if owner is None:
+            continue
+        open_interface(owner)
+        if tagness == "untagged":
+            untagged[owner] = vid
+        else:
+            tagged[owner].append(vid)
+    return order, modes, tagged, untagged
+
+
+def _els_details_to_switchports(root) -> dict[str, dict]:
+    """
+    Classify the interfaces of an ELS ``show ethernet-switching interface`` reply.
+
+    An interface with no VLAN rows, a management port for one, is left out.
+    A port whose own row named no mode is a trunk when it carries tagged
+    VLANs and access otherwise.
+    """
+    order, modes, tagged, untagged = _els_details_rows(root)
+    result: dict[str, dict] = {}
+    for ifname in order:
+        if not tagged[ifname] and untagged[ifname] is None:
+            continue
+        mode = modes[ifname] or ("trunk" if tagged[ifname] else "access")
+        info = SwitchportInfo(
+            enabled=True,
+            admin_mode=mode,
+            oper_mode=None,
+            access_vlan=untagged[ifname],
+            native_vlan=untagged[ifname],
+            allowed_vlans=sorted(tagged[ifname]),
+        )
+        result[ifname] = classify_switchport(info)
+    return result
+
+
+def _vlan_name_resolver(driver):
+    """
+    Return a callable mapping a VLAN name to its id, built on first use.
+
+    Junos reports a member either by tag id or by name alone. A name can only be
+    turned into an id by asking the device's own VLAN table, which costs an RPC,
+    so the table is fetched the first time a nameless member is actually seen and
+    not at all on the devices that never report one. Once per call, that is: the
+    runner asks get_vlans for its own reasons just before this, and napalm does
+    not memoize it, so a device reporting any nameless member does pay for a
+    second round trip.
+
+    **Matched exactly, never case-folded.** On a measured EX4550 the VLAN table
+    holds ``MGMT`` at tag 20, while ``me0.0`` reports a member named ``mgmt``:
+    Junos puts the out-of-band management port in a pseudo-VLAN of that name that
+    is not in the switching space at all. Case-folding would bind the management
+    port to VLAN 20, which is wrong, and wrong silently. A name that differs in
+    case is a different name.
+
+    A name the table gives more than one id for is refused for the same reason
+    nothing else here guesses: the device is the only thing that could say which
+    was meant, and it has not.
+    """
+    cache: dict[str, int] = {}
+    loaded = False
+
+    def resolve(name: str) -> int | None:
+        nonlocal loaded
+        if not name:
+            return None
+        if not loaded:
+            loaded = True
+            cache.update(_vlan_ids_by_name(driver))
+        return cache.get(name)
+
+    return resolve
+
+
+def _vlan_ids_by_name(driver) -> dict[str, int]:
+    """Build name -> id from ``get_vlans()``, dropping names that are not unique."""
+    try:
+        vlans = driver.get_vlans() or {}
+    except Exception:
+        logger.debug("Junos get_vlans failed while resolving a VLAN name", exc_info=True)
+        return {}
+
+    ids_by_name: dict[str, set[int]] = {}
+    for vid, data in vlans.items():
+        name = (data or {}).get("name") or ""
+        parsed = _maybe_int(vid)
+        if not name or parsed is None:
+            continue
+        ids_by_name.setdefault(name, set()).add(parsed)
+
+    resolved: dict[str, int] = {}
+    for name, ids in ids_by_name.items():
+        if len(ids) > 1:
+            logger.warning(
+                "Junos VLAN name %r maps to %d ids (%s); not resolving members by that name",
+                name,
+                len(ids),
+                ", ".join(str(i) for i in sorted(ids)),
+            )
+            continue
+        resolved[name] = next(iter(ids))
+    return resolved
+
+
+def _members_to_vids(member_list, resolve_vlan_name) -> tuple[int | None, list[int], bool]:
+    """
+    Read one ``<interface-vlan-member-list>`` into (untagged, tagged, has-all).
+
+    A member carries its id in ``<interface-vlan-member-tagid>`` and its side of
+    the trunk in ``<interface-vlan-member-tagness>``. Where the id is absent the
+    name is put to the device's VLAN table; see _vlan_name_resolver.
+    """
+    members = _find_children(member_list, "interface-vlan-member") if member_list is not None else []
+
+    untagged_vid: int | None = None
+    tagged_vids: list[int] = []
+    has_all_member = False
+    for m in members:
+        name = _text(_find_child(m, "interface-vlan-name"))
+        if name.lower() == "all":
+            has_all_member = True
+            continue
+        # coerce_vid, not _maybe_int, so a value outside 1-4094 is refused here
+        # rather than counted as membership and dropped later. The difference is
+        # not cosmetic: a member with tagid 0 would otherwise make the port look
+        # like it has an untagged VLAN, infer access from that, and write
+        # mode=access to NetBox with no VLAN to go with it.
+        vid = coerce_vid(_text(_find_child(m, "interface-vlan-member-tagid")))
+        if vid is None and resolve_vlan_name is not None:
+            vid = coerce_vid(resolve_vlan_name(name))
+        if vid is None:
+            # Nothing names this member: either the table has no VLAN called
+            # that, or it has several. Warn so operators see the association go
+            # missing at default log levels rather than wondering.
+            logger.warning(
+                "Junos interface-vlan-member %r has no tagid and no VLAN of that exact name; skipping",
+                name,
+            )
+            continue
+        if "untagged" in _text(_find_child(m, "interface-vlan-member-tagness")).lower():
+            untagged_vid = vid
+        else:
+            tagged_vids.append(vid)
+    return untagged_vid, tagged_vids, has_all_member
+
+
+def _interface_to_switchport_info(intf_elem, resolve_vlan_name=None) -> SwitchportInfo:
     """
     Build a SwitchportInfo from one ``<interface>`` element.
 
@@ -110,9 +321,12 @@ def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
     VLAN membership is in ``<interface-vlan-member-list>`` containing
     ``<interface-vlan-member>`` entries with
     ``<interface-vlan-member-tagid>`` and
-    ``<interface-vlan-member-tagness>`` ("tagged"|"untagged"). Members
-    with only a name (no tagid) are dropped with a warning log — VLAN-name
-    resolution against ``self.get_vlans()`` is out-of-scope for v1.
+    ``<interface-vlan-member-tagness>`` ("tagged"|"untagged"). A member with
+    only a name is put to ``resolve_vlan_name`` when the caller supplies one,
+    and dropped with a warning when nothing names it.
+
+    Where the reply carries no mode element at all, the mode is read off the
+    membership; see the comment on that branch for which signals decide it.
     """
     # Mode — read whichever element is present
     mode_text = (
@@ -127,34 +341,42 @@ def _interface_to_switchport_info(intf_elem) -> SwitchportInfo:
     else:
         admin = None
 
-    native_vid = _maybe_int(_text(_find_child(intf_elem, "interface-native-vlan-id")))
+    # coerce_vid, for the same reason the member ids below use it, and with a
+    # sharper consequence: a native id is now a trunk signal, so an
+    # out-of-range or placeholder value would make a port a trunk AND be
+    # substituted for its real untagged member, which classify_switchport then
+    # rejects — leaving a port that has a VLAN reported as a trunk with none.
+    native_vid = coerce_vid(_text(_find_child(intf_elem, "interface-native-vlan-id")))
 
-    member_list = _find_child(intf_elem, "interface-vlan-member-list")
-    members = _find_children(member_list, "interface-vlan-member") if member_list is not None else []
+    untagged_vid, tagged_vids, has_all_member = _members_to_vids(
+        _find_child(intf_elem, "interface-vlan-member-list"), resolve_vlan_name
+    )
 
-    untagged_vid: int | None = None
-    tagged_vids: list[int] = []
-    has_all_member = False
-    for m in members:
-        name = _text(_find_child(m, "interface-vlan-name"))
-        if name.lower() == "all":
-            has_all_member = True
-            continue
-        vid = _maybe_int(_text(_find_child(m, "interface-vlan-member-tagid")))
-        tagness = _text(_find_child(m, "interface-vlan-member-tagness")).lower()
-        if vid is None:
-            # Member emitted with only a name (no tagid). v1 doesn't resolve
-            # names → IDs via self.get_vlans(); warn so operators see the
-            # missing association at default log levels.
-            logger.warning(
-                "Junos interface-vlan-member %r has no tagid; skipping (name resolution out-of-scope for v1)",
-                name,
-            )
-            continue
-        if "untagged" in tagness:
-            untagged_vid = vid
-        else:
-            tagged_vids.append(vid)
+    # No mode element, but the device did report memberships. Read the mode off
+    # them: a member the port carries tagged makes it a trunk, and a port with
+    # only an untagged member is an access port. This is the same conclusion the
+    # SNMP path draws from Q-BRIDGE, and it is what the plain form of this RPC
+    # leaves us — a measured EX4550 returns 56 memberships with no mode element
+    # anywhere, and without this every one of its ports read as routed and the
+    # whole switch reached NetBox with no VLAN associations at all.
+    #
+    # Checked against that device's own detailed reply, which does carry the
+    # mode: 11 of its 11 classifiable interfaces agree, none disagree. Inference
+    # is still the fallback rather than the rule, because a trunk carrying only
+    # an untagged member and no other trunk signal reads as access, and the mode
+    # element says so outright.
+    #
+    # Three things make a trunk here, not one. A member the port carries tagged
+    # is the obvious one. A member named "all" is a trunk-only construct, since
+    # "vlan members all" is only configurable under "port-mode trunk". And a
+    # native VLAN id is only meaningful on a trunk, which is what makes it the
+    # deciding signal for a port whose single member is untagged: without it
+    # that port is access, with it the untagged member is the native VLAN.
+    if admin is None:
+        if tagged_vids or has_all_member or native_vid is not None:
+            admin = "trunk"
+        elif untagged_vid is not None:
+            admin = "access"
 
     if admin == "trunk":
         allowed: list[int] | str | None = "all" if has_all_member else tagged_vids
@@ -706,6 +928,282 @@ def _junos_get_modules_impl(driver) -> dict | None:
     return _junos_modules_from_standalone(driver, rpc_root)
 
 
+_EXPECTED_VIRTUAL_TAG = "virtual-ip-address"
+
+# Element names already reported, so an unrecognised spelling is logged once per
+# process rather than once per address per cycle. The expected name is not
+# corroborated by any published source, so on a device using a different one an
+# unbounded line would be permanent noise.
+_UNEXPECTED_TAGS_SEEN: set[str] = set()
+
+
+def _note_unexpected_tag(ifname: str, address: str, name: str) -> None:
+    """
+    Log once per element name that is not the expected one.
+
+    The element carrying a virtual address is matched by shape rather than by a
+    verified name. The case worth surfacing is a match on an address the driver
+    never reported as an interface address: nothing is suppressed then, so no
+    other line is emitted and a wrong match would leave no trace.
+    """
+    if name == _EXPECTED_VIRTUAL_TAG or name in _UNEXPECTED_TAGS_SEEN:
+        return
+    _UNEXPECTED_TAGS_SEEN.add(name)
+    logger.info(
+        "%s: matched virtual address %s via unexpected element <%s>",
+        ifname,
+        address,
+        name,
+    )
+
+
+def _normalise_ip(value: str) -> str:
+    """Return the address without any mask, compressed, or the input unchanged."""
+    bare = (value or "").split("/", 1)[0].strip()
+    try:
+        return ip_address(bare).compressed
+    except ValueError:
+        return value
+
+
+# The three address roles VRRP output distinguishes: the virtual address, the
+# local (this router's own) address, and the master's address. Only the first
+# may be suppressed; collecting either of the others would remove a real
+# interface address.
+_VIRTUAL_ROLE = "vip"
+_REAL_ADDRESS_ROLES = frozenset({"lcl", "mas"})
+
+
+def _is_virtual_address_tag(name: str) -> bool:
+    """
+    Recognise a virtual address carried by the element's own name.
+
+    No published source corroborates the exact element name, so match local
+    names that contain "virtual" and end in "address", plus the bare "vip"
+    form.
+    """
+    return name == _VIRTUAL_ROLE or ("virtual" in name and name.endswith("address"))
+
+
+# Element names that may take a role from an adjacent type value. Deliberately
+# exact and deliberately tiny: a substring test matched names like
+# local-interface-address, so a vip role leaked onto the interface's own
+# address and suppressed it. Add a name here only once a real capture shows it.
+_ROLE_VALUE_TAGS = frozenset({"address"})
+
+
+def _role_value(el) -> str:
+    """Return the address role this element declares, lowercased, or ""."""
+    text = _text(el).strip().lower()
+    if text == _VIRTUAL_ROLE or text in _REAL_ADDRESS_ROLES:
+        return text
+    return ""
+
+
+def _roles_by_element(entry) -> tuple[dict, set]:
+    """
+    Map elements under ``entry`` to their address role, and mark real pairings.
+
+    Returns the role that applies to each element, used to veto anything a
+    reply declares as lcl or mas, and the set of elements that actually
+    consumed a role. A role pairs with one recognised value element and is then
+    spent, so a later element cannot inherit it.
+
+    Junos can carry the role as a value rather than in the element name. That
+    can be one row per container, or a flat run of repeated type/address pairs
+    under a single parent. A role therefore has to be paired with the address it
+    precedes, not with any role found somewhere among the siblings: on a flat
+    run every address would otherwise inherit whichever role appeared first,
+    which either misses the virtual address entirely or suppresses the
+    interface's own address along with it.
+
+    Document order carries the association, so each element takes the role most
+    recently declared before it within its own parent. Only that direction is
+    supported: the label precedes the value in the output this was derived from
+    ("lcl <addr> / vip <addr>"), and a run of pairs cannot be read both ways at
+    once. An address with no role declared before it is left unroled, so it is
+    not suppressed. Guessing the other direction is the dangerous one, since it
+    would attach a virtual role to a real address.
+    """
+    roles: dict = {}
+    paired: set = set()
+    for parent in entry.iter():
+        if not isinstance(parent.tag, str):
+            continue
+        in_effect = ""
+        for child in parent:
+            if not isinstance(child.tag, str):
+                continue
+            role = _role_value(child)
+            if role:
+                in_effect = role
+                continue
+            roles[child] = in_effect
+            if in_effect and _localname(child) in _ROLE_VALUE_TAGS:
+                # The row is complete once its value is taken. Clearing here
+                # keeps a spent role from vetoing a later name-based virtual
+                # address in a reply that mixes both shapes.
+                paired.add(child)
+                in_effect = ""
+    return roles, paired
+
+
+def _carries_virtual_address(name: str, role: str, paired: bool) -> bool:
+    """
+    Decide whether an element holds a virtual address, by name or by role.
+
+    Two reply shapes are supported because which one Junos emits is not
+    established: the role in the element name, and the role as a value paired
+    with a generically named address element.
+
+    An explicit lcl or mas role wins over a name match, so a row that declares
+    itself real is never collected whatever it is called. The role path in turn
+    requires an actual pairing: a role applies to one recognised value element
+    and is then spent, so an unrecognised element that merely follows a vip row
+    is left alone rather than inheriting it.
+    """
+    if role in _REAL_ADDRESS_ROLES:
+        return False
+    if _is_virtual_address_tag(name):
+        return True
+    return paired and role == _VIRTUAL_ROLE
+
+
+def _iter_localname(root, name: str):
+    """Yield root and every descendant element whose local name matches."""
+    for el in root.iter():
+        if isinstance(el.tag, str) and _localname(el) == name:
+            yield el
+
+
+def _owned_by(el, entry) -> bool:
+    """
+    True when the innermost ``vrrp-interface`` enclosing ``el`` is ``entry``.
+
+    A nested entry owns its own addresses; letting the outer one absorb them
+    would suppress an address on the wrong interface. Skipping per element
+    rather than breaking out of the walk matters because ``iter()`` is
+    document-order depth-first, so a break would also abandon any of the outer
+    entry's own addresses that appear after the nested one.
+
+    Requires lxml's ``getparent()``, as does ``_group_for``. PyEZ and the test
+    double both produce lxml trees.
+    """
+    if el is entry:
+        return True
+    node = el.getparent()
+    while node is not None:
+        if _localname(node) == "vrrp-interface":
+            return node is entry
+        node = node.getparent()
+    return True
+
+
+def _group_for(matched, entry) -> str:
+    """
+    Return the group id nearest the matched element, walking up to ``entry``.
+
+    A per-group container would put the group above the address rather than
+    beside the interface, so a direct-child lookup on ``entry`` alone would
+    report every group as unknown.
+    """
+    node = matched
+    while node is not None:
+        group = _text(_find_child(node, "group"))
+        if group:
+            return group
+        if node is entry:
+            break
+        node = node.getparent()
+    return ""
+
+
+def _vrrp_interface_name(entry) -> str:
+    """
+    Return the logical interface name, joining a separate unit when present.
+
+    VRRP output can report the physical interface and its unit as two fields,
+    which would otherwise produce a name that cannot match the interface keys
+    upstream returns.
+    """
+    for tag in ("interface", "interface-name"):
+        name = _text(_find_child(entry, tag))
+        if not name:
+            continue
+        if "." not in name:
+            unit = _text(_find_child(entry, "unit"))
+            if unit:
+                return f"{name}.{unit}"
+        return name
+    return ""
+
+
+def _virtual_addresses_from_reply(reply) -> dict[tuple[str, str], str]:
+    """
+    Map (ifl, virtual address) to the VRRP group that declares it.
+
+    Returns an empty mapping for anything that is not an element: a device with
+    no VRRP configured answers with a warning that PyEZ turns into the boolean
+    True, which is the common case rather than an error.
+
+    Walks every descendant, so a multi-routing-engine-results wrapper needs no
+    special handling. Comments and processing instructions are skipped because
+    their tag is a callable and ncclient copies them through from real devices.
+
+    Anything that does not yield both an interface and an address is skipped
+    rather than raising, so an unanticipated reply shape degrades to
+    "suppress nothing".
+    """
+    out: dict[tuple[str, str], str] = {}
+    if reply is None or not hasattr(reply, "tag"):
+        return out
+    for entry in _iter_localname(reply, "vrrp-interface"):
+        ifname = _vrrp_interface_name(entry)
+        if not ifname:
+            continue
+        roles, paired = _roles_by_element(entry)
+        for el in entry.iter():
+            if not isinstance(el.tag, str):
+                continue
+            name = _localname(el)
+            if not _carries_virtual_address(name, roles.get(el, ""), el in paired):
+                continue
+            if not _owned_by(el, entry):
+                continue
+            address = _normalise_ip(_text(el))
+            try:
+                ip_address(address)
+            except ValueError:
+                continue
+            _note_unexpected_tag(ifname, address, name)
+            out[(ifname, address)] = _group_for(el, entry)
+    return out
+
+
+def _suppress_virtual(
+    interfaces_ip: dict,
+    virtual: dict[tuple[str, str], str],
+) -> tuple[dict, list[tuple[str, str, str]]]:
+    """
+    Remove addresses the device reports as first-hop-redundancy virtual addresses.
+
+    Only address entries are removed. Family and interface keys are left in
+    place because an interface may be known only through this mapping.
+    """
+    dropped: list[tuple[str, str, str]] = []
+    if not virtual:
+        return interfaces_ip, dropped
+    for ifname, families in interfaces_ip.items():
+        for addresses in families.values():
+            for ip in list(addresses):
+                group = virtual.get((ifname, _normalise_ip(ip)))
+                if group is None:
+                    continue
+                del addresses[ip]
+                dropped.append((ifname, ip, group))
+    return interfaces_ip, dropped
+
+
 class JunOSDriver(NapalmJunOSDriver):
     """
     Juniper Junos NAPALM driver.
@@ -740,6 +1238,45 @@ class JunOSDriver(NapalmJunOSDriver):
         """
         return _junos_get_modules_impl(self)
 
+    def _virtual_addresses(self) -> dict[tuple[str, str], str]:
+        """Ask the device which of its addresses are VRRP virtual addresses."""
+        reply = self.device.rpc.get_vrrp_information(
+            ignore_warning=["vrrp subsystem not running"],
+        )
+        return _virtual_addresses_from_reply(reply)
+
+    def get_interfaces_ip(self) -> dict:
+        """
+        Return interface addresses, minus VRRP virtual addresses.
+
+        Junos reports a virtual address as an interface address, without a mask,
+        and upstream NAPALM fills that gap with a host length. Emitting it
+        overwrites an operator's own record with a value the device never
+        reported, and moves an address held against a redundancy group onto the
+        interface. The device is asked which addresses are virtual, and those
+        are left out.
+
+        Best-effort throughout: any failure returns what upstream parsed, since
+        this method is called without a guard and an escaping exception would
+        cost the device its whole discovery cycle. A failure part-way through
+        keeps the suppressions already made, which is strictly better than
+        losing the device.
+        """
+        interfaces_ip = super().get_interfaces_ip()
+        try:
+            virtual = self._virtual_addresses()
+            interfaces_ip, dropped = _suppress_virtual(interfaces_ip, virtual)
+            for ifname, address, group in dropped:
+                logger.info(
+                    "%s: not emitting %s, reported as a virtual address of group %s",
+                    ifname,
+                    address,
+                    group or "unknown",
+                )
+        except Exception:
+            logger.debug("Junos virtual-address suppression failed", exc_info=True)
+        return interfaces_ip
+
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """
         Return per-interface VLAN config (PyEZ NETCONF path).
@@ -750,27 +1287,85 @@ class JunOSDriver(NapalmJunOSDriver):
         emit subtly-different XML and we'd rather skip VLAN ingest than fail
         the whole device.
         """
-        try:
-            reply = self.device.rpc.get_ethernet_switching_interface_information()
-        except Exception:
-            logger.debug("Junos get-ethernet-switching-interface-information failed", exc_info=True)
-            return {}
-
-        if reply is None:
-            return {}
+        reply = self._switching_interface_reply()
 
         # Wrapper element is <ethernet-switching-interface-information> (non-ELS)
         # or <l2ng-l2ald-iff-information> (ELS). Each <interface> child has the
         # same shape regardless of wrapper.
+        interfaces = _find_children(reply, "interface") if reply is not None else []
+        if not interfaces:
+            return self._interfaces_vlans_from_details()
         try:
+            resolve_name = _vlan_name_resolver(self)
             result: dict[str, dict] = {}
-            for intf in _find_children(reply, "interface"):
+            for intf in interfaces:
                 ifname = _text(_find_child(intf, "interface-name"))
                 if not ifname:
                     continue
-                info = _interface_to_switchport_info(intf)
-                result[ifname] = classify_switchport(info)
+                info = _interface_to_switchport_info(intf, resolve_name)
+                # Junos reports switching per logical unit — the measured EX4550
+                # answers with ge-0/0/23.0 — while NetBox carries switchport mode
+                # and VLANs on the port. The ELS path has normalised this since it
+                # was written; this one did not, and no fixture caught it because
+                # every synthetic non-ELS reply was written without unit suffixes.
+                # Left literal, the recovered VLANs land on the subinterface and
+                # the port they belong to stays blank.
+                result[_physical_name(ifname)] = classify_switchport(info)
             return result
         except Exception:
             logger.debug("Junos VLAN XML parse failed", exc_info=True)
+            return {}
+
+    def _switching_interface_reply(self):
+        """
+        Fetch ``<get-ethernet-switching-interface-information>``, detail first.
+
+        The two CLI forms map to one RPC, the detailed one adding ``<detail/>``.
+        They do not answer alike: on a measured EX4550 running 15.1 the plain
+        form returns the VLAN memberships with NO ``<interface-port-mode>`` at
+        all, while the detailed form carries it on every interface. The mode is
+        the authoritative statement of access versus trunk, so ask for the reply
+        that has it.
+
+        The plain form is still tried when the detailed one yields nothing, so a
+        platform that rejects the argument keeps the behaviour it has today, and
+        an ELS switch that refuses the RPC in both forms falls through to its own.
+        """
+        for kwargs in ({"detail": True}, {}):
+            try:
+                reply = self.device.rpc.get_ethernet_switching_interface_information(**kwargs)
+            except Exception:
+                # An ELS switch refuses this RPC outright, as a syntax error: it
+                # is the normal state of such a switch, not a fault, and the
+                # details RPC is its path.
+                logger.debug(
+                    "Junos get-ethernet-switching-interface-information%s failed",
+                    " (detail)" if kwargs else "",
+                    exc_info=True,
+                )
+                continue
+            if _find_children(reply, "interface"):
+                return reply
+        return None
+
+    def _interfaces_vlans_from_details(self) -> dict[str, dict]:
+        """
+        Per-interface VLAN config from ``<get-ethernet-switching-interface-details>``.
+
+        The RPC behind ``show ethernet-switching interface`` on ELS Junos,
+        answered where ``get-ethernet-switching-interface-information`` is a
+        syntax error. Best-effort like the caller: any failure returns an
+        empty dict rather than costing the device its discovery cycle.
+        """
+        try:
+            reply = self.device.rpc.get_ethernet_switching_interface_details()
+        except Exception:
+            logger.debug("Junos get-ethernet-switching-interface-details failed", exc_info=True)
+            return {}
+        if reply is None:
+            return {}
+        try:
+            return _els_details_to_switchports(reply)
+        except Exception:
+            logger.debug("Junos ELS details XML parse failed", exc_info=True)
             return {}

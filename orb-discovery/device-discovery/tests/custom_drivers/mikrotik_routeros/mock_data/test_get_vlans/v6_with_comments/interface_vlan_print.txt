@@ -1,0 +1,7 @@
+Flags: X - disabled, R - running 
+ #    NAME                MTU ARP        VLAN-ID INTERFACE
+ 0 R  ;;; UPLINK_A
+      sfpplus1.156       1500 enabled        156 sfpplus1
+ 1 R  ;;; UPLINK_B
+      sfpplus1.810       1500 enabled        810 sfpplus1
+ 2 X  sfpplus1.20        1500 enabled         20 sfpplus1

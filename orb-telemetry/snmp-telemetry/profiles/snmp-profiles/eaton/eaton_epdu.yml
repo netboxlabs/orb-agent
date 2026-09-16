@@ -1,0 +1,442 @@
+# http://www.circitor.fr/Mibs/Html/E/EATON-EPDU-MIB.php
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid: 1.3.6.1.4.1.534.6.6.7    # Eaton ePDU
+
+metrics:
+  - MIB: EATON-EPDU-MIB
+    symbols:
+      # Status of the internal communication with the PDU.
+      - name: communicationStatus
+        OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.30.0
+        enum:
+          good: 0
+          communicationLost: 1
+      # Status of the internal failure inside the PDU.
+      - name: internalStatus
+        OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.31.0
+        enum:
+          good: 0
+          internalFailure: 1
+      # Status of the external communication with a strapping unit.
+      - name: strappingStatus
+        OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.32.0
+        enum:
+          good: 0
+          communicationLost: 1
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: inputTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.3.1
+    symbols:
+      # Units are 0.1 Hz; divide by ten to get Hz.
+      - name: inputFrequency	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.1.1.3
+      # Units are 0.1 Hz; divide by ten to get Hz.
+      - name: inputFrequencyStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.1.1.4
+        enum:
+          good: 0
+          outOfRange: 1
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.3.1.1.10
+          name: inputFeedDescription
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: inputVoltageTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.3.2
+    symbols:
+      # An input voltage measurement value. Units are millivolts.
+      - name: inputVoltage	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.2.1.3
+      # Status of the measured input voltage relative to the configured thresholds.
+      - name: inputVoltageThStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.2.1.4
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.3.3.1.12
+          name: inputDescription
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: inputCurrentTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.3.3
+    symbols:
+      # Status of the measured input voltage relative to the configured thresholds.
+      - name: inputCurrent	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.3.1.4
+      # Status of the measured input voltage relative to the configured thresholds.
+      - name: inputCurrentThStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.2.1.5
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+      # Current percent load, based on the rated current capacity. Units are percentage, for example 80% will be returned as 80. A negative value indicates that this object is not available.
+      - name: inputCurrentPercentLoad	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.3.1.11
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.3.3.1.12
+          name: inputDescription
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: inputPowerTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.3.4
+    symbols:
+      # An input VA value. Units are VA. A negative value indicates that this object is not available.
+      - name: inputVA	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.4.1.3
+      # An input Watts value. Units are Watts. A negative value indicates that this object is not available.
+      - name: inputWatts	
+        OID: 1.3.6.1.4.1.534.6.6.7.3.4.1.4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.3.3.1.12
+          name: inputDescription
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: groupTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.5.1
+    symbols:
+      # Only applicable to breaker-groups. Indicates whether a breaker is turned off or on.
+      - name: groupBreakerStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.5
+        enum:
+          notApplicable: 0
+          breakerOn: 1
+          breakerOff: 2
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.3
+          name: groupName
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.4
+          name: groupType
+          enum:
+            unknown: 0
+            breaker1pole: 1
+            breaker2pole: 2
+            breaker3pole: 3
+            outletSection: 4
+            userDefined: 5
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: groupVoltageTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.5.3
+    symbols:
+      # Units are millivolts.
+      - name: groupVoltage	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.3.1.3
+      # Status of the measured group voltage relative to the configured thresholds.
+      - name: groupVoltageThStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.3.1.4
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.3
+          name: groupName
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.4
+          name: groupType
+          enum:
+            unknown: 0
+            breaker1pole: 1
+            breaker2pole: 2
+            breaker3pole: 3
+            outletSection: 4
+            userDefined: 5
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: groupCurrentTable 
+      OID: 1.3.6.1.4.1.534.6.6.7.5.3
+    symbols:
+      # A group current measurement value. Units are milliamps.
+      - name: groupCurrent	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.4.1.3
+      # Status of the measured group voltage relative to the configured thresholds.
+      - name: groupCurrentThStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.4.1.4
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+      # A group current measurement value. Units are milliamps.
+      - name: groupCurrentPercentLoad
+        OID: 1.3.6.1.4.1.534.6.6.7.5.4.1.10
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.3
+          name: groupName
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.4
+          name: groupType
+          enum:
+            unknown: 0
+            breaker1pole: 1
+            breaker2pole: 2
+            breaker3pole: 3
+            outletSection: 4
+            userDefined: 5
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: groupPowerTable
+      OID: 1.3.6.1.4.1.534.6.6.7.5.5
+    symbols:
+      # A group VA value. Units are VA. A negative value indicates that this object is not available.
+      - name: groupVA	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.5.1.2
+      # Group Watts value. Units are Watts. A negative value indicates that this object is not available.
+      - name: groupWatts	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.5.1.3
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.3
+          name: groupName
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.4
+          name: groupType
+          enum:
+            unknown: 0
+            breaker1pole: 1
+            breaker2pole: 2
+            breaker3pole: 3
+            outletSection: 4
+            userDefined: 5
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: groupControlTable
+      OID: 1.3.6.1.4.1.534.6.6.7.5.6
+    symbols:
+      # Current state of a controlled group. A value of 'mixed' means that that the outlets within the group have differing states.
+      - name: groupControlStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.5.6.1.2
+        enum:
+          off: 0
+          on: 1
+          rebooting: 2
+          mixed: 3
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.3
+          name: groupName
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.5.1.1.4
+          name: groupType
+          enum:
+            unknown: 0
+            breaker1pole: 1
+            breaker2pole: 2
+            breaker3pole: 3
+            outletSection: 4
+            userDefined: 5
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: outletVoltageTable
+      OID: 1.3.6.1.4.1.534.6.6.7.6.3
+    symbols:
+      # Units are millivolts.
+      - name: outletVoltage	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.3.1.2
+      # Status of the measured outlet voltage relative to the configured thresholds.
+      - name: outletVoltageThStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.3.1.3
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.6.1.1.3
+          name: outletName
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: outletCurrentTable
+      OID: 1.3.6.1.4.1.534.6.6.7.6.4
+    symbols:
+      # An outlet current measurement value. Units are milliamps.
+      - name: outletCurrent	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.4.1.3
+      # Status of the measured outlet voltage relative to the configured thresholds.
+      - name: outletCurrentThStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.4.1.4
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+      # An outlet current measurement value. Units are milliamps.
+      - name: outletCurrentPercentLoad	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.4.1.10
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.6.1.1.3
+          name: outletName
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: outletPowerTable
+      OID: 1.3.6.1.4.1.534.6.6.7.6.5
+    symbols:
+      # An outlet VA value. Units are VA. A negative value indicates that this object is not available.
+      - name: outletVA	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.5.1.2
+      # An outlet Watts value. Units are Watts. A negative value indicates that this object is not available.
+      - name: outletWatts	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.5.1.3
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+      # An outlet current measurement value. Units are milliamps.
+      - name: outletCurrentPercentLoad	
+        OID: 1.3.6.1.4.1.534.6.6.7.6.4.1.10
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.6.1.1.3
+          name: outletName           
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: temperatureTable
+      OID: 1.3.6.1.4.1.534.6.6.7.7.1
+    symbols:
+      # Indicates whether a probe is connected or not.
+      - name: temperatureProbeStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.7.1.1.3
+        enum:
+          bad: -1
+          disconnected: 0
+          connected: 1
+      # Units are in tenths of a degree according to the scale specified by temperatureScale (either Fahrenheit or Celsius). Divide by ten to get degrees.
+      - name: temperatureValue	
+        OID: 1.3.6.1.4.1.534.6.6.7.7.1.1.4
+      # Status of the measured temperature relative to the configured thresholds.
+      - name: temperatureThStatus
+        OID: 1.3.6.1.4.1.534.6.6.7.7.1.1.5
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.7.1.1.2
+          name: temperatureName
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: humidityTable
+      OID: 1.3.6.1.4.1.534.6.6.7.7.2
+    symbols:
+      # Indicates whether a probe is connected or not.
+      - name: humidityProbeStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.7.2.1.3
+        enum:
+          bad: -1
+          disconnected: 0
+          connected: 1
+      # Units are tenths of a percent relative humidity. Divide the value by 10 to get %RH.
+      - name: humidityValue	
+        OID: 1.3.6.1.4.1.534.6.6.7.7.2.1.4
+      # Status of the measured humidity relative to the configured thresholds.
+      - name: humidityThStatus
+        OID: 1.3.6.1.4.1.534.6.6.7.7.2.1.5
+        enum:
+          good: 0
+          lowWarning: 1
+          lowCritical: 2
+          highWarning: 3
+          highCritical: 4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.7.2.1.2
+          name: humidityName
+
+  - MIB: EATON-EPDU-MIB
+    table:
+      name: contactTable
+      OID: 1.3.6.1.4.1.534.6.6.7.7.3
+    symbols:
+      # Indicates whether a probe is connected or not.
+      - name: contactProbeStatus	
+        OID: 1.3.6.1.4.1.534.6.6.7.7.3.1.3
+        enum:
+          bad: -1
+          disconnected: 0
+          connected: 1
+      # The state of the contact sensor.
+      - name: contactState	
+        OID: 1.3.6.1.4.1.534.6.6.7.7.3.1.4
+        enum:
+          contactBad: -1
+          contactOpen: 0
+          contactClosed: 1
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.534.6.6.7.7.3.1.2
+          name: contactName
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.3.0
+      name: partNumber
+  - column:
+      OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.4.0
+      name: serialNumber
+    tag: serial_number
+  - column:
+      OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.6.0
+      name: unitName
+  - column:
+      OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.9.0
+      name: temperatureScale
+      enum:
+        celsius: 0
+        fahrenheit: 1
+  # Technical capabilities of the PDU. Functionality is as follows: Monitored (MI) - input and usually section/group monitoring. Advanced Monitored (AM) - input, section/group, and outlet monitoring. Switched (SW) - input and section/group monitoring, outlet switching. Managed (MA) - input, section/group, and outlet monitoring plug outlet switching.
+  - column:
+      OID: 1.3.6.1.4.1.534.6.6.7.1.2.1.10.0
+      name: unitType
+      enum:
+        unknown: 0
+        switched: 1
+        advancedMonitored: 2
+        managed: 3
+        monitored: 4

@@ -1,0 +1,8 @@
+{
+  "TABLE_modinfo": {
+    "ROW_modinfo": {"modinf": "\"3\"", "modules": "\"3\"", "ports": "36", "type": "\"Nexus 9K 36x100GbE\"", "model": "\"N9K-X9736C-FX\"", "status": "active *"}
+  },
+  "TABLE_modwwninfo": {
+    "ROW_modwwninfo": {"modwwn": "3", "sn": "FOC90001LC03"}
+  }
+}

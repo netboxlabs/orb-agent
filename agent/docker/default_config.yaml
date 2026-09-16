@@ -7,6 +7,7 @@ orb:
         client_id: ${FLEET_CLIENT_ID}
         client_secret: ${FLEET_CLIENT_SECRET}
         otlp_bridge_grpc_port: 4337
+        otlp_bridge_http_port: 4338
   secrets_manager:
     active: fleet
     sources:
@@ -21,3 +22,7 @@ orb:
     device_discovery:
     snmp_discovery:
     worker:
+    snmp_telemetry:
+      start_mode: on_demand
+    gnmi_telemetry:
+      start_mode: on_demand

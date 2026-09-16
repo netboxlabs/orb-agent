@@ -1179,6 +1179,63 @@ def test_translate_device_without_netbox_id(sample_device_info, sample_defaults)
     assert "source_match" not in device.metadata
 
 
+def test_translate_device_netbox_id_omits_placeholder_site_and_role(sample_device_info):
+    """
+    A netbox_id scope with no configured site/role omits both fields.
+
+    ``netbox_id`` binds an existing device by PK, so the plugin skips matching
+    and applies every field present in the payload. Sending the literal
+    "undefined" placeholder therefore repoints a real device's site and role at
+    the placeholder objects: netbox_id made the overwrite deterministic instead
+    of preventing it.
+    """
+    device = translate_device(sample_device_info, Defaults(), netbox_id=42)
+
+    assert device.metadata["source_match"]["netbox_id"] == 42
+    assert not device.HasField("site"), "placeholder site must not be sent"
+    assert not device.HasField("role"), "placeholder role must not be sent"
+
+
+def test_translate_device_netbox_id_keeps_explicitly_configured_site_and_role(
+    sample_device_info,
+):
+    """Suppression is for the placeholder only; real values still go out."""
+    defaults = Defaults(site="New York", role="access-switch")
+
+    device = translate_device(sample_device_info, defaults, netbox_id=42)
+
+    assert device.site.name == "New York"
+    assert device.role.name == "access-switch"
+
+
+def test_translate_device_without_netbox_id_keeps_placeholders(sample_device_info):
+    """
+    Without netbox_id the placeholders must survive.
+
+    NetBox requires both site and role on a Device, so a create has to carry
+    something. Only netbox_id tells us the payload is an update, which is why
+    the suppression is keyed on it rather than on the value being unset.
+    """
+    device = translate_device(sample_device_info, Defaults())
+
+    assert device.site.name == "undefined"
+    assert device.role.name == "undefined"
+
+
+def test_translate_device_netbox_id_omits_placeholder_site_from_location(
+    sample_device_info,
+):
+    """An explicit location must not smuggle the placeholder site back in."""
+    defaults = Defaults(location="floor-1")
+
+    device = translate_device(sample_device_info, defaults, netbox_id=42)
+
+    assert device.location.name == "floor-1"
+    assert not device.location.HasField("site"), (
+        "the placeholder site must not ride along inside the location"
+    )
+
+
 def test_translate_data_with_config_disabled(sample_device_info):
     """Test that config is not captured when flags are disabled."""
     config_info = {
@@ -2289,3 +2346,128 @@ def test_emit_host_prefixes_keeps_real_subnets_untouched(
     )
 
     assert sorted(prefixes) == ["10.0.0.1/32", "172.24.0.0/24"]
+
+
+def test_translate_data_emits_prefix_vlan_from_the_raw_vlan_database(sample_device_info):
+    """
+    The whole path: raw NAPALM VLAN data to a Prefix carrying that VLAN.
+
+    Every other test for this feature hands the interface builder a VLAN cache
+    that the test itself constructed, so the wiring from ``data["vlan"]`` through
+    the cache into the emitted Prefix was never exercised. Since the association
+    cannot be cleared by a later run, that wiring is worth pinning directly.
+    """
+    data = {
+        "device": sample_device_info,
+        "interface": {"Vlan120": {"is_up": True, "is_enabled": True, "speed": 1000}},
+        "interface_ip": {"Vlan120": {"ipv4": {"10.0.120.1": {"prefix_length": 24}}}},
+        "vlan": {"120": {"name": "Users"}},
+        "driver": "ios",
+        "defaults": Defaults(site="dc1"),
+        "options": Options(emit_prefix_vlan="svi-name"),
+    }
+
+    entities = list(translate_data(data))
+
+    prefixes = [
+        e.prefix for e in entities
+        if e.WhichOneof("entity") == "prefix" and e.prefix.prefix == "10.0.120.0/24"
+    ]
+    assert prefixes, "the derived prefix must be emitted"
+    assert all(p.vlan.vid == 120 for p in prefixes), (
+        "the VLAN must reach the prefix from the raw VLAN database"
+    )
+    assert all(p.vlan.name == "Users" for p in prefixes)
+
+    vlans = [e.vlan for e in entities if e.WhichOneof("entity") == "vlan"]
+    assert any(v.vid == 120 and v.name == "Users" for v in vlans), (
+        "the VLAN the prefix references must itself be emitted"
+    )
+
+    # The interface is an SVI, so it must not be typed from its reported speed.
+    ifaces = [e.interface for e in entities if e.WhichOneof("entity") == "interface"]
+    assert any(i.name == "Vlan120" and i.type == "virtual" for i in ifaces)
+
+
+def test_translate_data_withholds_prefix_vlan_when_the_option_is_off(sample_device_info):
+    """The same input emits no prefix VLAN with the option left at its default."""
+    data = {
+        "device": sample_device_info,
+        "interface": {"Vlan120": {"is_up": True, "is_enabled": True, "speed": 1000}},
+        "interface_ip": {"Vlan120": {"ipv4": {"10.0.120.1": {"prefix_length": 24}}}},
+        "vlan": {"120": {"name": "Users"}},
+        "driver": "ios",
+        "defaults": Defaults(site="dc1"),
+    }
+
+    entities = list(translate_data(data))
+
+    for e in entities:
+        if e.WhichOneof("entity") == "prefix":
+            assert not e.prefix.HasField("vlan")
+
+
+def test_junos_switching_unit_lands_on_the_physical_port():
+    """
+    Junos reports switching on unit .0; NetBox wants it on the port.
+
+    This is the seam between the two halves and neither side's own tests
+    cross it. The Junos driver reads switching information from the RPC per
+    logical unit (``ge-0/0/23.0`` on a measured EX4550) and keys its result by
+    the physical port, because ``apply_interface_vlans`` pairs on an exact
+    name and orb emits the port and the unit as separate Interfaces. Key it by
+    the unit and the recovered VLANs attach to the subinterface while the port
+    they belong to stays blank, which is the shape of a fix that looks like it
+    worked.
+    """
+    from lxml import etree
+
+    from custom_napalm.junos import JunOSDriver, _localname
+
+    reply = etree.fromstring(
+        b"""<switching-interface-information>
+              <interface>
+                <interface-name>ge-0/0/23.0</interface-name>
+                <interface-port-mode>Access</interface-port-mode>
+                <interface-vlan-member-list>
+                  <interface-vlan-member>
+                    <interface-vlan-name>VL888</interface-vlan-name>
+                    <interface-vlan-member-tagid>888</interface-vlan-member-tagid>
+                    <interface-vlan-member-tagness>untagged</interface-vlan-member-tagness>
+                  </interface-vlan-member>
+                </interface-vlan-member-list>
+              </interface>
+            </switching-interface-information>"""
+    )
+    assert [_localname(c) for c in reply] == ["interface"], "fixture shape changed"
+
+    class Dev:
+        def __init__(self):
+            self.rpc = self
+
+        def get_ethernet_switching_interface_information(self, **_kw):
+            return reply
+
+    driver = object.__new__(JunOSDriver)
+    driver.device = Dev()
+    driver.get_vlans = dict
+    switchports = driver.get_interfaces_vlans()
+
+    assert set(switchports) == {"ge-0/0/23"}, (
+        f"the driver must key on the physical port, got {sorted(switchports)}"
+    )
+
+    # Both interfaces exist in NetBox, as orb emits them.
+    entities = [_make_iface_entity("ge-0/0/23"), _make_iface_entity("ge-0/0/23.0")]
+    defaults = Defaults()
+    options = Options()
+    cache = _build_vlan_cache({"888": {"name": "VL888"}}, defaults)
+    new_stubs: list = []
+
+    apply_interface_vlans(entities, switchports, cache, defaults, options, new_stubs)
+
+    port, unit = entities[0].interface, entities[1].interface
+    assert port.mode == "access"
+    assert port.untagged_vlan.vid == 888
+    assert unit.mode == "", "the subinterface must not carry the switchport config"
+    assert not unit.HasField("untagged_vlan")

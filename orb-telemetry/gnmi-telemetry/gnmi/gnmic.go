@@ -1,0 +1,1175 @@
+package gnmi
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+	"unicode"
+
+	gpath "github.com/openconfig/gnmi/path"
+	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
+	"github.com/openconfig/gnmi/value"
+	gapi "github.com/openconfig/gnmic/pkg/api"
+	"github.com/openconfig/gnmic/pkg/api/target"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// subscriptionPrefix begins the gnmic-side name of every subscription attempt
+// this backend registers. Each attempt is named prefix + its own generation
+// rather than one fixed name: gnmic's attemptSubscription defers
+// StopSubscription(name), which cancels and deletes whatever the target holds
+// under that name, so an old producer exiting after the ladder opened the next
+// attempt would tear the new attempt down under a shared name. A target that
+// rejects ON_CHANGE would then skip the SAMPLE rung it does support and fall
+// to Get.
+const subscriptionPrefix = "gnmi-telemetry"
+
+// DefaultProbeTimeout bounds one probe a session runs under a caller's
+// unbounded context, the Capabilities call that opens it and the Get it runs
+// per subscription path, when the dial spec named none of its own. Ten seconds
+// is long enough for a busy target to answer either and short enough that a
+// silent one costs a probe rather than the life of the policy. It is exported
+// so a caller applying the same deadline to a call of its own, the collector
+// holding a stream's first response to it, reads the number from here.
+const DefaultProbeTimeout = 10 * time.Second
+
+// GnmicDialer implements Dialer using the gnmic library.
+type GnmicDialer struct {
+	// Logger receives the events a session raises on its own, such as a pruned
+	// subscription path. Nil leaves the session on slog.Default().
+	Logger *slog.Logger
+}
+
+// Dial creates a gnmic-backed Session connected to the given target.
+func (d *GnmicDialer) Dial(ctx context.Context, spec TargetSpec) (Session, error) {
+	opts := []gapi.TargetOption{
+		gapi.Name("gnmi-telemetry"),
+		gapi.Address(spec.Host),
+	}
+	if spec.Username != "" {
+		opts = append(opts, gapi.Username(spec.Username))
+	}
+	if spec.Password != "" {
+		opts = append(opts, gapi.Password(spec.Password))
+	}
+
+	// TLS is the default (secure by default): explicit CA/cert/key supply
+	// verification/mTLS material; skip_verify keeps TLS but does not verify the
+	// target cert (honored INDEPENDENTLY of that material, e.g. mTLS against a
+	// self-signed device cert). Plaintext requires an EXPLICIT insecure opt-in.
+	// With none of these set, gnmic establishes TLS using the system root CAs.
+	if spec.CAFile != "" {
+		opts = append(opts, gapi.TLSCA(spec.CAFile))
+	}
+	if spec.CertFile != "" {
+		opts = append(opts, gapi.TLSCert(spec.CertFile))
+	}
+	if spec.KeyFile != "" {
+		opts = append(opts, gapi.TLSKey(spec.KeyFile))
+	}
+	if spec.SkipVerify {
+		opts = append(opts, gapi.SkipVerify(true))
+	}
+	if spec.Insecure {
+		opts = append(opts, gapi.Insecure(true))
+	}
+
+	tg, err := gapi.NewTarget(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("gnmi dial: create target: %w", err)
+	}
+	if err := tg.CreateGNMIClient(ctx); err != nil {
+		return nil, fmt.Errorf("gnmi dial: create client: %w", err)
+	}
+	return &gnmicSession{tg: tg, origin: spec.Origin, probeTimeout: spec.ProbeTimeout, logger: d.Logger}, nil
+}
+
+// withOrigin prefixes a gNMI request path with the session's origin
+// ("openconfig:/...") so strict OpenConfig targets (e.g. Nokia SR Linux) resolve
+// it against the OpenConfig schema rather than their native one. An empty origin
+// yields the bare path (origin-less). gapi.Path (path.ParsePath) parses the
+// "<origin>:<path>" form; request paths use [key=*] wildcards so no literal ':'
+// in a key value collides with the origin separator.
+func withOrigin(origin, path string) string {
+	if origin == "" {
+		return path
+	}
+	return origin + ":" + path
+}
+
+// gnmicSession wraps a gnmic Target and implements Session.
+type gnmicSession struct {
+	tg *target.Target
+	// subCancel cancels the context driving the active SubscribeChan producer
+	// goroutine. It is set by Subscribe and invoked by Close so the producer
+	// always observes cancellation, even while it is blocked in gnmic's
+	// internal retry-timer wait (which only selects on this context).
+	subCancel context.CancelFunc
+	// subGen numbers the subscription attempts made on this session, so each
+	// one registers with gnmic under a name no other attempt owns.
+	subGen atomic.Uint64
+	// subName is the gnmic-side name of the attempt subCancel drives, the one
+	// StopSubscribe tears down. Empty until stream registers the first attempt,
+	// and again once one is stopped.
+	subName string
+	// encoding is the request encoding negotiated from the target's advertised
+	// Capabilities (set by Capabilities()); empty until then, defaulting to
+	// json_ietf via enc(). Used for Get, where a leaf-path request yields a flat
+	// scalar regardless of encoding.
+	encoding string
+	// subEncoding is the request encoding for Subscribe (set by Capabilities());
+	// empty until then. It prefers PROTO because targets that serialize a STREAM
+	// subscription as JSON_IETF (e.g. Nokia SR Linux) emit the subscribed leaf as
+	// a nested JSON object rooted at its parent *container* path, with a
+	// module-qualified first element (".../system/state" = {"hostname":"srl1"},
+	// elem "openconfig-system:system") — which our flat-leaf model can't match.
+	// PROTO yields one flat scalar update per leaf at its full path, exactly what
+	// the model expects. Falls back to enc() via subEnc() when PROTO is absent.
+	subEncoding string
+	// origin is the gNMI request-path origin (e.g. "openconfig"); "" = origin-less.
+	origin string
+	// accepted caches the subscribe paths the target accepts (probed once per
+	// session); nil until the first Subscribe probes them.
+	accepted []string
+	// probed caches the per-subscription probe verdicts for SubscribeMany, keyed
+	// by origin + "|" + path; the value is whether the target accepted the path.
+	probed map[string]bool
+	// probeTimeout bounds each of those probes, from the dial spec; zero takes
+	// DefaultProbeTimeout.
+	probeTimeout time.Duration
+	// logger is the dialer's logger, carried so this session's own events reach
+	// the deployment's handler and level; nil means slog.Default().
+	logger *slog.Logger
+}
+
+// logPruned reports one subscription path the target refused.
+//
+// It goes through the session's logger so the configured level and handler
+// apply: the package-level slog this used printed a text line on stderr at info
+// level whatever the deployment asked for, which put a routine device condition
+// past --log-level error and beside a JSON stream rather than in it.
+func logPruned(logger *slog.Logger, sub Subscription, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("gnmi subscription path pruned", "path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
+// logEmptySubtree reports one subscription path the target holds nothing under
+// yet. That is the routine answer for a list with no entries, and the path is
+// subscribed regardless, so it is quieter than a refusal and quieter still
+// than a probe that reached no verdict.
+func logEmptySubtree(logger *slog.Logger, sub Subscription, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Debug("gnmi subscription path holds nothing yet, keeping the path",
+		"path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
+// logProbeInconclusive reports one subscription path whose probe never reached
+// a verdict. A target refusing a path is routine, but a probe that could not
+// ask it is the connection faltering under a subscription the profile expects
+// to carry, so it is louder than a refusal. The path stays in the request: the
+// probe learned nothing, so the stream is what decides.
+func logProbeInconclusive(logger *slog.Logger, sub Subscription, err error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("gnmi subscription path probe inconclusive, keeping the path",
+		"path", sub.Path, "origin", sub.Origin, "error", err)
+}
+
+// definitiveProbeRejection reports whether a failed path probe is the target
+// saying it does not model the path, rather than the probe failing to reach a
+// verdict about it. Only these codes answer the question the probe asked; a
+// timeout, an Unavailable or anything else is the call not arriving, and
+// remembering that as a refusal prunes the path for the life of the session.
+//
+// A NotFound is not among them. A target answers a Get that way for a path it
+// models and holds nothing under, a list with no entries in it above all, and
+// it accepts a subscription over that same path: reading it as a refusal
+// pruned the path for the session, so an element created a moment later never
+// streamed and was never collected.
+func definitiveProbeRejection(err error) bool {
+	switch status.Code(err) {
+	case codes.InvalidArgument, codes.Unimplemented:
+		return true
+	default:
+		return false
+	}
+}
+
+// emptySubtree reports whether a failed path probe is the target answering that
+// it holds nothing under the path yet, which says nothing about whether it
+// carries the path: the subscription goes out with it, and the stream delivers
+// whatever appears there later.
+func emptySubtree(err error) bool {
+	return status.Code(err) == codes.NotFound
+}
+
+// probeDeadline is how long one probe this session runs may take, the
+// Capabilities call and each subscription-path Get alike: what the dial spec
+// asked for, or the package default when it asked for nothing.
+func (s *gnmicSession) probeDeadline() time.Duration {
+	if s.probeTimeout <= 0 {
+		return DefaultProbeTimeout
+	}
+	return s.probeTimeout
+}
+
+// bounded gives one call the context it runs under: the session's own probe
+// deadline when the caller's context carries none, and a plain cancellable
+// child of it when it already carries one.
+//
+// A caller that bounded its own context keeps that bound and the reading it
+// draws from it. The sweep tells a silent address from an answering one by
+// whether its own context ended the Capabilities call, since a peer may send
+// DeadlineExceeded itself and the code alone says nothing; a shorter deadline
+// of ours firing first would leave that context unexpired and the silence
+// counted as an answer. Applying ours only where there is none to keep leaves
+// every such caller with its own classification and still bounds the loop's
+// context, which has no deadline and lives as long as the policy.
+func (s *gnmicSession) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, s.probeDeadline())
+}
+
+// acceptedPaths returns the subset of paths the target accepts, so one
+// unsupported path can't make a strict target reject the whole atomic
+// subscription. Fast path: a single multi-path Get — if it succeeds, every path
+// is valid. Only on failure does it Get per path to prune the unsupported ones
+// (reusing the same per-path tolerance as GetOnce). Result is cached for the
+// session (the auto ladder re-subscribes on the same session). If probing prunes
+// everything (e.g. a target that rejects Get), it falls back to the full set so
+// behavior is never worse than before.
+func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []string {
+	if s.accepted != nil {
+		return s.accepted
+	}
+	if _, err := s.getPaths(ctx, paths); err == nil {
+		s.accepted = paths
+		return paths
+	}
+	ok := make([]string, 0, len(paths))
+	for _, p := range paths {
+		if _, err := s.getPaths(ctx, []string{p}); err == nil {
+			ok = append(ok, p)
+		}
+	}
+	if len(ok) == 0 {
+		ok = paths
+	}
+	s.accepted = ok
+	return ok
+}
+
+// enc returns the negotiated request encoding, defaulting to json_ietf when
+// Capabilities has not run or advertised nothing usable.
+func (s *gnmicSession) enc() string {
+	if s.encoding != "" {
+		return s.encoding
+	}
+	return "json_ietf"
+}
+
+// getEncodingPreference is the order a Get encoding is chosen in, from the
+// advertised name to the name the request carries: JSON_IETF is OpenConfig's
+// canonical encoding, JSON is what a target that offers only it names (e.g.
+// NX-OS), and PROTO is taken when neither is advertised. The first two carry a
+// leaf's value the same way across targets, so PROTO is last rather than
+// absent: it is what a PROTO-only target answers, and asking such a target for
+// anything else fails every path probe and the Get rung with it.
+var getEncodingPreference = []struct{ advertised, request string }{
+	{"JSON_IETF", "json_ietf"},
+	{"JSON", "json"},
+	{"PROTO", "proto"},
+}
+
+// negotiateEncoding picks the request encoding from the target's advertised
+// Capabilities encodings, in getEncodingPreference order and regardless of the
+// order the target listed them in, else json_ietf as a best effort when it
+// advertised nothing usable. decodeTypedValue handles a JSON_IETF, JSON and
+// PROTO response alike, and a Get response is converted by convertNotification
+// exactly as a stream response is, so any negotiated value yields the same
+// decoded shape downstream.
+func negotiateEncoding(advertised []string) string {
+	has := make(map[string]bool, len(advertised))
+	for _, e := range advertised {
+		has[strings.ToUpper(strings.TrimSpace(e))] = true
+	}
+	for _, pref := range getEncodingPreference {
+		if has[pref.advertised] {
+			return pref.request
+		}
+	}
+	return "json_ietf"
+}
+
+// subEnc returns the negotiated Subscribe encoding, falling back to the Get
+// encoding (enc()) when Capabilities has not run or advertised no PROTO support.
+func (s *gnmicSession) subEnc() string {
+	if s.subEncoding != "" {
+		return s.subEncoding
+	}
+	return s.enc()
+}
+
+// negotiateSubEncoding picks the Subscribe encoding: prefer PROTO when the target
+// advertises it, because a STREAM subscription serialized as JSON_IETF emits each
+// leaf as a nested object at its parent container path (with a module-qualified
+// first element) rather than as a flat leaf update — see the subEncoding field
+// doc. PROTO gives one flat scalar per leaf at its full path, which our model
+// consumes directly. When PROTO is not advertised, fall back to the Get encoding
+// (JSON_IETF/JSON) negotiated for this target.
+func negotiateSubEncoding(advertised []string) string {
+	for _, e := range advertised {
+		if strings.EqualFold(strings.TrimSpace(e), "PROTO") {
+			return "proto"
+		}
+	}
+	return negotiateEncoding(advertised)
+}
+
+// Capabilities runs the gNMI Capabilities RPC and returns a normalized result.
+//
+// A caller whose context carries no deadline of its own, the loop's above all,
+// gets the session's: it lives as long as the policy, so a target that accepts
+// the connection and then never answers would otherwise hold the loop for
+// ever, with no error, no backoff and no reconnect. A call that misses the
+// deadline fails like any other, and the loop reconnects through it. A caller
+// that already bounded its context keeps its own bound.
+func (s *gnmicSession) Capabilities(ctx context.Context) (*CapabilitiesResult, error) {
+	capsCtx, cancel := s.bounded(ctx)
+	resp, err := s.tg.Capabilities(capsCtx)
+	cancel()
+	if err != nil {
+		return nil, fmt.Errorf("gnmi capabilities: %w", err)
+	}
+	result := mapCapabilities(resp)
+	// Negotiate the request encoding from what the target advertises so a
+	// JSON-only target (e.g. NX-OS) isn't sent a JSON_IETF request it rejects.
+	s.encoding = negotiateEncoding(result.Encodings)
+	s.subEncoding = negotiateSubEncoding(result.Encodings)
+	return result, nil
+}
+
+// StopSubscribe tears down the active subscription (cancels the producer
+// goroutine + its gRPC stream and clears the gnmic-side subscription) without
+// closing the session. Subscribe calls it before opening a new stream, and the
+// runner calls it when switching from a SAMPLE/ON_CHANGE stream to a Get poll on
+// the same connection so the prior subscription doesn't keep retrying in the
+// background. Idempotent; a no-op when no subscription is active.
+func (s *gnmicSession) StopSubscribe() {
+	if s.subCancel != nil {
+		s.subCancel()
+		s.subCancel = nil
+	}
+	// Only ever the name this session registered: a fixed name would be the
+	// next attempt's too, and stopping it here (or from the old producer's own
+	// deferred StopSubscription) would cancel the stream the ladder just
+	// opened. Empty means no attempt of ours is registered.
+	if s.subName != "" {
+		s.tg.StopSubscription(s.subName)
+		s.subName = ""
+	}
+}
+
+// nextSubscriptionName returns the gnmic-side name for this session's next
+// subscription attempt: the backend prefix and a generation that never
+// repeats, so no two attempts on one session share a name.
+func (s *gnmicSession) nextSubscriptionName() string {
+	return fmt.Sprintf("%s-%d", subscriptionPrefix, s.subGen.Add(1))
+}
+
+// Subscribe opens a gNMI STREAM subscription.
+//
+// We use tg.SubscribeChan (not SubscribeStreamChan): it returns buffered
+// (cap-1) channels of *target.SubscribeResponse / *target.TargetError, and its
+// producer goroutine's sends and retry-timer wait all select on the context we
+// pass, so the producer exits cleanly once that context is cancelled. We derive
+// that context from the caller's ctx and store its cancel on the session so
+// Close() can stop the producer (and its gRPC connection) even when it is
+// blocked mid-retry. This avoids the goroutine/connection leak that
+// SubscribeStreamChan caused on reconnect (its producer looped forever on a
+// bare `goto SUBSC` and only watched the parent ctx).
+//
+// Callers MUST call Session.Close() when the stream ends; the runner satisfies
+// this via `defer sess.Close()` in runOnce.
+func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string, sampleIntervalMs int) (<-chan Notification, <-chan error, error) {
+	// Tear down any prior subscription on this session FIRST — before building or
+	// validating the new request — so a build error can never leak the previous
+	// producer goroutine + gRPC stream. The auto-fallback ladder in the runner
+	// calls Subscribe twice on the same session (on_change, then sample on
+	// downgrade); cancelling subCancel is the only thing that unblocks a producer
+	// parked in gnmic's retry-timer wait. Cancel funcs are idempotent, so a later
+	// Close() calling subCancel again is harmless. No attempt is registered
+	// before the first subscribe, so this is safe there too.
+	s.StopSubscribe()
+
+	// A gNMI SubscribeRequest is ATOMIC: a strict target (e.g. Nokia SR Linux)
+	// rejects the WHOLE multi-path subscription if any one path is unsupported
+	// (an optional subtree like switched-vlan), which would sink discovery of the
+	// supported paths too. Prune to the accepted paths first so one bad subtree
+	// can't take down the rest.
+	paths = s.acceptedPaths(ctx, paths)
+
+	subOpts := []gapi.GNMIOption{
+		gapi.SubscriptionListModeSTREAM(),
+		gapi.Encoding(s.subEnc()),
+	}
+
+	for _, p := range paths {
+		var pathOpts []gapi.GNMIOption
+		pathOpts = append(pathOpts, gapi.Path(withOrigin(s.origin, p)))
+		switch mode {
+		case OnChange:
+			pathOpts = append(pathOpts, gapi.SubscriptionModeON_CHANGE())
+		default: // Sample
+			pathOpts = append(pathOpts, gapi.SubscriptionModeSAMPLE())
+			if sampleIntervalMs > 0 {
+				pathOpts = append(pathOpts, gapi.SampleInterval(time.Duration(sampleIntervalMs)*time.Millisecond))
+			}
+		}
+		subOpts = append(subOpts, gapi.Subscription(pathOpts...))
+	}
+
+	req, err := gapi.NewSubscribeRequest(subOpts...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
+	}
+
+	return s.stream(ctx, req, paths)
+}
+
+// stream drives one built SubscribeRequest: it opens the gnmic subscription,
+// owns the producer's context so Close() can stop it, and pumps responses into
+// the returned notification and error channels. Shared by Subscribe and
+// SubscribeMany, which differ only in how they build the request.
+//
+// carried are the paths the request ended up subscribing to, which the sync
+// response reports: pruning leaves the stream covering less than the caller
+// asked for, and a caller reconciling against the dump speaks only for what the
+// stream carries.
+func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeRequest, carried []string) (<-chan Notification, <-chan error, error) {
+	carried = append([]string(nil), carried...)
+	// Own context for the producer so Close() can stop it independently of the
+	// caller's ctx lifetime.
+	subCtx, cancel := context.WithCancel(ctx)
+	s.subCancel = cancel
+	s.subName = s.nextSubscriptionName()
+
+	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, s.subName)
+
+	notes := make(chan Notification)
+	errs := make(chan error, 1)
+
+	go func() {
+		defer close(notes)
+		defer close(errs)
+		for {
+			select {
+			case <-subCtx.Done():
+				return
+			case wrapped, ok := <-rawResp:
+				if !ok {
+					// rawResp closed — but SubscribeChan may have already queued an
+					// error on rawErr that this select didn't pick (the async
+					// ON_CHANGE-rejection path auto mode depends on). Drain it
+					// non-blocking and forward it; otherwise streamLoop sees a clean
+					// notes close, returns nil, and the target reconnects at on_change
+					// forever instead of downgrading to SAMPLE/GET.
+					select {
+					case terr, ok := <-rawErr:
+						if ok && terr != nil && terr.Err != nil {
+							select {
+							case errs <- terr.Err:
+							case <-subCtx.Done():
+							}
+						}
+					default:
+					}
+					return
+				}
+				// SubscribeChan wraps the proto response in .Response.
+				resp := wrapped.Response
+				if resp == nil {
+					continue
+				}
+				if resp.GetSyncResponse() {
+					select {
+					case notes <- Notification{SyncDone: true, Paths: carried}:
+					case <-subCtx.Done():
+						return
+					}
+					continue
+				}
+				if upd := resp.GetUpdate(); upd != nil {
+					n := convertNotification(upd)
+					select {
+					case notes <- n:
+					case <-subCtx.Done():
+						return
+					}
+				}
+			case terr, ok := <-rawErr:
+				if !ok {
+					return
+				}
+				// TargetError wraps the underlying error in .Err.
+				if terr != nil && terr.Err != nil {
+					select {
+					case errs <- terr.Err:
+					case <-subCtx.Done():
+					}
+				}
+				return
+			}
+		}
+	}()
+
+	return notes, errs, nil
+}
+
+// buildSubscribeRequest turns subscriptions into one STREAM request. Each
+// path carries its own origin; an empty origin is sent bare.
+func buildSubscribeRequest(encoding string, subs []Subscription) (*gnmiproto.SubscribeRequest, error) {
+	opts := []gapi.GNMIOption{gapi.SubscriptionListModeSTREAM(), gapi.Encoding(encoding)}
+	for _, sub := range subs {
+		pathOpts := []gapi.GNMIOption{gapi.Path(withOrigin(sub.Origin, sub.Path))}
+		switch sub.Mode {
+		case OnChange:
+			pathOpts = append(pathOpts, gapi.SubscriptionModeON_CHANGE())
+		case Sample:
+			pathOpts = append(pathOpts, gapi.SubscriptionModeSAMPLE())
+			if sub.SampleIntervalMs > 0 {
+				pathOpts = append(pathOpts, gapi.SampleInterval(time.Duration(sub.SampleIntervalMs)*time.Millisecond))
+			}
+		default:
+			return nil, fmt.Errorf("gnmi subscribe: mode %q is not a stream mode", sub.Mode)
+		}
+		opts = append(opts, gapi.Subscription(pathOpts...))
+	}
+	req, err := gapi.NewSubscribeRequest(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
+	}
+	return req, nil
+}
+
+// acceptedSubscriptions prunes subscriptions whose path the target rejects,
+// probing each once per session with a one-path Get under its own origin
+// and remembering the verdict. A subscription is atomic on a strict target,
+// so one bad path would sink the rest. Get is a proxy for Subscribe support:
+// a path a target streams but refuses to Get is pruned too, which is why
+// each pruned path is logged with its error. Each probe carries its
+// subscription's origin explicitly, so the probes run together on one
+// session without touching its state.
+//
+// The whole probe phase runs under one deadline where the caller's context
+// has none, which is the loop's case and lives as long as the policy: a
+// target that answers Capabilities and then never answers the Get would
+// otherwise hold the probe for ever, and there would be no stream, no ladder
+// and no reconnect until the policy was deleted. One deadline for the phase,
+// not one per probe: the probes run from a bounded pool, and a deadline per
+// probe let an unresponsive target cost one full deadline per batch of the
+// pool, minutes for a large profile, on every connection.
+//
+// Only a refusal prunes, and only a refusal is remembered. A probe that missed
+// its deadline, or found the target unavailable, asked its question and got no
+// answer, and one that found nothing under the path learned what the target
+// holds rather than what it models; neither says the path is refused, so it
+// stays in the subscription and the stream decides. A target that truly does not model it rejects it there,
+// which the ladder and the reconnect handle, while a target that was merely
+// slow serves it, where dropping it left a healthy partial stream that never
+// asked for it again. Nothing is cached either, so the next SubscribeMany on
+// this session probes it afresh.
+func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscription) []Subscription {
+	if s.probed == nil {
+		s.probed = map[string]bool{}
+	}
+	// The unseen subscriptions are probed together; their verdicts are read
+	// and remembered here, on the caller's goroutine, once every probe has
+	// returned.
+	errs := make([]error, len(subs))
+	var unseen []int
+	for i, sub := range subs {
+		if _, seen := s.probed[sub.Origin+"|"+sub.Path]; !seen {
+			unseen = append(unseen, i)
+		}
+	}
+	phaseCtx, cancelPhase := s.bounded(ctx)
+	defer cancelPhase()
+	runBounded(len(unseen), func(k int) {
+		i := unseen[k]
+		_, errs[i] = s.getPathsWithOrigin(phaseCtx, subs[i].Origin, []string{subs[i].Path})
+	})
+	kept := make([]Subscription, 0, len(subs))
+	for i, sub := range subs {
+		key := sub.Origin + "|" + sub.Path
+		ok, seen := s.probed[key]
+		if !seen {
+			err := errs[i]
+			ok = err == nil
+			switch {
+			case ok:
+				s.probed[key] = true
+			case definitiveProbeRejection(err):
+				s.probed[key] = false
+				logPruned(s.logger, sub, err)
+			case emptySubtree(err):
+				// The target holds nothing under the path yet, which is no
+				// verdict on the path itself and nothing to remember: an
+				// element created later belongs on the stream, and pruning
+				// here kept it off for the life of the session.
+				logEmptySubtree(s.logger, sub, err)
+				ok = true
+			default:
+				// No verdict, so nothing to act on and nothing to remember: the
+				// path is subscribed as if it had never been probed, and the
+				// next SubscribeMany on this session, which is a rung change,
+				// probes it again. A reconnect opens a session of its own and
+				// probes everything afresh regardless.
+				logProbeInconclusive(s.logger, sub, err)
+				ok = true
+			}
+		}
+		if ok {
+			kept = append(kept, sub)
+		}
+	}
+	if len(kept) == 0 {
+		return subs
+	}
+	return kept
+}
+
+// SubscribeMany is Subscribe with per-subscription mode and origin.
+func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error) {
+	s.StopSubscribe()
+	subs = s.acceptedSubscriptions(ctx, subs)
+	req, err := buildSubscribeRequest(s.subEnc(), subs)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s.stream(ctx, req, subscribedPaths(subs))
+}
+
+// subscribedPaths is the path of every subscription in a list, the paths the
+// stream built from it carries.
+func subscribedPaths(subs []Subscription) []string {
+	out := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		out = append(out, sub.Path)
+	}
+	return out
+}
+
+// GetOnce performs a single gNMI Get over the given paths. The snapshot reports
+// the paths it fetched, which is every requested path only when the target
+// answered the request whole: the recovery below returns a partial snapshot as
+// success, and a caller reconciling against it must not speak for a path that
+// failed.
+func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
+	// Fast path: one Get for all paths — most targets handle a multi-path Get fine.
+	//
+	// The whole request runs under half of what the caller's deadline leaves,
+	// so the other half is still live for the recovery below. Under the whole
+	// deadline, a target that hangs on the aggregate request and answers path
+	// by path spent all of it here, and every per-path Get then failed at once
+	// on the spent context: the recovery never recovered, and the target
+	// reconnected for ever with nothing collected.
+	wholeCtx, cancelWhole := shareRemaining(ctx, 2)
+	n, err := s.getPaths(wholeCtx, paths)
+	cancelWhole()
+	if err == nil {
+		n.Paths = append([]string(nil), paths...)
+		return n, nil
+	}
+	// A multi-path Get can fail ATOMICALLY when the target returns
+	// NotFound/Unimplemented for one optional subtree it doesn't model (e.g.
+	// switched-vlan or network-instance VLAN/VRF leaves). Retry per path and
+	// tolerate the per-path failures so one unsupported optional path doesn't
+	// abort the whole discovery pass (dropping otherwise-available hostname/
+	// interface data and leaving the target reconnecting with no ingest). Only
+	// surface an error when EVERY path fails (a genuine transport/auth problem).
+	var result Notification
+	result.SyncDone = true
+	// The per-path Gets run together under what remains of the deadline, so
+	// a path the target hangs on costs the others nothing, and each has the
+	// whole remainder rather than a share of it. Run one after another on
+	// equal shares, seven paths under a one-second interval left each about
+	// seventy milliseconds, and a target that answered a path in a hundred
+	// timed out on every one of them, on every poll.
+	type outcome struct {
+		n   Notification
+		err error
+	}
+	outcomes := make([]outcome, len(paths))
+	runBounded(len(paths), func(i int) {
+		n, err := s.getPaths(ctx, []string{paths[i]})
+		outcomes[i] = outcome{n: n, err: err}
+	})
+	got := 0
+	var lastErr error
+	for i, p := range paths {
+		if outcomes[i].err != nil {
+			lastErr = outcomes[i].err
+			continue
+		}
+		mergeGetResults(&result, outcomes[i].n)
+		result.Paths = append(result.Paths, p)
+		got++
+	}
+	if got == 0 && lastErr != nil {
+		return Notification{}, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
+	}
+	return result, nil
+}
+
+// maxConcurrentGets bounds how many Gets one session has in flight at once,
+// in the subscription probes and the per-path recovery alike. Unbounded, a
+// profile of a thousand paths opened a thousand RPCs against one device at
+// every connection and every failed poll.
+const maxConcurrentGets = 8
+
+// runBounded calls fn for every index from 0 to n-1 from at most
+// maxConcurrentGets goroutines, and returns once every call has.
+func runBounded(n int, fn func(i int)) {
+	workers := min(n, maxConcurrentGets)
+	if workers <= 0 {
+		return
+	}
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				fn(i)
+			}
+		}()
+	}
+	for i := 0; i < n; i++ {
+		idx <- i
+	}
+	close(idx)
+	wg.Wait()
+}
+
+// shareRemaining is ctx bounded to a 1/n share of what its deadline leaves,
+// or a plain cancellable child of it when it carries none. The whole request
+// takes half, leaving the other half for the per-path recovery.
+func shareRemaining(ctx context.Context, n int) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok || n < 1 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Until(deadline)/time.Duration(n))
+}
+
+// keyValueEscaper escapes what would otherwise change the shape of a rendered
+// path: a bracket in a key value, which a list key such as an interface name
+// may carry, read as a key delimiter to the matcher, moved every element after
+// it and left the update unmatched. The matcher's parser decodes the same
+// escapes, and the value reaches a series attribute as the device wrote it.
+var keyValueEscaper = strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`)
+
+// escapeKeyValue renders one key value for the path string.
+func escapeKeyValue(v string) string {
+	return keyValueEscaper.Replace(v)
+}
+
+// mergeGetResults folds one converted notification into a merged Get result:
+// updates and deletes are appended, and the greatest device timestamp wins. A
+// Get response carries one notification per path, so the latest device time is
+// the honest stamp for the merged snapshot; a notification the target left
+// unstamped (zero) never lowers it.
+func mergeGetResults(into *Notification, n Notification) {
+	into.Updates = append(into.Updates, n.Updates...)
+	into.Deletes = append(into.Deletes, n.Deletes...)
+	if n.Timestamp > into.Timestamp {
+		into.Timestamp = n.Timestamp
+	}
+}
+
+// getPaths issues a single gNMI Get for the given paths under the session's
+// origin and merges the response notifications into one Notification.
+func (s *gnmicSession) getPaths(ctx context.Context, paths []string) (Notification, error) {
+	return s.getPathsWithOrigin(ctx, s.origin, paths)
+}
+
+// getPathsWithOrigin is getPaths under an explicit origin, which is what a
+// subscription probe carries so that probes can run together.
+func (s *gnmicSession) getPathsWithOrigin(ctx context.Context, origin string, paths []string) (Notification, error) {
+	getOpts := []gapi.GNMIOption{
+		gapi.Encoding(s.enc()),
+		gapi.DataTypeALL(),
+	}
+	for _, p := range paths {
+		getOpts = append(getOpts, gapi.Path(withOrigin(origin, p)))
+	}
+	req, err := gapi.NewGetRequest(getOpts...)
+	if err != nil {
+		return Notification{}, fmt.Errorf("gnmi get: build request: %w", err)
+	}
+
+	resp, err := s.tg.Get(ctx, req)
+	if err != nil {
+		return Notification{}, fmt.Errorf("gnmi get: %w", err)
+	}
+
+	var result Notification
+	result.SyncDone = true
+	for _, notif := range resp.GetNotification() {
+		mergeGetResults(&result, convertNotification(notif))
+	}
+	return result, nil
+}
+
+// GetConfig fetches the CONFIG datastore as serialized JSON_IETF: one Get with
+// DataType=CONFIG over the origin-prefixed root path "/". Returns the raw JSON
+// payload of the first update carrying one. JSON_IETF (not PROTO) is requested
+// because the artifact is stored as a config document, not consumed as flat
+// leaves.
+func (s *gnmicSession) GetConfig(ctx context.Context) ([]byte, error) {
+	req, err := gapi.NewGetRequest(
+		gapi.Path(withOrigin(s.origin, "/")),
+		gapi.DataTypeCONFIG(),
+		gapi.Encoding("json_ietf"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gnmi get config: build request: %w", err)
+	}
+	resp, err := s.tg.Get(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("gnmi get config: %w", err)
+	}
+	for _, notif := range resp.GetNotification() {
+		for _, upd := range notif.GetUpdate() {
+			tv := upd.GetVal()
+			if b := tv.GetJsonIetfVal(); len(b) > 0 {
+				return b, nil
+			}
+			if b := tv.GetJsonVal(); len(b) > 0 {
+				return b, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("gnmi get config: response carried no JSON config payload")
+}
+
+// Close releases the underlying gNMI connection. It first cancels the
+// subscribe context so the gnmic producer goroutine exits (even if blocked in
+// its internal retry-timer wait), then closes the target's gRPC connection.
+func (s *gnmicSession) Close() error {
+	if s.subCancel != nil {
+		s.subCancel()
+	}
+	return s.tg.Close()
+}
+
+// vendorCanonical maps a lower-cased vendor token (as it may appear within a
+// SupportedModel Organization string) to the canonical NetBox manufacturer
+// surfaced as the discovered vendor. NVIDIA Cumulus may report "NVIDIA",
+// "Cumulus", or "Mellanox" depending on release; the "cumulus" token resolves
+// to the NVIDIA manufacturer (Cumulus is NVIDIA's NOS, not a NetBox
+// manufacturer of its own), so every NVIDIA-Cumulus spelling still lines up
+// with the nvidia_cumulus overlay's aliases.
+var vendorCanonical = map[string]string{
+	"arista":   "Arista",
+	"nokia":    "Nokia",
+	"cisco":    "Cisco",
+	"juniper":  "Juniper",
+	"nvidia":   "NVIDIA",
+	"cumulus":  "NVIDIA",
+	"mellanox": "Mellanox",
+	"huawei":   "Huawei",
+	"dell":     "Dell",
+}
+
+// vendorTokenOrder fixes the scan order over vendorCanonical so the first match
+// is deterministic across runs (map iteration order is randomized).
+var vendorTokenOrder = []string{"arista", "nokia", "cisco", "juniper", "nvidia", "cumulus", "mellanox", "huawei", "dell"}
+
+// nosCanonical maps a network-OS token (as it may appear in a SupportedModel
+// Organization) to its canonical name. A NOS is software that runs on hardware
+// from a separate OEM, so it is detected independently of vendorCanonical and
+// never becomes a device Manufacturer — it only biases profile selection.
+// SONiC is the case in point: a Dell/Edgecore/etc. box runs SONiC, so the
+// manufacturer stays the hardware OEM while the profile is the sonic overlay.
+var nosCanonical = map[string]string{
+	"sonic": "SONiC",
+}
+
+// nosTokenOrder fixes the NOS scan order (deterministic; map order is randomized).
+var nosTokenOrder = []string{"sonic"}
+
+// hasWord reports whether org, already lower-cased, carries tok as a whole
+// word: org is split on everything that is neither a letter nor a digit.
+func hasWord(org, tok string) bool {
+	for _, w := range strings.FieldsFunc(org, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if w == tok {
+			return true
+		}
+	}
+	return false
+}
+
+// mapCapabilities converts a raw gNMI CapabilityResponse to our CapabilitiesResult.
+func mapCapabilities(resp *gnmiproto.CapabilityResponse) *CapabilitiesResult {
+	result := &CapabilitiesResult{}
+
+	models := resp.GetSupportedModels()
+	// Scan all SupportedModel Organizations for a known hardware-vendor token.
+	// We collect the best (lowest index in vendorTokenOrder) match across all
+	// models so a higher-priority token wins regardless of which model appears
+	// first in the list. If nothing matches, Vendor stays "" — we deliberately do
+	// NOT fall back to models[0]'s raw Organization, which would surface noise
+	// like "OpenConfig working group" as a literal NetBox manufacturer. The
+	// profile Store.Match still works because each canonical token is a word of
+	// itself (and of the overlay aliases).
+	//
+	// A token must be a whole word of the organization. Matched as a substring,
+	// "Francisco Networks" read as Cisco, and since the canonical vendor outranks
+	// the reported organizations in profile selection, a profile written for
+	// that organization lost to the cisco overlay.
+	bestIdx := len(vendorTokenOrder) // sentinel: no match yet
+	for _, m := range models {
+		org := strings.ToLower(m.GetOrganization())
+		for idx, tok := range vendorTokenOrder {
+			if idx >= bestIdx {
+				break // no improvement possible
+			}
+			if hasWord(org, tok) {
+				bestIdx = idx
+				result.Vendor = vendorCanonical[tok]
+				break
+			}
+		}
+	}
+	// Network-OS detection is independent of the hardware vendor: a Dell-built
+	// SONiC box matches both "dell" (Vendor/manufacturer) and "sonic" (NOS, which
+	// biases profile selection). Same lowest-index-wins scan over nosTokenOrder.
+	nosIdx := len(nosTokenOrder)
+	for _, m := range models {
+		org := strings.ToLower(m.GetOrganization())
+		for idx, tok := range nosTokenOrder {
+			if idx >= nosIdx {
+				break
+			}
+			if hasWord(org, tok) {
+				nosIdx = idx
+				result.NOS = nosCanonical[tok]
+				break
+			}
+		}
+	}
+	// Every organization the target reported, kept whole beside the vendor the
+	// mapping derived from it: an organization outside vendorCanonical leaves
+	// Vendor empty, and a profile written for that vendor has nothing else to
+	// be selected by. Repeats are dropped, so a device naming one organization
+	// across fifty models reports it once.
+	seenOrg := map[string]bool{}
+	for _, m := range models {
+		org := strings.TrimSpace(m.GetOrganization())
+		if org == "" || seenOrg[org] {
+			continue
+		}
+		seenOrg[org] = true
+		result.Organizations = append(result.Organizations, org)
+	}
+	for _, m := range models {
+		result.Models = append(result.Models, m.GetName())
+	}
+
+	for _, enc := range resp.GetSupportedEncodings() {
+		result.Encodings = append(result.Encodings, enc.String())
+	}
+
+	return result
+}
+
+// convertNotification maps a proto *gnmi.Notification to our Notification.
+func convertNotification(n *gnmiproto.Notification) Notification {
+	if n == nil {
+		return Notification{}
+	}
+	prefix := pathToString(n.GetPrefix())
+
+	result := Notification{}
+	result.Timestamp = n.GetTimestamp()
+	for _, upd := range n.GetUpdate() {
+		p := joinPaths(prefix, pathToString(upd.GetPath()))
+		result.Updates = append(result.Updates, Update{
+			Path:  p,
+			Value: decodeTypedValue(upd.GetVal()),
+		})
+	}
+	for _, del := range n.GetDelete() {
+		result.Deletes = append(result.Deletes, joinPaths(prefix, pathToString(del)))
+	}
+	return result
+}
+
+// pathToString renders a *gnmi.Path to an absolute XPath-style string.
+// Keys within each element are sorted for deterministic output.
+//
+// The Path.Origin field is intentionally not rendered. Profile paths are
+// origin-less OpenConfig xpaths, so omitting origin lets incoming updates
+// match the profile regardless of whether the target sets origin (e.g.
+// "openconfig"). Prepending origin would break AllowsPath / profile matching.
+func pathToString(p *gnmiproto.Path) string {
+	if p == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, elem := range p.GetElem() {
+		b.WriteByte('/')
+		// Strip a YANG module prefix from the element name (e.g. some targets
+		// render the first element of a subscribe update as "openconfig-system:system").
+		// Our profile paths and AllowsPath use bare OpenConfig names, so normalize
+		// "module:name" to "name" — a no-op for the already-bare names Get returns.
+		name := elem.GetName()
+		if i := strings.IndexByte(name, ':'); i >= 0 {
+			name = name[i+1:]
+		}
+		b.WriteString(name)
+		if len(elem.GetKey()) > 0 {
+			keys := make([]string, 0, len(elem.GetKey()))
+			for k := range elem.GetKey() {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(&b, "[%s=%s]", k, escapeKeyValue(elem.GetKey()[k]))
+			}
+		}
+	}
+	// Fall back to the deprecated repeated Path.element when Path.elem is absent —
+	// older targets/proxies still populate it, and rendering empty here would make
+	// AllowsPath drop every update. gpath.ToStrings reads the deprecated field
+	// internally (so we never reference it directly); each entry is an
+	// already-rendered element (e.g. "interface[name=eth0]"). prefix=false keeps
+	// origin/target out, consistent with the elem rendering above.
+	if len(p.GetElem()) == 0 {
+		for _, e := range gpath.ToStrings(p, false) {
+			b.WriteByte('/')
+			b.WriteString(e)
+		}
+	}
+	return b.String()
+}
+
+// joinPaths concatenates a prefix path and a leaf path, avoiding double slashes.
+func joinPaths(prefix, path string) string {
+	if prefix == "" {
+		return path
+	}
+	if path == "" {
+		return prefix
+	}
+	return strings.TrimSuffix(prefix, "/") + "/" + strings.TrimPrefix(path, "/")
+}
+
+// decodeJSON decodes a JSON payload with its numbers left as json.Number, the
+// digits the device sent, rather than as float64, which holds 53 bits of them:
+// a counter64 past that rounds on the way in, and 9007199254740993 would be
+// exported as 9007199254740992. Consumers of a decoded value read a json.Number
+// alongside the shapes a PROTO update yields. It reports false for a payload
+// that is not JSON, which the caller keeps as the string it is.
+//
+// A decoder reads one value and stops, where a whole-payload unmarshal refuses
+// anything after it, so the payload has to be whole here too: "123garbage",
+// "0x10" and two objects in a row are not one JSON value, and a prefix of them
+// is not what the device sent. Trailing space is not another value, so a
+// payload that ends in a newline still decodes.
+//
+// What says the payload ended is a second read that reaches EOF. More() answers
+// a different question, whether another element follows in the array or object
+// being parsed, so at the top level it is false for the closing bracket that
+// belongs to no value here: "123]" and "{}]" would each have decoded to their
+// own prefix.
+func decodeJSON(raw []byte) (any, bool) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var decoded any
+	if err := dec.Decode(&decoded); err != nil {
+		return nil, false
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		return nil, false
+	}
+	return decoded, true
+}
+
+// decodeTypedValue converts a *gnmi.TypedValue to a plain Go value.
+func decodeTypedValue(tv *gnmiproto.TypedValue) any {
+	if tv == nil {
+		return nil
+	}
+	switch v := tv.GetValue().(type) {
+	case *gnmiproto.TypedValue_StringVal:
+		return v.StringVal
+	case *gnmiproto.TypedValue_IntVal:
+		return v.IntVal
+	case *gnmiproto.TypedValue_UintVal:
+		return v.UintVal
+	case *gnmiproto.TypedValue_BoolVal:
+		return v.BoolVal
+	case *gnmiproto.TypedValue_DoubleVal:
+		return v.DoubleVal
+	case *gnmiproto.TypedValue_BytesVal:
+		return v.BytesVal
+	case *gnmiproto.TypedValue_AsciiVal:
+		return v.AsciiVal
+	case *gnmiproto.TypedValue_JsonIetfVal:
+		if decoded, ok := decodeJSON(v.JsonIetfVal); ok {
+			return decoded
+		}
+		return string(v.JsonIetfVal)
+	case *gnmiproto.TypedValue_JsonVal:
+		if decoded, ok := decodeJSON(v.JsonVal); ok {
+			return decoded
+		}
+		return string(v.JsonVal)
+	case *gnmiproto.TypedValue_LeaflistVal:
+		// A native leaf-list (e.g. trunk-vlans when a target ignores the json_ietf
+		// encoding hint): decode each element to a plain Go value, yielding []any —
+		// the same shape JSON_IETF produces, so downstream leaf-list consumers
+		// (e.g. mapping.expandTrunkVlans) handle both encodings uniformly.
+		if v.LeaflistVal == nil {
+			return nil
+		}
+		out := make([]any, 0, len(v.LeaflistVal.GetElement()))
+		for _, el := range v.LeaflistVal.GetElement() {
+			out = append(out, decodeTypedValue(el))
+		}
+		return out
+	default:
+		// Remaining scalar types — including the deprecated FloatVal/DecimalVal that
+		// older targets may still send — are decoded via the openconfig value
+		// helper, so we never reference the deprecated proto fields directly. Falls
+		// back to the proto string repr only for a genuinely unknown type.
+		if s, err := value.ToScalar(tv); err == nil {
+			return s
+		}
+		return tv.String()
+	}
+}

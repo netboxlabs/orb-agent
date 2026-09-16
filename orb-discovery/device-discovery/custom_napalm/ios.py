@@ -31,6 +31,7 @@ from custom_napalm._modules import (
 )
 from custom_napalm._modules import (
     is_optic_pid,
+    orphan_optic_bay,
 )
 from custom_napalm._modules import (
     to_payload as _modules_to_payload,
@@ -652,9 +653,14 @@ _INVENTORY_VC_FRU_RE = re.compile(
 # Catalyst stacks emit — e.g. ``StackPort1/1`` (the inter-switch stack
 # cable port) — which then bogusly attached as transceiver sub-bays under
 # slot 1 in VC mode. Even with the narrow prefix list a paranoid second
-# gate is applied at the parse site: rows that DON'T classify as
-# transceiver via the PID are dropped, so a non-transceiver Cisco-prefix
-# row (rare but possible) doesn't materialize a wrong sub-bay.
+# gate is applied at the parse site, but only for a row the device DID
+# name a PID for: such a row that doesn't classify as transceiver via
+# that PID is dropped, so a non-transceiver Cisco-prefix row (rare but
+# possible) doesn't materialize a wrong sub-bay. A row with no PID (an
+# unidentified optic — serial and description, no part number) has no
+# PID to second-gate on and is typed transceiver unconditionally; the
+# ifname-shaped NAME matched above is the only signal available, and by
+# design it is trusted on its own for these rows.
 _INVENTORY_IFNAME_RE = re.compile(
     r"""
     ^
@@ -696,12 +702,34 @@ _SWITCH_PREFIX_RE = re.compile(r"^Switch\s*(\d+)\b", re.IGNORECASE)
 
 
 def _count_distinct_switch_ids(inv_rows: list[dict]) -> int:
-    """Return the number of distinct ``Switch N`` member ids in inventory."""
+    """
+    Return the number of distinct member ids named in inventory.
+
+    Recognizes both the ``Switch N ...`` prefix (``_SWITCH_PREFIX_RE``) and
+    the bare-numeric chassis NAME some IOS-XE releases emit instead — the
+    same row shape ``_INVENTORY_CHASSIS_RE`` already accepts and
+    ``get_chassis_members`` already trusts (see
+    ``test_get_chassis_members/numeric_inventory_names``).
+
+    Without the bare-numeric branch, a real stack whose only member signal
+    is a bare-digit NAME never reaches switch-prefixed mode: every ifname's
+    leading integer is actually the member id, but with no ``Switch N`` row
+    anywhere to detect, the driver reads it as if it were the slot id
+    instead. A fixed port and an uplink port on the same member then both
+    resolve to the same (wrong) "slot" and become indistinguishable — see
+    ``_optic_parent_is_baseboard``, which depends on this count being right
+    to tell the two apart at all.
+    """
     member_ids: set[str] = set()
     for row in inv_rows or []:
-        m = _SWITCH_PREFIX_RE.match((row.get("name") or "").strip())
+        name = (row.get("name") or "").strip()
+        m = _SWITCH_PREFIX_RE.match(name)
         if m:
             member_ids.add(m.group(1))
+            continue
+        m = _INVENTORY_CHASSIS_RE.match(name)
+        if m:
+            member_ids.add(m.group(1) or m.group(2))
     return len(member_ids)
 
 
@@ -728,6 +756,135 @@ def _interface_slot(ifname: str, *, depth: int = 1) -> str | None:
     return m.group(1) if m else None
 
 
+_INTERFACE_SEGMENTS_RE = re.compile(r"^[A-Za-z]+(\d+(?:/\d+)*)$")
+
+
+def _interface_segment_count(ifname: str) -> int:
+    """
+    Count the numeric position segments in a canonicalized Cisco ifname.
+
+    ``GigabitEthernet1/0/1`` → 3 (switch/slot/port on a VC member, or
+    slot/sub/port on a standalone modular chassis). ``Gi0/25`` → 2 (classic
+    Catalyst module/port). Returns 0 for a name with no numeric segment at
+    all — this driver's transceiver rows always have at least one ``/``,
+    but the count is used defensively by ``_optic_parent_is_baseboard``,
+    which must not guess when the shape is unrecognized.
+    """
+    m = _INTERFACE_SEGMENTS_RE.match(ifname)
+    if not m:
+        return 0
+    return m.group(1).count("/") + 1
+
+
+# Non-prefixed 3-tuple ifnames (``Te1/0/1``) give no per-port signal that
+# the port's own parent is the chassis baseboard: on a fixed WS-C3850-48XS,
+# "Te1/0/1" and on a modular C9404R, "Te1/0/1" are byte-identical, and
+# ``_interface_slot``'s depth=1 reading already commits to the modular
+# interpretation (leading integer = slot). The only signal left is at the
+# device level: does ANYTHING in the raw inventory look modular at all?
+#
+#   - a ``Slot N`` / ``Subslot`` / ``FRU`` row anywhere (whatever member or
+#     NAME form the platform uses for a card bay), or
+#   - the chassis DESCR itself saying "<N> Slot Chassis".
+#
+# Either one vetoes promotion for every non-prefixed 3-tuple optic on the
+# device. This is absence-grade, not immunity-grade: a modular chassis that
+# omits EVERY card row AND whose chassis DESCR lacks the slot wording still
+# false-promotes. That residual is accepted rather than declining the whole
+# mode outright, which would silently kill fixed-port promotion on every
+# standalone 3850/9300-shaped device — the exact feature this gate exists
+# to protect.
+_MODULAR_VETO_NAME_RE = re.compile(r"Slot\s*\d+|Subslot|FRU", re.IGNORECASE)
+_MODULAR_VETO_DESCR_RE = re.compile(r"\d+\s+Slot\s+Chassis", re.IGNORECASE)
+
+# Chassis families whose uplink ports are FIXED but are still numbered on a
+# non-zero module (``Te1/1/x``). They ship no FRU row for those ports because
+# there is no removable module to report, so the baseboard rule below cannot
+# tell them apart from a modular chassis whose card row the vendor omitted —
+# the two are byte-identical in both ifname shape and inventory. The chassis
+# PID is the only signal, so recognition is an explicit allowlist rather than a
+# heuristic.
+#
+# Membership criterion: every SKU in the family has non-removable uplinks, and
+# a device capture confirms the resulting inventory shape. Two families qualify:
+#
+#   - Catalyst 9200L — its -4G, -4X and -2Y uplinks are all fixed (e.g.
+#     C9200L-24PXG-4X, C9200L-48PXG-2Y). The plain Catalyst 9200 does NOT: it
+#     takes a removable C9200-NM-* uplink module.
+#   - Catalyst 9300L — fixed SFP uplinks, no network-module slot. The plain
+#     C9300 and the C9300X both DO take a removable C9300-NM-* module.
+#
+# A removable module is reported as its own FRU row, which claims the slot and
+# is matched before this gate is consulted.
+_IOS_FIXED_UPLINK_PID_RE = re.compile(r"^(?:C9200L|C9300L)-", re.IGNORECASE)
+
+
+def _ios_chassis_is_fixed_uplink(inv_rows: list[dict]) -> bool:
+    """Return True when raw inventory names a known fixed-uplink chassis PID."""
+    for row in inv_rows or []:
+        if _IOS_FIXED_UPLINK_PID_RE.match((row.get("pid") or "").strip()):
+            return True
+    return False
+
+
+def _non_prefixed_modular_veto(inv_rows: list[dict]) -> bool:
+    """Return True when raw inventory shows any sign the chassis is modular."""
+    for row in inv_rows or []:
+        if _MODULAR_VETO_NAME_RE.search(row.get("name") or ""):
+            return True
+        if _MODULAR_VETO_DESCR_RE.search(row.get("descr") or ""):
+            return True
+    return False
+
+
+def _optic_parent_is_baseboard(
+    canonical: str,
+    *,
+    switch_prefixed: bool,
+    non_prefixed_modular_veto: bool,
+    fixed_uplink_chassis: bool = False,
+) -> bool:
+    """
+    Positive-evidence check: may an unclaimed, parentless optic promote?
+
+    Promotion to a device-rooted bay requires evidence that the port's OWN
+    parent position is the chassis baseboard (module 0) — not merely the
+    absence of a claim on its slot. See ``_attach_transceivers`` for why
+    absence alone stopped being trustworthy (a vendor that omits the
+    parent row defeats it every time).
+
+    - Switch-prefixed ifnames (member/slot/port, or member/slot/sub/port —
+      depth=2 is the slot): module 0 is the switch's own baseboard, every
+      real bay is 1-based. A name with fewer than 3 segments has no
+      reliable slot at depth 2 — refuse rather than read the port number
+      as the slot. A non-zero module promotes only on a chassis whose PID
+      says its uplinks are fixed (``fixed_uplink_chassis``); nothing in the
+      ifname distinguishes that case from a modular chassis whose card row
+      the vendor omitted.
+    - Non-prefixed 2-tuple (module/port, depth=1 is the slot): same
+      baseboard reasoning, one dimension up.
+    - Non-prefixed 3-tuple: no per-port signal exists at all (a fixed
+      WS-C3850-48XS and a modular C9404R report byte-identical names).
+      Promotion is allowed unless a device-level veto fires.
+    """
+    if switch_prefixed:
+        if _interface_segment_count(canonical) < 3:
+            return False
+        if _interface_slot(canonical, depth=2) == "0":
+            return True
+        # Non-zero module on a chassis whose uplinks are known to be fixed:
+        # the port has no removable parent to nest under, which is why no FRU
+        # row claimed its slot. Reached only after the claimed-slot check, so
+        # a fixed-uplink chassis that DOES report a card row still nests.
+        return fixed_uplink_chassis
+    segments = _interface_segment_count(canonical)
+    if segments == 2:
+        return _interface_slot(canonical, depth=1) == "0"
+    if segments >= 3:
+        return not non_prefixed_modular_veto
+    return False
+
+
 def _classify_slot_module(pid: str, role_hint: str) -> str:
     """
     Pick a ModuleType for a Slot N inventory row.
@@ -747,29 +904,184 @@ def _classify_slot_module(pid: str, role_hint: str) -> str:
     return "linecard" if pid_type == "transceiver" else pid_type
 
 
+def _ios_claim_slot(
+    claimed_slots: set[tuple[int | None, str]],
+    vc_slot: re.Match | None,
+    vc_fru: re.Match | None,
+    slot_match: re.Match | None,
+    vc_mode: bool,
+) -> None:
+    """
+    Record the ``(member_key, slot)`` an inventory row's NAME claims.
+
+    Called before any pid/sn usability filter, so an unusable row's slot
+    claim survives — see ``_parse_inventory_rows`` for why that matters.
+    The three matches are mutually exclusive (a row matches at most one),
+    and each is keyed exactly like the bay it would build in
+    ``_parse_inventory_rows`` below.
+    """
+    if vc_slot:
+        claimed_slots.add((int(vc_slot.group(1)) if vc_mode else None, vc_slot.group(2)))
+    elif vc_fru:
+        claimed_slots.add((int(vc_fru.group(1)) if vc_mode else None, vc_fru.group(2)))
+    elif slot_match:
+        claimed_slots.add((None, slot_match.group(1)))
+
+
+#: What IOS prints in the PID column for a part it cannot identify. Compared
+#: case-folded: the exact casing is not a documented contract, just what one
+#: 2960S image happened to print, and a release that wrote it differently would
+#: otherwise have the placeholder read as a real part number and the row
+#: dropped -- the very bug this exists to remove.
+_IOS_UNIDENTIFIED_PID = "unspecified"
+
+# `show idprom interface <ifname>` reads the optic's own EEPROM, which names
+# its vendor and part number even when `show inventory` reports neither. The
+# labels are fixed-width and colon-separated; values that are byte dumps
+# ("0x03 0x07 ...") rather than text are the encoded fields, which is why only
+# these two are read.
+# [ \t] rather than \s throughout: \s matches a newline, so a label with a
+# blank value would consume its own line break and capture the NEXT line as
+# the value -- an empty Vendor Name yielding "Vendor Part Number : ..." as
+# the manufacturer, which NetBox would then hold as a real vendor name.
+_IDPROM_VENDOR_RE = re.compile(
+    r"^[ \t]*Vendor Name[ \t]*:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE,
+)
+_IDPROM_PART_RE = re.compile(
+    r"^[ \t]*Vendor Part Number[ \t]*:[ \t]*(\S.*?)[ \t]*$", re.MULTILINE,
+)
+
+
+def _parse_idprom(output: str) -> tuple[str, str]:
+    """
+    Return (vendor, part number) from `show idprom interface` output.
+
+    Either may be empty: an optic that reports one and not the other is not
+    usable here, since a part number needs a manufacturer to key a NetBox
+    ModuleType and a manufacturer alone names nothing. The caller decides.
+    """
+    if not output:
+        return "", ""
+    vendor = _IDPROM_VENDOR_RE.search(output)
+    part = _IDPROM_PART_RE.search(output)
+    return (
+        vendor.group(1).strip() if vendor else "",
+        part.group(1).strip() if part else "",
+    )
+
+
+def _ios_read_optic_eeprom(driver, transceivers_by_member) -> None:
+    """
+    Fill in vendor and part number for optics `show inventory` did not name.
+
+    Mutates the entries in place. Only rows already marked unidentified are
+    probed, so a switch whose optics are all recognised issues no extra
+    commands at all, and the cost is one command per optic the device could
+    not name rather than per port.
+
+    A failure here is never fatal: the command is not available on every
+    platform or image, and an optic that does not answer keeps the
+    description-derived model it already had.
+    """
+    targets = [
+        (member, ifname, entry)
+        for member, entries in transceivers_by_member.items()
+        for ifname, entry in entries.items()
+        if not entry.identified
+    ]
+    if not targets:
+        return
+    logger.debug(
+        "ios.get_modules: reading the EEPROM of %d optic(s) the inventory did not name",
+        len(targets),
+    )
+    for _member, ifname, entry in targets:
+        try:
+            out = driver.device.send_command(f"show idprom interface {ifname}")
+        except Exception as e:
+            logger.debug(
+                "ios.get_modules: show idprom interface %s failed: %s; "
+                "keeping the description as the model", ifname, e,
+            )
+            continue
+        vendor, part = _parse_idprom(out or "")
+        if not vendor or not part:
+            logger.debug(
+                "ios.get_modules: %s reported no usable vendor/part in its EEPROM "
+                "(vendor=%r part=%r); keeping the description as the model",
+                ifname, vendor, part,
+            )
+            continue
+        entry.model = part
+        entry.manufacturer = vendor
+        entry.identified = True
+
+
 def _parse_inventory_rows(
     rows: list[dict],
     vc_mode: bool,
 ) -> tuple[
     dict[int | None, dict[str, _ModuleBay]],
     dict[int | None, dict[str, _ModuleEntry]],
+    set[tuple[int | None, str]],
 ]:
     """
     Split ``show inventory`` rows into per-member slot bays and transceivers.
 
-    Returns ``(bays_by_member_then_slot, transceivers_by_member_then_ifname)``.
-    In standalone mode (``vc_mode=False``) both outer dicts have a single
-    ``None`` key. In VC mode the outer key is the member id captured from
-    ``Switch N ...`` prefixes on the inventory row.
+    Returns ``(bays_by_member_then_slot, transceivers_by_member_then_ifname,
+    claimed_slots)``. In standalone mode (``vc_mode=False``) both outer dicts
+    have a single ``None`` key. In VC mode the outer key is the member id
+    captured from ``Switch N ...`` prefixes on the inventory row.
+
+    ``claimed_slots`` is every ``(member_key, slot)`` pair the RAW inventory
+    names via ``Switch N Slot M``, ``Switch N FRU Uplink Module M`` or plain
+    ``Slot N`` — matched against ``name`` here, BEFORE the ``sn`` usability
+    filter below (a blank PID no longer disqualifies a row; only a blank
+    serial does) and before any type/classification filter, and keyed
+    exactly like ``bays_by_member``. A slot lands in this set even when its
+    own row turns out unusable (blank serial, or a serial with neither a
+    PID nor a description to name the part); the caller must then decline
+    promoting any optic mapped to that slot, because the slot's parent
+    exists in hardware — this row simply failed to describe it usably.
+    Promoting the optic to a device-rooted bay in that case would invent a
+    chassis-level parent for hardware that already has one.
     """
     bays_by_member: dict[int | None, dict[str, _ModuleBay]] = {}
     trans_by_member: dict[int | None, dict[str, _ModuleEntry]] = {}
+    claimed_slots: set[tuple[int | None, str]] = set()
     for row in rows or []:
         name = (row.get("name") or "").strip()
         pid = (row.get("pid") or "").strip()
         sn = (row.get("sn") or "").strip()
         descr = (row.get("descr") or "").strip()
-        if not (pid and sn):
+
+        # A row matches at most one of these three (see the comments above
+        # _INVENTORY_SLOT_RE / _INVENTORY_VC_SLOT_RE / _INVENTORY_VC_FRU_RE).
+        # Matched up front, before the pid/sn filter, so an unusable row's
+        # slot claim survives even though the row itself gets skipped below.
+        vc_slot = _INVENTORY_VC_SLOT_RE.match(name)
+        vc_fru = _INVENTORY_VC_FRU_RE.match(name)
+        slot_match = _INVENTORY_SLOT_RE.match(name)
+        _ios_claim_slot(claimed_slots, vc_slot, vc_fru, slot_match, vc_mode)
+
+        if not sn:
+            continue
+        # A row the device serialised but did not name. The description stands
+        # in for the model and `identified` records that it did, so translate
+        # can file it under a generic manufacturer rather than assert a brand
+        # the device never claimed. A row with neither is skipped: NetBox needs
+        # a model and there is nothing to call the part.
+        #
+        # `Unspecified` is a Cisco placeholder, not a model. Normalising it here
+        # rather than in the shared layer is deliberate: which strings are
+        # placeholders is vendor knowledge.
+        identified = bool(pid) and pid.casefold() != _IOS_UNIDENTIFIED_PID
+        model = pid if identified else descr
+        if not model:
+            logger.debug(
+                "ios.get_modules: %s has a serial but no PID and no description; "
+                "skipping (nothing to name the part)", name,
+            )
             continue
 
         # VC slot pattern (Switch N Slot M [role]) is tried regardless of
@@ -777,69 +1089,85 @@ def _parse_inventory_rows(
         # use the "Switch 1 Slot M" prefix too. The member id captured
         # here is discarded in standalone mode so the bay falls into the
         # None bucket the standalone translate path expects.
-        vc_slot = _INVENTORY_VC_SLOT_RE.match(name)
         if vc_slot:
             member_key = int(vc_slot.group(1)) if vc_mode else None
             slot = vc_slot.group(2)
-            mtype = _classify_slot_module(pid, vc_slot.group(3) or "")
+            mtype = _classify_slot_module(model, vc_slot.group(3) or "")
             bays_by_member.setdefault(member_key, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
-                    model=pid, serial=sn, type=mtype, description=descr,
+                    model=model, serial=sn, type=mtype, description=descr,
+                    identified=identified,
                 ),
             )
             continue
 
-        vc_fru = _INVENTORY_VC_FRU_RE.match(name)
         if vc_fru:
             member_key = int(vc_fru.group(1)) if vc_mode else None
             slot = vc_fru.group(2)
-            # FRU uplink modules have no role hint in NAME, so trust the
-            # PID classifier (linecard for non-transceiver Cisco PIDs).
+            # FRU uplink modules have no role hint in NAME, so classify from
+            # `model` alone (empty role hint) via the same
+            # transceiver-shaped-classification downgrade the slot branches
+            # use: for an unidentified row `model` is the raw device
+            # description, and a description that happens to start with a
+            # recognized MSA optic prefix must not silently type the bay
+            # transceiver, or it would vanish in linecards mode.
             bays_by_member.setdefault(member_key, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
-                    model=pid, serial=sn,
-                    type=classify_module_type_cisco_ios(pid),
+                    model=model, serial=sn,
+                    type=_classify_slot_module(model, ""),
                     description=descr,
+                    identified=identified,
                 ),
             )
             continue
 
-        slot_match = _INVENTORY_SLOT_RE.match(name)
         if slot_match:
             # Plain "Slot N" row (no Switch prefix) — bucketed under None.
             slot = slot_match.group(1)
-            mtype = _classify_slot_module(pid, slot_match.group(2) or "")
+            mtype = _classify_slot_module(model, slot_match.group(2) or "")
             bays_by_member.setdefault(None, {})[slot] = _ModuleBay(
                 name=slot, position=slot,
                 module=_ModuleEntry(
-                    model=pid, serial=sn, type=mtype, description=descr,
+                    model=model, serial=sn, type=mtype, description=descr,
+                    identified=identified,
                 ),
             )
             continue
 
         if _INVENTORY_IFNAME_RE.match(name):
-            # Transceiver row keyed by ifname. Second-gate by PID class:
-            # only rows whose PID classifies as transceiver actually
-            # become transceiver sub-bays. This drops paranoid edge
-            # cases where a non-transceiver Cisco-prefix row (e.g. a
-            # rare stack-hardware row that happens to use a real port
-            # prefix) sneaks past the narrow ifname regex.
-            module_type = classify_module_type_cisco_ios(pid)
-            if module_type != "transceiver":
-                continue
+            # The row's NAME being an interface is the optic signal, not the
+            # PID. classify_module_type_cisco_ios returns "linecard" for both
+            # "" and "Unspecified", so deriving the type from the PID would
+            # file an unidentified optic as a linecard and let it survive
+            # linecards mode, where a transceiver is correctly dropped. Junos
+            # gates on its own NAME ("Xcvr") for the same reason.
+            #
+            # An identified row is still second-gated by PID class, which drops
+            # a non-transceiver row whose NAME sneaked past the narrow regex.
+            module_type = "transceiver"
+            if identified:
+                module_type = classify_module_type_cisco_ios(pid)
+                if module_type != "transceiver":
+                    logger.warning(
+                        "ios.get_modules: %s reports PID %r, which is not a "
+                        "recognized transceiver model; skipping",
+                        name, pid,
+                    )
+                    continue
             # In VC mode the leading integer of the ifname is the
             # member id; in standalone there is no member dimension
             # and the transceiver lives in the same None bucket as
             # its parent.
             member_for_transceiver = _interface_member_id(name) if vc_mode else None
             trans_by_member.setdefault(member_for_transceiver, {})[name] = _ModuleEntry(
-                model=pid, serial=sn,
+                model=model, serial=sn,
                 type=module_type,
                 description=descr,
+                identified=identified,
             )
-    return bays_by_member, trans_by_member
+    return bays_by_member, trans_by_member, claimed_slots
 
 
 def _collect_interfaces_by_member_and_slot(
@@ -898,6 +1226,9 @@ def _attach_transceivers(
     transceivers_by_member: dict[int | None, dict[str, _ModuleEntry]],
     interfaces_by_member_and_slot: dict[int | None, dict[str, list[str]]],
     switch_prefixed: bool,
+    claimed_slots: set[tuple[int | None, str]],
+    non_prefixed_modular_veto: bool,
+    fixed_uplink_chassis: bool = False,
 ) -> None:
     """
     Attach each transceiver entry as a sub-bay of its member's parent slot.
@@ -909,22 +1240,66 @@ def _attach_transceivers(
     in full mode. ``switch_prefixed`` (any ``Switch N`` row in inventory)
     determines whether the slot id is the leading integer (False) or the
     second integer (True), matching the interface-routing depth above.
+
+    ``claimed_slots`` (see ``_parse_inventory_rows``) names every
+    ``(member_id, slot)`` the RAW inventory already accounted for. An optic
+    whose slot has no usable bay but IS claimed is declined rather than
+    promoted — that slot's parent exists in hardware, it just didn't
+    survive ``_parse_inventory_rows``'s usability filter, so promoting the
+    optic here would invent a chassis-level topology instead of reporting
+    the real modular one.
+
+    An optic on an UNCLAIMED slot is no longer promoted on absence alone —
+    a vendor that omits the parent row entirely (rather than reporting it
+    unusably) defeats that check every time. ``_optic_parent_is_baseboard``
+    supplies the positive evidence instead: promotion requires the port's
+    OWN name to say its parent is the chassis baseboard, or (in the one
+    mode with no such signal) the absence of any device-level sign that the
+    chassis is modular at all. See that function's docstring for the
+    per-mode rules, and its module-level veto comment for the residual this
+    still cannot catch.
     """
     slot_depth = 2 if switch_prefixed else 1
     for member_id, transceivers in transceivers_by_member.items():
-        if member_id not in bays_by_member:
-            continue
         for raw_ifname, transceiver in transceivers.items():
             canonical = canonical_interface_name(
                 raw_ifname, addl_name_map=_IOS_ADDL_NAME_MAP,
             )
             slot = _interface_slot(canonical, depth=slot_depth)
-            if slot is None or slot not in bays_by_member[member_id]:
-                continue
-            parent_bay = bays_by_member[member_id][slot]
-            parent_bay.module.sub_bays.append(
-                _ModuleBay(name=canonical, position=canonical, module=transceiver),
-            )
+            parent_bay = None
+            if slot is not None:
+                parent_bay = bays_by_member.get(member_id, {}).get(slot)
+            if parent_bay is None or parent_bay.module is None:
+                if slot is not None and (member_id, slot) in claimed_slots:
+                    logger.debug(
+                        "ios.get_modules: declining promotion of %s onto member %s "
+                        "slot %s (inventory claims the slot but its row was unusable)",
+                        canonical, member_id, slot,
+                    )
+                    continue
+                if not _optic_parent_is_baseboard(
+                    canonical,
+                    switch_prefixed=switch_prefixed,
+                    non_prefixed_modular_veto=non_prefixed_modular_veto,
+                    fixed_uplink_chassis=fixed_uplink_chassis,
+                ):
+                    logger.debug(
+                        "ios.get_modules: declining promotion of %s onto member %s "
+                        "slot %s (no positive evidence its parent is the chassis "
+                        "baseboard)",
+                        canonical, member_id, slot,
+                    )
+                    continue
+                # Fixed-port chassis, and fixed ports on a chassis whose only
+                # bay is an uplink module: the optic has no parent to nest
+                # under, so it becomes a bay in its own right.
+                bays_by_member.setdefault(member_id, {})[canonical] = (
+                    orphan_optic_bay(canonical, transceiver)
+                )
+            else:
+                parent_bay.module.sub_bays.append(
+                    _ModuleBay(name=canonical, position=canonical, module=transceiver),
+                )
             interfaces_by_member_and_slot.setdefault(member_id, {}).setdefault(
                 canonical, [],
             ).append(canonical)
@@ -943,6 +1318,13 @@ def _ios_get_modules_impl(driver) -> dict | None:
         logger.warning("ios.get_modules: show inventory failed: %s", e)
         return None
     if not inv_rows:
+        # Every Cisco chassis reports at least its own row, so zero parsed rows
+        # means the command was rejected or its output did not parse -- a
+        # different failure from "no modules on this device".
+        logger.warning(
+            "ios.get_modules: show inventory returned no parseable rows; "
+            "emitting no modules",
+        )
         return None
 
     distinct_switch_count = _count_distinct_switch_ids(inv_rows)
@@ -953,22 +1335,54 @@ def _ios_get_modules_impl(driver) -> dict | None:
     # leading switch id) fires whenever inventory has ANY Switch N row —
     # single-chassis 9500 with Switch 1 prefix uses the same format.
     switch_prefixed = distinct_switch_count >= 1
-    bays_by_member, transceivers_by_member = _parse_inventory_rows(inv_rows, vc_mode)
-    if not bays_by_member:
+    # Only consulted by _optic_parent_is_baseboard in non-prefixed mode;
+    # computed unconditionally anyway since scanning the rows once here is
+    # cheap and keeps the veto device-level rather than per-optic.
+    non_prefixed_modular_veto = _non_prefixed_modular_veto(inv_rows)
+    fixed_uplink_chassis = _ios_chassis_is_fixed_uplink(inv_rows)
+    bays_by_member, transceivers_by_member, claimed_slots = _parse_inventory_rows(
+        inv_rows, vc_mode,
+    )
+    # Ask the optics themselves about the ones the chassis inventory could not
+    # name. Runs before the emptiness check below on purpose: an upgrade here
+    # changes what those rows become, not whether they exist.
+    _ios_read_optic_eeprom(driver, transceivers_by_member)
+    if not bays_by_member and not transceivers_by_member:
+        # No aggregate warning here on purpose. A switch with no optics and no
+        # cards reaches this line every cycle, and that is the correct answer,
+        # not a diagnostic event. The rows that WERE candidates and got
+        # rejected are each warned about individually in
+        # _parse_inventory_rows, which is where the reason actually lives.
         return None
 
     interfaces_by_member_and_slot = _collect_interfaces_by_member_and_slot(
         driver, bays_by_member, vc_mode, switch_prefixed,
     )
+    # Counted before the attach consumes them, so the warning below can say
+    # how many optics the device actually reported.
+    optics_found = sum(len(t) for t in transceivers_by_member.values())
     _attach_transceivers(
         bays_by_member, transceivers_by_member, interfaces_by_member_and_slot,
-        switch_prefixed,
+        switch_prefixed, claimed_slots, non_prefixed_modular_veto,
+        fixed_uplink_chassis,
     )
 
-    return _modules_to_payload({
+    payload = _modules_to_payload({
         member_id: _MemberModules(
             bays=list(bays.values()),
             interfaces_by_bay=interfaces_by_member_and_slot.get(member_id, {}),
         )
         for member_id, bays in bays_by_member.items()
     })
+    if payload is None and optics_found:
+        # The device reported optics and not one of them survived. Declining is
+        # the right call when a parent bay may exist unreported, but staying
+        # silent about it makes the option look broken rather than deliberate.
+        # The per-port reason stays at debug.
+        logger.warning(
+            "ios.get_modules: found %d transceiver(s) but declined every one "
+            "(no modeled parent bay); emitting no modules. Enable debug "
+            "logging on custom_napalm.ios for the per-port reason.",
+            optics_found,
+        )
+    return payload

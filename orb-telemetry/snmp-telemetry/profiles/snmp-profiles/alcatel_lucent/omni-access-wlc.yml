@@ -1,0 +1,102 @@
+# http://www.circitor.fr/Mibs/Html/W/WLSX-SWITCH-MIB.php
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-wireless-controller
+
+sysobjectid:
+  - 1.3.6.1.4.1.6486.800.1.1.2.2.2.*           # Alcatel Lucent Omni Access Wireless Controller
+  - 1.3.6.1.4.1.6486.800.1.1.2.2.2.1.1.21      # Alcatel Lucent OAW-4750XM
+
+metrics:
+  - MIB: 
+    # The table of processors contained by the switch.
+    table:
+      name: wlsxSysXProcessorTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.9
+    symbols:
+      # The average, over the last minute, of the percentage of time that this processor was not idle.
+      - name: sysXProcessorLoad
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.9.1.3
+        poll_time_sec: 60
+        tag: CPU
+    metric_tags:
+      # description of the processor.
+      - column:
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.1.9.1.2
+          name: sysXProcessorDescr
+
+  # The table of Storage-devices contained by the switch.
+  - MIB: 
+    table:
+      name: wlsxSysXStorageTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10
+    symbols:
+      # size of the storage filesystem in MB.
+      - name: sysXStorageSize
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.3
+      # used space of the storage filesystem in MB.
+      - name: sysXStorageUsed
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.4
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.2
+          name: sysXStorageType
+          enum:
+            ram: 1
+            flashMemory: 2
+      # name of the storage filesystem.
+      - column:
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.5
+          name: sysXStorageName
+
+  - MIB: 
+    table:
+      # The memory status of the switch
+      name: wlsxSysXMemoryTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.11
+    symbols:
+      # Total memory in KB.
+      - name: sysXMemorySize
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.11.1.2
+        poll_time_sec: 60
+        tag: MemoryTotal
+      # Used memory in KB.
+      - name: sysXMemoryUsed
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.11.1.3
+        poll_time_sec: 60
+        tag: MemoryUsed
+      # Free memory in KB.
+      - name: sysXMemoryFree
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.11.1.4
+        poll_time_sec: 60
+        tag: MemoryFree
+
+  - MIB: 
+    symbols:
+      # Total Number of Access Points Connected to this switch.
+      - name: wlsxSwitchTotalNumAccessPoints
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.1.0
+      # Total Number of Stations Associated to this switch.
+      - name: wlsxSwitchTotalNumStationsAssociated
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.2.0
+
+metric_tags:
+  # Model Name of the switch.
+  - column:
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.2.0
+      name: wlsxModelName
+  # Role of this switch in the Switch Domain.
+  - column:
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.4
+      name: wlsxSwitchRole
+      enum:
+        master: 1
+        local: 2
+        standbymaster: 3
+  # The license serial number of the switch
+  - column:
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.12
+      name: wlsxSwitchLicenseSerialNumber

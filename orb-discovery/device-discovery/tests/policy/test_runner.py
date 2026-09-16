@@ -530,6 +530,38 @@ def test_run_scan_handles_port_scan_failure(policy_runner, sample_config, run_st
         assert "Port scan timeout" in runs[0].reason
 
 
+def test_run_scan_records_a_failed_run_for_an_empty_expansion(
+    policy_runner, sample_config, run_store,
+):
+    """
+    A scope that expanded to no addresses is recorded as a failed run.
+
+    ``expand_hostnames`` returns an empty list when a target is over the
+    expansion cap. Without a run record the policy reports RUNNING with no
+    history for that scope, so the operator sees an unchanged status and has
+    only the log to go on. A range that scans but finds nothing reachable is
+    already recorded as FAILED; a range that could never be scanned at all
+    must not be less visible than that.
+    """
+    scope = Napalm(
+        driver=None,
+        hostname="2001:db8::/64",
+        username="admin",
+        password="password",
+    )
+    trigger = MagicMock(spec=BaseTrigger)
+    policy_runner.run_store = run_store
+    policy_runner.name = "test_policy"
+
+    policy_runner.run_scan([], trigger, scope, sample_config)
+
+    runs = run_store.get_runs_for_target("test_policy", "2001:db8::/64")
+    assert len(runs) == 1, "an over-cap scope must leave a run behind"
+    assert runs[0].status.value == "failed"
+    assert runs[0].entity_count == 0
+    assert "no addresses" in runs[0].reason
+
+
 def test_options_discovery_drivers_default_none():
     """Test that discovery_drivers defaults to None when not specified."""
     from device_discovery.policy.models import Options

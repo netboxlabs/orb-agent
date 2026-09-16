@@ -1,0 +1,541 @@
+# This profile needs to be manually applied in the device config.
+# Device uses generic Net-SNMP sysobjectid for Linux and has no identifying data in sysDescr.
+# Ex:
+# 1.3.6.1.2.1.1.1.0 = STRING: Linux <device_name> 4.18.0-305.12.1.el8.ibm.1.x86_64 #1 SMP Wed Aug 18 07:10:24 CDT 2021 x86_64
+# 1.3.6.1.2.1.1.2.0 = OID: .1.3.6.1.4.1.8072.3.2.10
+# https://mibs.observium.org/mib/Barracuda-BWS/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.3.2.10.barracudawaf    # Barracuda Web Application Firewall
+
+provider: kentik-waf
+
+metrics:
+  # A table of SSL stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsSslProxyStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.2
+    symbols:
+      # Number of active connections.
+      - name: sslProxyActiveConn
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.4
+      # Number of full handshakes.
+      - name: sslProxyFullHandshakes
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.5
+      # Number of resumption handshakes.
+      - name: sslProxyResumptionHandshakes
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.6
+      # Number of handshake attempts.
+      - name: sslProxyHandshakeAttempts
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.7
+      # Number of cache hits.
+      - name: sslProxyCacheHits
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.8
+      # Number of cache misses.
+      - name: sslProxyCacheMiss
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.9
+      # Number of cache timeouts.
+      - name: sslProxyCacheTimeouts
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.10
+      # Number of PMC errors.
+      - name: sslProxyErrPms
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.11
+      # Number of bad certificates.
+      - name: sslProxyAuthBadCertErr
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.12
+      # Number of bad CN errors.
+      - name: sslProxyAuthBadCNErr
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.13
+      # Number of bad DNC errors.
+      - name: sslProxyBadDNCErr
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.14
+      # Number of bad CRL errors.
+      - name: sslProxyBadCRLErr
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.15
+      # Number of IN octets.
+      - name: sslProxyInBytes
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.16
+      # Number of OUT octets.
+      - name: sslProxyOutBytes
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.17
+      # Total number of requests.
+      - name: sslProxyTotalReq
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.18
+      # Total number of connections.
+      - name: sslProxyTotalConn
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.19
+      # Current number of connections.
+      - name: sslProxyCurrentConn
+        OID: 1.3.6.1.4.1.20632.8.50.2.1.20
+    metric_tags:
+      - column:
+          name: sslProxyAddress
+          OID: 1.3.6.1.4.1.20632.8.50.2.1.2
+      - column:
+          name: sslProxyPort
+          OID: 1.3.6.1.4.1.20632.8.50.2.1.3
+
+  # A table of SSL server stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsSslSrvrStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.6
+    symbols:
+      # The total number of request accepted by ssl server.
+      - name: sslSrvrTotReqAccepted
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.7
+      # The total number of active request at server.
+      - name: sslSrvrTotReqActive
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.8
+      # The total number of request rejected at server.
+      - name: sslSrvrTotReqRejected
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.9
+      # The total number of request successfull at server.
+      - name: sslSrvrTotSuccess
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.10
+      # The total number of request rejected at server.
+      - name: sslSrvrTotRefused
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.11
+      # The total number of request timed out at server.
+      - name: sslSrvrTotTimedout
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.12
+      # The average number of request per connection at server.
+      - name: sslSrvrAvgReqPerConn
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.13
+      # The total number of response at server.
+      - name: sslSrvrTotResponse
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.14
+      # The average response time at server.
+      - name: sslSrvrAvgResTime
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.15
+      # The maximum response time at server.
+      - name: sslSrvrMaxResTime
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.16
+      # The minimum response time at server.
+      - name: sslSrvrMinResTime
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.17
+      # The number of request enqueued at server.
+      - name: sslSrvrNumReqEnqueue
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.18
+      # Number of free connection at server.
+      - name: sslSrvrNumFreeConn
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.19
+      # Number of opening connection at server.
+      - name: sslSrvrNumOpeningConn
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.20
+      # Number of connections at server.
+      - name: sslSrvrNumConn
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.21
+      # Number of IB disabled at server.
+      - name: sslSrvrNumIBDisabled
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.22
+      # Number of OOB disabled at server.
+      - name: sslSrvrNumOOBDisabled
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.23
+      # Number of OOB enabled at server.
+      - name: sslSrvrNumOOBEnabled
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.24
+      # Last disabled time at server.
+      - name: sslSrvrLastDisabledTime
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.25
+      # Server state.
+      - name: sslSrvrState
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.26
+        enum:
+          up: 0
+          down: 1
+      # Total IN bytes.
+      - name: sslSrvrInBytes
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.27
+      # Total OUT bytes.
+      - name: sslSrvrOutBytes
+        OID: 1.3.6.1.4.1.20632.8.50.6.1.28
+    metric_tags:
+      - column:
+          name: sslSrvrSrvcAddress
+          OID: 1.3.6.1.4.1.20632.8.50.6.1.2
+      - column:
+          name: sslSrvrSrvcPort
+          OID: 1.3.6.1.4.1.20632.8.50.6.1.3
+      - column:
+          name: sslSrvrAddress
+          OID: 1.3.6.1.4.1.20632.8.50.6.1.5
+      - column:
+          name: sslSrvrPort
+          OID: 1.3.6.1.4.1.20632.8.50.6.1.6
+
+  # A table of IPS request service stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsReqSrvcStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.7
+    symbols:
+      # Number of URL profiles matched.
+      - name: ipsReqSrvcNoOfUrlProfMatched
+        OID: 1.3.6.1.4.1.20632.8.50.7.1.4
+      # Number of app profile violations.
+      - name: ipsReqSrvcNoOfAppProfViol
+        OID: 1.3.6.1.4.1.20632.8.50.7.1.5
+      # Total number of profile violations.
+      - name: ipsReqSrvcTotProfViol
+        OID: 1.3.6.1.4.1.20632.8.50.7.1.6
+    metric_tags:
+      - column:
+          name: ipsReqSrvcAddress
+          OID: 1.3.6.1.4.1.20632.8.50.7.1.2
+      - column:
+          name: ipsReqSrvcPort
+          OID: 1.3.6.1.4.1.20632.8.50.7.1.3
+
+# A table of IPS request service stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsLrnSrvcStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.8
+    symbols:
+      # Number of updated by requests.
+      - name: ipsLrnSrvcUpdatesByReq
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.4
+      # Number of updated by response.
+      - name: ipsLrnSrvcUpdatesByRsp
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.5
+      # Total number of updated by requests.
+      - name: ipsLrnSrvcTotUpdatesByReq
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.6
+      # Total number of updated by response.
+      - name: ipsLrnSrvcTotUpdatesByRsp
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.7
+      # Total number URL updated.
+      - name: ipsLrnSrvcTotUrlUpdated
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.8
+      # Total number parameters learned.
+      - name: ipsLrnSrvcTotParamsLearned
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.9
+      # Time at which last update was done.
+      - name: ipsLrnSrvcTimeLastUpdated
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.10
+      # Time at which profile was locked.
+      - name: ipsLrnSrvcTimeLocked
+        OID: 1.3.6.1.4.1.20632.8.50.8.1.11
+    metric_tags:
+      - column:
+          name:  ipsLrnSrvcAddress
+          OID: 1.3.6.1.4.1.20632.8.50.8.1.2
+      - column:
+          name: ipsLrnSrvcPort
+          OID: 1.3.6.1.4.1.20632.8.50.8.1.3
+
+# A table of IPS request limit stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsReqLimitStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.9
+    symbols:
+      # Number of URL length overflow error.
+      - name: ipsReqLimitUrlLenOFErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.4
+      # Number of query length overflow error.
+      - name: ipsReqLimitQueryLenOFErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.5
+      # Number of request length overflow error.
+      - name: ipsReqLimitReqLenOFErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.6
+      # Number of Cookie length overflow error.
+      - name: ipsReqLimitCookieLenOFErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.7
+      # Number of header count overflow error.
+      - name: ipsReqLimitHdrCntOFErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.8
+      # Number of header length overflow error.
+      - name: ipsReqLimitHdrLenOFErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.9
+      # Number of content length overflow error.
+      - name: ipsReqLimitContentLenErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.10
+      # Number of blocked method error.
+      - name: ipsReqLimitBlkdMethodErr
+        OID: 1.3.6.1.4.1.20632.8.50.9.1.11
+    metric_tags:
+      - column:
+          name:  ipsReqLimitAddress
+          OID: 1.3.6.1.4.1.20632.8.50.9.1.2
+      - column:
+          name: ipsReqLimitPort
+          OID: 1.3.6.1.4.1.20632.8.50.9.1.3
+
+# A table of IPS URL normalization stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsUrlNormStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.10
+    symbols:
+      # Number of encoding error.
+      - name: ipsUrlNormEncodingErr
+        OID: 1.3.6.1.4.1.20632.8.50.10.1.4
+      # Number of slash dot in URL error.
+      - name: ipsUrlNormSlashDotInUrlErr
+        OID: 1.3.6.1.4.1.20632.8.50.10.1.5
+      # Number of tilda in URL error.
+      - name: ipsUrlNormTildaInUrl
+        OID: 1.3.6.1.4.1.20632.8.50.10.1.6
+      # Number of character set encoding error.
+      - name: ipsUrlNormCharSetEncodingErr
+        OID: 1.3.6.1.4.1.20632.8.50.10.1.7
+    metric_tags:
+      - column:
+          name: ipsUrlNormAddress
+          OID: 1.3.6.1.4.1.20632.8.50.10.1.2
+      - column:
+          name: ipsUrlNormPort
+          OID: 1.3.6.1.4.1.20632.8.50.10.1.3
+
+# A table of IPS cookie security stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsCookieSecStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.11
+    symbols:
+      # Number of cookie encrypted.
+      - name: ipsCookieSecEncrypted
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.4
+      # Number of cookie tampered.
+      - name: ipsCookieSecTampered
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.5
+      # Number of cookie allowed.
+      - name: ipsCookieSecNumCookieAllow
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.6
+      # Number of cookie set.
+      - name: ipsCookieSecNumCookieSet
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.7
+      # Number of cookie error.
+      - name: ipsCookieSecNumCookieErr
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.8
+      # Number of cookie dec error.
+      - name: ipsCookieSecCookieDecErr
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.9
+      # Number of cookie decrypted.
+      - name: ipsCookieSecCookieDecrypted
+        OID: 1.3.6.1.4.1.20632.8.50.11.1.10
+    metric_tags:
+      - column:
+          name: ipsCookieSecAddress
+          OID: 1.3.6.1.4.1.20632.8.50.11.1.2
+      - column:
+          name: ipsCookieSecPort
+          OID: 1.3.6.1.4.1.20632.8.50.11.1.3
+
+# A table of IPS URL ACL stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsUrlAclStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.12
+    symbols:
+      # Number of ACL hits.
+      - name: ipsUrlAclProcessAclHits
+        OID: 1.3.6.1.4.1.20632.8.50.12.1.4
+      # Number of ACL policy hits.
+      - name: ipsUrlAclPolicyHits
+        OID: 1.3.6.1.4.1.20632.8.50.12.1.5
+      # Time stamp at which this entry was last modified.
+      - name: ipsUrlAclTimeStamp
+        OID: 1.3.6.1.4.1.20632.8.50.12.1.6
+      # Number of ACL policy allows.
+      - name: ipsUrlAclAllowAclHits
+        OID: 1.3.6.1.4.1.20632.8.50.12.1.8
+    metric_tags:
+      - column:
+          name: ipsUrlAclAddress
+          OID: 1.3.6.1.4.1.20632.8.50.12.1.2
+      - column:
+          name: ipsUrlAclPort
+          OID: 1.3.6.1.4.1.20632.8.50.12.1.3
+
+# A table of IPS header ACL stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsHdrAclStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.13
+    symbols:
+      # Number of ACL hits.
+      - name: ipsHdrAclHits
+        OID: 1.3.6.1.4.1.20632.8.50.13.1.4
+      # Time stamp at which this entry was last modified.
+      - name: ipsHdrAclTimeStamp
+        OID: 1.3.6.1.4.1.20632.8.50.13.1.5
+    metric_tags:
+      - column:
+          name: ipsHdrAclAddress
+          OID: 1.3.6.1.4.1.20632.8.50.13.1.2
+      - column:
+          name: ipsHdrAclPort
+          OID: 1.3.6.1.4.1.20632.8.50.13.1.3
+
+# A table of IPS URL translation stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsWebAddrTransStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.14
+    symbols:
+      # Number of URL translation requests.
+      - name: ipsWebAddrTransReqUrlTrans
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.4
+      # Number of URL translation response.
+      - name: ipsWebAddrTransRspUrlTrans
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.5
+      # Number of URL re-written.
+      - name: ipsWebAddrTransReqUrlReWritten
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.6
+      # Number of request header re-written.
+      - name: ipsWebAddrTransReqHdrReWritten
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.7
+      # Number of response header re-written.
+      - name: ipsWebAddrTransRspHdrReWritten
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.8
+      # Number of request redirection.
+      - name: ipsWebAddrTransReqReDirection
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.9
+      # Time stamp at which this entry was last modified.
+      - name: ipsWebAddrTransTimeStamp
+        OID: 1.3.6.1.4.1.20632.8.50.14.1.10
+    metric_tags:
+      - column:
+          name: ipsWebAddrTransAddress
+          OID: 1.3.6.1.4.1.20632.8.50.14.1.2
+      - column:
+          name: ipsWebAddrTransPort
+          OID: 1.3.6.1.4.1.20632.8.50.14.1.3
+
+# A table of IPS access control stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsAccessCtrlStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.15
+    symbols:
+      # Number of missing cookies.
+      - name: ipsAccessCtrlMissingCookie
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.4
+      # Number of no authorization header.
+      - name: ipsAccessCtrlNoAuthHdr
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.5
+      # Number of invalid cookie.
+      - name: ipsAccessCtrlInvalidCookie
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.6
+      # Number of expired cookie.
+      - name: ipsAccessCtrlExpiredCookie
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.7
+      # Number of access denied.
+      - name: ipsAccessCtrlAccessDenied
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.8
+      # Number of general failure.
+      - name: ipsAccessCtrlGenFailure
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.9
+      # Number of access attempts.
+      - name: ipsAccessCtrlAccessAttempts
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.10
+      # Number of access attempts.
+      - name: ipsAccessCtrlAccessAttemptsTotRtt
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.11
+      # Number of invalid source ip.
+      - name: ipsAccessCtrlInvalidSrcIp
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.12
+      # Number of authorization cache hits.
+      - name: ipsAccessCtrlAuthCacheHits
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.13
+      # Number of authorization cache miss.
+      - name: ipsAccessCtrlAuthCacheMiss
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.14
+      # Number of authorization cache expiry.
+      - name: ipsAccessCtrlAuthCacheExp
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.15
+      # Time stamp at which this entry was last modified.
+      - name: ipsAccessCtrlTimeStamp
+        OID: 1.3.6.1.4.1.20632.8.50.15.1.16
+    metric_tags:
+      - column:
+          name: ipsAccessCtrlAddress
+          OID: 1.3.6.1.4.1.20632.8.50.15.1.2
+      - column:
+          name: ipsAccessCtrlPort
+          OID: 1.3.6.1.4.1.20632.8.50.15.1.3
+
+# A table of IPS rate control stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsRCStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.16
+    symbols:
+      # Total number of RC served.
+      - name: ipsRCTotServed
+        OID: 1.3.6.1.4.1.20632.8.50.16.1.4
+      # Total number RC queued.
+      - name: ipsRCTotQueued
+        OID: 1.3.6.1.4.1.20632.8.50.16.1.5
+      # Total number RC dropped.
+      - name: ipsRCTotDropped
+        OID: 1.3.6.1.4.1.20632.8.50.16.1.6
+      # Total number of out of resource error.
+      - name: ipsRCTotOutOfResource
+        OID: 1.3.6.1.4.1.20632.8.50.16.1.7
+      # Time stamp at which this entry was last modified.
+      - name: ipsRCTimeStamp
+        OID: 1.3.6.1.4.1.20632.8.50.16.1.8
+    metric_tags:
+      - column:
+          name: ipsRCAddress
+          OID: 1.3.6.1.4.1.20632.8.50.16.1.2
+      - column:
+          name: ipsRCPort
+          OID: 1.3.6.1.4.1.20632.8.50.16.1.3
+
+# A table of IPS UrlPolicy stats.
+  - MIB: BWS-MIB
+    table:
+      name: bwsIpsUrlPolicyStatsTable
+      OID: 1.3.6.1.4.1.20632.8.50.17
+    symbols:
+      # Total number of UrlPolicy served.
+      - name: ipsUrlPolicyTotServed
+        OID: 1.3.6.1.4.1.20632.8.50.17.1.4
+      # Total number UrlPolicy queued.
+      - name: ipsUrlPolicyTotQueued
+        OID: 1.3.6.1.4.1.20632.8.50.17.1.5
+      # Total number UrlPolicy dropped.
+      - name: ipsUrlPolicyTotDropped
+        OID: 1.3.6.1.4.1.20632.8.50.17.1.6
+      # Total number of out of resource error.
+      - name: ipsUrlPolicyTotOutOfResource
+        OID: 1.3.6.1.4.1.20632.8.50.17.1.7
+      # Total number entry control authentication.
+      - name: ipsUrlPolicyEntryCtrlAuth
+        OID: 1.3.6.1.4.1.20632.8.50.17.1.8
+      # Time stamp at which this entry was last modified.
+      - name: ipsUrlPolicyTimeStamp
+        OID: 1.3.6.1.4.1.20632.8.50.17.1.9
+    metric_tags:
+      - column:
+          name: ipsUrlPolicyAddress
+          OID: 1.3.6.1.4.1.20632.8.50.17.1.2
+      - column:
+          name: ipsUrlPolicyPort
+          OID: 1.3.6.1.4.1.20632.8.50.17.1.3
+
+metric_tags:
+  # Current firmware version running in the system (WAF)
+  - column:
+      name: currentFirmwareVersion
+      OID: 1.3.6.1.4.1.20632.8.25.0
+  # This management object shall contain the current version of the security definitions and the date and time when the last security definitions got updated.
+  - column:
+      name: securityDefUpdates
+      OID: 1.3.6.1.4.1.20632.8.27.0
+  # This management object shall contain the system serial number
+  - column:
+      name: systemSerialNumber
+      OID: 1.3.6.1.4.1.20632.8.28.0
+      tag: serial_number

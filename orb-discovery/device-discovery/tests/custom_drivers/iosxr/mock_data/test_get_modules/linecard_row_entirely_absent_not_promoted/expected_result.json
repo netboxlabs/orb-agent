@@ -1,0 +1,10 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {"name": "0/RSP0/CPU0", "position": "0/RSP0/CPU0", "module": {"model": "A9K-RSP880-LT-SE", "serial": "FOXABSENT0RS", "description": "ASR9K Route Switch Processor with 440G/slot Fabric and 12GB", "type": "supervisor", "sub_bays": []}}
+      ],
+      "interfaces_by_bay": {}
+    }
+  }
+}

@@ -19,6 +19,12 @@ func TestResolveVendor(t *testing.T) {
 		{"empty sysObjectID", "", "", ""},
 		{"cisco no-dot prefix", "1.3.6.1.4.1.9.1.1234", "Cisco IOS Software", "cisco"},
 		{"cisco no-dot meraki", "1.3.6.1.4.1.29671.5.1", "Meraki MS220", "cisco"},
+		// SmartAX OLTs sit under the Huawei enterprise arc like every other
+		// Huawei product; the gate is the enterprise, not a product family.
+		{"huawei smartax olt", ".1.3.6.1.4.1.2011.2.80.8", "Huawei Integrated Access Software", "huawei"},
+		{"huawei vrp switch", ".1.3.6.1.4.1.2011.2.23.96", "S5720-28X-SI-AC", "huawei"},
+		{"huawei no-dot prefix", "1.3.6.1.4.1.2011.2.80.8", "", "huawei"},
+		{"an arc that merely starts like huawei", ".1.3.6.1.4.1.20111.1", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -38,5 +44,27 @@ func TestExtractSysIdentity(t *testing.T) {
 	soid, sdescr := ExtractSysIdentity(all)
 	if soid != ".1.3.6.1.4.1.9.1.123" || sdescr != "Cisco IOS XE" {
 		t.Errorf("got (%q, %q), want (.1.3.6.1.4.1.9.1.123, Cisco IOS XE)", soid, sdescr)
+	}
+}
+
+// TestResolveVendor_ToleratesPaddedSysObjectID covers the decorations agents
+// put on a DisplayString-like value.
+//
+// The consequence of a miss here is silent and total: no vendor means the
+// vendor's whole OID set is never walked, so a feature that depends on an
+// enterprise table simply does nothing, with no error anywhere.
+func TestResolveVendor_ToleratesPaddedSysObjectID(t *testing.T) {
+	for _, tc := range []struct{ what, sysObjectID, want string }{
+		{"canonical", ".1.3.6.1.4.1.2636.1.1.1.2.92", "juniper"},
+		{"no leading dot", "1.3.6.1.4.1.2636.1.1.1.2.92", "juniper"},
+		{"NUL padded", ".1.3.6.1.4.1.2636.1.1.1.2.92\x00", "juniper"},
+		{"space padded", "  .1.3.6.1.4.1.2636.1.1.1.2.92 ", "juniper"},
+		{"trailing newline", ".1.3.6.1.4.1.2636.1.1.1.2.92\n", "juniper"},
+		{"an arc that merely starts the same", ".1.3.6.1.4.1.26361.1", ""},
+		{"empty", "", ""},
+	} {
+		if got := ResolveVendor(tc.sysObjectID, "", defaultVendorMatchers); got != tc.want {
+			t.Errorf("%s: ResolveVendor(%q) = %q, want %q", tc.what, tc.sysObjectID, got, tc.want)
+		}
 	}
 }

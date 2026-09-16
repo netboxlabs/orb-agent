@@ -1,0 +1,174 @@
+# https://mibs.observium.org/mib/FREENAS-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - ucd-mib.yml
+  - host-resources-mib.yml
+
+provider: kentik-nas
+
+sysobjectid: 1.3.6.1.4.1.50536.3.2   # TrueNAS
+
+metrics:
+  # 
+  - MIB:
+    table:
+      name: zpoolTable
+      OID: 1.3.6.1.4.1.50536.1.1.1
+    symbols:
+      #
+      - name: zpoolReadBytes
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.10
+      #
+      - name: zpoolWriteBytes
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.11
+      #
+      - name: zpoolReadOps1sec
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.12
+      #
+      - name: zpoolWriteOps1sec
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.13
+      #
+      - name: zpoolReadBytes1sec
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.14
+      #
+      - name: zpoolWriteBytes1sec
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.15
+      #
+      - name: zpoolAllocationUnits
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.3
+      #
+      - name: zpoolSize
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.4
+      #
+      - name: zpoolUsed
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.5
+      #
+      - name: zpoolAvailable
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.6
+      #
+      - name: zpoolHealth
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.7
+      #
+      - name: zpoolReadOps
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.8
+      #
+      - name: zpoolWriteOps
+        OID: 1.3.6.1.4.1.50536.1.1.1.1.9
+    metric_tags:
+      # 
+      - column:
+          name: zpoolDescr
+          OID: 1.3.6.1.4.1.50536.1.1.1.1.2
+
+  # 
+  - MIB:
+    table:
+      name: datasetTable
+      OID: 1.3.6.1.4.1.50536.1.2.1
+    symbols:
+      #
+      - name: datasetAllocationUnits
+        OID: 1.3.6.1.4.1.50536.1.2.1.1.3
+      #
+      - name: datasetSize
+        OID: 1.3.6.1.4.1.50536.1.2.1.1.4
+      #
+      - name: datasetUsed
+        OID: 1.3.6.1.4.1.50536.1.2.1.1.5
+      #
+      - name: datasetAvailable
+        OID: 1.3.6.1.4.1.50536.1.2.1.1.6
+    metric_tags:
+      # 
+      - column:
+          name: datasetDescr
+          OID: 1.3.6.1.4.1.50536.1.2.1.1.2
+
+  # 
+  - MIB:
+    table:
+      name: zvolTable
+      OID: 1.3.6.1.4.1.50536.1.3.1
+    symbols:
+      #
+      - name: zvolAllocationUnits
+        OID: 1.3.6.1.4.1.50536.1.3.1.1.3
+      #
+      - name: zvolSize
+        OID: 1.3.6.1.4.1.50536.1.3.1.1.4
+      #
+      - name: zvolUsed
+        OID: 1.3.6.1.4.1.50536.1.3.1.1.5
+      #
+      - name: zvolAvailable
+        OID: 1.3.6.1.4.1.50536.1.3.1.1.6
+      #
+      - name: zvolReferenced
+        OID: 1.3.6.1.4.1.50536.1.3.1.1.7
+    metric_tags:
+      # 
+      - column:
+          name: zvolDescr
+          OID: 1.3.6.1.4.1.50536.1.3.1.1.2
+
+  # 
+  - MIB:
+    symbols:
+      #
+      - name: zfsArcSize
+        OID: 1.3.6.1.4.1.50536.1.4.1
+      #
+      - name: zfsArcCacheMissRatio
+        OID: 1.3.6.1.4.1.50536.1.4.10
+      #
+      - name: zfsArcMeta
+        OID: 1.3.6.1.4.1.50536.1.4.2
+      #
+      - name: zfsArcData
+        OID: 1.3.6.1.4.1.50536.1.4.3
+      #
+      - name: zfsArcHits
+        OID: 1.3.6.1.4.1.50536.1.4.4
+      #
+      - name: zfsArcMisses
+        OID: 1.3.6.1.4.1.50536.1.4.5
+      #
+      - name: zfsArcC
+        OID: 1.3.6.1.4.1.50536.1.4.6
+      #
+      - name: zfsArcP
+        OID: 1.3.6.1.4.1.50536.1.4.7
+      #
+      - name: zfsArcMissPercent
+        OID: 1.3.6.1.4.1.50536.1.4.8
+      #
+      - name: zfsArcCacheHitRatio
+        OID: 1.3.6.1.4.1.50536.1.4.9
+
+      #
+      - name: zfsL2ArcHits
+        OID: 1.3.6.1.4.1.50536.1.5.1
+      #
+      - name: zfsL2ArcMisses
+        OID: 1.3.6.1.4.1.50536.1.5.2
+      #
+      - name: zfsL2ArcRead
+        OID: 1.3.6.1.4.1.50536.1.5.3
+      #
+      - name: zfsL2ArcWrite
+        OID: 1.3.6.1.4.1.50536.1.5.4
+      #
+      - name: zfsL2ArcSize
+        OID: 1.3.6.1.4.1.50536.1.5.5
+
+      #
+      - name: zfsZilstatOps1sec
+        OID: 1.3.6.1.4.1.50536.1.6.1
+      #
+      - name: zfsZilstatOps5sec
+        OID: 1.3.6.1.4.1.50536.1.6.2
+      #
+      - name: zfsZilstatOps10sec
+        OID: 1.3.6.1.4.1.50536.1.6.3

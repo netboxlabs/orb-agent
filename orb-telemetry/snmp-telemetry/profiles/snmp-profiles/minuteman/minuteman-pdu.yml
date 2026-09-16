@@ -1,0 +1,80 @@
+# Minuteman RPM1581 PDU
+# MIB: DigiPower-PDU-MIB (Enterprise OID: 1.3.6.1.4.1.17420)
+# SysDescr: "RPM", SysObjectID: iso.3.6.1.4.1.17420
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-pdu
+
+sysobjectid:
+  - 1.3.6.1.4.1.17420    # DigiPower/Minuteman RPM series
+
+metrics:
+  # --- PDU Scalar Metrics ---
+  - MIB: DigiPower-PDU-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.11.0
+      name: pduLoad
+      # Total load in Amps (Value: 11)
+
+  - MIB: DigiPower-PDU-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.17.0
+      name: pduInputVoltage
+      # Input voltage (Value: 115)
+
+  - MIB: DigiPower-PDU-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.15.0
+      name: pduThresholdWarning
+      # Load warning threshold (Value: 120)
+
+  - MIB: DigiPower-PDU-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.16.0
+      name: pduThresholdCritical
+      # Load critical threshold (Value: 150)
+
+  # --- Outlet Status (raw CSV string, 1=ON 0=OFF per position) ---
+  # Device returns all 8 outlet states as one CSV: "1,1,1,1,1,1,1,1"
+  # Cannot be split per-outlet natively; use outlet_status_raw tag in NRQL
+  - MIB: DigiPower-PDU-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.13.0
+      name: pduOutletStatusRaw
+      # Use conversion to_one so KTranslate emits a numeric metric;
+      # the actual string is captured in the outlet_status_raw metric_tag below
+      conversion: to_one
+
+# Device-level metadata tags applied globally to all metrics from this device
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.13.0
+      name: pdu01OutletStatusRaw
+    tag: outlet_status_raw
+    # Value: "1,1,1,1,1,1,1,1" — position maps to outlet 1-8, 1=ON 0=OFF
+
+  - column:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.19.0
+      name: pdu01ModelNumber
+    tag: model_number
+    # Value: "RPM1581HVN"
+
+  - column:
+      OID: 1.3.6.1.4.1.17420.1.2.4.0
+      name: devVersion
+    tag: firmware_revision
+    # Value: "s4.82-110825-1cb08s"
+
+  - column:
+      OID: 1.3.6.1.4.1.17420.1.2.3.0
+      name: devMAC
+    tag: serial_number
+    # Value: "00:06:18:76:1A:E7" (MAC used as unique identifier)
+
+  - column:
+      OID: 1.3.6.1.4.1.17420.1.2.9.1.18.0
+      name: pdu01ModelName
+    tag: model_name
+    # Value: "RPM"

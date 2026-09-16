@@ -31,8 +31,8 @@ func TestPostMap_RegistrationOrder(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	cfg := &Config{
-		mapping:            map[string]*Entry{},
-		inetAddressEntries: map[string]*Entry{},
+		mapping:        map[string]*Entry{},
+		indexedEntries: map[string]*Entry{},
 	}
 	mapper := &ObjectIDMapper{
 		mappingConfig: cfg,

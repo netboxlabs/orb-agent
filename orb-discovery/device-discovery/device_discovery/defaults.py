@@ -31,11 +31,30 @@ DEFAULT_INTERFACE_PATTERNS = [
     InterfacePattern(match=r"^Loopback\d+", type="virtual"),
     InterfacePattern(match=r"^lo\d*$", type="virtual"),
     # VLAN/SVI Interfaces (Virtual)
+    # Case-insensitive because the same interface is spelled differently across
+    # platforms and releases (BDI100 / Bdi100, Vlanif100 / vlanif100). Every
+    # entry below names an interface the device implements in software, so
+    # without a pattern here it falls through to speed-based detection and is
+    # emitted as an Ethernet type.
     InterfacePattern(match=r"^Vlan\d+", type="virtual"),
     InterfacePattern(match=r"^vlan\.\d+", type="virtual"),
     InterfacePattern(match=r"^irb$", type="virtual"),
+    InterfacePattern(match=r"(?i)^vlanif\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^vlan-interface\d+", type="virtual"),
+    # Bridge-domain / bridge-group SVIs (Cisco IOS-XE BDI, IOS-XR BVI)
+    InterfacePattern(match=r"(?i)^bdi\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^bvi\d+", type="virtual"),
+    # VXLAN overlay endpoints
+    InterfacePattern(match=r"(?i)^nve\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^vxlan\d+", type="virtual"),
+    # Software-instantiated access interfaces (Cisco)
+    InterfacePattern(match=r"(?i)^virtual-template\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^virtual-access\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^dialer\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^null\d+", type="virtual"),
     # Tunnel Interfaces (Virtual)
     InterfacePattern(match=r"^Tunnel\d+", type="virtual"),
+    InterfacePattern(match=r"(?i)^tunnel-(?:ip|te|mte)\d+", type="virtual"),
     # Management Interfaces
     InterfacePattern(match=r"^(Management|mgmt)\d+", type="1000base-t"),
     InterfacePattern(match=r"^management$", type="1000base-t"),

@@ -32,7 +32,7 @@ Interfaces are attached to the device and ip addresses will be attached to the i
 
 When a target is a switch stack / Virtual Chassis (NetBox `VirtualChassis`), device-discovery emits one `VirtualChassis` entity plus one `Device` per member, and routes each interface/IP to the member that physically owns it — see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis) below. Drivers that do not implement stack discovery (or devices not in stack mode) fall through to the existing single-`Device` path with no change in behaviour.
 
-When a target is a modular chassis and the `discover_modules` policy option is enabled, device-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot (and, in `full` mode, each transceiver sub-bay) — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change.
+When the `discover_modules` policy option is enabled, device-discovery additionally emits `Module` and `ModuleBay` entities for each chassis slot on a modular target (and, in `full` mode, each transceiver sub-bay), plus, on the seven drivers that implement it, a device-rooted `ModuleBay` for any optic that has no slot, linecard or FRU module above it — the whole inventory on a fixed-port target, or just the fixed ports on a chassis whose only module is an uplink — see [Modules / ModuleBays](#modules--modulebays) below. Defaults to `off`, so existing operators see zero behaviour change.
 
 When the `discover_vrfs` policy option is enabled, device-discovery emits a `VRF` entity for each VRF configured on the device and attaches it to the IP addresses and prefixes of the interfaces inside that VRF — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
 
@@ -120,11 +120,54 @@ Current supported options:
 | sanitize_config | bool | If False, captured configuration is stored as-is without redacting sensitive values such as passwords and pre-shared keys (defaults to 'True' if not specified) |
 | discovery_drivers | list | Restrict auto-discovery to this ordered list of driver names (e.g. `[paloalto_panos, huawei_vrp]`). Only used when a scope entry has no `driver` set. If not specified, only standard NAPALM drivers are tried. Custom drivers (`paloalto_panos`, `paloalto_panos_ssh`, `huawei_vrp`) must be listed explicitly to be used in auto-discovery. See the [supported platforms page](./supported_platforms.md) for the full list. |
 | create_unknown_vlans | bool | When discovering interface↔VLAN associations, auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's VLAN database. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `True`. Set `False` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). Only drivers that implement `get_interfaces_vlans()` populate these associations — see the [supported platforms page](./supported_platforms.md). |
-| discover_modules | str | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards, supervisors, etc. — transceiver sub-bays skipped), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
+| discover_modules | str | Controls emission of `Module` / `ModuleBay` entities. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot on a modular target — line cards, supervisors, etc.; transceiver sub-bays and device-rooted optics both skipped), or `full` (linecards plus one Module per transceiver sub-bay or device-rooted optic; interfaces carry a `module=` ref to the transceiver they're connected to). An optic with no slot, linecard or FRU module above it — the whole inventory on a fixed-port target, or the fixed ports on a chassis whose only module is an uplink — is discovered too, as a device-rooted `ModuleBay`. Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
 | discover_vrfs | bool | When `True`, discovers VRFs from the device via the driver's `get_network_instances()` and attaches each VRF to the IP addresses and prefixes of its member interfaces. A discovered VRF takes precedence over the `defaults.*.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for those interfaces; interfaces in the default routing table keep the configured defaults. Defaults to `False`. Only drivers that implement `get_network_instances()` populate VRF data — see the [supported platforms page](./supported_platforms.md#vrfs). See [VRFs](#vrfs) for filtering rules and route-distinguisher handling. |
 | emit_host_prefixes | bool | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. Defaults to `False`: a host prefix only restates the address, which is already emitted as an `IPAddress` entity, so no prefix is derived for them. Set `True` to restore them, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefix](#prefix). |
-| emit_device_name | bool | Emit `Device.name` from the hostname the driver reported. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
+| emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the SVI-style interface the contributing address lives on. One of `off` (default) or `svi-name`. Any scalar is read as its text, so a bare `on`, a number and a mistyped mode all resolve to `off` with a warning rather than erroring; a list or mapping is a policy error, as it is for snmp-discovery. See [Prefix](#prefix). |
+| emit_device_name | bool | Emit `Device.name` from the discovered device name — the hostname fact, or the fqdn fact under `device_name_source: fqdn`. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
+| device_name_source | string | Fact used for `Device.name`: `hostname` (default) or `fqdn`. With `fqdn`, the fqdn fact is used only when it positively looks like a domain-qualified form of the hostname — no whitespace and, case-insensitively, the hostname followed by a dot and at least one more character. Anything else falls back to the hostname: placeholders such as `None` (junos), `Unknown` (ios family), `N/A` (paloalto) or ios's `<hostname>.not set`, an fqdn equal to the hostname, or a hostname that already contains a dot (several drivers blindly append the domain again, producing `rtr1.dc1.example.net.dc1.example.net`). Does not apply to virtual-chassis stacks: every member's name, the master's included, comes from `stack_member_name_template`. Note: Diode matches devices by name, so switching an existing deployment to `fqdn` creates new records unless the NetBox devices are renamed first. An unrecognized value logs a warning and resolves to `hostname`. |
+
+#### Modules the device cannot identify
+
+Some devices report a module with a serial number and a description but no part
+number. A Cisco C9200L does this for DAC cables, and a 2960S reports the literal
+placeholder `Unspecified` for an SFP whose vendor coding it does not recognise.
+
+These are recorded rather than dropped.
+
+**The optic's own EEPROM is asked first** (`ios` only). `show inventory` has no
+manufacturer field at all, but an SFP carries its vendor and part number in its
+EEPROM regardless of whether the switch recognises the coding, so
+`show idprom interface <ifname>` is run for each transceiver the inventory could
+not name. Where it answers with both, they become the module's manufacturer and
+model — a real part such as `CISCO-FINISAR` / `FTRJ8519P1BNL-C3` rather than a
+generic bucket. The cost is one command per *unnamed* optic, not per port, so a
+switch whose optics are all recognised issues none; the command is unavailable
+on some platforms and images, and a failure is not fatal.
+
+**Otherwise the description is used as the model**, and the manufacturer is set
+to `Unknown` rather than the switch's own vendor, because the device has not
+told us who made the part and reporting `Unspecified` usually means it is *not*
+the chassis vendor's. Filing them under `Unknown` also keeps them findable:
+every module NetBox holds only a description for can be listed with a single
+manufacturer filter.
+
+A part that names its own manufacturer is filed under that manufacturer even
+when the inventory row was unidentified. `dcim.moduletype` matches on
+`(manufacturer, model)`, so a third-party optic filed under the chassis vendor
+would put a part that vendor did not make into their catalog.
+
+A module with a serial but neither a part number nor a description is skipped,
+since NetBox requires a model and there would be nothing to call it.
+
+> **Manual corrections do not survive.** NetBox matches a Module by the module
+> bay it occupies, so if you correct one of these by hand and discovery runs
+> again, your edit is overwritten. This applies to any discovered module, but it
+> matters most here, where the model is a description rather than a part number.
+
+Currently applies to the `ios` driver. Other drivers still skip modules without
+a part number.
 
 #### Defaults
 Current supported defaults:
@@ -191,13 +234,34 @@ Current supported defaults:
 | ├─ comments | str | VRF comments |
 | ├─ tags | list | VRF tags |
 | vlan       | map  | VLAN-specific defaults        |
-| ├─ group   | str  | VLAN group name. When set, every emitted VLAN is attached to an `ipam.vlangroup` scoped to `defaults.site`: the group's `scope_site` is populated from `defaults.site` |
+| ├─ group   | str/map  | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see [VLAN group](#vlan-group) below). In a per-device `override_defaults`, the group replaces the policy value as a whole |
 | ├─ tenant   | str  | VLAN tenant                  |
 | ├─ role   | str  | VLAN role                      |
 | ├─ description | str  | VLAN description          |
 | ├─ comments   | str  | VLAN comments              |
 | ├─ tags       | list | VLAN tags                  |
 
+##### VLAN group
+Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
+
+```yaml
+defaults:
+  site: "mysite01"
+  vlan:
+    group:
+      name: "Brussels VLAN Group"
+      scope_site_group: "Brussels"
+```
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | str | VLAN group name (required in the map form) |
+| scope_site | str | Scope the group to this site instead of `defaults.site` |
+| scope_site_group | str | Scope the group to a site group |
+| scope_region | str | Scope the group to a region |
+| scope_location | str | Scope the group to a location. Locations are unique per site in NetBox, so `defaults.site` is sent with it |
+
+Only one `scope_*` may be set; a map with none behaves like the bare name. Rack and cluster scopes are not supported.
 
 ### Scope
 The scope defines a list of devices that can be accessed and pulled data. 
@@ -211,6 +275,28 @@ The scope defines a list of devices that can be accessed and pulled data.
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
+
+#### Subnet and range expansion
+
+A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254
+addresses and `10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to
+exclude and stay 2 and 1. IPv6 has no broadcast, so only the network address is
+excluded: `fd00::/126` is 3. A range excludes nothing, because someone who
+wrote `0` and `255` meant them, so `10.0.0.0-255` is 256.
+
+A policy may expand to at most **65536** addresses in total, counted across all
+its scope entries before any expansion happens. The budget spans the policy
+rather than one entry, so sixteen `/16` scopes are refused together even though
+each is under the limit on its own. A policy over the budget is rejected when it
+is written, naming the total and the limit:
+
+```
+policy scopes expand to 1048544 addresses in total, more than the limit of 65536
+```
+
+A single entry over the limit is also refused at expansion time as a backstop:
+it is skipped, named in an error, and recorded as a failed run, leaving the rest
+of the policy unaffected.
 
 ### SSH Configuration and Jumphost Support
 
@@ -380,21 +466,25 @@ When a driver supports it, interfaces also carry their switching configuration: 
 
 ## Modules / ModuleBays
 
-When a driver implements module discovery and the `discover_modules` policy option is enabled, device-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot (e.g. a Catalyst 9404R supervisor + line cards in slots 1–4) and, in `full` mode, for each transceiver sub-bay reported by the device. Standalone non-modular switches (e.g. a Cat 3850 / 9300 with no removable line cards) and devices whose driver does not implement module discovery fall back to the existing emission with no change in behaviour. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
+When a driver implements module discovery and the `discover_modules` policy option is enabled, device-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot (e.g. a Catalyst 9404R supervisor + line cards in slots 1–4) and, in `full` mode, for each transceiver sub-bay reported by the device. An optic whose inventory row has no slot, linecard or FRU module above it — the whole inventory on a standalone non-modular switch (e.g. a Cat 3850 / 9300 with no removable line cards), or just the fixed ports on a chassis whose only module is an uplink — is discovered too, as a device-rooted `ModuleBay` named after its interface (see below). Device-rooted optic discovery is implemented by seven drivers — `ios`, `eos`, `nxos`, `nxos_ssh`, `iosxr`, `nokia_sros` and `aruba_aoscx`. Other drivers that implement `get_modules()` still discover slot-based modules only, so a fixed-port target on one of those — and any device whose driver does not implement module discovery at all — falls back to the existing emission with no change in behaviour; see the [supported platforms page](./supported_platforms.md#modules--modulebays) for the per-driver state. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
 
 **Three modes:**
 
 | `discover_modules` | What gets emitted |
 |---|---|
 | `off` *(default)* | No module / module-bay entities. Existing behaviour. |
-| `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors, PSU / fan modules a driver classifies explicitly). Transceiver sub-bays are skipped — useful when operators care about the slot inventory but not per-port optics. |
-| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. |
+| `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors, PSU / fan modules a driver classifies explicitly). Every optic is skipped, whether it's a transceiver sub-bay under a linecard or a device-rooted bay with no parent slot at all — useful when operators care about the slot inventory but not per-port optics. A fixed-port device therefore emits nothing in this mode. |
+| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every optic reported by the device — a transceiver sub-bay under its parent linecard, or a device-rooted bay named after its interface when no parent slot exists. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. |
 
 **Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
 
-**Virtual-chassis-of-modular** (e.g. Catalyst 9300 stack with FRU uplinks, Catalyst 9400 / 9500 in StackWise Virtual mode). When a VC member is itself a modular chassis, modules and bays are dispatched per member: each `Module` / `ModuleBay` carries `device=` set to the member that physically owns the slot, and the `Module.module_bay` reference points at that member's bay. The emission order becomes: `Device(master)` → `VirtualChassis` → `Device(non-master members)` → all `ModuleBay` + `Module` per member → `Interface` / `IPAddress` per member. Stack members that are non-modular emit no module entries; the VC stack envelope is unchanged.
+**Virtual-chassis-of-modular** (e.g. Catalyst 9300 stack with FRU uplinks, Catalyst 9400 / 9500 in StackWise Virtual mode). When a VC member is itself a modular chassis, modules and bays are dispatched per member: each `Module` / `ModuleBay` carries `device=` set to the member that physically owns the slot, and the `Module.module_bay` reference points at that member's bay. The emission order becomes: `Device(master)` → `VirtualChassis` → `Device(non-master members)` → all `ModuleBay` + `Module` per member → `Interface` / `IPAddress` per member. A stack member with no slot bays at all — the FRU-less members of a mixed stack, or every member on a stack of otherwise-fixed-port switches — still emits its own optics as device-rooted bays under that member's `Device`; only a member with neither slot bays nor optics emits no module entries. One exception: on `iosxr`, a multi-rack target whose inventory reports no linecard rows at all promotes optics for the first rack only and refuses later racks with a warning, because there is no validated chassis set to attribute them to.
 
-**Current sub-bay rendering trade-off (transient).** In `full` mode the transceiver sub-bay is emitted device-rooted — i.e. without a `module=parent_linecard` link. As a result, NetBox renders the transceiver sub-bay at chassis level (alongside the line-card slot bays) instead of visually nested under its parent line card. The transceiver `Module` itself is still installed in the sub-bay correctly via `Module.module_bay`, so per-port optic visibility works as expected; only the bay-under-linecard hierarchy is lost. The link is dropped because, in the current per-entity reconciler, attaching `module=parent_linecard` on a sub-bay causes the parent Module to be re-created from inside the sub-bay's changeset and conflicts at apply with the line card already created by the prior top-level Module entity. The link will be restored once the reconciler resolves nested parent-module refs against committed sibling entities in a single ingest call.
+**Optics with no parent module.** An optic whose inventory row reports no enclosing slot, linecard or FRU module is discovered as a `ModuleBay` rooted on the device and named after its interface, rather than being dropped. This covers two cases: a wholly fixed-port chassis (every optic is device-rooted, since nothing above it exists), and the fixed ports of a chassis whose only module is an uplink (the uplink's optics nest under it as usual; the fixed ports' optics have no parent and are device-rooted alongside it). Promotion only fires on an optic already classified as a transceiver with a non-empty model and serial; an optic that resolves a parent bay is emitted exactly as before, nested under it. In `linecards` mode these device-rooted bays are skipped along with every other optic, so a fixed-port device produces no modules at all in that mode.
+
+An optic the device serialises but does not identify — an inventory row with a serial but no PID — is recorded rather than dropped; see [Modules the device cannot identify](#modules-the-device-cannot-identify) above for how it is emitted. The manufacturer is filed under the generic `Unknown` rather than the device's own vendor: substituting the row's description for a part number would otherwise split what is physically one optic model across two different NetBox `ModuleType` records as different devices report (or omit) that description text, so segregating these rows under `Unknown` keeps them distinguishable from genuinely identified parts instead of polluting the vendor's real catalog.
+
+**Current sub-bay rendering trade-off (transient).** In `full` mode the transceiver sub-bay is emitted device-rooted — i.e. without a `module=parent_linecard` link. As a result, NetBox renders the transceiver sub-bay at chassis level (alongside the line-card slot bays) instead of visually nested under its parent line card. The transceiver `Module` itself is still installed in the sub-bay correctly via `Module.module_bay`, so per-port optic visibility works as expected; only the bay-under-linecard hierarchy is lost. The link is dropped because, in the current per-entity reconciler, attaching `module=parent_linecard` on a sub-bay causes the parent Module to be re-created from inside the sub-bay's changeset and conflicts at apply with the line card already created by the prior top-level Module entity. The link will be restored once the reconciler resolves nested parent-module refs against committed sibling entities in a single ingest call. This trade-off is specific to sub-bays that give up a real parent link: a fixed-port optic's bay is device-rooted because no parent module exists at all, which is the correct representation rather than a compromise, and is unaffected by any future reconciler fix.
 
 **Supported drivers.** Module discovery is opt-in per driver (analogous to interface↔VLAN associations and stack discovery). See the [supported platforms page](./supported_platforms.md#modules--modulebays) for the current list; vendors land as follow-up PRs as the underlying drivers gain module-discovery support.
 
@@ -494,6 +584,38 @@ The opt-in covers host prefixes only. IPv6 link-local prefixes stay suppressed e
 | Scope (site / location) | **Not collected** | Set via `defaults.prefix.scope_*` (see Nested Defaults) or opt into the cascade via `options.propagate_defaults_to_prefix_scope` |
 
 Prefix scope is a `oneof` — a Prefix carries one of `scope_site` or `scope_location`. When both `defaults.prefix.scope_*` are set, the most-specific wins on the wire: `scope_location` > `scope_site`. By default `defaults.site` does NOT auto-fill `Prefix.scope_site` — set `options.propagate_defaults_to_prefix_scope: true` to enable the cascade. Any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale, so a cascaded more-specific scope can't override an operator's explicit less-specific choice. Clearing an existing scope requires editing NetBox directly.
+
+**VLAN association (`emit_prefix_vlan`).** When set to `svi-name`, a derived prefix
+carries the VLAN of the SVI-style interface the contributing address lives on, so an
+address on `Vlan10` associates its prefix with VLAN 10. Defaults to `off`. Any scalar is
+read as its text, so a bare `on`, a number, a YAML timestamp and a mistyped mode all
+resolve to `off` with a warning rather than erroring: a typo disables the feature instead
+of writing a guess into NetBox. A list or mapping is rejected, matching what the
+snmp-discovery decoder does with one.
+
+**Which interface names qualify.** Case-insensitively: an optional leading `interface`
+*followed by a separator*, one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`,
+`vl`, then an optional separator before a VLAN ID in 1-4094 with leading zeros stripped.
+So `Vlan10`, `VLAN ID 0051` and `Interface vlan30` qualify, while the run-together
+`InterfaceVlan30` does not. Any name containing a dot is
+rejected, because the number after the dot is a subinterface index rather than reliably
+a VLAN ID.
+
+**The VLAN must already be known and named.** Only a VLAN already found in the device's
+VLAN database with a non-empty name is attached. Unlike `create_unknown_vlans`, this
+never stubs a VLAN to satisfy an SVI name; a miss is left unassociated.
+
+**Unanimity, and what it cannot cover.** A prefix is tagged only when every contributing
+address resolves to the same VLAN. Any disagreement, or a contributing address with no
+resolvable VLAN, leaves it untagged, and that is logged only when at least one address
+actually proposed a VLAN. On a virtual chassis the check spans every member, because a
+`Prefix` is keyed globally rather than per member. It cannot span devices: if two devices
+report the same network through different VLANs, the last to report wins.
+
+**The association cannot be retracted.** The Diode reconciler never diffs a field the
+payload omits, so a VLAN written onto a prefix cannot later be cleared by discovery, and
+a manual correction in NetBox is overwritten on the next poll that still finds a
+unanimous VLAN. This is why the option defaults to `off`.
 
 ### VLAN
 

@@ -1,0 +1,107 @@
+# https://mibs.observium.org/mib/ROOMALERT3E-MIB/
+---
+extends:
+  - system-mib.yml
+
+provider: kentik-envir-sensor
+
+sysobjectid:
+  - .1.3.6.1.4.1.20916.1.9.*   # Avtech Room Alert 3E
+
+metrics:
+  # Table of internal sensors for units
+  - MIB: ROOMALERT3E-MIB
+    symbols:
+      # The current temperature reading in Celsius of the Internal Temperature Sensor.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.1.1.0
+        name: digital-sen1-1
+      # The current temperature reading in Fahrenheit of the Internal Temperature Sensor.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.1.2.0
+        name: digital-sen1-2
+      # The label of this sensor
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.1.3.0
+        name: digital-sen1-label
+        conversion: to_one
+
+      # If this sensor is a Temperature or Temp/Humidity sensor, this value represents the current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.1.0
+        name: digital-sen2-1
+      # If this sensor is a Temperature or Temp/Humidity sensor, this value represents the current temperature in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.2.0
+        name: digital-sen2-2
+      # If this sensor is a Temp/Humidity sensor, this value represents the current relative humidity in % Relative Humidity.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.3.0
+        name: digital-sen2-3
+      # If this sensor is a Temp/Humidity sensor, this value represents the current heat index in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.4.0
+        name: digital-sen2-4
+      # If this sensor is a Temp/Humidity sensor, this value represents the current heat index in Celsius.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.5.0
+        name: digital-sen2-5
+      # The label of this sensor
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.6.0
+        name: digital-sen2-label
+        conversion: to_one
+      # If this sensor is a Temp/Humidity sensor, this value represents the current dew point in Fahrenheit.
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.7.0
+        name: digital-sen2-7
+      # The label of this sensor
+      - OID: 1.3.6.1.4.1.20916.1.9.1.1.2.8.0
+        name: digital-sen2-label
+        conversion: to_one
+
+      # The reading for the switch sensor (0 = OPEN, 1 = CLOSED).
+      - OID: 1.3.6.1.4.1.20916.1.9.1.2.1.0
+        name: switch-sen1
+      # The label for the switch sensor
+      - OID: 1.3.6.1.4.1.20916.1.9.1.2.2.0
+        name: switch-label
+        conversion: to_one
+
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.1.0
+        name: red-led
+        enum:
+          off: 0
+          on: 1
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.2.0
+        name: amber-led
+        enum:
+          off: 0
+          on: 1
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.3.0
+        name: green-led
+        enum:
+          off: 0
+          on: 1
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.4.0
+        name: blue-led
+        enum:
+          off: 0
+          on: 1
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.5.0
+        name: white-led
+        enum:
+          off: 0
+          on: 1
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.6.0
+        name: alarm1
+        enum:
+          off: 0
+          on: 1
+      # The status of this Signal Tower element (0 = OFF, 1 = ON).
+      - OID: 1.3.6.1.4.1.20916.1.9.2.7.0
+        name: alarm2
+        enum:
+          off: 0
+          on: 1
+
+      # Last Alarm Message
+      - OID: 1.3.6.1.4.1.20916.1.9.3.1.0
+        name: alarmmessage
+        conversion: to_one

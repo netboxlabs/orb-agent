@@ -1,0 +1,411 @@
+# http://oid-info.com/get/1.3.6.1.4.1.12356.101.4
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - bgp4-mib.yml
+  - ospf-mib.yml
+
+provider: kentik-firewall
+
+sysobjectid: 
+  - 1.3.6.1.4.1.12356.101.*         # Fortigate Base
+  - 1.3.6.1.4.1.12356.101.1.*       # Fortigate
+  - 1.3.6.1.4.1.12356.101.1.10      # fgtONE
+  - 1.3.6.1.4.1.12356.101.1.20      # fgtVM
+  - 1.3.6.1.4.1.12356.101.1.30      # fgtVM64
+  - 1.3.6.1.4.1.12356.101.1.40      # fgtVM64XEN
+  - 1.3.6.1.4.1.12356.101.1.60      # fgtVM64KVm
+  - 1.3.6.1.4.1.12356.101.1.70      # fgtVM64HV
+  - 1.3.6.1.4.1.12356.101.1.210     # fwf20C
+  - 1.3.6.1.4.1.12356.101.1.212     # fgt20C
+  - 1.3.6.1.4.1.12356.101.1.213     # fw20CA
+  - 1.3.6.1.4.1.12356.101.1.214     # fg20CA
+  - 1.3.6.1.4.1.12356.101.1.302     # fgt30B
+  - 1.3.6.1.4.1.12356.101.1.304     # fgt30D
+  - 1.3.6.1.4.1.12356.101.1.305     # fgt30DPOE
+  - 1.3.6.1.4.1.12356.101.1.310     # fwf30B
+  - 1.3.6.1.4.1.12356.101.1.314     # fwf30D
+  - 1.3.6.1.4.1.12356.101.1.315     # fwf30DPOE
+  - 1.3.6.1.4.1.12356.101.1.410     # fgt40C
+  - 1.3.6.1.4.1.12356.101.1.411     # fwf40C
+  - 1.3.6.1.4.1.12356.101.1.500     # fgt50A
+  - 1.3.6.1.4.1.12356.101.1.502     # fgt50B
+  - 1.3.6.1.4.1.12356.101.1.504     # fgt51B
+  - 1.3.6.1.4.1.12356.101.1.510     # fwf50B
+  - 1.3.6.1.4.1.12356.101.1.600     # fgt60
+  - 1.3.6.1.4.1.12356.101.1.601     # fgt60M
+  - 1.3.6.1.4.1.12356.101.1.602     # fgt60ADSL
+  - 1.3.6.1.4.1.12356.101.1.603     # fgt60B
+  - 1.3.6.1.4.1.12356.101.1.610     # fwf60
+  - 1.3.6.1.4.1.12356.101.1.611     # fwf60A
+  - 1.3.6.1.4.1.12356.101.1.612     # fwf60AM
+  - 1.3.6.1.4.1.12356.101.1.613     # fwf60B
+  - 1.3.6.1.4.1.12356.101.1.615     # fgt60C
+  - 1.3.6.1.4.1.12356.101.1.616     # fwf60C
+  - 1.3.6.1.4.1.12356.101.1.617     # fw60CM
+  - 1.3.6.1.4.1.12356.101.1.618     # fw60CA
+  - 1.3.6.1.4.1.12356.101.1.619     # fw6XMB
+  - 1.3.6.1.4.1.12356.101.1.621     # fgt60CP
+  - 1.3.6.1.4.1.12356.101.1.625     # fgt60D
+  - 1.3.6.1.4.1.12356.101.1.626     # fwf60D
+  - 1.3.6.1.4.1.12356.101.1.630     # fgt90D
+  - 1.3.6.1.4.1.12356.101.1.631     # fgt90DPOE
+  - 1.3.6.1.4.1.12356.101.1.632     # fwf90D
+  - 1.3.6.1.4.1.12356.101.1.633     # fwf90DPOE
+  - 1.3.6.1.4.1.12356.101.1.644     # fw60EI
+  - 1.3.6.1.4.1.12356.101.1.800     # fgt80C
+  - 1.3.6.1.4.1.12356.101.1.801     # fgt80CM
+  - 1.3.6.1.4.1.12356.101.1.802     # fgt82C
+  - 1.3.6.1.4.1.12356.101.1.810     # fwf80CM
+  - 1.3.6.1.4.1.12356.101.1.811     # fwf81CM
+  - 1.3.6.1.4.1.12356.101.1.1000    # fgt100
+  - 1.3.6.1.4.1.12356.101.1.1001    # fgt100A
+  - 1.3.6.1.4.1.12356.101.1.1002    # fgt110C
+  - 1.3.6.1.4.1.12356.101.1.1003    # fgt111C
+  - 1.3.6.1.4.1.12356.101.1.1004    # fgt100D
+  - 1.3.6.1.4.1.12356.101.1.1005    # fr100C
+  - 1.3.6.1.4.1.12356.101.1.1401    # fgt140D
+  - 1.3.6.1.4.1.12356.101.1.1402    # fgt140P
+  - 1.3.6.1.4.1.12356.101.1.1403    # fgt140T
+  - 1.3.6.1.4.1.12356.101.1.2000    # fgt200
+  - 1.3.6.1.4.1.12356.101.1.2001    # fgt200A
+  - 1.3.6.1.4.1.12356.101.1.2002    # fgt224B
+  - 1.3.6.1.4.1.12356.101.1.2003    # fgt200B
+  - 1.3.6.1.4.1.12356.101.1.2004    # fgt200BPOE
+  - 1.3.6.1.4.1.12356.101.1.2005    # fgt200D
+  - 1.3.6.1.4.1.12356.101.1.2006    # fgt240D
+  - 1.3.6.1.4.1.12356.101.1.2011    # fgt200F
+  - 1.3.6.1.4.1.12356.101.1.2013    # fgt280D
+  - 1.3.6.1.4.1.12356.101.1.3000    # fgt300
+  - 1.3.6.1.4.1.12356.101.1.3001    # fgt300A
+  - 1.3.6.1.4.1.12356.101.1.3002    # fgt310B
+  - 1.3.6.1.4.1.12356.101.1.3003    # fgt300D
+  - 1.3.6.1.4.1.12356.101.1.3004    # fgt311B
+  - 1.3.6.1.4.1.12356.101.1.3005    # fgt300C
+  - 1.3.6.1.4.1.12356.101.1.4000    # fgt400
+  - 1.3.6.1.4.1.12356.101.1.4001    # fgt400A
+  - 1.3.6.1.4.1.12356.101.1.5000    # fgt500
+  - 1.3.6.1.4.1.12356.101.1.5001    # fgt500A
+  - 1.3.6.1.4.1.12356.101.1.6003    # fgt600C
+  - 1.3.6.1.4.1.12356.101.1.6005    # fgt600E
+  - 1.3.6.1.4.1.12356.101.1.6201    # fgt600D
+  - 1.3.6.1.4.1.12356.101.1.6200    # fgt620B
+  - 1.3.6.1.4.1.12356.101.1.6210    # fgt621B
+  - 1.3.6.1.4.1.12356.101.1.8000    # fgt800
+  - 1.3.6.1.4.1.12356.101.1.8001    # fgt800F
+  - 1.3.6.1.4.1.12356.101.1.8003    # fgt800C
+  - 1.3.6.1.4.1.12356.101.1.10000   # fgt1000
+  - 1.3.6.1.4.1.12356.101.1.10001   # fgt1000A
+  - 1.3.6.1.4.1.12356.101.1.10002   # fgt1000AFA2
+  - 1.3.6.1.4.1.12356.101.1.10003   # fgt1000ALENC
+  - 1.3.6.1.4.1.12356.101.1.10004   # fgt1000C
+  - 1.3.6.1.4.1.12356.101.1.10006   # fgt1100E
+  - 1.3.6.1.4.1.12356.101.1.12400   # fgt1240B
+  - 1.3.6.1.4.1.12356.101.1.30000   # fgt3000
+  - 1.3.6.1.4.1.12356.101.1.30160   # fgt3016B
+  - 1.3.6.1.4.1.12356.101.1.30400   # fgt3040B
+  - 1.3.6.1.4.1.12356.101.1.30401   # fgt3140B
+  - 1.3.6.1.4.1.12356.101.1.32401   # fgt3240C
+  - 1.3.6.1.4.1.12356.101.1.36000   # fgt3600
+  - 1.3.6.1.4.1.12356.101.1.36003   # fgt3600A
+  - 1.3.6.1.4.1.12356.101.1.36004   # fgt3600C
+  - 1.3.6.1.4.1.12356.101.1.38100   # fgt3810A
+  - 1.3.6.1.4.1.12356.101.1.39500   # fgt3950B
+  - 1.3.6.1.4.1.12356.101.1.39501   # fgt3951B
+  - 1.3.6.1.4.1.12356.101.1.50001   # fgt5002FB2
+  - 1.3.6.1.4.1.12356.101.1.50010   # fgt5001
+  - 1.3.6.1.4.1.12356.101.1.50011   # fgt5001A
+  - 1.3.6.1.4.1.12356.101.1.50012   # fgt5001FA2
+  - 1.3.6.1.4.1.12356.101.1.50013   # fgt5001B
+  - 1.3.6.1.4.1.12356.101.1.50014   # fgt5001C
+  - 1.3.6.1.4.1.12356.101.1.50023   # fsw5203B
+  - 1.3.6.1.4.1.12356.101.1.50051   # fgt5005FA2
+  - 1.3.6.1.4.1.12356.101.1.51010   # fgt5101C
+  - 1.3.6.1.4.1.12356.101.1.25000   # fgt2500E
+
+
+metrics:
+  - MIB: FORTINET-FORTIGATE-MIB
+    symbols:
+      # Current CPU usage (percentage) - polled at 60s to support anomaly detection
+      - OID: 1.3.6.1.4.1.12356.101.4.1.3.0
+        name: fgSysCpuUsage
+        poll_time_sec: 60
+        tag: CPU
+      # Current memory utilization (percentage) - polled at 60s to support anomaly detection
+      - OID: 1.3.6.1.4.1.12356.101.4.1.4.0
+        name: fgSysMemUsage
+        poll_time_sec: 60
+        tag: MemoryUtilization
+      # Total physical memory (RAM) installed (KB)
+      - OID: 1.3.6.1.4.1.12356.101.4.1.5.0
+        name: fgSysMemCapacity
+      # Current hard disk usage (MB), if disk is present
+      - OID: 1.3.6.1.4.1.12356.101.4.1.6.0
+        name: fgSysDiskUsage
+      # Total hard disk capacity (MB), if disk is present
+      - OID: 1.3.6.1.4.1.12356.101.4.1.7.0
+        name: fgSysDiskCapacity
+      # Sessions Total - polled at 60s to support anomaly detection
+      - OID: 1.3.6.1.4.1.12356.101.4.1.8.0
+        name: fgSysSesCount
+        poll_time_sec: 60
+      # Current lowmem utilization (percentage). Lowmem is memory available for the kernel's own data structures and kernel specific tables. The system can get into a bad state if it runs out of lowmem.
+      - OID: 1.3.6.1.4.1.12356.101.4.1.9.0
+        name: fgSysLowMemUsage
+      # Total lowmem capacity (KB). See fgSysLowMemUsage for the description of lowmem. 
+      - OID: 1.3.6.1.4.1.12356.101.4.1.10.0
+        name: fgSysLowMemCapacity
+      # The average session setup rate over the past minute.
+      - OID: 1.3.6.1.4.1.12356.101.4.1.11.0
+        name: fgSysSesRate1
+      # Number of active ipv6 sessions on the device - polled at 60s to support anomaly detection
+      - OID: 1.3.6.1.4.1.12356.101.4.1.15.0
+        name: fgSysSes6Count
+        poll_time_sec: 60
+      # The average ipv6 session setup rate over the past minute.
+      - OID: 1.3.6.1.4.1.12356.101.4.1.16.0
+        name: fgSysSes6Rate1
+      # The number of virtual domains in vdTable
+      - OID: 1.3.6.1.4.1.12356.101.3.1.1.0
+        name: fgVdNumber
+      # The maximum number of virtual domains allowed on the device as allowed by hardware and/or licensing
+      - OID: 1.3.6.1.4.1.12356.101.3.1.2.0
+        name: fgVdMaxVdoms
+      # The 64bit time (in hundredths of a second) since the network management portion of the system was last re-initialized.
+      - OID: 1.3.6.1.4.1.12356.101.4.1.20
+        name: fgSysUpTime
+      # Number of configured DHCP servers on the FORTIGATE.
+      - OID: 1.3.6.1.4.1.12356.101.23.1.1
+        name: fgDhcpServerNumber
+        
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.4.3.2
+      name: fgHwSensorTable
+    symbols:
+      # A string representation of the value of the sensor. Because sensors can present data in different formats, string representation is most general format. Interpretation of the value (units of measure, for example) is dependent on the individual sensor.
+      - OID: 1.3.6.1.4.1.12356.101.4.3.2.1.3
+        name: fgHwSensorEntValue
+      # If the sensor has an alarm threshold and has exceeded it, this will indicate its status. Not all sensors have alarms.
+      - OID: 1.3.6.1.4.1.12356.101.4.3.2.1.4
+        name: fgHwSensorEntAlarmStatus
+        enum:
+          false: 0
+          true: 1
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.12356.101.4.3.2.1.2
+          name: fgHwSensorEntName
+          
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.4.9.2
+      name: fgVWLHealthCheckLinkTable
+    symbols:
+      # Virtual-wan-link member link sequence.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.3
+        name: fgVWLHealthCheckLinkSeq
+      # Heatlth check state on a specific member link.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.4
+        name: fgVWLHealthCheckLinkState
+        enum:
+          alive: 0
+          dead: 1
+      # The average latency of a health check on a specific member link in float number within the last 30 probes.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.5
+        name: fgVWLHealthCheckLinkLatency
+      # The average jitter of a health check on a specific member link in float number within the last 30 probes.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.6
+        name: fgVWLHealthCheckLinkJitter
+      # The total number of packets sent by a health check on a specific member link.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.7
+        name: fgVWLHealthCheckLinkPacketSend
+      # The total number of packets received by a health check on a specific member link.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.8
+        name: fgVWLHealthCheckLinkPacketRecv
+      # The packet loss percentage of a health check on a specific member link in float number within the last 30 probes.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.9
+        name: fgVWLHealthCheckLinkPacketLoss
+      # Virtual domain the link monitor entry exists in. This name corresponds to the fgVdEntName used in fgVdTable.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.10
+        name: fgVWLHealthCheckLinkVdom
+      # The available bandwidth in Mbps of incoming traffic detected by a health check on a specific member link.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.11
+        name: fgVWLHealthCheckLinkBandwidthIn
+      # The available bandwidth in Mbps of outgoing traffic detected by a health check on a specific member link.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.12
+        name: fgVWLHealthCheckLinkBandwidthOut
+      # The available bandwidth in Mbps of bi-direction traffic detected by a health check on a specific member link.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.13
+        name: fgVWLHealthCheckLinkBandwidthBi
+      # Virtual-wan-link member interface name.
+      - OID: 1.3.6.1.4.1.12356.101.4.9.2.1.14
+        name: fgVWLHealthCheckLinkIfName
+    metric_tags:
+      - tag: healthcheck_service_link_name
+        column:
+          OID: 1.3.6.1.4.1.12356.101.4.9.2.1.2
+          name: fgVWLHealthCheckLinkName
+      
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.4.4.2
+      name: fgProcessorTable
+    symbols:
+      # The processor's CPU usage (percentage), which is an average calculated over the last minute.
+      - OID: 1.3.6.1.4.1.12356.101.4.4.2.1.2
+        name: fgProcessorUsage
+      # The total number of packets received by this processor
+      - OID: 1.3.6.1.4.1.12356.101.4.4.2.1.6
+        name: fgProcessorPktRxCount
+      # The total number of packets transmitted by this processor
+      - OID: 1.3.6.1.4.1.12356.101.4.4.2.1.7
+        name: fgProcessorPktTxCount
+      # The total number of packets dropped by this processor
+      - OID: 1.3.6.1.4.1.12356.101.4.4.2.1.8
+        name: fgProcessorPktDroppedCount
+      # The processor's CPU system space usage, which is an average calculated over the last minute.
+      - OID: 1.3.6.1.4.1.12356.101.4.4.2.1.10
+        name: fgProcessorSysUsage
+      # HTTP proxy current connections
+      - OID: 1.3.6.1.4.1.12356.101.10.100.4.0
+        name: fgApHTTPConnections
+      # Maximum number of connections supported by SMTP proxy
+      - OID: 1.3.6.1.4.1.12356.101.10.100.5.0
+        name: fgApHTTPMaxConnections
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.3.2.1
+      name: fgVdTable
+    symbols:
+      # Operation mode of the virtual domain
+      - OID: 1.3.6.1.4.1.12356.101.3.2.1.1.3
+        name: fgVdEntOpMode
+        enum:
+          nat: 1
+          transparent: 2
+      # HA cluster member state of the virtual domain on this device
+      - OID: 1.3.6.1.4.1.12356.101.3.2.1.1.4
+        name: fgVdEntHaState
+        enum:
+          master: 1
+          backup: 2
+          standalone: 3
+      - OID: 1.3.6.1.4.1.12356.101.3.2.1.1.5
+        name: fgVdEntCpuUsage
+      - OID: 1.3.6.1.4.1.12356.101.3.2.1.1.6
+        name: fgVdEntMemUsage
+      - OID: 1.3.6.1.4.1.12356.101.3.2.1.1.7
+        name: fgVdEntSesCount
+      - OID: 1.3.6.1.4.1.12356.101.3.2.1.1.8
+        name: fgVdEntSesRate
+    metric_tags:
+      - tag: virtual_domain_name
+        column:
+          OID: 1.3.6.1.4.1.12356.101.3.2.1.1.2
+          name: fgVdEntName
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.5.1.2.1
+      name: fgFwPolStatsTable
+    symbols:
+      # Number of packets matched to policy (passed or blocked, depending on policy action). Count is from the time the policy became active.
+      - OID: 1.3.6.1.4.1.12356.101.5.1.2.1.1.2
+        name: fgFwPolPktCount
+      # Number of bytes in packets matching the policy. See fgFwPolPktCount.
+      - OID: 1.3.6.1.4.1.12356.101.5.1.2.1.1.3
+        name: fgFwPolByteCount
+    metric_tags:
+      - tag: firewall_policy_index
+        column:
+          OID: 1.3.6.1.4.1.12356.101.5.1.2.1.1.1
+          name: fgFwPolID
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.5.1.2.2
+      name: fgFwPol6StatsTable
+    symbols:
+      # Number of packets matched to policy (passed or blocked, depending on policy action). Count is from the time the policy became active.
+      - OID: 1.3.6.1.4.1.12356.101.5.1.2.2.1.2
+        name: fgFwPol6PktCount
+      # Number of bytes in packets matching the policy. See fgFwPol6PktCount.
+      - OID: 1.3.6.1.4.1.12356.101.5.1.2.2.1.3
+        name: fgFwPol6ByteCount
+    metric_tags:
+      - tag: firewall_policy6_index
+        column:
+          OID: 1.3.6.1.4.1.12356.101.5.1.2.2.1.1
+          name: fgFwPol6ID
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      OID: 1.3.6.1.4.1.12356.101.23.2.1
+      name: fgDhcpTable
+    symbols:
+      #Lease Usage of the DHCP server.
+      - OID: 1.3.6.1.4.1.12356.101.23.2.1.1.2
+        name: fgDhcpLeaseUsage
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      name: fgHaStatsTable
+      OID: 1.3.6.1.4.1.12356.101.13.2.1
+    symbols:
+      # Current HA Sync status
+      - name: fgHaStatsSyncStatus 
+        OID: 1.3.6.1.4.1.12356.101.13.2.1.1.12
+        enum:
+          unsynchronized: 0
+          synchronized: 1
+      # Serial number of primary during the last sync attempt (successful or not)
+      - name: fgHaStatsPrimarySerial
+        OID: 1.3.6.1.4.1.12356.101.13.2.1.1.16
+        conversion: to_one
+    metric_tags:
+      # Serial number of the HA cluster member for this row
+      - column:
+          name: fgHaStatsSerial
+          OID: 1.3.6.1.4.1.12356.101.13.2.1.1.2
+      # Host name of the specified cluster member
+      - column:
+          name: fgHaStatsHostname
+          OID: 1.3.6.1.4.1.12356.101.13.2.1.1.11
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      name: fgLinkMonitorTable
+      OID: 1.3.6.1.4.1.12356.101.4.8.2
+    symbols:
+      - name: fgLinkMonitorState
+        OID: 1.3.6.1.4.1.12356.101.4.8.2.1.3
+        enum:
+          alive: 0
+          dead: 1
+      - name: fgLinkMonitorLatency
+        OID: 1.3.6.1.4.1.12356.101.4.8.2.1.4
+      - name: fgLinkMonitorJitter
+        OID: 1.3.6.1.4.1.12356.101.4.8.2.1.5
+      - name: fgLinkMonitorPacketLoss
+        OID: 1.3.6.1.4.1.12356.101.4.8.2.1.8
+    metric_tags:
+      - column:
+          name: fgLinkMonitorName
+          OID: 1.3.6.1.4.1.12356.101.4.8.2.1.2
+
+  - MIB: FORTINET-FORTIGATE-MIB
+    table:
+      name: fgVpnTunTable
+      OID: 1.3.6.1.4.1.12356.101.12.2.2
+    symbols:
+      - name: fgVpnTunEntStatus
+        OID: 1.3.6.1.4.1.12356.101.12.2.2.1.20
+        enum:
+          down: 1
+          up: 2
+      - name: fgVpnTunEntPhase1Name
+        OID: 1.3.6.1.4.1.12356.101.12.2.2.1.2

@@ -1,0 +1,35 @@
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.26866.3.6 # GigaVUE-HC2
+  - 1.3.6.1.4.1.26866.3.15 # GigaVUE-HC3
+
+
+metrics:
+  - MIB: GIGAMON-SNMP-MIB
+    symbol:
+      # Displays the average cpu load(in % per 30 seconds) in CPU utilization of the system.
+      name: gigamonCpuUtilization
+      OID: 1.3.6.1.4.1.26866.2.18.4.0
+      poll_time_sec: 60 
+      tag: CPU
+      conversion: "regexp:(\\d+)."
+  - MIB: GIGAMON-SNMP-MIB
+    symbol:
+      # Displays the total memory(in Kilo bytes) in memory utilization of the system.
+      name: totalMemory
+      OID: 1.3.6.1.4.1.26866.2.19.1.0
+      poll_time_sec: 60 
+      tag: MemoryTotal
+  - MIB: GIGAMON-SNMP-MIB
+    symbol:
+      # Displays the free memory(in Kilo bytes) in memory utilization of the system.
+      name: freeMemory
+      OID: 1.3.6.1.4.1.26866.2.19.2.0
+      poll_time_sec: 60 
+      tag: MemoryFree

@@ -1,0 +1,88 @@
+# https://mibs.observium.org/mib/HUAWEI-STACK-MIB/
+---
+extends:
+  - huawei-all-devices.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.2011.2.23.343     # Huawei S6720-54C-EI-48S-AC
+  - 1.3.6.1.4.1.2011.2.23.606     # Huawei S5730-68C-PWH-HI
+  - 1.3.6.1.4.1.2011.2.239.15     # Huawei CE12804S
+  - 1.3.6.1.4.1.2011.2.239.16     # Huawei CE12808S
+
+provider: kentik-switch
+
+metrics:
+  # The topology of a stack.
+  - MIB: HUAWEI-STACK-MIB
+    symbol:
+      name: hwStackTopoType
+      OID: 1.3.6.1.4.1.2011.5.25.183.1.2.0
+      enum:
+        ring: 1
+        link: 2
+  # The stack system's MAC address, it will always be the master device's MAC address.
+  - MIB: HUAWEI-STACK-MIB
+    symbol:
+      name: hwStackSystemMac
+      OID: 1.3.6.1.4.1.2011.5.25.183.1.4.0
+      conversion: hwaddr
+  # The value true(1) indicates that the device's stack function is enable and it is in a stack system. When false(2), the stack function is not enable or it is not in a stack system.
+  - MIB: HUAWEI-STACK-MIB
+    symbol:
+      name: hwStackIsStackDevice
+      OID: 1.3.6.1.4.1.2011.5.25.183.1.5.0
+      enum:
+        true: 1
+        false: 2
+  # Stack reserved-vlanId.
+  - MIB: HUAWEI-STACK-MIB
+    symbol:
+      name: hwStackReservedVlanId
+      OID: 1.3.6.1.4.1.2011.5.25.183.1.6.0
+  # Table of stack member switches.
+  - MIB: HUAWEI-STACK-MIB
+    table:
+      name: hwStackMemberInfoTable
+      OID: 1.3.6.1.4.1.2011.5.25.183.1.20
+    symbols:
+      # Stack member's priority.
+      - name: hwMemberStackPriority
+        OID: 1.3.6.1.4.1.2011.5.25.183.1.20.1.2
+      # The role of stack device in stack system.
+      - name: hwMemberStackRole
+        OID: 1.3.6.1.4.1.2011.5.25.183.1.20.1.3
+        enum:
+          master: 1
+          standby: 2
+          slave: 3
+    metric_tags:
+      # MAC address of the stack device.
+      - column:
+          name: hwMemberStackMacAddress
+          OID: 1.3.6.1.4.1.2011.5.25.183.1.20.1.4
+          conversion: hwaddr
+      # Device type of the stack device.
+      - column:
+          name: hwMemberStackDeviceType
+          OID: 1.3.6.1.4.1.2011.5.25.183.1.20.1.5
+      # The vendor's sysOID for the stack device.
+      - column:
+          name: hwMemberStackObjectId
+          OID: 1.3.6.1.4.1.2011.5.25.183.1.20.1.7
+  # Table of stack ports.
+  - MIB: HUAWEI-STACK-MIB
+    table:
+      name: hwStackPortTable
+      OID: 1.3.6.1.4.1.2011.5.25.183.1.21
+    symbols:
+      # The status of the stack port.
+      - name: hwStackPortStatus
+        OID: 1.3.6.1.4.1.2011.5.25.183.1.21.1.5
+        enum:
+          up: 1
+          down: 2
+    metric_tags:
+      # Stack port name.
+      - column:
+          name: hwStackPortName
+          OID: 1.3.6.1.4.1.2011.5.25.183.1.21.1.3

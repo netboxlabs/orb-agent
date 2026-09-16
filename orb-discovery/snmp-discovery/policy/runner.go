@@ -101,6 +101,20 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	runner.scope = policy.Scope
 	runner.config = policy.Config
 
+	// Normalised once per policy rather than per member per poll: a bad
+	// template is an operator mistake to fix, and a warning repeated on
+	// every scan of every stack is one nobody reads. Every consumer
+	// downstream then reads a template already known to be usable.
+	runner.config.Defaults.StackMemberNameTemplate = config.NormalizeStackMemberTemplate(
+		runner.config.Defaults.StackMemberNameTemplate, logger)
+	for i := range runner.scope.Targets {
+		od := runner.scope.Targets[i].OverrideDefaults
+		if od == nil || od.StackMemberNameTemplate == "" {
+			continue
+		}
+		od.StackMemberNameTemplate = config.NormalizeStackMemberTemplate(od.StackMemberNameTemplate, logger)
+	}
+
 	expandedTargetGroups := runner.expandTargetRanges(runner.scope.Targets)
 
 	for _, group := range expandedTargetGroups {
@@ -299,6 +313,60 @@ func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
 	return &r.config.Defaults
 }
 
+// probeProbeUser is the USM user the v3 probe presents instead of the
+// operator's. gosnmp rejects an empty user name, so the probe needs some
+// value; this one is never a credential and is only ever seen by an agent that
+// has already answered engine discovery.
+const probeProbeUser = "orb-probe"
+
+// engineDiscoverer is answered by a client that learned a peer's SNMPv3
+// authoritative engine ID.
+//
+// Asserted rather than added to snmp.Walker so a walker that cannot report it
+// keeps the walk-error admission rule, which is the only one v1 and v2c have.
+type engineDiscoverer interface {
+	EngineDiscovered() bool
+}
+
+// probeAuthentication returns the credentials the reachability probe may send
+// to an address that has not yet proven anything is there.
+//
+// SNMPv3 carries a credential-free engine discovery exchange before any
+// authenticated request (RFC 3414 section 4), so the probe presents a
+// placeholder user at noAuthNoPriv: the operator's user never reaches a
+// scanned address, and without an authenticated request there is no HMAC to
+// capture and attack offline. Presence comes from the discovery answer, so
+// nothing is lost by not authenticating.
+//
+// v1 and v2c are returned unchanged, and this is the exposure the probe cannot
+// close: the community IS the credential and there is no discovery exchange to
+// stand in for it. A conformant agent silently discards a request bearing the
+// wrong community, so substituting one turns every device into a false
+// negative rather than protecting anything. Whether a v2c range may be scanned
+// at all is a policy question, not one the probe can answer.
+func probeAuthentication(auth *config.Authentication) *config.Authentication {
+	if auth == nil || auth.ProtocolVersion != snmp.ProtocolVersion3 {
+		return auth
+	}
+
+	// Copied rather than mutated: the caller's authentication is the policy's
+	// own and is reused for the real run.
+	probe := *auth
+	probe.Username = probeProbeUser
+	probe.SecurityLevel = "noAuthNoPriv"
+	// The sentinels rather than empty strings: getAuthProtocol and
+	// getPrivProtocol accept "NoAuth" and "NoPriv" and reject everything else
+	// they do not recognise, the empty string included. Clearing these to ""
+	// makes the client factory fail before it connects, which rejects every
+	// address and quietly turns off v3 range scanning altogether.
+	probe.AuthProtocol = "NoAuth"
+	probe.AuthPassphrase = ""
+	probe.PrivProtocol = "NoPriv"
+	probe.PrivPassphrase = ""
+	probe.ContextName = ""
+	return &probe
+}
+
 func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	select {
 	case <-ctx.Done():
@@ -306,7 +374,7 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 	default:
 	}
 
-	auth := r.resolveTargetAuthentication(target)
+	auth := probeAuthentication(r.resolveTargetAuthentication(target))
 
 	snmpClient, err := r.ClientFactory(target.Host, target.Port, 0, r.snmpProbeTimeout, auth, r.logger)
 	if err != nil {
@@ -320,8 +388,17 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 		return false
 	}
 
-	_, err = snmpClient.Walk(defaultSNMPProbeOID, 0)
-	return err == nil
+	_, err = snmpClient.Walk(ctx, defaultSNMPProbeOID, 0)
+	if err == nil {
+		return true
+	}
+
+	// The v3 probe deliberately cannot authenticate, so its walk fails against
+	// a live agent too. Answering engine discovery is what proves one is there.
+	if discoverer, ok := snmpClient.(engineDiscoverer); ok {
+		return discoverer.EngineDiscovered()
+	}
+	return false
 }
 
 // run runs the policy for a single target (no parent)
@@ -513,7 +590,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// bounded by snmpTimeout (set on the SNMP client), so it is not a permanent leak.
 	resultCh := make(chan walkResult, 1)
 	go func() {
-		oids, err := host.Walk(genericOIDs)
+		oids, err := host.Walk(ctx, genericOIDs)
 		resultCh <- walkResult{oids, err}
 	}()
 
@@ -553,7 +630,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				"host", targetHost, "vendor", vendor, "oid_count", len(vendorOIDs))
 			vendorCh := make(chan walkResult, 1)
 			go func() {
-				out, err := host.Walk(vendorOIDs)
+				out, err := host.Walk(ctx, vendorOIDs)
 				vendorCh <- walkResult{out, err}
 			}()
 			select {
@@ -601,11 +678,20 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				attribute.String("policy", policyName)))
 	}
 
+	// Normalise the walk before any consumer reads it. On the Junos platforms
+	// that index dot1qVlanStaticTable internally, the VLAN catalog, the port
+	// masks and the SVI resolver would each otherwise read an internal number
+	// as a VLAN ID. Done here, once, so every consumer below sees one keying
+	// and the translation's warnings are logged once per target. A no-op
+	// everywhere else.
+	oids = mapping.ResolveJuniperVlanIndices(oids, r.logger)
+
 	entities := make([]diode.Entity, 0)
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
-		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)), r.logger)
+		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
+		targetDefaults.StackMemberNameTemplate, r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path
@@ -684,6 +770,15 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		}
 	}
 
+	// Resolve SVI VLANs before prefix derivation: VLAN entities are already
+	// appended to entitiesForTarget by this point, and the resolver only
+	// references VLANs the device itself named. Gated on the option so a
+	// target pays nothing (no ifName/ifDescr rescan) when it's off.
+	var sviVlanByIfIndex map[int]*diode.VLAN
+	if r.config.Options.PrefixVlanMode() != "off" {
+		sviVlanByIfIndex = mapping.ResolveSviVlans(oids, entitiesForTarget, r.logger)
+	}
+
 	// Prefix derivation (default on, opt-out via emit_prefixes: false):
 	// one Prefix per unique (network, VRF) derived from the discovered IP
 	// addresses, matching device-discovery's behavior. Runs after VRF
@@ -691,7 +786,8 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// VRF; everything else follows defaults.prefix.
 	if r.config.Options.PrefixEmissionEnabled() {
 		prefixEntities := mapping.DerivePrefixes(
-			entitiesForTarget, vrfByAddress, targetDefaults, &r.config.Options, r.logger,
+			entitiesForTarget, vrfByAddress, sviVlanByIfIndex, ifIndexByIface,
+			targetDefaults, &r.config.Options, r.logger,
 		)
 		entitiesForTarget = append(entitiesForTarget, prefixEntities...)
 	}

@@ -1,0 +1,1088 @@
+# https://mibs.observium.org/mib/CPQSTDEQ-MIB/
+# https://mibs.observium.org/mib/CPQSINFO-MIB/
+# https://mibs.observium.org/mib/CPQIDA-MIB/
+# https://mibs.observium.org/mib/CPQHLTH-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-hp-ilo
+
+sysobjectid:
+  - 1.3.6.1.4.1.232.9.4.*     # HP ILO
+  - 1.3.6.1.4.1.232.9.4.10    # ILO4
+  - 1.3.6.1.4.1.232.9.4.11    # ILO5
+
+metrics:
+  # A list of the CPUs (processors) in the system.
+  - MIB: CPQSTDEQ-MIB
+    table:
+      name: cpqSeCpuTable
+      OID: 1.3.6.1.4.1.232.1.2.2.1
+    symbols:
+      # The status of the processor.
+      - name: cpqSeCpuStatus
+        OID: 1.3.6.1.4.1.232.1.2.2.1.1.6
+        enum:
+          unknown: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+          disabled: 5
+      # Servers like Itanium has capability to lower power supply to CPU if it is idle for specified period of time. Proliant servers can set to high/low/Dynamic mode of power through ILO.
+      - name: cpqSeCpuLowPowerStatus
+        OID: 1.3.6.1.4.1.232.1.2.2.1.1.26
+        enum:
+          unknown: 1
+          lowPowered: 2
+          normalPowered: 3
+          highPowered: 4
+    metric_tags:
+      # This value represents this processor's slot. If the slot cannot be determined the value of zero (0) will be returned.
+      - column:
+          name: cpqSeCpuSlot
+          OID: 1.3.6.1.4.1.232.1.2.2.1.1.2
+      # The name of this processor. For example: 80386
+      - column:
+          name: cpqSeCpuName
+          OID: 1.3.6.1.4.1.232.1.2.2.1.1.3
+      # The number of cores in this CPU module. Zero will be returned if can not be determined.
+      - column:
+          name: cpqSeCpuCore
+          OID: 1.3.6.1.4.1.232.1.2.2.1.1.15
+
+  # This value specifies the overall condition of the processor sub-system.
+  - MIB: CPQSTDEQ-MIB
+    symbol:
+      name: cpqSeCpuCondition
+      OID: 1.3.6.1.4.1.232.1.2.2.4.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+        failed: 4
+
+  # Array Controller Table.
+  - MIB: CPQIDA-MIB
+    table:
+      name: cpqDaCntlrTable
+      OID: 1.3.6.1.4.1.232.3.2.2.1
+    symbols:
+      # The status of the Standard Interface. The Standard Interface is how DOS communicates with a drive.
+      - name: cpqDaCntlrStndIntr
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.4
+        enum:
+          other: 1
+          primary: 2
+          secondary: 3
+          disabled: 4
+          unavailable: 5
+      # The condition of the device. This value represents the overall condition of this controller, and any associated logical drives, physical drives, and cache modules.
+      - name: cpqDaCntlrCondition
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.6
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Array Controller Current Role. For duplexed array controllers, this is the controllers current role.
+      - name: cpqDaCntlrCurrentRole
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.9
+        enum:
+          other: 1
+          notDuplexed: 2
+          active: 3
+          backup: 4
+          asymActiveActive: 5
+      # Array Controller Board Status.
+      - name: cpqDaCntlrBoardStatus
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.10
+        enum:
+          other: 1
+          ok: 2
+          generalFailure: 3
+          cableProblem: 4
+          poweredOff: 5
+          cacheModuleMissing: 6
+      # Array Controller Partner Board Status.
+      - name: cpqDaCntlrPartnerBoardStatus
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.11
+        enum:
+          other: 1
+          ok: 2
+          generalFailure: 3
+          cableProblem: 4
+          poweredOff: 5
+      # The condition of the device. This value represents the condition of the controller and any associated cache modules.
+      - name: cpqDaCntlrBoardCondition
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.12
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # The condition of the partner device. This value represents the condition of the controller and any associated cache modules.
+      - name: cpqDaCntlrPartnerBoardCondition
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.13
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Array Controller Drive Ownership. For duplexed controllers, indicates to which controller slot the shared devices are associated.
+      - name: cpqDaCntlrDriveOwnership
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.14
+        enum:
+          other: 1
+          owner: 2
+          notOwner: 3
+      # Array Controller Redundancy Type.
+      - name: cpqDaCntlrRedundancyType
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.16
+        enum:
+          other: 1
+          notRedundant: 2
+          driverDuplexing: 3
+          fwActiveStandby: 4
+          fwPrimarySecondary: 5
+          fwActiveActive: 6
+      # Array Controller Redundancy Error.
+      - name: cpqDaCntlrRedundancyError
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.17
+        enum:
+          other: 1
+          noFailure: 2
+          noRedundantController: 3
+          differentHardware: 4
+          noLink: 5
+          differentFirmware: 6
+          differentCache: 7
+          otherCacheFailure: 8
+          noDrives: 9
+          otherNoDrives: 10
+          unsupportedDrives: 11
+          expandInProgress: 12
+      # Array Controller RAID ADG Enabler Module Status.
+      - name: cpqDaCntlrAccessModuleStatus
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.18
+        enum:
+          other: 1
+          notSupported: 2
+          notPresent: 3
+          badSignature: 4
+          badChecksum: 5
+          fullyFunctional: 6
+          upgradeFirmware: 7
+      # Array Controller Daughter Board Type.
+      - name: cpqDaCntlrDaughterBoardType
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.19
+        enum:
+          other: 1
+          notSupported: 2
+          notPresent: 3
+          scsiBoardPresent: 4
+          fibreBoardPresent: 5
+          arrayExpansionModulePresent: 6
+      # Array Controller Current Temperature. This is the temperature of the array controller in degrees Celsius. The field will contain -1 if the controller temperature cannot be calculated or if the controller does not support reporting temperature.
+      - name: cpqDaCntlrCurrentTemp
+        OID: 1.3.6.1.4.1.232.3.2.2.1.1.32
+    metric_tags:
+      # Array Controller Model. The type of controller card.
+      - column:
+          name: cpqDaCntlrModel
+          OID: 1.3.6.1.4.1.232.3.2.2.1.1.2
+          enum:
+            other: 1
+            ida: 2
+            idaExpansion: 3
+            ida-2: 4
+            smart: 5
+            smart-2e: 6
+            smart-2p: 7
+            smart-2sl: 8
+            smart-3100es: 9
+            smart-3200: 10
+            smart-2dh: 11
+            smart-221: 12
+            sa-4250es: 13
+            sa-4200: 14
+            sa-integrated: 15
+            sa-431: 16
+            sa-5300: 17
+            raidLc2: 18
+            sa-5i: 19
+            sa-532: 20
+            sa-5312: 21
+            sa-641: 22
+            sa-642: 23
+            sa-6400: 24
+            sa-6400em: 25
+            sa-6i: 26
+            sa-generic: 27
+            sa-p600: 29
+            sa-p400: 30
+            sa-e200: 31
+            sa-e200i: 32
+            sa-p400i: 33
+            sa-p800: 34
+            sa-e500: 35
+            sa-p700m: 36
+            sa-p212: 37
+            sa-p410: 38
+            sa-p410i: 39
+            sa-p411: 40
+            sa-b110i: 41
+            sa-p712m: 42
+            sa-p711m: 43
+            sa-p812: 44
+            sw-1210m: 45
+            sa-p220i: 46
+            sa-p222: 47
+            sa-p420: 48
+            sa-p420i: 49
+            sa-p421: 50
+            sa-b320i: 51
+            sa-p822: 52
+            sa-p721m: 53
+            sa-b120i: 54
+            hps-1224: 55
+            hps-1228: 56
+            hps-1228m: 57
+            sa-p822se: 58
+            hps-1224e: 59
+            hps-1228e: 60
+            hps-1228em: 61
+            sa-p230i: 62
+            sa-p430i: 63
+            sa-p430: 64
+            sa-p431: 65
+            sa-p731m: 66
+            sa-p830i: 67
+            sa-p830: 68
+            sa-p831: 69
+      # Array Controller Firmware Revision. The firmware revision of the drive array controller. This value can be used to help identify a particular revision of the controller. For B-Series controllers this value is the RAID Stack Revision that is running and this value may change when upgrading or downgrading the operating system device driver.
+      - column:
+          name: cpqDaCntlrFWRev
+          OID: 1.3.6.1.4.1.232.3.2.2.1.1.3
+      # Array Controller Serial Number. The serial number of the array controller. This field will be a null (size 0) string if the controller does not support serial number.
+      - column:
+          name: cpqDaCntlrSerialNumber
+          OID: 1.3.6.1.4.1.232.3.2.2.1.1.15
+      # A text description of the hardware location of the controller. A NULL string indicates that the hardware location could not be determined or is irrelevant.
+      - column:
+          name: cpqDaCntlrHwLocation
+          OID: 1.3.6.1.4.1.232.3.2.2.1.1.20
+      # The array controller's current operating mode.
+      - column:
+          name: cpqDaCntlrOperatingMode
+          OID: 1.3.6.1.4.1.232.3.2.2.1.1.43
+          enum:
+            other: 1
+            smartArrayMode: 2
+            smartHbaMode: 3
+
+  # Cache Module Board Table. Note that for some controller models, a cache module board that physically attaches to the controller or chipset may not be an available option.
+  - MIB: CPQIDA-MIB
+    table:
+      name: cpqDaAccelTable
+      OID: 1.3.6.1.4.1.232.3.2.2.2
+    symbols:
+      # Cache Module/Operations Status. This describes the status of the cache module and/or cache operations.
+      - name: cpqDaAccelStatus
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.2
+        enum:
+          other: 1
+          invalid: 2
+          enabled: 3
+          tmpDisabled: 4
+          permDisabled: 5
+          cacheModFlashMemNotAttached: 6
+          cacheModDegradedFailsafeSpeed: 7
+          cacheModCriticalFailure: 8
+          cacheReadCacheNotMapped: 9
+      # Cache Module Board Bad Data.
+      - name: cpqDaAccelBadData
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.4
+        enum:
+          other: 1
+          none: 2
+          possible: 3
+      # Cache Module Board Error Code. Use this to determine the status of the write cache operations.
+      - name: cpqDaAccelErrCode
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.5
+        enum:
+          other: 1
+          invalid: 2
+          badConfig: 3
+          lowBattery: 4
+          disableCmd: 5
+          noResources: 6
+          notConnected: 7
+          badMirrorData: 8
+          readErr: 9
+          writeErr: 10
+          configCmd: 11
+          expandInProgress: 12
+          snapshotInProgress: 13
+          redundantLowBattery: 14
+          redundantSizeMismatch: 15
+          redundantCacheFailure: 16
+          excessiveEccErrors: 17
+          adgEnablerMissing: 18
+          postEccErrors: 19
+          batteryHotRemoved: 20
+          capacitorChargeLow: 21
+          notEnoughBatteries: 22
+          cacheModuleNotSupported: 23
+          batteryNotSupported: 24
+          noCapacitorAttached: 25
+          capBasedBackupFailed: 26
+          capBasedRestoreFailed: 27
+          capBasedModuleHWFailure: 28
+          capacitorFailedToCharge: 29
+          capacitorBasedHWMemBeingErased: 30
+          incompatibleCacheModule: 31
+          fbcmChargerCircuitFailure: 32
+      # Cache Module Board Backup Power Status. This monitors the status of each backup power source on the board. The backup power source can only recharge when the system has power applied.
+      - name: cpqDaAccelBattery
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.6
+        enum:
+          other: 1
+          ok: 2
+          recharging: 3
+          failed: 4
+          degraded: 5
+          notPresent: 6
+          capacitorFailed: 7
+      # Cache Module Board Read Errors. This shows the total number of read memory parity errors that were detected while reading from the Cache Module board.
+      - name: cpqDaAccelReadErrs
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.7
+      # Cache Module Board Write Errors. This shows the total number of write memory parity errors that were detected while writing to the Cache Module board.
+      - name: cpqDaAccelWriteErrs
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.8
+      # The condition of the device. This value represents the overall condition of this cache module.
+      - name: cpqDaAccelCondition
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.9
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Read Cache Percent. This shows the percent of cache memory allocated for read ahead caching. If the data cannot be determined or is not applicable, the value is set to 4,294,967,295.
+      - name: cpqDaAccelReadCachePercent
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.13
+      # Write Cache Percent. This shows the percent of cache memory allocated for posted write caching. If the data cannot be determined or is not applicable, the value is set to 4,294,967,295.
+      - name: cpqDaAccelWriteCachePercent
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.14
+      # Cache Module Board Backup Power Source. This describes the backup power source being used by the Cache Module board.
+      - name: cpqDaAccelBackupPowerSource
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.16
+        enum:
+          other: 1
+          battery: 2
+          capacitor: 3
+      # Cache Module Board Current Temperature. This is the temperature of the cache module board in degrees Celsius. The field will contain -1 if the cache module board temperature cannot be calculated or if the controller does not support reporting cache module board temperature.
+      - name: cpqDaAccelBoardCurrentTemp
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.17
+      # Cache Module Capacitor Current Temperature. This is the temperature of the Super-Cap in degrees Celsius. The field will contain -1 if the Super-Cap temperature cannot be calculated or if the controller does not support reporting Super-Cap temperature.
+      - name: cpqDaAccelCapacitorCurrentTemp
+        OID: 1.3.6.1.4.1.232.3.2.2.2.1.18
+    metric_tags:
+      # Cache Module Serial Number. The serial number of the Cache Module. This field will be a null (size 0) string if the cache module does not support serial number.
+      - column:
+          name: cpqDaAccelSerialNumber
+          OID: 1.3.6.1.4.1.232.3.2.2.2.1.11
+      # Total Cache Memory. This value is the total amount of cache module memory in kilobytes, including both battery-backed and non-battery-backed memory.
+      - column:
+          name: cpqDaAccelTotalMemory
+          OID: 1.3.6.1.4.1.232.3.2.2.2.1.12
+
+  # Drive Array Logical Drive Table. A table of logical drive entries.
+  - MIB: CPQIDA-MIB
+    table:
+      name: cpqDaLogDrvTable
+      OID: 1.3.6.1.4.1.232.3.2.3.1
+    symbols:
+      # Logical Drive Fault Tolerance. This shows the fault tolerance mode of the logical drive.
+      - name: cpqDaLogDrvFaultTol
+        OID: 1.3.6.1.4.1.232.3.2.3.1.1.3
+        enum:
+          other: 1
+          none: 2
+          mirroring: 3
+          dataGuard: 4
+          distribDataGuard: 5
+          advancedDataGuard: 7
+          raid50: 8
+          raid60: 9
+          raid1Adm: 10
+          raid10Adm: 11
+      # Logical Drive Status.
+      - name: cpqDaLogDrvStatus
+        OID: 1.3.6.1.4.1.232.3.2.3.1.1.4
+        enum:
+          other: 1
+          ok: 2
+          failed: 3
+          unconfigured: 4
+          recovering: 5
+          readyForRebuild: 6
+          rebuilding: 7
+          wrongDrive: 8
+          badConnect: 9
+          overheating: 10
+          shutdown: 11
+          expanding: 12
+          notAvailable: 13
+          queuedForExpansion: 14
+          multipathAccessDegraded: 15
+          erasing: 16
+          predictiveSpareRebuildReady: 17
+          rapidParityInitInProgress: 18
+          rapidParityInitPending: 19
+          noAccessEncryptedNoCntlrKey: 20
+          unencryptedToEncryptedInProgress: 21
+          newLogDrvKeyRekeyInProgress: 22
+          noAccessEncryptedCntlrEncryptnNotEnbld: 23
+          unencryptedToEncryptedNotStarted: 24
+          newLogDrvKeyRekeyRequestReceived: 25
+      # The Logical Drive condition. This value represents the overall condition of this logical drive and any associated physical drives.
+      - name: cpqDaLogDrvCondition
+        OID: 1.3.6.1.4.1.232.3.2.3.1.1.11
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Logical Drive Multi-path Access. This indicates whether all the physical disks including spares of this logical drive have been configured to have and currently still have more than one I/O path to the controller.
+      - name: cpqDaLogDrvMultipathAccess
+        OID: 1.3.6.1.4.1.232.3.2.3.1.1.18
+        enum:
+          other: 1
+          notSupported: 2
+          notConfigured: 3
+          pathRedundant: 4
+          noRedundantPath: 5
+    metric_tags:
+      # Drive Array Logical Drive Index. This logical drive number keeps track of multiple instances of logical drives which are on the same controller. For each controller index value, the logical drive index starts at 1 and increments for each logical drive.
+      - column:
+          name: cpqDaLogDrvIndex
+          OID: 1.3.6.1.4.1.232.3.2.3.1.1.2
+      # Logical Drive Has Cache Module Board. This indicates whether the logical drive has a Cache Module board configured and enabled.
+      - column:
+          name: cpqDaLogDrvHasAccel
+          OID: 1.3.6.1.4.1.232.3.2.3.1.1.7
+          enum:
+            other: 1
+            unavailable: 2
+            enabled: 3
+            disabled: 4
+      # Logical Drive Size. This is the size of the logical drive in megabytes. This value is calculated using the value 1,048,576 (2^20) as a megabyte. Drive manufacturers sometimes use the number 1,000,000 as a megabyte when giving drive capacities so this value may differ from the advertised size of a drive.
+      - column:
+          name: cpqDaLogDrvSize
+          OID: 1.3.6.1.4.1.232.3.2.3.1.1.9
+      # Logical Drive Cache Volume Accelerator Association Type. Indicates the way in which this logical drive is associated with a cache volume accelerator group.
+      - column:
+          name: cpqDaLogDrvCacheVolAccelAssocType
+          OID: 1.3.6.1.4.1.232.3.2.3.1.1.21
+          enum:
+            other: 1
+            nonMember: 2
+            logicalDriveMember: 3
+            cacheVolumeMember: 4
+      # Logical Drive SSD Smart Path Status. Indicates the logical drive SSD Smart Path status. An SSD Smart Path for a logical drive can be utilized only when both the Smart Array firmware and Smart Array controller driver support such a path.
+      - column:
+          name: cpqDaLogDrvSSDSmartPathStatus
+          OID: 1.3.6.1.4.1.232.3.2.3.1.1.24
+          enum:
+            other: 1
+            updateDriver: 2
+            ssdSmartPathDisabled: 3
+            ssdSmartPathEnabled: 4
+      # Logical Drive Encryption Status. Indicates the logical drive encryption status.
+      - column:
+          name: cpqDaLogDrvEncryptionStatus
+          OID: 1.3.6.1.4.1.232.3.2.3.1.1.25
+          enum:
+            other: 1
+            encrypted: 2
+            notEncrypted: 3
+
+  # Drive Array Physical Drive Table. A table of physical drive entries.
+  - MIB: CPQIDA-MIB
+    table:
+      name: cpqDaPhyDrvTable
+      OID: 1.3.6.1.4.1.232.3.2.5
+    symbols:
+      # Physical Drive Status. This shows the status of the physical drive.
+      - name: cpqDaPhyDrvStatus
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.6
+        enum:
+          other: 1
+          ok: 2
+          failed: 3
+          predictiveFailure: 4
+          erasing: 5
+          eraseDone: 6
+          eraseQueued: 7
+          ssdWearOut: 8
+          notAuthenticated: 9
+      # Reference Time in hours. This shows the total number of hours that a physical drive has been in operation since the drive was stamped. The drive will have either been stamped when it left the factory or when you ran diagnostics on your new drive.
+      - name: cpqDaPhyDrvRefHours
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.9
+      # The condition of the device. This value represents the overall condition of this physical drive.
+      - name: cpqDaPhyDrvCondition
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.37
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # Physical Drive S.M.A.R.T Status.
+      - name: cpqDaPhyDrvSmartStatus
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.57
+        enum:
+          other: 1
+          ok: 2
+          replaceDrive: 3
+          replaceDriveSSDWearOut: 4
+      # Physical Drive Configuration Status.
+      - name: cpqDaPhyDrvConfigurationStatus
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.58
+        enum:
+          other: 1
+          configured: 2
+          notConfigured: 3
+      # Drive Array Physical Drive Multi-path Access Status. This indicates if this physical drive has been configured to have and currently still has more than one I/O path to the controller.
+      - name: cpqDaPhyDrvMultipathAccess
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.68
+        enum:
+          other: 1
+          notSupported: 2
+          notConfigured: 3
+          pathRedundant: 4
+          noRedundantPath: 5
+          driveFailed: 6
+      # Drive Array Physical Drive Current Temperature. This is the temperature of the physical drive in degrees Celsius. The field will contain -1 if the drive temperature cannot be calculated or if the controller does not support reporting drive temperature.
+      - name: cpqDaPhyDrvCurrentTemperature
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.70
+      # Drive Array Physical Drive Solid State Disk Wear Status. This shows the wear status of the solid state physical drive.
+      - name: cpqDaPhyDrvSSDWearStatus
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.73
+        enum:
+          other: 1
+          ok: 2
+          fiftySixDayThreshold: 3
+          fivePercentThreshold: 4
+          twoPercentThreshold: 5
+          ssdWearOut: 6
+      # Drive Array Physical Drive Authentication Status.
+      - name: cpqDaPhyDrvAuthenticationStatus
+        OID: 1.3.6.1.4.1.232.3.2.5.1.1.77
+        enum:
+          other: 1
+          notSupported: 2
+          authenticationFailed: 3
+          authenticationPassed: 4
+    metric_tags:
+      # Physical Drive Model. This is a text description of the physical drive. The text that appears depends upon who manufactured the drive and the drive type.
+      - column:
+          name: cpqDaPhyDrvModel
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.3
+      # Physical Drive Firmware Revision. This shows the physical drive revision number. If the firmware revision is not present, you have not properly initialized the drive array.
+      - column:
+          name: cpqDaPhyDrvFWRev
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.4
+      # Physical Drive Bay Location. This value matches the bay location where the physical drive has been installed. For a SCSI drive, this is the SCSI ID of the drive. For a SAS or SATA drive, this is the bay number on the enclosure.
+      - column:
+          name: cpqDaPhyDrvBay
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.5
+      # Physical Drive Size in MB. This is the size of the physical drive in megabytes. Drive manufacturers sometimes use the number 1,000,000 as a megabyte when giving drive capacities so this value may differ from the advertised size of a drive.
+      - column:
+          name: cpqDaPhyDrvSize
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.45
+      # Physical Drive Serial Number. This is the serial number assigned to the physical drive.
+      - column:
+          name: cpqDaPhyDrvSerialNum
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.51
+      # Drive Array Physical Drive Rotational Speed.
+      - column:
+          name: cpqDaPhyDrvRotationalSpeed
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.59
+          enum:
+            other: 1
+            rpm7200: 2
+            rpm10k: 3
+            rpm15k: 4
+            rpmSSD: 5
+      # Physical Drive Type.
+      - column:
+          name: cpqDaPhyDrvType
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.60
+          enum:
+            other: 1
+            parallelScsi: 2
+            sata: 3
+            sas: 4
+      # Physical Drive SATA Version.
+      - column:
+          name: cpqDaPhyDrvSataVersion
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.61
+          enum:
+            other: 1
+            sataOne: 2
+            sataTwo: 3
+      # Physical Drive Host Connector. This is the host connector to which the drive is ultimately attached. If the host connector cannot be determined, the agent will return a NULL string.
+      - column:
+          name: cpqDaPhyDrvHostConnector
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.62
+      # Physical Drive Location String. This string describes the location of the drive in relation to the controller. If the location string cannot be determined, the agent will return a NULL string.
+      - column:
+          name: cpqDaPhyDrvLocationString
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.64
+      # Drive Array Physical Drive Media Type.
+      - column:
+          name: cpqDaPhyDrvMediaType
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.69
+          enum:
+            other: 1
+            rotatingPlatters: 2
+            solidState: 3
+      # Physical Drive Encryption Status. The physical drive's encryption status.
+      - column:
+          name: cpqDaPhyDrvEncryptionStatus
+          OID: 1.3.6.1.4.1.232.3.2.5.1.1.80
+          enum:
+            other: 1
+            encrypted: 2
+            notEncrypted: 3
+
+  # The Automatic Server Recovery feature status.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeAsrStatus
+      OID: 1.3.6.1.4.1.232.6.2.5.1.0
+      enum:
+        other: 1
+        notAvailable: 2
+        disabled: 3
+        enabled: 4
+
+  # This value specifies the overall condition of the ASR feature.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeAsrCondition
+      OID: 1.3.6.1.4.1.232.6.2.5.17.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+        failed: 4
+
+  # This value specifies the overall condition of the system's thermal environment.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeThermalCondition
+      OID: 1.3.6.1.4.1.232.6.2.6.1.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+        failed: 4
+
+  # The status of the system's temperature sensors.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeThermalTempStatus
+      OID: 1.3.6.1.4.1.232.6.2.6.3.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+        failed: 4
+
+  # The status of the fan(s) in the system.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeThermalSystemFanStatus
+      OID: 1.3.6.1.4.1.232.6.2.6.4.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+        failed: 4
+
+  # The status of the processor fan(s) in the system.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeThermalCpuFanStatus
+      OID: 1.3.6.1.4.1.232.6.2.6.5.0
+      enum:
+        other: 1
+        ok: 2
+        failed: 4
+
+  # A table of Fault Tolerant Fan Entries.
+  - MIB: CPQHLTH-MIB
+    table:
+      name: cpqHeFltTolFanTable
+      OID: 1.3.6.1.4.1.232.6.2.6.7
+    symbols:
+      # This specifies the speed of the fan. This value will be set if the fan type is tachOutput.
+      - name: cpqHeFltTolFanSpeed
+        OID: 1.3.6.1.4.1.232.6.2.6.7.1.6
+        enum:
+          other: 1
+          normal: 2
+          high: 3
+      # The condition of the fan.
+      - name: cpqHeFltTolFanCondition
+        OID: 1.3.6.1.4.1.232.6.2.6.7.1.9
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # This indicates if the fan is capable of being removed and/or inserted while the system is in an operational state.
+      - name: cpqHeFltTolFanHotPlug
+        OID: 1.3.6.1.4.1.232.6.2.6.7.1.10
+        enum:
+          other: 1
+          nonHotPluggable: 2
+          hotPluggable: 3
+    metric_tags:
+      # This specifies the location of the fan in the system.
+      - column:
+          name: cpqHeFltTolFanLocale
+          OID: 1.3.6.1.4.1.232.6.2.6.7.1.3
+          enum:
+            other: 1
+            unknown: 2
+            system: 3
+            systemBoard: 4
+            ioBoard: 5
+            cpu: 6
+            memory: 7
+            storage: 8
+            removableMedia: 9
+            powerSupply: 10
+            ambient: 11
+            chassis: 12
+            bridgeCard: 13
+            managementBoard: 14
+            backplane: 15
+            networkSlot: 16
+            bladeSlot: 17
+            virtual: 18
+      # This specifies if the fan described is present in the system.
+      - column:
+          name: cpqHeFltTolFanPresent
+          OID: 1.3.6.1.4.1.232.6.2.6.7.1.4
+          enum:
+            other: 1
+            absent: 2
+            present: 3
+      # This specifies the type of fan.
+      - column:
+          name: cpqHeFltTolFanType
+          OID: 1.3.6.1.4.1.232.6.2.6.7.1.5
+          enum:
+            other: 1
+            tachOutput: 2
+            spinDetect: 3
+      # This specifies if the fan is in a redundant configuration.
+      - column:
+          name: cpqHeFltTolFanRedundant
+          OID: 1.3.6.1.4.1.232.6.2.6.7.1.7
+          enum:
+            other: 1
+            notRedundant: 2
+            redundant: 3
+
+  # A table of Temperature Sensor Entries.
+  - MIB: CPQHLTH-MIB
+    table:
+      name: cpqHeTemperatureTable
+      OID: 1.3.6.1.4.1.232.6.2.6.8
+    symbols:
+      # This is the current temperature sensor reading in degrees celsius. If this value cannot be determined by software, then a value of -99 will be returned.
+      - name: cpqHeTemperatureCelsius
+        OID: 1.3.6.1.4.1.232.6.2.6.8.1.4
+      # The Temperature sensor condition.
+      - name: cpqHeTemperatureCondition
+        OID: 1.3.6.1.4.1.232.6.2.6.8.1.6
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+    metric_tags:
+      # This specifies the location of the temperature sensor present in the system.
+      - column:
+          name: cpqHeTemperatureLocale
+          OID: 1.3.6.1.4.1.232.6.2.6.8.1.3
+          enum:
+            other: 1
+            unknown: 2
+            system: 3
+            systemBoard: 4
+            ioBoard: 5
+            cpu: 6
+            memory: 7
+            storage: 8
+            removableMedia: 9
+            powerSupply: 10
+            ambient: 11
+            chassis: 12
+            bridgeCard: 13
+
+  # This value specifies the overall condition of the fault tolerant power supply sub-system.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeFltTolPwrSupplyCondition
+      OID: 1.3.6.1.4.1.232.6.2.9.1.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+        failed: 4
+
+  # This value specifies the status of the fault tolerant power supply.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeFltTolPwrSupplyStatus
+      OID: 1.3.6.1.4.1.232.6.2.9.2.0
+      enum:
+        other: 1
+        notSupported: 2
+        notInstalled: 3
+        installed: 4
+
+  # A table of Power Supply Entries.
+  - MIB: CPQHLTH-MIB
+    table:
+      name: cpqHeFltTolPowerSupplyTable
+      OID: 1.3.6.1.4.1.232.6.2.9.3
+    symbols:
+      # Indicates whether the power supply is present in the chassis.
+      - name: cpqHeFltTolPowerSupplyPresent
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.3
+        enum:
+          other: 1
+          absent: 2
+          present: 3
+      # The condition of the power supply.
+      - name: cpqHeFltTolPowerSupplyCondition
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.4
+        enum:
+          other: 1
+          ok: 2
+          degraded: 3
+          failed: 4
+      # The status of the power supply.
+      - name: cpqHeFltTolPowerSupplyStatus
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.5
+        enum:
+          noError: 1
+          generalFailure: 2
+          bistFailure: 3
+          fanFailure: 4
+          tempFailure: 5
+          interlockOpen: 6
+          epromFailed: 7
+          vrefFailed: 8
+          dacFailed: 9
+          ramTestFailed: 10
+          voltageChannelFailed: 11
+          orringdiodeFailed: 12
+          brownOut: 13
+          giveupOnStartup: 14
+          nvramInvalid: 15
+          calibrationTableInvalid: 16
+      # The input main voltage of the power supply in volts.
+      - name: cpqHeFltTolPowerSupplyMainVoltage
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.6
+      # The currently used capacity of the power supply in watts.
+      - name: cpqHeFltTolPowerSupplyCapacityUsed
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.7
+      # The redundancy state of the power supply.
+      - name: cpqHeFltTolPowerSupplyRedundant
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.9
+        enum:
+          other: 1
+          notRedundant: 2
+          redundant: 3
+      # This indicates if the power supply is capable of being removed and/or inserted while the system is in an operational state.
+      - name: cpqHeFltTolPowerSupplyHotPlug
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.13
+        enum:
+          other: 1
+          nonHotPluggable: 2
+          hotPluggable: 3
+      # The Error condition of the power supply.
+      - name: cpqHeFltTolPowerSupplyErrorCondition
+        OID: 1.3.6.1.4.1.232.6.2.9.3.1.18
+        enum:
+          noError: 1
+          generalFailure: 2
+          overvoltage: 3
+          overcurrent: 4
+          overtemperature: 5
+          powerinputloss: 6
+          fanfailure: 7
+          vinhighwarning: 8
+          vinlowwarning: 9
+          vouthighwarning: 10
+          voutlowwarning: 11
+          inlettemphighwarning: 12
+          iinternaltemphighwarning: 13
+          vauxhighwarning: 14
+          vauxlowwarning: 15
+    metric_tags:
+      # The bay number to index within this chassis.
+      - column:
+          name: cpqHeFltTolPowerSupplyBay
+          OID: 1.3.6.1.4.1.232.6.2.9.3.1.2
+      # The maximum capacity of the power supply in watts.
+      - column:
+          name: cpqHeFltTolPowerSupplyCapacityMaximum
+          OID: 1.3.6.1.4.1.232.6.2.9.3.1.8
+      # The power supply model name.
+      - column:
+          name: cpqHeFltTolPowerSupplyModel
+          OID: 1.3.6.1.4.1.232.6.2.9.3.1.10
+      # The power supply serial number.
+      - column:
+          name: cpqHeFltTolPowerSupplySerialNumber
+          OID: 1.3.6.1.4.1.232.6.2.9.3.1.11
+
+  # This value specifies the type of Advanced Memory Protection fault tolerance currently active on the system.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeResilientMemTypeActive
+      OID: 1.3.6.1.4.1.232.6.2.14.1.0
+      enum:
+        other: 1
+        none: 2
+        onLineSpare: 3
+        mirrored: 4
+        advancedEcc: 5
+        mirroredSingleBoard: 6
+        mirroredDualBoard: 7
+        xor: 8
+        lockStep: 9
+        onLineSpareChannel: 10
+        onLineSpareRank: 11
+        mirroringIntrasocket: 12
+        mirroringIntersocket: 13
+
+  # This value specifies the current state of the Advanced Memory Protection subsystem.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeResilientMemStatus
+      OID: 1.3.6.1.4.1.232.6.2.14.3.0
+      enum:
+        other: 1
+        notProtected: 2
+        protected: 3
+        degraded: 4
+        dimmEcc: 5
+        mirrorNoFaults: 6
+        mirrorWithFaults: 7
+        hotSpareNoFaults: 8
+        hotSpareWithFaults: 9
+        xorNoFaults: 10
+        xorWithFaults: 11
+        advancedEcc: 12
+        advancedEccWithFaults: 13
+        lockStep: 14
+        lockStepWithFaults: 15
+
+  # This value specifies the current condition of the Advanced Memory Protection subsystem.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeResilientMemCondition
+      OID: 1.3.6.1.4.1.232.6.2.14.4.0
+      enum:
+        other: 1
+        ok: 2
+        degraded: 3
+
+  # This value specifies the current condition of the Advanced Memory Protection subsystem.
+  - MIB: CPQHLTH-MIB
+    symbol:
+      name: cpqHeResilientMemHotPlug
+      OID: 1.3.6.1.4.1.232.6.2.14.5.0
+      enum:
+        other: 1
+        nonHotPluggable: 2
+        hotPluggable: 3
+
+metric_tags:
+  # The amount of base memory in kilobytes
+  - column:
+      name: cpqSeBaseMem
+      OID: 1.3.6.1.4.1.232.1.2.3.1.0
+
+  # The total amount of memory in kilobytes
+  - column:
+      name: cpqSeTotalMem
+      OID: 1.3.6.1.4.1.232.1.2.3.2.0
+
+  # System ROM version information.
+  - column:
+      name: cpqSeSysRomVer
+      OID: 1.3.6.1.4.1.232.1.2.6.1.0
+
+  # System ROM version information for the redundant ROM image.
+  - column:
+      name: cpqSeRedundantSysRomVer
+      OID: 1.3.6.1.4.1.232.1.2.6.4.0
+
+  # The serial number of the physical system unit.
+  - column:
+      name: cpqSiSysSerialNum
+      OID: 1.3.6.1.4.1.232.2.2.2.1.0
+
+  # The form factor of the system.
+  - column:
+      name: cpqSiFormFactor
+      OID: 1.3.6.1.4.1.232.2.2.2.2.0
+      enum:
+        unknown: 1
+        portable: 2
+        laptop: 3
+        desktop: 4
+        tower: 5
+        mini-tower: 6
+        rack-mount: 7
+
+  # The product id string of the system unit
+  - column:
+      name: cpqSiSysProductId
+      OID: 1.3.6.1.4.1.232.2.2.2.6.0
+
+  # The machine product name.
+  - column:
+      name: cpqSiProductName
+      OID: 1.3.6.1.4.1.232.2.2.4.2.0
+
+  # The state of power management.
+  - column:
+      name: cpqSiPowerMgmtStatus
+      OID: 1.3.6.1.4.1.232.2.2.4.12.0
+      enum:
+        other: 1
+        disabled: 2
+        enabled: 3
+
+  # This field will be populated if TPM module is present in the system board.
+  - column:
+      name: cpqSiTPMmodule
+      OID: 1.3.6.1.4.1.232.2.2.4.24.0
+      enum:
+        other: 1
+        absent: 2
+        presentEnabled: 3
+        presentDisabled: 4

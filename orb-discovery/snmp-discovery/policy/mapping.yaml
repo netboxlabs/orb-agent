@@ -76,6 +76,17 @@ entries:
       - oid: ".1.3.6.1.2.1.4.34.1.10"
         entity: "ipAddress"
         field: "addressRowStatus"
+      # IPV6-MIB ipv6AddrPfxLength, deprecated by RFC 4293 and read only
+      # as a fallback: roughly one device in eight that reports IPv6
+      # returns no usable ipAddressPrefix pointer, leaving every address
+      # a /128. Declared here rather than as a table of its own because
+      # its rows annotate ipAddressTable rows and carry none of their
+      # own; its index is <ifIndex>.<16 address bytes>, not an
+      # InetAddress, hence the separate index_kind.
+      - oid: ".1.3.6.1.2.1.55.1.8.1.2"
+        entity: "ipAddress"
+        field: "addressPrefixLength"
+        index_kind: "ipv6_addr_prefix"
 
   # Device mappings.
   #
@@ -198,6 +209,28 @@ entries:
         entity: "vlan"
         field: "rowStatus"
 
+  # Q-BRIDGE-MIB dot1qVlanCurrentTable — the VLANs the device is actually
+  # running, with the same per-VLAN egress/untagged masks the static table
+  # carries. A switch can report membership here that appears nowhere in
+  # dot1qVlanStaticTable and has no dot1qPvid row either: an Eltex MES2324FB
+  # reports its port-channels as untagged members of VLAN 1 in this table
+  # alone, so without it those ports reach NetBox with no VLAN at all.
+  #
+  # INDEX is { dot1qVlanTimeMark, dot1qVlanIndex }, so the VLAN id is the LAST
+  # index element, not the first. identifier_size 2 keeps both.
+  - oid: ".1.3.6.1.2.1.17.7.1.4.2"
+    entity: "vlan"
+    field: "_id"
+    identifier_size: 2
+    description: "Q-BRIDGE-MIB dot1qVlanCurrentTable (per-VLAN egress masks as currently running)"
+    mapping_entries:
+      - oid: ".1.3.6.1.2.1.17.7.1.4.2.1.4"
+        entity: "vlan"
+        field: "currentEgressPorts"
+      - oid: ".1.3.6.1.2.1.17.7.1.4.2.1.5"
+        entity: "vlan"
+        field: "currentUntaggedPorts"
+
   # Q-BRIDGE-MIB dot1qPortVlanTable — per-port PVID.
   - oid: ".1.3.6.1.2.1.17.7.1.4.5"
     entity: "interface_vlan"
@@ -208,6 +241,31 @@ entries:
       - oid: ".1.3.6.1.2.1.17.7.1.4.5.1.1"
         entity: "interface_vlan"
         field: "pvid"
+
+  # JUNIPER-VLAN-MIB jnxExVlanTable — the real 802.1Q tag of a VLAN the switch
+  # indexes internally. Some Junos platforms key dot1qVlanStaticTable by an
+  # internal number rather than the VLAN ID, which RFC 4363 permits; without
+  # this column those VLANs reach NetBox under an ID the operator never
+  # configured. Absent on the Junos platforms already keyed by the tag, and
+  # the handling passes those through untouched.
+  - oid: ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.5"
+    entity: "vlan"
+    field: "juniperVlanTag"
+    identifier_size: 1
+    vendor: "juniper"
+    description: "JUNIPER-VLAN-MIB jnxExVlanTag (internal VLAN index to 802.1Q tag)"
+
+  # jnxExVlanName, the same column's names. Required, not decorative: a tag
+  # table whose row count happens to line up with the static table is not
+  # evidence the two are keyed alike, and rewriting on that alone would
+  # re-emit every VLAN under a stranger's ID. Matching names at one index is
+  # the device confirming both rows describe one VLAN.
+  - oid: ".1.3.6.1.4.1.2636.3.40.1.5.1.5.1.2"
+    entity: "vlan"
+    field: "juniperVlanName"
+    identifier_size: 1
+    vendor: "juniper"
+    description: "JUNIPER-VLAN-MIB jnxExVlanName (corroborates the tag table's keying)"
 
   # CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable — non-trunk access VLAN per ifIndex.
   - oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1"
@@ -233,6 +291,30 @@ entries:
       - oid: ".1.3.6.1.4.1.9.9.68.1.5.1.1"
         entity: "interface_vlan"
         field: "vmVoiceVlanId"
+
+  # CISCO-VTP-MIB vtpVlanEntry — VLAN catalog for Cisco IOS/IOS-XE
+  # devices, which do not implement dot1qVlanStaticName in the default
+  # SNMP context. Indexed by (managementDomainIndex, vlanIndex).
+  #
+  # Scoped to the existing cisco vendor gate (sysObjectID prefix
+  # .1.3.6.1.4.1.9., see policy/vendor.go), which covers IOS/IOS-XE:
+  # they report sysObjectIDs under ciscoProducts (.1.3.6.1.4.1.9.1.NNNN),
+  # a child of that prefix, so this device family is not missed.
+  #
+  # The vtp_vlan entity is the same VlanMapper post-pass as vlan, under a
+  # distinct type so the walk can be gated: the table is read to corroborate
+  # SVI-derived prefix VLANs, so it is only walked when emit_prefix_vlan is
+  # not off.
+  - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1"
+    entity: "vtp_vlan"
+    field: "_id"
+    identifier_size: 2
+    vendor: "cisco"
+    description: "CISCO-VTP-MIB vtpVlanEntry (VLAN catalog for IOS/IOS-XE devices without dot1qVlanStaticName)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+        entity: "vtp_vlan"
+        field: "vtpVlanName"
 
   # CISCOSB private vlan group — Cisco small-business switches (Catalyst
   # 1200/1300, CBS/SG). On these, dot1qPvid is not merely absent but wrong: it
@@ -266,6 +348,49 @@ entries:
       - oid: ".1.3.6.1.4.1.9.6.1.101.48.62.1.1"
         entity: "interface_vlan"
         field: "ciscoSBAccessVlanId"
+
+  # HUAWEI-VLAN-MIB hwVlanMIBTable — VLAN catalog for Huawei platforms that
+  # do not implement Q-BRIDGE-MIB at all. Access gear such as the SmartAX
+  # MA5600T/MA5608T OLTs answers "No Such Object" for dot1qVlanStaticTable
+  # and dot1qPortVlanTable, and publishes its VLAN database only here.
+  # Indexed by the VLAN ID itself (hwVlanIndex), so the OID suffix is the
+  # 802.1Q tag. hwVlanName is optional per row: a VLAN with no configured
+  # description has an hwVlanIndex row but no hwVlanName row, so the index
+  # column is walked to learn WHICH VLANs exist and the name column only
+  # decorates them. hwVlanRowStatus is a standard RowStatus and feeds the
+  # same active/reserved derivation dot1qVlanStaticRowStatus does.
+  #
+  # hwVlanPorts is the per-VLAN port membership. Its own DESCRIPTION lays it
+  # out as eight octets per slot and sixty-four ports per slot rather than as
+  # an RFC PortList, and these devices publish no dot1dBasePortIfIndex, so the
+  # slot/port positions are translated through ifName (which carries
+  # frame/slot/port on this platform) — see mapping/vlan_huawei.go. Membership
+  # is applied as tagged VLANs; the device exposes no PVID source, so the
+  # untagged VLAN stays unset.
+  #
+  # Scoped to the huawei vendor gate (sysObjectID prefix .1.3.6.1.4.1.2011.,
+  # see policy/vendor.go). Huawei switches that do implement Q-BRIDGE keep
+  # emitting from dot1qVlanStaticTable; where both answer, the standard
+  # column's name wins and this one only fills VIDs it does not cover.
+  - oid: ".1.3.6.1.4.1.2011.5.6.1.1"
+    entity: "vlan"
+    field: "_id"
+    identifier_size: 1
+    vendor: "huawei"
+    description: "HUAWEI-VLAN-MIB hwVlanMIBTable (VLAN catalog for Huawei devices without Q-BRIDGE-MIB)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.1"
+        entity: "vlan"
+        field: "hwVlanIndex"
+      - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.2"
+        entity: "vlan"
+        field: "hwVlanName"
+      - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.3"
+        entity: "vlan"
+        field: "hwVlanPorts"
+      - oid: ".1.3.6.1.4.1.2011.5.6.1.1.1.13"
+        entity: "vlan"
+        field: "hwVlanRowStatus"
 
   # --- VRF discovery (gated by options.discover_vrfs) ------------------- #
   # Three MIB tiers, resolved in order by mapping.TranslateVrfs: the
@@ -306,3 +431,9 @@ entries:
     identifier_size: 1
     vendor: "cisco"
     description: "CISCO-VRF-MIB cvVrfInterfaceTable (VRF-lite interface membership)"
+  - oid: ".1.3.6.1.4.1.2636.3.26.1.3.1.4"
+    entity: "vrf"
+    field: "jnxVpnIfRowStatus"
+    identifier_size: 1
+    vendor: "juniper"
+    description: "JUNIPER-VPN-MIB jnxVpnIfTable (VRF interface membership on Junos platforms without mplsL3VpnIfConfTable)"

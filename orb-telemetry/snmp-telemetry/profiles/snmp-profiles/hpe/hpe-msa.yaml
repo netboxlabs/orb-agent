@@ -1,0 +1,162 @@
+# https://mibs.observium.org/mib/FCMGMT-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-nas
+
+sysobjectid:
+  - 1.3.6.1.4.1.11.2.51    #  hpMSA
+
+metrics:
+  - MIB: FCMGMT-MIB
+    # Table of the sensors supported by each connectivity unit managed by this agent.
+    table:
+      OID: 1.3.6.1.3.94.1.8
+      name: connUnitSensorTable
+    symbols:
+      # The status indicated by the sensor.
+      - OID: 1.3.6.1.3.94.1.8.1.4
+        name: connUnitSensorStatus
+        enum:
+          unknown: 1
+          other: 2
+          ok: 3
+          warning: 4
+          failed: 5
+      # This describes the status of the sensor as a message. It may also provide more resolution on the sensor indication, for example 'Cover temperature 1503K, above nominal operating range'
+      - OID: 1.3.6.1.3.94.1.8.1.6
+        name: connUnitSensorMessage
+    metric_tags:
+      # A textual identification of the sensor intended primarily for operator use.
+      - column:
+          OID: 1.3.6.1.3.94.1.8.1.3
+          name: connUnitSensorName
+      # The characteristics being monitored by this sensor.
+      - column:
+          OID: 1.3.6.1.3.94.1.8.1.8
+          name: connUnitSensorCharacteristic
+          enum:
+            unknown: 1
+            other: 2
+            temperature: 3
+            pressure: 4
+            emf: 5
+            currentValue: 6
+            airflow: 7
+            frequency: 8
+            power: 9
+            door: 10
+
+  - MIB: FCMGMT-MIB
+    # Generic information on ports for a specific connUnit.
+    table:
+      OID: 1.3.6.1.3.94.1.10
+      name: connUnitPortTable
+    symbols:
+      # The user selected state of the port hardware.
+      - OID: 1.3.6.1.3.94.1.10.1.6
+        name: connUnitPortState
+        enum:
+          unknown: 1
+          online: 2
+          offline: 3
+          bypassed: 4
+          diagnostics: 5
+      # An overall protocol status for the port. This value of connUnitPortState is not online, then this is reported Unknown.
+      - OID: 1.3.6.1.3.94.1.10.1.7
+        name: connUnitPortStatus
+        enum:
+          unknown: 1
+          unused: 2
+          ready: 3
+          warning: 4
+          failure: 5
+          notparticipating: 6
+          initializing: 7
+          bypass: 8
+          ols: 9
+    metric_tags:
+      # The port type.
+      - column:
+          OID: 1.3.6.1.3.94.1.10.1.3
+          name: connUnitPortType
+          enum:
+            unknown: 1
+            other: 2
+            not-present: 3
+            hub-port: 4
+            n-port: 5
+            nl-port: 6
+            fl-port: 7
+            f-port: 8
+            e-port: 9
+            g-port: 10
+            domain-ctl: 11
+            hub-controller: 12
+            scsi: 13
+            escon: 14
+            lan: 15
+            wan: 16
+            ac: 17
+            dc: 18
+            ssa: 19
+      # The technology of the port transceiver.
+      - column:
+          OID: 1.3.6.1.3.94.1.10.1.8
+          name: connUnitPortTransmitterType
+          enum:
+            unknown: 1
+            other: 2
+            unused: 3
+            shortwave: 4
+            longwave: 5
+            copper: 6
+            scsi: 7
+            longwaveNoOFC: 8
+            shortwaveNoOFC: 9
+            longwaveLED: 10
+            ssa: 11
+      # The module type of the port connector.
+      - column:
+          OID: 1.3.6.1.3.94.1.10.1.9
+          name: connUnitPortModuleType
+          enum:
+            unknown: 1
+            other: 2
+            gbic: 3
+            embedded: 4
+            glm: 5
+            gbicSerialId: 6
+            gbicNoSerialId: 7
+            gbicNotInstalled: 8
+            smallFormFactor: 9
+      # The World Wide Name of the port if applicable, otherwise all zeros.
+      - column:
+          OID: 1.3.6.1.3.94.1.10.1.10
+          name: connUnitPortWwn
+      # The speed of the port in kilobytes per second.
+      - column:
+          OID: 1.3.6.1.3.94.1.10.1.15
+          name: connUnitPortSpeed
+      # A user-defined name for this port. This means that up to DisplayString characters may be supported. If less than, then the name will be truncated in the connunit.
+      - column:
+          OID: 1.3.6.1.3.94.1.10.1.17
+          name: connUnitPortName
+
+metric_tags:
+  # The serial number of the physical system unit. The string will be empty if the system does not report the serial number function.
+  - column:
+      OID: 1.3.6.1.4.1.232.2.2.2.1
+      name: cpqSiSysSerialNum
+    tag: serial_number
+  # The product id string of the system unit. The string will be empty if the system does not report the product id.
+  - column:
+      OID: 1.3.6.1.4.1.232.2.2.2.6
+      name: cpqSiSysProductId
+  # The machine product name. The name of the machine used in this system.
+  - column:
+      OID: 1.3.6.1.4.1.232.2.2.4.2
+      name: cpqSiProductName
+    tag: model

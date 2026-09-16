@@ -1,0 +1,50 @@
+# https://mibs.observium.org/mib/ZYXEL-ES-COMMON/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.890.1.15    # ZyWALL Switch (Generic)
+
+metrics:
+  # Device CPU usage (%)
+  # Polled at 60s to support anomaly detection
+  - MIB: ZYXEL-ES-COMMON
+    symbol:
+      name: sysMgmtCPUUsage
+      OID: 1.3.6.1.4.1.890.1.15.3.2.4.0
+      poll_time_sec: 60
+      tag: CPU
+  # Device memory usage (%)
+  # Polled at 60s to support anomaly detection
+  - MIB: ZYXEL-ES-COMMON
+    symbol:
+      name: sysMgmtMemUsage
+      OID: 1.3.6.1.4.1.890.1.15.3.2.5.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+
+metric_tags:
+  # The software platform information.
+  - column:
+      name: sysSwPlatform
+      OID: 1.3.6.1.4.1.890.1.15.3.1.1.0
+      enum:
+        other: 1
+        zynos: 2
+        zld: 3
+  # The detail software version.
+  - column:
+      name: sysSwVersionString
+      OID: 1.3.6.1.4.1.890.1.15.3.1.6.0
+  # The device model name.
+  - column:
+      name: sysProductModel
+      OID: 1.3.6.1.4.1.890.1.15.3.1.11.0
+  # The serial number of this device.
+  - column:
+      name: sysProductSerialNumber
+      OID: 1.3.6.1.4.1.890.1.15.3.1.12.0

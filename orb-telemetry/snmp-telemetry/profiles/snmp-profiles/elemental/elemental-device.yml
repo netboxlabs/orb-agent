@@ -1,0 +1,79 @@
+# This profile needs to be manually applied in the device config.
+# Device uses generic Net-SNMP sysobjectid for Linux and has no identifying data in sysDescr.
+# Ex:
+# 1.3.6.1.2.1.1.1.0 = STRING: Linux <device_name> 4.18.0-305.12.1.el8.ibm.1.x86_64 #1 SMP Wed Aug 18 07:10:24 CDT 2021 x86_64
+# 1.3.6.1.2.1.1.2.0 = OID: .1.3.6.1.4.1.8072.3.2.10
+---
+extends:
+  - host-resources-mib.yml
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-aws-elemental
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.3.2.10.aws-elemental    # AWS Elemental Live Device
+
+# disable the SNMP bulk walk operation for these devices
+no_use_bulkwalkall: true
+
+metrics:
+  - MIB: ELEMENTAL-MIB
+    symbols:
+      # Service Status: Checks if AWS Elemental Conductor Live is running
+      - name: serviceStatus
+        OID: 1.3.6.1.4.1.37086.1.0
+        enum:
+          notRunning: 0
+          running: 1
+      # Firewall Status: Used to determine if the firewall is running
+      - name: firewallStatus
+        OID: 1.3.6.1.4.1.37086.2.0
+        enum:
+          notRunning: 0
+          running: 1
+      # Mount Points: Number of user-mounted filesystems in /mnt
+      - name: mountPoints
+        OID: 1.3.6.1.4.1.37086.4.0
+      # httpd Status: Checks the status of the httpd service.
+      - name: httpdStatus
+        OID: 1.3.6.1.4.1.37086.8.0
+        enum:
+          notRunning: 0
+          running: 1
+      # Database Backup: Checks if writes (starting backups) is allowed. (1) for NOT allowd, (0) for allowed
+      - name: databaseBackup
+        OID: 1.3.6.1.4.1.37086.9.0
+        enum:
+          allowed: 0
+          notAllowed: 1
+
+  - MIB: ELEMENTAL-LIVE-MIB
+    table:
+      OID: 1.3.6.1.4.1.37086.5.1.1
+      name: eventTable
+    walk_full_table: true
+    symbols:
+      - name: eventRunning
+        OID: 1.3.6.1.4.1.37086.5.1.1.1.3
+        enum:
+          notRunning: 0
+          running: 1
+      - name: eventError
+        OID: 1.3.6.1.4.1.37086.5.1.1.1.4
+        enum:
+          noError: 0
+          error: 1
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.37086.5.1.1.1.2
+          name: eventName
+      # The numerical ID of the node that the event is running on.
+      - column:
+          OID: 1.3.6.1.4.1.37086.5.1.1.1.6
+          name: nodeId
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.37086.7.0
+      name: version

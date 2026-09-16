@@ -1,0 +1,66 @@
+# https://mibs.observium.org/mib/FORTINET-FORTISWITCH-MIB/
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.12356.106.1.*       # FortiSwitch
+  - 1.3.6.1.4.1.12356.106.1.1084    # FortiSwitch 108E-FPOE
+  - 1.3.6.1.4.1.12356.106.1.1086    # FortiSwitch 108F
+  - 1.3.6.1.4.1.12356.106.1.1246    # FortiSwitch 124E-FPOE
+  - 1.3.6.1.4.1.12356.106.1.1486    # FortiSwitch-148F-FPOE
+  - 1.3.6.1.4.1.12356.106.1.1248    # FortiSwitch-148E-FPOE
+  - 1.3.6.1.4.1.12356.106.1.2485    # FortiSwitch-248E-POE
+  - 1.3.6.1.4.1.12356.106.1.4483    # FortiSwitch 448D-FPOE
+  - 1.3.6.1.4.1.12356.106.1.4484    # FortiSwitch 448D-POE
+  - 1.3.6.1.4.1.12356.106.1.5482    # FortiSwitch 548D
+
+provider: kentik-switch
+
+metrics:
+  # Current CPU usage (percentage)
+  # Polled at 60s to support anomaly detection
+  - MIB: FORTINET-FORTISWITCH-MIB
+    symbol:
+      name: fsSysCpuUsage
+      OID: 1.3.6.1.4.1.12356.106.4.1.2.0
+      tag: CPU
+      poll_time_sec: 60
+  # Current system memory usage (KB)
+  # Polled at 60s to support anomaly detection
+  - MIB: FORTINET-FORTISWITCH-MIB
+    symbol:
+      name: fsSysMemUsage
+      OID: 1.3.6.1.4.1.12356.106.4.1.3.0
+      tag: MemoryUsed
+      poll_time_sec: 60
+  # Total physical memory (RAM) installed (KB)
+  # Polled at 60s to support anomaly detection
+  - MIB: FORTINET-FORTISWITCH-MIB
+    symbol:
+      name: fsSysMemCapacity
+      OID: 1.3.6.1.4.1.12356.106.4.1.4.0
+      tag: MemoryTotal
+      poll_time_sec: 60
+  # Current hard disk usage (KB), if disk is present.
+  - MIB: FORTINET-FORTISWITCH-MIB
+    symbol:
+      name: fsSysDiskUsage
+      OID: 1.3.6.1.4.1.12356.106.4.1.5.0
+  # Total hard disk capacity (KB), if disk is present.
+  - MIB: FORTINET-FORTISWITCH-MIB
+    symbol:
+      name: fsSysDiskCapacity
+      OID: 1.3.6.1.4.1.12356.106.4.1.6.0
+
+metric_tags:
+  # Device serial number
+  - column:
+      name: fsSysSerial
+      OID: 1.3.6.1.4.1.12356.106.1.1.1.0
+      tag: entity_serial
+  # Firmware version of the device
+  - column:
+      name: fsSysVersion
+      OID: 1.3.6.1.4.1.12356.106.4.1.1.0

@@ -1,0 +1,300 @@
+# https://mibs.observium.org/mib/ARISTA-PRODUCTS-MIB/
+# https://mibs.observium.org/mib/ARISTA-IF-MIB/
+# https://mibs.observium.org/mib/ARISTA-QUEUE-MIB/
+# https://mibs.observium.org/mib/ARISTA-BGP4V2-MIB/
+# This profile uses this prescribed approach for memory monitoring from Arista:
+# - https://aristanetworks.force.com/AristaCommunity/s/article/memory-utilization-on-eos-devices
+---
+
+provider: kentik-switch
+
+extends:
+  - system-mib.yml
+  - entity-sensor-mib.yml
+  - if-mib.yml
+  - ospf-mib.yml
+  - bgp4-mib.yml
+  - lldp-mib.yml
+
+sysobjectid: 
+  - 1.3.6.1.4.1.30065.1.3011.7010.427.48            # Arista DCS-7010T-48
+  - 1.3.6.1.4.1.30065.1.3011.7010.427.48.2957	      # Arista DCS-7010T-48-DC
+  - 1.3.6.1.4.1.30065.1.3011.7020.1964.48	          # Arista DCS-7020TR-48
+  - 1.3.6.1.4.1.30065.1.3011.7020.312.48	          # Arista DCS-7020TRA-48
+  - 1.3.6.1.4.1.30065.1.3011.7020.3735.24.2878.2	  # Arista DCS-7020SR-24C2
+  - 1.3.6.1.4.1.30065.1.3011.7020.3735.32.2878.2	  # Arista DCS-7020SR-32C2
+  - 1.3.6.1.4.1.30065.1.3011.7048.427.3648	        # Arista DCS-7048TA
+  - 1.3.6.1.4.1.30065.1.3011.7048.427.4.3282	      # Arista DCS-7048T4S
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.128	        # Arista DCS-7050TX-128
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.128.761	    # Arista DCS-7050TX-128-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.2.128	      # Arista DCS-7050TX2-128
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.2.128.761	  # Arista DCS-7050TX2-128-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.48	          # Arista DCS-7050TX-48
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.48.761	      # Arista DCS-7050TX-48-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.64	          # Arista DCS-7050TX-64
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.64.761	      # Arista DCS-7050TX-64-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.72	          # Arista DCS-7050TX-72
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.72.2512	    # Arista DCS-7050TX-72Q
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.72.2512.761	# Arista DCS-7050TX-72Q-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.72.761	      # Arista DCS-7050TX-72-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.96	          # Arista DCS-7050TX-96
+  - 1.3.6.1.4.1.30065.1.3011.7050.1958.96.761	      # Arista DCS-7050TX-96-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.2512.16	          # Arista DCS-7050Q-16
+  - 1.3.6.1.4.1.30065.1.3011.7050.2512.16.761	      # Arista DCS-7050Q-16-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.2733.3.32.3282	  # Arista DCS-7050CX3-32S
+  - 1.3.6.1.4.1.30065.1.3011.7050.2733.3.32.3282.761	# Arista DCS-7050CX3-32S-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.2.32.3282	  # Arista DCS-7050QX2-32S
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.2.32.3282.761	# Arista DCS-7050QX2-32S-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.32	          # Arista DCS-7050QX-32
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.32.2745.761	# Arista DCS-7050QX-32CL-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.32.3282	    # Arista DCS-7050QX-32S
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.32.3282.761	# Arista DCS-7050QX-32S-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3095.32.761	      # Arista DCS-7050QX-32-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3282.52	          # Arista DCS-7050S-52
+  - 1.3.6.1.4.1.30065.1.3011.7050.3282.52.761	      # Arista DCS-7050S-52-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3282.64	          # Arista DCS-7050S-64
+  - 1.3.6.1.4.1.30065.1.3011.7050.3282.64.761	      # Arista DCS-7050S-64-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.128	        # Arista DCS-7050SX-128
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.128.761	    # Arista DCS-7050SX-128-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.2.128	      # Arista DCS-7050SX2-128
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.2.128.761	  # Arista DCS-7050SX2-128-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.2.72.2512	  # Arista DCS-7050SX2-72Q
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.2.72.2512.761	# Arista DCS-7050SX2-72Q-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.3.48.1654.12	# Arista DCS-7050SX3-48YC12
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.3.48.1654.12.761	# Arista DCS-7050SX3-48YC12-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.3.48.1654.8	# Arista DCS-7050SX3-48Y-C8
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.64	          # Arista DCS-7050SX-64
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.64.761	      # Arista DCS-7050SX-64SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.72	          # Arista DCS-7050SX-72
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.72.2512	    # Arista DCS-7050SX-72Q
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.72.2512.761	# Arista DCS-7050SX-72QSSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.72.761	      # Arista DCS-7050SX-72SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.96	          # Arista DCS-7050SX-96
+  - 1.3.6.1.4.1.30065.1.3011.7050.3741.96.761	      # Arista DCS-7050SX-96-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.427.36	          # Arista DCS-7050T-36
+  - 1.3.6.1.4.1.30065.1.3011.7050.427.52	          # Arista DCS-7050T-52
+  - 1.3.6.1.4.1.30065.1.3011.7050.427.52.761	      # Arista DCS-7050T-52-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7050.427.64	          # Arista DCS-7050T-64
+  - 1.3.6.1.4.1.30065.1.3011.7050.427.64.761	      # Arista DCS-7050T-64-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7060.2733.2.32.3282	  # Arista DCS-7060CX2-32S
+  - 1.3.6.1.4.1.30065.1.3011.7060.2733.32.3282	    # Arista DCS-7060CX-32S
+  - 1.3.6.1.4.1.30065.1.3011.7060.2733.32.3282.3362	# Arista DCS-7060CX-32S-ES
+  - 1.3.6.1.4.1.30065.1.3011.7060.2733.32.3282.761	# Arista DCS-7060CX-32S-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7060.3741.2.48.1654.6	# Arista DCS-7060SX2-48YC6
+  - 1.3.6.1.4.1.30065.1.3011.7060.3741.2.48.1654.6.761	# Arista DCS-7060SX2-48YC6-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7120.427.4.3282	      # Arista DCS-7120T-4S
+  - 1.3.6.1.4.1.30065.1.3011.7124.2312	            # Arista DCS-7124FX
+  - 1.3.6.1.4.1.30065.1.3011.7124.2312.2745	        # Arista DCS-7124FX-CL
+  - 1.3.6.1.4.1.30065.1.3011.7124.3282	            # Arista DCS-7124S
+  - 1.3.6.1.4.1.30065.1.3011.7124.3741	            # Arista DCS-7124SX
+  - 1.3.6.1.4.1.30065.1.3011.7124.3741.761	        # Arista DCS-7124SX-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7140.427.8.3282	      # Arista DCS-7140T-8S
+  - 1.3.6.1.4.1.30065.1.3011.7148.3282	            # Arista DCS-7148S
+  - 1.3.6.1.4.1.30065.1.3011.7148.3741	            # Arista DCS-7148SX
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.24	          # Arista DCS-7150S-24
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.24.2745	    # Arista DCS-7150S-24CL
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.24.2745.761	# Arista DCS-7150S-24CL-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.52.2745	    # Arista DCS-7150S-52CL
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.52.2745.761	# Arista DCS-7150S-52CLSSD
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.64.2745	    # Arista DCS-7150S-64CL
+  - 1.3.6.1.4.1.30065.1.3011.7150.3282.64.2745.761	# Arista DCS-7150S-64CL-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7150.3720.24.1208	    # Arista DCS-7150SC-24-CLD
+  - 1.3.6.1.4.1.30065.1.3011.7150.3720.64.1208	    # Arista DCS-7150SC-64-CLD
+  - 1.3.6.1.4.1.30065.1.3011.7160.32.2726	          # Arista DCS-7160-32CQ
+  - 1.3.6.1.4.1.30065.1.3011.7160.32.2726.761	      # Arista DCS-7160-32CQ-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7160.48.1654.6	        # Arista DCS-7160-48YC6
+  - 1.3.6.1.4.1.30065.1.3011.7160.48.1654.6.761	    # Arista DCS-7160-48YC6-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7160.48.1981.6	        # Arista DCS-7160-48TC6
+  - 1.3.6.1.4.1.30065.1.3011.7160.48.1981.6.761	    # Arista DCS-7160-48TC6-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7160.64.1654.16	      # Arista DCS-7160-64YC-16
+  - 1.3.6.1.4.1.30065.1.3011.7170.32.2737	          # Arista DCS-7170-32C-D
+  - 1.3.6.1.4.1.30065.1.3011.7170.32.2737.972	      # Arista DCS-7170-32C-DM
+  - 1.3.6.1.4.1.30065.1.3011.7170.32.2878	          # Arista DCS-7170-32C
+  - 1.3.6.1.4.1.30065.1.3011.7170.32.2878.972	      # Arista DCS-7170-32C-M
+  - 1.3.6.1.4.1.30065.1.3011.7170.64.2878	          # Arista DCS-7170-64C
+  - 1.3.6.1.4.1.30065.1.3011.7170.64.2878.972	      # Arista DCS-7170-64C-M
+  - 1.3.6.1.4.1.30065.1.3011.7250.3095.64	          # Arista DCS-7250QX-64
+  - 1.3.6.1.4.1.30065.1.3011.7250.3095.64.761	      # Arista DCS-7250QX-64SSD
+  - 1.3.6.1.4.1.30065.1.3011.7250.3095.64.972	      # Arista DCS-7250QX-64M
+  - 1.3.6.1.4.1.30065.1.3011.7260.2733.3.64	        # Arista DCS-7260CX3-64
+  - 1.3.6.1.4.1.30065.1.3011.7260.2733.3.64.761	    # Arista DCS-7260CX3-64-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7260.2733.64	          # Arista DCS-7260CX-64
+  - 1.3.6.1.4.1.30065.1.3011.7260.2733.64.761	      # Arista DCS-7260CX-64-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7260.3095.64	          # Arista DCS-7260QX-64
+  - 1.3.6.1.4.1.30065.1.3011.7260.3095.64.761	      # Arista DCS-7260QX-64-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7280.1347.48.2878.6	  # Arista DCS-7280SRA-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.1347.48.2878.6.972	# Arista DCS-7280SRA-48C6-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.1359.40.2733.2	  # Arista DCS-7280SRM-40CX2
+  - 1.3.6.1.4.1.30065.1.3011.7280.1964.48.2878.6	  # Arista DCS-7280TR-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.1964.48.2878.6.972	# Arista DCS-7280TR-48C6-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.2655.2878.36.3282	# Arista DCS-7280QRAC-36-S
+  - 1.3.6.1.4.1.30065.1.3011.7280.2655.2878.36.3282.972	# Arista DCS-7280QRAC-36-SM
+  - 1.3.6.1.4.1.30065.1.3011.7280.2655.2878.72	    # Arista DCS-7280QRAC-72
+  - 1.3.6.1.4.1.30065.1.3011.7280.2655.2878.72.972	# Arista DCS-7280QRAC-72-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.202.30	    # Arista DCS-7280CR2K-30
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.202.60	    # Arista DCS-7280CR2K-60
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.202.60.761	# Arista DCS-7280CR2K-60-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.3648.30	  # Arista DCS-7280CR2A-30
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.3648.60	  # Arista DCS-7280CR2A-60
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.3648.60.761	# Arista DCS-7280CR2A-60-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.60	        # Arista DCS-7280CR2-60
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.60.761	    # Arista DCS-7280CR2-60-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.2.972.30	    # Arista DCS-7280CR2M-30
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.48	          # Arista DCS-7280CR-48
+  - 1.3.6.1.4.1.30065.1.3011.7280.2727.48.761	      # Arista DCS-7280CR-48-SSD
+  - 1.3.6.1.4.1.30065.1.3011.7280.3101.2878.36	    # Arista DCS-7280QRC-36
+  - 1.3.6.1.4.1.30065.1.3011.7280.3101.2878.36.3282	# Arista DCS-7280QRC-36-S
+  - 1.3.6.1.4.1.30065.1.3011.7280.3101.2878.36.3282.972	# Arista DCS-7280QRC-36-SM
+  - 1.3.6.1.4.1.30065.1.3011.7280.3101.2878.36.972	# Arista DCS-7280QRC-36-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.3101.2878.72	    # Arista DCS-7280QRC-72
+  - 1.3.6.1.4.1.30065.1.3011.7280.3101.2878.72.972	# Arista DCS-7280QRC-72-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.312.48.2878.6	    # Arista DCS-7280TRA-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.312.48.2878.6.972	# Arista DCS-7280TRA-48C6-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.3714.64	          # Arista DCS-7280SE-64
+  - 1.3.6.1.4.1.30065.1.3011.7280.3714.68	          # Arista DCS-7280SE-68
+  - 1.3.6.1.4.1.30065.1.3011.7280.3714.72	          # Arista DCS-7280SE-72
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.2.202.48.2878.6	# Arista DCS-7280SR2K-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.2.3648.48.1654.6	# Arista DCS-7280SR2A4-8YC6
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.2.3648.48.1654.6.972	# Arista DCS-7280SR2A-48YC6-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.2.48.1654.6	# Arista DCS-7280SR2-48YC6
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.2.48.1654.6.972	# Arista DCS-7280SR2-48YC6-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.2.589.48.2878.6	# Arista DCS-7280SR2L-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.32.2878.2	  # Arista DCS-7280SR-32C2
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.48.2878.6	  # Arista DCS-7280SR-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.3735.48.2878.6.972	# Arista DCS-7280SR-48C6-M
+  - 1.3.6.1.4.1.30065.1.3011.7280.3977.48.2878.6	  # Arista DCS-7280SRAM-48C6
+  - 1.3.6.1.4.1.30065.1.3011.7280.877.48	          # Arista DCS-7280CRA-48
+  - 1.3.6.1.4.1.30065.1.3011.7280.877.48.972	      # Arista DCS-7280CRA-48-M
+  - 1.3.6.1.4.1.30065.*                             # All other Arista devices
+
+metrics:
+  # This table contains statistical information of the ingress queue in an interface.
+  - MIB: ARISTA-QUEUE-MIB
+    table:
+      OID: 1.3.6.1.4.1.30065.3.6.1.1
+      name: aristaIngressQueueTable
+    symbols:
+      - OID: 1.3.6.1.4.1.30065.3.6.1.1.1.3
+        name: aristaIngressQueuePktsDropped
+    metric_tags:
+      - tag: interface_index
+        column:
+          OID: 1.3.6.1.4.1.30065.3.6.1.1.1.1
+          name: aristaIngressIfIndex
+      - tag: queue_index
+        column:
+          OID: 1.3.6.1.4.1.30065.3.6.1.1.1.2
+          name: aristaIngressQueueIndex
+  # This table contains statistical information of the egress queue in an interface.
+  - MIB: ARISTA-QUEUE-MIB
+    table:
+      OID: 1.3.6.1.4.1.30065.3.6.1.2
+      name: aristaEgressQueueTable
+    symbols:
+      - OID: 1.3.6.1.4.1.30065.3.6.1.2.1.6
+        name: aristaEgressQueuePktsDropped
+    metric_tags:
+      - tag: interface_index
+        column:
+          OID: 1.3.6.1.4.1.30065.3.6.1.2.1.1
+          name: aristaEgressIfIndex
+      - tag: queue_index
+        column:
+          OID: 1.3.6.1.4.1.30065.3.6.1.2.1.2
+          name: aristaEgressQueueIndex
+  # Memory Utilization - polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageSizeRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.5.1
+      poll_time_sec: 60
+      tag: MemoryTotal
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsedRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.6.100
+      poll_time_sec: 60
+      tag: MemoryUsed
+  # CPU Utilization - polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrProcessorLoadCombined
+      OID: 1.3.6.1.2.1.25.3.3.1.2.1
+      poll_time_sec: 60
+      tag: CPU
+  # BGP peer table. This table contains, one entry per BGP peer, information about the connections with BGP peers.
+  - MIB: ARISTA-BGP4V2-MIB
+    table:
+      name: aristaBgp4V2PeerTable
+      OID: 1.3.6.1.4.1.30065.4.1.1.2
+    symbols:
+      - name: aristaBgp4V2PeerLocalAddrType
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.2
+        enum:
+          unknown: 0
+          ipv4: 1
+          ipv6: 2
+          ipv4z: 3
+          ipv6z: 4
+          dns: 16
+      - name: aristaBgp4V2PeerLocalPort
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.6
+      - name: aristaBgp4V2PeerLocalAs
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.7
+      - name: aristaBgp4V2PeerRemotePort
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.9
+      - name: aristaBgp4V2PeerRemoteAs
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.10
+      - name: aristaBgp4V2PeerAdminStatus
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.12
+        enum:
+          halted: 1
+          running: 2
+      - name: aristaBgp4V2PeerState
+        OID: 1.3.6.1.4.1.30065.4.1.1.2.1.13
+        enum:
+          idle: 1
+          connect: 2
+          active: 3
+          opensent: 4
+          openconfirm: 5
+          established: 6
+    metric_tags:
+      - column:
+          name: aristaBgp4V2PeerLocalAddr
+          OID: 1.3.6.1.4.1.30065.4.1.1.2.1.3
+          conversion: hextoip
+      - column:
+          name: aristaBgp4V2PeerLocalIdentifier
+          OID: 1.3.6.1.4.1.30065.4.1.1.2.1.8
+          conversion: hextoip
+      - column:
+          name: aristaBgp4V2PeerRemoteIdentifier
+          OID: 1.3.6.1.4.1.30065.4.1.1.2.1.11
+          conversion: hextoip
+      - column:
+          name: aristaBgp4V2PeerDescription
+          OID: 1.3.6.1.4.1.30065.4.1.1.2.1.14
+  # This table contains additional interface statistics not contained in the IF-MIB.
+  - MIB: ARISTA-IF-MIB
+    table:
+      name: aristaIfTable
+      OID: 1.3.6.1.4.1.30065.3.15.1.1
+    symbols:
+      - name: aristaIfInPktRate
+        OID: 1.3.6.1.4.1.30065.3.15.1.1.1.3
+      - name: aristaIfOutPktRate
+        OID: 1.3.6.1.4.1.30065.3.15.1.1.1.4
+      - name: aristaIfInOctetRate
+        OID: 1.3.6.1.4.1.30065.3.15.1.1.1.5
+      - name: aristaIfOutOctetRate
+        OID: 1.3.6.1.4.1.30065.3.15.1.1.1.6
+    metric_tags:
+      - column:
+          name: aristaIfRateInterval
+          OID: 1.3.6.1.4.1.30065.3.15.1.1.1.2
+      - MIB: IF-MIB
+        column:
+          OID: 1.3.6.1.2.1.31.1.1.1.1
+          name: ifName
+        tag: if_interface_name

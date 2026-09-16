@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	neturl "net/url"
 	"strings"
 	"time"
 
@@ -189,6 +188,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         d.logger,
+		Ctx:            d.ctx,
 		NameDisplay:    "device-discovery",
 		NameUnderscore: "device_discovery",
 		Exec:           d.exec,
@@ -337,8 +337,12 @@ func (d *deviceDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	} else {
 		name = data.Name
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, neturl.PathEscape(name))
-	err := backend.CommonRequest("device-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
+	segment, err := backend.PolicyPathSegment(name)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, segment)
+	err = backend.CommonRequest("device-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
 		return err

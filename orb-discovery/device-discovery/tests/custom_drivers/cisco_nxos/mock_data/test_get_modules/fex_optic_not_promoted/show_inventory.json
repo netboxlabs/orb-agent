@@ -1,0 +1,9 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9300 fixed\"", "productid": "\"N9K-C93180YC-FX\"", "vendorid": "V01", "serialnum": "\"FOC30001CHA\""},
+      {"name": "\"Ethernet1/1\"", "desc": "\"QSFP-100G-SR4\"", "productid": "\"QSFP-100G-SR4\"", "vendorid": "V02", "serialnum": "\"OPT30001001\""},
+      {"name": "\"Ethernet101/1/1\"", "desc": "\"SFP-10G-SR\"", "productid": "\"SFP-10G-SR\"", "vendorid": "V02", "serialnum": "\"OPT30001101\""}
+    ]
+  }
+}

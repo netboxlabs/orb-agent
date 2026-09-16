@@ -1,0 +1,234 @@
+package traps
+
+import (
+	"fmt"
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// RFC 3414 section 3.2.7(b), the non-authoritative side: the receiver learns
+// each engine's boots and time from the first authenticated message, then
+// treats a message as outside the window when its boots are lower than
+// learned or its time is more than 150 seconds behind the clock the receiver
+// keeps for that engine. A message ahead of that clock moves it forward; one
+// behind it, inside the window, leaves it alone, so a replay cannot wind the
+// clock back.
+func TestTimeliness_LearnsThenRejectsLowerBootsAndStaleTime(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1000), "an unknown engine is learned")
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1000), "the same second again is inside the window")
+	assert.False(t, w.check(clockID{user: "e1", engineID: "e1"}, 4, 1000), "lower boots is a replay")
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1200), "a later time is accepted and moves the clock")
+
+	now = now.Add(200 * time.Second)
+	assert.False(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1200), "200 seconds later the same time is 200 behind the clock, past the window")
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1260), "140 behind the clock is inside the window")
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1260), "and did not move the clock back, so it is still inside")
+	assert.False(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 1249), "151 behind is not")
+
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 6, 0), "a reboot resets the clock and is accepted")
+	assert.False(t, w.check(clockID{user: "e1", engineID: "e1"}, 5, 5000), "the old boots are rejected however far their time claims")
+	assert.False(t, w.check(clockID{user: "e2", engineID: "e2"}, maxEngineBoots, 0), "an engine reporting the boots ceiling is never in the window")
+	assert.True(t, w.check(clockID{user: "e2", engineID: "e2"}, 1, 1), "a different engine keeps its own clock")
+}
+
+// A registered sender holding a v3 credential can authenticate under any
+// engine ID it likes, since the key localises against the ID it supplies, so
+// the clock map is bounded: past maxEngines the engine seen longest ago is
+// evicted to make room, and loses its replay protection until it is seen
+// again.
+func TestTimeliness_EvictsTheEngineSeenLongestAgo(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	for i := range maxEngines {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(clockID{user: fmt.Sprintf("e%d", i), engineID: fmt.Sprintf("e%d", i)}, 5, 1000))
+	}
+	assert.Equal(t, maxEngines, w.size())
+
+	now = now.Add(time.Second)
+	assert.True(t, w.check(clockID{user: "e0", engineID: "e0"}, 5, uint32(1000+maxEngines+5)), "seeing e0 again, with its clock advanced, makes it the most recent")
+	now = now.Add(time.Second)
+	assert.True(t, w.check(clockID{user: "new", engineID: "new"}, 5, 1000), "a new engine is learned at the cap")
+	assert.Equal(t, maxEngines, w.size(), "by evicting one")
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 4, 1000), "e1 was the one seen longest ago: relearned, so lower boots pass")
+	assert.False(t, w.check(clockID{user: "e0", engineID: "e0"}, 4, 1000), "e0 was kept, so lower boots are still a replay")
+}
+
+// Eviction is by recency of use, kept in order as engines are touched, so a
+// new engine at the cap costs no scan of the map. Refreshing the oldest
+// engine moves it to the front; the next new engine evicts the one that
+// became oldest.
+func TestTimeliness_EvictionOrderFollowsUse(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	for i := range maxEngines {
+		assert.True(t, w.check(clockID{user: fmt.Sprintf("e%d", i), engineID: fmt.Sprintf("e%d", i)}, 1, 1))
+	}
+	assert.True(t, w.check(clockID{user: "e0", engineID: "e0"}, 1, 1), "touch the oldest")
+	assert.True(t, w.check(clockID{user: "e2", engineID: "e2"}, 1, 1), "and the third oldest")
+	assert.True(t, w.check(clockID{user: "new1", engineID: "new1"}, 1, 1))
+	assert.True(t, w.check(clockID{user: "new2", engineID: "new2"}, 1, 1))
+	assert.Equal(t, maxEngines, w.size())
+	assert.True(t, w.check(clockID{user: "e1", engineID: "e1"}, 0, 1), "e1 was evicted first: relearned, so lower boots pass")
+	assert.True(t, w.check(clockID{user: "e3", engineID: "e3"}, 0, 1), "e3 second")
+	assert.False(t, w.check(clockID{user: "e0", engineID: "e0"}, 0, 1), "e0 was kept")
+	assert.False(t, w.check(clockID{user: "e2", engineID: "e2"}, 0, 1), "e2 was kept")
+}
+
+// RFC 3414 bounds engineBoots and engineTime to 2^31 minus 1. gosnmp casts a
+// negative wire integer to uint32, so a value past the bound is a malformed
+// clock rather than a very late one; it is rejected and, above all, never
+// learned, or every genuine value for that clock would read as older.
+func TestTimeliness_RejectsOutOfRangeClockValuesWithoutLearningThem(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	id := clockID{user: "e1", engineID: "e1"}
+	assert.False(t, w.check(id, 0x80000000, 1), "boots past the bound")
+	assert.False(t, w.check(id, 1, 0xffffffff), "time past the bound")
+	assert.False(t, w.check(id, 0xffffffff, 0xffffffff))
+	assert.Equal(t, 0, w.size(), "nothing was learned from them")
+	assert.True(t, w.check(id, 1, 0x7fffffff), "the bound itself is a valid time")
+	assert.True(t, w.check(id, 2, 5), "and the clock is a normal one afterwards")
+	assert.False(t, w.check(id, 1, 5), "so a lower boots is still a replay")
+}
+
+// A principal, one sender and credential, may hold only a few clocks, and
+// past that its own least recently used one is evicted. So a principal
+// cycling through engine IDs never reaches another principal's clock, and a
+// captured old datagram of that other principal stays a replay.
+func TestTimeliness_OnePrincipalCannotEvictAnothersClock(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	victim := clockID{user: "victim", authPass: "v", engineID: "ev"}
+	assert.True(t, w.check(victim, 5, 100))
+
+	attacker := clockID{user: "attacker", authPass: "a"}
+	for i := range maxEngines + 1 {
+		now = now.Add(time.Second)
+		id := attacker
+		id.engineID = fmt.Sprintf("e%d", i)
+		assert.True(t, w.check(id, 1, 1))
+	}
+	assert.LessOrEqual(t, w.size(), maxEnginesPerPrincipal+1, "the attacker holds at most its own quota")
+	assert.Equal(t, w.size(), w.orderLen(), "an eviction within a principal frees its global slot too")
+	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: the old datagram is still a replay")
+	assert.True(t, w.check(victim, 5, 100+uint32(maxEngines)+1), "and its live traffic still passes")
+}
+
+// Eviction within a principal follows use, like the global order does: a
+// clock the principal just used is not the one that goes.
+func TestTimeliness_PrincipalEvictionFollowsUse(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	id := func(engine string) clockID { return clockID{user: "one", authPass: "p", engineID: engine} }
+	for i := range maxEnginesPerPrincipal {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(id(fmt.Sprintf("e%d", i)), 5, 1))
+	}
+	now = now.Add(time.Second)
+	assert.True(t, w.check(id("e0"), 5, uint32(maxEnginesPerPrincipal)+2), "e0 is used again")
+	now = now.Add(time.Second)
+	assert.True(t, w.check(id("new"), 5, 1), "a new engine at the principal's bound")
+	assert.Equal(t, maxEnginesPerPrincipal, w.size())
+	assert.False(t, w.check(id("e0"), 4, 1), "e0 was kept: lower boots is still a replay")
+	assert.True(t, w.check(id("e1"), 4, 1), "e1, the least recently used, was evicted and is relearned")
+}
+
+// At the global bound, a principal that already holds a clock evicts its
+// own rather than the globally oldest, so a credential holder below its
+// quota cannot spend the quota evicting other principals' replay state. Only
+// a principal's very first clock can displace another's, once.
+func TestTimeliness_AtTheGlobalBoundAPrincipalEvictsItself(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	filler := func(i int) clockID { return clockID{user: fmt.Sprintf("f%d", i), engineID: "e"} }
+	victim := clockID{user: "victim", authPass: "v", engineID: "ev"}
+	// The oldest clock is a filler, the victim the next oldest, then the
+	// rest of the fillers up to the global bound.
+	now = now.Add(time.Second)
+	assert.True(t, w.check(filler(0), 1, 1))
+	now = now.Add(time.Second)
+	assert.True(t, w.check(victim, 5, 100))
+	for i := 1; i < maxEngines-1; i++ {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(filler(i), 1, 1))
+	}
+	require.Equal(t, maxEngines, w.size())
+
+	attacker := clockID{user: "attacker", authPass: "a"}
+	for i := range maxEnginesPerPrincipal - 1 {
+		now = now.Add(time.Second)
+		id := attacker
+		id.engineID = fmt.Sprintf("e%d", i)
+		assert.True(t, w.check(id, 1, 1))
+	}
+	assert.Equal(t, maxEngines, w.size())
+	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: only the attacker's first clock displaced anyone, and that was the oldest filler")
+	assert.True(t, w.check(filler(0), 0, 1), "the oldest filler was the one displaced, once")
+}
+
+// Source churn under one credential makes every spoofed registered source a
+// new principal, so eviction ownership has a level above the principal: the
+// credential. At the global bound a credential that holds any clock evicts
+// within its own group, so thousands of first clocks from one credential
+// displace only that credential's own state, never another's.
+func TestTimeliness_SourceChurnUnderOneCredentialEvictsOnlyThatCredential(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	filler := func(i int) clockID { return clockID{user: fmt.Sprintf("f%d", i), engineID: "e"} }
+	victim := clockID{src: netip.MustParseAddr("10.0.0.1"), user: "victim", authPass: "v", engineID: "ev"}
+	now = now.Add(time.Second)
+	assert.True(t, w.check(filler(0), 1, 1))
+	now = now.Add(time.Second)
+	assert.True(t, w.check(victim, 5, 100))
+	for i := 1; i < maxEngines-1; i++ {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(filler(i), 1, 1))
+	}
+	require.Equal(t, maxEngines, w.size())
+
+	// One credential, spoofing a fresh registered source every time.
+	for i := range 3 * maxEngines {
+		now = now.Add(time.Second)
+		id := clockID{src: netip.AddrFrom4([4]byte{10, 1, byte(i >> 8), byte(i)}), user: "attacker", authPass: "a", engineID: "e"}
+		assert.True(t, w.check(id, 1, 1))
+	}
+	assert.Equal(t, maxEngines, w.size())
+	assert.False(t, w.check(victim, 4, 100), "the victim's clock survived: after the attacker's first clock, its churn evicted only its own credential's clocks")
+	assert.True(t, w.check(filler(0), 0, 1), "the oldest filler was the one displaced, once")
+}
+
+// Eviction within a credential's group follows use too: at the global bound
+// the group gives up its least recently used clock, not one a principal in
+// it has just used.
+func TestTimeliness_CredentialEvictionFollowsUse(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	w := newTimeliness(func() time.Time { return now })
+	member := func(i int) clockID {
+		return clockID{src: netip.AddrFrom4([4]byte{10, 0, 0, byte(i)}), user: "fleet", authPass: "f", engineID: "e"}
+	}
+	for i := 1; i <= 3; i++ {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(member(i), 5, 1))
+	}
+	for i := range maxEngines - 3 {
+		now = now.Add(time.Second)
+		assert.True(t, w.check(clockID{user: fmt.Sprintf("f%d", i), engineID: "e"}, 1, 1))
+	}
+	require.Equal(t, maxEngines, w.size())
+
+	now = now.Add(time.Second)
+	assert.True(t, w.check(member(1), 5, uint32(maxEngines)+5), "member 1 is used again, with its clock advanced")
+	now = now.Add(time.Second)
+	assert.True(t, w.check(member(4), 5, 1), "a new member of the fleet at the global bound")
+	assert.Equal(t, maxEngines, w.size())
+	assert.False(t, w.check(member(1), 4, 1), "member 1 was kept: lower boots is still a replay")
+	assert.True(t, w.check(member(2), 4, 1), "member 2, the fleet's least recently used, was evicted and is relearned")
+}

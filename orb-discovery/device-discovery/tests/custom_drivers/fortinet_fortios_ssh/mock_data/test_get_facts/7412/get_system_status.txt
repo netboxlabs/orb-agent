@@ -1,0 +1,4 @@
+Version: FortiGate-60F v7.4.0,build2360,230222 (GA.F)
+Serial-Number: FGT60F0000000001
+Hostname: FGT-LAB
+Operation Mode: NAT

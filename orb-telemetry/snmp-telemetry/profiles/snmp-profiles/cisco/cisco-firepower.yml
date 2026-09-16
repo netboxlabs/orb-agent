@@ -1,0 +1,340 @@
+# http://www.circitor.fr/Mibs/Html/C/CISCO-ENHANCED-MEMPOOL-MIB.php
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-firepower
+
+sysobjectid:
+  - 1.3.6.1.4.1.9.1.2285    # Firepower 9300 SA
+  - 1.3.6.1.4.1.9.1.2286    # Firepower 9000 SM 24
+  - 1.3.6.1.4.1.9.1.2288    # Firepower 9000 SM 36
+  - 1.3.6.1.4.1.9.1.2292    # Firepower NGFW 4150
+  - 1.3.6.1.4.1.9.1.2293    # Firepower NGFW 4140
+  - 1.3.6.1.4.1.9.1.2294    # Firepower 4120
+  - 1.3.6.1.4.1.9.1.2295    # Firepower NGFW 4110
+  - 1.3.6.1.4.1.9.1.2313    # Firepower 4110 SM 12
+  - 1.3.6.1.4.1.9.1.2314    # Firepower 4120 SM 24
+  - 1.3.6.1.4.1.9.1.2315    # Firepower 4140 SM 36
+  - 1.3.6.1.4.1.9.1.2316    # Firepower 4150 SM 44
+  - 1.3.6.1.4.1.9.1.2319    # Firepower Virtual Appliance
+  - 1.3.6.1.4.1.9.1.2404    # Firepower NGFW 2110
+  - 1.3.6.1.4.1.9.1.2405    # Firepower 2120
+  - 1.3.6.1.4.1.9.1.2406    # Firepower 2130
+  - 1.3.6.1.4.1.9.1.2407    # Firepower 2140
+  - 1.3.6.1.4.1.9.1.2409    # Firepower 9000 SM 44
+  - 1.3.6.1.4.1.9.1.2483    # Firepower 1010
+  - 1.3.6.1.4.1.9.1.2662    # Firepower 1140
+  - 1.3.6.1.4.1.9.1.2663    # Firepower 1020
+  - 1.3.6.1.4.1.9.1.2757    # Firepower 9000 SM 56
+  - 1.3.6.1.4.1.9.1.2772    # Firepower 9300 SM 40
+  - 1.3.6.1.4.1.9.1.2773    # Firepower 9000 SM 48
+  - 1.3.6.1.4.1.9.1.2774    # Firepower 4115 SM 24
+  - 1.3.6.1.4.1.9.1.2775    # Firepower 4125
+  - 1.3.6.1.4.1.9.1.2776    # Firepower 4145
+  - 1.3.6.1.4.1.9.1.2777    # Firepower 4145 K9
+  - 1.3.6.1.4.1.9.1.2778    # Firepower 4125
+  - 1.3.6.1.4.1.9.1.2779    # Firepower 4115
+  - 1.3.6.1.4.1.9.1.2870    # Firepower 1150
+  - 1.3.6.1.4.1.9.1.2899    # Firepower 4112
+  - 1.3.6.1.4.1.9.1.3053    # Firepower 3110
+  - 1.3.6.1.4.1.9.1.3054    # Firepower 3120
+  - 1.3.6.1.4.1.9.1.3055    # Firepower 3130
+  - 1.3.6.1.4.1.9.1.3056    # Firepower 3140
+  - 1.3.6.1.4.1.9.1.3166    # Firepower 3105
+  - 1.3.6.1.4.1.9.12.3.1.3.1788    # Firepower 4120
+
+metrics:
+  # A table of overall CPU statistics.
+  - MIB: CISCO-PROCESS-MIB
+    table:
+      name: cpmCPUTotalTable
+      OID: 1.3.6.1.4.1.9.9.109.1.1.1
+    symbols:
+      # CPU Utilization - polled at 60s to support anomaly detection
+      # The overall CPU busy percentage in the last 1 minute period.
+      - name: cpmCPUTotal1minRev
+        OID: 1.3.6.1.4.1.9.9.109.1.1.1.1.7
+        poll_time_sec: 60
+        tag: CPU
+
+  # A table of memory pool monitoring entries.
+  # Polled at 60s to support anomaly detection.
+  - MIB: CISCO-ENHANCED-MEMPOOL-MIB
+    symbols:
+      # Indicates the number of bytes from the memory pool that are currently in use by applications on the managed device.
+      - name: cempMemPoolUsed
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.7.1.1
+        poll_time_sec: 60
+        tag: MemoryUsed
+        allow_duplicate: true
+        # Indicates the number of bytes from the memory pool that are currently unused on the managed device.
+      - name: cempMemPoolFree
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.8.1.1
+        poll_time_sec: 60
+        tag: MemoryFree
+        allow_duplicate: true
+      - name: cempMemPoolHCUsed
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.18
+        poll_time_sec: 60
+        tag: MemoryUsed
+        allow_duplicate: true
+        condition: cempMemPoolName="DP System memory"
+      - name: cempMemPoolHCFree
+        OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.20
+        poll_time_sec: 60
+        tag: MemoryFree
+        allow_duplicate: true
+        condition: cempMemPoolName="DP System memory"
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.9.9.221.1.1.1.1.3
+          name: cempMemPoolName
+
+  # A table of module metrics
+  # Not globally supported on all Firepower devices
+  # Polled at 60s to support anomaly detection.
+  - MIB: CISCO-FIREPOWER-SM-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.826.1.71.20
+      name: cfprSmMonitorTable
+    symbols:
+      # Indicates the amount of unused memory on the security module.
+      - name: cfprSmMonitorMemFree
+        OID: 1.3.6.1.4.1.9.9.826.1.71.20.1.21
+        poll_time_sec: 60
+        tag: MemoryFree
+        allow_duplicate: true
+      # Indicates the amount of used memory on the security module.
+      - name: cfprSmMonitorMemUsed
+        OID: 1.3.6.1.4.1.9.9.826.1.71.20.1.23
+        poll_time_sec: 60
+        tag: MemoryUsed
+        allow_duplicate: true
+
+  # Scalar OIDs for various session statistics
+  - MIB: CISCO-REMOTE-ACCESS-MONITOR-MIB
+    symbols:
+      - name: crasNumDeclinedSessions
+        OID: 1.3.6.1.4.1.9.9.392.1.4.1.2.0
+      # Polled at 60s to support anomaly detection
+      - name: crasNumSessions
+        OID: 1.3.6.1.4.1.9.9.392.1.3.1.0
+        poll_time_sec: 60
+      - name: crasMaxSessionsSupportable
+        OID: 1.3.6.1.4.1.9.9.392.1.1.1.0
+      - name: crasNumUsers
+        OID: 1.3.6.1.4.1.9.9.392.1.3.3.0
+      - name: crasMaxUsersSupportable
+        OID: 1.3.6.1.4.1.9.9.392.1.1.2.0
+      - name: crasNumSetupFailInsufResources
+        OID: 1.3.6.1.4.1.9.9.392.1.4.1.3.0
+        
+ # FTD failover status
+  - MIB: CISCO-UNIFIED-FIREWALL-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.491.1.4.2.1
+      name: cufwFOGrpStatusTable
+    symbols:
+      - name: cufwFOGrpLastFailoverAt
+        OID: 1.3.6.1.4.1.9.9.491.1.4.2.1.1.2
+        conversion: to_one
+      - name: cufwFOGrpHAstate
+        OID: 1.3.6.1.4.1.9.9.491.1.4.2.1.1.3
+        enum:
+          active: 0
+          standby: 1
+          unknown: 2
+      - name: cufwFOGrpUpTime
+        OID: 1.3.6.1.4.1.9.9.491.1.4.2.1.1.4
+      - name: cufwFOGrpContextCount
+        OID: 1.3.6.1.4.1.9.9.491.1.4.2.1.1.5 
+
+  # This table lists the type, scale, and present value of a sensor listed in the Entity-MIB entPhysicalTable.
+  - MIB: CISCO-ENTITY-SENSOR-MIB
+    table:
+      name: entSensorValueTable
+      OID: 1.3.6.1.4.1.9.9.91.1.1.1
+    symbols:
+      # This variable reports the most recent measurement seen by the sensor. 
+      - name: entSensorValue
+        OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.4
+      # This variable indicates the present operational status of the sensor.
+      - name: entSensorStatus
+        OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.5
+        tag: entity_sensor_status
+        enum:
+          ok: 1
+          unavailable: 2
+          nonoperational: 3
+    metric_tags:
+      # This variable indicates the type of data reported by the entSensorValue.
+      - tag: entity_sensor_type
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.1
+          name: entSensorType
+          enum:
+            undefined: 0
+            other: 1
+            unknown: 2
+            voltsAC: 3
+            voltsDC: 4
+            amperes: 5
+            watts: 6
+            hertz: 7
+            celsius: 8
+            percentRH: 9
+            rpm: 10
+            cmm: 11
+            truthvalue: 12
+            specialEnum: 13
+            dBm: 14
+            dB: 15
+      # This variable indicates the exponent to apply to sensor values reported by entSensorValue.
+      - tag: entity_sensor_scale
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.2
+          name: entSensorScale
+          enum:
+            yocto: 1     # 10^-24
+            zepto: 2     # 10^-21
+            atto: 3      # 10^-18
+            femto: 4     # 10^-15
+            pico: 5      # 10^-12
+            nano: 6      # 10^-9
+            micro: 7     # 10^-6
+            milli: 8     # 10^-3
+            units: 9     # 10^0
+            kilo: 10     # 10^3
+            mega: 11     # 10^6
+            giga: 12     # 10^9
+            tera: 13     # 10^12
+            exa: 14      # 10^15
+            peta: 15     # 10^18
+            zetta: 16    # 10^21
+            yotta: 17    # 10^24
+      # This variable indicates the number of decimal places of precision in fixed-point sensor values reported by entSensorValue.
+      - tag: entity_sensor_precision
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.1.1.1.3
+          name: entSensorPrecision
+      # A textual description of physical entity.
+      - tag: entity_description
+        column:
+          name: entPhysicalDescr
+          OID: 1.3.6.1.2.1.47.1.1.1.1.2
+      # An indication of the general hardware type of the physical entity.
+      - tag: entity_class
+        column:
+          name: entPhysicalClass
+          OID: 1.3.6.1.2.1.47.1.1.1.1.5
+          enum:
+            other: 1
+            unknown: 2
+            chassis: 3
+            backplane: 4
+            container: 5
+            powerSupply: 6
+            fan: 7
+            sensor: 8
+            module: 9
+            port: 10
+            stack: 11
+            cpu: 12
+      # The textual name of the physical entity.
+      - tag: entity_name
+        column:
+          name: entPhysicalName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.7
+      # The vendor-specific serial number string for the physical entity.
+      - tag: entity_serial
+        column:
+          name: entPhysicalSerialNum
+          OID: 1.3.6.1.2.1.47.1.1.1.1.11
+      # The vendor-specific model name identifier string associated with this physical component.
+      - tag: entity_model
+        column:
+          name: entPhysicalModelName
+          OID: 1.3.6.1.2.1.47.1.1.1.1.13
+
+  # Fan managed object table
+  # Not globally supported on all Firepower devices
+  - MIB: CISCO-FIREPOWER-EQUIPMENT-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.826.1.20.34
+      name: cfprEquipmentFanTable
+    symbols:
+      # The operational state of the fan module.
+      - OID: 1.3.6.1.4.1.9.9.826.1.20.34.1.10
+        name: cfprEquipmentFanOperState
+        enum:
+          unknown: 0
+          operable: 1
+          inoperable: 2
+          degraded: 3
+          poweredOff: 4
+          powerProblem: 5
+          removed: 6
+          voltageProblem: 7
+          thermalProblem: 8
+          performanceProblem: 9
+          accessibilityProblem: 10
+          identityUnestablishable: 11
+          biosPostTimeout: 12
+          disabled: 13
+          malformedFru: 14
+          fabricConnProblem: 51
+          fabricUnsupportedConn: 52
+          config: 81
+          equipmentProblem: 82
+          decomissioning: 83
+          chassisLimitExceeded: 84
+          notSupported: 100
+          discovery: 101
+          discoveryFailed: 102
+          identify: 103
+          postFailure: 104
+          upgradeProblem: 105
+          peerCommProblem: 106
+          autoUpgrade: 107
+          linkActivateBlocked: 108
+    metric_tags:
+      # The name of the fan module.
+      - tag: fan_module
+        column:
+          OID: 1.3.6.1.4.1.9.9.826.1.20.34.1.2
+          name: cfprEquipmentFanDn
+
+  # PSU managed object table
+  # Not globally supported on all Firepower devices
+  - MIB: CISCO-FIREPOWER-EQUIPMENT-MIB
+    table:
+      OID: 1.3.6.1.4.1.9.9.826.1.20.109
+      name: cfprEquipmentPsuTable
+    symbols:
+      # The operational state of the PSU module.
+      - OID: 1.3.6.1.4.1.9.9.826.1.20.109.1.13
+        name: cfprEquipmentPsuPower
+        enum:
+          unknown: 0
+          on: 1
+          test: 2
+          off: 3
+          online: 4
+          offline: 5
+          offduty: 6
+          degraded: 7
+          powerSave: 8
+          error: 9
+          ok: 10
+          failed: 11
+          oirFailed: 12
+          oirInvalid: 13
+          notSupported: 100
+    metric_tags:
+      # The name of the PSU module.
+      - tag: psu_module
+        column:
+          OID: 1.3.6.1.4.1.9.9.826.1.20.109.1.2
+          name: cfprEquipmentPsuDn

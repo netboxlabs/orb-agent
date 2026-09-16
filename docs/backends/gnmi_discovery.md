@@ -54,6 +54,9 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | debounce_ms | int | no | Flush delay in ms after the last notification before a snapshot is ingested (default `2000`). |
 | sample_interval_ms | int | no | `SAMPLE` subscription interval in ms (default `300000` = 5m). |
 | get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). |
+| probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
+| rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
+| send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not verify the server. Off by default. See [Credentials and ranges](#credentials-and-ranges). |
 | options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). |
 | defaults | map | no | NetBox defaults applied to discovered entities (see below). |
 
@@ -68,28 +71,120 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | interface | map | Interface defaults: `if_type` (fallback type, default `other`), `description`, `tags` |
 | ip_address | map | IP address defaults: `role`, `tenant`, `description`, `comments`, `tags` |
 | vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery) |
+| vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant`, `role`, `description`, `tags` |
 | interface_patterns | list | Name-regex → NetBox type, highest precedence (first match wins). |
 | interface_exclude_patterns | list | Name-regex; matching interfaces are skipped entirely. |
+
+##### VLAN group
+`vlan.group` attaches every emitted VLAN to an `ipam.vlangroup`. Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. A bare name scopes the group to the device's site. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
+
+```yaml
+defaults:
+  site: "mysite01"
+  vlan:
+    group:
+      name: "Brussels VLAN Group"
+      scope_site_group: "Brussels"
+```
+
+| Key | Type | Description |
+|:---:|:----:|:-----------:|
+| name | str | VLAN group name (required in the map form) |
+| scope_site | str | Scope the group to this site instead of the device's site |
+| scope_site_group | str | Scope the group to a site group |
+| scope_region | str | Scope the group to a region |
+| scope_location | str | Scope the group to a location. Locations are unique per site in NetBox, so the device's site is sent with it |
+
+Only one `scope_*` may be set; a map with none behaves like the bare name. An unknown key in the map, two scopes, or a missing name rejects the policy rather than falling back to a site-scoped group. In a per-target `override_defaults`, the group replaces the policy value as a whole. Rack and cluster scopes are not supported.
 
 ### Scope
 `scope` defines the list of gNMI targets to discover.
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| targets | list | yes | The gNMI endpoints to subscribe to (see target fields below). |
+| targets | list | yes | The gNMI endpoints to discover (see target fields below). |
+| username | str | no | Default gNMI username for every target that does not set its own. `${ENV_VAR}` syntax is supported. |
+| password | str | no | Default gNMI password for every target that does not set its own. `${ENV_VAR}` syntax is supported. |
+| port | int | no | Default port for every target whose `host` carries no port and that sets no `port` of its own (default `9339`). |
+| origin | str | no | Default gNMI path origin. A target that sets `origin: ""` keeps origin-less paths rather than inheriting. |
+| tls | map | no | Default TLS settings. A target's own `tls` block **replaces** this one entirely rather than merging field by field, because a bool cannot distinguish "unset" from "false". |
+
+Scope-level settings are defaults, not overrides: a target that sets a field keeps
+its own value. What counts is that the field is present, not that it is non-empty,
+so a target inside a credentialed scope can connect anonymously by writing
+`username: ""` and `password: ""`. `mode`, `profile` and `override_defaults` are deliberately not
+scope fields. `mode` and `override_defaults` duplicate the policy-level `config`
+knobs, and a scope-level `profile` would pin one vendor profile onto every device
+in a range whose contents are not known in advance.
 
 #### Target
 | Key | Type | Required | Description |
 |:---:|:----:|:--------:|:-----------:|
-| host | str | yes | `host:port` of the gNMI endpoint (e.g. `10.0.0.11:6030`). When the port is omitted, the IANA gNMI port `9339` is used. |
-| username | str | no | gNMI username. `${ENV_VAR}` syntax is supported. |
-| password | str | no | gNMI password. `${ENV_VAR}` syntax is supported. |
+| host | str | yes | A single endpoint (`10.0.0.11`, `10.0.0.11:6030`, `switch-a.example.com`), a CIDR (`10.0.0.0/24`), or a range (`10.1.0.0-50`, `10.2.0.0-10.2.0.9`). A CIDR or range cannot carry an inline `:port`; use the `port` field. |
+| port | int | no | Port for this target, used when `host` carries no inline port (default `9339`). An inline `host:port` wins over this field, which wins over the scope's. |
+| username | str | no | gNMI username. `${ENV_VAR}` syntax is supported. Set it to `""` to connect anonymously from inside a scope that sets one. An omitted field inherits; an explicitly empty one does not. |
+| password | str | no | gNMI password. `${ENV_VAR}` syntax is supported. Set it to `""` to block the scope's, as with `username`. |
 | tls | map | no | TLS settings: `skip_verify` (keep TLS, don't verify the cert), `insecure` (opt-in PLAINTEXT, off by default), `ca`/`cert`/`key` (optional mTLS). TLS with system root CAs is the default. |
 | mode | str | no | Per-target delivery mode override (`auto`/`on_change`/`sample`/`get`). |
 | profile | str | no | Pin a gNMI profile (auto-detected when omitted). |
 | origin | str | no | gNMI path origin (default `openconfig`); set `""` for origin-less paths. |
-| netbox_id | int | no | Pin discovery to an existing NetBox device ID. |
+| netbox_id | int | no | Pin discovery to an existing NetBox device ID. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
 | override_defaults | map | no | Per-target overrides of the policy `defaults`. |
+
+#### Ranges and subnets
+A `host` covering more than one address is expanded, and each address is probed
+once before anything subscribes. Only addresses that answer get a subscription.
+A gNMI subscription is a persistent stream rather than a poll, so without the
+probe a `/24` would leave around 250 goroutines redialling empty addresses for
+the life of the policy.
+
+A CIDR excludes its network and broadcast addresses, so `10.0.0.0/24` is 254
+addresses and `10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to
+exclude and stay 2 and 1. A range excludes nothing, so `10.0.0.0-255` is 256.
+A policy may expand to at most 1024 addresses in total, counted across all its
+targets before any expansion happens.
+
+A probe establishes only whether something is listening on the gNMI port. Any
+response admits the address, including a rejected RPC or a failed TLS handshake,
+so an mTLS device probed without a client certificate and a device with a
+self-signed certificate both count as present. Only silence counts as absent.
+Probes carry no credentials.
+
+A single named host is not probed. It is subscribed to directly and retried for
+the life of the policy, so a device that is rebooting when the policy is applied
+is not dropped.
+
+#### Credentials and ranges
+A probe carries no credentials, but the subscription that follows one does. A
+probe admits anything that answers, so a range with a password and either
+`skip_verify` or `insecure` sends that password to any service listening on the
+gNMI port in that range, including services that are not network devices. A range
+that overlaps a server VLAN is enough to cause this.
+
+That combination is refused:
+
+| Target | Password | TLS verification | Result |
+|:------:|:--------:|:----------------:|:------:|
+| explicit host | yes | any | allowed |
+| CIDR / range | no | any | allowed |
+| CIDR / range | yes | verified (`ca`, or system roots) | allowed |
+| CIDR / range | yes | `skip_verify` | refused |
+| CIDR / range | yes | `insecure` | refused |
+
+Naming a host explicitly is not affected. The credential goes where the operator
+said it should, and collecting it requires intercepting that connection rather
+than listening on an unused address in a range.
+
+The check is on the password, not on every credential. A client certificate is
+not a bearer secret, because TLS ties possession to the session and an endpoint
+that receives one cannot reuse it. mTLS over a range without a password is
+allowed, and so is a username without a password.
+
+For credentialed range discovery, give the scope a `ca` so the server is
+verified. If the devices use per-device self-signed certificates with no shared
+CA, verification is not possible; either name the hosts explicitly or set
+`config.send_credentials_to_unverified_targets: true`. Setting it logs a warning
+each time the policy is applied.
 
 #### Interface type discovery
 Each interface's NetBox type is resolved per interface, in precedence order:
@@ -117,15 +212,20 @@ orb:
                 type: 10gbase-x-sfpp
             interface_exclude_patterns:
               - "^Management"
+          rescan_interval_ms: 3600000    # re-probe hourly for devices that were down
         scope:
+          username: ${GNMI_USER}         # inherited by every target below
+          password: ${GNMI_PASS}
+          port: 6030                     # Arista EOS default gNMI port
+          tls:
+            ca: /run/secrets/ca.pem      # prefer a CA over skip_verify
           targets:
-            - host: 10.0.0.11:6030       # Arista EOS default gNMI port
-              username: ${GNMI_USER}
-              password: ${GNMI_PASS}
-              tls:
-                skip_verify: true
+            - host: 10.0.0.0/24          # swept: only addresses that answer subscribe
+            - host: 10.1.0.0-50
+            - host: 10.0.0.11            # a named host is subscribed without probing
               profile: arista_eos
-            - host: 10.0.0.21:57400      # Nokia SR-OS default gNMI port
+            - host: 10.0.0.21            # Nokia SR-OS
+              port: 57400
               username: admin
-              password: ${GNMI_PASS}
+              netbox_id: 42              # honoured: a bare address, not a range
 ```

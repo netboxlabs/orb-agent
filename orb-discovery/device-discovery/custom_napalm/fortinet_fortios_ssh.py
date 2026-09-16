@@ -5,8 +5,22 @@ Custom FortiOS SSH NAPALM driver.
 Implements only the methods used by device-discovery:
   get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
 
-Uses ntc-templates 9.x for structured parsing where templates exist;
-falls back to regex parsing where they do not (uptime).
+This driver parses ``get system interface`` and ``get system interface physical``
+itself rather than through ntc-templates. Both templates end in ``^. -> Error``, so
+one unknown field aborts the parse and the device reports no interfaces
+(netboxlabs/orb-agent#537). ``get system status`` was already parsed locally for the
+same reason. ``_parse_output_resilient`` from cisco_asa_ssh is deliberately not
+reused: on the flat listing it strips every interface line and returns zero rows
+without raising, and it gives up after 25 stripped lines.
+
+Fields the local parsers drop relative to the templates: ``duplex``,
+``ipv6_address`` and ``ipv6netmask``, and the physical ``ip`` value is left unsplit.
+Every vendored capture reports ``ipv6: ::/0``, and the getter that would use an
+address reads the flat listing, which emits no ``ipv6:`` at all.
+
+``is_enabled`` is unconditionally True on FortiOS: all 175 observed status values
+are ``up`` or ``down`` and ``disabled`` never appears. Deliberate, not an oversight;
+it cannot be omitted because the test harness requires the key.
 """
 
 import logging
@@ -16,7 +30,6 @@ import napalm.base as _napalm_base
 from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
-from ntc_templates.parse import parse_output
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +38,253 @@ _SET_FIELDS_RE = re.compile(
     re.IGNORECASE,
 )
 _ENC_RE = re.compile(r"(\bENC\b)\s+\S+")
+
+# A field marker is `key:` anchored on both sides: preceded by start-of-line or
+# whitespace, followed by whitespace or end-of-line. Both anchors are load-bearing.
+# Without the left one, `(Duplex:` in `speed: 1000Mbps (Duplex: full)` reads as a key
+# on every up interface, 27 of the 73 blocks in tests/.../corpus/. Without the right
+# one, a colon inside free text such as `description: site-a:core` splits the value.
+# The cost is that `status:up` with no space is not a field; it is counted as an
+# anomaly rather than guessed at.
+_FIELD_MARKER_RE = re.compile(r"(?:^|(?<=\s))([A-Za-z][A-Za-z0-9_.-]*):(?=\s|$)")
+
+
+def _scan_fields(line: str) -> tuple[dict[str, str], int]:
+    """
+    Return the ``key: value`` pairs on one line, plus an anomaly count.
+
+    Keys are lowercased and keep their hyphens, so this yields ``netbios-forward``
+    where the replaced ntc-template yielded ``netbios_forward``. A key's first
+    occurrence wins; a repeat is counted rather than silently resolved, because
+    first-wins and last-wins are both defensible and would report different
+    interfaces to NetBox.
+    """
+    marks = list(_FIELD_MARKER_RE.finditer(line))
+    fields: dict[str, str] = {}
+    anomalies = 0
+    for index, mark in enumerate(marks):
+        key = mark.group(1).lower()
+        end = marks[index + 1].start() if index + 1 < len(marks) else len(line)
+        if key in fields:
+            anomalies += 1
+            continue
+        fields[key] = line[mark.end():end].strip()
+    return fields, anomalies
+
+
+# Every field key the vendored captures emit, derived from them rather than
+# transcribed. Membership must be the OBSERVED keys, not the six the driver
+# consumes: with only the consumed keys one real capture logs 299 debug lines per
+# poll, burying the new field that matters. tests/.../test_corpus_parity.py asserts
+# no capture logs anything, so a key dropped from here fails CI.
+_KNOWN_FIELD_KEYS = frozenset({
+    "drop-fragment", "drop-overlapped-fragment", "explicit-ftp-proxy",
+    "explicit-web-proxy", "fec", "fec_cap", "ip", "ipv6", "management-ip", "mode",
+    "mtu-override", "name", "netbios-forward", "netflow-sampler",
+    "proxy-captive-portal", "ring-rx", "ring-tx", "scan-botnet-connections",
+    "sflow-sampler", "speed", "src-check", "status", "switch-controller-feature",
+    "type", "wccp",
+})
+
+
+def _log_unknown_keys(keys, seen: set[str]) -> None:
+    """
+    Log each unfamiliar field key once per parse, at debug.
+
+    This is the drift sensor that dropping the template's ``^. -> Error`` gives up:
+    a new FortiOS field is now ignored on purpose, and this is what makes it visible
+    so it can be sent upstream. Once per distinct key per parse, because a device
+    with the same new field on forty interfaces should log one line, not forty.
+    """
+    for key in keys:
+        if key in _KNOWN_FIELD_KEYS or key in seen:
+            continue
+        seen.add(key)
+        logger.debug("fortinet: unknown field %r in interface output", key)
+
+
+# Interface headers are matched against the stripped line, as a FULL match. The
+# trailing anchor is what makes `==[port2] (SFP+)` an unreadable line rather than a
+# header with trailing text, which is what stops its fields landing on the interface
+# above it.
+#
+# The name is any run of non-whitespace, non-bracket characters, keeping the `\S+`
+# contract of the template this replaces. Narrowing it to a hand-listed alphabet
+# looked tidier and silently dropped real hardware: FortiGate AMC and 7000-series
+# split ports are named `amc-sw1/1` and `1-P20/1`, and the slash is not in any such
+# list until someone remembers it.
+_PHYS_HEADER_RE = re.compile(r"^==\s*\[\s*([^\]\s]+)\s*\]$")
+_SPEED_RE = re.compile(r"^(\d+)\s*Mbps\b")
+
+
+def _normalise_speed(value: str) -> str:
+    """
+    Return the digits of an Mbps speed, the ``n/a`` sentinel, or an empty string.
+
+    ``get_interfaces`` tests for the literal ``n/a`` and then calls ``float()``, so
+    both forms the replaced template produced are preserved. A unit that is not Mbps
+    yields empty rather than its digits: ``10Gbps`` read as ``10`` would reach NetBox
+    as 10 Mbps on a 10G port.
+    """
+    value = value.strip()
+    if value.lower().startswith("n/a"):
+        return "n/a"
+    match = _SPEED_RE.match(value)
+    return match.group(1) if match else ""
+
+
+def _close_physical_block(
+    block: dict[str, str] | None, rows: list[dict[str, str]]
+) -> int:
+    """
+    Emit BLOCK into ROWS if usable, and report the anomalies it contributes.
+
+    A block is emitted only when it scanned both ``status`` and ``speed``, the two
+    fields ``get_interfaces`` consumes. A block closed without them is discarded and
+    counted: a half-read block reaching NetBox as an up port reported down with no
+    speed is a wrong value, where dropping it is merely an absent one.
+    """
+    if block is None:
+        return 0
+    # status must have a value, not merely be present: an empty one would reach
+    # NetBox as is_up=False, which is a wrong value rather than an absent one. speed
+    # need only be present, because an unreadable rate normalises to empty on
+    # purpose and is counted where it is read.
+    if block.get("status") and "speed" in block:
+        rows.append(block)
+        return 0
+    return 1
+
+
+def _absorb_physical_fields(
+    block: dict[str, str], line: str, seen: set[str]
+) -> tuple[bool, int]:
+    """
+    Fold LINE's fields into BLOCK, reporting whether the line was readable.
+
+    Every field found is taken, rather than requiring exactly one, so a future
+    release that puts two pairs on one line is absorbed instead of treated as damage.
+    """
+    fields, anomalies = _scan_fields(line)
+    _log_unknown_keys(fields, seen)
+    if not fields:
+        return False, anomalies
+    if "speed" in fields:
+        normalised = _normalise_speed(fields["speed"])
+        # A value that was present but unreadable, such as a unit that is not Mbps,
+        # is counted. The row is still emitted: the interface and its up/down state
+        # are known, only the rate is not, so dropping it would lose more than it
+        # protects. Without this the interface reaches NetBox with no speed and no
+        # warning, which is the silence this change exists to remove.
+        if fields["speed"] and not normalised:
+            anomalies += 1
+        fields["speed"] = normalised
+    block.update(fields)
+    return True, anomalies
+
+
+def _parse_physical(raw: str | None) -> tuple[list[dict[str, str]], int]:
+    """
+    Parse ``get system interface physical`` into rows, plus an anomaly count.
+
+    Unknown fields are kept and ignored; that tolerance is the point. An unreadable
+    line closes the open block, so an unrecognised header cannot let its fields land
+    on the interface above it. End of input closes the block too, which is
+    load-bearing rather than tidiness: every capture under tests/.../corpus/ ends on
+    a field line, so without it the last interface of every device is lost.
+    """
+    rows: list[dict[str, str]] = []
+    anomalies = 0
+    seen: set[str] = set()
+    block: dict[str, str] | None = None
+
+    for line in (raw or "").splitlines():
+        if not line.strip():
+            continue
+        header = _PHYS_HEADER_RE.match(line.strip())
+        if header:
+            anomalies += _close_physical_block(block, rows)
+            # An indented header names an interface; a non-indented one is a group
+            # header such as `== [onboard]`, which is normal output, not an anomaly.
+            block = {"name": header.group(1)} if line[:1].isspace() else None
+            continue
+        if block is not None:
+            readable, extra = _absorb_physical_fields(block, line, seen)
+            anomalies += extra
+            if readable:
+                continue
+        anomalies += _close_physical_block(block, rows) + 1
+        block = None
+
+    anomalies += _close_physical_block(block, rows)
+    return rows, anomalies
+
+
+
+_QUAD_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+# Keys signal 3 must not read when hunting an address-shaped token: a netmask is
+# address-shaped, and a management address on an otherwise unnumbered box must not
+# make that signal fire on every poll.
+_SIGNAL_THREE_IGNORED_KEYS = frozenset(
+    {"netmask", "management-ip", "management_ip", "management_netmask"}
+)
+# `ip:` and `management-ip:` each carry "<address> <netmask>". The pair is emitted only
+# when both are real dotted quads, restoring what Value IP_ADDRESS/NETMASK enforced:
+# _netmask_to_prefix silently accepts garbage (255.2 -> 9), so a bad mask would reach
+# NetBox as a prefix, and a prefix above 32 raises inside an unguarded ip_interface()
+# call downstream that aborts the whole device's ingest.
+_FLAT_ADDRESS_KEYS = (
+    ("ip", "ip_address", "netmask"),
+    ("management-ip", "management_ip", "management_netmask"),
+)
+
+
+def _valid_quad(value: str) -> bool:
+    """Return True when VALUE is four dot-separated decimal octets in 0-255."""
+    if not _QUAD_RE.match(value):
+        return False
+    return all(int(part) <= 255 for part in value.split("."))
+
+
+def _parse_flat(raw: str | None) -> tuple[list[dict[str, str]], int]:
+    """
+    Parse ``get system interface`` into rows, plus an anomaly count.
+
+    Dispatch is on ``name:``. Nothing is derived from the ``== [ x ]`` header, not
+    even as a fallback: headers are 1:1 with rows in every vendored capture, but one
+    of them has ``== [ VPN-TUN ]`` above ``name: VPN-LAB``, so a header can disagree
+    with the interface it precedes.
+    """
+    rows: list[dict[str, str]] = []
+    anomalies = 0
+    seen: set[str] = set()
+
+    for line in (raw or "").splitlines():
+        if not line.strip():
+            continue
+        if line.strip().startswith("=="):
+            continue
+        fields, duplicates = _scan_fields(line)
+        anomalies += duplicates
+        _log_unknown_keys(fields, seen)
+        if not fields.get("name"):
+            # Any non-blank, non-header line that yields no usable name: a stray
+            # line, or a `name:` whose value is empty. Emitting a nameless row would
+            # make len(rows) non-zero and silence the nothing-parsed warning.
+            anomalies += 1
+            continue
+        for source, address_key, netmask_key in _FLAT_ADDRESS_KEYS:
+            value = fields.pop(source, None)
+            if value is None:
+                continue
+            parts = value.split()
+            if len(parts) == 2 and _valid_quad(parts[0]) and _valid_quad(parts[1]):
+                fields[address_key], fields[netmask_key] = parts
+            else:
+                anomalies += 1
+        rows.append(fields)
+
+    return rows, anomalies
 
 
 def _sanitize_config(text: str) -> str:
@@ -110,7 +370,7 @@ def _netmask_to_prefix(netmask: str) -> int:
 
 
 class FortiOSSSHDriver(_napalm_base.NetworkDriver):
-    """FortiOS NAPALM driver using SSH CLI + ntc-templates (read-only subset for device-discovery)."""
+    """FortiOS NAPALM driver over the SSH CLI (read-only subset for device-discovery)."""
 
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
         """Initialize the driver."""
@@ -172,12 +432,13 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
         intf_raw = self.device.send_command("get system interface physical")
         interface_list: list[str] = []
         try:
-            intf_parsed = parse_output(
-                platform="fortinet", command="get system interface physical", data=intf_raw
-            )
-            interface_list = sorted(r["name"] for r in intf_parsed if r.get("name"))
+            intf_rows, _ = _parse_physical(intf_raw)
+            interface_list = sorted(r["name"] for r in intf_rows if r.get("name"))
         except Exception:
-            logger.debug("Failed to parse 'get system interface physical' output", exc_info=True)
+            logger.warning(
+                "fortinet.get_facts: parsing 'get system interface physical' failed",
+                exc_info=True,
+            )
 
         return {
             "hostname": hostname,
@@ -204,12 +465,25 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
         """
         raw = self.device.send_command("get system interface physical")
         try:
-            parsed = parse_output(
-                platform="fortinet", command="get system interface physical", data=raw
-            )
+            parsed, anomalies = _parse_physical(raw)
         except Exception:
-            logger.debug("Failed to parse 'get system interface physical' output", exc_info=True)
+            logger.warning(
+                "fortinet.get_interfaces: parsing 'get system interface physical' failed",
+                exc_info=True,
+            )
             return {}
+
+        if (raw or "").strip() and not parsed:
+            logger.warning(
+                "fortinet.get_interfaces: 'get system interface physical' returned output "
+                "but no interfaces could be parsed from it"
+            )
+        elif anomalies:
+            logger.warning(
+                "fortinet.get_interfaces: %d problem(s) reading 'get system interface "
+                "physical'; some interfaces may be missing",
+                anomalies,
+            )
 
         mac_by_intf = _parse_fnsysctl_mac_addresses(
             self.device.send_command("fnsysctl ifconfig")
@@ -244,10 +518,25 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
         """Return IP addresses per interface."""
         raw = self.device.send_command("get system interface")
         try:
-            parsed = parse_output(platform="fortinet", command="get system interface", data=raw)
+            parsed, anomalies = _parse_flat(raw)
         except Exception:
-            logger.debug("Failed to parse 'get system interface' output", exc_info=True)
+            logger.warning(
+                "fortinet.get_interfaces_ip: parsing 'get system interface' failed",
+                exc_info=True,
+            )
             return {}
+
+        if (raw or "").strip() and not parsed:
+            logger.warning(
+                "fortinet.get_interfaces_ip: 'get system interface' returned output but "
+                "no interfaces could be parsed from it"
+            )
+        elif anomalies:
+            logger.warning(
+                "fortinet.get_interfaces_ip: %d problem(s) reading 'get system interface'; "
+                "some addresses may be missing",
+                anomalies,
+            )
 
         interfaces_ip: dict = {}
         for row in parsed:
@@ -263,6 +552,25 @@ class FortiOSSSHDriver(_napalm_base.NetworkDriver):
                 }
             except (ValueError, AttributeError):
                 continue
+
+        # Signal 3, keyed on address SHAPE rather than on the `ip_address` name. The
+        # two failures it catches are FortiOS renaming `ip:` and a regression in the
+        # rename inside _parse_flat, and in both cases `ip_address` is absent, so a
+        # name-keyed check cannot see either. Management keys are excluded or a box
+        # whose interfaces are all unnumbered but which reports a management address
+        # warns on every poll.
+        addressable = any(
+            _valid_quad(token) and token != "0.0.0.0"
+            for row in parsed
+            for key, value in row.items()
+            if key not in _SIGNAL_THREE_IGNORED_KEYS
+            for token in value.split()
+        )
+        if addressable and not interfaces_ip:
+            logger.warning(
+                "fortinet.get_interfaces_ip: interfaces reported addresses but none "
+                "were emitted"
+            )
 
         return interfaces_ip
 

@@ -1,0 +1,554 @@
+# https://mibs.observium.org/mib/SFOS-FIREWALL-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.2604.5    # Sophos XGS Firewall
+
+provider: kentik-firewall
+
+metrics:
+  # CPU Utilization %
+  # Polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrProcessorLoadCombined
+      OID: 1.3.6.1.2.1.25.3.3.1.2.196608
+      poll_time_sec: 60
+      tag: CPU
+  # Memory Utilization %
+  # Polled at 60s to support anomaly detection
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosMemoryPercentUsage
+      OID: 1.3.6.1.4.1.2604.5.1.2.5.2.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # Memory capacity in MB
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosMemoryCapacity
+      OID: 1.3.6.1.4.1.2604.5.1.2.5.1.0
+      tag: MemoryTotal
+  # Disk capacity in MB
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDiskCapacity
+      OID: 1.3.6.1.4.1.2604.5.1.2.4.1.0
+  # % Disk usage
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDiskPercentUsage
+      OID: 1.3.6.1.4.1.2604.5.1.2.4.2.0
+  # Swap Capacity in MB
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSwapCapacity
+      OID: 1.3.6.1.4.1.2604.5.1.2.5.3.0
+  # % usage of swap
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSwapPercentUsage
+      OID: 1.3.6.1.4.1.2604.5.1.2.5.4.0
+  # Sessions Total - polled at 60s to support anomaly detection
+  # Display live user count login into captive portal
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosLiveUsersCount
+      OID: 1.3.6.1.4.1.2604.5.1.2.6.0
+      poll_time_sec: 60
+  # Counters to show hits to various TCP Protocols
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosHTTPHits
+      OID: 1.3.6.1.4.1.2604.5.1.2.7.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosFTPHits
+      OID: 1.3.6.1.4.1.2604.5.1.2.8.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosPOP3Hits
+      OID: 1.3.6.1.4.1.2604.5.1.2.9.1.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosImapHits
+      OID: 1.3.6.1.4.1.2604.5.1.2.9.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSmtpHits
+      OID: 1.3.6.1.4.1.2604.5.1.2.9.3.0
+  # Status indicators for various services
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosPoP3Service
+      OID: 1.3.6.1.4.1.2604.5.1.3.1.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosImap4Service
+      OID: 1.3.6.1.4.1.2604.5.1.3.2.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSmtpService
+      OID: 1.3.6.1.4.1.2604.5.1.3.3.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosFtpService
+      OID: 1.3.6.1.4.1.2604.5.1.3.4.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosHttpService
+      OID: 1.3.6.1.4.1.2604.5.1.3.5.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosAVService
+      OID: 1.3.6.1.4.1.2604.5.1.3.6.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosASService
+      OID: 1.3.6.1.4.1.2604.5.1.3.7.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDNSService
+      OID: 1.3.6.1.4.1.2604.5.1.3.8.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosHAService
+      OID: 1.3.6.1.4.1.2604.5.1.3.9.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosIPSService
+      OID: 1.3.6.1.4.1.2604.5.1.3.10.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosApacheService
+      OID: 1.3.6.1.4.1.2604.5.1.3.11.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosNtpService
+      OID: 1.3.6.1.4.1.2604.5.1.3.12.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosTomcatService
+      OID: 1.3.6.1.4.1.2604.5.1.3.13.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSSLVpnService
+      OID: 1.3.6.1.4.1.2604.5.1.3.14.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosIPSecVpnService
+      OID: 1.3.6.1.4.1.2604.5.1.3.15.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDatabaseService
+      OID: 1.3.6.1.4.1.2604.5.1.3.16.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosNetworkService
+      OID: 1.3.6.1.4.1.2604.5.1.3.17.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosGarnerService
+      OID: 1.3.6.1.4.1.2604.5.1.3.18.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDroutingService
+      OID: 1.3.6.1.4.1.2604.5.1.3.19.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSSHdService
+      OID: 1.3.6.1.4.1.2604.5.1.3.20.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDgdService
+      OID: 1.3.6.1.4.1.2604.5.1.3.21.0
+      enum:
+        untouched: 0
+        stopped: 1
+        initializing: 2
+        running: 3
+        exiting: 4
+        dead: 5
+        frozen: 6
+        unregistered: 7
+  # Is HA enabled on this device?
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosHAStatus
+      OID: 1.3.6.1.4.1.2604.5.1.4.1.0
+      enum:
+        disabled: 0
+        enabled: 1
+  # HA State of current Device
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDeviceCurrentHAState
+      OID: 1.3.6.1.4.1.2604.5.1.4.4.0
+      enum:
+        notApplicable: 0
+        auxiliary: 1
+        standAlone: 2
+        primary: 3
+        faulty: 4
+        ready: 5
+  # HA State of peer Device
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosDevicePeerHAState
+      OID: 1.3.6.1.4.1.2604.5.1.4.5.0
+      enum:
+        notApplicable: 0
+        auxiliary: 1
+        standAlone: 2
+        primary: 3
+        faulty: 4
+        ready: 5
+  # Licenses Status and Expiration dates
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosBaseFWLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.1.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosBaseFWLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.1.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosNetProtectionLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.2.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosNetProtectionLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.2.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosWebProtectionLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.3.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosWebProtectionLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.3.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosMailProtectionLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.4.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosMailProtectionLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.4.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosWebServerProtectionLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.5.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosWebServerProtectionLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.5.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSandstromLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.6.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosSandstromLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.6.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosEnhancedSupportLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.7.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosEnhancedSupportLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.7.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosEnhancedPlusLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.8.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosEnhancedPlusLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.8.2.0
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosCentralOrchestrationLicRegStatus
+      OID: 1.3.6.1.4.1.2604.5.1.5.9.1.0
+      enum:
+        trial: 1
+        unsubscribed: 2
+        subscribed: 3
+        expired: 4
+  - MIB: SFOS-FIREWALL-MIB
+    symbol:
+      name: sfosCentralOrchestrationLicExpiryDate
+      OID: 1.3.6.1.4.1.2604.5.1.5.9.2.0
+  # IPSec Tunnel information Table
+  - MIB: SFOS-FIREWALL-MIB
+    table:
+      name: sfosIPSecVpnTunnelTable
+      OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1
+    symbols:
+      # Connection mode of IPSec tunnel
+      - name: sfosIPSecVpnConnMode
+        OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.5
+      # Connection Type of IPSec Tunnel
+      - name: sfosIPSecVpnConnType
+        OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.6
+        enum:
+          host_to_host: 1
+          site_to_site: 2
+      # Port name which is  used as local gateway for IPSec tunnel
+      - name: sfosIPSecVpnLocalgwPort
+        OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.7
+      # Count of active tunnel
+      - name: sfosIPSecVpnActiveTunnel
+        OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.8
+    metric_tags:
+      # Connection Name of the tunnel
+      - column:
+          name: sfosIPSecVpnConnName
+          OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.2
+      # Descriptive of the tunnel
+      - column:
+          name: sfosIPSecVpnConnDes
+          OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.3
+      # Policy Name of IPSec tunnel
+      - column:
+          name: sfosIPSecVpnPolicyName
+          OID: 1.3.6.1.4.1.2604.5.1.6.1.1.1.1.4
+
+metric_tags:
+  # Type of Device like XG-85, XG-210.
+  - column:
+      name: sfosDeviceType
+      OID: 1.3.6.1.4.1.2604.5.1.1.2.0
+  # Current running firmware version of SFOS
+  - column:
+      name: sfosDeviceFWVersion
+      OID: 1.3.6.1.4.1.2604.5.1.1.3.0
+  # Current snort version running in SFOS
+  - column:
+      name: sfosIPSVersion
+      OID: 1.3.6.1.4.1.2604.5.1.1.6.0

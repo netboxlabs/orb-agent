@@ -1,0 +1,307 @@
+# This profile needs to be manually applied in the device config.
+# Device uses generic Net-SNMP sysobjectid for Linux and has no identifying data in sysDescr.
+# Ex:
+# 1.3.6.1.2.1.1.1.0 = STRING: Linux <device_name> 4.18.0-305.12.1.el8.ibm.1.x86_64 #1 SMP Wed Aug 18 07:10:24 CDT 2021 x86_64
+# 1.3.6.1.2.1.1.2.0 = OID: .1.3.6.1.4.1.8072.3.2.10
+# https://www.qct.io/Download/index?method=2&category=0&keyword=mib
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+  - host-resources-mib.yml
+
+provider: kentik-netapp-hci
+
+sysobjectid:
+  - 1.3.6.1.4.1.8072.3.2.10.hci    # NetApp HCI
+
+metrics:
+  # Chassis Status
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: agentChassisStatus
+      OID: 1.3.6.1.4.1.7244.1.2.1.1.4.0
+      enum:
+        powerIsOn: 1
+        powerOverLoad: 2
+        interlock: 4
+        powerFault: 8
+        powerControlFault: 16
+
+  # Power Control
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: agentPowerControl
+      OID: 1.3.6.1.4.1.7244.1.2.1.1.5.0
+      enum:
+        unsupported: 0
+        off: 1
+        on: 2
+        reset: 3
+        cycle: 4
+
+  # Voltage Status Overall
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: voltageStatusOverall
+      OID: 1.3.6.1.4.1.7244.1.2.1.2.1.0
+      enum:
+        other: 1
+        unknown: 2
+        ok: 3
+        nonCritical: 4
+        critical: 5
+        nonRecoverable: 6
+
+  # Fan Status Overall
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: fanStatusOverall
+      OID: 1.3.6.1.4.1.7244.1.2.1.2.3.0
+      enum:
+        other: 1
+        unknown: 2
+        ok: 3
+        nonCritical: 4
+        critical: 5
+        nonRecoverable: 6
+
+  # Temperature Status Overall
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: temperatureStatusOverall
+      OID: 1.3.6.1.4.1.7244.1.2.1.2.5.0
+      enum:
+        other: 1
+        unknown: 2
+        ok: 3
+        nonCritical: 4
+        critical: 5
+        nonRecoverable: 6
+
+  # Power Supply Redundancy Status
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: powerSupplyRedundancy
+      OID: 1.3.6.1.4.1.7244.1.2.1.2.7.0
+      enum:
+        other: 1
+        full: 2
+        lost: 3
+
+  # Power Supply 0 Status
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: powerSupply0Status
+      OID: 1.3.6.1.4.1.7244.1.2.1.2.8.0
+      enum:
+        isPresent: 1
+        failDetect: 2
+        predictiveFail: 4
+        inputLost: 8
+        lostOrOutOfRange: 16
+        outOfRange: 32
+
+  # Power Supply 1 Status
+  - MIB: QUANTA-RACK-MIB
+    symbol:
+      name: powerSupply1Status
+      OID: 1.3.6.1.4.1.7244.1.2.1.2.9.0
+      enum:
+        isPresent: 1
+        failDetect: 2
+        predictiveFail: 4
+        inputLost: 8
+        lostOrOutOfRange: 16
+        outOfRange: 32
+
+  # Processor Device Info Table
+  - MIB: QUANTA-RACK-MIB
+    table:
+      name: processorDeviceInfoTable
+      OID: 1.3.6.1.4.1.7244.1.2.1.3.1
+    symbols:
+      # This attribute defines the reading of the processor device Info probe.
+      - name: processorDeviceInfoStatus
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.1.1.2
+        enum:
+          processorNotPresent: 0
+          processorPresent: 1
+    metric_tags:
+      # This attribute defines the location name of the processor device Info probe.
+      - column:
+          name: processorDeviceInfoLocationName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.1.1.3
+      # This attribute defines the manufacturer name of the processor device Info probe.
+      - column:
+          name: processorDeviceInfoManufacturerName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.1.1.4
+      # This attribute defines the model name of the processor device Info probe.
+      - column:
+          name: processorDeviceInfoModelName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.1.1.5
+      # This attribute defines the frequency of the processor device Info probe.
+      - column:
+          name: processorDeviceInfoFrequency
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.1.1.6
+
+  # Memory Device Info Table
+  - MIB: QUANTA-RACK-MIB
+    table:
+      name: memoryDeviceInfoTable
+      OID: 1.3.6.1.4.1.7244.1.2.1.3.2
+    symbols:
+      # This attribute defines the reading of the memory device Info probe.
+      - name: memoryDeviceInfoStatus
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.2.1.2
+        enum:
+          memoryNotPresent: 0
+          memoryPresent: 1
+    metric_tags:
+      # This attribute defines the location name of the memory device Info probe.
+      - column:
+          name: memoryDeviceInfoLocationName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.2.1.3
+      # This attribute defines the model name of the memory device Info probe.
+      - column:
+          name: memoryDeviceInfoModelName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.2.1.4
+      # This attribute defines the frequency of the memory device Info probe.
+      - column:
+          name: memoryDeviceInfoFrequency
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.2.1.5
+      # This attribute defines the size of the memory device Info probe.
+      - column:
+          name: memoryDeviceInfoSize
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.2.1.6
+
+  # Fan Device Info Table
+  - MIB: QUANTA-RACK-MIB
+    table:
+      name: fanDeviceInfoTable
+      OID: 1.3.6.1.4.1.7244.1.2.1.3.3
+    symbols:
+      # This attribute defines the reading of the fan device Info probe.
+      - name: fanDeviceInfoStatus
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.3.1.2
+        enum:
+          other: 1
+          unknown: 2
+          ok: 3
+          nonCriticalUpper: 4
+          criticalUpper: 5
+          nonRecoverableUpper: 6
+          nonCriticalLower: 7
+          criticalLower: 8
+          nonRecoverableLower: 9
+          failed: 10
+      # This attribute defines the rotation speed of the fan device Info probe.
+      # If this value cannot be determined by software, then a value of -99 will be returned.
+      - name: fanDeviceReading
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.3.1.4
+    metric_tags:
+      # This attribute defines the location name of the fan device Info probe.
+      - column:
+          name: fanDeviceInfoLocationName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.3.1.3
+
+  # Temperature Device Info Table
+  - MIB: QUANTA-RACK-MIB
+    table:
+      name: temperatureDeviceInfoTable
+      OID: 1.3.6.1.4.1.7244.1.2.1.3.4
+    symbols:
+      # This attribute defines the reading of the temperature device Info probe.
+      - name: temperatureDeviceInfoStatus
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.4.1.2
+        enum:
+          other: 1
+          unknown: 2
+          ok: 3
+          nonCriticalUpper: 4
+          criticalUpper: 5
+          nonRecoverableUpper: 6
+          nonCriticalLower: 7
+          criticalLower: 8
+          nonRecoverableLower: 9
+          failed: 10
+      # This attribute defines the degree of the temperature device Info probe. In tenths of degrees Centigrade.
+      - name: temperatureDeviceReading
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.4.1.4
+    metric_tags:
+      # This attribute defines the location name of the temperature device Info probe.
+      - column:
+          name: temperatureDeviceInfoLocationName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.4.1.3
+
+  # Voltage Device Info Table
+  - MIB: QUANTA-RACK-MIB
+    table:
+      name: voltageDeviceInfoTable
+      OID: 1.3.6.1.4.1.7244.1.2.1.3.5
+    symbols:
+      # This attribute defines the reading of the voltage device Info probe.
+      - name: voltageDeviceInfoStatus
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.5.1.2
+        enum:
+          other: 1
+          unknown: 2
+          ok: 3
+          nonCriticalUpper: 4
+          criticalUpper: 5
+          nonRecoverableUpper: 6
+          nonCriticalLower: 7
+          criticalLower: 8
+          nonRecoverableLower: 9
+          failed: 10
+      # This attribute defines the volts of the voltage device Info probe. In millivolts.
+      # This value has to divided by 1000.
+      - name: voltageDeviceReading
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.5.1.4
+    metric_tags:
+      # This attribute defines the location name of the voltage device Info probe.
+      - column:
+          name: voltageDeviceInfoLocationName
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.5.1.3
+
+  # FRU Device Info Table
+  - MIB: QUANTA-RACK-MIB
+    table:
+      name: fruDeviceInfoTable
+      OID: 1.3.6.1.4.1.7244.1.2.1.3.6
+    symbols:
+      # This attribute defines the device name of the FRU device Info.
+      - name: fruDeviceInfoDeviceName
+        OID: 1.3.6.1.4.1.7244.1.2.1.3.6.1.3
+        conversion: to_one
+    metric_tags:
+      # This attribute defines the chassis type of the FRU device Info.
+      - column:
+          name: fruDeviceInfoChassisType
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.6.1.4
+      # This attribute defines the chassis part number of the FRU device Info.
+      - column:
+          name: fruDeviceInfoChassisPartNumber
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.6.1.5
+      # This attribute defines the chassis serial number of the FRU device Info.
+      - column:
+          name: fruDeviceInfoChassisSerialNumber
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.6.1.6
+      # This attribute defines the product manufacturer name of the FRU device Info.
+      - column:
+          name: fruDeviceInfoProductManufacturer
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.6.1.11
+      # This attribute defines the product serial number of the FRU device Info.
+      - column:
+          name: fruDeviceInfoProductSerialNumber
+          OID: 1.3.6.1.4.1.7244.1.2.1.3.6.1.15
+
+metric_tags:
+  # BMC Version Number
+  - column:
+      name: agentBMCVersion
+      OID: 1.3.6.1.4.1.7244.1.2.1.1.1.0
+  # System BIOS version
+  - column:
+      name: agentSystemBIOSVersion
+      OID: 1.3.6.1.4.1.7244.1.2.1.1.8.0

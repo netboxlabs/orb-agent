@@ -170,6 +170,68 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 	}
 }
 
+// rowInterfaceIndex returns the value of the row's interface-binding
+// column (the one mapped to "assignedObject"), or "" when the row has
+// none. Found by field rather than by OID arithmetic on a sibling,
+// because the caller may be handling a column that belongs to a
+// different table than the row it annotates.
+func rowInterfaceIndex(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry) string {
+	for _, propertyMappingEntry := range mappingEntry.MappingEntries {
+		if propertyMappingEntry.Field != "assignedObject" {
+			continue
+		}
+		for objectID, value := range values {
+			if objectID.HasParent(propertyMappingEntry.OID) {
+				return value.Value
+			}
+		}
+	}
+	return ""
+}
+
+// ipv6AnnotatedPrefixLength returns the prefix length the IPV6-MIB rows
+// in this group agree on for the address they annotate, and when they do
+// not, a short reason for the debug line.
+//
+// The annotation is indexed by (ifIndex, address), so one address on
+// several interfaces has several rows that may disagree. A row
+// describing an interface other than the one the address is bound to is
+// ignored; where the address is unbound nothing can be ruled out that
+// way, so every row is a candidate and candidates that disagree are no
+// evidence at all.
+//
+// Decided over the whole group rather than per PDU, so that the answer
+// cannot depend on which row is iterated first. A malformed length is
+// skipped rather than counted as disagreement: it is not evidence in
+// either direction.
+func ipv6AnnotatedPrefixLength(values map[ObjectIDIndex]*ObjectIDValue, columnOID, rowIfIndex string) (int, string, bool) {
+	agreed := 0
+	found := false
+	for objectID, value := range values {
+		if !objectID.HasParent(columnOID) {
+			continue
+		}
+		prefixIfIndex := ipv6AddrPrefixIfIndex(string(objectID), columnOID)
+		if rowIfIndex != "" && rowIfIndex != "0" &&
+			prefixIfIndex != "" && prefixIfIndex != "0" &&
+			prefixIfIndex != rowIfIndex {
+			continue
+		}
+		prefixLen, err := strconv.Atoi(value.Value)
+		if err != nil || prefixLen < 0 || prefixLen > 128 {
+			continue
+		}
+		if found && prefixLen != agreed {
+			return 0, "rows for this address disagree on the length", false
+		}
+		agreed, found = prefixLen, true
+	}
+	if !found {
+		return 0, "no usable row for this address's interface", false
+	}
+	return agreed, "", true
+}
+
 // Map maps IP addresses to entities
 func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry *Entry, entityRegistry *EntityRegistry, defaults *config.Defaults) diode.Entity {
 	m.logger.Debug("mapping values to ipAddress entity", "values", values, "mapping_entry", mappingEntry)
@@ -266,6 +328,9 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 						m.logger.Warn("error converting mask to prefix size", "error", err, "value", value.Value)
 						continue
 					}
+					// A netmask the device reported. Marked so dedup can tell
+					// it from the host-route default.
+					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankReported)
 					if ipAddress.Address == nil || *ipAddress.Address == "" {
 						// No address set yet
 						if extractedIP != "" {
@@ -363,6 +428,48 @@ func (m *IPAddressMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 							"raw", prefixLen, "clamped", maxLen, "address", canonical)
 						prefixLen = maxLen
 					}
+					// The RowPointer parsed and passed every check, so this
+					// prefix came from the device rather than from the default.
+					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankReported)
+					setOrUpdateAddress(fmt.Sprintf("%s/%d", canonical, prefixLen))
+					fieldFound = true
+				case "addressPrefixLength":
+					// IPV6-MIB ipv6AddrPfxLength, a column of a table RFC
+					// 4293 obsoleted. Read only as a fallback: the two
+					// current tables have first claim and this one applies
+					// only where neither of them resolved a prefix.
+					//
+					// A row's PDUs are iterated in map order, so nothing
+					// here may depend on which one arrives first. Two
+					// things secure that: the guard below is a rank
+					// comparison rather than an assumption about ordering,
+					// and the length is decided over the group as a whole,
+					// which makes this case idempotent however many of the
+					// address's annotation rows trigger it.
+					if ipAddress.Address == nil || *ipAddress.Address == "" {
+						continue
+					}
+					if entityRegistry.PrefixRank(&ipAddress) > prefixRankDeprecated {
+						continue
+					}
+					canonical := stripPrefix(*ipAddress.Address)
+					if !strings.Contains(canonical, ":") {
+						// The table is IPv6-only, so an IPv4 address here
+						// means the row is describing something other than
+						// the address it grouped with.
+						m.logger.Debug("ipv6AddrPfxLength on a non-IPv6 address, keeping host route",
+							"address", *ipAddress.Address)
+						continue
+					}
+					rowIfIndex := rowInterfaceIndex(values, mappingEntry)
+					prefixLen, reason, ok := ipv6AnnotatedPrefixLength(values, propertyMappingEntry.OID, rowIfIndex)
+					if !ok {
+						m.logger.Debug("ipv6AddrPfxLength not usable, keeping host route",
+							"reason", reason, "address", *ipAddress.Address,
+							"row_ifindex", rowIfIndex)
+						continue
+					}
+					entityRegistry.MarkPrefixSource(&ipAddress, prefixRankDeprecated)
 					setOrUpdateAddress(fmt.Sprintf("%s/%d", canonical, prefixLen))
 					fieldFound = true
 				case "assignedObject":
@@ -669,7 +776,24 @@ func maskToPrefixSize(maskStr string) (int, error) {
 	}
 
 	mask := net.IPv4Mask(ip[0], ip[1], ip[2], ip[3])
-	ones, _ := mask.Size()
+	// Size returns (0, 0) for a mask that is not a run of ones followed by a
+	// run of zeros. Discarding the bit width made a malformed 255.0.255.0 read
+	// as a valid /0, which then outranked the other table's host route and put
+	// every address on the device into /0. A mask that has no prefix length is
+	// not a prefix.
+	ones, bits := mask.Size()
+	if bits == 0 {
+		return 0, fmt.Errorf("mask is not contiguous: %s", maskStr)
+	}
+	// An all-zero mask is the well-known agent quirk for "no mask
+	// configured" rather than a default route on an interface address, and
+	// 31 walks in the LibreNMS corpus report one. Reading it as /0 put the
+	// address on a network covering everything; once a prefix carries
+	// provenance, that /0 would also outrank the other table's host route
+	// and spread to every address on the device.
+	if ones == 0 {
+		return 0, fmt.Errorf("mask has no network bits: %s", maskStr)
+	}
 
 	return ones, nil
 }

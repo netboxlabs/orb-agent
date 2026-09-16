@@ -1,0 +1,5 @@
+NAME: "Switch 1", DESCR: "Cisco Catalyst 9300-48T Switch"
+PID: C9300-48T     , VID: V01 , SN: SN0093001
+
+NAME: "Te1/1/1", DESCR: "SFP-10GBase-LR"
+PID: SFP-10G-LR        , VID: V02 , SN: OPT0093101

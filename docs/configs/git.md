@@ -5,7 +5,7 @@ The Git configuration manager outlines a policy management system where an agent
 
 ### Config
 
-The `config_manager.sources.git` section supports three authentication modes. Pick the snippet that matches your repository and omit the fields you do not use — mixing basic and SSH fields in the same config is not needed.
+The `config_manager.sources.git` section supports four authentication modes. Pick the snippet that matches your repository and omit the fields you do not use — mixing basic, SSH and GitHub App fields in the same config is not needed.
 
 **Public repository (no auth):**
 ```yaml
@@ -57,16 +57,37 @@ orb:
 ```
 See [SSH Authentication](#ssh-authentication) below for the required `known_hosts` setup.
 
+**GitHub App authentication** (short-lived installation tokens, github.com only):
+```yaml
+orb:
+  config_manager:
+    active: git
+    sources:
+      git:
+        url: "https://github.com/myorg/policyrepo"
+        schedule: "* * * * *"
+        branch: develop
+        auth: github_app
+        github_app:
+          client_id: "Iv23liAbCdEfGhIjKlMn"
+          installation_id: "78901234"
+          private_key: /opt/orb/github-app.pem
+```
+See [GitHub App Authentication](#github-app-authentication) below for how to create and install the app.
+
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
 | url | string | yes  |  the url of the repository  that contain agent policies  |
 | schedule | cron format | no  |  If defined, it will execute fetch remote changes on cron schedule time. If not defined, it will execute the match and apply policies only once  |
 | branch | string | no  |  the git branch that should be used by the agent. If not specified, the default branch will be used   |
-| auth | string | no | it can be either 'basic' or 'ssh'. The basic authentication supports both password or token. If not specified, no auth will be used (public repository) |
+| auth | string | no | it can be 'basic', 'ssh' or 'github_app'. The basic authentication supports both password or token. If not specified, no auth will be used (public repository) |
 | username | string | no | username used for authentication |
 | password | string | no | the password used for authentication. If the auth method is 'basic' it should contain the password or auth token. If the method is 'ssh' it should contain the passphrase for the private key file (leave empty for unprotected keys) |
 | private_key | string | no | the path to the SSH private key file |
 | skip_tls | bool | no | skip TLS certificate verification when connecting to the repository (default: false). Useful for self-signed or private CA certificates |
+| github_app.client_id | string | yes, when auth is 'github_app' | the GitHub App's Client ID (preferred) or its numeric App ID |
+| github_app.installation_id | string | yes, when auth is 'github_app' | the numeric id of the app's installation on the account that owns the repository |
+| github_app.private_key | string | yes, when auth is 'github_app' | the path to the app's `.pem` private key, or the PEM content itself |
 
 ## SSH Authentication
 
@@ -109,6 +130,87 @@ ssh-keygen -t ed25519 -f /local/orb/id_ed25519 -N ""
 ```
 
 > **Note:** Azure DevOps requires RSA keys. Use `ssh-keygen -t rsa -b 4096` instead.
+
+## GitHub App Authentication
+
+When using `auth: github_app`, the agent authenticates as a GitHub App installation rather than as a
+user. Compared to a personal access token this gives you a credential that is not tied to a person,
+is scoped to exactly the repositories the app is installed on, and is short-lived — the agent mints a
+one-hour installation access token and refreshes it automatically.
+
+This mode supports **github.com only**, which includes GitHub Enterprise Cloud (served from
+`github.com`). It does **not** support GitHub Enterprise Server or GitHub Enterprise Cloud with data
+residency (`*.ghe.com`) — use `auth: basic` with a personal access token for those.
+
+### Creating the App
+
+1. Go to **Settings > Developer settings > GitHub Apps > New GitHub App** (under your organization if
+   the policy repo is org-owned).
+2. Under **Repository permissions**, grant **`Contents: Read`**. Nothing else is required — the agent
+   only reads `selector.yaml` and the policy files, and never writes to the repository.
+3. Uncheck **Webhook > Active**; the agent polls on the configured `schedule` and does not receive
+   webhooks.
+4. Create the app, then under **Private keys** click **Generate a private key**. This downloads a
+   PKCS#1 `.pem` file.
+5. Click **Install App** and install it on the account that owns the policy repo, choosing **Only
+   select repositories** and selecting just that repo.
+
+### Finding the IDs
+
+- **`client_id`** — use the app's **Client ID** (`Iv23li…`), shown on the app's settings page. This is
+  the form the GitHub API documentation specifies, and the numeric App ID looks likely to be dropped
+  in a future API version. The numeric App ID still works today.
+- **`installation_id`** — the number at the end of the URL of the *installation's* settings page,
+  e.g. `https://github.com/organizations/myorg/settings/installations/78901234` → `78901234`.
+  Putting the App ID or Client ID here is the most common misconfiguration; the agent rejects a
+  non-numeric value at startup with a message saying so.
+
+### Supplying the private key
+
+Mount the `.pem` **read-only** and keep it out of the image:
+
+```bash
+docker run \
+  -v /local/orb:/opt/orb \
+  -v /local/orb/github-app.pem:/opt/orb/github-app.pem:ro \
+  netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
+```
+
+`private_key` accepts either a path or the PEM content itself, so the key can also come from an
+environment variable or a secrets manager without ever being written to disk:
+
+```yaml
+        github_app:
+          client_id: "Iv23liAbCdEfGhIjKlMn"
+          installation_id: "78901234"
+          private_key: ${GITHUB_APP_KEY}          # PEM content in an env var
+          # private_key: ${vault://secret/github-app#pem}
+```
+
+Both PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`, what GitHub issues) and PKCS#8
+(`-----BEGIN PRIVATE KEY-----`) are accepted. Passphrase-protected keys are not; decrypt first with
+`openssl rsa -in key.pem -out key-decrypted.pem`.
+
+The agent never logs the private key or the minted token — both are redacted from any config dump.
+
+### Token lifetime
+
+Installation access tokens last one hour. The agent mints one at startup — so a wrong App ID, a wrong
+installation ID or an unreadable key fails startup immediately with a specific error — and re-mints
+automatically once fewer than five minutes of validity remain. There is nothing to schedule or rotate.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---------|--------------|
+| `GitHub rejected the app JWT (HTTP 401…)` | Host clock skew, or `client_id` does not match the private key. The error prints GitHub's time next to the agent's — compare them. |
+| `installation … was not found (HTTP 404…)` | `installation_id` holds the App ID, or the app was uninstalled. |
+| `GitHub refused the token request (HTTP 403…)` | The app is suspended, blocked by an org policy, or rate limited. |
+| Clone fails with 404 after a successful token mint | The app is installed on the account but the policy repo was not selected during installation. |
+| `holds an OpenSSH key, not a GitHub App key` | `private_key` points at an SSH key instead of the app's `.pem`. |
+
+> **Note:** `skip_tls: true` also disables TLS verification for the api.github.com token exchange, not
+> just for the git connection.
 
 ## What Goes in Git vs. the Local Agent Config
 

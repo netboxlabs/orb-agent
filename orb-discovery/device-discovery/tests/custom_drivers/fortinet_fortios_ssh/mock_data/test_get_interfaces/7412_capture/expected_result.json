@@ -1,0 +1,263 @@
+{
+  "dmz": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "ha1": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "ha2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "mgmt": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port2": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port3": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port4": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port5": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port6": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port7": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port8": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port9": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port10": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port11": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port12": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 1000.0,
+    "mac_address": ""
+  },
+  "port13": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port14": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port15": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port16": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port17": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port18": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port19": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "port20": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "wan1": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "wan2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "x1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 10000.0,
+    "mac_address": ""
+  },
+  "x2": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  },
+  "modem": {
+    "is_up": false,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 0,
+    "speed": 0.0,
+    "mac_address": ""
+  }
+}

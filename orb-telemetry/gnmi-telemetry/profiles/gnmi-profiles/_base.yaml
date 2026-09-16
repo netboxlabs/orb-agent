@@ -1,0 +1,76 @@
+# Base metric profile: the OpenConfig subtrees every target is expected to
+# serve. Vendor overlays extend it. Sample subscriptions follow the policy's
+# metrics_interval; on_change ones stream one state leaf each.
+match: {}
+subscriptions:
+  - path: /interfaces/interface[name=*]/state/counters
+    mode: sample
+    attributes:
+      interface_name: name
+    metrics:
+      - {leaf: in-octets, name: if_in_octets, type: counter, unit: By}
+      - {leaf: in-pkts, name: if_in_pkts, type: counter, unit: "{packet}"}
+      - {leaf: in-unicast-pkts, name: if_in_unicast_pkts, type: counter, unit: "{packet}"}
+      - {leaf: in-broadcast-pkts, name: if_in_broadcast_pkts, type: counter, unit: "{packet}"}
+      - {leaf: in-multicast-pkts, name: if_in_multicast_pkts, type: counter, unit: "{packet}"}
+      - {leaf: in-errors, name: if_in_errors, type: counter, unit: "{error}"}
+      - {leaf: in-discards, name: if_in_discards, type: counter, unit: "{packet}"}
+      - {leaf: in-fcs-errors, name: if_in_fcs_errors, type: counter, unit: "{error}"}
+      - {leaf: out-octets, name: if_out_octets, type: counter, unit: By}
+      - {leaf: out-pkts, name: if_out_pkts, type: counter, unit: "{packet}"}
+      - {leaf: out-unicast-pkts, name: if_out_unicast_pkts, type: counter, unit: "{packet}"}
+      - {leaf: out-broadcast-pkts, name: if_out_broadcast_pkts, type: counter, unit: "{packet}"}
+      - {leaf: out-multicast-pkts, name: if_out_multicast_pkts, type: counter, unit: "{packet}"}
+      - {leaf: out-errors, name: if_out_errors, type: counter, unit: "{error}"}
+      - {leaf: out-discards, name: if_out_discards, type: counter, unit: "{packet}"}
+      - {leaf: carrier-transitions, name: if_carrier_transitions, type: counter, unit: "{transition}"}
+  - path: /interfaces/interface[name=*]/state/oper-status
+    mode: on_change
+    attributes:
+      interface_name: name
+    metrics:
+      - leaf: .
+        name: if_oper_status
+        type: gauge
+        enum: {UP: 1, DOWN: 0, TESTING: 2, UNKNOWN: 3, DORMANT: 4, NOT_PRESENT: 5, LOWER_LAYER_DOWN: 6}
+  - path: /interfaces/interface[name=*]/state/admin-status
+    mode: on_change
+    attributes:
+      interface_name: name
+    metrics:
+      - leaf: .
+        name: if_admin_status
+        type: gauge
+        enum: {UP: 1, DOWN: 0, TESTING: 2}
+  - path: /system/cpus/cpu[index=*]/state
+    mode: sample
+    attributes:
+      cpu_index: index
+    metrics:
+      - {leaf: total/instant, name: cpu_utilization, type: gauge, unit: "%"}
+      - {leaf: user/instant, name: cpu_user, type: gauge, unit: "%"}
+      - {leaf: kernel/instant, name: cpu_kernel, type: gauge, unit: "%"}
+      - {leaf: idle/instant, name: cpu_idle, type: gauge, unit: "%"}
+  - path: /system/memory/state
+    mode: sample
+    metrics:
+      - {leaf: physical, name: memory_physical, type: gauge, unit: By}
+      - {leaf: reserved, name: memory_reserved, type: gauge, unit: By}
+      - {leaf: used, name: memory_used, type: gauge, unit: By}
+      - {leaf: free, name: memory_free, type: gauge, unit: By}
+  - path: /components/component[name=*]/state/temperature
+    mode: sample
+    attributes:
+      component_name: name
+    metrics:
+      - {leaf: instant, name: temperature, type: gauge, unit: Cel}
+      - {leaf: alarm-status, name: temperature_alarm, type: gauge, bool: true}
+  - path: /components/component[name=*]/state/oper-status
+    mode: on_change
+    attributes:
+      component_name: name
+    metrics:
+      - leaf: .
+        name: component_oper_status
+        type: gauge
+        enum: {ACTIVE: 1, INACTIVE: 0, DISABLED: 2}

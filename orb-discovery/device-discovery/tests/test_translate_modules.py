@@ -233,6 +233,44 @@ def test_linecards_mode_skips_top_level_transceiver_bay() -> None:
     assert iface_module_map == {}
 
 
+def test_linecards_mode_emits_nothing_for_device_rooted_optics() -> None:
+    """
+    A fixed-port device has only transceiver bays, so linecards mode is silent.
+
+    Fixed-port platforms (and the fixed ports of a chassis whose only module
+    is an uplink) have no slot/linecard/FRU parent for their optics, so the
+    driver promotes each one to a device-rooted bay named after its
+    interface — the same shape a sub-bay collapses to once a parent link is
+    stripped. Mode filtering doesn't care where the bay is rooted, only that
+    its module classifies as a transceiver, so this is shared by every
+    driver that implements get_modules() and one test covers all of them.
+    """
+    entities: list = []
+    data = {
+        "modules": _standalone(
+            bays=[
+                {
+                    "name": "Ethernet1",
+                    "position": "Ethernet1",
+                    "module": {
+                        "model": "QSFP-40G-SR4",
+                        "serial": "OPT0000001",
+                        "type": "transceiver",
+                        "description": "",
+                        "sub_bays": [],
+                    },
+                },
+            ],
+            interfaces_by_bay={"Ethernet1": ["Ethernet1"]},
+        ),
+    }
+    iface_module_map = emit_modules_if_requested(
+        data, Options(discover_modules="linecards"), _devices(), entities,
+    )
+    assert entities == [], "linecards mode must not emit a device-rooted transceiver bay"
+    assert iface_module_map == {}
+
+
 # ---- full mode -----------------------------------------------------------
 
 
@@ -611,6 +649,10 @@ def test_metric_counters_invoked_when_enabled(monkeypatch) -> None:
     # Linecard emits with type=linecard; transceiver with type=transceiver.
     assert {m[2].get("type") for m in mod_counts} == {"linecard", "transceiver"}
     assert all(c[2].get("vendor") == "Cisco" for c in mod_counts + bay_counts)
+    # Both rows in this payload are identified (real PIDs), so the metric
+    # label must say so — a deleted "identified" bump would still pass every
+    # other assertion here.
+    assert all(m[2].get("identified") == "true" for m in mod_counts)
 
 
 def test_metric_counters_noop_when_disabled(monkeypatch) -> None:
@@ -930,3 +972,147 @@ def test_emit_vc_boolean_member_id_warn_dropped(caplog, monkeypatch) -> None:
     assert modules == []
     assert any("boolean" in r.getMessage() for r in caplog.records)
     assert (1, {"reason": "malformed"}) in counter_calls
+
+
+def test_unidentified_module_gets_the_generic_manufacturer():
+    """
+    Unidentified modules use the generic manufacturer to avoid collisions.
+
+    dcim.moduletype matches on (manufacturer, model) and nothing else, so the
+    manufacturer decides whether a described part lands segregated or filed
+    among the vendor's genuine parts. Cisco reports "Unspecified" precisely
+    when an optic is NOT Cisco-coded, so inheriting the chassis vendor would
+    assert a brand the device never claimed.
+    """
+    device = _make_device()
+    payload = {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/3", "position": "Te1/1/3",
+                    "module": {
+                        "model": "SFP-10GBase-CX1", "serial": "OPT3",
+                        "description": "SFP-10GBase-CX1", "type": "transceiver",
+                        "identified": False, "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+    entities: list = []
+
+    emit_modules_if_requested({"modules": payload}, Options(discover_modules="full"),
+                              {None: device}, entities)
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Unknown"
+    assert module.module_type.model == "SFP-10GBase-CX1"
+
+
+def test_identified_module_keeps_the_device_manufacturer():
+    """The suppression must not overreach: real parts stay with the vendor."""
+    device = _make_device(vendor="Cisco")
+    payload = {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/1", "position": "Te1/1/1",
+                    "module": {
+                        "model": "SFP-10G-SR", "serial": "OPT1",
+                        "description": "SFP-10GBase-SR", "type": "transceiver",
+                        "identified": True, "sub_bays": [],
+                    },
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+    entities: list = []
+
+    emit_modules_if_requested({"modules": payload}, Options(discover_modules="full"),
+                              {None: device}, entities)
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Cisco"
+
+
+def _optic_payload(module: dict) -> dict:
+    return {
+        "members": {
+            None: {
+                "bays": [{
+                    "name": "Te1/1/3", "position": "Te1/1/3", "module": module,
+                }],
+                "interfaces_by_bay": {},
+            }
+        }
+    }
+
+
+def test_part_manufacturer_outranks_the_device_vendor():
+    """
+    An optic that names its own maker is filed under that maker.
+
+    dcim.moduletype matches on (manufacturer, model). A third-party optic in a
+    Cisco switch reports its own vendor in its EEPROM, so filing it under
+    Cisco would put a part Cisco did not make into Cisco's catalog, where it
+    would sit among genuine Cisco ModuleTypes and be indistinguishable from
+    them.
+    """
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "FTRJ8519P1BNL-C3", "serial": "OPT3",
+            "description": "1000BaseSX SFP", "type": "transceiver",
+            "manufacturer": "CISCO-FINISAR", "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "CISCO-FINISAR"
+    assert module.module_type.model == "FTRJ8519P1BNL-C3"
+
+
+def test_part_manufacturer_outranks_the_generic_name_too():
+    """
+    Reading the EEPROM is what demotes the generic name to a last resort.
+
+    A row can arrive with a real vendor while still carrying identified=False
+    from the inventory parse; the vendor is the better answer and wins.
+    """
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "FTRJ8519P1BNL-C3", "serial": "OPT3",
+            "description": "1000BaseSX SFP", "type": "transceiver",
+            "manufacturer": "CISCO-FINISAR", "identified": False, "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "CISCO-FINISAR"
+
+
+def test_blank_part_manufacturer_falls_through():
+    """An empty value is not a vendor; it must not become one."""
+    device = _make_device(vendor="Cisco")
+    entities: list = []
+
+    emit_modules_if_requested(
+        {"modules": _optic_payload({
+            "model": "SFP-10GBase-CX1", "serial": "OPT3",
+            "description": "SFP-10GBase-CX1", "type": "transceiver",
+            "manufacturer": "   ", "identified": False, "sub_bays": [],
+        })},
+        Options(discover_modules="full"), {None: device}, entities,
+    )
+
+    module = next(e.module for e in entities if e.WhichOneof("entity") == "module")
+    assert module.module_type.manufacturer.name == "Unknown"

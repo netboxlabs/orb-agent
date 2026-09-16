@@ -1,3 +1,4 @@
-== [ root ]
-name: port1 ip: 192.168.1.1 255.255.255.0 status: up netbios-forward: disable type: physical netflow-sampler: disable sflow-sampler: disable scan-botnet-connections: disable src-check: enable explicit-web-proxy: disable explicit-ftp-proxy: disable proxy-captive-portal: disable mtu-override: disable wccp: disable drop-overlapped-fragment: disable drop-fragment: disable
-name: mgmt ip: 10.0.0.1 255.255.255.0 status: up netbios-forward: disable type: physical netflow-sampler: disable sflow-sampler: disable scan-botnet-connections: disable src-check: enable explicit-web-proxy: disable explicit-ftp-proxy: disable proxy-captive-portal: disable mtu-override: disable wccp: disable drop-overlapped-fragment: disable drop-fragment: disable
+== [ port1 ]
+name: port1 mode: static ip: 192.168.1.1 255.255.255.0 status: up netbios-forward: disable type: physical ring-rx: 0 ring-tx: 0 netflow-sampler: disable sflow-sampler: disable src-check: enable explicit-web-proxy: disable explicit-ftp-proxy: disable proxy-captive-portal: disable mtu-override: disable wccp: disable drop-overlapped-fragment: disable drop-fragment: disable
+== [ mgmt ]
+name: mgmt mode: static ip: 10.0.0.1 255.255.255.0 status: up netbios-forward: disable type: physical ring-rx: 0 ring-tx: 0 netflow-sampler: disable sflow-sampler: disable src-check: enable explicit-web-proxy: disable explicit-ftp-proxy: disable proxy-captive-portal: disable mtu-override: disable wccp: disable drop-overlapped-fragment: disable drop-fragment: disable

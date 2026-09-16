@@ -24,6 +24,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet"
 	"github.com/netboxlabs/orb-agent/agent/otlpbridge"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockPolicyManagerForFleet implements the PolicyManager interface for fleet testing
@@ -35,8 +36,8 @@ func (m *mockPolicyManagerForFleet) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManagerForFleet) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManagerForFleet) GetPolicyState() ([]policies.PolicyData, error) {
@@ -53,12 +54,12 @@ func (m *mockPolicyManagerForFleet) GetRepo() policies.PolicyRepo {
 	return val.(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManagerForFleet) ApplyBackendPolicies(_ context.Context, name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 
-func (m *mockPolicyManagerForFleet) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+func (m *mockPolicyManagerForFleet) RemoveBackendPolicies(_ string, be backend.Backend, permanently bool) error {
 	args := m.Called(be, permanently)
 	return args.Error(0)
 }
@@ -67,6 +68,8 @@ func (m *mockPolicyManagerForFleet) RemovePolicy(policyID string, policyName str
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManagerForFleet) SetStarter(_ policymgr.BackendStarter) {}
 
 type mockBackendState struct {
 	mock.Mock
@@ -258,6 +261,7 @@ func TestFleetConfigManager_Start_WithJWTTopicGeneration(t *testing.T) {
 						ClientID:           "test_client_id",
 						ClientSecret:       "test_client_secret",
 						OTLPBridgeGRPCPort: &ephemeralPort,
+						OTLPBridgeHTTPPort: &ephemeralPort,
 					},
 				},
 			},
@@ -1128,9 +1132,11 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
 
-	// Pre-occupy a port with a test listener
+	// Pre-occupy a port with a test listener on loopback, where the bridge binds
+	// by default. (A wildcard listener would not conflict on macOS, where
+	// SO_REUSEADDR lets 127.0.0.1:port bind next to :port.)
 	testPort := findAvailablePort(t)
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", testPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", testPort))
 	require.NoError(t, err, "failed to create test listener")
 	defer func() {
 		_ = listener.Close()
@@ -1159,6 +1165,7 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 	defer server.Close()
 
 	// Create config with the pre-occupied port
+	ephemeralHTTPPort := 0
 	cfg := config.Config{
 		OrbAgent: config.OrbAgent{
 			ConfigManager: config.ManagerConfig{
@@ -1169,6 +1176,7 @@ func TestFleetConfigManager_Start_OTLPBridgePortInUse(t *testing.T) {
 						ClientID:           "test_client",
 						ClientSecret:       "test_secret",
 						OTLPBridgeGRPCPort: &testPort,
+						OTLPBridgeHTTPPort: &ephemeralHTTPPort,
 					},
 				},
 			},
@@ -1237,6 +1245,7 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 						ClientID:           "test_client",
 						ClientSecret:       "test_secret",
 						OTLPBridgeGRPCPort: &ephemeralPort,
+						OTLPBridgeHTTPPort: &ephemeralPort,
 					},
 				},
 			},
@@ -1597,6 +1606,29 @@ func TestFleetConfigManager_ResetGoroutine_UsesLatestConnectionDetails(t *testin
 		"reset goroutine should use the refreshed token, not the stale initial token")
 }
 
+// stubManagerResetter is a minimal fleet.Resetter used only to prove identity
+// through FleetConfigManager.SetResetter.
+type stubManagerResetter struct{}
+
+func (*stubManagerResetter) RestartAll(_ context.Context, _ string) error { return nil }
+
+// TestFleetConfigManager_SetResetter_ReachesTheConnection verifies that
+// FleetConfigManager.SetResetter passes its argument through to the
+// underlying connection's SetResetter instead of discarding it.
+func TestFleetConfigManager_SetResetter_ReachesTheConnection(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	stub := &stubManagerResetter{}
+	mgr.SetResetter(stub)
+
+	require.NotNil(t, mockConn.ResetterForTest(), "SetResetter on the manager must reach the connection's SetResetter")
+	assert.Same(t, stub, mockConn.ResetterForTest(),
+		"SetResetter on the manager must reach the connection's SetResetter")
+}
+
 // newResetHandlerManager creates a FleetConfigManager wired with a mock MQTT connection and
 // pre-initialised contexts so that runResetHandler can be invoked directly in tests.
 func newResetHandlerManager(t *testing.T, mockConn *fleet.MockMQTTConnection) *FleetConfigManager {
@@ -1688,4 +1720,150 @@ func TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock(t *testing.T) 
 
 	assert.ErrorIs(t, mgr.connCtx.Err(), context.Canceled,
 		"connCtx should be cancelled after Stop() completes")
+}
+
+func TestFleetOTLPPorts_Defaults(t *testing.T) {
+	var cfg config.Config
+	assert.Equal(t, 4317, fleetOTLPGRPCPort(cfg))
+	assert.Equal(t, 4318, fleetOTLPHTTPPort(cfg))
+
+	grpcPort, httpPort := 4337, 4338
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &grpcPort
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &httpPort
+	assert.Equal(t, 4337, fleetOTLPGRPCPort(cfg))
+	assert.Equal(t, 4338, fleetOTLPHTTPPort(cfg))
+}
+
+func TestStartOTLPBridge_BindHost(t *testing.T) {
+	for name, bindHost := range map[string]string{"default is loopback": "", "explicit loopback with spaces": " 127.0.0.1 "} {
+		bindHost := bindHost
+		t.Run(name, func(t *testing.T) {
+			logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+			mockPMgr := &mockPolicyManagerForFleet{}
+			mockPMgr.On("GetRepo").Return(nil)
+			fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+
+			ephemeral := 0
+			var cfg config.Config
+			cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &ephemeral
+			cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &ephemeral
+			cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = bindHost
+
+			require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+			t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
+
+			for _, addr := range []string{fm.otlpBridge.ListenAddr(), fm.otlpBridge.HTTPListenAddr()} {
+				host, _, err := net.SplitHostPort(addr)
+				require.NoError(t, err)
+				ip := net.ParseIP(host)
+				require.NotNil(t, ip, "listener %s must be bound to an IP", addr)
+				assert.True(t, ip.IsLoopback(), "listener %s must be on loopback", addr)
+				if bindHost != "" {
+					assert.Equal(t, "127.0.0.1", host)
+				}
+				assert.NoError(t, checkBridgeReachable(context.Background(), addr), "backends dial localhost:<port>; it must reach %s", addr)
+			}
+		})
+	}
+}
+
+func TestCheckBridgeReachable_ReportsClosedPort(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := l.Addr().String()
+	require.NoError(t, checkBridgeReachable(context.Background(), addr))
+	require.NoError(t, l.Close())
+	require.Error(t, checkBridgeReachable(context.Background(), addr), "a closed port must be reported")
+	require.Error(t, checkBridgeReachable(context.Background(), "not-an-address"))
+}
+
+func TestFleetOTLPBindHost_Validation(t *testing.T) {
+	for _, ok := range []string{"localhost", "127.0.0.1", "::1", "0.0.0.0", "::", " LocalHost "} {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = ok
+		_, err := fleetOTLPBindHost(cfg)
+		assert.NoError(t, err, "%q must be accepted", ok)
+	}
+	for _, empty := range []string{"", "   "} {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = empty
+		host, err := fleetOTLPBindHost(cfg)
+		require.NoError(t, err)
+		assert.Equal(t, "localhost", host, "unset bind host must default to loopback by name")
+	}
+	for _, bad := range []string{"10.0.0.5", "192.168.1.1", "example.com", "agent.internal", "127.0.0.2", "[::1]"} {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeBindHost = bad
+		_, err := fleetOTLPBindHost(cfg)
+		require.Error(t, err, "%q must be rejected: backends dial localhost", bad)
+		assert.Contains(t, err.Error(), "localhost")
+	}
+}
+
+// A reconnect signal that is already queued when shutdown begins is dropped:
+// the handler must not start a disconnect and reconnect during teardown,
+// whichever of its two ready cases the select picks. Stop's own disconnect
+// follows. Repeated because the select between a cancelled context and a
+// buffered signal is random.
+func TestFleetConfigManager_ResetHandler_DropsASignalOnceShutdownBegan(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		mockConn := &fleet.MockMQTTConnection{}
+		mgr := newResetHandlerManager(t, mockConn)
+		mgr.resetChan <- struct{}{}
+		mgr.monitorCancel()
+
+		done := make(chan struct{})
+		go func() {
+			mgr.runResetHandler(5 * time.Second)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("runResetHandler did not exit after monitorCtx was cancelled")
+		}
+		require.False(t, mockConn.DisconnectCalled(), "iteration %d: a signal received once shutdown began must not disconnect", i)
+		require.False(t, mockConn.ConnectCalled(), "iteration %d: nor reconnect", i)
+	}
+}
+
+// A disconnect the handler is running when shutdown begins is cut short:
+// Stop cancels monitorCtx and waits for the handler, so the disconnect must
+// observe that cancellation instead of running to its own timeout, and
+// Stop's own disconnect takes over.
+func TestFleetConfigManager_ResetHandler_DisconnectIsCutShortByShutdown(t *testing.T) {
+	entered := make(chan struct{})
+	observed := make(chan error, 1)
+	mockConn := &fleet.MockMQTTConnection{OnDisconnect: func(ctx context.Context) {
+		close(entered)
+		<-ctx.Done()
+		observed <- ctx.Err()
+	}}
+	mgr := newResetHandlerManager(t, mockConn)
+
+	done := make(chan struct{})
+	go func() {
+		mgr.runResetHandler(time.Minute)
+		close(done)
+	}()
+	mgr.resetChan <- struct{}{}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("the handler never entered Disconnect")
+	}
+	mgr.monitorCancel()
+
+	select {
+	case err := <-observed:
+		require.ErrorIs(t, err, context.Canceled, "the disconnect's context is cancelled by shutdown, not by its own timeout")
+	case <-time.After(time.Second):
+		t.Fatal("the disconnect did not observe shutdown; Stop would wait for the disconnect timeout")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runResetHandler did not exit after shutdown cut the disconnect short")
+	}
+	assert.False(t, mockConn.ConnectCalled(), "no reconnect after a disconnect that shutdown cut short: the connection would be created during teardown")
 }

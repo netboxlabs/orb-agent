@@ -1,0 +1,388 @@
+# https://mibs.observium.org/mib/WLSX-HA-MIB/
+# https://mibs.observium.org/mib/WLSX-SWITCH-MIB/
+# https://mibs.observium.org/mib/WLSX-SYSTEMEXT-MIB/
+# https://mibs.observium.org/mib/WLSX-USER-MIB/
+# https://mibs.observium.org/mib/WLSX-WLAN-MIB/
+---
+extends:
+  - system-mib.yml
+  - if-mib.yml
+
+provider: kentik-wireless-controller
+
+sysobjectid: 
+  - 1.3.6.1.4.1.14823.1.1.1	  # Aruba 5000
+  - 1.3.6.1.4.1.14823.1.1.2	  # Aruba 2400
+  - 1.3.6.1.4.1.14823.1.1.3	  # Aruba 800
+  - 1.3.6.1.4.1.14823.1.1.4	  # Aruba 6000
+  - 1.3.6.1.4.1.14823.1.1.7	  # Aruba 2400E
+  - 1.3.6.1.4.1.14823.1.1.8	  # Aruba 800E
+  - 1.3.6.1.4.1.14823.1.1.9	  # Aruba 804
+  - 1.3.6.1.4.1.14823.1.1.10	# Aruba 200
+  - 1.3.6.1.4.1.14823.1.1.11	# Aruba 2424
+  - 1.3.6.1.4.1.14823.1.1.12	# Aruba 6000-SC3
+  - 1.3.6.1.4.1.14823.1.1.13	# Aruba 3200
+  - 1.3.6.1.4.1.14823.1.1.14	# Aruba 3200-8
+  - 1.3.6.1.4.1.14823.1.1.15	# Aruba 3400
+  - 1.3.6.1.4.1.14823.1.1.16	# Aruba 3400-32
+  - 1.3.6.1.4.1.14823.1.1.17	# Aruba 3600
+  - 1.3.6.1.4.1.14823.1.1.18	# Aruba 3600-64
+  - 1.3.6.1.4.1.14823.1.1.19	# Aruba 650
+  - 1.3.6.1.4.1.14823.1.1.20	# Aruba 651
+  - 1.3.6.1.4.1.14823.1.1.23	# Aruba 620
+  - 1.3.6.1.4.1.14823.1.1.24	# Aruba s3500-24P
+  - 1.3.6.1.4.1.14823.1.1.25	# Aruba s3500-24T
+  - 1.3.6.1.4.1.14823.1.1.26	# Aruba s3500-48P
+  - 1.3.6.1.4.1.14823.1.1.27	# Aruba s3500-48T
+  - 1.3.6.1.4.1.14823.1.1.28	# Aruba s2500-24P
+  - 1.3.6.1.4.1.14823.1.1.29	# Aruba s2500-24T
+  - 1.3.6.1.4.1.14823.1.1.30	# Aruba s2500-48P
+  - 1.3.6.1.4.1.14823.1.1.31	# Aruba s2500-48T
+  - 1.3.6.1.4.1.14823.1.1.32	# Aruba 7210
+  - 1.3.6.1.4.1.14823.1.1.33	# Aruba 7220
+  - 1.3.6.1.4.1.14823.1.1.34	# Aruba 7240
+  - 1.3.6.1.4.1.14823.1.1.35	# Aruba s3500-24F
+  - 1.3.6.1.4.1.14823.1.1.39  # Aruba 7005
+  - 1.3.6.1.4.1.14823.1.1.40  # Aruba 7010
+  - 1.3.6.1.4.1.14823.1.1.41  # Aruba 7030
+  - 1.3.6.1.4.1.14823.1.1.42  # Aruba 7205
+  - 1.3.6.1.4.1.14823.1.1.47  # Aruba 7240
+  - 1.3.6.1.4.1.14823.1.1.48  # Aruba 7008
+  - 1.3.6.1.4.1.14823.1.1.56  # Aruba 9004
+
+metrics:
+  # The CPU used percent of the switch
+  - MIB: WLSX-SYSTEMEXT-MIB
+    symbol:
+      name: wlsxSysExtCpuUsedPercent
+      OID: 1.3.6.1.4.1.14823.2.2.1.2.1.30.0
+      poll_time_sec: 60
+      tag: CPU
+  # The memory used percent of the switch
+  - MIB: WLSX-SYSTEMEXT-MIB
+    symbol:
+      name: wlsxSysExtMemoryUsedPercent
+      OID: 1.3.6.1.4.1.14823.2.2.1.2.1.31.0
+      poll_time_sec: 60
+      tag: MemoryUtilization
+  # The packet loss count of the switch
+  - MIB: WLSX-SYSTEMEXT-MIB
+    symbol:
+      name: wlsxSysExtPacketLossPercent
+      OID: 1.3.6.1.4.1.14823.2.2.1.2.1.32.0
+      tag: packet_loss
+  # The table of Storage-devices contained by the switch
+  - MIB: WLSX-SWITCH-MIB
+    table:
+      name: wlsxSysXStorageTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10
+    symbols:
+      # The total size of the storage filesystem in MB
+      - name: sysXStorageSize
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.3
+      # The total used storage filesystem in MB
+      - name: sysXStorageUsed
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.4
+    metric_tags:
+      # The type of storage being measured
+      - column:
+          name: sysXStorageType
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.2
+          enum:
+            ram: 1
+            flashMemory: 2
+      # The name of the storage filesystem
+      - column:
+          name: sysXStorageName
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.1.10.1.5
+  # This Table lists all the Access Points Connected to this switch
+  - MIB: WLSX-SWITCH-MIB
+    table:
+      name: wlsxSwitchAccessPointTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3
+    symbols:
+      # Indicates the noise on the channel
+      - name: apChannelNoise
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.13
+      # SNR for the BSSID
+      - name: apSignalToNoiseRatio
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.14
+    metric_tags:
+      # ESSID of the Access Point
+      - column:
+          name: apESSID
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.2
+      # Physical Layer Protocol support of the AP
+      - column:
+          name: apPhyType
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.6
+          enum:
+            dot11a: 1
+            dot11b: 2
+            dot11g: 3
+      # Indicates whether the Access point is an Air Monitor or regular AP
+      - column:
+          name: apType
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.7
+          enum:
+            ap: 1
+            am: 2
+      # The Current Operating frequency channel
+      - column:
+          name: apCurrentChannel
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.8
+      # Indicates whether Load balancing is enabled or not
+      - column:
+          name: apLoadBalancing
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.3.3.1.12
+          enum:
+            true: 1
+            false: 2
+  # This Table lists the statistics of all the Access Points Connected to this switch
+  - MIB: WLSX-SWITCH-MIB
+    table:
+      name: wlsxSwitchAccessPointStatsTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5
+    symbols:
+      # Bandwidth Rate in Kbps of the apChannel
+      - name: apChannelBwRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.2
+      # AP Channel Frame Retry Rate
+      - name: apChannelFrameRetryRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.3
+      # AP Channel Frame Low Speed Rate
+      - name: apChannelFrameLowSpeedRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.4
+      # AP Channel Frame Non Unicast Packet Rate
+      - name: apChannelFrameNonUnicastRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.5
+      # AP Channel Frame Fragmentation Rate
+      - name: apChannelFrameFragmentationRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.6
+      # AP Channel Frame Receive Error Rate
+      - name: apChannelFrameReceiveErrorRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.7
+      # Total Packets Transmitted by the AP on this BSSID
+      - name: apBSSTxPackets
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.8
+      # Total Bytes Transmitted by the AP on this BSSID
+      - name: apBSSTxBytes
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.9
+      # Total Packets Received by the AP on this BSSID
+      - name: apBSSRxPackets
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.10
+      # Total Bytes Received by the AP on this BSSID
+      - name: apBSSRxBytes
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.11
+      # Bandwidth Rate in Kbps of the AP on this BSSID
+      - name: apBSSBwRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.12
+      # Frame Retry Rate on this BSSID
+      - name: apBSSFrameRetryRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.13
+      # Frame Low Speed Rate on this BSSID
+      - name: apBSSFrameLowSpeedRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.14
+      # Frame Non Unicast Packet Rate on this BSSID
+      - name: apBSSFrameNonUnicastRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.15
+      # Frame Fragmentation Rate on this BSSID
+      - name: apBSSFrameFragmentationRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.16
+      # Frame Receive Error Rate on this BSSID
+      - name: apBSSFrameReceiveErrorRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.17
+    metric_tags:
+      # Channel on which the AP is operating
+      - column:
+          name: apStatsChannel
+          OID: 1.3.6.1.4.1.14823.2.2.1.1.3.5.1.1
+  #  Number of 802.1x users
+  - MIB: WLSX-USER-MIB
+    symbol:
+      name: wlsxNumOfUsers8021x
+      OID: 1.3.6.1.4.1.14823.2.2.1.4.1.4.1.0
+  # Number of VPN users
+  - MIB: WLSX-USER-MIB
+    symbol:
+      name: wlsxNumOfUsersVPN
+      OID: 1.3.6.1.4.1.14823.2.2.1.4.1.4.2.0
+  # Number of Captive Portal users
+  - MIB: WLSX-USER-MIB
+    symbol:
+      name: wlsxNumOfUsersCP
+      OID: 1.3.6.1.4.1.14823.2.2.1.4.1.4.3.0
+  # Number of MAC users
+  - MIB: WLSX-USER-MIB
+    symbol:
+      name: wlsxNumOfUsersMAC
+      OID: 1.3.6.1.4.1.14823.2.2.1.4.1.4.4.0
+  # Number of stateful 802.1x users
+  - MIB: WLSX-USER-MIB
+    symbol:
+      name: wlsxNumOfUsersStateful8021x
+      OID: 1.3.6.1.4.1.14823.2.2.1.4.1.4.5.0
+  # The number of active APs
+  - MIB: WLSX-HA-MIB
+    symbol:
+      name: haActiveAPs
+      OID: 1.3.6.1.4.1.14823.2.2.1.20.1.2.1.1.0
+  # The number of standby APs
+  - MIB: WLSX-HA-MIB
+    symbol:
+      name: haStandbyAPs
+      OID: 1.3.6.1.4.1.14823.2.2.1.20.1.2.1.2.0
+  # The total number of APs
+  - MIB: WLSX-HA-MIB
+    symbol:
+      name: haTotalAPs
+      OID: 1.3.6.1.4.1.14823.2.2.1.20.1.2.1.3.0
+  # This table lists the total number of High Availability active/standby tunnels and AP heart beat tunnels on the Aruba controller.
+  - MIB: WLSX-HA-MIB
+    table:
+      name: wlsxHighAvalabilityTunnelTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.20.1.5
+    symbols:
+      # The number of active per VAP GRE tunnels
+      - name: haActiveVapTunnels
+        OID: 1.3.6.1.4.1.14823.2.2.1.20.1.5.1.1
+      # The number of standby per VAP GRE tunnels
+      - name: haStandbyVapTunnels
+        OID: 1.3.6.1.4.1.14823.2.2.1.20.1.5.1.2
+      # The total number of per VAP GRE tunnels
+      - name: haTotalVapTunnels
+        OID: 1.3.6.1.4.1.14823.2.2.1.20.1.5.1.3
+      # The number of AP hbt GRE tunnels
+      - name: haAPHbtTunnels
+        OID: 1.3.6.1.4.1.14823.2.2.1.20.1.5.1.4
+  # This Table lists all the wireless stations associated with the access points connected to this controller
+  - MIB: WLSX-WLAN-MIB
+    table:
+      name: wlsxWlanStationTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1
+    symbols:
+      # Transmit rate with which the Station is associated with this system
+      - name: wlanStaTransmitRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.10
+      # Signal to Noise ratio for the station
+      - name: wlanStaRSSI
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.14
+      # Time since the station associated to the current BSSID
+      - name: wlanStaUpTime
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.15
+      # Transmit rate code with which the Station is associated with this system, unit is mbps
+      - name: wlanStaTransmitRateCode
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.17
+    metric_tags:
+      # Type of the Station
+      - column:
+          name: wlanStaPhyType
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.3
+          enum:
+            dot11a: 1
+            dot11b: 2
+            dot11g: 3
+            dot11ag: 4
+            wired: 5
+      # ESSID of the Access point
+      - column:
+          name: wlanStaAccessPointESSID
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.12
+      # Channel on which the station is associated
+      - column:
+          name: wlanStaChannel
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.6
+      # VLAN in which the station is present
+      - column:
+          name: wlanStaVlanId
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.7
+      # Indicates whether the station is authenticated
+      - column:
+          name: wlanStaIsAuthenticated
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.4
+          enum:
+            true: 1
+            false: 2
+      # Indicates whether the station is associated
+      - column:
+          name: wlanStaIsAssociated
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.5
+          enum:
+            true: 1
+            false: 2
+      # The HT status of the station
+      - column:
+          name: wlanStaHTMode
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.2.2.1.1.16
+          enum:
+            none: 1
+            ht20: 2
+            ht40: 3
+            vht20: 4
+            vht40: 5
+            vht80: 6
+            vht160: 7
+            vht80plus80: 8
+  # This Table lists statistics of all the wireless stations associated with the access points connected to this controller
+  - MIB: WLSX-WLAN-MIB
+    table:
+      name: wlsxWlanStationStatsTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.5.3.2.1
+    symbols:
+      # The number of bytes transmitted by this station, 64-bit value
+      - name: wlanStaTxBytes64
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.3.2.1.1.25
+      # The number of bytes received by this station, 64-bit value
+      - name: wlanStaRxBytes64
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.3.2.1.1.26
+    metric_tags:
+      # The channel the station is currently using
+      - column:
+          name: wlanStaChannelNum
+          OID: 1.3.6.1.4.1.14823.2.2.1.5.3.2.1.1.1
+  # This Table lists statistics of the ESSID controlled by this controller
+  - MIB: WLSX-WLAN-MIB
+    table:
+      name: wlsxWlanESSIDStatsTable
+      OID: 1.3.6.1.4.1.14823.2.2.1.5.3.3.1
+    symbols:
+      # The data rate received from the ESSID in sampling interval, unit is kbyte/s
+      - name: wlanESSIDRxRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.3.3.1.1.8
+      # The data rate transmitted from the ESSID in sampling interval, unit is kbyte/s
+      - name: wlanESSIDTxRate
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.3.3.1.1.9
+      # The total number of bytes on the ESSID uplink channel of wireless side
+      - name: wlanESSIDWiredRxBytes
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.3.3.1.1.11
+      # The total number of bytes on the ESSID downlink channel of wireless side
+      - name: wlanESSIDWiredTxBytes
+        OID: 1.3.6.1.4.1.14823.2.2.1.5.3.3.1.1.12
+
+metric_tags:
+  # Hardware version of the switch
+  - column:
+      name: wlsxSysExtHwVersion
+      OID: 1.3.6.1.4.1.14823.2.2.1.2.1.27.0
+  # Software version of the switch
+  - column:
+      name: wlsxSysExtSwVersion
+      OID: 1.3.6.1.4.1.14823.2.2.1.2.1.28.0
+  # Model Name of the switch
+  - column:
+      name: wlsxModelName
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.2.0
+  # Role of this switch in the Switch Domain
+  - column:
+      name: wlsxSwitchRole
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.4.0
+      enum:
+        master: 1
+        local: 2
+        standbymaster: 3
+        branch: 4
+        md: 5
+  # The license serial number of the switch
+  - column:
+      name: wlsxSwitchLicenseSerialNumber
+      OID: 1.3.6.1.4.1.14823.2.2.1.1.1.12.0

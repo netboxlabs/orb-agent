@@ -45,7 +45,7 @@ type MockHost struct {
 	mock.Mock
 }
 
-func (m *MockHost) Walk(objectID string, identifierSize int) (map[string]snmp.PDU, error) {
+func (m *MockHost) Walk(_ context.Context, objectID string, identifierSize int) (map[string]snmp.PDU, error) {
 	args := m.Called(objectID, identifierSize)
 	return args.Get(0).(map[string]snmp.PDU), args.Error(1)
 }

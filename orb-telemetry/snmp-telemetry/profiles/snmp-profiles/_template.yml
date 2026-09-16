@@ -1,0 +1,98 @@
+# Top level comments, it is recommended to use this section to provide links to public websites outlining the vendor MIB(s) in this profile: 
+# e.g.: http://www.circitor.fr/Mibs/Html/P/PowerNet-MIB.php
+---
+
+# The 'extends' section is used to inherit OIDs from other profiles 
+# This section supports a list of profile file names
+extends:
+  - system-mib.yml
+
+# The 'provider' section annotates the value of the 'provider' key sent to New Relic for entity synthesis
+provider: kentik-default
+
+# The 'sysobjectid' section accepts a list of sysOIDs to promote automatic matching of devices to profiles during SNMP discovery
+# This field will accept wildcard [*] entries as well
+sysobjectid:
+  - 1.2.3.4.5.6.7.8.9                         # Matches the exact sysOID
+  - 1.2.3.4.5.6.7.8.*                         # Matches all sysOIDs under the '.8' root
+  
+# OPTIONAL: For cases where a vendor does not differentiate models by sysOIDs you can add a match rule to redirect to a
+# different profile by using the below example syntax
+# If the sysDesc matches these regexes, use the corresponding profile.
+# Regex is run on _lower case_ version of the sysDesc string.
+matches:
+  "^pfsense": pf_sense.yml
+  "barracuda email security gateway": barracuda-email-gateway.yml
+  "barracuda web application firewall": barracuda-waf.yml
+  
+
+# The 'metrics' section accepts a list of scalar and tabular OIDs for collection
+metrics:
+  # Scalar OIDs can be directly polled and are individually added to the profile
+  - MIB: CISCO-SYSTEM-EXT-MIB                 # The name of the target MIB
+    symbol:
+      name: cseSysCPUUtilization              # The target scalar OID name
+      OID: 1.3.6.1.4.1.9.9.305.1.1.1.0        # The target scalar OID value, this needs to end in an index, usually ".0"
+      poll_time_sec: 60                       # You can force a faster polling interval for specific OID's, especially for Golden Metrics
+      tag: CPU                                # OPTIONAL: Used to rename the metric key sent to New Relic
+      allow_duplicate: true                   # OPTIONAL: Used to allow multiple metrics with the same tag in a single profile; ktranslate will only ship the one that responds
+      # OPTIONAL: You can also add an 'enum' function here, see the tabular OID section below for an example
+
+  # Tabular OIDs work under a common 'MIB' element to combine multiple OIDs together
+  # They are matched based on the value of a provided 'Index', based on SNMP standards.  The index is decorated to the data automatically for all tabular OIDs.
+  - MIB: CISCO-ENTITY-SENSOR-MIB             # The name of the target MIB
+    # The 'table' section is where you announce the target MIB table
+    table:
+      name: entSensorThresholdTable          # The name of the target table
+      OID: 1.3.6.1.4.1.9.9.91.1.2.1          # The root OID of the target table
+    # The 'symbols' section accepts a list of OIDs to target within the table
+    symbols:
+      - name: entSensorThresholdSeverity     # The target tabular OID name
+        OID: 1.3.6.1.4.1.9.9.91.1.2.1.1.2    # The target tabular OID value
+        enum:                                # OPTIONAL: This section creates string:int maps that decorate the metric string attributes
+          other: 1                           # ex: metric value == 1; string decoration == 'other'
+          minor: 10
+          major: 20
+          critical: 30
+      - name: entSensorThresholdValue               # The target tabular OID name
+        OID: 1.3.6.1.4.1.9.9.91.1.2.1.1.4           # The target tabular OID value
+        condition: entSensorThresholdSeverity=30    # OPTIONAL: you can filter the polled entries in a table by providing a condition to evaluate against in the same table
+      - name: entSensorThresholdEvaluation          # The target tabular OID name
+        OID: 1.3.6.1.4.1.9.9.91.1.2.1.1.5           # The target tabular OID value
+        enum:
+          true: 1
+          false: 2
+    # Using a 'metric_tags' section here provides a list of OIDs to target that will be used to decorate corresponding rows of tabular metrics
+    # This is primarily used for things like row names and descriptions and other rarely changed string data.
+    # IMPORTANT: Tag OID are only polled every 3 hours, they should not be used for values where it is important to stay current
+    metric_tags:
+      - tag: sensor_threshold_relation       # OPTIONAL: Used to rename the metric key sent to New Relic
+        column:
+          OID: 1.3.6.1.4.1.9.9.91.1.2.1.1.3
+          name: entSensorThresholdRelation
+          enum:
+            lessThan: 1
+            lessOrEqual: 2
+            greaterThan: 3
+            greaterOrEqual: 4
+            equalTo: 5
+            notEqualTo: 6
+
+# OPTIONAL: You can also create an additional 'metric_tags' section here to provide OID's to decorate all the scalar OIDs in this profile.
+# Note that tags applied at this level do no get decorated to data inside of table stanzas.
+metric_tags:
+
+# OPTIONAL: There is also a supported 'conversion' function for edge cases where an OID returns a non-string/non-numeric value
+# ex: conversion: powerset_status | hwaddr | hextoint:<current>:<desired> | hextoip | regexp | to_one
+    # powerset_status == used for enumeration of the 'upsBasicStateOutputState' OID in the POWERNET-MIB
+    # hwaddr == used to convert physical MAC addresses into human-readable form
+    # hextoint == used to convert hexadecimal into integer format
+    #   <current> == LittleEndian | BigEndian
+    #   <desired> == uint16 | uint32 | uint64
+    # hextoip == converts a hex string into a 4 octet ip addresses string
+    # regexp == places a regex match on the OID output to capture substrings; needs to be wrapped in quotes and have backslashes escaped
+    #    Example OID result: "    5 Secs ( 96.3762%)   60 Secs ( 62.8549%)  300 Secs ( 25.2877%)"
+    #    Example Conversion:
+    #      conversion: "regexp:60 Secs.*?(\\d+)"
+    #    Results: 62
+    # to_one == used to create a gauge metric with the value of '1' in order to poll non-numeric metrics outside of the metric_tags

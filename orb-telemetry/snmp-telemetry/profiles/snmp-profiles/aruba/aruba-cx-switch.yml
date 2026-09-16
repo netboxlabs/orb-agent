@@ -1,0 +1,155 @@
+# https://community.hpe.com/t5/Aruba-ProVision-based/Monitor-Aruba-JL679A-6100-CPU-MEM-etc-via-SNMP/m-p/7147859/highlight/true#M16588
+# This profile covers the CX-series devices from Aruba that do not support the standard CPU and Memory OIDs from the other switch models
+# http://www.circitor.fr/Mibs/Html/A/ARUBAWIRED-CHASSIS-MIB.php
+---
+
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-switch
+
+sysobjectid:
+  - 1.3.6.1.4.1.47196.4.1.1.1.*       # Aruba CX Switches
+  - 1.3.6.1.4.1.47196.4.1.1.1.1       # JL375A/CX 8400
+  - 1.3.6.1.4.1.47196.4.1.1.1.2       # JL479A/CX 8320
+  - 1.3.6.1.4.1.47196.4.1.1.1.3       # JL579A/CX 8320
+  - 1.3.6.1.4.1.47196.4.1.1.1.5       # JL581A/CX 8320
+  - 1.3.6.1.4.1.47196.4.1.1.1.50      # JL635A/CX 8325
+  - 1.3.6.1.4.1.47196.4.1.1.1.70      # JL636A/CX 6300
+  - 1.3.6.1.4.1.47196.4.1.1.1.101     # JL659A/CX 6300M
+  - 1.3.6.1.4.1.47196.4.1.1.1.103     # JL661A/CX 6300M
+  - 1.3.6.1.4.1.47196.4.1.1.1.104     # JL662A/CX 6300M
+  - 1.3.6.1.4.1.47196.4.1.1.1.150     # R0X24A/CX 6405
+  - 1.3.6.1.4.1.47196.4.1.1.1.304     # JL728A/CX 6200F
+  - 1.3.6.1.4.1.47196.4.1.1.1.405     # JL722A/CX 8360
+
+metrics:
+  # Memory Utilization - polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageSizeRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.5.1
+      poll_time_sec: 60
+      tag: MemoryTotal
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsedRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      poll_time_sec: 60
+      tag: MemoryUsed
+  # CPU Utilization - polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrProcessorLoadCombined
+      OID: 1.3.6.1.2.1.25.3.3.1.2.196608
+      poll_time_sec: 60
+      tag: CPU
+
+  - MIB: ARUBAWIRED-TEMPSENSOR-MIB
+    # This table contains one row per switch temperature sensor entity.
+    table:
+      OID: 1.3.6.1.4.1.47196.4.1.1.3.11.3.1
+      name: arubaWiredTempSensorTable
+    symbols:
+      # Current temperature value read from the temperature sensor.
+      - name: arubaWiredTempSensorTemperature
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.3.1.1.7
+      # Current status for the temperature sensor.
+      - name: arubaWiredTempSensorState
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.3.1.1.6
+        conversion: to_one
+    metric_tags:
+      # Identification of the temperature sensor for the system.
+      - column:
+          name: arubaWiredTempSensorName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.3.1.1.5
+
+  - MIB: ARUBAWIRED-POWERSUPPLY-MIB
+    # This table contains one row per switch power supply entity.
+    table:
+      OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1
+      name: arubaWiredPowerSupplyTable
+    symbols:
+      # Current status for the power supply.
+      - name: arubaWiredPSUState
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.4
+        conversion: to_one
+      # Total instantaneous power supplied by the power supply in Watts.
+      - name: arubaWiredPSUInstantaneousPower
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.7
+      # Number of failures the power supply has experienced since the most recent insertion of the power supply and boot of the system. The number of failures for a power supply will be cleared if the power supply is removed from the system or if the system is rebooted. For non removable power supplies, the number of failures will not clear until the system reboots. Failures are any events where power delivery from the power supply did not occur when expected. This includes unsupported power supply types since their power delivery is not considered valid even though the power supply itself may not have an internal failure. Some examples of failures are over current, invalid input power, and unsupported power supply type.
+      - name: arubaWiredPSUNumberFailures
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.9
+    metric_tags:
+      # Identification of the power supply for the system.
+      - column:
+          name: arubaWiredPSUName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.3
+      # Power supply product name identification. This field is used to determine if the power supply is supported.
+      - column:
+          name: arubaWiredPSUProductName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.5
+      # Power supply serial number to uniquely identify the power supply.
+      - column:
+          name: arubaWiredPSUSerialNumber
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.6
+      # Power Supply airflow direction.
+      - column:
+          name: arubaWiredPSUAirflowDirection
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.2.1.1.10
+
+  - MIB: ARUBAWIRED-FANTRAY-MIB
+    # This table contains one row per switch fan tray entity.
+    table:
+      OID: 1.3.6.1.4.1.47196.4.1.1.3.11.4.1
+      name: arubaWiredFanTrayTable
+    symbols:
+      # Current status for the fan tray.
+      - name: arubaWiredFanTrayState
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.4.1.1.4
+        conversion: to_one
+    metric_tags:
+      # Identification of the fan tray for the system.
+      - column:
+          name: arubaWiredFanTrayName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.4.1.1.3
+      # Fan tray product name identification.
+      - column:
+          name: arubaWiredFanTrayProductName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.4.1.1.5
+      # Fan tray serial number to uniquely identify the fan tray.
+      - column:
+          name: arubaWiredFanTraySerialNumber
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.4.1.1.6
+
+  - MIB: ARUBAWIRED-FAN-MIB
+    # This table contains one row per switch fan entity.
+    table:
+      OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1
+      name: arubaWiredFanTable
+    symbols:
+      # Current status for the fan.
+      - name: arubaWiredFanState
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1.1.5
+        conversion: to_one
+      # Current RPM read for the fan.
+      - name: arubaWiredFanRPM
+        OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1.1.8
+    metric_tags:
+      # Identification of the fan for the system.
+      - column:
+          name: arubaWiredFanName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1.1.4
+      # Fan product name identification.
+      - column:
+          name: arubaWiredFanProductName
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1.1.6
+      # Fan serial number to uniquely identify the fan.
+      - column:
+          name: arubaWiredFanSerialNumber
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1.1.7
+      # Air flow direction for the fan.
+      - column:
+          name: arubaWiredFanAirflowDirection
+          OID: 1.3.6.1.4.1.47196.4.1.1.3.11.5.1.1.9

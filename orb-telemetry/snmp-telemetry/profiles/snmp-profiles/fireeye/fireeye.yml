@@ -1,0 +1,191 @@
+# https://community.fireeye.com/s/article/000002198
+---
+extends: 
+  - system-mib.yml
+  - if-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.25597.1    # FireEye appliances seem to all use this SysOID
+
+provider: kentik-web-gateway
+
+metrics:
+  # CPU Utilization
+  - MIB: HOST-RESOURCES-MIB
+    table:
+      OID: 1.3.6.1.2.1.25.3.3
+      name: hrProcessorTable
+    symbols:
+      - OID: 1.3.6.1.2.1.25.3.3.1.2
+        name: hrProcessorLoad
+        poll_time_sec: 60
+        tag: CPU
+    metric_tags:
+      - tag: processor_id
+        column:
+          OID: 1.3.6.1.2.1.25.3.3.1.1
+          name: hrProcessorFrwID
+  # Memory Total
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      name: hrStorageUsed
+      poll_time_sec: 60
+      tag: MemoryTotal
+  # Memory Buffers
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      OID: 1.3.6.1.2.1.25.2.3.1.6.6
+      name: hrStorageUsed
+      poll_time_sec: 60
+      tag: MemoryBuffer
+  # Memory Cache
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      OID: 1.3.6.1.2.1.25.2.3.1.6.7
+      name: hrStorageUsed
+      poll_time_sec: 60
+      tag: MemoryCache
+  # Whether the product license is active
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.11.5.1.10.0
+      name: feProductLicenseActive
+      enum:
+        true: 1
+        false: 2
+  # Overall system status
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.11.1.1.1.0
+      name: feSystemStatus
+  # System temperature health
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.11.1.1.6.0
+      name: feTemperatureIsHealthy
+      enum:
+       true: 1
+       false: 2
+  # RAID health
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.11.2.1.2.0
+      name: feRaidIsHealthy
+      enum:
+       true: 1
+       false: 2
+  # The physical disk table
+  - MIB: FE-FIREEYE-MIB
+    table:
+      OID: 1.3.6.1.4.1.25597.11.2.1.3
+      name: fePhysicalDiskTable
+    symbols:
+      # Whether a physical disk is healthy
+      - OID: 1.3.6.1.4.1.25597.11.2.1.3.1.4
+        name: fePhysicalDiskIsHealthy
+        enum:
+          true: 1
+          false: 2
+    metric_tags:
+      # Physical disk name
+      - column:
+          OID: 1.3.6.1.4.1.25597.11.2.1.3.1.2
+          name: fePhysicalDiskName
+  # Power supply health
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.11.3.1.2.0
+      name: fePowerSupplyOverallIsHealthy
+      enum:
+       true: 1
+       false: 2
+  # Fan health
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.11.4.1.2.0
+      name: feFanOverallIsHealthy
+      enum:
+       true: 1
+       false: 2
+  # Total Email count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.1.0
+      name: feTotalEmailCount
+  # Infected Email count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.4.0
+      name: feInfectedEmailCount
+  # Analyzed Email count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.7.0
+      name: feAnalyzedEmailCount
+  # Total URL count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.10.0
+      name: feTotalUrlCount
+  # Infected URL count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.13.0
+      name: feInfectedUrlCount
+  # Analyzed URL count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.16.0
+      name: feAnalyzedUrlCount
+  # Total attachment count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.19.0
+      name: feTotalAttachmentCount
+  # Infected attachment count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.22.0
+      name: feInfectedAttachmentCount
+  # Analyzed attachment count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.25.0
+      name: feAnalyzedAttachmentCount
+  # Percent of quarantine capacity used
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.40.0
+      name: feeQuarantineUsage
+  # Deferred Email count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.44.0
+      name: feDeferredEmailCount
+  # Email hold queue count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.13.1.45.0
+      name: feHoldQueueEmailCount
+  # Total analyzed object count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.15.1.1.0
+      name: feTotalObjectAnalyzedCount
+  # Total malicious object count
+  - MIB: FE-FIREEYE-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.25597.15.1.4.0
+      name: feTotalMaliciousObjectCount
+ 
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.25597.11.1.1.2.0
+      name: feHardwareModel
+    tag: hardware_model
+  - column:
+      OID: 1.3.6.1.4.1.25597.11.1.1.3.0
+      name: feSerialNumber
+    tag: serial_number
+    

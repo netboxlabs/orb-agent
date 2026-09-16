@@ -1,0 +1,24 @@
+{
+  "members": {
+    "null": {
+      "bays": [
+        {
+          "name": "GigabitEthernet2/0/1",
+          "position": "GigabitEthernet2/0/1",
+          "module": {
+            "model": "GLC-LH-SMD",
+            "serial": "OPT4444401",
+            "description": "1000BaseLX SFP",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "GigabitEthernet2/0/1": [
+          "GigabitEthernet2/0/1"
+        ]
+      }
+    }
+  }
+}

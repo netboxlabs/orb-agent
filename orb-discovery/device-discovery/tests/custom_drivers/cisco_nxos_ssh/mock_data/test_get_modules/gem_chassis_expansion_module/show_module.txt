@@ -1,0 +1,9 @@
+Mod Ports             Module-Type                      Model           Status
+--- ----- ------------------------------------- ---------------------- ---------
+1   48    48x10G fixed module                   N9K-C9396PX            active *
+2   12    12x40G uplink module                  N9K-M12PQ              ok
+
+Mod  MAC-Address(es)                         Serial-Num
+---  --------------------------------------  ----------
+1    00:11:22:33:00:01 to 00:11:22:33:00:0f  FOC80102FIX
+2    00:11:22:33:00:10 to 00:11:22:33:00:1f  FOC80102UPL

@@ -1,0 +1,32 @@
+# http://www.circitor.fr/Mibs/Html/A/AcBoard.php
+---
+extends:
+  - if-mib.yml
+  - system-mib.yml
+
+provider: kentik-audiocodes-gateway
+
+sysobjectid:
+  - 1.3.6.1.4.1.5003.8.1.1.71    # Mediant 1000 E-SBC
+
+metrics:
+  # Memory Utilization - polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageSizeRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.5.1
+      poll_time_sec: 60
+      tag: MemoryTotal
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrStorageUsedRAM
+      OID: 1.3.6.1.2.1.25.2.3.1.6.1
+      poll_time_sec: 60
+      tag: MemoryUsed
+  # CPU Utilization - polled at 60s to support anomaly detection
+  - MIB: HOST-RESOURCES-MIB
+    symbol:
+      name: hrProcessorLoadCombined
+      OID: 1.3.6.1.2.1.25.3.3.1.2.1
+      poll_time_sec: 60
+      tag: CPU

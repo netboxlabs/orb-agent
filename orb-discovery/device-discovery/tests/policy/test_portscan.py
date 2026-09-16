@@ -146,3 +146,114 @@ def test_find_reachable_hosts_logs_exceptions(monkeypatch):
     assert result["bad-host"] is False
     assert result["good-host"] is True
     mock_logger.warning.assert_called_once()
+
+
+def test_expand_hostnames_rejects_cidr_over_the_cap(monkeypatch):
+    """A prefix wider than the cap expands to nothing instead of allocating it."""
+    mock_logger = MagicMock()
+    monkeypatch.setattr(portscan, "logger", mock_logger)
+
+    # /15 is 131072 addresses, twice the cap. Deliberately small enough that
+    # the unguarded version fails fast rather than hanging the suite.
+    hosts, parsed = portscan.expand_hostnames("10.0.0.0/15")
+
+    assert hosts == []
+    assert parsed is True
+    mock_logger.error.assert_called_once()
+    message = mock_logger.error.call_args[0][0] % mock_logger.error.call_args[0][1:]
+    assert "10.0.0.0/15" in message
+    assert str(portscan.MAX_EXPANDED_HOSTS) in message
+
+
+def test_expand_hostnames_rejects_range_over_the_cap(monkeypatch):
+    """The range branch is bounded too, not just the CIDR branch."""
+    mock_logger = MagicMock()
+    monkeypatch.setattr(portscan, "logger", mock_logger)
+
+    hosts, parsed = portscan.expand_hostnames("10.0.0.0-10.2.0.0")
+
+    assert hosts == []
+    assert parsed is True
+    mock_logger.error.assert_called_once()
+
+
+def test_expand_hostnames_allows_a_cidr_exactly_at_the_cap():
+    """The cap is inclusive, so the largest allowed prefix still expands."""
+    hosts, parsed = portscan.expand_hostnames("10.0.0.0/16")
+
+    assert parsed is True
+    assert len(hosts) == portscan.MAX_EXPANDED_HOSTS - 2  # network + broadcast
+
+
+def test_expand_hostnames_rejects_a_standard_ipv6_subnet(monkeypatch):
+    """
+    The reported case: a /64 returns at once instead of allocating 2**64 strings.
+
+    Before the cap this call never returned. It is the first thing an operator
+    would type, since /64 is the standard IPv6 subnet size, and it took the
+    whole process down rather than failing the one scope.
+    """
+    mock_logger = MagicMock()
+    monkeypatch.setattr(portscan, "logger", mock_logger)
+
+    hosts, parsed = portscan.expand_hostnames("2001:db8::/64")
+
+    assert hosts == []
+    assert parsed is True
+    mock_logger.error.assert_called_once()
+
+
+def test_expand_hostnames_keeps_small_ipv6_prefixes():
+    """Bounded IPv6 prefixes are still legitimate targets and must survive."""
+    hosts, parsed = portscan.expand_hostnames("2001:db8::/120")
+
+    assert parsed is True
+    assert len(hosts) == 255
+    assert hosts[0] == "2001:db8::1"
+
+
+def test_count_hostnames_agrees_with_expand_for_every_shape():
+    """
+    Counting and expanding must never disagree about what a target means.
+
+    The policy budget is charged from count_hostnames against notation the
+    expander has not run yet, so a shape the two read differently would let a
+    policy pay one price and allocate another. Cross-checked here rather than
+    asserted per-shape, so a new branch in one has to be added to the other.
+    """
+    shapes = [
+        "10.0.0.0/24",
+        "10.0.0.0/22",
+        "10.0.0.4/31",
+        "10.0.0.5/32",
+        "fd00::/126",
+        "2001:db8::/120",
+        "10.0.0.0-255",
+        "192.168.1.10-20",
+        "10.0.0.3-10.0.0.1",
+        "192.168.3.22/28-192.168.4.22/28",
+        "router-alpha-beta",
+        "plain-hostname.example.com",
+        "10.0.0.1",
+    ]
+
+    for shape in shapes:
+        expanded, _ = portscan.expand_hostnames(shape)
+        assert portscan.count_hostnames(shape) == len(expanded), (
+            f"{shape}: count and expand disagree"
+        )
+
+
+def test_count_hostnames_does_not_materialize_an_oversized_target():
+    """
+    A target the expander refuses is still counted, and counted cheaply.
+
+    The whole point of counting is to price a policy before paying for it, so
+    the count has to be available for exactly the targets expansion would
+    decline. A /64 has 2**64 addresses and must come back as that number
+    rather than as the empty list the expander returns.
+    """
+    # Host counts, matching what expansion would have returned: IPv6 drops the
+    # network address, IPv4 drops network and broadcast.
+    assert portscan.count_hostnames("2001:db8::/64") == 2**64 - 1
+    assert portscan.count_hostnames("0.0.0.0/0") == 2**32 - 2

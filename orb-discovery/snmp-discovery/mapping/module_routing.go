@@ -158,7 +158,46 @@ func buildIfaceModuleMap(
 			out[ifIdx] = mod
 		}
 	}
+	// Second pass: a port that is not itself a module, and holds no
+	// transceiver the alias table knows about, still belongs to whatever
+	// module physically contains it. Fixed-port platforms put every access
+	// port under a line module, so without this every one of them is
+	// emitted with no module reference at all.
+	//
+	// Runs after the transceiver pass and never overwrites it: a
+	// transceiver is the more specific FRU for the port it occupies.
+	for physIdx, ifIdx := range aliasMap {
+		if _, taken := out[ifIdx]; taken {
+			continue
+		}
+		if mod, ok := nearestContainingModule(inv, emittedModules, physIdx); ok {
+			out[ifIdx] = mod
+		}
+	}
 	return out
+}
+
+// nearestContainingModule climbs entPhysicalContainedIn from physIdx and
+// returns the first emitted module found, starting with physIdx itself.
+// The walk is bounded at 32 hops and stops at a root, a missing parent or a
+// self-referencing row, so a malformed containment chain cannot spin.
+func nearestContainingModule(
+	inv ModuleInventory,
+	emittedModules map[string]*diode.Module,
+	physIdx string,
+) (*diode.Module, bool) {
+	ent := physIdx
+	for hop := 0; hop < 32; hop++ {
+		if mod, ok := emittedModules[ent]; ok {
+			return mod, true
+		}
+		parent, has := inv.ContainedIn[ent]
+		if !has || parent == "" || parent == "0" || parent == ent {
+			return nil, false
+		}
+		ent = parent
+	}
+	return nil, false
 }
 
 // aliasCandidate carries the parsed (logical index, ifIndex) for one

@@ -1,0 +1,72 @@
+{
+  "members": {
+    "1": {
+      "bays": [
+        {
+          "name": "TenGigabitEthernet1/0/1",
+          "position": "TenGigabitEthernet1/0/1",
+          "module": {
+            "model": "SFP-10G-LR",
+            "serial": "OPT0000001",
+            "description": "SFP-10GBase-LR",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "TenGigabitEthernet1/0/3",
+          "position": "TenGigabitEthernet1/0/3",
+          "module": {
+            "model": "GLC-LH-SMD",
+            "serial": "OPT0000003",
+            "description": "1000BaseLX SFP",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "TenGigabitEthernet1/0/1": [
+          "TenGigabitEthernet1/0/1"
+        ],
+        "TenGigabitEthernet1/0/3": [
+          "TenGigabitEthernet1/0/3"
+        ]
+      }
+    },
+    "2": {
+      "bays": [
+        {
+          "name": "TenGigabitEthernet2/0/1",
+          "position": "TenGigabitEthernet2/0/1",
+          "module": {
+            "model": "SFP-10G-LR",
+            "serial": "OPT0000021",
+            "description": "SFP-10GBase-LR",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        },
+        {
+          "name": "TenGigabitEthernet2/0/14",
+          "position": "TenGigabitEthernet2/0/14",
+          "module": {
+            "model": "SFP-10G-SR",
+            "serial": "OPT0000214",
+            "description": "SFP-10GBase-SR",
+            "type": "transceiver",
+            "sub_bays": []
+          }
+        }
+      ],
+      "interfaces_by_bay": {
+        "TenGigabitEthernet2/0/1": [
+          "TenGigabitEthernet2/0/1"
+        ],
+        "TenGigabitEthernet2/0/14": [
+          "TenGigabitEthernet2/0/14"
+        ]
+      }
+    }
+  }
+}

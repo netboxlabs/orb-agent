@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -19,6 +21,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
 // mockPolicyManager implements the PolicyManager interface for testing
@@ -30,8 +33,8 @@ func (m *mockPolicyManager) ManagePolicy(payload config.PolicyPayload) {
 	m.Called(payload)
 }
 
-func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, be backend.Backend) {
-	m.Called(policyID, datasetID, be)
+func (m *mockPolicyManager) RemovePolicyDataset(policyID string, datasetID string, beName string, be backend.Backend) {
+	m.Called(policyID, datasetID, beName, be)
 }
 
 func (m *mockPolicyManager) GetPolicyState() ([]policies.PolicyData, error) {
@@ -44,12 +47,12 @@ func (m *mockPolicyManager) GetRepo() policies.PolicyRepo {
 	return args.Get(0).(policies.PolicyRepo)
 }
 
-func (m *mockPolicyManager) ApplyBackendPolicies(be backend.Backend) error {
-	args := m.Called(be)
+func (m *mockPolicyManager) ApplyBackendPolicies(_ context.Context, name string, be backend.Backend) error {
+	args := m.Called(name, be)
 	return args.Error(0)
 }
 
-func (m *mockPolicyManager) RemoveBackendPolicies(be backend.Backend, permanently bool) error {
+func (m *mockPolicyManager) RemoveBackendPolicies(_ string, be backend.Backend, permanently bool) error {
 	args := m.Called(be, permanently)
 	return args.Error(0)
 }
@@ -58,6 +61,8 @@ func (m *mockPolicyManager) RemovePolicy(policyID string, policyName string, beN
 	args := m.Called(policyID, policyName, beName)
 	return args.Error(0)
 }
+
+func (m *mockPolicyManager) SetStarter(_ policymgr.BackendStarter) {}
 
 // mockPolicyRepo implements the PolicyRepo interface for testing
 type mockPolicyRepo struct {
@@ -80,6 +85,11 @@ func (m *mockPolicyRepo) Remove(policyID string) error {
 }
 
 func (m *mockPolicyRepo) Update(data policies.PolicyData) error {
+	args := m.Called(data)
+	return args.Error(0)
+}
+
+func (m *mockPolicyRepo) UpdateKeepingRuns(data policies.PolicyData) error {
 	args := m.Called(data)
 	return args.Error(0)
 }
@@ -241,7 +251,7 @@ func TestMessageHandlers_DispatchToHandlers(t *testing.T) {
 					Backend: "test_backend_dispatch",
 				}, nil)
 				m.On("GetRepo").Return(mockRepo)
-				m.On("RemovePolicyDataset", "policy1", "dataset1", mock.Anything).Return()
+				m.On("RemovePolicyDataset", "policy1", "dataset1", "test_backend_dispatch", mock.Anything).Return()
 			},
 			expectedError:         false,
 			expectedPolicyMgrCall: true,
@@ -1020,8 +1030,8 @@ func TestMessageHandlers_handleAgentGroupRemoval_RemovesDatasetsWhenGroupsRemain
 	// Setup mock expectations
 	mockPMgr.On("GetRepo").Return(mockRepo)
 	mockRepo.On("GetAll").Return(existingPolicies, nil)
-	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", mock.Anything).Return()
-	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset2", mock.Anything).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", "pktvisor", mock.Anything).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset2", "pktvisor", mock.Anything).Return()
 
 	// Create group removal payload
 	groupRemoval := messages.GroupRemovedRPCPayload{
@@ -1269,7 +1279,7 @@ func TestMessageHandlers_handleDatasetRemoval_Success(t *testing.T) {
 		Name:    "Test Policy",
 		Backend: "test_backend",
 	}, nil)
-	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", mockBe).Return()
+	mockPMgr.On("RemovePolicyDataset", "policy1", "dataset1", "test_backend", mockBe).Return()
 
 	// Create dataset removal payload
 	datasetRemoval := messages.DatasetRemovedRPCPayload{
@@ -1309,7 +1319,7 @@ func TestMessageHandlers_handleDatasetRemoval_PolicyRetrievalFails(t *testing.T)
 	handlers.handleDatasetRemoval(datasetRemoval)
 
 	// Assert - should return early without calling RemovePolicyDataset
-	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything)
+	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPMgr.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
@@ -1342,7 +1352,7 @@ func TestMessageHandlers_handleDatasetRemoval_BackendNotFound(t *testing.T) {
 	handlers.handleDatasetRemoval(datasetRemoval)
 
 	// Assert - should return early without calling RemovePolicyDataset
-	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything)
+	mockPMgr.AssertNotCalled(t, "RemovePolicyDataset", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockPMgr.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
@@ -1393,7 +1403,7 @@ func TestMessageHandlers_DispatchToHandlers_AgentReset(t *testing.T) {
 		SchemaVersion: "1.0",
 		Func:          messages.AgentResetRPCFunc,
 		Payload: messages.AgentResetRPCPayload{
-			FullReset: false, // Set to false to avoid calling backend.RestartAll
+			FullReset: false, // Set to false to avoid exercising the resetter
 			Reason:    "test dispatch",
 		},
 	}
@@ -1802,4 +1812,155 @@ func TestHandleGroupMemberships_SubscribeError(_ *testing.T) {
 		Groups:   []messages.GroupMembershipData{{GroupID: "group1", Name: "Group 1"}},
 	}
 	handlers.handleGroupMemberships(context.Background(), payload, "org1", "agent1", topicActions)
+}
+
+// stubResetter is a Resetter that records the reason of every call it
+// receives and, when entered/release are set, signals entry and blocks
+// until released, so a test can observe the reset in flight.
+type stubResetter struct {
+	mu      sync.Mutex
+	calls   []string
+	entered chan struct{}
+	release chan struct{}
+	err     error // returned by RestartAll after the release, when set
+}
+
+func (r *stubResetter) RestartAll(_ context.Context, reason string) error {
+	r.mu.Lock()
+	r.calls = append(r.calls, reason)
+	r.mu.Unlock()
+	if r.entered != nil {
+		r.entered <- struct{}{}
+	}
+	if r.release != nil {
+		<-r.release
+	}
+	return r.err
+}
+
+func (r *stubResetter) reasons() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+func newResetHandlers(t *testing.T) (*Messaging, chan struct{}) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	resetChan := make(chan struct{}, 1)
+	groupManager := newGroupManager()
+	return NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager, nil), resetChan
+}
+
+// A full reset runs the resetter off the dispatch worker and sends the
+// reconnect signal only when the restarts have finished, so capabilities
+// republished on reconnect see every backend answering.
+func TestHandleAgentResetRunsTheResetterThenSignalsReconnect(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+	r := &stubResetter{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	handlers.SetResetter(r)
+
+	done := make(chan struct{})
+	go func() {
+		handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "test"})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler must return before the reset finishes, off the dispatch worker")
+	}
+	<-r.entered
+	select {
+	case <-resetChan:
+		t.Fatal("the reconnect signal must not be sent before the restarts finish")
+	default:
+	}
+	close(r.release)
+	select {
+	case <-resetChan:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reconnect signal was not sent after the restarts finished")
+	}
+	assert.Equal(t, []string{"test"}, r.reasons())
+}
+
+// A second full reset that arrives while one is running is queued, not
+// dropped: the same goroutine runs it once more, for the last reason
+// queued, after the current run finishes, with its own reconnect signal.
+// The reset channel is given a two-slot buffer so both signals land without
+// racing whichever one the test reads first.
+func TestHandleAgentResetQueuesAResetWhileOneRuns(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	resetChan := make(chan struct{}, 2)
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, &mockPolicyManager{}, resetChan, &groupManager, nil)
+	r := &stubResetter{entered: make(chan struct{}, 2), release: make(chan struct{})}
+	handlers.SetResetter(r)
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "first"})
+	select {
+	case <-r.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first reset never entered the resetter")
+	}
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "second"})
+	close(r.release)
+
+	select {
+	case <-r.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the queued reset never ran")
+	}
+
+	var signals int
+	for i := 0; i < 2; i++ {
+		select {
+		case <-resetChan:
+			signals++
+		case <-time.After(5 * time.Second):
+			t.Fatal("did not receive both reconnect signals")
+		}
+	}
+	assert.Equal(t, 2, signals, "one reconnect signal per run")
+	assert.Equal(t, []string{"first", "second"}, r.reasons(),
+		"two RPCs during a run produce exactly two resetter calls, for the first and the last reason")
+}
+
+// With no resetter set, the RPC is logged and ignored: no signal is sent.
+func TestHandleAgentResetWithoutAResetterIsIgnored(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "test"})
+
+	select {
+	case <-resetChan:
+		t.Fatal("no reconnect signal without a resetter")
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// A reset that shutdown aborted (the resetter reports a cancellation) sends
+// no reconnect signal: there is no connection to refresh, and the reset
+// handler it would wake is on its way down and could sit in Disconnect for
+// its whole timeout. The run still clears resetRunning.
+func TestHandleAgentResetSkipsTheReconnectSignalWhenShutdownAbortsTheReset(t *testing.T) {
+	handlers, resetChan := newResetHandlers(t)
+	r := &stubResetter{err: fmt.Errorf("restart sweep aborted by stop: %w", context.Canceled)}
+	handlers.SetResetter(r)
+
+	handlers.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{FullReset: true, Reason: "test"})
+
+	require.Eventually(t, func() bool {
+		handlers.resetMu.Lock()
+		defer handlers.resetMu.Unlock()
+		return !handlers.resetRunning
+	}, 5*time.Second, 5*time.Millisecond, "the run must finish and clear resetRunning")
+	select {
+	case <-resetChan:
+		t.Fatal("no reconnect signal after a reset that shutdown aborted")
+	default:
+	}
+	assert.Equal(t, []string{"test"}, r.reasons())
 }

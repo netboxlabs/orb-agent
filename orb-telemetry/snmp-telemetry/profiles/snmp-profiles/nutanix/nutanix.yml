@@ -1,0 +1,380 @@
+extends:
+  - host-resources-mib.yml
+  - if-mib.yml
+  - system-mib.yml
+  - ucd-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.41263.*
+
+provider: kentik-net-snmp
+
+metrics:
+  - MIB: NUTANIX-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.41263.508
+      name: clusterIOBandwidth
+      description: Cluster wide IO bandwidth in KBps.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.41263.506
+      name: clusterIops
+      description: Cluster wide average IO operations per second.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.41263.507
+      name: clusterLatency
+      description: Cluster wide average latency.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.41263.504
+      name: clusterTotalStorageCapacity
+      description: Total storage capacity of the cluster in bytes.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    symbol:
+      OID: 1.3.6.1.4.1.41263.505
+      name: clusterUsedStorageCapacity
+      description: Number of bytes of storage used on the cluster.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.8
+      name: containerInformationTable
+      description: Storage container information in a table form.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.8.1.8
+        name: citIOBandwidth
+        description: IO bandwidth in KBps for the storage container.
+      - OID: 1.3.6.1.4.1.41263.8.1.5
+        name: citUsedCapacity
+        description: Number of bytes used in the storage container.
+      - OID: 1.3.6.1.4.1.41263.8.1.4
+        name: citTotalCapacity
+        description: Total capacity of the storage container in bytes.
+      - OID: 1.3.6.1.4.1.41263.8.1.7
+        name: citAvgLatencyUsecs
+        description: Average IO latency for this storage container in microseconds.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.8.1.2
+          name: citContainerId
+          description: Storage container id.
+      - column:
+          OID: 1.3.6.1.4.1.41263.8.1.6
+          name: citIOPerSecond
+          description: Number of IO operations served per second from this storage container.
+      - column:
+          OID: 1.3.6.1.4.1.41263.8.1.3
+          name: citContainerName
+          description: Name of the storage container.
+      - column:
+          OID: 1.3.6.1.4.1.41263.8.1.1
+          name: citIndex
+          description: Unique index for storage container information table entries.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.4
+      name: controllerVMResourceTable
+      description: Table of resources per Controller VM.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.4.1.3
+        name: crtMemory
+        description: Total memory available on a CVM.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.4.1.2
+          name: crtControllerVMId
+          description: Nutanix Controller VM Id.
+      - column:
+          OID: 1.3.6.1.4.1.41263.4.1.1
+          name: crtIndex
+          description: A unique index for each row in the CVM memory table.
+      - column:
+          OID: 1.3.6.1.4.1.41263.4.1.4
+          name: crtNumCpus
+          description: Total number of CPUs allocated to a CVM.
+      - column:
+          OID: 1.3.6.1.4.1.41263.4.1.5
+          name: crtName
+          description: Name of the Nutanix COntroller VM.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.3
+      name: diskStatusTable
+      description: Table provides disk status on all CVMs.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.3.1.5
+        name: dstNumRawBytes
+        description: Maximum number of raw bytes available on the device.
+      - OID: 1.3.6.1.4.1.41263.3.1.11
+        name: dstIOBandwidth
+        description: IO bandwidth in KBps for the disk.
+      - OID: 1.3.6.1.4.1.41263.3.1.7
+        name: dstNumFreeBytes
+        description: Total number of bytes availabe to the non-root users on the device through its file system.
+      - OID: 1.3.6.1.4.1.41263.3.1.8
+        name: dstNumTotalInodes
+        description: Maximum number of inodes usable on the device through its file system.
+      - OID: 1.3.6.1.4.1.41263.3.1.10
+        name: dstAverageLatency
+        description: Average IO latency per micro seconds for the disk.
+      - OID: 1.3.6.1.4.1.41263.3.1.12
+        name: dstNumberIops
+        description: Number IO per seconds for the disk.
+      - OID: 1.3.6.1.4.1.41263.3.1.9
+        name: dstNumFreeInodes
+        description: Total number of inodes availabe to the non-root users on the device through its file system.
+      - OID: 1.3.6.1.4.1.41263.3.1.6
+        name: dstNumTotalBytes
+        description: Total number of bytes usable on the device through its file system.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.3.1.2
+          name: dstDiskId
+          description: A unique disk id for each disk.
+      - column:
+          OID: 1.3.6.1.4.1.41263.3.1.4
+          name: dstSerial
+          description: Disk Serial Number
+      - column:
+          OID: 1.3.6.1.4.1.41263.3.1.13
+          name: dstState
+          description: State of the disk.
+      - column:
+          OID: 1.3.6.1.4.1.41263.3.1.1
+          name: dstIndex
+          description: A unique index for each row in the disk status table.
+      - column:
+          OID: 1.3.6.1.4.1.41263.3.1.3
+          name: dstControllerVMId
+          description: Nutanix Controller VM unique identifier.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.9
+      name: hypervisorInformationTable
+      description: Hypervisor information in a table form.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.999.6
+        name: ntxAlertResolvedTime
+        description: This object indicates the time when an alert was resolved. It is the timestamp in seconds from epoch.
+      - OID: 1.3.6.1.4.1.41263.999.4
+        name: ntxAlertSeverity
+        description: Alert Severity for the sent alert.
+      - OID: 1.3.6.1.4.1.41263.9.1.7
+        name: hypervisorMemory
+        description: Total memory available on the hypervisor in bytes.
+      - OID: 1.3.6.1.4.1.41263.9.1.12
+        name: hypervisorIOBandwidth
+        description: IO bandwidth in KBps of the hypervisor.
+      - OID: 1.3.6.1.4.1.41263.9.1.15
+        name: hypervisorRxDropCount
+        description: Total number of packets dropped while receiving on the hypervisor.
+      - OID: 1.3.6.1.4.1.41263.9.1.14
+        name: hypervisorTxBytes
+        description: Total number of bytes transmitted from the hypervisor.
+      - OID: 1.3.6.1.4.1.41263.9.1.13
+        name: hypervisorRxBytes
+        description: Total number of bytes recieved on the hypervisor.
+      - OID: 1.3.6.1.4.1.41263.999.1
+        name: ntxAlertCreationTime
+        description: Alert creation Timestamp in seconds from epoch.
+      - OID: 1.3.6.1.4.1.41263.9.1.11
+        name: hypervisorAverageLatency
+        description: Average IO latency per micro seconds of the hypervisor.
+      - OID: 1.3.6.1.4.1.41263.9.1.16
+        name: hypervisorTxDropCount
+        description: Total number of packets dropped while transmiting from hypervisor.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.8
+          name: ntxAlertSourceEntityUuid
+          description: UUID of the source entity of the alert.
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.9
+          name: ntxAlertSourceEntityName
+          description: Name of the source entity of the alert.
+      - column:
+          OID: 1.3.6.1.4.1.41263.9.1.3
+          name: hypervisorName
+          description: Name of the Hypervisor.
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.3
+          name: ntxAlertTitle
+          description: Alert Title for the sent alert.
+      - column:
+          OID: 1.3.6.1.4.1.41263.9.1.2
+          name: hypervisorId
+          description: Hypervisor Id for the hypervisor.
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.10
+          name: ntxAlertSourceEntityType
+          description: Source entity type of the alert.
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.5
+          name: ntxAlertUuid
+          description: This object incidates the Alert Uuid
+      - column:
+          OID: 1.3.6.1.4.1.41263.9.1.1
+          name: hypervisorIndex
+          description: Unique index for hypervisor information table entries.
+      - column:
+          OID: 1.3.6.1.4.1.41263.992
+          name: ntxTrapName
+          description: This object incidates the name of MIB object which is a trap and has been resolved
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.7
+          name: ntxAlertClusterName
+          description: The name of the cluster generating the alert
+      - column:
+          OID: 1.3.6.1.4.1.41263.999.2
+          name: ntxAlertDisplayMsg
+          description: Display message for the sent alert.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.1
+      name: softwareVersionTable
+      description: Table of software versions for packages on all Controller VMs.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.10.1.15
+        name: vmTxBytes
+        description: Total number of bytes transmitted from the VM.
+      - OID: 1.3.6.1.4.1.41263.10.1.17
+        name: vmTxDropCount
+        description: Total number of packets dropped while transmiting from VM.
+      - OID: 1.3.6.1.4.1.41263.10.1.14
+        name: vmRxBytes
+        description: Total number of bytes recieved on the VM.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.11.1.2
+          name: cstControllerVMId
+          description: Nutanix Controller VM Id.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.5
+          name: svtNutanixCore
+          description: The nutanix-core software package version.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.6
+          name: svtNutanixToolchain
+          description: The nutanix-toolchain software package version.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.7
+          name: svtNutanixServiceability
+          description: The nutanix-serviceability software package version.
+      - column:
+          OID: 1.3.6.1.4.1.41263.11.1.3
+          name: cstControllerVMStatus
+          description: Status of the node.
+      - column:
+          OID: 1.3.6.1.4.1.41263.10.1.4
+          name: vmHypervisorId
+          description: Hypervisor id on which the VM resides.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.1
+          name: svtIndex
+          description: Index for software version table entries.
+      - column:
+          OID: 1.3.6.1.4.1.41263.10.1.3
+          name: vmName
+          description: Name of the VM.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.3
+          name: svtNutanixBootstrap
+          description: The nutanix-bootstrap software package version.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.4
+          name: svtNutanixInfrastructure
+          description: The nutanix-infrastructure software package version.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.2
+          name: svtControllerVMId
+          description: Nutanix Controller VM Id.
+      - column:
+          OID: 1.3.6.1.4.1.41263.1.1.8
+          name: svtLinuxKernel
+          description: The linux kernel version currently installed.
+      - column:
+          OID: 1.3.6.1.4.1.41263.11.1.5
+          name: cstMetadataServiceStatus
+          description: Status of metadata services on the Controller VM.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.7
+      name: storagePoolInformationTable
+      description: Storage pool information in a table form.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.7.1.4
+        name: spitTotalCapacity
+        description: Total capacity of the storage pool in bytes.
+      - OID: 1.3.6.1.4.1.41263.7.1.8
+        name: spitIOBandwidth
+        description: IO bandwidth in KBps for the storage pool.
+      - OID: 1.3.6.1.4.1.41263.7.1.7
+        name: spitAvgLatencyUsecs
+        description: Average IO latency for this storage pool in microseconds.
+      - OID: 1.3.6.1.4.1.41263.7.1.5
+        name: spitUsedCapacity
+        description: Number of bytes used in the storage pool.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.7.1.6
+          name: spitIOPerSecond
+          description: Number of IO operations served per second from this storage pool.
+      - column:
+          OID: 1.3.6.1.4.1.41263.7.1.2
+          name: spitStoragePoolId
+          description: Storage pool id.
+      - column:
+          OID: 1.3.6.1.4.1.41263.7.1.3
+          name: spitStoragePoolName
+          description: Name of the storage pool.
+      - column:
+          OID: 1.3.6.1.4.1.41263.7.1.1
+          name: spitIndex
+          description: Unique index for storage pool information table entries.
+    walk_full_table: false
+  - MIB: NUTANIX-MIB
+    table:
+      OID: 1.3.6.1.4.1.41263.10
+      name: vmInformationTable
+      description: Vm information in a table form.
+    symbols:
+      - OID: 1.3.6.1.4.1.41263.10.1.12
+        name: vmAverageLatency
+        description: Average IO latency per micro seconds of the VM.
+      - OID: 1.3.6.1.4.1.41263.10.1.13
+        name: vmIOBandwidth
+        description: IO bandwidth in KBps of the VM.
+      - OID: 1.3.6.1.4.1.41263.10.1.8
+        name: vmMemory
+        description: Total memory available on the VM in bytes.
+      - OID: 1.3.6.1.4.1.41263.10.1.16
+        name: vmRxDropCount
+        description: Total number of packets dropped while receiving on the VM.
+    metric_tags:
+      - column:
+          OID: 1.3.6.1.4.1.41263.10.1.1
+          name: vmIndex
+          description: Unique index for VM information table entries.
+      - column:
+          OID: 1.3.6.1.4.1.41263.10.1.5
+          name: vmPowerState
+          description: Power state of the VM.
+      - column:
+          OID: 1.3.6.1.4.1.41263.10.1.2
+          name: vmId
+          description: Nutanix unique identifier for VM.
+    walk_full_table: false
+no_use_bulkwalkall: false
+matches: {}
+matches_list: []
+sysmap: {}

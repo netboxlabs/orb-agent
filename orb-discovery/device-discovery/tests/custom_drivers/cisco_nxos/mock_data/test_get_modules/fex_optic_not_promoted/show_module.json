@@ -1,0 +1,10 @@
+{
+  "TABLE_modinfo": {
+    "ROW_modinfo": {
+      "modinf": "\"1\"", "modules": "\"1\"", "ports": "48", "type": "\"48x10/25G + 6x100G\"", "model": "\"N9K-C93180YC-FX\"", "status": "active *"
+    }
+  },
+  "TABLE_modwwninfo": {
+    "ROW_modwwninfo": {"modwwn": "1", "sn": "FOC30001FIX"}
+  }
+}

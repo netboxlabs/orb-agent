@@ -618,7 +618,7 @@ func TestTranslateVlanNamesAndInventory(t *testing.T) {
 		"/network-instances/network-instance[name=default]/vlans/vlan[vlan-id=99]/state/name":   "mgmt",
 		"/network-instances/network-instance[name=default]/vlans/vlan[vlan-id=99]/state/status": "SUSPENDED",
 	}
-	defaults := &config.Defaults{Site: "lab", Vlan: config.VlanDefaults{Group: "lab-vlans"}}
+	defaults := &config.Defaults{Site: "lab", Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "lab-vlans"}}}
 	ents := Translate(base, snap, defaults, "")
 	vlans := map[int64]*diode.VLAN{}
 	for _, e := range ents {

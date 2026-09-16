@@ -33,8 +33,10 @@ jobs:
             agent
             device-discovery
             gnmi-discovery
+            gnmi-telemetry
             network-discovery
             snmp-discovery
+            snmp-telemetry
             worker
             ci
             docs

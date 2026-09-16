@@ -1,0 +1,11 @@
+{
+  "TABLE_inv": {
+    "ROW_inv": [
+      {"name": "\"Chassis\"", "desc": "\"Nexus 9300 fixed\"", "productid": "\"N9K-C93180YC-FX\"", "vendorid": "V01", "serialnum": "\"FOC50001CHA\""},
+      {"name": "\"Slot 1\"", "desc": "\"Nexus 9300 fixed base board\"", "productid": "\"N9K-C93180YC-FX\"", "vendorid": "V01", "serialnum": "\"FOC50001CHA\""},
+      {"name": "\"Power Supply 1\"", "desc": "\"Power Supply\"", "productid": "\"N9K-PAC-650W-B\"", "vendorid": "V01", "serialnum": "\"FOC50001PSU1\""},
+      {"name": "\"Ethernet1/1\"", "desc": "\"QSFP-100G-SR4\"", "productid": "\"QSFP-100G-SR4\"", "vendorid": "V02", "serialnum": "\"OPT50001001\""},
+      {"name": "\"Ethernet1/2\"", "desc": "\"QSFP-100G-LR4\"", "productid": "\"QSFP-100G-LR4\"", "vendorid": "V02", "serialnum": "\"OPT50001002\""}
+    ]
+  }
+}

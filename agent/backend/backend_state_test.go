@@ -87,6 +87,23 @@ func TestBackendStateManager_RegisterRestart(t *testing.T) {
 	assert.False(t, state[backendName].LastRestartTS.IsZero())
 }
 
+// A restart can be requested for a backend the monitor never registered, a
+// backend the agent restarts before its monitor ran; the record is created
+// rather than dereferenced.
+func TestBackendStateManager_RegisterRestart_UnmonitoredBackend(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	manager := backend.NewStateManager("fleet", logger, make(chan string, 5), repo)
+
+	require.NotPanics(t, func() { manager.RegisterRestart("never-monitored", "operator request") })
+
+	state := manager.Get()
+	require.Contains(t, state, "never-monitored")
+	assert.Equal(t, int64(1), state["never-monitored"].RestartCount)
+	assert.Equal(t, "operator request", state["never-monitored"].LastRestartReason)
+}
+
 func TestBackendStateManager_RegisterRestart_MultipleRestarts(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -394,7 +411,7 @@ func TestBackendStateManager_Interface_Implementation(t *testing.T) {
 	assert.NotNil(t, state)
 }
 
-func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T) {
+func TestBackendStateManager_RegisterError_UpdatesStatusAndErrorInPlace(t *testing.T) {
 	// Arrange
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	restartChan := make(chan string, 5)
@@ -416,7 +433,8 @@ func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T)
 
 	initialRestartCount := manager.Get()[backendName].RestartCount
 
-	// Act - RegisterError should overwrite the state
+	// Act - RegisterError updates only the status and error, in place, and
+	// keeps the restart record
 	errorMsg := "critical error"
 	manager.RegisterError(backendName, errorMsg)
 
@@ -425,9 +443,10 @@ func TestBackendStateManager_RegisterError_OverwritesExistingState(t *testing.T)
 	require.Contains(t, state, backendName)
 	assert.Equal(t, backend.BackendError, state[backendName].Status)
 	assert.Equal(t, errorMsg, state[backendName].LastError)
-	// RestartCount should be reset to 0 because RegisterError creates a new State
-	assert.Equal(t, int64(0), state[backendName].RestartCount)
-	assert.NotEqual(t, initialRestartCount, state[backendName].RestartCount)
+	// RestartCount is preserved: RegisterError updates the entry in place
+	// rather than replacing it, so a failed retry does not erase the
+	// restarts recorded before it.
+	assert.Equal(t, initialRestartCount, state[backendName].RestartCount)
 }
 
 func TestBackendStateManager_MinRestartTime_Constant(t *testing.T) {
@@ -697,6 +716,29 @@ func TestBackendStateManager_PolicyStatusPolling_WithoutEntityCount(t *testing.T
 	mockBe.AssertExpectations(t)
 }
 
+// A failed start after restarts must not erase the restarts: RegisterError
+// creates an entry when there is none, and on an existing one updates the
+// status and error and leaves the restart record alone.
+func TestBackendStateManager_RegisterError_KeepsTheRestartRecord(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	manager := backend.NewStateManager("fleet", logger, make(chan string, 5), repo)
+	manager.RegisterError("flaky", "first failure")
+	manager.RegisterRestart("flaky", "first")
+	manager.RegisterRestart("flaky", "second")
+	before := manager.Get()["flaky"]
+
+	manager.RegisterError("flaky", "binary not found")
+
+	state := manager.Get()["flaky"]
+	assert.Equal(t, backend.BackendError, state.Status)
+	assert.Equal(t, "binary not found", state.LastError)
+	assert.Equal(t, int64(2), state.RestartCount)
+	assert.Equal(t, "second", state.LastRestartReason)
+	assert.Equal(t, before.LastRestartTS, state.LastRestartTS)
+}
+
 func TestBackendStateManager_PolicyStatusPolling_NonProviderBackend(t *testing.T) {
 	// Test that non-PolicyStatusProvider backends are skipped
 	// Arrange
@@ -726,4 +768,32 @@ func TestBackendStateManager_PolicyStatusPolling_NonProviderBackend(t *testing.T
 
 	// Assert - Should not panic and should not call GetPolicyStatus
 	mockBe.AssertExpectations(t)
+}
+
+// A backend whose restarts were registered before its monitor (an on-demand
+// backend that came up on a retry) keeps its restart count and reason when
+// the monitor is registered; only the status is reset to the initial one
+// until the first tick.
+func TestBackendStateManager_StartBackendMonitor_KeepsRegisteredRestarts(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	manager := backend.NewStateManager("fleet", logger, make(chan string, 5), repo)
+	manager.RegisterError("late-backend", "no binary")
+	manager.RegisterRestart("late-backend", "retry after failed start")
+	manager.RegisterRestart("late-backend", "retry after failed start")
+	mockBe := &mockBackend{}
+	mockBe.On("GetInitialState").Return(backend.Running)
+	mockBe.On("GetStartTime").Return(time.Now()).Maybe()
+	mockBe.On("GetRunningStatus").Return(backend.Running, "", nil).Maybe()
+	mockBe.On("GetPolicyStatus").Return([]backend.PolicyStatus{}, nil).Maybe()
+
+	manager.StartBackendMonitor("late-backend", mockBe)
+
+	state := manager.Get()["late-backend"]
+	require.NotNil(t, state)
+	assert.Equal(t, int64(2), state.RestartCount, "the restarts registered before the monitor survive it")
+	assert.Equal(t, "retry after failed start", state.LastRestartReason)
+	assert.Equal(t, backend.Running, state.Status, "the status is the initial one until the first tick")
+	assert.Empty(t, state.LastError, "a start that succeeded clears the failure before it")
 }

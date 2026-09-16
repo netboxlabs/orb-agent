@@ -1,0 +1,101 @@
+# This profile only takes effect when a device uses the generic Vertiv/Liebert sysOID and the sysDesc also contains the string 'ups' 
+# http://oidref.com/1.3.6.1.4.1.476.1.42.3.4
+---
+extends:
+  - system-mib.yml
+  - ups-mib.yml
+
+sysobjectid:
+  - 1.3.6.1.4.1.476.1.42.ups # Liebert UPS
+  - 1.3.6.1.4.1.476.1.42.vertiv # Vertiv 30K 3 Phase
+
+provider: kentik-ups
+
+metrics:
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.1.3.3
+      name: lgpEnvTemperatureTableDegC
+    symbols:
+      - OID: 1.3.6.1.4.1.476.1.42.3.4.1.3.3.1.3
+        name: lgpEnvTemperatureMeasurementDegC 
+
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    table:
+      OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.3
+      name: lgpEnvTemperatureTableDegF
+    symbols:
+      - OID: 1.3.6.1.4.1.476.1.42.3.4.1.2.3.1.3
+        name: lgpEnvTemperatureMeasurementDegF
+
+  - MIB: LIEBERT-GP-FLEXIBLE-MIB
+    table:
+      OID: 1.3.6.1.4.1.476.1.42.3.9.30
+      name: lgpFlexibleExtendedTable
+    symbols:
+      # The battery state of health percentage
+      - OID: 1.3.6.1.4.1.476.1.42.3.9.30.1.20.1.2.1.7462
+        name: lgpFlexibleBatteryStateOfHealth
+          
+  - MIB: LIEBERT-GP-ENVIRONMENTAL-MIB
+    symbols:
+      # The number of battery modules in the device that have a warning.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.6.0
+        name: lgpPwrNumberBatteryModuleWarnings
+      # The outcome of the previous battery test.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.8.0
+        name: lgpPwrBatteryTestResult
+      # The nominal battery capacity of the system (in minutes) at full load.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.9.0
+        name: lgpPwrNominalBatteryCapacity
+      # The present state of the system's battery charge. 
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.14.0
+        name: lgpPwrBatteryChargeStatus
+        enum:
+          fullycharged: 1
+          notfullycharged: 2
+          charging: 3
+          discharging: 4
+      # The state of the battery charger.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.16.0
+        name: lgpPwrBatteryCharger
+        enum:
+          on: 1
+          off: 2
+      # An estimate of the time to battery charge depletion under the present load conditions if the utility power is off and remains off, or if it were to be lost and remain off. NOTE: A UPS is expected to provide a battery time remaining value when not operating on battery. However, if the system is not capable of providing this information, then this point will return 65535 to indicate that the value is unavailable.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.18.0
+        name: lgpPwrBatteryTimeRemaining
+      # The present percentage of battery capacity.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.19.0
+        name: lgpPwrBatteryCapacity	
+      # The date and time when the battery system was put into service. This information persists across system reboot events. It is the responsibility of Service to reset this date/time when the batteries are replaced. The date and time are determined in seconds since the epoch on January 1, 1970.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.1.24.0
+        name: lgpPwrBatteryLastCommissionTime
+      # The present percent load of the AC line power.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.2.3.1.19.0
+        name: lgpPwrLineMeasurementPercentLoad
+      # The number of occurrences where the input line voltage has fallen below a pre-determined threshold for a specified amount of time. This number resets when the command 'lgpPwrStatisticsReset' is executed.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.8.1.0
+        name: lgpPwrBrownOutCount
+      # The number of occurrences where there is a total loss of electric power. This number resets when the command 'lgpPwrStatisticsReset' is executed.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.8.2.0
+        name: lgpPwrBlackOutCount
+      # The number of occurrences where the input line voltage spikes above a pre-determined threshold for a specified amount of time. This number resets when the command 'lgpPwrStatisticsReset' is executed.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.8.3.0
+        name: lgpPwrTransientCount
+      # The number of power modules in the device that have failed.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.5.2.0
+        name: lgpPwrNumberFailedPowerModules
+      # The number of power modules in the device that have a warning.
+      - OID: 1.3.6.1.4.1.476.1.42.3.5.5.6.0
+        name: gpPwrNumberPowerModuleWarnings
+
+metric_tags:
+  - column:
+      OID: 1.3.6.1.4.1.476.1.42.2.4.2.1.4.0
+      name: lgpAgentDeviceModel
+    tag: model
+  - column:
+      OID: 1.3.6.1.4.1.476.1.42.2.4.2.1.7.0
+      name: lgpAgentDeviceSerialNumber	
+    tag: serial_number

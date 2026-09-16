@@ -1,0 +1,943 @@
+[
+  {
+    "capture": "flat_fortinet_get_system_interface.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "wan",
+        "ip_address": "10.180.1.229",
+        "netmask": "255.255.255.252"
+      },
+      {
+        "name": "lan1",
+        "ip_address": "",
+        "netmask": ""
+      },
+      {
+        "name": "lan2",
+        "ip_address": "",
+        "netmask": ""
+      },
+      {
+        "name": "lan3",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "a",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "modem",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "lan",
+        "ip_address": "10.152.1.230",
+        "netmask": "255.255.255.252"
+      },
+      {
+        "name": "lo0",
+        "ip_address": "10.105.3.75",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "VPN1_0",
+        "ip_address": "10.105.1.75",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "VPN2_0",
+        "ip_address": "10.105.2.75",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "Vlan10",
+        "ip_address": "10.18.61.1",
+        "netmask": "255.255.255.240"
+      },
+      {
+        "name": "Vlan20",
+        "ip_address": "10.18.61.17",
+        "netmask": "255.255.255.240"
+      },
+      {
+        "name": "Vlan30",
+        "ip_address": "10.18.61.33",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan40",
+        "ip_address": "10.18.61.65",
+        "netmask": "255.255.255.192"
+      },
+      {
+        "name": "Vlan50",
+        "ip_address": "10.18.61.129",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan60",
+        "ip_address": "10.18.61.161",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan70",
+        "ip_address": "10.18.61.193",
+        "netmask": "255.255.255.240"
+      },
+      {
+        "name": "Vlan80",
+        "ip_address": "10.18.61.209",
+        "netmask": "255.255.255.240"
+      },
+      {
+        "name": "Vlan90",
+        "ip_address": "10.18.61.225",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan100",
+        "ip_address": "10.19.61.1",
+        "netmask": "255.255.255.240"
+      },
+      {
+        "name": "Vlan110",
+        "ip_address": "10.19.61.17",
+        "netmask": "255.255.255.248"
+      },
+      {
+        "name": "Vlan120",
+        "ip_address": "10.19.61.25",
+        "netmask": "255.255.255.248"
+      },
+      {
+        "name": "Vlan130",
+        "ip_address": "10.19.61.33",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan140",
+        "ip_address": "10.19.61.65",
+        "netmask": "255.255.255.224"
+      }
+    ]
+  },
+  {
+    "capture": "flat_fortinet_get_system_interface_5.6.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "mgmt",
+        "ip_address": "203.0.113.4",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "wan1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "dmz1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "modem",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "port1",
+        "ip_address": "203.0.113.5",
+        "netmask": "255.255.255.240"
+      },
+      {
+        "name": "port2.10",
+        "ip_address": "203.0.113.6",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "VPN-TUN",
+        "ip_address": "203.0.113.7",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "loopback.0",
+        "ip_address": "10.0.0.100",
+        "netmask": "255.255.255.255"
+      }
+    ]
+  },
+  {
+    "capture": "flat_fortinet_get_system_interface_6.0.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "mgmt",
+        "ip_address": "203.0.113.4",
+        "netmask": "255.255.255.248"
+      },
+      {
+        "name": "wan1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "dmz1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "modem",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "port1",
+        "ip_address": "203.0.113.5",
+        "netmask": "255.255.255.248"
+      },
+      {
+        "name": "port2",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "port2.103",
+        "ip_address": "203.0.113.6",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "VPN-LAB",
+        "ip_address": "203.0.113.10",
+        "netmask": "255.255.255.255"
+      }
+    ]
+  },
+  {
+    "capture": "flat_fortinet_get_system_interface_6.2.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "ha",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "mgmt",
+        "ip_address": "203.0.113.4",
+        "netmask": "255.255.255.248"
+      },
+      {
+        "name": "port1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "port2",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "s1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "vw1",
+        "ip_address": "",
+        "netmask": ""
+      },
+      {
+        "name": "x1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "modem",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "npu0_vlink0",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "fortilink",
+        "ip_address": "169.254.1.1",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "x1.113",
+        "ip_address": "203.0.113.5",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "loopback.0",
+        "ip_address": "10.0.0.100",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "VPN-TUN",
+        "ip_address": "203.0.113.6",
+        "netmask": "255.255.255.255"
+      }
+    ]
+  },
+  {
+    "capture": "flat_fortinet_get_system_interface_6.4.2.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "wan",
+        "ip_address": "203.0.113.162",
+        "netmask": "255.255.255.252"
+      },
+      {
+        "name": "lan3",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "modem",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "lan",
+        "ip_address": "203.0.113.230",
+        "netmask": "255.255.255.252"
+      },
+      {
+        "name": "Vlan10",
+        "ip_address": "203.0.113.1",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan20",
+        "ip_address": "203.0.113.33",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan30",
+        "ip_address": "203.0.113.65",
+        "netmask": "255.255.255.192"
+      },
+      {
+        "name": "Vlan40",
+        "ip_address": "203.0.113.225",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan50",
+        "ip_address": "203.0.113.129",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan60",
+        "ip_address": "203.0.113.161",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Vlan70",
+        "ip_address": "203.0.113.193",
+        "netmask": "255.255.255.224"
+      },
+      {
+        "name": "Loopback0",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "Tu-Hub01-Main",
+        "ip_address": "203.0.113.69",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "Tu-Hub02-Main",
+        "ip_address": "203.0.113.69",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "Tu-Hub01-Rezerv",
+        "ip_address": "203.0.113.69",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "Tu-Hub02-Rezerv",
+        "ip_address": "203.0.113.69",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "port3_vl10",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "Loopback772",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "Loopback773",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "Tu-Rsnnc-Main",
+        "ip_address": "192.168.64.10",
+        "netmask": "255.255.255.255"
+      }
+    ]
+  },
+  {
+    "capture": "flat_fortinet_get_system_interface_7.0.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "wan",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "lan1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "lan2",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "lan3",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "a",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "modem",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "naf.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "l2t.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "lo0.100",
+        "ip_address": "10.0.0.0",
+        "netmask": "255.255.255.255"
+      },
+      {
+        "name": "wan.100",
+        "ip_address": "10.0.0.0",
+        "netmask": "255.255.255.252"
+      },
+      {
+        "name": "lan1.10",
+        "ip_address": "10.0.0.0",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "lan1.20",
+        "ip_address": "10.0.0.0",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "lan1.30",
+        "ip_address": "10.0.0.0",
+        "netmask": "255.255.255.192"
+      },
+      {
+        "name": "TUNNEL1",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "TUNNEL2",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      }
+    ]
+  },
+  {
+    "capture": "flat_fortinet_get_system_interface_7.4.raw",
+    "command": "flat",
+    "rows": [
+      {
+        "name": "port1",
+        "ip_address": "192.168.0.205",
+        "netmask": "255.255.255.0"
+      },
+      {
+        "name": "port2",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "port3",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "port4",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "naf.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "l2t.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "ssl.root",
+        "ip_address": "0.0.0.0",
+        "netmask": "0.0.0.0"
+      },
+      {
+        "name": "fortilink",
+        "ip_address": "10.255.1.1",
+        "netmask": "255.255.255.0"
+      }
+    ]
+  },
+  {
+    "capture": "phys_fortinet_get_system_interface_physical_5.6.raw",
+    "command": "physical",
+    "rows": [
+      {
+        "name": "dmz1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "dmz2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "mgmt",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port1",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port2",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port3",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port4",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port5",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port6",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port7",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port8",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port9",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port10",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port11",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port12",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port13",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port14",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port15",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port16",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "wan1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "wan2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "modem",
+        "status": "down",
+        "speed": "n/a"
+      }
+    ]
+  },
+  {
+    "capture": "phys_fortinet_get_system_interface_physical_6.0.raw",
+    "command": "physical",
+    "rows": [
+      {
+        "name": "dmz1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "dmz2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "mgmt",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port1",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port2",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port3",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port4",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port5",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port6",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port7",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port8",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port9",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port10",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port11",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port12",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port13",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port14",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port15",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port16",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "wan1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "wan2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "modem",
+        "status": "down",
+        "speed": "n/a"
+      }
+    ]
+  },
+  {
+    "capture": "phys_fortinet_get_system_interface_physical_6.2.raw",
+    "command": "physical",
+    "rows": [
+      {
+        "name": "ha",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "mgmt",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "npu0_vlink0",
+        "status": "up",
+        "speed": "n/a"
+      },
+      {
+        "name": "npu0_vlink1",
+        "status": "up",
+        "speed": "n/a"
+      },
+      {
+        "name": "port1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port3",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port4",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port5",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port6",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port7",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port8",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port9",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port10",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port11",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "port12",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "s1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "s2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "vw1",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "vw2",
+        "status": "down",
+        "speed": "n/a"
+      },
+      {
+        "name": "x1",
+        "status": "up",
+        "speed": "10000"
+      },
+      {
+        "name": "x2",
+        "status": "up",
+        "speed": "10000"
+      },
+      {
+        "name": "modem",
+        "status": "down",
+        "speed": "n/a"
+      }
+    ]
+  },
+  {
+    "capture": "phys_fortinet_get_system_interface_physical_7.4.raw",
+    "command": "physical",
+    "rows": [
+      {
+        "name": "ha",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "mgmt",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port1",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port2",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port3",
+        "status": "up",
+        "speed": "1000"
+      },
+      {
+        "name": "port4",
+        "status": "up",
+        "speed": "1000"
+      }
+    ]
+  }
+]

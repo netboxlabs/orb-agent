@@ -19,6 +19,9 @@ from netboxlabs.diode.sdk.ingester import (
     Location,
     Platform,
     Rack,
+    Region,
+    Site,
+    SiteGroup,
     Tenant,
     TenantGroup,
     VLANGroup,
@@ -28,9 +31,11 @@ from netboxlabs.diode.sdk.ingester import (
 from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
 from device_discovery.policy.models import (
+    UNDEFINED_PLACEHOLDER,
     Defaults,
     Options,
     TenantParameters,
+    VlanGroupParameters,
     VrfParameters,
 )
 from device_discovery.proto_presence import blank_to_none
@@ -86,6 +91,67 @@ def translate_vrf(
     return VRF(name=vrf)
 
 
+def _drop_unconfigured_placeholder(value: str | None, *, is_update: bool) -> str | None:
+    """
+    Drop the "nothing was configured" placeholder from a value bound for an update.
+
+    ``Defaults`` carries ``UNDEFINED_PLACEHOLDER`` for site and role when the
+    operator set neither. A payload carrying ``source_match.netbox_id`` binds an
+    existing device by primary key, so the plugin skips matching entirely and
+    applies every field the payload contains. Sending the placeholder there
+    repoints a real device's site and role at the placeholder objects, which
+    makes netbox_id cause the overwrite rather than prevent it.
+
+    On a create the placeholder has to stay: NetBox requires both fields on a
+    Device, and netbox_id is the only signal distinguishing an update from a
+    create.
+    """
+    if is_update and value == UNDEFINED_PLACEHOLDER:
+        return None
+    return value
+
+
+def _resolve_device_name(device_info: dict, options: Options | None) -> str | None:
+    """
+    Pick the fact used for ``Device.name``.
+
+    Defaults to the ``hostname`` fact. With ``options.device_name_source``
+    set to ``"fqdn"`` the ``fqdn`` fact is used instead, but only when it
+    positively looks like a domain-qualified form of the hostname: no
+    whitespace and, case-insensitively, the hostname followed by a dot and
+    at least one more character. Anything else falls back to the hostname.
+    A denylist cannot keep up with what drivers emit when no domain is
+    configured — ``"None"`` (junos stringifies an undetermined fact),
+    ``"Unknown"`` (the ios-family default), ``"N/A"`` (paloalto), or
+    ``"<hostname>.not set"`` (ios keeps the text after "Default domain
+    is") — while the positive check rejects them all, including an fqdn
+    merely equal to the hostname, which adds nothing over it.
+
+    A hostname that already contains a dot is kept as-is: ios, junos and
+    others build ``hostname + "." + domain`` with no check, so a
+    domain-qualified hostname plus a configured domain would yield
+    ``rtr1.dc1.example.net.dc1.example.net``.
+
+    A driver that discovered no hostname at all must OMIT device.name. An
+    explicit empty name is a real value to the Diode plugin, not an
+    omission — hence ``blank_to_none`` on the result.
+    """
+    hostname = device_info.get("hostname")
+    if options is not None and options.device_name_source == "fqdn":
+        fqdn = device_info.get("fqdn")
+        if (
+            isinstance(hostname, str)
+            and hostname
+            and "." not in hostname
+            and isinstance(fqdn, str)
+            and len(fqdn) > len(hostname) + 1
+            and not any(ch.isspace() for ch in fqdn)
+            and fqdn.lower().startswith(hostname.lower() + ".")
+        ):
+            return blank_to_none(fqdn)
+    return blank_to_none(hostname)
+
+
 def translate_device(
     device_info: dict,
     defaults: Defaults,
@@ -127,8 +193,11 @@ def translate_device(
         manufacturer = defaults.device.manufacturer or manufacturer
         platform = defaults.device.platform or platform
 
+    site = _drop_unconfigured_placeholder(defaults.site, is_update=netbox_id is not None)
+    role = _drop_unconfigured_placeholder(defaults.role, is_update=netbox_id is not None)
+
     if defaults.location:
-        location = Location(name=defaults.location, site=defaults.site)
+        location = Location(name=defaults.location, site=site)
 
     serial_number = device_info.get("serial_number")
     if isinstance(serial_number, list | tuple):
@@ -156,12 +225,12 @@ def translate_device(
 
     # Build Device parameters
     device_params = {
-        # A driver that discovered no hostname must OMIT device.name. An explicit
-        # empty name is a real value to the Diode plugin, not an omission.
-        "name": blank_to_none(device_info.get("hostname")),
+        # Name-fact selection (hostname vs fqdn) and the omit-blank rule
+        # live in _resolve_device_name.
+        "name": _resolve_device_name(device_info, options),
         "device_type": DeviceType(model=model, manufacturer=manufacturer),
         "platform": Platform(name=platform, manufacturer=manufacturer),
-        "role": defaults.role,
+        "role": role,
         "serial": serial_number,
         # asset_tag is the highest-precedence dcim.device matcher and comes straight
         # from policy. Blanking it here keeps the rich entity consistent with the
@@ -170,14 +239,14 @@ def translate_device(
         if defaults.device
         else None,
         "status": "active",
-        "site": defaults.site,
+        "site": site,
         "tags": tags,
         "location": location,
         # Attach the location to the rack too: without it NetBox has no
         # site+location+name key to match on and duplicates the rack.
         # `location` is None when no location default is set, leaving the rack's
         # location unset (site+name only) as before.
-        "rack": Rack(name=defaults.rack, site=defaults.site, location=location)
+        "rack": Rack(name=defaults.rack, site=site, location=location)
         if defaults.rack
         else None,
         "tenant": translate_tenant(defaults.tenant),
@@ -223,7 +292,7 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
         tenant = translate_tenant(defaults.vlan.tenant)
         role = defaults.vlan.role
         if group:
-            group = VLANGroup(name=group, slug=slugify(group), scope_site=defaults.site)
+            group = translate_vlan_group(group, defaults.site)
 
     clean_name = " ".join(vlan_name.strip().split())
     vlan = VLAN(
@@ -238,6 +307,33 @@ def translate_vlan(vid: str, vlan_name: str, defaults: Defaults) -> VLAN | None:
     )
 
     return vlan
+
+
+def translate_vlan_group(
+    group: str | VlanGroupParameters, default_site: str | None
+) -> VLANGroup:
+    """
+    Build the VLAN group with the scope NetBox attaches it to.
+
+    An explicit ``scope_*`` wins; otherwise ``default_site`` applies, so a
+    bare group name keeps its site scope. NetBox locations are unique within
+    their site, so a location scope carries ``default_site`` when set.
+    """
+    if isinstance(group, str):
+        group = VlanGroupParameters(name=group)
+    scope: dict[str, Any] = {}
+    if group.scope_site_group:
+        scope["scope_site_group"] = SiteGroup(name=group.scope_site_group)
+    elif group.scope_region:
+        scope["scope_region"] = Region(name=group.scope_region)
+    elif group.scope_location:
+        site = Site(name=default_site) if default_site else None
+        scope["scope_location"] = Location(name=group.scope_location, site=site)
+    elif group.scope_site:
+        scope["scope_site"] = group.scope_site
+    elif default_site:
+        scope["scope_site"] = default_site
+    return VLANGroup(name=group.name, slug=slugify(group.name), **scope)
 
 
 def _build_vlan_cache(
@@ -746,6 +842,13 @@ def translate_data(data: dict) -> Iterable[Entity]:
             {None: device_for_interfaces},
             module_entities,
         )
+        # Rebuilt here rather than reused from _apply_interface_vlan_associations
+        # below: that call only builds a vlan_cache when data["interfaces_vlans"]
+        # is present, and runs after this point in the sequence anyway.
+        # _build_vlan_cache is a pure, side-effect-free read of data["vlan"] (it
+        # never stubs), so recomputing it here is cheap and keeps this prefix-VLAN
+        # feature decoupled from the tagged/untagged-VLAN association flow.
+        vlan_cache = _build_vlan_cache(data.get("vlan") or {}, defaults)
         interface_related_entities = build_interface_entities(
             device_for_interfaces,
             interfaces,
@@ -754,6 +857,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
             iface_module_map=iface_module_map,
             options=options,
             iface_vrf_map=iface_vrf_map,
+            vlan_cache=vlan_cache,
         )
         # assign_primary_ip must run before the Device is wrapped into Entity
         # because Entity(device=...) copies the message; subsequent mutations
