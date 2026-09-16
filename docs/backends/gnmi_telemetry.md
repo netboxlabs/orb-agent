@@ -27,7 +27,7 @@ orb:
 
 | Parameter | Type | Default | Description |
 |:---------:|:----:|:-------:|:------------|
-| start_mode | str | `eager` | `on_demand` starts the backend when its first policy arrives; see the README's Backends section. |
+| start_mode | str | `eager` | Lifecycle key every backend accepts, documented in the README's Backends section. `on_demand` starts this backend when its first policy arrives; the image declares it that way. |
 | start_timeout | int | 30 | Seconds an on-demand start may take to answer its API before it is treated as failed and retried; 1 to 300, only with start_mode on_demand. |
 | host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control. |
 | port | int | 8079 | Port of the backend's API, 1 to 65535. |
