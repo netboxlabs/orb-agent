@@ -13,7 +13,7 @@ orb:
       otlp:
         grpc: "grpc://otel-collector:4317"
     gnmi_telemetry:
-      start_mode: on_demand              # optional: start on the first policy, see the README
+      start_mode: on_demand              # the image declares this backend on demand; see the README's Backends section
       host: 127.0.0.1                    # default localhost
       port: 8079                         # default 8079
       log_level: INFO                    # default INFO (DEBUG, INFO, WARN, ERROR)
@@ -27,8 +27,6 @@ orb:
 
 | Parameter | Type | Default | Description |
 |:---------:|:----:|:-------:|:------------|
-| start_mode | str | `eager` | Lifecycle key every backend accepts, documented in the README's Backends section. `on_demand` starts this backend when its first policy arrives; the image declares it that way. |
-| start_timeout | int | 30 | Seconds an on-demand start may take to answer its API before it is treated as failed and retried; 1 to 300, only with start_mode on_demand. |
 | host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control. |
 | port | int | 8079 | Port of the backend's API, 1 to 65535. |
 | log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
