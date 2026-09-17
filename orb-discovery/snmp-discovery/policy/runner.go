@@ -745,6 +745,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		mapping.AttachIfaceModules(entitiesForTarget, ifaceModuleMap, ifIndexByIface)
 	}
 
+	// Link-aggregation membership (default on, opt-out via
+	// emit_lag_membership: false): set Interface.lag on each member port
+	// from IEEE8023-LAG-MIB. Runs after stack translation so the member and
+	// aggregate Device pointers already name the owning member.
+	if r.config.Options.LagMembershipEnabled() {
+		mapping.AttachLagMembership(oids, ifIndexByIface, r.logger)
+	}
+
 	// VRF discovery: translate the walked VRF MIB rows (the columns are
 	// only in the walk set when discover_vrfs is on) and attach the
 	// discovered VRFs to the IP addresses of their member interfaces by

@@ -197,6 +197,24 @@ entries:
     vendor: "mikrotik"
     description: "MIKROTIK-MIB mtxrSerialNumber (chassis serial on RouterOS, whose ENTITY-MIB chassis row carries none)"
 
+  # IEEE8023-LAG-MIB dot3adAggPortTable — link-aggregation membership.
+  # Indexed by the member port's ifIndex; each column names the aggregator
+  # by ifIndex (0 = not attached). Consumed by mapping.AttachLagMembership
+  # after stack translation; the LagMembershipMapper.Map is a no-op. Walked
+  # unless options.emit_lag_membership is false.
+  - oid: ".1.2.840.10006.300.43.1.2.1.1"
+    entity: "lag_membership"
+    field: "_id"
+    identifier_size: 1
+    description: "IEEE8023-LAG-MIB dot3adAggPortTable (member port -> aggregator ifIndex)"
+    mapping_entries:
+      - oid: ".1.2.840.10006.300.43.1.2.1.1.12"
+        entity: "lag_membership"
+        field: "selectedAggID"
+      - oid: ".1.2.840.10006.300.43.1.2.1.1.13"
+        entity: "lag_membership"
+        field: "attachedAggID"
+
   # BRIDGE-MIB dot1dBasePortIfIndex — bridge port -> ifIndex translation.
   # Required by VlanMapper bitmap decoding.
   - oid: ".1.3.6.1.2.1.17.1.4.1"
