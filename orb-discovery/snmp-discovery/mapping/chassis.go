@@ -868,9 +868,11 @@ func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
 // inventory. Three outcomes:
 //
 //   - 0 chassis rows with non-empty serial -> entities returned
-//     unchanged (no Serial assignment possible), EXCEPT when rows existed
-//     and were all refused as ambiguous, in which case the master keeps a
-//     serial but gets no VirtualChassis (see refusedMasterSerial).
+//     unchanged in shape. The master still gets a serial when rows existed
+//     and were all refused as ambiguous (see refusedMasterSerial), or
+//     when the walk carries a vendor chassis-serial scalar such as
+//     jnxBoxSerialNo or mtxrSerialNumber (see applyVendorSerialFallback);
+//     otherwise no Serial assignment is possible.
 //   - 1 chassis row -> set master.Serial on the existing Device,
 //     return entities unchanged otherwise (standalone case).
 //   - >= 2 chassis rows -> emit master + top-level VirtualChassis +
@@ -935,6 +937,10 @@ func TranslateAsStack(
 			logger.Warn("stack refused: emitting master serial only, no virtual chassis",
 				"serial", s, "refused_ids", len(inv.DroppedIDs))
 		}
+		// With no chassis row to read, an enterprise chassis-serial scalar
+		// is the last source. Only reached when ENTITY-MIB produced nothing
+		// usable, so the standard column keeps priority wherever it answers.
+		applyVendorSerialFallback(master, oids, logger)
 		return entities
 	}
 

@@ -177,6 +177,26 @@ entries:
       - oid: ".1.3.6.1.2.1.47.1.3.2.1.2"
         entity: "chassis_inventory"
         field: "aliasMapping"
+
+  # Vendor chassis-serial scalars — the device serial when ENTITY-MIB has
+  # none to give. Some platforms implement no entPhysicalTable, and others
+  # leave the chassis row's entPhysicalSerialNum empty while publishing
+  # serials only on contained components, which are never the device's.
+  # Consumed by mapping.TranslateAsStack after chassis inventory, and only
+  # when that inventory yielded no usable chassis serial, so a populated
+  # standard chassis row always wins. Each is walked only under its vendor
+  # gate (policy/vendor.go).
+  - oid: ".1.3.6.1.4.1.2636.3.1.3"
+    entity: "chassis_inventory"
+    field: "vendorSerial"
+    vendor: "juniper"
+    description: "JUNIPER-MIB jnxBoxSerialNo (chassis serial on Junos platforms without an ENTITY-MIB chassis serial)"
+  - oid: ".1.3.6.1.4.1.14988.1.1.7.3"
+    entity: "chassis_inventory"
+    field: "vendorSerial"
+    vendor: "mikrotik"
+    description: "MIKROTIK-MIB mtxrSerialNumber (chassis serial on RouterOS, whose ENTITY-MIB chassis row carries none)"
+
   # BRIDGE-MIB dot1dBasePortIfIndex — bridge port -> ifIndex translation.
   # Required by VlanMapper bitmap decoding.
   - oid: ".1.3.6.1.2.1.17.1.4.1"

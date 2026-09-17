@@ -349,6 +349,8 @@ scope:
 
 When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) with non-empty serials, snmp-discovery emits a NetBox `VirtualChassis` plus one `Device` per stack member, and routes each interface and IP address to the correct member. Detection is vendor-neutral and driven entirely by `entPhysicalClass`, `entPhysicalContainedIn`, and `entPhysicalSerialNum`; no vendor-specific MIB is required. Standalone switches, devices not in stack mode, and members without a serial fall back to the existing single-`Device` path with no change in behaviour.
 
+The same chassis row supplies the standalone device's `serial`. On platforms where `ENTITY-MIB` yields no chassis serial — no `entPhysicalTable` at all, or a chassis row with an empty serial — the serial is read from the vendor's chassis-serial scalar (Juniper `jnxBoxSerialNo`, MikroTik `mtxrSerialNumber`) instead; a populated standard chassis serial always takes priority. See [Device serial](./supported_platforms.md#device-serial).
+
 **Topology patterns detected.** Two valid `ENTITY-MIB` shapes are supported:
 
 | Pattern | Chassis row's `entPhysicalContainedIn` | Used by |
