@@ -17,6 +17,11 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
+// mqttReconnectBackoff delays after a failed CONNECT. Attempt 0 is the first
+// try of a new ConnectionManager and must be 0, or JWT reconnects sleep 10s
+// before dialing. autopaho calls ReconnectBackoff before every attempt.
+var mqttReconnectBackoff = autopaho.NewConstantBackoff(10 * time.Second)
+
 // TopicMessageHandler handles messages for a specific topic
 type TopicMessageHandler func(topic string, payload []byte) error
 
@@ -208,9 +213,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 		KeepAlive:                     30,
 		CleanStartOnInitialConnection: true,
 		ConnectTimeout:                10 * time.Second,
-		ReconnectBackoff: func(_ int) time.Duration {
-			return 10 * time.Second
-		},
+		ReconnectBackoff:              mqttReconnectBackoff,
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			connection.logger.Info("MQTT connection established", "server", serverURL.String())
 

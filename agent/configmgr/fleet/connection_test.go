@@ -540,3 +540,15 @@ func TestDispatchQueue_ConcurrentStopDispatchWorker_NoPanic(t *testing.T) {
 	assert.Equal(t, int32(0), panics.Load(),
 		"concurrent stopDispatchWorker calls should not panic")
 }
+
+// autopaho calls ReconnectBackoff(0) before the first CONNECT. A constant
+// return of 10s (the previous implementation) delays every new session,
+// including JWT refresh reconnects, by 10 seconds.
+func TestMQTTReconnectBackoff_FirstAttemptIsImmediate(t *testing.T) {
+	assert.Equal(t, time.Duration(0), mqttReconnectBackoff(0))
+}
+
+func TestMQTTReconnectBackoff_FailedAttemptsWaitTenSeconds(t *testing.T) {
+	assert.Equal(t, 10*time.Second, mqttReconnectBackoff(1))
+	assert.Equal(t, 10*time.Second, mqttReconnectBackoff(2))
+}
