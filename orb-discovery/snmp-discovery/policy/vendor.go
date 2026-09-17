@@ -43,6 +43,12 @@ var defaultVendorMatchers = []VendorMatcher{
 			".1.3.6.1.4.1.2011.", // Huawei Technologies
 		},
 	},
+	{
+		Vendor: "mikrotik",
+		SysObjectIDPrefixes: []string{
+			".1.3.6.1.4.1.14988.", // MikroTik (RouterOS and SwOS)
+		},
+	},
 	// Future vendors append here.
 }
 

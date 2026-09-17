@@ -86,6 +86,17 @@ Manufacturer-level resolution (SNMP enterprise number → vendor name) is handle
 
 You can add or override lookup data without rebuilding the agent. See the [Device Model Lookup](./README.md#device-model-lookup) section of the SNMP Discovery docs for the `lookup_extensions_dir` option and the YAML format for custom files.
 
+## Device serial
+
+The device serial comes from the standard `ENTITY-MIB::entPhysicalSerialNum` on the chassis row (`entPhysicalClass = chassis(3)` at the root of `entPhysicalTable`), vendor-neutrally; this is also what drives [stack detection](./README.md#switch-stacks--virtual-chassis). Two shapes leave that column with nothing usable: a platform that implements no `entPhysicalTable` at all, and one whose chassis row carries an empty serial while serial-column strings appear only on contained components (USB controllers, fans), which are never the device's own serial and are never selected as it. On those platforms the serial is read from the vendor's chassis-serial scalar instead:
+
+| Vendor | Fallback source | Walked when |
+|---|---|---|
+| Juniper | JUNIPER-MIB `jnxBoxSerialNo` (`1.3.6.1.4.1.2636.3.1.3.0`) | `sysObjectID` under enterprise `1.3.6.1.4.1.2636.` |
+| MikroTik | MIKROTIK-MIB `mtxrSerialNumber` (`1.3.6.1.4.1.14988.1.1.7.3.0`) | `sysObjectID` under enterprise `1.3.6.1.4.1.14988.` |
+
+A populated standard chassis serial always wins: the fallback is consulted only when `ENTITY-MIB` yielded no chassis row with a serial, so a Junos platform that does publish one (QFX5100, for example) is unaffected, and on a Virtual Chassis the master serial stays pinned to the lowest member's chassis row. When neither source answers, the serial is left unset rather than guessed.
+
 ## Interface ↔ VLAN associations
 
 Switchport-to-VLAN association discovery is built on standard MIBs with vendor overlays:
