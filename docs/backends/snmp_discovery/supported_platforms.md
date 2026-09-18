@@ -99,7 +99,7 @@ A populated standard chassis serial always wins: the fallback is consulted only 
 
 ## LAG membership
 
-Member-port → aggregate associations (`Interface.lag`) come from the standard `IEEE8023-LAG-MIB::dot3adAggPortTable`, so any device that implements it is covered with no vendor branch. Aggregates themselves are ordinary interface rows typed `lag` from `ifType` 161. Junos is the one platform with a documented wrinkle: its aggregation ports are the logical units (`xe-0/0/0.0`), which are normalised to the physical port before the reference is emitted, since NetBox does not accept a LAG parent on a virtual interface. Details and the refusal rules are in the [LAG membership](./README.md#lag-membership) section of the README.
+Member-port → aggregate associations (`Interface.lag`) come from the standard `IEEE8023-LAG-MIB::dot3adAggPortTable`, so any device that implements it is covered with no vendor branch. Aggregates themselves are ordinary interface rows typed `lag` from `ifType` 161. Junos is the one platform with a documented wrinkle: its aggregation ports are the logical units (`xe-0/0/0.0`), which are normalised to the physical port before the reference is emitted, since NetBox does not accept a LAG parent on a virtual interface. Which members are logical is decided on the device's reported `ifType`, so a channelized lane keeps its own membership rather than collapsing onto the un-channelized port. Details and the refusal rules are in the [LAG membership](./README.md#lag-membership) section of the README.
 
 | Platform | Status |
 |---|---|
