@@ -177,7 +177,10 @@ func newDeviceStubKeepingPrimary(owner *diode.Device, isV6 bool, primary *diode.
 // rejects first-time interface creation without it) and the plain
 // attributes the mapper computed, or they are silently lost. Pointer-
 // sharing them costs negligible bytes. Structural refs (parent/bridge/
-// lag) are intentionally dropped; they carry their own nested payloads.
+// lag) are not copied here: on a top-level interface they carry their
+// own nested payloads, and a stub used as one of those refs must not
+// nest further. The IP-assigned stub is the exception, see
+// assignedInterfaceStub in PruneNestedRefs.
 //
 // Tags is deliberately NOT carried. Nested IP-assigned interface refs have
 // never carried it, so adding it here would start tagging interfaces that are
@@ -354,6 +357,20 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 		return newInterfaceStub(ref, stubFor(resolveIfaceOwner(ref)))
 	}
 
+	// assignedInterfaceStub builds the stub for an IPAddress.AssignedObject.
+	// That interface is filtered from top-level emission, so this stub is
+	// its only wire payload and must keep the parent the subinterface
+	// resolver found. The parent is a plain stub, one level, so the chain
+	// ends there and no cycle is introduced (its device stub carries no
+	// primary IP).
+	assignedInterfaceStub := func(iface *diode.Interface, deviceStub *diode.Device) *diode.Interface {
+		stub := newInterfaceStub(iface, deviceStub)
+		if stub != nil && iface.Parent != nil {
+			stub.Parent = stubForIface(iface.Parent)
+		}
+		return stub
+	}
+
 	// prunePrimarySnapshot stubs the device ref buried in a top-level Device's
 	// primary-IP snapshot. detachForPrimaryIP shallow-copies the Device during
 	// mapping to break the Device -> IP -> Interface -> Device cycle, so without
@@ -516,9 +533,9 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 					case !isV6 && currentDevice != nil && currentDevice.PrimaryIp4 != nil:
 						primary = currentDevice.PrimaryIp4
 					}
-					e.AssignedObject = newInterfaceStub(iface, newDeviceStubKeepingPrimary(owner, isV6, primary))
+					e.AssignedObject = assignedInterfaceStub(iface, newDeviceStubKeepingPrimary(owner, isV6, primary))
 				} else {
-					e.AssignedObject = stubForIface(iface)
+					e.AssignedObject = assignedInterfaceStub(iface, stubFor(resolveIfaceOwner(iface)))
 				}
 			}
 		case *diode.MACAddress:

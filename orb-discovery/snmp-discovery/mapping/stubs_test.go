@@ -865,3 +865,61 @@ func strDerefSafe(p *string) string {
 	}
 	return *p
 }
+
+// An interface that carries an IP address is dropped from top-level emission,
+// so the stub nested in the IPAddress is its only wire payload and must keep
+// the parent the resolver found, or the subinterface lands in NetBox without
+// one. Both the plain and the cycle-closer branch build that stub.
+func TestPruneNestedRefs_IPAssignedStubKeepsParent(t *testing.T) {
+	v4 := "10.0.0.1/24"
+	currentDevice := &diode.Device{
+		Name:       strPtr("r1"),
+		Serial:     strPtr("SN1"),
+		PrimaryIp4: &diode.IPAddress{Address: &v4},
+	}
+	physType := strPtr("10gbase-x-sfpp")
+	physical := &diode.Interface{Name: strPtr("sfpplus1"), Device: currentDevice, Type: physType}
+	// A parent that itself points further up: the stub must cut the chain
+	// after one level.
+	parentRef := func() *diode.Interface {
+		return &diode.Interface{
+			Name: physical.Name, Type: physical.Type, Device: currentDevice,
+			Parent: &diode.Interface{Name: strPtr("upstream"), Device: currentDevice},
+		}
+	}
+
+	closerUnit := &diode.Interface{Name: strPtr("sfpplus1.156"), Device: currentDevice, Type: strPtr("virtual"), Parent: parentRef()}
+	primaryIP := &diode.IPAddress{Address: &v4, AssignedObject: closerUnit}
+
+	otherAddr := "192.0.2.9/30"
+	otherUnit := &diode.Interface{Name: strPtr("sfpplus1.810"), Device: currentDevice, Type: strPtr("virtual"), Parent: parentRef()}
+	otherIP := &diode.IPAddress{Address: &otherAddr, AssignedObject: otherUnit}
+
+	entities := []diode.Entity{currentDevice, physical, primaryIP, otherIP}
+	PruneNestedRefs(entities, currentDevice, map[*diode.IPAddress]bool{primaryIP: true})
+
+	for _, ip := range []*diode.IPAddress{primaryIP, otherIP} {
+		stub, ok := ip.AssignedObject.(*diode.Interface)
+		require.True(t, ok)
+		require.NotNil(t, stub.Parent, "%s lost its parent", *stub.Name)
+		assert.Equal(t, strPtr("sfpplus1"), stub.Parent.Name)
+		assert.Same(t, physType, stub.Parent.Type)
+		require.NotNil(t, stub.Parent.Device)
+		assert.Equal(t, strPtr("r1"), stub.Parent.Device.Name)
+		assert.Nil(t, stub.Parent.Device.Serial, "parent device must be a stub")
+		assert.Nil(t, stub.Parent.Device.PrimaryIp4, "parent device stub must not close the primary-IP cycle")
+		assert.Nil(t, stub.Parent.Parent, "parent stub carries no parent of its own")
+	}
+	closer := primaryIP.AssignedObject.(*diode.Interface)
+	require.NotNil(t, closer.Device.PrimaryIp4, "cycle-closer keeps its matcher-only primary")
+}
+
+func TestPruneNestedRefs_IPAssignedStubWithoutParentStaysNil(t *testing.T) {
+	currentDevice := &diode.Device{Name: strPtr("r1")}
+	iface := &diode.Interface{Name: strPtr("ether1"), Device: currentDevice, Type: strPtr("1000base-t")}
+	addr := "10.0.0.1/24"
+	ip := &diode.IPAddress{Address: &addr, AssignedObject: iface}
+	PruneNestedRefs([]diode.Entity{currentDevice, iface, ip}, currentDevice, nil)
+	stub := ip.AssignedObject.(*diode.Interface)
+	assert.Nil(t, stub.Parent)
+}
