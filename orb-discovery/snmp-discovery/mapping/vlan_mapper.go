@@ -121,13 +121,11 @@ func (m *VlanMapper) PostMap(
 		vlanEntities := m.emitVLANs(allObjectIDs, defaults)
 		if membership := vendorTaggedMembership(allObjectIDs, m.logger); len(membership) > 0 {
 			ensureVLAN := m.vlanIndex(&vlanEntities, defaults)
+			classifications := make(map[int]qbridge.Classification, len(membership))
 			for ifIndex, vids := range membership {
-				iface := verifiedInterface(registry, ifIndex)
-				if iface == nil {
-					continue
-				}
-				applyClassification(iface, qbridge.Classification{Mode: qbridge.ModeTrunk, Tagged: vids}, ensureVLAN)
+				classifications[ifIndex] = qbridge.Classification{Mode: qbridge.ModeTrunk, Tagged: vids}
 			}
+			m.applyClassifications(registry, classifications, ensureVLAN)
 			return vlanEntities
 		}
 		if hasVLANSignal(allObjectIDs) {
@@ -170,14 +168,11 @@ func (m *VlanMapper) PostMap(
 	// Mutate interfaces in place. The registry holds *diode.Interface
 	// instances InterfaceMapper produced; we look them up by ifIndex
 	// using string-form ifIndex as ObjectIDIndex.
+	classifications := make(map[int]qbridge.Classification, len(infos))
 	for ifIndex, info := range infos {
-		iface := verifiedInterface(registry, ifIndex)
-		if iface == nil {
-			continue
-		}
-		c := qbridge.Classify(*info)
-		applyClassification(iface, c, ensureVLAN)
+		classifications[ifIndex] = qbridge.Classify(*info)
 	}
+	m.applyClassifications(registry, classifications, ensureVLAN)
 	return vlanEntities
 }
 
@@ -1200,4 +1195,177 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 // int64Ptr is a local helper for *int64 values (diode.VLAN.Vid is *int64).
 func int64Ptr(v int64) *int64 {
 	return &v
+}
+
+// verifiedInterfacesByName indexes the walked interfaces by name for
+// switchport-target resolution. Excluded names are left out so a unit never
+// binds its switchport configuration to an interface the operator's
+// exclude patterns removed from the payload.
+func verifiedInterfacesByName(registry *EntityRegistry) map[string][]*diode.Interface {
+	bucket := registry.entities[InterfaceEntityType]
+	ifaces := make([]*diode.Interface, 0, len(bucket))
+	for _, e := range bucket {
+		iface, ok := e.(*diode.Interface)
+		if !ok || iface == nil || iface.Name == nil {
+			continue
+		}
+		if !registry.IsInterfaceVerified(iface) || registry.IsInterfaceExcluded(*iface.Name) {
+			continue
+		}
+		ifaces = append(ifaces, iface)
+	}
+	return interfacesByName(ifaces)
+}
+
+// switchportTarget returns the interface that should carry the switchport
+// configuration of a classified bridge port.
+//
+// Bridge ports are ifIndexes, and on Junos the ifIndex in
+// dot1dBasePortIfIndex is the logical unit (xe-0/0/17.0, ae8.0) rather than
+// the port it runs on. NetBox models mode / untagged_vlan / tagged_vlans on
+// the switchport itself, and a NETCONF discovery of the same device puts
+// them there, so a unit is resolved back to its port. Aggregates are valid
+// switchports, so ae8.0 resolving to ae8 is wanted; only the unit is
+// unwanted. Platforms whose bridge ports are already the ports themselves
+// (Cisco, Arista, and Junos ELS) have nothing to resolve and are untouched.
+//
+// When the unit's port is absent from the walk or its name is ambiguous,
+// the unit itself is kept: the membership the device reported is still true
+// of that interface, and dropping it would lose discovered data to gain
+// tidiness.
+func (m *VlanMapper) switchportTarget(
+	iface *diode.Interface,
+	byName map[string][]*diode.Interface,
+) *diode.Interface {
+	parent, isSub, reason := parentInterfaceFor(strDeref(iface.Name), byName)
+	switch {
+	case parent != nil:
+		return parent
+	case isSub:
+		m.logger.Warn("vlan: keeping switchport configuration on the logical unit",
+			"interface", strDeref(iface.Name), "reason", reason)
+	}
+	return iface
+}
+
+// mergedClassification accumulates the classifications of every bridge port
+// that resolves to one switchport, with the unit names that contributed.
+type mergedClassification struct {
+	class            qbridge.Classification
+	sources          []string
+	untaggedConflict bool
+}
+
+// merge folds src into the accumulator. One physical port carrying several
+// bridging units is a real configuration (flexible VLAN tagging), and the
+// port's switchport state is the combination: every unit's tagged VLANs, and
+// the trunkiest mode any of them reported. Two units claiming DIFFERENT
+// untagged VLANs contradict each other — a port has one native VLAN — so the
+// untagged assignment is dropped and the tagged union kept, rather than
+// picking whichever unit the walk happened to yield first.
+func (a *mergedClassification) merge(src qbridge.Classification, source string) {
+	a.sources = append(a.sources, source)
+	if len(a.sources) == 1 {
+		a.class = src
+		return
+	}
+	if src.Mode > a.class.Mode {
+		a.class.Mode = src.Mode
+	}
+	a.class.Tagged = unionVids(a.class.Tagged, src.Tagged)
+	switch {
+	case src.Untagged == nil:
+	case a.class.Untagged == nil:
+		a.class.Untagged = src.Untagged
+	case *a.class.Untagged != *src.Untagged:
+		a.untaggedConflict = true
+	}
+}
+
+// unionVids returns the sorted, deduplicated union of two VID lists.
+func unionVids(a, b []int) []int {
+	seen := make(map[int]struct{}, len(a)+len(b))
+	out := make([]int, 0, len(a)+len(b))
+	for _, list := range [][]int{a, b} {
+		for _, vid := range list {
+			if _, dup := seen[vid]; dup {
+				continue
+			}
+			seen[vid] = struct{}{}
+			out = append(out, vid)
+		}
+	}
+	sort.Ints(out)
+	return out
+}
+
+// applyClassifications places each classified bridge port's switchport
+// configuration on the interface that should carry it, after resolving
+// logical units to their ports and combining the units that share one.
+//
+// Bridge ports are visited in ifIndex order so that a device reporting
+// several units of one port produces the same payload on every poll.
+func (m *VlanMapper) applyClassifications(
+	registry *EntityRegistry,
+	classifications map[int]qbridge.Classification,
+	ensureVLAN func(int) *diode.VLAN,
+) {
+	if len(classifications) == 0 {
+		return
+	}
+	byName := verifiedInterfacesByName(registry)
+
+	ifIndexes := make([]int, 0, len(classifications))
+	for ifIndex := range classifications {
+		ifIndexes = append(ifIndexes, ifIndex)
+	}
+	sort.Ints(ifIndexes)
+
+	merged := map[*diode.Interface]*mergedClassification{}
+	order := make([]*diode.Interface, 0, len(ifIndexes))
+	for _, ifIndex := range ifIndexes {
+		c := classifications[ifIndex]
+		// Routed and unknown ports carry no switchport configuration, so
+		// they neither claim a target nor dilute one that another unit of
+		// the same port does claim.
+		if classificationToNetboxMode(c.Mode) == "" {
+			continue
+		}
+		iface := verifiedInterface(registry, ifIndex)
+		if iface == nil {
+			continue
+		}
+		target := m.switchportTarget(iface, byName)
+		acc, seen := merged[target]
+		if !seen {
+			acc = &mergedClassification{}
+			merged[target] = acc
+			order = append(order, target)
+		}
+		acc.merge(c, strDeref(iface.Name))
+	}
+
+	for _, target := range order {
+		acc := merged[target]
+		if acc.untaggedConflict {
+			// A port has one native VLAN, so contradicting units settle
+			// nothing. Drop the contested assignment and keep what the
+			// units agree on; with no tagged VLANs left there is nothing
+			// to say about the port, and emitting access with no VLAN
+			// would be worse than emitting nothing.
+			acc.class.Untagged = nil
+			if len(acc.class.Tagged) == 0 {
+				m.logger.Warn("vlan: units of one port report different untagged VLANs and nothing else; leaving it unclassified",
+					"interface", strDeref(target.Name), "units", acc.sources)
+				continue
+			}
+			m.logger.Warn("vlan: units of one port report different untagged VLANs; keeping the tagged VLANs only",
+				"interface", strDeref(target.Name), "units", acc.sources)
+		}
+		if len(acc.sources) > 1 {
+			m.logger.Debug("vlan: combined logical units onto their port",
+				"interface", strDeref(target.Name), "units", acc.sources)
+		}
+		applyClassification(target, acc.class, ensureVLAN)
+	}
 }

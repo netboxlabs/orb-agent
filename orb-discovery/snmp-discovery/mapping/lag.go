@@ -97,20 +97,20 @@ func lagMemberTarget(member *diode.Interface, byName map[string][]*diode.Interfa
 	if member == nil || member.Name == nil {
 		return nil, "member interface has no name"
 	}
-	if parentName := ExtractParentInterfaceName(*member.Name); parentName != "" {
-		switch parents := byName[parentName]; len(parents) {
-		case 1:
-			return parents[0], ""
-		case 0:
-			if isVirtualInterfaceType(member.Type) {
-				return nil, "virtual member's parent interface is not in the walk"
-			}
-			return member, ""
-		default:
-			return nil, "parent interface name is ambiguous on this device"
-		}
+	parent, isSub, reason := parentInterfaceFor(*member.Name, byName)
+	switch {
+	case parent != nil:
+		return parent, ""
+	case isSub && reason == "parent interface name is ambiguous on this device":
+		return nil, reason
 	}
+	// Either not a subinterface at all, or one whose parent is absent: the
+	// member itself is the only candidate, and it is eligible only when
+	// NetBox would accept a LAG parent on it.
 	if isVirtualInterfaceType(member.Type) {
+		if isSub {
+			return nil, "virtual member's parent interface is not in the walk"
+		}
 		return nil, "member is a virtual interface with no physical parent"
 	}
 	return member, ""
@@ -158,13 +158,12 @@ func AttachLagMembership(
 	}
 
 	byIfIndex := make(map[int]*diode.Interface, len(ifIndexByIface))
-	byName := make(map[string][]*diode.Interface, len(ifIndexByIface))
+	ifaces := make([]*diode.Interface, 0, len(ifIndexByIface))
 	for iface, idx := range ifIndexByIface {
 		byIfIndex[idx] = iface
-		if iface.Name != nil {
-			byName[*iface.Name] = append(byName[*iface.Name], iface)
-		}
+		ifaces = append(ifaces, iface)
 	}
+	byName := interfacesByName(ifaces)
 
 	// target -> aggregate chosen for it; a second, different aggregate for
 	// the same target marks the target contradictory.
