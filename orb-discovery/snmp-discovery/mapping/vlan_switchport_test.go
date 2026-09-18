@@ -3,7 +3,9 @@ package mapping
 import (
 	"log/slog"
 	"os"
+	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -49,15 +51,35 @@ func bridgeFixture(basePorts map[int]int, vlans []bridgeVlan, pvids map[int]int,
 }
 
 // junosRegistry registers interfaces by ifIndex under the names the device
-// reports, physical ports and their logical units alike.
-func junosRegistry(t *testing.T, byIfIndex map[int]string) (*EntityRegistry, map[string]*diode.Interface) {
+// reports, physical ports and their logical units alike. Types follow what
+// those devices publish through ifType, since placement is decided on the
+// type and not on the name: a unit is propVirtual/l3ipvlan (virtual), an
+// aggregate is ieee8023adLag (lag), and everything else is a port.
+// typeOverrides names the interfaces that need something else.
+func junosRegistry(
+	t *testing.T,
+	byIfIndex map[int]string,
+	typeOverrides ...map[string]string,
+) (*EntityRegistry, map[string]*diode.Interface) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	registry := NewEntityRegistry(logger)
 	registry.entities[InterfaceEntityType] = map[ObjectIDIndex]diode.Entity{}
 	byName := map[string]*diode.Interface{}
 	for ifIndex, name := range byIfIndex {
-		iface := &diode.Interface{Name: StringPtr(name)}
+		ifType := "10gbase-x-sfpp"
+		switch {
+		case regexp.MustCompile(`\.\d+$`).MatchString(name):
+			ifType = "virtual"
+		case strings.HasPrefix(name, "ae"):
+			ifType = "lag"
+		}
+		for _, o := range typeOverrides {
+			if t2, ok := o[name]; ok {
+				ifType = t2
+			}
+		}
+		iface := &diode.Interface{Name: StringPtr(name), Type: StringPtr(ifType)}
 		registry.entities[InterfaceEntityType][ObjectIDIndex(strconv.Itoa(ifIndex))] = iface
 		registry.MarkInterfaceVerified(iface)
 		byName[name] = iface
@@ -297,14 +319,15 @@ func TestVlanMapper_PostMap_ExcludedPort_KeepsUnit(t *testing.T) {
 	require.NotNil(t, ifaces["xe-0/0/50.0"].Mode)
 }
 
-// A colon on Junos names a channelized lane, not a unit: et-0/0/0:0 is a
-// physical port in its own right. Where a device publishes the
-// un-channelized name too, the lane's membership must stay on the lane.
+// A channelized lane is a switchport in its own right: the Aruba CX shape,
+// where 1/1/11:3 parses as a child of 1/1/11 and the parent IS in the walk.
+// The device types the lane as ethernetCsmacd, which is what keeps the
+// configuration where it belongs.
 func TestVlanMapper_PostMap_ChannelizedLane_KeepsItsOwnConfig(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	registry, ifaces := junosRegistry(t, map[int]string{
-		700: "et-0/0/0",
-		701: "et-0/0/0:0",
+		700: "1/1/11",
+		701: "1/1/11:3",
 	})
 	oids := bridgeFixture(
 		map[int]int{1: 701},
@@ -315,11 +338,38 @@ func TestVlanMapper_PostMap_ChannelizedLane_KeepsItsOwnConfig(t *testing.T) {
 
 	NewVlanMapper(logger, config.Options{}).PostMap(oids, registry, &config.Defaults{})
 
-	lane := ifaces["et-0/0/0:0"]
+	lane := ifaces["1/1/11:3"]
 	require.NotNil(t, lane.Mode, "the lane is the switchport")
 	assert.Equal(t, "tagged", *lane.Mode)
 	assert.Equal(t, []int{300}, vidsOf(lane.TaggedVlans))
-	assert.Nil(t, ifaces["et-0/0/0"].Mode, "the un-channelized name is not the switchport here")
+	assert.Nil(t, ifaces["1/1/11"].Mode, "the un-channelized name is not the switchport here")
+}
+
+// The same shape with a different vendor and separator: BDCOM GPON ONU
+// ports (GPON0/2:1) parse as children of the PON port and are typed
+// other(1), so dozens of them must not collapse onto one interface.
+func TestVlanMapper_PostMap_OnuPort_KeepsItsOwnConfig(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		800: "GPON0/2",
+		801: "GPON0/2:1",
+		802: "GPON0/2:2",
+	}, map[string]string{"GPON0/2": "other", "GPON0/2:1": "other", "GPON0/2:2": "other"})
+	oids := bridgeFixture(
+		map[int]int{1: 801, 2: 802},
+		[]bridgeVlan{
+			{vid: 401, name: "VL401", egress: []int{1}},
+			{vid: 402, name: "VL402", egress: []int{2}},
+		},
+		nil,
+		map[int]int{800: 1, 801: 1, 802: 1},
+	)
+
+	NewVlanMapper(logger, config.Options{}).PostMap(oids, registry, &config.Defaults{})
+
+	assert.Equal(t, []int{401}, vidsOf(ifaces["GPON0/2:1"].TaggedVlans))
+	assert.Equal(t, []int{402}, vidsOf(ifaces["GPON0/2:2"].TaggedVlans))
+	assert.Nil(t, ifaces["GPON0/2"].Mode, "ONU ports never collapse onto their PON port")
 }
 
 // A unit of a channelized lane is still a unit, and resolves onto the lane.

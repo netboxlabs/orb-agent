@@ -1224,12 +1224,18 @@ func verifiedInterfacesByName(registry *EntityRegistry) map[string][]*diode.Inte
 // dot1dBasePortIfIndex is the logical unit (xe-0/0/17.0, ae8.0) rather than
 // the port it runs on. NetBox models mode / untagged_vlan / tagged_vlans on
 // the switchport itself, and a NETCONF discovery of the same device puts
-// them there, so a unit is resolved back to its port. Aggregates are valid
-// switchports, so ae8.0 resolving to ae8 is wanted; only the unit is
-// unwanted. Platforms whose bridge ports are already the ports themselves
-// (Cisco, Arista, and Junos ELS) have nothing to resolve and are untouched.
+// them there, so a unit is resolved back to its port.
 //
-// When the unit's port is absent from the walk or its name is ambiguous,
+// Only a LOGICAL interface hands its configuration over. The device says
+// which those are through ifType, and a name-shaped child is not
+// necessarily one: a channelized lane (Aruba CX 1/1/11:3, ifType 6) and a
+// GPON ONU port (BDCOM GPON0/2:1, ifType 1) both parse as children of an
+// interface that is in the walk, yet each is a switchport in its own right
+// and keeps what the device reported for it. Units (ifType 53 / 135) and
+// aggregate units (ifType 161) hand over, so ae8.0 resolves onto ae8 —
+// aggregates are switchports too.
+//
+// When the unit's port is absent from the walk, or its name is ambiguous,
 // the unit itself is kept: the membership the device reported is still true
 // of that interface, and dropping it would lose discovered data to gain
 // tidiness.
@@ -1237,6 +1243,10 @@ func (m *VlanMapper) switchportTarget(
 	iface *diode.Interface,
 	byName map[string][]*diode.Interface,
 ) *diode.Interface {
+	// A physical interface is the switchport, whatever its name looks like.
+	if !isVirtualInterfaceType(iface.Type) {
+		return iface
+	}
 	parent, isSub, reason := parentInterfaceFor(strDeref(iface.Name), byName)
 	switch {
 	case parent != nil:
