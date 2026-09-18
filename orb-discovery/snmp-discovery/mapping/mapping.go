@@ -227,6 +227,19 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 			continue // Not a subinterface
 		}
 
+		// NetBox accepts a parent only on a virtual interface: Interface
+		// .clean() refuses one on anything else ("Only virtual interfaces
+		// may be assigned to a parent interface"), and a refused interface
+		// fails the whole target's ingestion. A name-shaped child the
+		// device typed as a port — a channelized lane, an ONU port — is
+		// therefore left without the reference rather than carrying one
+		// that cannot be stored.
+		if iface.Type == nil || *iface.Type != "virtual" {
+			r.logger.Debug("interface is not virtual; not assigning a parent",
+				"interface", *iface.Name, "type", strDeref(iface.Type))
+			continue
+		}
+
 		// Look up the parent interface by name
 		parent := r.GetInterfaceByName(parentName)
 		if parent != nil {

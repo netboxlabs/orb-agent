@@ -3,6 +3,7 @@ package mapping
 import (
 	"log/slog"
 	"os"
+	"strconv"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -16,6 +17,18 @@ import (
 // lagIface builds a registry-shaped interface for the attach tests.
 func lagIface(name, typ string, dev *diode.Device) *diode.Interface {
 	return &diode.Interface{Name: strPtr(name), Type: strPtr(typ), Device: dev}
+}
+
+// lagIfTypes adds the IF-MIB ifType rows a real walk carries, keyed by
+// ifIndex in the numeric form the agent reports. Membership placement
+// reads these rather than the NetBox type on the interface, so a fixture
+// that omits them describes a device that answered nothing about its
+// interfaces.
+func lagIfTypes(oids ObjectIDValueMap, byIfIndex map[int]int) ObjectIDValueMap {
+	for ifIndex, ifType := range byIfIndex {
+		oids[oidIfType+strconv.Itoa(ifIndex)] = Value{Value: strconv.Itoa(ifType)}
+	}
+	return oids
 }
 
 // Junos EX with three aggregation ports, indexed by logical unit as the
@@ -43,14 +56,18 @@ func fixtureJunosLagMembers() (map[*diode.Interface]int, map[string]*diode.Inter
 }
 
 func fixtureJunosLagOids() ObjectIDValueMap {
-	return ObjectIDValueMap{
+	return lagIfTypes(ObjectIDValueMap{
 		oidDot3adAggPortSelectedAggID + "528": {Value: "584"},
 		oidDot3adAggPortSelectedAggID + "534": {Value: "576"},
 		oidDot3adAggPortSelectedAggID + "546": {Value: "584"},
 		oidDot3adAggPortAttachedAggID + "528": {Value: "584"},
 		oidDot3adAggPortAttachedAggID + "534": {Value: "576"},
 		oidDot3adAggPortAttachedAggID + "546": {Value: "584"},
-	}
+	}, map[int]int{
+		524: 6, 526: 6, // physical ports
+		528: 53, 534: 53, 546: 53, // the units the MIB names
+		576: 161, 584: 161, 586: 161, // aggregates and an aggregate unit
+	})
 }
 
 func TestLagMembershipRows_AttachedWinsAndZeroDropped(t *testing.T) {
@@ -92,13 +109,61 @@ func TestAttachLagMembership_PhysicalMemberUsedDirectly(t *testing.T) {
 	gi2 := lagIface("GigabitEthernet1/0/2", "1000base-t", dev)
 	po1 := lagIface("Port-channel1", "lag", dev)
 	byIface := map[*diode.Interface]int{gi1: 1, gi2: 2, po1: 5001}
-	oids := ObjectIDValueMap{
+	oids := lagIfTypes(ObjectIDValueMap{
 		oidDot3adAggPortAttachedAggID + "1": {Value: "5001"},
 		oidDot3adAggPortAttachedAggID + "2": {Value: "5001"},
-	}
+	}, map[int]int{1: 6, 2: 6, 5001: 161})
 	assert.Equal(t, 2, AttachLagMembership(oids, byIface, slog.Default()))
 	assert.Equal(t, "Port-channel1", *gi1.Lag.Name)
 	assert.Equal(t, "Port-channel1", *gi2.Lag.Name)
+}
+
+// Channelized lanes are members in their own right. Their names parse as
+// children of the un-channelized port, which the walk also carries, so a
+// placement decided on the name would point every lane's membership at an
+// interface that is not in the aggregate at all.
+func TestAttachLagMembership_ChannelizedLanesKeepTheirOwnMembership(t *testing.T) {
+	dev := &diode.Device{Name: strPtr("cx8360")}
+	port := lagIface("1/1/11", "10gbase-x-sfpp", dev)
+	// Typed as the mapper types them: the device reports ethernetCsmacd,
+	// and a colon-named child no longer contradicts that.
+	lane1 := lagIface("1/1/11:1", "10gbase-x-sfpp", dev)
+	lane2 := lagIface("1/1/11:2", "10gbase-x-sfpp", dev)
+	lag1 := lagIface("lag1", "lag", dev)
+	byIface := map[*diode.Interface]int{port: 110, lane1: 111, lane2: 112, lag1: 900}
+	oids := lagIfTypes(ObjectIDValueMap{
+		oidDot3adAggPortAttachedAggID + "111": {Value: "900"},
+		oidDot3adAggPortAttachedAggID + "112": {Value: "900"},
+	}, map[int]int{110: 6, 111: 6, 112: 6, 900: 161})
+
+	assert.Equal(t, 2, AttachLagMembership(oids, byIface, slog.Default()))
+	require.NotNil(t, lane1.Lag)
+	assert.Equal(t, "lag1", *lane1.Lag.Name)
+	require.NotNil(t, lane2.Lag)
+	assert.Equal(t, "lag1", *lane2.Lag.Name)
+	assert.Nil(t, port.Lag, "the un-channelized port is not a member of anything")
+}
+
+// The interface that would carry the reference has to be one NetBox
+// accepts it on. With no ifType in the walk the member is used as-is and
+// its type comes from the policy default, which an operator can set to a
+// virtual one — and NetBox rejects the whole interface, not just the
+// relationship, when a LAG parent lands on a virtual type.
+func TestAttachLagMembership_RefusesTargetNetBoxWouldReject(t *testing.T) {
+	dev := &diode.Device{Name: strPtr("sw")}
+	ae1 := lagIface("ae1", "lag", dev)
+	byIface := map[*diode.Interface]int{ae1: 9}
+	for _, typ := range []string{"virtual", "bridge", "lag"} {
+		member := lagIface("xe-0/0/9", typ, dev)
+		byIface[member] = 1
+		oids := lagIfTypes(ObjectIDValueMap{
+			oidDot3adAggPortAttachedAggID + "1": {Value: "9"},
+		}, map[int]int{9: 161})
+
+		assert.Equal(t, 0, AttachLagMembership(oids, byIface, slog.Default()), "type %s", typ)
+		assert.Nil(t, member.Lag, "type %s must not receive a LAG parent", typ)
+		delete(byIface, member)
+	}
 }
 
 func TestAttachLagMembership_RefusesWhatItCannotResolve(t *testing.T) {
@@ -109,14 +174,14 @@ func TestAttachLagMembership_RefusesWhatItCannotResolve(t *testing.T) {
 	notLag := lagIface("irb", "virtual", dev)
 	ae1 := lagIface("ae1", "lag", dev)
 	byIface := map[*diode.Interface]int{phys: 1, orphanUnit: 2, loop: 3, notLag: 4, ae1: 9}
-	oids := ObjectIDValueMap{
+	oids := lagIfTypes(ObjectIDValueMap{
 		oidDot3adAggPortAttachedAggID + "1":  {Value: "4"},  // aggregate is not typed lag
-		oidDot3adAggPortAttachedAggID + "2":  {Value: "9"},  // virtual member, parent missing
-		oidDot3adAggPortAttachedAggID + "3":  {Value: "9"},  // virtual member, no parent at all
+		oidDot3adAggPortAttachedAggID + "2":  {Value: "9"},  // logical member, parent missing
+		oidDot3adAggPortAttachedAggID + "3":  {Value: "9"},  // logical member, no parent at all
 		oidDot3adAggPortAttachedAggID + "9":  {Value: "9"},  // aggregate names itself
 		oidDot3adAggPortAttachedAggID + "77": {Value: "9"},  // member not walked
 		oidDot3adAggPortAttachedAggID + "4":  {Value: "42"}, // aggregate not walked
-	}
+	}, map[int]int{1: 6, 2: 53, 3: 24, 4: 53, 9: 161})
 	assert.Equal(t, 0, AttachLagMembership(oids, byIface, slog.Default()))
 	for _, i := range []*diode.Interface{phys, orphanUnit, loop, notLag, ae1} {
 		assert.Nil(t, i.Lag, "%s must stay untouched", *i.Name)
@@ -131,10 +196,10 @@ func TestAttachLagMembership_ContradictoryUnitsLeaveLagUnset(t *testing.T) {
 	ae1 := lagIface("ae1", "lag", dev)
 	ae2 := lagIface("ae2", "lag", dev)
 	byIface := map[*diode.Interface]int{phys: 1, u0: 10, u1: 11, ae1: 20, ae2: 21}
-	oids := ObjectIDValueMap{
+	oids := lagIfTypes(ObjectIDValueMap{
 		oidDot3adAggPortAttachedAggID + "10": {Value: "20"},
 		oidDot3adAggPortAttachedAggID + "11": {Value: "21"},
-	}
+	}, map[int]int{1: 6, 10: 53, 11: 53, 20: 161, 21: 161})
 	assert.Equal(t, 0, AttachLagMembership(oids, byIface, slog.Default()))
 	assert.Nil(t, phys.Lag, "two units naming different aggregates is a contradiction, not a choice")
 }
@@ -149,7 +214,8 @@ func TestAttachLagMembership_AmbiguousParentNameSkipped(t *testing.T) {
 	unit := lagIface("me0.0", "virtual", m1)
 	ae := lagIface("ae0", "lag", m1)
 	byIface := map[*diode.Interface]int{a: 1, b: 2, unit: 3, ae: 9}
-	oids := ObjectIDValueMap{oidDot3adAggPortAttachedAggID + "3": {Value: "9"}}
+	oids := lagIfTypes(ObjectIDValueMap{oidDot3adAggPortAttachedAggID + "3": {Value: "9"}},
+		map[int]int{1: 6, 2: 6, 3: 53, 9: 161})
 	assert.Equal(t, 0, AttachLagMembership(oids, byIface, slog.Default()))
 	assert.Nil(t, a.Lag)
 	assert.Nil(t, b.Lag)
