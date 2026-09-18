@@ -2,7 +2,7 @@
 
 The Orb Agent can integrate with [Delinea Secret Server](https://delinea.com/products/secret-server/) (both Secret Server Cloud and on-prem / Platform) to securely manage sensitive information such as passwords and API keys. This feature allows you to reference secrets stored in Delinea directly in your policy configurations without hardcoding sensitive values.
 
-> **Beta:** The Delinea provider is read-only and supports username/password authentication only. The integration is exercised by unit tests against a fake Delinea HTTP server; end-to-end validation against a real Delinea tenant is captured as a manual checklist below.
+> **Note:** The Delinea provider is read-only and supports username/password authentication only.
 
 ## Configuration
 
@@ -14,21 +14,21 @@ orb:
     active: delinea
     sources:
       delinea:
-        server_url: ""                  # On-prem / Platform URL (XOR with tenant)
-        tenant: "<your-tenant>"         # Secret Server Cloud subdomain (XOR with server_url)
+        server_url: ""                  # Full URL, any deployment (XOR with tenant)
+        tenant: "<your-tenant>"         # Subdomain, *.secretservercloud.com only (XOR with server_url)
         username: "svc_orb"
         password: "${DELINEA_PASSWORD}"
         schedule: "*/5 * * * *"         # Optional, cron format for polling interval
 ```
 
-Exactly one of `server_url` or `tenant` must be set. The provider does not eagerly authenticate at startup — the first secret fetch performs the OAuth handshake against Delinea.
+Exactly one of `server_url` or `tenant` must be set. `tenant` is a shorthand that expands to `https://<tenant>.secretservercloud.com`, so it fits only that domain; `server_url` takes the address as given and works for every deployment, which is the one to use if your tenant is on `delinea.app` or a regional domain. The provider does not eagerly authenticate at startup — the first secret fetch performs the OAuth handshake against Delinea.
 
 ### Configuration Options
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `server_url` | string | Cond. | URL of an on-prem Secret Server or Delinea Platform deployment. Mutually exclusive with `tenant`. |
-| `tenant` | string | Cond. | Tenant subdomain for Secret Server Cloud (e.g. `acme` for `acme.secretservercloud.com`). Mutually exclusive with `server_url`. |
+| `server_url` | string | Cond. | Full URL of the Secret Server, including the scheme and with no trailing path. Use this for on-prem and Delinea Platform deployments, and for any cloud tenant whose hostname is not `<tenant>.secretservercloud.com`, such as a `delinea.app` tenant or a regional `secretservercloud.eu` one. Mutually exclusive with `tenant`. |
+| `tenant` | string | Cond. | Subdomain of a Secret Server Cloud tenant on `secretservercloud.com`, for example `acme` for `acme.secretservercloud.com`. The rest of the hostname is fixed, so any other domain needs `server_url` instead. Mutually exclusive with `server_url`. |
 | `username` | string | Yes | Service-user username with `View Secret` permission on the referenced secrets. |
 | `password` | string | Yes | Password for the service user. |
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
@@ -105,14 +105,14 @@ If a policy references multiple Delinea secrets, a single failed fetch is sticky
 
 This is useful for credential rotation scenarios, where you want to rotate credentials in Delinea without restarting the Orb Agent or manually updating policies.
 
-## Manual end-to-end validation
+## Verifying the integration
 
-The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), so end-to-end validation uses a free Secret Server Cloud trial tenant.
+Delinea Secret Server cannot be run locally, since it requires Windows and MSSQL, so this walkthrough uses a free Secret Server Cloud trial tenant.
 
 ### Prerequisites
 
 - Free trial tenant from <https://secretservercloud.com>.
-- Docker (the `netboxlabs/orb-agent:develop` image is used below; switch to `:latest` once a release containing this integration is published).
+- Docker.
 
 ### Steps
 
@@ -160,12 +160,12 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
 3. **Pull the image and run with debug logging:**
 
    ```bash
-   docker pull netboxlabs/orb-agent:develop
+   docker pull netboxlabs/orb-agent:latest
    export DELINEA_PASSWORD='<svc_orb password>'
    docker run --rm --net=host \
      -v "${PWD}":/opt/orb/ \
      -e DELINEA_PASSWORD \
-     netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml -d
+     netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml -d
    ```
 
 4. **Verify auth + lookup:** in the debug log, look for one line per resolved placeholder of the form `Resolved delinea secret ref=path/orb-test/orb-test-credential/password policy_id=…`, followed by the `device_discovery` backend accepting the policy without a `failed to solve secrets` error.
@@ -176,7 +176,7 @@ The Delinea Secret Server cannot be run locally (it requires Windows + MSSQL), s
    - Wrong service-user password → the first secret fetch fails with a clear authentication error.
    - Bad placeholder grammar (for example `${delinea://id/abc/password}`) → policy apply fails with a parse error.
 
-### Pass criteria
+### Expected results
 
 - The resolved secret value reaches the backend.
 - A live rotation triggers a policy re-apply within one cron interval.

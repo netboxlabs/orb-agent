@@ -2,8 +2,6 @@
 
 The Orb Agent can integrate with [CyberArk Privileged Access Manager (PAM)](https://www.cyberark.com/products/privileged-access-manager/) via the Central Credential Provider (CCP) to retrieve secrets at runtime. This feature allows you to reference accounts stored in CyberArk directly in your policy configurations without hardcoding sensitive values.
 
-> **Beta:** Validated via unit tests against a fake CCP HTTP server. End-to-end validation against a real CCP deployment is the next step.
-
 ## Prerequisites
 
 Before configuring the agent, the CyberArk administrator must provision:

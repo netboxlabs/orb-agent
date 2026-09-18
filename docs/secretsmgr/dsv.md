@@ -4,7 +4,7 @@ The Orb Agent can integrate with [Delinea DevOps Secrets Vault (DSV)](https://de
 
 > **DSV is a different product from Delinea Secret Server.** If you use Secret Server, see [the `delinea` provider](./delinea.md) instead. This page documents the `dsv` provider, which targets DevOps Secrets Vault via the official `dsv-sdk-go` SDK.
 
-> **Beta:** The DSV provider is read-only and supports client-credential authentication only. It is exercised by unit tests against a fake DSV HTTP server; end-to-end validation against a real DSV tenant is captured as a manual checklist below.
+> **Note:** The DSV provider is read-only and supports client-credential authentication only.
 
 ## Configuration
 
@@ -96,13 +96,13 @@ If a policy references multiple DSV secrets, a single failed fetch is sticky: th
 
 This is useful for credential-rotation scenarios: rotate a credential in DSV without restarting the Orb Agent or manually updating policies.
 
-## Manual end-to-end validation
+## Verifying the integration
 
 ### Prerequisites
 
 - A DSV tenant with a client credential (`client_id` / `client_secret`).
 - A secret, e.g. at path `orb-test/credential`, with a `password` data field.
-- Docker (the `netboxlabs/orb-agent:develop` image is used below; switch to `:latest` once a release containing this integration is published).
+- Docker.
 
 ### Steps
 
@@ -146,12 +146,12 @@ This is useful for credential-rotation scenarios: rotate a credential in DSV wit
 3. **Run with debug logging:**
 
    ```bash
-   docker pull netboxlabs/orb-agent:develop
+   docker pull netboxlabs/orb-agent:latest
    export DSV_CLIENT_SECRET='<client secret>'
    docker run --rm --net=host \
      -v "${PWD}":/opt/orb/ \
      -e DSV_CLIENT_SECRET \
-     netboxlabs/orb-agent:develop run -c /opt/orb/agent.yaml -d
+     netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml -d
    ```
 
 4. **Verify auth + lookup:** in the debug log, confirm the `device_discovery` backend accepts the policy without a `failed to solve secrets` error.
@@ -162,7 +162,7 @@ This is useful for credential-rotation scenarios: rotate a credential in DSV wit
    - Wrong client secret → the first secret fetch fails with a clear authentication error.
    - Bad placeholder grammar (for example `${dsv://mysecret}` with no field key) → policy apply fails with a parse error.
 
-### Pass criteria
+### Expected results
 
 - The resolved secret value reaches the backend.
 - A live rotation triggers a policy re-apply within one cron interval.
