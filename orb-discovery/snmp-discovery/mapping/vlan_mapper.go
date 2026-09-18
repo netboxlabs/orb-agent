@@ -125,7 +125,7 @@ func (m *VlanMapper) PostMap(
 			for ifIndex, vids := range membership {
 				classifications[ifIndex] = qbridge.Classification{Mode: qbridge.ModeTrunk, Tagged: vids}
 			}
-			m.applyClassifications(registry, classifications, ensureVLAN)
+			m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
 			return vlanEntities
 		}
 		if hasVLANSignal(allObjectIDs) {
@@ -172,7 +172,7 @@ func (m *VlanMapper) PostMap(
 	for ifIndex, info := range infos {
 		classifications[ifIndex] = qbridge.Classify(*info)
 	}
-	m.applyClassifications(registry, classifications, ensureVLAN)
+	m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
 	return vlanEntities
 }
 
@@ -1197,6 +1197,26 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
+// walkedIfTypes reads IF-MIB ifType for every ifIndex in the walk, keyed by
+// ifIndex and left in the numeric form the agent reported. Switchport
+// placement is decided on this value rather than on the NetBox type the
+// interface carries, because that type is resolved from the interface's
+// NAME first: every name that parses as a child — a Junos unit, but equally
+// a channelized lane or a GPON ONU port — is typed virtual before ifType is
+// consulted at all.
+func walkedIfTypes(oids ObjectIDValueMap) map[int]string {
+	out := make(map[int]string)
+	for oid, v := range oids {
+		if !strings.HasPrefix(oid, oidIfType) {
+			continue
+		}
+		if ifIndex, ok := atoi(strings.TrimPrefix(oid, oidIfType)); ok {
+			out[ifIndex] = strings.TrimSpace(v.Value)
+		}
+	}
+	return out
+}
+
 // verifiedInterfacesByName indexes the walked interfaces by name for
 // switchport-target resolution. Excluded names are left out so a unit never
 // binds its switchport configuration to an interface the operator's
@@ -1226,14 +1246,17 @@ func verifiedInterfacesByName(registry *EntityRegistry) map[string][]*diode.Inte
 // the switchport itself, and a NETCONF discovery of the same device puts
 // them there, so a unit is resolved back to its port.
 //
-// Only a LOGICAL interface hands its configuration over. The device says
-// which those are through ifType, and a name-shaped child is not
-// necessarily one: a channelized lane (Aruba CX 1/1/11:3, ifType 6) and a
-// GPON ONU port (BDCOM GPON0/2:1, ifType 1) both parse as children of an
-// interface that is in the walk, yet each is a switchport in its own right
-// and keeps what the device reported for it. Units (ifType 53 / 135) and
-// aggregate units (ifType 161) hand over, so ae8.0 resolves onto ae8 —
-// aggregates are switchports too.
+// Only a LOGICAL interface hands its configuration over, and the decision
+// is made on the ifType the device reported for that ifIndex — not on the
+// emitted NetBox type, which is derived from the name for anything that
+// parses as a child and would therefore answer "virtual" to a question it
+// was never asked. A name-shaped child is not necessarily a logical one: a
+// channelized lane (Aruba CX 1/1/11:3, ifType 6) and a GPON ONU port
+// (BDCOM GPON0/2:1, ifType 1) both parse as children of an interface that
+// is in the walk, yet each is a switchport in its own right and keeps what
+// the device reported for it. Units (ifType 53 / 135 / 136) and aggregate
+// units (ifType 161) hand over, so ae8.0 resolves onto ae8 — aggregates are
+// switchports too.
 //
 // When the unit's port is absent from the walk, or its name is ambiguous,
 // the unit itself is kept: the membership the device reported is still true
@@ -1241,10 +1264,14 @@ func verifiedInterfacesByName(registry *EntityRegistry) map[string][]*diode.Inte
 // tidiness.
 func (m *VlanMapper) switchportTarget(
 	iface *diode.Interface,
+	ifType string,
 	byName map[string][]*diode.Interface,
 ) *diode.Interface {
 	// A physical interface is the switchport, whatever its name looks like.
-	if !isVirtualInterfaceType(iface.Type) {
+	// An interface the walk carries no ifType for is left alone for the same
+	// reason: moving its configuration would be acting on evidence the
+	// device never gave.
+	if !isLogicalIfType(ifType) {
 		return iface
 	}
 	parent, isSub, reason := parentInterfaceFor(strDeref(iface.Name), byName)
@@ -1329,6 +1356,7 @@ func unionVids(a, b []int) []int {
 func (m *VlanMapper) applyClassifications(
 	registry *EntityRegistry,
 	classifications map[int]qbridge.Classification,
+	ifTypes map[int]string,
 	ensureVLAN func(int) *diode.VLAN,
 ) {
 	if len(classifications) == 0 {
@@ -1356,7 +1384,7 @@ func (m *VlanMapper) applyClassifications(
 		if iface == nil {
 			continue
 		}
-		target := m.switchportTarget(iface, byName)
+		target := m.switchportTarget(iface, ifTypes[ifIndex], byName)
 		acc, seen := merged[target]
 		if !seen {
 			acc = &mergedClassification{}

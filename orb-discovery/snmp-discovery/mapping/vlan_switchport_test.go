@@ -3,7 +3,6 @@ package mapping
 import (
 	"log/slog"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -69,7 +68,12 @@ func junosRegistry(
 	for ifIndex, name := range byIfIndex {
 		ifType := "10gbase-x-sfpp"
 		switch {
-		case regexp.MustCompile(`\.\d+$`).MatchString(name):
+		// Tier 0 of ResolveInterfaceType, which is what the mapper puts on
+		// these interfaces: ANY name that parses as a child is typed
+		// virtual before ifType is looked at, colon-separated channelized
+		// lanes and ONU ports included. Typing those physically here would
+		// assert something no device does.
+		case ExtractParentInterfaceName(name) != "":
 			ifType = "virtual"
 		case strings.HasPrefix(name, "ae"):
 			ifType = "lag"
@@ -354,7 +358,7 @@ func TestVlanMapper_PostMap_OnuPort_KeepsItsOwnConfig(t *testing.T) {
 		800: "GPON0/2",
 		801: "GPON0/2:1",
 		802: "GPON0/2:2",
-	}, map[string]string{"GPON0/2": "other", "GPON0/2:1": "other", "GPON0/2:2": "other"})
+	}, map[string]string{"GPON0/2": "other"})
 	oids := bridgeFixture(
 		map[int]int{1: 801, 2: 802},
 		[]bridgeVlan{
@@ -370,6 +374,30 @@ func TestVlanMapper_PostMap_OnuPort_KeepsItsOwnConfig(t *testing.T) {
 	assert.Equal(t, []int{401}, vidsOf(ifaces["GPON0/2:1"].TaggedVlans))
 	assert.Equal(t, []int{402}, vidsOf(ifaces["GPON0/2:2"].TaggedVlans))
 	assert.Nil(t, ifaces["GPON0/2"].Mode, "ONU ports never collapse onto their PON port")
+}
+
+// An interface the walk carries no ifType for is left where it is. The
+// name says "child", but nothing the device reported says "logical", and
+// moving a port's VLANs on that basis is how lanes and ONU ports get
+// collapsed onto their parent. Driven at the placement layer: a bridge
+// port whose ifIndex has no ifTable row is not classified in the first
+// place, so the policy has nowhere else to show.
+func TestVlanMapper_ApplyClassifications_ChildWithoutIfType_KeepsItsOwnConfig(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		900: "xe-0/0/90",
+		901: "xe-0/0/90.0",
+	})
+	NewVlanMapper(logger, config.Options{}).applyClassifications(registry, map[int]qbridge.Classification{
+		901: {Mode: qbridge.ModeTrunk, Tagged: []int{500}},
+	}, map[int]string{900: "6"}, func(vid int) *diode.VLAN {
+		v := int64(vid)
+		return &diode.VLAN{Vid: &v}
+	})
+
+	require.NotNil(t, ifaces["xe-0/0/90.0"].Mode, "an untyped child keeps what the device reported")
+	assert.Equal(t, []int{500}, vidsOf(ifaces["xe-0/0/90.0"].TaggedVlans))
+	assert.Nil(t, ifaces["xe-0/0/90"].Mode)
 }
 
 // A unit of a channelized lane is still a unit, and resolves onto the lane.
@@ -410,7 +438,7 @@ func TestVlanMapper_ApplyClassifications_UntaggedConflictKeepsTaggedAll(t *testi
 	vm.applyClassifications(registry, map[int]qbridge.Classification{
 		660: {Mode: qbridge.ModeTrunkAll, Tagged: []int{}, Untagged: &native10},
 		661: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &native20},
-	}, func(vid int) *diode.VLAN {
+	}, map[int]string{660: "53", 661: "53"}, func(vid int) *diode.VLAN {
 		v := int64(vid)
 		return &diode.VLAN{Vid: &v}
 	})
@@ -436,7 +464,7 @@ func TestVlanMapper_ApplyClassifications_UntaggedConflictAloneLeavesPortUnset(t 
 	NewVlanMapper(logger, config.Options{}).applyClassifications(registry, map[int]qbridge.Classification{
 		662: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &a},
 		663: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &b},
-	}, func(vid int) *diode.VLAN {
+	}, map[int]string{662: "53", 663: "53"}, func(vid int) *diode.VLAN {
 		v := int64(vid)
 		return &diode.VLAN{Vid: &v}
 	})
@@ -460,7 +488,7 @@ func TestVlanMapper_ApplyClassifications_NativeVlanNotAlsoTagged(t *testing.T) {
 	NewVlanMapper(logger, config.Options{}).applyClassifications(registry, map[int]qbridge.Classification{
 		670: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &native},
 		671: {Mode: qbridge.ModeTrunk, Tagged: []int{10, 20}, Untagged: nil},
-	}, func(vid int) *diode.VLAN {
+	}, map[int]string{670: "53", 671: "53"}, func(vid int) *diode.VLAN {
 		v := int64(vid)
 		return &diode.VLAN{Vid: &v}
 	})

@@ -49,3 +49,22 @@ func parentInterfaceFor(
 		return nil, true, "parent interface name is ambiguous on this device"
 	}
 }
+
+// isLogicalIfType reports whether an IANAifType value, in the numeric form
+// the agent reports it, names an interface that exists only in software and
+// therefore hands its switchport configuration to the interface underneath
+// it: propVirtual and the l2vlan / l3ipvlan units (53 / 135 / 136), a
+// bridge (209), and the aggregate units Junos reports as ieee8023adLag
+// (161). InterfaceTypeMap is the same table the interface mapper types
+// interfaces from, read here at tier 2 — by ifType alone, with no name
+// heuristic ahead of it.
+//
+// An ifType the walk did not carry, or one the table does not name, is not
+// logical: an interface is only moved on evidence the device gave.
+func isLogicalIfType(ifType string) bool {
+	switch InterfaceTypeMap[ifType] {
+	case "virtual", "bridge", "lag":
+		return true
+	}
+	return false
+}
