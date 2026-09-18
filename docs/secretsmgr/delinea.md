@@ -14,21 +14,21 @@ orb:
     active: delinea
     sources:
       delinea:
-        server_url: ""                  # On-prem / Platform URL (XOR with tenant)
-        tenant: "<your-tenant>"         # Secret Server Cloud subdomain (XOR with server_url)
+        server_url: ""                  # Full URL, any deployment (XOR with tenant)
+        tenant: "<your-tenant>"         # Subdomain, *.secretservercloud.com only (XOR with server_url)
         username: "svc_orb"
         password: "${DELINEA_PASSWORD}"
         schedule: "*/5 * * * *"         # Optional, cron format for polling interval
 ```
 
-Exactly one of `server_url` or `tenant` must be set. The provider does not eagerly authenticate at startup — the first secret fetch performs the OAuth handshake against Delinea.
+Exactly one of `server_url` or `tenant` must be set. `tenant` is a shorthand that expands to `https://<tenant>.secretservercloud.com`, so it fits only that domain; `server_url` takes the address as given and works for every deployment, which is the one to use if your tenant is on `delinea.app` or a regional domain. The provider does not eagerly authenticate at startup — the first secret fetch performs the OAuth handshake against Delinea.
 
 ### Configuration Options
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `server_url` | string | Cond. | URL of an on-prem Secret Server or Delinea Platform deployment. Mutually exclusive with `tenant`. |
-| `tenant` | string | Cond. | Tenant subdomain for Secret Server Cloud (e.g. `acme` for `acme.secretservercloud.com`). Mutually exclusive with `server_url`. |
+| `server_url` | string | Cond. | Full URL of the Secret Server, including the scheme and with no trailing path. Use this for on-prem and Delinea Platform deployments, and for any cloud tenant whose hostname is not `<tenant>.secretservercloud.com`, such as a `delinea.app` tenant or a regional `secretservercloud.eu` one. Mutually exclusive with `tenant`. |
+| `tenant` | string | Cond. | Subdomain of a Secret Server Cloud tenant on `secretservercloud.com`, for example `acme` for `acme.secretservercloud.com`. The rest of the hostname is fixed, so any other domain needs `server_url` instead. Mutually exclusive with `server_url`. |
 | `username` | string | Yes | Service-user username with `View Secret` permission on the referenced secrets. |
 | `password` | string | Yes | Password for the service user. |
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
