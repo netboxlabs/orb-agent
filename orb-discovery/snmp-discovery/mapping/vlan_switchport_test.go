@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping/qbridge"
 )
 
 // bridgeVlan is one row of the static VLAN table in a test fixture.
@@ -294,4 +295,102 @@ func TestVlanMapper_PostMap_ExcludedPort_KeepsUnit(t *testing.T) {
 
 	assert.Nil(t, ifaces["xe-0/0/50"].Mode, "an excluded interface never receives configuration")
 	require.NotNil(t, ifaces["xe-0/0/50.0"].Mode)
+}
+
+// A colon on Junos names a channelized lane, not a unit: et-0/0/0:0 is a
+// physical port in its own right. Where a device publishes the
+// un-channelized name too, the lane's membership must stay on the lane.
+func TestVlanMapper_PostMap_ChannelizedLane_KeepsItsOwnConfig(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		700: "et-0/0/0",
+		701: "et-0/0/0:0",
+	})
+	oids := bridgeFixture(
+		map[int]int{1: 701},
+		[]bridgeVlan{{vid: 300, name: "VL300", egress: []int{1}}},
+		nil,
+		map[int]int{700: 6, 701: 6},
+	)
+
+	NewVlanMapper(logger, config.Options{}).PostMap(oids, registry, &config.Defaults{})
+
+	lane := ifaces["et-0/0/0:0"]
+	require.NotNil(t, lane.Mode, "the lane is the switchport")
+	assert.Equal(t, "tagged", *lane.Mode)
+	assert.Equal(t, []int{300}, vidsOf(lane.TaggedVlans))
+	assert.Nil(t, ifaces["et-0/0/0"].Mode, "the un-channelized name is not the switchport here")
+}
+
+// A unit of a channelized lane is still a unit, and resolves onto the lane.
+func TestVlanMapper_PostMap_UnitOfChannelizedLane_LandsOnTheLane(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		701: "et-0/0/0:0",
+		702: "et-0/0/0:0.0",
+	})
+	oids := bridgeFixture(
+		map[int]int{1: 702},
+		[]bridgeVlan{{vid: 301, name: "VL301", egress: []int{1}}},
+		nil,
+		map[int]int{701: 6, 702: 135},
+	)
+
+	NewVlanMapper(logger, config.Options{}).PostMap(oids, registry, &config.Defaults{})
+
+	require.NotNil(t, ifaces["et-0/0/0:0"].Mode)
+	assert.Equal(t, []int{301}, vidsOf(ifaces["et-0/0/0:0"].TaggedVlans))
+	assert.Nil(t, ifaces["et-0/0/0:0.0"].Mode)
+}
+
+// tagged-all states its wildcard in the mode, with no tagged VLANs to
+// carry it. A native-VLAN disagreement between units must not take the
+// mode down with it. Driven at the placement layer: building a genuine
+// 1..4094 membership through the fixture would say nothing more about
+// the branch under test.
+func TestVlanMapper_ApplyClassifications_UntaggedConflictKeepsTaggedAll(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		560: "xe-0/0/60",
+		660: "xe-0/0/60.0",
+		661: "xe-0/0/60.100",
+	})
+	native10, native20 := 10, 20
+	vm := NewVlanMapper(logger, config.Options{})
+	vm.applyClassifications(registry, map[int]qbridge.Classification{
+		660: {Mode: qbridge.ModeTrunkAll, Tagged: []int{}, Untagged: &native10},
+		661: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &native20},
+	}, func(vid int) *diode.VLAN {
+		v := int64(vid)
+		return &diode.VLAN{Vid: &v}
+	})
+
+	port := ifaces["xe-0/0/60"]
+	require.NotNil(t, port.Mode, "a trunk carrying everything is still a trunk")
+	assert.Equal(t, "tagged-all", *port.Mode)
+	assert.Nil(t, port.UntaggedVlan, "the contested native VLAN is still dropped")
+	assert.Nil(t, ifaces["xe-0/0/60.0"].Mode)
+	assert.Nil(t, ifaces["xe-0/0/60.100"].Mode)
+}
+
+// The same contradiction with nothing else to say leaves the port alone:
+// access with no VLAN would be worse than no classification.
+func TestVlanMapper_ApplyClassifications_UntaggedConflictAloneLeavesPortUnset(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		561: "xe-0/0/61",
+		662: "xe-0/0/61.0",
+		663: "xe-0/0/61.100",
+	})
+	a, b := 10, 20
+	NewVlanMapper(logger, config.Options{}).applyClassifications(registry, map[int]qbridge.Classification{
+		662: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &a},
+		663: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &b},
+	}, func(vid int) *diode.VLAN {
+		v := int64(vid)
+		return &diode.VLAN{Vid: &v}
+	})
+
+	assert.Nil(t, ifaces["xe-0/0/61"].Mode)
+	assert.Nil(t, ifaces["xe-0/0/61"].UntaggedVlan)
 }

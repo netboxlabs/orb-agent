@@ -1354,7 +1354,10 @@ func (m *VlanMapper) applyClassifications(
 			// to say about the port, and emitting access with no VLAN
 			// would be worse than emitting nothing.
 			acc.class.Untagged = nil
-			if len(acc.class.Tagged) == 0 {
+			// ModeTrunkAll carries its wildcard in the mode, not in
+			// Tagged, so an empty list there still says the port is a
+			// trunk carrying everything — that survives the conflict.
+			if len(acc.class.Tagged) == 0 && acc.class.Mode != qbridge.ModeTrunkAll {
 				m.logger.Warn("vlan: units of one port report different untagged VLANs and nothing else; leaving it unclassified",
 					"interface", strDeref(target.Name), "units", acc.sources)
 				continue
