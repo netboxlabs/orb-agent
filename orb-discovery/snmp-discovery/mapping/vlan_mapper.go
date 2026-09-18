@@ -1414,6 +1414,16 @@ func (m *VlanMapper) applyClassifications(
 			m.logger.Warn("vlan: units of one port report different untagged VLANs; keeping the tagged VLANs only",
 				"interface", strDeref(target.Name), "units", acc.sources)
 		}
+		// A trunk carrying everything says so in the mode and carries no
+		// tagged list — that is what Classify emits for a wildcard, and
+		// what the conflict branch above relies on. Merging a wildcard
+		// unit with one that listed VLANs must not leave that subset
+		// beside it: the two contradict each other, and NetBox discards
+		// tagged VLANs on any non-tagged mode the next time it saves the
+		// interface, so the list is noise that outlives nothing.
+		if acc.class.Mode == qbridge.ModeTrunkAll {
+			acc.class.Tagged = nil
+		}
 		// Classify never leaves the native VLAN in the tagged set, and a
 		// merge must not reintroduce it: one unit reporting a VID untagged
 		// while another reports it tagged describes one port whose native

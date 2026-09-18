@@ -451,6 +451,33 @@ func TestVlanMapper_ApplyClassifications_UntaggedConflictKeepsTaggedAll(t *testi
 	assert.Nil(t, ifaces["xe-0/0/60.100"].Mode)
 }
 
+// A wildcard trunk subsumes any list another unit reported. Emitting
+// tagged-all beside an explicit subset contradicts the classifier, which
+// states the wildcard in the mode and leaves the tagged set empty.
+func TestVlanMapper_ApplyClassifications_TrunkAllDropsExplicitTagged(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		580: "xe-0/0/80",
+		680: "xe-0/0/80.0",
+		681: "xe-0/0/80.100",
+	})
+	native := 10
+	NewVlanMapper(logger, config.Options{}).applyClassifications(registry, map[int]qbridge.Classification{
+		680: {Mode: qbridge.ModeTrunkAll, Tagged: []int{}, Untagged: &native},
+		681: {Mode: qbridge.ModeTrunk, Tagged: []int{20, 30}},
+	}, map[int]string{680: "53", 681: "53"}, func(vid int) *diode.VLAN {
+		v := int64(vid)
+		return &diode.VLAN{Vid: &v}
+	})
+
+	port := ifaces["xe-0/0/80"]
+	require.NotNil(t, port.Mode)
+	assert.Equal(t, "tagged-all", *port.Mode)
+	assert.Empty(t, port.TaggedVlans, "the wildcard already covers every VLAN a unit listed")
+	require.NotNil(t, port.UntaggedVlan, "a trunk carrying everything still has a native VLAN")
+	assert.Equal(t, int64(10), *port.UntaggedVlan.Vid)
+}
+
 // The same contradiction with nothing else to say leaves the port alone:
 // access with no VLAN would be worse than no classification.
 func TestVlanMapper_ApplyClassifications_UntaggedConflictAloneLeavesPortUnset(t *testing.T) {
