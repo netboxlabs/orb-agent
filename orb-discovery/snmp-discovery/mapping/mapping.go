@@ -304,7 +304,7 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 		return &diode.VLAN{}, nil
 	case "interface_vlan", "vtp_vlan":
 		return nil, fmt.Errorf("entity type %q is post-pass only and has no row entity", entityType)
-	case "chassis_inventory", "chassis_asset":
+	case "chassis_inventory", "chassis_asset", "lag_membership":
 		return nil, fmt.Errorf("entity type %q is post-pass only and has no row entity", entityType)
 	}
 	return nil, fmt.Errorf("unimplemented entity type: %s", entityType)
@@ -364,6 +364,12 @@ const (
 	// the table exists to corroborate SVI-derived prefix VLANs, so it is
 	// only walked when options.emit_prefix_vlan is not "off".
 	VtpVlanEntityType EntityType = "vtp_vlan"
+	// LagMembershipEntityType is a pseudo-entity that flags the
+	// IEEE8023-LAG-MIB dot3adAggPortTable aggregator columns for
+	// consumption by AttachLagMembership as a runner-level pass. Map() on
+	// its associated mapper is a no-op; data flows via the raw oids map.
+	// The columns are walked unless options.emit_lag_membership is false.
+	LagMembershipEntityType EntityType = "lag_membership"
 )
 
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
@@ -523,6 +529,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		string(ChassisModuleEntityType):    &ChassisModuleMapper{logger: logger},
 		string(VrfEntityType):              &VrfMapper{logger: logger},
 		string(ChassisAssetEntityType):     &ChassisInventoryMapper{logger: logger},
+		string(LagMembershipEntityType):    &LagMembershipMapper{logger: logger},
 	}
 	postPassMappers := []postPassMapper{vlanMapper}
 	// Validate index_kind on every entry (top-level and nested). A typo
@@ -576,7 +583,8 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 			Entry.Entity == string(ChassisInventoryEntityType) ||
 			Entry.Entity == string(ChassisModuleEntityType) ||
 			Entry.Entity == string(ChassisAssetEntityType) ||
-			Entry.Entity == string(VrfEntityType) {
+			Entry.Entity == string(VrfEntityType) ||
+			Entry.Entity == string(LagMembershipEntityType) {
 			postPassPrefixes = append(postPassPrefixes, m.OID+".")
 		}
 	}
@@ -1873,12 +1881,16 @@ func (m *Config) VendorObjectIDs(vendor string) map[string]int {
 //     an inert option alter a target's emitted VLANs. With either off the table
 //     is not walked, and a Cisco target emits exactly the VLAN entities it
 //     emitted before the option existed.
+//   - lag_membership: IEEE8023-LAG-MIB dot3adAggPortTable aggregator
+//     columns, consumed by AttachLagMembership. On by default; walked
+//     unless emit_lag_membership is false.
 func (m *Config) skippedWalkEntities() map[string]bool {
 	return map[string]bool{
 		string(ChassisModuleEntityType): m.options.ModuleDiscoveryMode() == config.DiscoverModulesOff,
 		string(VrfEntityType):           !m.options.VrfDiscoveryEnabled(),
 		string(ChassisAssetEntityType):  !m.options.AssetTagDiscoveryEnabled(),
 		string(VtpVlanEntityType):       m.options.PrefixVlanMode() == "off" || !m.options.PrefixEmissionEnabled(),
+		string(LagMembershipEntityType): !m.options.LagMembershipEnabled(),
 	}
 }
 

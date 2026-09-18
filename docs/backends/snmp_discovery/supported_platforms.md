@@ -97,6 +97,15 @@ The device serial comes from the standard `ENTITY-MIB::entPhysicalSerialNum` on 
 
 A populated standard chassis serial always wins: the fallback is consulted only when `ENTITY-MIB` yielded no chassis row with a serial, so a Junos platform that does publish one (QFX5100, for example) is unaffected, and on a Virtual Chassis the master serial stays pinned to the lowest member's chassis row. When neither source answers, the serial is left unset rather than guessed.
 
+## LAG membership
+
+Member-port → aggregate associations (`Interface.lag`) come from the standard `IEEE8023-LAG-MIB::dot3adAggPortTable`, so any device that implements it is covered with no vendor branch. Aggregates themselves are ordinary interface rows typed `lag` from `ifType` 161. Junos is the one platform with a documented wrinkle: its aggregation ports are the logical units (`xe-0/0/0.0`), which are normalised to the physical port before the reference is emitted, since NetBox does not accept a LAG parent on a virtual interface. Details and the refusal rules are in the [LAG membership](./README.md#lag-membership) section of the README.
+
+| Platform | Status |
+|---|---|
+| Juniper Junos (QFX5100, EX4550 — logical-unit members) | Vendor-neutral via IEEE8023-LAG-MIB — tested against device walks |
+| Any platform publishing `dot3adAggPortAttachedAggID` / `dot3adAggPortSelectedAggID` keyed by physical-port `ifIndex` | Vendor-neutral via IEEE8023-LAG-MIB |
+
 ## Interface ↔ VLAN associations
 
 Switchport-to-VLAN association discovery is built on standard MIBs with vendor overlays:

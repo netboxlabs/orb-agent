@@ -572,6 +572,12 @@ type Options struct {
 	// option does not affect them.
 	EmitHostPrefixes *bool `yaml:"emit_host_prefixes,omitempty"`
 
+	// Tri-state pointer; unset defaults to TRUE — link-aggregation
+	// membership is read from IEEE8023-LAG-MIB dot3adAggPortTable and each
+	// member port's Interface.lag is set to its aggregate interface. Set
+	// false to leave lag unset and skip the table walk.
+	EmitLagMembership *bool `yaml:"emit_lag_membership,omitempty"`
+
 	// Tri-state pointer; unset defaults to TRUE — Device.name is emitted
 	// from SNMP sysName, matching legacy behaviour. Set false to suppress
 	// the name on the matched device so continual discovery under
@@ -618,6 +624,12 @@ func (o *Options) PrefixEmissionEnabled() bool {
 // as an IPAddress entity.
 func (o *Options) HostPrefixEmissionEnabled() bool {
 	return o != nil && o.EmitHostPrefixes != nil && *o.EmitHostPrefixes
+}
+
+// LagMembershipEnabled returns the effective emit_lag_membership toggle,
+// defaulting to TRUE.
+func (o *Options) LagMembershipEnabled() bool {
+	return o == nil || o.EmitLagMembership == nil || *o.EmitLagMembership
 }
 
 // DeviceNameEmissionEnabled returns the effective emit_device_name
