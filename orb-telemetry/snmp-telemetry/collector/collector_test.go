@@ -2559,8 +2559,12 @@ func TestReservedTagName_NoBundledProfileDeclaresOne(t *testing.T) {
 	assert.Empty(t, reserved)
 	// The declarations scanned, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1208, device, "device-level tag declarations scanned")
-	assert.Equal(t, 3708, row, "row-level tag declarations scanned")
+	// The row count here counts declarations; the one in
+	// TestDerivedAttrNames_NoBundledProfileTagIsShadowed counts distinct
+	// names per entry. They differ by one because the bundled Chatsworth
+	// profile declares one join tag twice under different index transforms.
+	assert.Equal(t, 1287, device, "device-level tag declarations scanned")
+	assert.Equal(t, 4427, row, "row-level tag declarations scanned")
 }
 
 // TestCollectTarget_SameEndpointTwiceInOnePolicy covers a policy that targets
@@ -7077,9 +7081,9 @@ func TestDerivedAttrNames_NoBundledProfileTagIsShadowed(t *testing.T) {
 	assert.Empty(t, shadowed)
 	// The names compared, so a loader returning nothing cannot pass this
 	// silently. Re-vendoring the profile set moves them.
-	assert.Equal(t, 1208, device, "device-level tag names scanned")
-	assert.Equal(t, 3708, row, "row-level tag names scanned")
-	assert.Equal(t, 1641, derived, "derived attribute names scanned")
+	assert.Equal(t, 1287, device, "device-level tag names scanned")
+	assert.Equal(t, 4426, row, "row-level tag names scanned")
+	assert.Equal(t, 1910, derived, "derived attribute names scanned")
 }
 
 // tagNameSet holds what a derived attribute could shadow. A tag under a
@@ -7780,4 +7784,26 @@ func TestCollectTarget_AProfileWithNoDeviceTagsIsUnaffected(t *testing.T) {
 	require.Len(t, pts, 1)
 	assert.Equal(t, int64(75), pts[0].value)
 	assert.Equal(t, host, attrValue(pts[0], "device_ip"), "the carried point keeps its identity")
+}
+
+// The repo-maintained profiles are hand-converted from another library's
+// schema. Each must survive the collector's own review with nothing to report:
+// a symbol it cannot read, a tag it would drop, or a conversion it does not
+// know would otherwise only surface on the first device that matches.
+// Stubs are not listed: they inherit their parent's entries and therefore
+// whatever the review already reports about the parent.
+func TestReviewProfile_ConvertedBundledProfilesAreClean(t *testing.T) {
+	for _, rel := range []string{
+		"netscout/netscout-switch.yml",
+		"hpe/hpe-proliant.yml",
+		"chatsworth/chatsworth-pdu.yml",
+	} {
+		t.Run(rel, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
+			c := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
+			c.reviewProfile(bundledProfile(t, rel))
+			assert.Empty(t, logs.String(), "review of %s must be silent", rel)
+		})
+	}
 }
