@@ -3,6 +3,7 @@ package mapping
 import (
 	"log/slog"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -69,11 +70,11 @@ func junosRegistry(
 		ifType := "10gbase-x-sfpp"
 		switch {
 		// Tier 0 of ResolveInterfaceType, which is what the mapper puts on
-		// these interfaces: ANY name that parses as a child is typed
-		// virtual before ifType is looked at, colon-separated channelized
-		// lanes and ONU ports included. Typing those physically here would
-		// assert something no device does.
-		case ExtractParentInterfaceName(name) != "":
+		// these interfaces: a dot-separated child is virtual whatever it
+		// reports, while a colon-named one is left to its ifType — every
+		// colon-named interface in these fixtures is a port the device
+		// types as one.
+		case regexp.MustCompile(`\.\d+$`).MatchString(name):
 			ifType = "virtual"
 		case strings.HasPrefix(name, "ae"):
 			ifType = "lag"

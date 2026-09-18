@@ -270,13 +270,40 @@ func TestResolveInterfaceType_Subinterfaces(t *testing.T) {
 			description:          "GigabitEthernet0/0.100 should be virtual even with gigabit speed",
 		},
 		{
-			name:                 "Juniper subinterface with colon",
+			name:                 "Channelized lane named with a colon",
 			interfaceName:        "ge-0/0/0:0",
 			ifType:               "6",
 			speed:                int64Ptr(1000000),
 			defaultInterfaceType: "",
+			expectedType:         "1000base-t",
+			description:          "a colon-named child the device types ethernetCsmacd is a lane, not a unit",
+		},
+		{
+			name:                 "Colon-named child the device types logical",
+			interfaceName:        "lag-16:2210",
+			ifType:               "161",
+			speed:                nil,
+			defaultInterfaceType: "",
 			expectedType:         "virtual",
-			description:          "ge-0/0/0:0 should be virtual with colon separator",
+			description:          "the device agreeing with the name keeps it virtual",
+		},
+		{
+			name:                 "Colon-named child with no ifType in the walk",
+			interfaceName:        "1/1/11:1",
+			ifType:               "",
+			speed:                nil,
+			defaultInterfaceType: "",
+			expectedType:         "virtual",
+			description:          "with nothing reported there is nothing to weigh the name against",
+		},
+		{
+			name:                 "Unit of a channelized lane",
+			interfaceName:        "et-0/0/0:0.0",
+			ifType:               "6",
+			speed:                nil,
+			defaultInterfaceType: "",
+			expectedType:         "virtual",
+			description:          "the dot is the unit separator and still decides on its own",
 		},
 		{
 			name:                 "Subinterface with LAG ifType",
@@ -457,6 +484,33 @@ func TestGetInterfaceByName(t *testing.T) {
 				assert.Nil(t, result, tt.description)
 			}
 		})
+	}
+}
+
+// NetBox refuses a parent on anything but a virtual interface, and a
+// refused interface fails the whole target's ingestion. A colon-named
+// child the device types as a port is a port, so it is left without the
+// reference rather than given one that cannot be stored.
+func TestResolveSubinterfaceParents_SkipsNonVirtualChildren(t *testing.T) {
+	logger := slog.Default()
+	registry := mapping.NewEntityRegistry(logger)
+
+	mk := func(index, name, typ string) *diode.Interface {
+		iface := registry.GetOrCreateEntity(mapping.InterfaceEntityType, mapping.ObjectIDIndex(index)).(*diode.Interface)
+		iface.Name = &name
+		iface.Type = &typ
+		return iface
+	}
+	port := mk("700", "1/1/11", "10gbase-x-sfpp")
+	lane := mk("701", "1/1/11:1", "10gbase-x-sfpp")
+	unit := mk("702", "1/1/11.0", "virtual")
+
+	registry.ResolveSubinterfaceParents()
+
+	assert.Nil(t, lane.Parent, "a lane the device types as a port carries no parent")
+	assert.Nil(t, port.Parent)
+	if assert.NotNil(t, unit.Parent, "a virtual unit still resolves to its port") {
+		assert.Equal(t, "1/1/11", *unit.Parent.Name)
 	}
 }
 

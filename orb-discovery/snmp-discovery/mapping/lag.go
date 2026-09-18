@@ -83,6 +83,26 @@ func lagMembershipRows(oids ObjectIDValueMap) [][2]int {
 	return rows
 }
 
+// netboxRefusesLagParent reports whether NetBox would reject a LAG parent
+// on an interface of this type. Interface.clean() raises "Virtual
+// interfaces cannot have a parent LAG interface." for any type in the
+// server's VIRTUAL_IFACE_TYPES, which is virtual, lag and bridge — and a
+// rejected interface fails the whole target's ingestion, not just its own
+// relationship. Placement is decided on the device's ifType (see
+// lagMemberTarget); this is the separate question of whether the interface
+// the walk actually emitted can carry the reference at all, and it is
+// asked of every member however it was resolved.
+func netboxRefusesLagParent(t *string) bool {
+	if t == nil {
+		return false
+	}
+	switch *t {
+	case "virtual", "bridge", "lag":
+		return true
+	}
+	return false
+}
+
 // lagMemberTarget picks the interface that carries the lag reference for
 // a member row. NetBox refuses a LAG parent on a virtual interface, and on
 // Junos the aggregation port the MIB names is the logical unit
@@ -196,6 +216,12 @@ func AttachLagMembership(
 		if target == agg {
 			logger.Warn("lag: member resolves to its own aggregate; skipping",
 				"member", strDeref(member.Name), "aggregate", strDeref(agg.Name))
+			continue
+		}
+		if netboxRefusesLagParent(target.Type) {
+			logger.Warn("lag: NetBox refuses a LAG parent on this interface type; skipping member",
+				"member", strDeref(member.Name), "interface", strDeref(target.Name),
+				"interface_type", strDeref(target.Type), "aggregate", strDeref(agg.Name))
 			continue
 		}
 		if prev, seen := chosen[target]; seen && prev != agg {

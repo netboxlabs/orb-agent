@@ -125,8 +125,10 @@ func TestAttachLagMembership_PhysicalMemberUsedDirectly(t *testing.T) {
 func TestAttachLagMembership_ChannelizedLanesKeepTheirOwnMembership(t *testing.T) {
 	dev := &diode.Device{Name: strPtr("cx8360")}
 	port := lagIface("1/1/11", "10gbase-x-sfpp", dev)
-	lane1 := lagIface("1/1/11:1", "virtual", dev) // typed from the name, as the mapper does
-	lane2 := lagIface("1/1/11:2", "virtual", dev)
+	// Typed as the mapper types them: the device reports ethernetCsmacd,
+	// and a colon-named child no longer contradicts that.
+	lane1 := lagIface("1/1/11:1", "10gbase-x-sfpp", dev)
+	lane2 := lagIface("1/1/11:2", "10gbase-x-sfpp", dev)
 	lag1 := lagIface("lag1", "lag", dev)
 	byIface := map[*diode.Interface]int{port: 110, lane1: 111, lane2: 112, lag1: 900}
 	oids := lagIfTypes(ObjectIDValueMap{
@@ -140,6 +142,28 @@ func TestAttachLagMembership_ChannelizedLanesKeepTheirOwnMembership(t *testing.T
 	require.NotNil(t, lane2.Lag)
 	assert.Equal(t, "lag1", *lane2.Lag.Name)
 	assert.Nil(t, port.Lag, "the un-channelized port is not a member of anything")
+}
+
+// The interface that would carry the reference has to be one NetBox
+// accepts it on. With no ifType in the walk the member is used as-is and
+// its type comes from the policy default, which an operator can set to a
+// virtual one — and NetBox rejects the whole interface, not just the
+// relationship, when a LAG parent lands on a virtual type.
+func TestAttachLagMembership_RefusesTargetNetBoxWouldReject(t *testing.T) {
+	dev := &diode.Device{Name: strPtr("sw")}
+	ae1 := lagIface("ae1", "lag", dev)
+	byIface := map[*diode.Interface]int{ae1: 9}
+	for _, typ := range []string{"virtual", "bridge", "lag"} {
+		member := lagIface("xe-0/0/9", typ, dev)
+		byIface[member] = 1
+		oids := lagIfTypes(ObjectIDValueMap{
+			oidDot3adAggPortAttachedAggID + "1": {Value: "9"},
+		}, map[int]int{9: 161})
+
+		assert.Equal(t, 0, AttachLagMembership(oids, byIface, slog.Default()), "type %s", typ)
+		assert.Nil(t, member.Lag, "type %s must not receive a LAG parent", typ)
+		delete(byIface, member)
+	}
 }
 
 func TestAttachLagMembership_RefusesWhatItCannotResolve(t *testing.T) {
