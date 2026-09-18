@@ -444,3 +444,31 @@ func TestVlanMapper_ApplyClassifications_UntaggedConflictAloneLeavesPortUnset(t 
 	assert.Nil(t, ifaces["xe-0/0/61"].Mode)
 	assert.Nil(t, ifaces["xe-0/0/61"].UntaggedVlan)
 }
+
+// Classify never leaves the native VLAN in the tagged set. Merging units
+// must not reintroduce it: one unit reporting VLAN 10 untagged and another
+// reporting it tagged describes one port whose native VLAN is 10, not a
+// port that carries 10 both ways.
+func TestVlanMapper_ApplyClassifications_NativeVlanNotAlsoTagged(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	registry, ifaces := junosRegistry(t, map[int]string{
+		570: "xe-0/0/70",
+		670: "xe-0/0/70.0",
+		671: "xe-0/0/70.100",
+	})
+	native := 10
+	NewVlanMapper(logger, config.Options{}).applyClassifications(registry, map[int]qbridge.Classification{
+		670: {Mode: qbridge.ModeAccess, Tagged: []int{}, Untagged: &native},
+		671: {Mode: qbridge.ModeTrunk, Tagged: []int{10, 20}, Untagged: nil},
+	}, func(vid int) *diode.VLAN {
+		v := int64(vid)
+		return &diode.VLAN{Vid: &v}
+	})
+
+	port := ifaces["xe-0/0/70"]
+	require.NotNil(t, port.Mode)
+	assert.Equal(t, "tagged", *port.Mode)
+	require.NotNil(t, port.UntaggedVlan)
+	assert.Equal(t, int64(10), *port.UntaggedVlan.Vid)
+	assert.Equal(t, []int{20}, vidsOf(port.TaggedVlans), "the native VLAN is not also a tagged VLAN")
+}

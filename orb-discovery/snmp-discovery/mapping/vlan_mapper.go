@@ -1292,6 +1292,17 @@ func (a *mergedClassification) merge(src qbridge.Classification, source string) 
 	}
 }
 
+// withoutVid returns vids with drop removed, keeping order.
+func withoutVid(vids []int, drop int) []int {
+	out := vids[:0:0]
+	for _, vid := range vids {
+		if vid != drop {
+			out = append(out, vid)
+		}
+	}
+	return out
+}
+
 // unionVids returns the sorted, deduplicated union of two VID lists.
 func unionVids(a, b []int) []int {
 	seen := make(map[int]struct{}, len(a)+len(b))
@@ -1374,6 +1385,13 @@ func (m *VlanMapper) applyClassifications(
 			}
 			m.logger.Warn("vlan: units of one port report different untagged VLANs; keeping the tagged VLANs only",
 				"interface", strDeref(target.Name), "units", acc.sources)
+		}
+		// Classify never leaves the native VLAN in the tagged set, and a
+		// merge must not reintroduce it: one unit reporting a VID untagged
+		// while another reports it tagged describes one port whose native
+		// VLAN is that VID, not a port that is both.
+		if acc.class.Untagged != nil {
+			acc.class.Tagged = withoutVid(acc.class.Tagged, *acc.class.Untagged)
 		}
 		if len(acc.sources) > 1 {
 			m.logger.Debug("vlan: combined logical units onto their port",
