@@ -949,9 +949,15 @@ func TestPruneNestedRefs_IPAssignedStubParentStaysOnUnitDevice(t *testing.T) {
 	portIP := ipOn("10.0.1.1/30", port)
 	unitIP := ipOn("10.0.2.1/30", unitOn("ge-1/0/0", member))
 
-	// Name on both members, top-level on both: the unit's own copy wins.
+	// Name on both members, top-level on both: the unit's own copy wins,
+	// and the stub is built from that copy, not from the stale ref that
+	// captured the master's attributes.
+	memberMac := "aa:bb:cc:00:00:02"
 	mgmtMaster := &diode.Interface{Name: strPtr("me0"), Device: master, Type: portType}
-	mgmtMember := &diode.Interface{Name: strPtr("me0"), Device: member, Type: portType}
+	mgmtMember := &diode.Interface{
+		Name: strPtr("me0"), Device: member, Type: strPtr("100base-tx"),
+		PrimaryMacAddress: &diode.MACAddress{MacAddress: &memberMac},
+	}
 	mgmtIP := ipOn("192.0.2.2/24", unitOn("me0", member))
 
 	// Name on both members, the unit's copy carrying an IP, the other one
@@ -979,6 +985,9 @@ func TestPruneNestedRefs_IPAssignedStubParentStaysOnUnitDevice(t *testing.T) {
 	}
 	assert.Equal(t, "stack-2", deviceOf(unitIP), "parent with its own IP follows the unit's member")
 	assert.Equal(t, "stack-2", deviceOf(mgmtIP), "duplicate name: the unit's own copy")
+	assert.Same(t, mgmtMember.Type, parentOf(mgmtIP).Type, "parent stub built from the member's copy, not the stale ref")
+	require.NotNil(t, parentOf(mgmtIP).PrimaryMacAddress, "parent stub carries the member copy's MAC matcher")
+	assert.Equal(t, &memberMac, parentOf(mgmtIP).PrimaryMacAddress.MacAddress)
 	assert.Equal(t, "stack", deviceOf(vmeIP), "duplicate name with the unit's copy IP-assigned: still its own")
 	assert.Nil(t, parentOf(uplinkIP), "a parent that exists only on another device is not emitted")
 	assert.Same(t, unitIP.AssignedObject.(*diode.Interface).Device, parentOf(unitIP).Device,

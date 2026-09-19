@@ -394,8 +394,10 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 	// chassis the stubs do not carry. The parent port lives on the same
 	// member as its unit: the ref is emitted only when an interface of
 	// that name exists on the unit's device in this run, top-level or
-	// nested in its own IP address, and stays on that device. Otherwise
-	// the unit goes out without a parent, as it did before.
+	// nested in its own IP address, and is built from that interface,
+	// since the ref captured the first name match before routing and may
+	// carry another member's type. Otherwise the unit goes out without a
+	// parent, as it did before.
 	assignedInterfaceStub := func(iface *diode.Interface, deviceStub *diode.Device) *diode.Interface {
 		stub := newInterfaceStub(iface, deviceStub)
 		if stub == nil || iface.Parent == nil || iface.Parent.Name == nil {
@@ -412,7 +414,7 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 		for _, candidates := range [][]*diode.Interface{ifaceByName[name], assignedByName[name]} {
 			for _, candidate := range candidates {
 				if candidate.Device != nil && stubFor(candidate.Device) == unitStub {
-					stub.Parent = newInterfaceStub(iface.Parent, unitStub)
+					stub.Parent = newInterfaceStub(candidate, unitStub)
 					return stub
 				}
 			}
