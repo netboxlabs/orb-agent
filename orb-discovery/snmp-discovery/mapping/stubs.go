@@ -161,6 +161,12 @@ func newDeviceStubKeepingPrimary(owner *diode.Device, isV6 bool, primary *diode.
 	return stub
 }
 
+// carriesPrimary reports whether a device ref would close the primary-IP
+// cycle if nested under that primary's own snapshot.
+func carriesPrimary(d *diode.Device) bool {
+	return d != nil && (d.PrimaryIp4 != nil || d.PrimaryIp6 != nil)
+}
+
 // newInterfaceStub returns an Interface populated with the matcher
 // fields plus the interface's plain attributes (type, description,
 // speed, mtu, enabled). Used wherever an Interface appears as a nested
@@ -177,7 +183,10 @@ func newDeviceStubKeepingPrimary(owner *diode.Device, isV6 bool, primary *diode.
 // rejects first-time interface creation without it) and the plain
 // attributes the mapper computed, or they are silently lost. Pointer-
 // sharing them costs negligible bytes. Structural refs (parent/bridge/
-// lag) are intentionally dropped; they carry their own nested payloads.
+// lag) are not copied here: on a top-level interface they carry their
+// own nested payloads, and a stub used as one of those refs must not
+// nest further. The IP-assigned stub is the exception, see
+// assignedInterfaceStub in PruneNestedRefs.
 //
 // Tags is deliberately NOT carried. Nested IP-assigned interface refs have
 // never carried it, so adding it here would start tagging interfaces that are
@@ -271,6 +280,10 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 	// exact key. Stores ALL matches so an address claimed by more than one
 	// interface is treated as ambiguous and left alone, mirroring ifaceByName.
 	liveIfaceByAddr := map[string][]*diode.Interface{}
+	// assignedByName indexes the interfaces that reach the wire only as an
+	// IPAddress.AssignedObject, so a parent lookup can see an interface the
+	// top-level index cannot.
+	assignedByName := map[string][]*diode.Interface{}
 	for _, e := range entities {
 		switch v := e.(type) {
 		case *diode.Device:
@@ -285,9 +298,12 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 				ifaceByName[*v.Name] = append(ifaceByName[*v.Name], v)
 			}
 		case *diode.IPAddress:
-			if v.Address != nil {
-				if i, ok := v.AssignedObject.(*diode.Interface); ok && i != nil {
+			if i, ok := v.AssignedObject.(*diode.Interface); ok && i != nil {
+				if v.Address != nil {
 					liveIfaceByAddr[*v.Address] = append(liveIfaceByAddr[*v.Address], i)
+				}
+				if i.Name != nil {
+					assignedByName[*i.Name] = append(assignedByName[*i.Name], i)
 				}
 			}
 		}
@@ -354,6 +370,58 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 		return newInterfaceStub(ref, stubFor(resolveIfaceOwner(ref)))
 	}
 
+	// unitOwner is the device an IP-assigned interface was routed to. The
+	// interface is not in the top-level index, so resolveIfaceOwner answers
+	// with its own Device, which TranslateAsStack has already routed;
+	// currentDevice is the fallback the cycle-closer path always applied.
+	unitOwner := func(iface *diode.Interface) *diode.Device {
+		if owner := resolveIfaceOwner(iface); owner != nil {
+			return owner
+		}
+		return currentDevice
+	}
+
+	// assignedInterfaceStub builds the stub for an IPAddress.AssignedObject.
+	// That interface is filtered from top-level emission, so this stub is
+	// its only wire payload and must keep the parent the subinterface
+	// resolver found. The parent is a plain stub, one level, so the chain
+	// ends there and no cycle is introduced (its device stub carries no
+	// primary IP).
+	//
+	// The parent ref was built before TranslateAsStack routed interfaces
+	// to stack members, so its Device may still be the master, and NetBox
+	// rejects a parent on another device unless both share a virtual
+	// chassis the stubs do not carry. The parent port lives on the same
+	// member as its unit: the ref is emitted only when an interface of
+	// that name exists on the unit's device in this run, top-level or
+	// nested in its own IP address, and is built from that interface,
+	// since the ref captured the first name match before routing and may
+	// carry another member's type. Otherwise the unit goes out without a
+	// parent, as it did before.
+	assignedInterfaceStub := func(iface *diode.Interface, deviceStub *diode.Device) *diode.Interface {
+		stub := newInterfaceStub(iface, deviceStub)
+		if stub == nil || iface.Parent == nil || iface.Parent.Name == nil {
+			return stub
+		}
+		// stubFor hands the ref back unchanged when it can resolve no owner;
+		// a device that still carries a primary IP must not be nested here,
+		// where it would reopen the cycle on the live cycle-closer.
+		unitStub := stubFor(unitOwner(iface))
+		if unitStub == nil || carriesPrimary(unitStub) {
+			return stub
+		}
+		name := *iface.Parent.Name
+		for _, candidates := range [][]*diode.Interface{ifaceByName[name], assignedByName[name]} {
+			for _, candidate := range candidates {
+				if candidate.Device != nil && stubFor(candidate.Device) == unitStub {
+					stub.Parent = newInterfaceStub(candidate, unitStub)
+					return stub
+				}
+			}
+		}
+		return stub
+	}
+
 	// prunePrimarySnapshot stubs the device ref buried in a top-level Device's
 	// primary-IP snapshot. detachForPrimaryIP shallow-copies the Device during
 	// mapping to break the Device -> IP -> Interface -> Device cycle, so without
@@ -362,9 +430,10 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 	// device_type, a hostname the operator asked to suppress, no source_match,
 	// and the master as owner where the live interface belongs to a member.
 	//
-	// Cannot reintroduce the cycle: newDeviceStub carries no PrimaryIp4/6 and
-	// newInterfaceStub carries no Parent/Bridge/Lag/Module, which is exactly what
-	// detachForPrimaryIP clears by hand.
+	// Cannot reintroduce the cycle: newDeviceStub carries no PrimaryIp4/6, and
+	// the stub carries no Bridge/Lag/Module and at most a one-level Parent
+	// whose device stub is primary-free, so the chain detachForPrimaryIP cut
+	// by hand stays cut.
 	prunePrimarySnapshot := func(ip *diode.IPAddress) {
 		if ip == nil {
 			return
@@ -381,18 +450,20 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 				iface = live[0]
 			}
 		}
-		// Deliberately still routed through stubForIface rather than stubbing
-		// live[0].Device directly. The point of this function is that the
-		// snapshot and the live cycle-closer entity agree, and the live entity
-		// goes through resolveIfaceOwner too; bypassing it here would let the
-		// two diverge again whenever resolveIfaceOwner rewrites an owner.
-		stubbed := stubForIface(iface)
+		// Deliberately built the same way as the live cycle-closer entity
+		// rather than stubbing live[0].Device directly. The point of this
+		// function is that the snapshot and the live entity agree, and the
+		// live entity goes through resolveIfaceOwner too; bypassing it here
+		// would let the two diverge again whenever resolveIfaceOwner
+		// rewrites an owner.
+		stubbed := assignedInterfaceStub(iface, stubFor(unitOwner(iface)))
 		// stubFor has an escape hatch that returns the ref unchanged when no
 		// owning Device can be resolved. Writing a still-rich device back here
 		// would point the snapshot at a Device that carries this very primary
-		// IP, and the SDK's proto conversion does not detect cycles.
-		if stubbed != nil && stubbed.Device != nil &&
-			(stubbed.Device.PrimaryIp4 != nil || stubbed.Device.PrimaryIp6 != nil) {
+		// IP, and the SDK's proto conversion does not detect cycles. The
+		// parent needs no check of its own: assignedInterfaceStub refuses a
+		// parent whose device stub carries a primary.
+		if stubbed != nil && carriesPrimary(stubbed.Device) {
 			return
 		}
 		ip.AssignedObject = stubbed
@@ -493,12 +564,7 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 					// attaching the other family's primary (dual-stack) would
 					// try to set a primary whose address is not yet assigned.
 					isV6 := e.Address != nil && strings.Contains(*e.Address, ":")
-					owner := resolveIfaceOwner(iface)
-					if owner == nil {
-						// Mirror the stripped path's currentDevice fallback
-						// when the ref names no resolvable top-level Device.
-						owner = currentDevice
-					}
+					owner := unitOwner(iface)
 					// Stack edge: the resolved owner may be a stack member
 					// whose own primary is nil while the master / currentDevice
 					// carries it. Source this family's primary from the device
@@ -516,9 +582,9 @@ func PruneNestedRefs(entities []diode.Entity, currentDevice *diode.Device, prima
 					case !isV6 && currentDevice != nil && currentDevice.PrimaryIp4 != nil:
 						primary = currentDevice.PrimaryIp4
 					}
-					e.AssignedObject = newInterfaceStub(iface, newDeviceStubKeepingPrimary(owner, isV6, primary))
+					e.AssignedObject = assignedInterfaceStub(iface, newDeviceStubKeepingPrimary(owner, isV6, primary))
 				} else {
-					e.AssignedObject = stubForIface(iface)
+					e.AssignedObject = assignedInterfaceStub(iface, stubFor(unitOwner(iface)))
 				}
 			}
 		case *diode.MACAddress:
