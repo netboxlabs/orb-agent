@@ -83,42 +83,16 @@ func lagMembershipRows(oids ObjectIDValueMap) [][2]int {
 	return rows
 }
 
-// lagMemberTarget picks the interface that carries the lag reference for
-// a member row. NetBox refuses a LAG parent on a virtual interface, and on
-// Junos the aggregation port the MIB names is the logical unit
-// (xe-0/0/0.0), so a member that is itself a subinterface is normalised to
-// its physical parent by name, the same derivation
-// ResolveSubinterfaceParents uses. A member with no parent is used as-is.
-// Returns nil, with a reason, when nothing eligible exists: a virtual
-// member whose parent is not in the walk, or a parent name that matches
-// more than one interface on the device, which happens on stacks that
-// repeat a management port name per member.
-func lagMemberTarget(member *diode.Interface, byName map[string][]*diode.Interface) (*diode.Interface, string) {
-	if member == nil || member.Name == nil {
-		return nil, "member interface has no name"
-	}
-	if parentName := ExtractParentInterfaceName(*member.Name); parentName != "" {
-		switch parents := byName[parentName]; len(parents) {
-		case 1:
-			return parents[0], ""
-		case 0:
-			if isVirtualInterfaceType(member.Type) {
-				return nil, "virtual member's parent interface is not in the walk"
-			}
-			return member, ""
-		default:
-			return nil, "parent interface name is ambiguous on this device"
-		}
-	}
-	if isVirtualInterfaceType(member.Type) {
-		return nil, "member is a virtual interface with no physical parent"
-	}
-	return member, ""
-}
-
-// isVirtualInterfaceType reports whether t is one of the NetBox types a
-// LAG parent may not be assigned to.
-func isVirtualInterfaceType(t *string) bool {
+// netboxRefusesLagParent reports whether NetBox would reject a LAG parent
+// on an interface of this type. Interface.clean() raises "Virtual
+// interfaces cannot have a parent LAG interface." for any type in the
+// server's VIRTUAL_IFACE_TYPES, which is virtual, lag and bridge — and a
+// rejected interface fails the whole target's ingestion, not just its own
+// relationship. Placement is decided on the device's ifType (see
+// lagMemberTarget); this is the separate question of whether the interface
+// the walk actually emitted can carry the reference at all, and it is
+// asked of every member however it was resolved.
+func netboxRefusesLagParent(t *string) bool {
 	if t == nil {
 		return false
 	}
@@ -127,6 +101,49 @@ func isVirtualInterfaceType(t *string) bool {
 		return true
 	}
 	return false
+}
+
+// lagMemberTarget picks the interface that carries the lag reference for
+// a member row. NetBox refuses a LAG parent on a virtual interface, and on
+// Junos the aggregation port the MIB names is the logical unit
+// (xe-0/0/0.0), so a member that is itself a logical interface is
+// normalised to its physical parent by name, the same derivation
+// ResolveSubinterfaceParents uses.
+//
+// Whether a member is logical is decided on the ifType the device reported
+// for it, not on the NetBox type the interface carries: that type is
+// resolved from the name first, so every name that parses as a child is
+// typed virtual before ifType is consulted. A channelized lane
+// (et-0/0/0:0, what a split 100G port gives you) is a member in its own
+// right and keeps the membership, where deriving from the name would
+// collapse every lane onto the un-channelized port.
+//
+// Returns nil, with a reason, when nothing eligible exists: a logical
+// member whose parent is not in the walk, one with no parent name at all,
+// or a parent name that matches more than one interface on the device,
+// which happens on stacks that repeat a management port name per member.
+func lagMemberTarget(
+	member *diode.Interface,
+	ifType string,
+	byName map[string][]*diode.Interface,
+) (*diode.Interface, string) {
+	if member == nil || member.Name == nil {
+		return nil, "member interface has no name"
+	}
+	// A physical port is the member, whatever its name looks like. So is
+	// one the walk reported no ifType for: moving its membership would be
+	// acting on evidence the device never gave.
+	if !isLogicalIfType(ifType) {
+		return member, ""
+	}
+	parent, isSub, reason := parentInterfaceFor(*member.Name, byName)
+	switch {
+	case parent != nil:
+		return parent, ""
+	case isSub:
+		return nil, reason
+	}
+	return nil, "member is a logical interface with no physical parent"
 }
 
 // AttachLagMembership sets Interface.Lag on each physical member port
@@ -158,13 +175,13 @@ func AttachLagMembership(
 	}
 
 	byIfIndex := make(map[int]*diode.Interface, len(ifIndexByIface))
-	byName := make(map[string][]*diode.Interface, len(ifIndexByIface))
+	ifaces := make([]*diode.Interface, 0, len(ifIndexByIface))
 	for iface, idx := range ifIndexByIface {
 		byIfIndex[idx] = iface
-		if iface.Name != nil {
-			byName[*iface.Name] = append(byName[*iface.Name], iface)
-		}
+		ifaces = append(ifaces, iface)
 	}
+	byName := interfacesByName(ifaces)
+	ifTypes := walkedIfTypes(oids)
 
 	// target -> aggregate chosen for it; a second, different aggregate for
 	// the same target marks the target contradictory.
@@ -190,7 +207,7 @@ func AttachLagMembership(
 				"aggregate_type", strDeref(agg.Type))
 			continue
 		}
-		target, reason := lagMemberTarget(member, byName)
+		target, reason := lagMemberTarget(member, ifTypes[memberIdx], byName)
 		if target == nil {
 			logger.Warn("lag: no eligible interface to carry the membership; skipping member",
 				"member", strDeref(member.Name), "aggregate", strDeref(agg.Name), "reason", reason)
@@ -199,6 +216,12 @@ func AttachLagMembership(
 		if target == agg {
 			logger.Warn("lag: member resolves to its own aggregate; skipping",
 				"member", strDeref(member.Name), "aggregate", strDeref(agg.Name))
+			continue
+		}
+		if netboxRefusesLagParent(target.Type) {
+			logger.Warn("lag: NetBox refuses a LAG parent on this interface type; skipping member",
+				"member", strDeref(member.Name), "interface", strDeref(target.Name),
+				"interface_type", strDeref(target.Type), "aggregate", strDeref(agg.Name))
 			continue
 		}
 		if prev, seen := chosen[target]; seen && prev != agg {
