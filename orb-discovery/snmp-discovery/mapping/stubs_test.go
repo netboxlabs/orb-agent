@@ -865,3 +865,221 @@ func strDerefSafe(p *string) string {
 	}
 	return *p
 }
+
+// An interface that carries an IP address is dropped from top-level emission,
+// so the stub nested in the IPAddress is its only wire payload and must keep
+// the parent the resolver found, or the subinterface lands in NetBox without
+// one. Both the plain and the cycle-closer branch build that stub.
+func TestPruneNestedRefs_IPAssignedStubKeepsParent(t *testing.T) {
+	v4 := "10.0.0.1/24"
+	currentDevice := &diode.Device{
+		Name:       strPtr("r1"),
+		Serial:     strPtr("SN1"),
+		PrimaryIp4: &diode.IPAddress{Address: &v4},
+	}
+	physType := strPtr("10gbase-x-sfpp")
+	physical := &diode.Interface{Name: strPtr("sfpplus1"), Device: currentDevice, Type: physType}
+	// A parent that itself points further up: the stub must cut the chain
+	// after one level.
+	parentRef := func() *diode.Interface {
+		return &diode.Interface{
+			Name: physical.Name, Type: physical.Type, Device: currentDevice,
+			Parent: &diode.Interface{Name: strPtr("upstream"), Device: currentDevice},
+		}
+	}
+
+	closerUnit := &diode.Interface{Name: strPtr("sfpplus1.156"), Device: currentDevice, Type: strPtr("virtual"), Parent: parentRef()}
+	primaryIP := &diode.IPAddress{Address: &v4, AssignedObject: closerUnit}
+
+	otherAddr := "192.0.2.9/30"
+	otherUnit := &diode.Interface{Name: strPtr("sfpplus1.810"), Device: currentDevice, Type: strPtr("virtual"), Parent: parentRef()}
+	otherIP := &diode.IPAddress{Address: &otherAddr, AssignedObject: otherUnit}
+
+	entities := []diode.Entity{currentDevice, physical, primaryIP, otherIP}
+	PruneNestedRefs(entities, currentDevice, map[*diode.IPAddress]bool{primaryIP: true})
+
+	for _, ip := range []*diode.IPAddress{primaryIP, otherIP} {
+		stub, ok := ip.AssignedObject.(*diode.Interface)
+		require.True(t, ok)
+		require.NotNil(t, stub.Parent, "%s lost its parent", *stub.Name)
+		assert.Equal(t, strPtr("sfpplus1"), stub.Parent.Name)
+		assert.Same(t, physType, stub.Parent.Type)
+		require.NotNil(t, stub.Parent.Device)
+		assert.Equal(t, strPtr("r1"), stub.Parent.Device.Name)
+		assert.Nil(t, stub.Parent.Device.Serial, "parent device must be a stub")
+		assert.Nil(t, stub.Parent.Device.PrimaryIp4, "parent device stub must not close the primary-IP cycle")
+		assert.Nil(t, stub.Parent.Parent, "parent stub carries no parent of its own")
+	}
+	closer := primaryIP.AssignedObject.(*diode.Interface)
+	require.NotNil(t, closer.Device.PrimaryIp4, "cycle-closer keeps its matcher-only primary")
+}
+
+func TestPruneNestedRefs_IPAssignedStubWithoutParentStaysNil(t *testing.T) {
+	currentDevice := &diode.Device{Name: strPtr("r1")}
+	iface := &diode.Interface{Name: strPtr("ether1"), Device: currentDevice, Type: strPtr("1000base-t")}
+	addr := "10.0.0.1/24"
+	ip := &diode.IPAddress{Address: &addr, AssignedObject: iface}
+	PruneNestedRefs([]diode.Entity{currentDevice, iface, ip}, currentDevice, nil)
+	stub := ip.AssignedObject.(*diode.Interface)
+	assert.Nil(t, stub.Parent)
+}
+
+// On a stack the parent ref is built before interfaces are routed to
+// members, so its device is still the master. The parent port lives on the
+// same member as its unit, so the parent stub takes the unit's resolved
+// owner when an interface of that name exists on that device in this run,
+// whether emitted top-level or nested in its own IP address. A parent that
+// exists only on another device is not emitted at all.
+func TestPruneNestedRefs_IPAssignedStubParentStaysOnUnitDevice(t *testing.T) {
+	master := &diode.Device{Name: strPtr("stack"), Serial: strPtr("SN-M")}
+	member := &diode.Device{Name: strPtr("stack-2"), Serial: strPtr("SN-2")}
+	portType := strPtr("1000base-t")
+	staleRef := func(name string) *diode.Interface {
+		return &diode.Interface{Name: strPtr(name), Type: portType, Device: master}
+	}
+	unitOn := func(name string, dev *diode.Device) *diode.Interface {
+		return &diode.Interface{Name: strPtr(name + ".0"), Device: dev, Type: strPtr("virtual"), Parent: staleRef(name)}
+	}
+	ipOn := func(addr string, iface *diode.Interface) *diode.IPAddress {
+		return &diode.IPAddress{Address: strPtr(addr), AssignedObject: iface}
+	}
+
+	// Parent with its own IP on the member: filtered from top-level emission.
+	port := &diode.Interface{Name: strPtr("ge-1/0/0"), Device: member, Type: portType}
+	portIP := ipOn("10.0.1.1/30", port)
+	unitIP := ipOn("10.0.2.1/30", unitOn("ge-1/0/0", member))
+
+	// Name on both members, top-level on both: the unit's own copy wins,
+	// and the stub is built from that copy, not from the stale ref that
+	// captured the master's attributes.
+	memberMac := "aa:bb:cc:00:00:02"
+	mgmtMaster := &diode.Interface{Name: strPtr("me0"), Device: master, Type: portType}
+	mgmtMember := &diode.Interface{
+		Name: strPtr("me0"), Device: member, Type: strPtr("100base-tx"),
+		PrimaryMacAddress: &diode.MACAddress{MacAddress: &memberMac},
+	}
+	mgmtIP := ipOn("192.0.2.2/24", unitOn("me0", member))
+
+	// Name on both members, the unit's copy carrying an IP, the other one
+	// top-level: still the unit's own copy.
+	vmeMaster := &diode.Interface{Name: strPtr("vme"), Device: master, Type: portType}
+	vmeMasterIP := ipOn("192.0.2.10/24", vmeMaster)
+	vmeMember := &diode.Interface{Name: strPtr("vme"), Device: member, Type: portType}
+	vmeIP := ipOn("192.0.2.11/24", unitOn("vme", master))
+
+	// Parent present only on another device: refused.
+	uplink := &diode.Interface{Name: strPtr("xe-0/1/0"), Device: master, Type: portType}
+	uplinkIP := ipOn("198.51.100.1/31", unitOn("xe-0/1/0", member))
+
+	entities := []diode.Entity{master, member, mgmtMaster, mgmtMember, vmeMember, uplink, portIP, unitIP, mgmtIP, vmeMasterIP, vmeIP, uplinkIP}
+	PruneNestedRefs(entities, master, nil)
+
+	parentOf := func(ip *diode.IPAddress) *diode.Interface {
+		return ip.AssignedObject.(*diode.Interface).Parent
+	}
+	deviceOf := func(ip *diode.IPAddress) string {
+		p := parentOf(ip)
+		require.NotNil(t, p, "%s lost its parent", *ip.AssignedObject.(*diode.Interface).Name)
+		require.NotNil(t, p.Device)
+		return *p.Device.Name
+	}
+	assert.Equal(t, "stack-2", deviceOf(unitIP), "parent with its own IP follows the unit's member")
+	assert.Equal(t, "stack-2", deviceOf(mgmtIP), "duplicate name: the unit's own copy")
+	assert.Same(t, mgmtMember.Type, parentOf(mgmtIP).Type, "parent stub built from the member's copy, not the stale ref")
+	require.NotNil(t, parentOf(mgmtIP).PrimaryMacAddress, "parent stub carries the member copy's MAC matcher")
+	assert.Equal(t, &memberMac, parentOf(mgmtIP).PrimaryMacAddress.MacAddress)
+	assert.Equal(t, "stack", deviceOf(vmeIP), "duplicate name with the unit's copy IP-assigned: still its own")
+	assert.Nil(t, parentOf(uplinkIP), "a parent that exists only on another device is not emitted")
+	assert.Same(t, unitIP.AssignedObject.(*diode.Interface).Device, parentOf(unitIP).Device,
+		"parent and unit share the member's cached device stub")
+	for _, ip := range []*diode.IPAddress{unitIP, mgmtIP, vmeIP} {
+		assert.Nil(t, parentOf(ip).Device.Serial, "parent device must be a stub")
+	}
+}
+
+// The cycle-closer branch on a stack: the unit keeps its primary-carrying
+// device stub, the parent gets the plain cached one for the same member.
+func TestPruneNestedRefs_IPAssignedStubParentOnStackCycleCloser(t *testing.T) {
+	v4 := "10.0.0.2/24"
+	master := &diode.Device{Name: strPtr("stack"), PrimaryIp4: &diode.IPAddress{Address: &v4}}
+	member := &diode.Device{Name: strPtr("stack-2")}
+	portType := strPtr("1000base-t")
+	port := &diode.Interface{Name: strPtr("ge-1/0/0"), Device: member, Type: portType}
+	unit := &diode.Interface{
+		Name: strPtr("ge-1/0/0.0"), Device: member, Type: strPtr("virtual"),
+		Parent: &diode.Interface{Name: port.Name, Type: portType, Device: master},
+	}
+	primaryIP := &diode.IPAddress{Address: &v4, AssignedObject: unit}
+
+	PruneNestedRefs([]diode.Entity{master, member, port, primaryIP}, master, map[*diode.IPAddress]bool{primaryIP: true})
+
+	stub := primaryIP.AssignedObject.(*diode.Interface)
+	require.NotNil(t, stub.Device.PrimaryIp4, "cycle-closer keeps its matcher-only primary")
+	require.NotNil(t, stub.Parent)
+	assert.Equal(t, strPtr("stack-2"), stub.Parent.Device.Name)
+	assert.Nil(t, stub.Parent.Device.PrimaryIp4, "parent device stub carries no primary")
+	assert.NotSame(t, stub.Device, stub.Parent.Device)
+}
+
+// The device's primary-IP snapshot nests the same interface as the
+// cycle-closer IP entity and must agree with it, parent included, without
+// reopening the cycle detachForPrimaryIP cut.
+func TestPruneNestedRefs_PrimarySnapshotCarriesParentWithoutCycle(t *testing.T) {
+	v4 := "10.0.0.1/24"
+	dev := &diode.Device{Name: strPtr("r1"), Serial: strPtr("SN1")}
+	port := &diode.Interface{Name: strPtr("ether1"), Device: dev, Type: strPtr("1000base-t")}
+	unit := &diode.Interface{
+		Name: strPtr("ether1.10"), Device: dev, Type: strPtr("virtual"),
+		Parent: &diode.Interface{Name: port.Name, Type: port.Type, Device: dev},
+	}
+	primaryIP := &diode.IPAddress{Address: &v4, AssignedObject: unit}
+	dev.PrimaryIp4 = detachForPrimaryIP(primaryIP, dev)
+
+	PruneNestedRefs([]diode.Entity{dev, port, primaryIP}, dev, map[*diode.IPAddress]bool{primaryIP: true})
+
+	snap := dev.PrimaryIp4.AssignedObject.(*diode.Interface)
+	require.NotNil(t, snap.Parent, "snapshot dropped the parent the live entity carries")
+	assert.Equal(t, strPtr("ether1"), snap.Parent.Name)
+	require.NotNil(t, snap.Parent.Device)
+	assert.Nil(t, snap.Parent.Device.PrimaryIp4, "parent device stub must not carry the primary")
+	assert.Nil(t, snap.Parent.Parent)
+	live := primaryIP.AssignedObject.(*diode.Interface)
+	assert.Equal(t, live.Parent.Name, snap.Parent.Name, "snapshot and live entity agree")
+}
+
+// With no Device entity in the batch, stubFor hands back the rich device
+// it was given. A rich device carrying a primary IP must never be nested
+// under the parent of a live cycle-closer, so the unit goes out without a
+// parent rather than with one that reopens the cycle.
+func TestPruneNestedRefs_IPAssignedStubParentRefusedWhenOwnerStaysRich(t *testing.T) {
+	v4 := "10.0.0.1/24"
+	rich := &diode.Device{Name: strPtr("r1"), PrimaryIp4: &diode.IPAddress{Address: &v4}}
+	port := &diode.Interface{Name: strPtr("ether1"), Device: rich, Type: strPtr("1000base-t")}
+	unit := &diode.Interface{
+		Name: strPtr("ether1.10"), Device: rich, Type: strPtr("virtual"),
+		Parent: &diode.Interface{Name: port.Name, Type: port.Type, Device: rich},
+	}
+	primaryIP := &diode.IPAddress{Address: &v4, AssignedObject: unit}
+
+	PruneNestedRefs([]diode.Entity{port, primaryIP}, nil, map[*diode.IPAddress]bool{primaryIP: true})
+
+	stub := primaryIP.AssignedObject.(*diode.Interface)
+	assert.Nil(t, stub.Parent, "a parent whose device could only be the rich one is refused")
+}
+
+// An IP-assigned interface with no device of its own falls back to the
+// current device, on the snapshot as on the live entity.
+func TestPruneNestedRefs_PrimarySnapshotFallsBackToCurrentDevice(t *testing.T) {
+	v4 := "10.0.0.1/24"
+	dev := &diode.Device{Name: strPtr("r1"), Serial: strPtr("SN1")}
+	unit := &diode.Interface{Name: strPtr("ether1.10"), Type: strPtr("virtual")}
+	primaryIP := &diode.IPAddress{Address: &v4, AssignedObject: unit}
+	dev.PrimaryIp4 = detachForPrimaryIP(primaryIP, dev)
+
+	PruneNestedRefs([]diode.Entity{dev, primaryIP}, dev, map[*diode.IPAddress]bool{primaryIP: true})
+
+	snap := dev.PrimaryIp4.AssignedObject.(*diode.Interface)
+	require.NotNil(t, snap.Device, "snapshot interface must name a device")
+	assert.Equal(t, strPtr("r1"), snap.Device.Name)
+	assert.Nil(t, snap.Device.Serial, "a stub, not the rich device")
+}
