@@ -97,6 +97,16 @@ The device serial comes from the standard `ENTITY-MIB::entPhysicalSerialNum` on 
 
 A populated standard chassis serial always wins: the fallback is consulted only when `ENTITY-MIB` yielded no chassis row with a serial, so a Junos platform that does publish one (QFX5100, for example) is unaffected, and on a Virtual Chassis the master serial stays pinned to the lowest member's chassis row. When neither source answers, the serial is left unset rather than guessed.
 
+## VRF membership
+
+VRFs and their interface membership come from the MIB tiers listed in the [VRFs](./README.md#vrfs) section of the README: the standard MPLS-L3VPN-STD-MIB, its pre-standard predecessor, CISCO-VRF-MIB, and JUNIPER-VPN-MIB for membership on Junos platforms whose agent omits the standard membership table. All four model BGP/MPLS VPNs, so a routing instance of another kind (a Junos `virtual-router`, for example) is not visible over SNMP on any tier and is documented as a limitation there.
+
+| Platform | Status |
+|---|---|
+| Juniper Junos EX (VRF table published, standard membership table absent) | Membership via JUNIPER-VPN-MIB `jnxVpnIfTable`, `bgpIpVpn` rows only — verified on a physical switch against a NETCONF control; `virtual-router` instances are not discoverable over SNMP |
+| Any platform publishing `mplsL3VpnIfConfTable` or the pre-standard equivalent | Vendor-neutral via the standard tiers |
+| Cisco VRF-lite without the MPLS MIBs | CISCO-VRF-MIB, no route distinguisher |
+
 ## LAG membership
 
 Member-port → aggregate associations (`Interface.lag`) come from the standard `IEEE8023-LAG-MIB::dot3adAggPortTable`, so any device that implements it is covered with no vendor branch. Aggregates themselves are ordinary interface rows typed `lag` from `ifType` 161. Junos is the one platform with a documented wrinkle: its aggregation ports are the logical units (`xe-0/0/0.0`), which are normalised to the physical port before the reference is emitted, since NetBox does not accept a LAG parent on a virtual interface. Details and the refusal rules are in the [LAG membership](./README.md#lag-membership) section of the README.

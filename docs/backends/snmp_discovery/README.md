@@ -404,13 +404,16 @@ Link-aggregation membership is read from the standard `IEEE8023-LAG-MIB::dot3adA
 
 When the `discover_vrfs` policy option is enabled (defaults to `false`), snmp-discovery walks the device's VRF MIB tables and emits a NetBox `VRF` entity per VRF, attached to the `IPAddress` entities of the VRF's member interfaces (membership is matched by `ifIndex`, so no name canonicalization is involved). With the option off, the VRF table columns are not walked at all — zero additional SNMP load.
 
-**MIB tiers.** Three sources are tried in order until one yields VRFs:
+**MIB tiers.** Four sources are tried in order until one yields VRFs:
 
 1. **MPLS-L3VPN-STD-MIB** (RFC 4382) — the standards path (`mplsL3VpnVrfTable` for names + route distinguishers, `mplsL3VpnIfConfTable` for membership). Implemented by Cisco IOS/IOS-XE/IOS-XR, Juniper, Nokia, Huawei, and others.
 2. **MPLS-VPN-MIB** (the pre-standard experimental arc) — same table shapes; common on older Cisco IOS.
 3. **CISCO-VRF-MIB** — VRF-lite platforms without the MPLS feature MIBs. No route distinguisher is available on this tier.
+4. **JUNIPER-VPN-MIB** `jnxVpnIfTable` — membership only, for Junos platforms that answer the standard VRF table but not the standard membership table (some EX switches). Only `bgpIpVpn` rows are read: the same table lists L2 circuits, L2 VPNs and VPLS instances, which are not VRFs. Rows are joined to the standard VRF by exact name, and the last index component is the member `ifIndex`.
 
 A tier that exposes VRF names but no membership (split-arc agents) merges membership from the lower tiers; lower tiers never introduce additional VRF names on their own.
+
+**Limitation — routing instances that are not VPNs.** Every one of these tables models BGP/MPLS VPNs. A routing instance configured as something else, such as a Junos `instance-type virtual-router`, has no route distinguisher and appears in none of them, so it is not emitted as a VRF and the addresses on its interfaces carry no VRF reference, whatever the interface type. The device publishes nothing over SNMP that could supply it. On platforms where this matters, device-discovery reads routing instances generally over NETCONF and is the complete source for that association; the two backends can run against the same device.
 
 **Precedence.** A discovered VRF wins over the `defaults.ip_address.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for member interfaces' addresses; every other address keeps the configured defaults. The device's primary IP reference is kept consistent with its underlying IP address entity, so NetBox (where IP identity is address + VRF) never sees the same address in two VRF contexts.
 
