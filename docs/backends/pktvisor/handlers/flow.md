@@ -1,4 +1,6 @@
-# Flow handler (flow)
+# Flow
+
+Handler type: `flow`
 
 - [Example of policy](#example-of-policy-with-input-flow-and-handler-flow)
 - [Metrics Group](#metrics-group)
@@ -64,7 +66,6 @@ input:
 kind: collection
 ```
 
-**Handler Type**: "flow"
 
 ## Summarizing by ASN
 
