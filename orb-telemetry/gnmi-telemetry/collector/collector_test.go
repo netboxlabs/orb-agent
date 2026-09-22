@@ -2502,3 +2502,43 @@ func TestModeLadderOnASilentStream(t *testing.T) {
 	})
 	assert.Equal(t, int64(2), calls.Load(), "one on_change request, then one sample request")
 }
+
+// A rejection marked as after the stream's data is the stream failing once
+// the target served it, and the same rung reconnects through it even when
+// none of that data reached the consumer: the notification in flight when a
+// sibling stream ended the attempt is dropped, and the verdict must not turn
+// on it.
+func TestARejectionAfterAStreamsDataKeepsTheRung(t *testing.T) {
+	testReader(t)
+	var onChange atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			for _, s := range subs {
+				if s.Mode == gnmi.OnChange {
+					onChange.Add(1)
+					out := make(chan gnmi.Notification)
+					errs := make(chan error, 1)
+					go func() {
+						defer close(out)
+						defer close(errs)
+						// Nothing reaches the consumer before the error.
+						errs <- fmt.Errorf("%w: %w", gnmi.ErrAfterData, status.Error(codes.Unimplemented, "rejected after serving"))
+					}()
+					return out, errs, nil
+				}
+			}
+			return streamOf(sample(1, time.Now().UnixNano()))(ctx, subs)
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool { return onChange.Load() >= 3 })
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "on_change", st[0].Mode, "the rung is kept and reconnected, not stepped down")
+}

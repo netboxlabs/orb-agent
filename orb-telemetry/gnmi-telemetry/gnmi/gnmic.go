@@ -748,9 +748,10 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 	}
 	// Each forwarder judges its own stream the way the consumer judges a
 	// stream of its own, since the consumer cannot see the streams apart:
-	// an error before the stream served data is marked as such, so a mode
-	// rejection on one stream reads as a refusal however much another has
-	// delivered; and a stream that answers neither data nor its sync within
+	// an error is marked as before or after the stream served data, so a
+	// mode rejection on one stream reads as a refusal however much another
+	// has delivered, and a failure after serving as a plain one however
+	// little reached the consumer; and a stream that answers neither data nor its sync within
 	// the probe deadline ends the attempt, silent when it served nothing,
 	// which the ladder advances through, stalled when it did, which the
 	// same rung reconnects through. The consumer's own dump deadline cannot
@@ -766,9 +767,15 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 			dump := time.NewTimer(dumpDeadline)
 			defer dump.Stop()
 			dumpDue := dump.C
-			before := func(err error) error {
+			// mark says on which side of the stream's first data an error
+			// fell. Both sides are said, since the consumer's own view of
+			// what was delivered is not this stream's: another stream's
+			// data may have reached it, or this stream's may not have,
+			// an attempt ending mid-handoff dropping the notification in
+			// flight.
+			mark := func(err error) error {
 				if delivered {
-					return err
+					return fmt.Errorf("%w: %w", ErrAfterData, err)
 				}
 				return fmt.Errorf("%w: %w", ErrBeforeData, err)
 			}
@@ -785,7 +792,7 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 					return
 				case err, ok := <-st.errs:
 					if ok && err != nil {
-						end(before(err))
+						end(mark(err))
 						return
 					}
 					if !ok {
@@ -806,7 +813,7 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 						select {
 						case err := <-st.errs:
 							if err != nil {
-								end(before(err))
+								end(mark(err))
 								return
 							}
 						default:

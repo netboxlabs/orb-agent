@@ -466,12 +466,17 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 	early := func(err error) error {
 		// A stream the session reports silent answered nothing before its
 		// sync: there is no code to read, as when the dump deadline below
-		// fires before any data, and the ladder advances through it. A
-		// rejection marked as before the stream's data is read as if
-		// nothing had been delivered, since another stream of the attempt
-		// is what delivered it.
+		// fires before any data, and the ladder advances through it. An
+		// error marked as after the stream's data is the stream failing
+		// once the target served it, plain whatever the consumer received
+		// of that data; one marked as before is read as if nothing had
+		// been delivered, since another stream of the attempt is what
+		// delivered it.
 		if errors.Is(err, gnmi.ErrStreamSilent) {
 			return refused(err)
+		}
+		if errors.Is(err, gnmi.ErrAfterData) {
+			return err
 		}
 		if productive && !errors.Is(err, gnmi.ErrBeforeData) {
 			return err

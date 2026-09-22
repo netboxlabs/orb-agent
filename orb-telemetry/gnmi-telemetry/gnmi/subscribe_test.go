@@ -1302,10 +1302,12 @@ func TestAStreamEndedAfterItsSyncBeforeTheOthersIsNotSilent(t *testing.T) {
 	assertOrdinaryClose(t, notes, errs)
 }
 
-// An error a stream reports after it has served data is not marked as
-// before its data: the target accepted the mode and served it, so the same
-// rung reconnects through the failure.
-func TestAStreamRefusingAfterItsDataIsNotMarked(t *testing.T) {
+// An error a stream reports after it has served data is marked as after it,
+// not before: the target accepted the mode and served it, so the same rung
+// reconnects through the failure, and the consumer reads that from the mark
+// rather than from what reached it, since the notification in flight when
+// the attempt ends may never arrive.
+func TestAStreamRefusingAfterItsDataIsMarkedAfter(t *testing.T) {
 	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
 	srv := &getServer{
 		holds:           map[string]bool{memory: true, native: true},
@@ -1332,6 +1334,7 @@ func TestAStreamRefusingAfterItsDataIsNotMarked(t *testing.T) {
 		case err := <-errs:
 			require.Error(t, err)
 			assert.False(t, errors.Is(err, ErrBeforeData), "the stream served before it was refused: %v", err)
+			assert.True(t, errors.Is(err, ErrAfterData), "the refusal is marked as after the stream's data: %v", err)
 			assert.Equal(t, codes.Unimplemented, status.Code(err), "the target's code is kept")
 			return
 		case <-deadline:

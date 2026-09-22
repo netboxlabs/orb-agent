@@ -68,6 +68,14 @@ type CapabilitiesResult struct {
 // the consumer to read.
 var ErrBeforeData = errors.New("before the stream served data")
 
+// ErrAfterData marks an error a stream reported after it had served data of
+// its own: the target accepted the mode and served it, so whatever the code,
+// the failure is one the same rung reconnects through. Together with
+// ErrBeforeData it makes the verdict on a stream's error complete from the
+// session's side, so it cannot depend on which stream's data the consumer
+// happened to receive before the attempt ended.
+var ErrAfterData = errors.New("after the stream served data")
+
 // ErrStreamSilent marks a stream that served nothing at all: it answered
 // neither data nor its sync response within the probe deadline, or ended
 // before answering either. There is no code to read, and the ladder
