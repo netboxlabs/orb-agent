@@ -1,6 +1,19 @@
 # Pktvisor
 The `pktvisor` backend embeds the [pktvisord](https://github.com/netboxlabs/pktvisor) process inside Orb Agent to run deep packet analytics, active probes, and streaming aggregations directly at the edge. Pktvisor policies let you decide which network taps to activate, which analyzers to run, and how the resulting metrics are exported to your observability stack.
 
+## Reference
+
+| Page | Contents |
+|:--|:--|
+| [Inputs](inputs.md) | The data streams a policy can consume: `pcap`, `flow`, `dnstap`, `netprobe`, with their configuration and filters. |
+| [Handlers](handlers.md) | The handler section, the available handler types and versions, metric groups, and the configurations shared by all handlers. |
+| [Metrics](metrics.md) | Every metric each handler produces. |
+
+Handler references: [DNS](handler_dns.md), [Network](handler_net.md),
+[Flow](handler_flow.md), [DHCP](handler_dhcp.md), [BGP](handler_bgp.md),
+[Packet capture](handler_pcap.md), [Netprobe](handler_netprobe.md),
+[Input resources](handler_input_resources.md).
+
 ## Configuration
 Orb writes a temporary pktvisor configuration file on startup based on the `orb.backends.pktvisor` block. Any key that is not handled explicitly is forwarded to `visor.config` in the generated file, so you can pass through native pktvisor options such as logging, crashpad, or custom data paths when needed.
 
@@ -14,8 +27,8 @@ Orb writes a temporary pktvisor configuration file on startup based on the `orb.
 
 Pktvisor ships with the Orb agent container image. If you run Orb on a bare host, ensure the `pktvisord` binary is in `$PATH` or adjust your deployment accordingly.
 
-### Exporting pktvisor metrics
-`pktvisord` can stream OpenTelemetry HTTP metrics directly to a collector. Configure the shared backend section to point Orb Agent at your collector endpoint:
+### Taps
+A tap names a data source once, on the agent, so that policies can refer to it. Each tap sets an `input_type`, its `config`, an optional `filter`, and optional `tags` that a policy can select on. See [Inputs](inputs.md) for the configuration and filters each input type accepts.
 
 ```yaml
 orb:
@@ -42,27 +55,33 @@ orb:
     common:
       otlp:
         http: "http://otel-collector.monitoring.svc.cluster.local:4318"
-...
 ```
 
+### Exporting pktvisor metrics
+`pktvisord` can stream OpenTelemetry HTTP metrics directly to a collector. Configure the shared `backends.common.otlp` section, as in the example above, to point Orb Agent at your collector endpoint.
+
 ## Policy structure
-Define pktvisor policies under `orb.policies.pktvisor`. Each entry key becomes the policy name pushed to `pktvisord`, and the policy body must follow the schema documented in the [Orb Policy Reference](https://orb.community/documentation/advanced_policies/#pktvisor-policy). Orb automatically wraps the policy with the expected version metadata, so you only provide the sections described below.
+Define pktvisor policies under `orb.policies.pktvisor`. Each entry key becomes the policy name pushed to `pktvisord`, and the agent wraps the body you write in the envelope `pktvisord` expects, so the body is just the four sections below.
 
-### `input`
-Describes the data stream the policy consumes.
-- `input_type` (required): must match the tap type (`pcap`, `flow`, `dnstap`, `netprobe`, ...).
-- `tap`: name of a tap defined in `orb.backends.pktvisor.taps`.
-- `tap_selector`: alternatively select taps by tags (`any` or `all` matching semantics).
-- `filter`: optional packet, flow, or probe filters (for example `bpf` strings or DNS selectors).
-- `config`: per-policy overrides of tap behavior (for example netprobe timing, flow sampling, DNS capture depth). Tap-level settings win if both are provided.
+```yaml
+orb:
+  policies:
+    pktvisor:
+      my_policy:
+        input: ...
+        handlers: ...
+        config: ...
+        kind: collection
+```
 
-### `handlers`
-Controls which analyzer modules run on the selected input.
-- `config`: global handler knobs such as `deep_sample_rate`, `num_periods`, `topn_count`, or `merge_like_handlers`.
-- `modules`: map keyed by module ID. Each module requires a `type` (`dns`, `net`, `netprobe`, …) and can specify `require_version`, module-specific `config`, `filter`, and `metric_groups.enable`/`metric_groups.disable` lists to turn metric families on or off. See the pktvisor repository for module-specific options and supported metric groups.
+| Section | Required | Description |
+|:--|:--|:--|
+| [`input`](inputs.md) | yes | The data stream to analyse: a tap name or tag selector, plus the input type and any filters. |
+| [`handlers`](handlers.md) | yes | The analyzer modules to run on that input, and their configuration, filters and metric groups. |
+| [`config`](handlers.md#config-section) | no | Policy level settings. Currently only `merge_like_handlers`. |
+| [`kind`](handlers.md#kind-section) | no | The only supported value is `collection`. |
 
-### `config`
-Optional policy-level settings applied before handlers run. Common parameters include `merge_like_handlers`, custom flush intervals, or reporter options. Values are passed straight to `visor.policies.<name>.config` and validated by `pktvisord`.
+A policy name must be unique within the backend.
 
 ## Example policy
 The following policy inspects DNS traffic captured from the `edge_dns` tap and runs both DNS-specific and network-wide analytics. Use this pattern when you want to reuse a tap across multiple handlers.
@@ -81,6 +100,7 @@ orb:
           modules:
             dns_summary:
               type: dns
+              require_version: "2.0"
               metric_groups:
                 enable:
                   - counters
@@ -93,7 +113,7 @@ orb:
         kind: collection
 ```
 
+Note the `require_version: "2.0"` on the DNS module. A module that omits `require_version` runs version `1.0` of that handler; see [available handlers](handlers.md#available-handlers).
+
 ## Additional resources
 - [Pktvisor project home](https://github.com/netboxlabs/pktvisor) — feature overview, module reference, and deployment notes.
-- [Orb agent configuration guide](https://orb.community/documentation/orb_agent_configs/#pktvisor-configuration) — tap definitions and available input options.
-- [Orb policy reference](https://orb.community/documentation/advanced_policies/) — complete pktvisor policy schema with per-module settings and examples.

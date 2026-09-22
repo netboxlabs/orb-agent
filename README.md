@@ -107,7 +107,7 @@ Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and
 #### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic, probes or device polling so you can feed metrics into your monitoring stack. SNMP Telemetry polls SNMP devices and receives their traps, exporting metrics over OTLP.
 
-- [pktvisor](./docs/backends/pktvisor.md)
+- [pktvisor](./docs/backends/pktvisor/README.md)
 - [OpenTelemetry Infinity](./docs/backends/opentelemetry_infinity.md)
 - [SNMP Telemetry](./docs/backends/snmp_telemetry.md)
 - [gNMI Telemetry](./docs/backends/gnmi_telemetry.md)
