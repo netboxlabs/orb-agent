@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -588,4 +589,66 @@ func TestStartProcess_SpecBudgetWinsOverTheContextBudget(t *testing.T) {
 func TestReadinessBudgetFromAnUnmarkedContextIsZero(t *testing.T) {
 	assert.Equal(t, time.Duration(0), ReadinessBudgetFrom(context.Background()))
 	assert.Equal(t, 3*time.Second, ReadinessBudgetFrom(WithReadinessBudget(context.Background(), 3*time.Second)))
+}
+
+// A backend's readiness check asks localhost:<port> and takes whatever answers,
+// so while another process holds the port, the check would report that
+// process's answer as the child's. StartProcess refuses to spawn while the
+// address the backend would listen on is held.
+func TestStartProcess_RefusesWhileTheListenAddressIsHeld(t *testing.T) {
+	stubProcessTimers(t)
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+
+	fake := newFakeCommander(4242)
+	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+	captured := stubNewCmdOptions(t, fake)
+	var setProcCalled atomic.Bool
+
+	err = StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     holder.Addr().String(),
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) { setProcCalled.Store(true) },
+		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), holder.Addr().String(), "the error names the address")
+	assert.Contains(t, err.Error(), "in use", "the error says the address is held")
+	assert.Empty(t, captured.exec, "nothing is spawned while the address is held")
+	assert.False(t, setProcCalled.Load(), "no process is published")
+}
+
+// The probe holds the address only for the check: the child must be able to
+// bind it right after.
+func TestStartProcess_ReleasesTheProbedListenAddress(t *testing.T) {
+	stubProcessTimers(t)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := probe.Addr().String()
+	require.NoError(t, probe.Close())
+
+	fake := newFakeCommander(4242)
+	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+	stubNewCmdOptions(t, fake)
+
+	err = StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     addr,
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+	})
+	require.NoError(t, err, "a free address lets the start proceed")
+
+	child, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the address is free again for the child")
+	_ = child.Close()
 }

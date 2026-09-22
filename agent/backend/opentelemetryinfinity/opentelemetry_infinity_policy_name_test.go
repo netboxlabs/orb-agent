@@ -81,6 +81,7 @@ func TestOpenTelemetryRemovePolicyEscapesTheName(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	stubListenProbe(t)
 	require.NoError(t, be.Start(ctx, cancel))
 
 	for _, c := range policyNameEscapingCases {

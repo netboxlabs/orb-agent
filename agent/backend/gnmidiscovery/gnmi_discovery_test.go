@@ -386,6 +386,12 @@ func createExecutable(t *testing.T, name string) {
 }
 
 func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(options backend.CmdOptions, name string, args []string)) {
+	// A test that stands a server in for the child on the configured address
+	// has that address held on purpose: the probe that refuses a held
+	// address is stubbed out here, along with the process.
+	origProbe := backend.EnsureListenAddrFree
+	backend.EnsureListenAddrFree = func(string) error { return nil }
+	t.Cleanup(func() { backend.EnsureListenAddrFree = origProbe })
 	t.Helper()
 
 	original := backend.NewCmdOptions

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -156,7 +157,8 @@ func (d *deviceDiscoveryBackend) buildArgs() []string {
 			"--diode-target", d.diodeTarget,
 		}
 		if !d.diodeTargetFromOtel {
-			opts = append(opts,
+			opts = append(
+				opts,
 				"--diode-client-id", d.diodeClientID,
 				"--diode-client-secret", d.diodeClientSecret,
 			)
@@ -193,6 +195,7 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 		NameUnderscore: "device_discovery",
 		Exec:           d.exec,
 		Args:           args,
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p

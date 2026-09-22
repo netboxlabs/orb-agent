@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 )
 
@@ -64,6 +65,14 @@ type StartSpec struct {
 	NameUnderscore string // underscore form passed only to StopProcess (e.g. "network_discovery")
 	Exec           string
 	Args           []string
+	// ListenAddr is the host:port the backend is told to listen on. When set,
+	// StartProcess refuses to spawn while another process holds it: the
+	// readiness check asks that address and takes whatever answers, so with
+	// the port held elsewhere (another agent sharing the host network) it
+	// would report the other process's answer as the child's, and the
+	// policies replayed after it would go to the other process too. Empty
+	// skips the check.
+	ListenAddr     string
 	LogLine        func(line string, isStderr bool)  // per-backend normalizer adapter
 	SetProc        func(Commander, <-chan CmdStatus) // publishes proc+statusChan to the backend BEFORE the readiness loop (see CRITICAL below)
 	ReadinessCheck func() (string, error)            // returns the version string + err; d.Version fits directly; pktvisor wraps an inline /metrics/app probe returning appMetrics.App.Version
@@ -81,6 +90,24 @@ type StartSpec struct {
 	// loop as it is. Zero also reads a budget attached to Ctx with
 	// WithReadinessBudget.
 	ReadinessBudget time.Duration
+}
+
+// EnsureListenAddrFree is the probe StartProcess runs on a spec's ListenAddr.
+// It is a variable so that a test standing a server in for the child on that
+// address can stub it, the way NewCmdOptions stands a Commander in for the
+// process.
+var EnsureListenAddrFree = ensureListenAddrFree
+
+// ensureListenAddrFree binds addr and releases it at once, so a backend that
+// is about to be told to listen there is refused while another process holds
+// it, with the bind error saying why. The window between the release and the
+// child's own bind is one the child reports itself, by failing to start.
+func ensureListenAddrFree(addr string) error {
+	l, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen address %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", addr, err)
+	}
+	return l.Close()
 }
 
 // StartProcess launches the process, streams stdout/stderr to LogLine, then:
@@ -132,6 +159,12 @@ func StartProcess(spec StartSpec) error {
 	}
 	if spec.ReadinessBudget == 0 {
 		spec.ReadinessBudget = ReadinessBudgetFrom(ctx)
+	}
+	if spec.ListenAddr != "" {
+		if err := EnsureListenAddrFree(spec.ListenAddr); err != nil {
+			spec.Logger.Error(spec.NameDisplay+" cannot start", "error", err)
+			return fmt.Errorf("%s: %w", spec.NameDisplay, err)
+		}
 	}
 
 	proc := NewCmdOptions(CmdOptions{

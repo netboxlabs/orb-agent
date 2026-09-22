@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -132,6 +133,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		NameUnderscore: "pktvisor",
 		Exec:           p.binary,
 		Args:           pvOptions,
+		ListenAddr:     net.JoinHostPort(p.adminAPIHost, p.adminAPIPort),
 		LogLine:        p.logLineAdapter,
 		SetProc: func(proc backend.Commander, ch <-chan backend.CmdStatus) {
 			p.proc = proc

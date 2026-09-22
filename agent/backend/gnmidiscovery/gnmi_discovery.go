@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -153,7 +154,8 @@ func (d *gnmiDiscoveryBackend) buildArgs() []string {
 	} else {
 		args = append(args, "--diode-target", d.diodeTarget)
 		if !d.diodeTargetFromOtel {
-			args = append(args,
+			args = append(
+				args,
 				"--diode-client-id", d.diodeClientID,
 				"--diode-client-secret", d.diodeClientSecret,
 			)
@@ -203,6 +205,7 @@ func (d *gnmiDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		NameUnderscore: "gnmi_discovery",
 		Exec:           d.exec,
 		Args:           args,
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p
