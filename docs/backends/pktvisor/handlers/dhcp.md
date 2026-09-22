@@ -35,6 +35,28 @@ kind: collection
 
 **Handler Type**: "dhcp"
 
+## Monitoring DHCP services
+
+DHCP exchanges run on UDP ports 67 and 68, so a policy that only wants DHCP
+narrows the capture with a BPF filter rather than analysing every packet. Pairing
+the `dhcp` handler with `net` gives the DHCP counters alongside the general
+traffic picture for the same packets.
+
+```yaml
+handlers:
+  modules:
+    dhcp_traffic:
+      type: dhcp
+    net_traffic:
+      type: net
+input:
+  input_type: pcap
+  tap: default_pcap
+  filter:
+    bpf: "port 67 or port 68"
+kind: collection
+```
+
 ## Metrics Group
 
 - [Check dhcp metrics](../metrics.md#dhcp-metrics)

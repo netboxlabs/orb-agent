@@ -144,6 +144,14 @@ The following inputs are supported: `pcap`, `flow`, `dnstap` and `netprobe`. For
 >             pcap: true
 > ```
 
+### Seeing the traffic
+
+A `pcap` tap can only analyse what reaches its interface. For an agent that is
+not itself in the traffic path, that usually means mirroring the traffic of
+interest to the interface it listens on, or putting that interface into
+promiscuous mode. An agent with no visibility of the traffic produces an empty
+policy rather than an error.
+
 ### pcap configuration
 
 The following configurations are available for pcap inputs. `bpf` is both a
@@ -275,6 +283,24 @@ bpf: "port 53"
 >           tags:
 >             flow: true
 > ```
+
+### Choosing a port and flow type
+
+`flow_type` must match what the exporters send, and the port is whatever they are
+configured to send to. The conventional ports differ by format:
+
+| Datagram format | `flow_type` | Conventional port |
+|:--|:--|:--|
+| sFlow | `sflow` | 6343 |
+| Netflow | `netflow` | 9996 |
+| IPFIX | `ipfix` | 4739 |
+
+`ipfix` and `netflow` select the same parser, so either value works for an IPFIX
+exporter.
+
+`bind` is the local address to receive on, and both it and `port` must be set
+together. Nothing about the port is enforced, so an exporter sending to a
+different one simply needs that number here.
 
 ### flow configuration
 

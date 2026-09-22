@@ -59,6 +59,35 @@ kind: collection
 
 **Handler Type**: "dns"
 
+## Monitoring authoritative DNS
+
+For a server answering queries for its own zones, `public_suffix_list` groups
+qnames by registrable domain rather than by every distinct label, and the
+`top_ecs` metric group surfaces which client subnets the queries carry. Narrowing
+the capture to port 53 keeps the handler off unrelated traffic. Both settings
+exist in the 1.0 handler too; drop `require_version` to use it.
+
+```yaml
+handlers:
+  modules:
+    dns_traffic:
+      type: dns
+      require_version: "2.0"
+      config:
+        public_suffix_list: true
+      metric_groups:
+        enable:
+          - top_ecs
+    net_traffic:
+      type: net
+input:
+  input_type: pcap
+  tap: dns_pcap
+  filter:
+    bpf: "port 53"
+kind: collection
+```
+
 ## Metrics Group (2.0)
 
 - [Check the dns metrics belonging to each group](../metrics.md#dns-metrics)

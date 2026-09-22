@@ -66,6 +66,48 @@ kind: collection
 
 **Handler Type**: "flow"
 
+## Summarizing by ASN
+
+A busy flow collector produces far more distinct IPs than are useful to store.
+Summarizing by ASN collapses them, and the exclusions keep the aggregate
+meaningful: drop the ASNs you do not want folded in, and drop the addresses that
+resolve to no ASN at all rather than letting them pile into one bucket.
+
+`only_device_interfaces` narrows this further to named devices and their SNMP
+interface indices. It is a map keyed by device IP.
+
+```yaml
+handlers:
+  modules:
+    flow_by_asn:
+      type: flow
+      config:
+        summarize_ips_by_asn: true
+        exclude_unknown_asns_from_summarization: true
+        exclude_asns_from_summarization:
+          - 64496
+        subnets_for_summarization:
+          - 0.0.0.0/24
+          - ::/64
+      filter:
+        only_device_interfaces:
+          192.0.2.1: [1, 2, 3]
+          192.0.2.2: [1, 2, 3]
+      metric_groups:
+        disable:
+          - all
+        enable:
+          - counters
+          - by_bytes
+          - top_ports
+          - top_ips
+          - top_tos
+input:
+  input_type: flow
+  tap: my_flow_tap
+kind: collection
+```
+
 ## Metrics Group
 
 - [Check the flow metrics belonging to each group](../metrics.md#flow-metrics)

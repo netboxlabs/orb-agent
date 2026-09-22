@@ -112,6 +112,20 @@ metric_groups:
 
 * Attention: enable is dominant over disable. So if both are passed, the metrics group will be enabled;
 
+Because `disable` is applied first and `enable` second, the two combine into a
+useful idiom: disable everything, then name only the groups you want. This is
+how you keep a handler to a known set rather than tracking which groups are on
+by default.
+
+```yaml
+metric_groups:
+  disable:
+    - all
+  enable:
+    - counters
+    - by_bytes
+```
+
 ## Abstract Configurations
 
 These four settings size the metric window and apply to every handler in the
