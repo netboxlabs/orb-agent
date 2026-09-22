@@ -50,9 +50,10 @@ kind: collection
 
 - [Abstract configurations](handlers.md#abstract-configurations).
 
-The netprobe handler itself takes no configuration of its own. What is probed,
-including the required `targets` map, is configured on the netprobe **input**;
-see [netprobe configuration](inputs.md#netprobe-configuration).
+The netprobe handler accepts `recorded_stream`, `xact_ttl_secs` and
+`xact_ttl_ms`. What is probed, including the required `targets` map, is
+configured on the netprobe **input** instead; see
+[netprobe configuration](inputs.md#netprobe-configuration).
 
 Netprobe settings describe the probe rather than the host the agent runs on, so
 they are often worth setting on the policy's `input` rather than on the tap. A

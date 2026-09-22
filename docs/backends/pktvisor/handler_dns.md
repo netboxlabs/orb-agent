@@ -12,7 +12,6 @@ handlers:
   window_config:
     deep_sample_rate: 100
     num_periods: 5
-    topn_count: 10
   modules:
     default_dns:
       type: dns
@@ -384,7 +383,6 @@ handlers:
   window_config:
     deep_sample_rate: 100
     num_periods: 5
-    topn_count: 10
   modules:
     default_dns:
       type: dns

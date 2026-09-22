@@ -21,14 +21,20 @@ Orb writes a temporary pktvisor configuration file on startup based on the `orb.
 | Parameter | Type | Required | Default | Description |
 |:---------:|:----:|:--------:|:-------:|-------------|
 | `host` | string | no | `localhost` | Admin API host exposed by `pktvisord`. Use this when `pktvisord` runs outside the Orb container. |
-| `port` | string | no | `10853` | Admin API port. Must match the listener configured for `--admin-api`. |
-| `taps` | map | yes | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, `filter`, and optional `tags`). |
+| `port` | string | no | `10853` | Admin API port. Written to `visor.config.port`, which is the port `pktvisord` binds its admin API to. |
+| `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not validated as required, but an agent with no taps has nothing for a policy to analyse. |
 | *other keys* | any | no | – | Added verbatim under `visor.config` (for example `log_level`, crashpad options, or storage paths). |
 
 Pktvisor ships with the Orb agent container image. If you run Orb on a bare host, ensure the `pktvisord` binary is in `$PATH` or adjust your deployment accordingly.
 
 ### Taps
-A tap names a data source once, on the agent, so that policies can refer to it. Each tap sets an `input_type`, its `config`, an optional `filter`, and optional `tags` that a policy can select on. See [Inputs](inputs.md) for the configuration and filters each input type accepts.
+A tap names a data source once, on the agent, so that policies can refer to it.
+Each tap sets an `input_type`, its `config`, and optional `tags` that a policy can
+select on. See [Inputs](inputs.md) for the configuration each input type accepts.
+
+A tap has no `filter` key: filters belong to the policy's `input`, and a `filter`
+written on a tap is ignored without an error. For packet capture a BPF expression
+can also go in the tap's `config`, since `pcap` accepts `bpf` there.
 
 ```yaml
 orb:
@@ -41,7 +47,6 @@ orb:
           input_type: pcap
           config:
             iface: eth0
-          filter:
             bpf: "port 53"
         sflow:
           input_type: flow
@@ -79,9 +84,11 @@ orb:
 | [`input`](inputs.md) | yes | The data stream to analyse: a tap name or tag selector, plus the input type and any filters. |
 | [`handlers`](handlers.md) | yes | The analyzer modules to run on that input, and their configuration, filters and metric groups. |
 | [`config`](handlers.md#config-section) | no | Policy level settings. Currently only `merge_like_handlers`. |
-| [`kind`](handlers.md#kind-section) | no | The only supported value is `collection`. |
+| [`kind`](handlers.md#kind-section) | yes | The only supported value is `collection`. |
 
-A policy name must be unique within the backend.
+A policy name must be unique within the backend. Policy, tap and handler module
+names must match `[a-zA-Z_][a-zA-Z0-9_-]*`, so they start with a letter or
+underscore and contain only letters, digits, `_` or `-`.
 
 ## Example policy
 The following policy inspects DNS traffic captured from the `edge_dns` tap and runs both DNS-specific and network-wide analytics. Use this pattern when you want to reuse a tap across multiple handlers.

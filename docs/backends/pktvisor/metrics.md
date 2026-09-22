@@ -2,7 +2,7 @@
 
 The metrics each handler produces, grouped by handler type. A handler emits a
 metric only when the metric group it belongs to is enabled; see
-[metric groups](handlers.md#pktvisor-handlers) for how to enable and disable them,
+[metric groups](handlers.md#handlers-section-analysis) for how to enable and disable them,
 and each handler's own page for which groups it supports.
 
 The Orb metrics currently provided come from the various supported pktvisor handlers and are listed here by handler.
@@ -113,7 +113,7 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Top QNAMES with response code NOERROR and no data in the response (NODATA)                                         | dns_top_nodata                      | top_qnames                      |
 | Top QNAMES with response code NXDOMAIN                                                                             | dns_top_nxdomain                    | top_qnames                      |
 | Top QNAMES by response volume                                                                                      | dns_top_qname_by_resp_bytes      | top_qnames_details + top_qnames |
-| Top QNAMES with result code NOERROR                                                                                | dns_top_noerror                     | top_qname_details + top_qnames  |
+| Top QNAMES with result code NOERROR                                                                                | dns_top_noerror                     | top_qnames_details + top_qnames  |
 | Top QNAMES aggregated at a depth of two labels                                                                     | dns_top_qname2                      | top_qnames                      |
 | Top QNAMES aggregated at a depth of three labels                                                                   | dns_top_qname3                      | top_qnames                      |
 | Top QTYPEs                                                                                                         | dns_top_qtype                       | any group*                      |
@@ -168,32 +168,32 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Metric                                                                  | Prometheus Name              | Metric Groups |
 |-------------------------------------------------------------------------|------------------------------|---------------|
 | IP cardinality                                                          | net_cardinality_ips          | cardinality   |
- | Total packets that were sampled for deep inspection                     | net_deep_sampled_packets     | any group*    |
- | Total packets seen that did not match the configured filter(s) (if any) | net_filtered_packets         | counters      |
- | Count of IPv4 packets                                                   | net_ipv4_packets             | counters      |
- | Count of IPv6 packets                                                   | net_ipv6_packets             | counters      |
- | Total packets events generated                                          | net_observed_packets         | any group*    |
- | Count of packets which are not UDP or TCP                               | net_other_l4_packets         | counters      |
- | Quantiles of payload sizes, in bytes                                    | net_payload_size_bytes       | quantiles     |
- | Count of payload sizes, in bytes                                        | net_payload_size_bytes_count | quantiles     |
- | Total sum of payload sizes, in bytes                                    | net_payload_size_bytes_sum   | quantiles     |
- | Data rate of bits per second                                            | net_rates_bps                | quantiles     |
- | Count of bits per second                                                | net_rates_bps_count          | quantiles     |
- | Total sum of bits per second                                            | net_rates_bps_sum            | quantiles     |
- | Rate of all packets before filtering per second                         | net_rates_observed_pps       | any group*    |
- | Count of all packets before filtering per second                        | net_rates_observed_pps_count | any group*    |
- | Total sum of all packets before filtering per second                    | net_rates_observed_pps_sum   | any group*    |
- | Rate of packets per second                                              | net_rates_pps                | quantiles     |
- | Count of packets per second                                             | net_rates_pps_count          | quantiles     |
- | Total sum of packets per second                                         | net_rates_pps_sum            | quantiles     |
- | Count of TCP packets                                                    | net_tcp_packets              | counters      |
- | Count of TCP SYN packets                                                | net_tcp_syn_packets          | counters      |
- | Top ASNs by IP                                                          | net_top_asn_packets          | top_geo       |
- | Top GeoIP locations                                                     | net_top_geo_loc_packets      | top_geo       |
- | Top IPv4 addresses                                                      | net_top_ipv4_packets         | top_ips       |
- | Top IPv6 addresses                                                      | net_top_ipv6_packets         | top_ips       |
- | Count of total packets matching the configured filter(s)                | net_total_packets            | counters      |
- | Count of UDP packets                                                    | net_udp_packets              | counters      |
+| Total packets that were sampled for deep inspection                     | net_deep_sampled_packets     | any group*    |
+| Total packets seen that did not match the configured filter(s) (if any) | net_filtered_packets         | counters      |
+| Count of IPv4 packets                                                   | net_ipv4_packets             | counters      |
+| Count of IPv6 packets                                                   | net_ipv6_packets             | counters      |
+| Total packets events generated                                          | net_observed_packets         | any group*    |
+| Count of packets which are not UDP or TCP                               | net_other_l4_packets         | counters      |
+| Quantiles of payload sizes, in bytes                                    | net_payload_size_bytes       | quantiles     |
+| Count of payload sizes, in bytes                                        | net_payload_size_bytes_count | quantiles     |
+| Total sum of payload sizes, in bytes                                    | net_payload_size_bytes_sum   | quantiles     |
+| Data rate of bits per second                                            | net_rates_bps                | quantiles     |
+| Count of bits per second                                                | net_rates_bps_count          | quantiles     |
+| Total sum of bits per second                                            | net_rates_bps_sum            | quantiles     |
+| Rate of all packets before filtering per second                         | net_rates_observed_pps       | any group*    |
+| Count of all packets before filtering per second                        | net_rates_observed_pps_count | any group*    |
+| Total sum of all packets before filtering per second                    | net_rates_observed_pps_sum   | any group*    |
+| Rate of packets per second                                              | net_rates_pps                | quantiles     |
+| Count of packets per second                                             | net_rates_pps_count          | quantiles     |
+| Total sum of packets per second                                         | net_rates_pps_sum            | quantiles     |
+| Count of TCP packets                                                    | net_tcp_packets              | counters      |
+| Count of TCP SYN packets                                                | net_tcp_syn_packets          | counters      |
+| Top ASNs by IP                                                          | net_top_asn_packets          | top_geo       |
+| Top GeoIP locations                                                     | net_top_geo_loc_packets      | top_geo       |
+| Top IPv4 addresses                                                      | net_top_ipv4_packets         | top_ips       |
+| Top IPv6 addresses                                                      | net_top_ipv6_packets         | top_ips       |
+| Count of total packets matching the configured filter(s)                | net_total_packets            | counters      |
+| Count of UDP packets                                                    | net_udp_packets              | counters      |
 
 ### Network 1.0
 
@@ -222,18 +222,18 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Quantiles of total data rates                                   | payload_rates_bytes_total        | any group*    |
 | Total sum of total data rates                                   | payload_rates_bytes_total_sum   | any group*    |
 | Count of total data rates                                       | payload_rates_bytes_total_count | any group*    |
-| Quantiles of all packets before filtering in packets per second | payload_rates_pps_events         | any group*    |
-| Total sum of all packets before filtering in packets per second | payload_rates_pps_events_sum    | any group*    |
-| Count of all packets before filtering in packets per second     | payload_rates_pps_events_count  | any group*    |
-| Quantiles of ingress packet rates                               | payload_rates_pps_in             | any group*    |
-| Total sum of ingress packet rates                               | payload_rates_pps_in_sum        | any group*    |
-| Count of ingress packet rates                                   | payload_rates_pps_in_count      | any group*    |
-| Quantiles of egress packet rates                                | payload_rates_pps_out            | any group*    |
-| Total sum of egress packet rates                                | payload_rates_pps_out_sum       | any group*    |
-| Count of egress packet rates                                    | payload_rates_pps_out_count     | any group*    |
-| Quantiles of total packet rates                                 | payload_rates_pps_total          | any group*    |
-| Total sum of total packet rates                                 | payload_rates_pps_total_sum     | any group*    |
-| Count of total packet rates                                     | payload_rates_pps_total_count   | any group*    |
+| Quantiles of all packets before filtering in packets per second | packets_rates_pps_events         | any group*    |
+| Total sum of all packets before filtering in packets per second | packets_rates_pps_events_sum    | any group*    |
+| Count of all packets before filtering in packets per second     | packets_rates_pps_events_count  | any group*    |
+| Quantiles of ingress packet rates                               | packets_rates_pps_in             | any group*    |
+| Total sum of ingress packet rates                               | packets_rates_pps_in_sum        | any group*    |
+| Count of ingress packet rates                                   | packets_rates_pps_in_count      | any group*    |
+| Quantiles of egress packet rates                                | packets_rates_pps_out            | any group*    |
+| Total sum of egress packet rates                                | packets_rates_pps_out_sum       | any group*    |
+| Count of egress packet rates                                    | packets_rates_pps_out_count     | any group*    |
+| Quantiles of total packet rates                                 | packets_rates_pps_total          | any group*    |
+| Total sum of total packet rates                                 | packets_rates_pps_total_sum     | any group*    |
+| Count of total packet rates                                     | packets_rates_pps_total_count   | any group*    |
 | Count of TCP packets                                            | packets_tcp                        | counters      |
 | Top ASNs                                                        | packets_top_ASN                   | top_geo       |
 | Top GeoIP locations                                             | packets_top_geoLoc                | top_geo       |
@@ -369,3 +369,16 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Total Net Probe successes                                                  | netprobe_successes                    | counters                             |
 | Cumulative counters for the buckets of Net Probe histogram in microseconds | netprobe_response_histogram_us_bucket | histograms                           |
 | Count of events of Net Probe histogram in microseconds                     | netprobe_response_histogram_us_count  | histograms                           |
+| Total HTTP/DoH responses whose HTTP status failed the configured status checks | netprobe_http_status_failures         | counters                             |
+| Total HTTP responses whose status passed but a response assertion failed   | netprobe_content_failures             | counters                             |
+| Top HTTP status codes                                                      | netprobe_top_status_codes             | counters                             |
+| Total DoH responses with a success HTTP status but a bad DNS response      | netprobe_dns_response_failures        | counters                             |
+| Top DNS response codes observed                                            | netprobe_top_rcodes                   | counters                             |
+| Earliest notAfter in the target's presented TLS certificate chain          | netprobe_tls_cert_expiry_epoch_sec    | counters                             |
+| Quantiles of response size in bytes                                        | netprobe_response_size_bytes          | quantiles                            |
+| Total sum of response size in bytes                                        | netprobe_response_size_bytes_sum      | quantiles                            |
+| Count of response size in bytes                                            | netprobe_response_size_bytes_count    | quantiles                            |
+| Quantiles of DNS resolution time in microseconds                           | netprobe_response_dns_us              | http_response_phases                 |
+| Quantiles of TCP connect time in microseconds                              | netprobe_response_connect_us          | http_response_phases                 |
+| Quantiles of TLS handshake time in microseconds                            | netprobe_response_tls_us              | http_response_phases                 |
+| Quantiles of time to first byte in microseconds                            | netprobe_response_ttfb_us             | http_response_phases                 |

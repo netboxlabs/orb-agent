@@ -12,7 +12,6 @@ handlers:
     window_config:
         deep_sample_rate: 95
         num_periods: 6
-        topn_count: 8
     modules:
         my_flow:
             type: flow
@@ -90,7 +89,7 @@ kind: collection
 
 |                       Filter                        |  Type   | Input |
 |:---------------------------------------------------:|:-------:|:-----:|
-| [`only_device_interfaces`](#only_device_interfaces) | *str[]* | FLOW  |
+| [`only_device_interfaces`](#only_device_interfaces) |  *map*  | FLOW  |
 |        [`only_directions`](#only_directions)        | *str[]* | FLOW  |
 |            [`only_ips`](#only_ips)             | *str[]* | FLOW  |
 |          [`only_ports`](#only_ports)           | *str[]* | FLOW  |
@@ -99,7 +98,7 @@ kind: collection
 
 ### only_device_interfaces
 
-Type: *str[]*
+Type: *map*
 
 Input: FLOW
 
@@ -118,12 +117,12 @@ Example:
 ```yaml
 only_device_interfaces:
   192.0.2.10:
-    - 2 #port can be passed as int
-    - 4-10 #port can be passed as range. Ports from 4 to 10: all ports in this interval will be accepted.
-    - "1" #port can be passed as str
+    - 2 #interface index as int
+    - 4-10 #a range: interfaces 4 to 10 inclusive
+    - "1" #interface index as str
   192.0.2.38: [9, 4-10]
   192.0.2.32:
-    - "*" #all ports
+    - "*" #all interfaces
 ```
 
 ### only_directions
@@ -249,6 +248,9 @@ sample_rate_scaling: false
 
 ### enrichment
 
+> Enrichment is **on by default**. Set `enrichment: false` to turn it off;
+> setting it to `true` is redundant.
+
 When true, uses device map settings.
 
 The `enrichment` configuration usage syntax is:
@@ -268,7 +270,7 @@ device_map:
   device_ip:
     name: "str" #name is required
     description: "Optionally set a description"
-    interfaces: #Interfaces are optional
+    interfaces: #required
         interface:
             name: "str" #required
             description: "Optionally set a description"

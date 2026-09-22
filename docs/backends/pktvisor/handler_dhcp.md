@@ -12,7 +12,6 @@ handlers:
   window_config:
     deep_sample_rate: 100
     num_periods: 8
-    topn_count: 10
   modules:
     default_dhcp:
       type: dhcp
@@ -49,3 +48,4 @@ kind: collection
 ## Configurations
 
 - [Abstract configurations](handlers.md#abstract-configurations).
+- `recorded_stream`: *bool*. Marks the stream as a recording rather than live traffic. It also accepts `xact_ttl_secs` and `xact_ttl_ms`.

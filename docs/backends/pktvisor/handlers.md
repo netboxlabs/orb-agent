@@ -47,8 +47,8 @@ config:
 
 ## Kind section
 
-What kind of object you want to create
-The only option for now is `"collection"`.
+`kind` is required, and the only accepted value is `collection`. A policy
+without it is rejected.
 
 ## Handlers section (Analysis)
 
@@ -64,7 +64,7 @@ handlers:
     topn_count: 10
     topn_percentile_threshold: 0
   modules:
-    tap_name:
+    module_id:
       type: ...
       require_version: ...
       config: ...
@@ -126,24 +126,34 @@ handlers:
     ...
 ```
 
-`window_config` is merged over each module's own `config`, so where the same key
-appears in both, the `window_config` value wins.
+`window_config` is merged over each module's own `config`, key by key, and only
+for the keys it actually sets. A module's value for a key `window_config` does not
+mention survives.
 
-`num_periods` and `deep_sample_rate` always have a value, defaulting to 5 and 100
-when `window_config` is omitted, so setting either inside a module's `config` has
-no effect. `topn_count` and `topn_percentile_threshold` have no window default, so
-a module's `config` value for those is used unless `window_config` also sets it.
+There is one special case. When `handlers.window_config` is absent, pktvisord
+substitutes `num_periods: 5` and `deep_sample_rate: 100` and merges those, so a
+module-level value for either of those two keys is discarded. Setting them per
+module is therefore only meaningful if `window_config` is present and does not
+name them.
+
+Those two fallbacks are themselves configurable for the whole process: any key
+set on the `pktvisor` backend other than `host`, `port` and `taps` is passed
+through to `visor.config`, where `periods` and `max_deep_sample` change them.
 
 |                  Abstract Configuration                   | Type  |     Default      |
 |:---------------------------------------------------------:|:-----:|:----------------:|
-|          [`deep_sample_rate`](#deep_sample_rate)          | *int* | 100 (per second) |
+|          [`deep_sample_rate`](#deep_sample_rate)          | *int* |       100        |
 |               [`num_periods`](#num_periods)               | *int* |        5         |
 |                [`topn_count`](#topn_count)                | *int* |        10        |
  | [`topn_percentile_threshold`](#topn_percentile_threshold) | *int* |        0         |
 
 ### deep_sample_rate
 
-`deep_sample_rate` determines the number of data packets that will be analyzed deeply per second. Some metrics are operationally expensive to generate, such as metrics that require string parsing (qname2, qtype, etc.). For this reason, a maximum number of packets per second to be analyzed is determined. If in one second fewer packages than the maximum amount are transacted, all packages will compose the deep metrics sample, if there are more packages than the established one, the value of the variable will be used. Allowed values are in the range [1,100]. Default value is 100.
+`deep_sample_rate` is the percentage of events that are inspected deeply. Some
+metrics are expensive to generate, such as those that require string parsing
+(qname, qtype and so on), so each event is drawn against this percentage and only
+the sampled ones feed those metrics. Allowed values are in the range [1,100], and
+the default of 100 inspects every event.
 
 > **Note:**
 > If a value less than 1 is passed, the `deep_sample_rate` will be 1. If the value passed is more than 100, `deep_sample_rate` will be 100.

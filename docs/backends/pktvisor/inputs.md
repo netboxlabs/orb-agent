@@ -29,8 +29,9 @@ declares what type that tap is, and may narrow or adjust it.
 selected by `tap` or `tap_selector`; if they disagree, the policy fails.
 
 `tap` - the name of a tap declared under `orb.backends.pktvisor.taps`, or
-`tap_selector` - tags to match against the declared taps. A selector matches on
-`any` of the given tags or on `all` of them.
+`tap_selector` - tags to match against the declared taps. Exactly one of the two
+must be set. A selector uses either `any` or `all`, not both, and a selector that
+matches no tap is an error.
 
 **Optional**
 
@@ -97,6 +98,11 @@ dnstap socket location, so that a policy can apply to a broad set of agents
 without naming them. Taps are declared under `orb.backends.pktvisor.taps`, and a
 single agent can declare as many as it needs.
 
+A tap accepts `input_type`, `config` and `tags` only. It has no `filter` key, and
+one written there is ignored without an error: filters belong to the policy's
+[`input`](#input-in-a-policy). A `pcap` tap can still carry a `bpf` expression in
+its `config`, which is where the example below puts it.
+
 ```yaml
 orb:
   backends:
@@ -105,14 +111,12 @@ orb:
         first_tap_name:
           input_type: type
           config: ...
-          filter: ...
           tags:
             key1: value1
             key2: value2
         second_tap_name:
           input_type: type
           config: ...
-          filter: ...
           tags:
             key1: value1
             key3: value3
@@ -135,7 +139,6 @@ The following inputs are supported: `pcap`, `flow`, `dnstap` and `netprobe`. For
 >             debug: true
 >             iface: auto
 >             host_spec: "192.168.0.1/24"
->           filter:
 >             bpf: "port 53"
 >           tags:
 >             pcap: true
@@ -272,19 +275,34 @@ bpf: "port 53"
 
 ### flow configuration
 
-There are 3 configs for flow inputs: `port`, `bind` and `flow_type`.
+The following configs are available for flow inputs. A flow input reads either
+from a capture file or from a UDP socket: set `pcap_file`, or set both `port` and
+`bind`. An input that sets neither fails to start.
 
 |               Config               | Type |
 |:----------------------------------:|:-----|
+| [pcap_file](#pcap_file-flow) | str  |
 |   [port](#port-flow)    | int  |
 |   [bind](#port-flow)    | str  |
 | [flow_type](#flow_type) | str  |
+
+### pcap_file (flow)
+
+Type: *str*
+
+Reads flow records from a capture file instead of a socket. When set, `port` and
+`bind` are not used.
+
+```yaml
+pcap_file: /path/to/flows.pcap
+```
 
 ### port (flow)
 
 Type: *int* and **bind**: *str*
 
-The other option for using flow is specifying a port AND an ip to bind (only udp bind is supported). Note that, in this case, both variables must be set.
+Receives flow records on a UDP socket. Both must be set together; only UDP bind
+is supported.
 
 ```yaml
 port: int
@@ -300,7 +318,7 @@ bind: 192.168.1.1
 
 Type: *str*
 
-Default: sflow. options: sflow or netflow (ipfix is supported on netflow).
+Default: sflow. Accepted values are `sflow`, `netflow` and `ipfix`.
 
 ```yaml
 flow_type: str
@@ -327,8 +345,6 @@ There are no specific filters for the FLOW input.
 >           config:
 >             socket: path/to/file.sock
 >             tcp: 192.168.8.2:235
->           filter:
->             only_hosts: 192.168.1.4/32
 >           tags:
 >             dnstap: true
 > ```
@@ -381,20 +397,24 @@ tcp: 192.168.8.2:235
 
 |                  Filter                  | Type |
 |:----------------------------------------:|:-----|
-| [`only_hosts`](#only_hosts) | str  |
+| [`only_hosts`](#only_hosts) | str[] |
 
 ### only_hosts
 
-Type: *str*
+Type: *str[]*
 
-`only_hosts` filters data from a specific host.
+`only_hosts` filters data to the given hosts. It is read as a list, so a bare
+string is rejected. Like every filter it is set on the policy's `input.filter`,
+not on the tap.
 
 ```yaml
-only_hosts: str
-```
-Example:
-```yaml
-only_hosts: 192.168.1.4/32
+input:
+  input_type: dnstap
+  tap: my_dnstap_tap
+  filter:
+    only_hosts:
+      - 192.0.2.4/32
+      - 198.51.100.0/24
 ```
 
 ## Netprobe
@@ -436,7 +456,6 @@ The following configs are available for netprobe inputs:
 |      [packets_per_test](#packets_per_test)      | int  |              ❌              |    1    |
 | [packets_interval_msec](#packets_interval_msec) | int  |              ❌              |   25    |
 |   [packet_payload_size](#packet_payload_size)   | int  |              ❌              |   48    |
-|                  [port](#port-netprobe)                  | int  | `Required if test_type=tcp` |    -    |
 
 ### targets
 
@@ -460,6 +479,15 @@ targets:
     target: www.example.com
   secondary_site:
     target: 192.0.2.10
+```
+
+Each target may also carry a `port`, which is required when `test_type` is `tcp`:
+
+```yaml
+targets:
+  web:
+    target: 192.0.2.10
+    port: 443
 ```
 
 ### test_type
@@ -555,20 +583,6 @@ packet_payload_size: int
 Example:
 ```yaml
 packet_payload_size: 48
-```
-
-### port (netprobe)
-
-Type: *int*
-
-Specifies the port on which the TCP test will run (It is only used if the test_type is TCP. Otherwise, is ignored if set).
-
-```yaml
-port: int
-```
-Example:
-```yaml
-port: 80
 ```
 
 ### netprobe filters
