@@ -130,12 +130,31 @@ Supported types are in the table below (if you use any other code that is not in
 The `only_rcode` filter usage syntax is:
 
 ```yaml
+only_rcode: int
+```
+
+or
+
+```yaml
 only_rcode:
   - str
   - str
 ```
 
-with the `int` referring to the response code to be filtered, written as string.
+A single response code may be given as a bare integer. A list may mix numeric
+codes, written as strings, with the names from the table above, which are
+matched case insensitively.
+
+```yaml
+only_rcode: 3
+```
+
+```yaml
+only_rcode:
+  - "3"
+  - nxdomain
+  - SRVFAIL
+```
 
 ### exclude_noerror (v2)
 
@@ -487,12 +506,31 @@ Supported types are in the table below (if you use any other code that is not in
 The `only_rcode` filter usage syntax is:
 
 ```yaml
+only_rcode: int
+```
+
+or
+
+```yaml
 only_rcode:
   - str
   - str
 ```
 
-with the `int` referring to the response code to be filtered, written as string.
+A single response code may be given as a bare integer. A list may mix numeric
+codes, written as strings, with the names from the table above, which are
+matched case insensitively.
+
+```yaml
+only_rcode: 3
+```
+
+```yaml
+only_rcode:
+  - "3"
+  - nxdomain
+  - SRVFAIL
+```
 
 ### exclude_noerror (v1)
 
@@ -725,7 +763,7 @@ dnstap_msg_type: auth
 ## Configurations
 
 - [public_suffix_list](#public_suffix_list): *bool*.
-- [recorded_stream](#recorded_stream): *bool*.
+- [recorded_stream](#recorded_stream). Presence-based.
 - [xact_ttl_secs](#xact_ttl_ms-or-xact_ttl_secs): *int*.
 - [xact_ttl_ms](#xact_ttl_ms-or-xact_ttl_secs): *int*.
 - [Abstract configurations](handlers.md#abstract-configurations).

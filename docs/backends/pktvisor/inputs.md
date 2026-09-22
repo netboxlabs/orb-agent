@@ -146,7 +146,9 @@ The following inputs are supported: `pcap`, `flow`, `dnstap` and `netprobe`. For
 
 ### pcap configuration
 
-The following configurations are available for pcap inputs.
+The following configurations are available for pcap inputs. `bpf` is both a
+config key and a filter, so a tap can carry it in its `config` where a tap
+cannot carry a `filter`.
 
 |                                       Config                                       | Type |
 |:----------------------------------------------------------------------------------:|:-----|
@@ -156,6 +158,7 @@ The following configurations are available for pcap inputs.
 |                         [host_spec](#host_spec)                         | str  |
 |                             [debug](#debug)                             | bool |
 | [tcp_packet_reassembly_cache_limit](#tcp_packet_reassembly_cache_limit) | int  |
+|                              [bpf](#bpf)                              | str  |
 
 ### pcap_file
 

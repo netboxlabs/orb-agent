@@ -64,29 +64,29 @@ policy input may override any of the tap's netprobe settings; see
 [Input in a policy](inputs.md#input-in-a-policy).
 
 ```yaml
-    handlers:
-      modules:
-        default_netprobe:
-          type: netprobe
-          metric_groups:
-            enable:
-              - counters
-              - quantiles
-              - histograms
-    input:
-      input_type: netprobe
-      tap: default_netprobe
-      config:
-        targets:
-          primary_site:
-            target: www.example.com
-          secondary_site:
-            target: www.example.net
-        test_type: ping
-        interval_msec: 2500
-        timeout_msec: 2000
-        packets_per_test: 5
-        packets_interval_msec: 20
-        packet_payload_size: 56
-    kind: collection
+handlers:
+  modules:
+    default_netprobe:
+      type: netprobe
+      metric_groups:
+        enable:
+          - counters
+          - quantiles
+          - histograms
+input:
+  input_type: netprobe
+  tap: default_netprobe
+  config:
+    targets:
+      primary_site:
+        target: www.example.com
+      secondary_site:
+        target: www.example.net
+    test_type: ping
+    interval_msec: 2500
+    timeout_msec: 2000
+    packets_per_test: 5
+    packets_interval_msec: 20
+    packet_payload_size: 56
+kind: collection
 ```

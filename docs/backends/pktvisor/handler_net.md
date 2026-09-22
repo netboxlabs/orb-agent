@@ -297,7 +297,7 @@ only_asn_number:
 
 ## Configurations
 
-- [recorded_stream](#recorded_stream): *bool*.
+- [recorded_stream](#recorded_stream). Presence-based.
 - [Abstract configurations](handlers.md#abstract-configurations).
 
 ### recorded_stream

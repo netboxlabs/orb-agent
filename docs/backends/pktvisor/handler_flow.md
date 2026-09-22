@@ -231,7 +231,7 @@ asn_notfound: true
 
 - [exclude_ips_from_summarization](#exclude_ips_from_summarization) *str[]*
 
-- [recorded_stream](#recorded_stream): *bool*
+- [recorded_stream](#recorded_stream). Presence-based.
 
 - [Abstract configurations](handlers.md#abstract-configurations).
 
@@ -247,20 +247,18 @@ sample_rate_scaling: false
 
 ### enrichment
 
-> Enrichment is **on by default**. Set `enrichment: false` to turn it off;
-> setting it to `true` is redundant.
+Enrichment applies the [`device_map`](#device_map) settings to the flow data.
 
-When true, uses device map settings.
-
-The `enrichment` configuration usage syntax is:
+It is **on by default**: it is active unless the key is set to `false`, so
+setting it to `true` changes nothing. To turn it off:
 
 ```yaml
-enrichment: True
+enrichment: false
 ```
 
 ### device_map
 
-This configuration allows the user to assign a custom name to devices and interfaces, and the proper functioning of this configuration depends on the [enrichment](#enrichment) being True.
+This configuration allows the user to assign a custom name to devices and interfaces, and it applies only while [enrichment](#enrichment) is on, which it is unless `enrichment: false` is set.
 
 The `device_map` configuration usage syntax is:
 

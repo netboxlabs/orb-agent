@@ -22,6 +22,10 @@ created without it and the rest of the policy is unaffected.
 | `policy_count` | counter | Total number of policies attached to the input stream. |
 | `handler_count` | counter | Total number of handlers attached to the input stream. |
 
+The two quantiles also export a `_sum` and a `_count` series, as every quantile
+does. As elsewhere in pktvisor, the `_sum` series carries the maximum observed
+value rather than a sum.
+
 These carry the `resources` schema prefix, so they are exported as
 `resources_cpu_usage`, `resources_memory_bytes`, `resources_policy_count` and
 `resources_handler_count`.

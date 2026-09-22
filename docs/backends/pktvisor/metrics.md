@@ -1,6 +1,8 @@
 # Pktvisor metrics
 
-The metrics each handler produces, grouped by handler type. A handler emits a
+The metrics each handler produces, grouped by handler type. The
+`input_resources` handler is not listed here; its four metrics are on
+[its own page](handler_input_resources.md). A handler emits a
 metric only when the metric group it belongs to is enabled; see
 [metric groups](handlers.md#handlers-section-analysis) for how to enable and disable them,
 and each handler's own page for which groups it supports.

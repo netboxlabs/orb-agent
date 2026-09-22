@@ -8,7 +8,7 @@ The `pktvisor` backend embeds the [pktvisord](https://github.com/netboxlabs/pktv
 | [Inputs](inputs.md) | The data streams a policy can consume: `pcap`, `flow`, `dnstap`, `netprobe`, with their configuration and filters. |
 | [Netprobe input](input_netprobe.md) | The active probe input in detail: ICMP, TCP, HTTP and DNS over HTTPS tests, their targets and response checks. |
 | [Handlers](handlers.md) | The handler section, the available handler types and versions, metric groups, and the configurations shared by all handlers. |
-| [Metrics](metrics.md) | Every metric each handler produces. |
+| [Metrics](metrics.md) | The metrics each handler produces. The `input_resources` metrics are on [its own page](handler_input_resources.md). |
 
 Handler references: [DNS](handler_dns.md), [Network](handler_net.md),
 [Flow](handler_flow.md), [DHCP](handler_dhcp.md), [BGP](handler_bgp.md),
@@ -44,7 +44,7 @@ orb:
       host: 0.0.0.0
       port: "10853"
       taps:
-        dns_pcap:
+        edge_dns:
           input_type: pcap
           config:
             iface: eth0
