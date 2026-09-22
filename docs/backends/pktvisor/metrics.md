@@ -372,38 +372,38 @@ what the Prometheus summary convention implies.
 ## Netprobe Metrics
 [Check how to activate/deactivate netprobe metrics](handlers/netprobe.md)
 
-| Metric                                                                     | Prometheus Name                       | Metric Groups                        |
-|----------------------------------------------------------------------------|---------------------------------------|--------------------------------------|
-| Quantiles of Net Probe quantile in microseconds                            | netprobe_response_quantiles_us        | quantiles                            |
-| Total sum of Net Probe quantile in microseconds                            | netprobe_response_quantiles_us_sum    | quantiles                            |
-| Count of Net Probe quantile in microseconds                                | netprobe_response_quantiles_us_count  | quantiles                            |
-| Total Net Probe attempts                                                   | netprobe_attempts                     | counters                             |
-| Total Net Probe failures when performed DNS lookup                         | netprobe_dns_lookup_failures          | counters                             |
-| Total Net Probe failures when performing a TCP socket connection           | netprobe_connect_failures             | counters                             |
-| Total Net Probe timeout transactions                                       | netprobe_packets_timeout              | counters                             |
-| Maximum response time measured in the reporting interval                   | netprobe_response_max_us              | counters + (quantiles or histograms) |
-| Minimum response time measured in the reporting interval                   | netprobe_response_min_us              | counters + (quantiles or histograms) |
-| Total Net Probe successes                                                  | netprobe_successes                    | counters                             |
-| Cumulative counters for the buckets of Net Probe histogram in microseconds | netprobe_response_histogram_us_bucket | histograms                           |
-| Count of events of Net Probe histogram in microseconds                     | netprobe_response_histogram_us_count  | histograms                           |
+| Metric                                                                         | Prometheus Name                       | Metric Groups                        |
+|--------------------------------------------------------------------------------|---------------------------------------|--------------------------------------|
+| Quantiles of Net Probe quantile in microseconds                                | netprobe_response_quantiles_us        | quantiles                            |
+| Total sum of Net Probe quantile in microseconds                                | netprobe_response_quantiles_us_sum    | quantiles                            |
+| Count of Net Probe quantile in microseconds                                    | netprobe_response_quantiles_us_count  | quantiles                            |
+| Total Net Probe attempts                                                       | netprobe_attempts                     | counters                             |
+| Total Net Probe failures when performed DNS lookup                             | netprobe_dns_lookup_failures          | counters                             |
+| Total Net Probe failures when performing a TCP socket connection               | netprobe_connect_failures             | counters                             |
+| Total Net Probe timeout transactions                                           | netprobe_packets_timeout              | counters                             |
+| Maximum response time measured in the reporting interval                       | netprobe_response_max_us              | counters + (quantiles or histograms) |
+| Minimum response time measured in the reporting interval                       | netprobe_response_min_us              | counters + (quantiles or histograms) |
+| Total Net Probe successes                                                      | netprobe_successes                    | counters                             |
+| Cumulative counters for the buckets of Net Probe histogram in microseconds     | netprobe_response_histogram_us_bucket | histograms                           |
+| Count of events of Net Probe histogram in microseconds                         | netprobe_response_histogram_us_count  | histograms                           |
 | Total HTTP/DoH responses whose HTTP status failed the configured status checks | netprobe_http_status_failures         | counters                             |
-| Total HTTP responses whose status passed but a response assertion failed   | netprobe_content_failures             | counters                             |
-| Top HTTP status codes                                                      | netprobe_top_status_codes             | counters                             |
-| Total DoH responses with a success HTTP status but a bad DNS response      | netprobe_dns_response_failures        | counters                             |
-| Top DNS response codes observed                                            | netprobe_top_rcodes                   | counters                             |
-| Earliest notAfter in the target's presented TLS certificate chain          | netprobe_tls_cert_expiry_epoch_sec    | counters                             |
-| Quantiles of response size in bytes                                        | netprobe_response_size_bytes          | quantiles                            |
-| Total sum of response size in bytes                                        | netprobe_response_size_bytes_sum      | quantiles                            |
-| Count of response size in bytes                                            | netprobe_response_size_bytes_count    | quantiles                            |
-| Quantiles of DNS resolution time in microseconds                           | netprobe_response_dns_us              | http_response_phases                 |
-| Total sum of DNS resolution time in microseconds                          | netprobe_response_dns_us_sum         | http_response_phases                 |
-| Count of DNS resolution time in microseconds                              | netprobe_response_dns_us_count       | http_response_phases                 |
-| Quantiles of TCP connect time in microseconds                              | netprobe_response_connect_us          | http_response_phases                 |
-| Total sum of TCP connect time in microseconds                             | netprobe_response_connect_us_sum     | http_response_phases                 |
-| Count of TCP connect time in microseconds                                 | netprobe_response_connect_us_count   | http_response_phases                 |
-| Quantiles of TLS handshake time in microseconds                            | netprobe_response_tls_us              | http_response_phases                 |
-| Total sum of TLS handshake time in microseconds                           | netprobe_response_tls_us_sum         | http_response_phases                 |
-| Count of TLS handshake time in microseconds                               | netprobe_response_tls_us_count       | http_response_phases                 |
-| Quantiles of time to first byte in microseconds                            | netprobe_response_ttfb_us             | http_response_phases                 |
-| Total sum of time to first byte in microseconds                      | netprobe_response_ttfb_us_sum        | http_response_phases                 |
-| Count of time to first byte in microseconds                          | netprobe_response_ttfb_us_count      | http_response_phases                 |
+| Total HTTP responses whose status passed but a response assertion failed       | netprobe_content_failures             | counters                             |
+| Top HTTP status codes                                                          | netprobe_top_status_codes             | counters                             |
+| Total DoH responses with a success HTTP status but a bad DNS response          | netprobe_dns_response_failures        | counters                             |
+| Top DNS response codes observed                                                | netprobe_top_rcodes                   | counters                             |
+| Earliest notAfter in the target's presented TLS certificate chain              | netprobe_tls_cert_expiry_epoch_sec    | counters                             |
+| Quantiles of response size in bytes                                            | netprobe_response_size_bytes          | quantiles                            |
+| Total sum of response size in bytes                                            | netprobe_response_size_bytes_sum      | quantiles                            |
+| Count of response size in bytes                                                | netprobe_response_size_bytes_count    | quantiles                            |
+| Quantiles of DNS resolution time in microseconds                               | netprobe_response_dns_us              | http_response_phases                 |
+| Total sum of DNS resolution time in microseconds                               | netprobe_response_dns_us_sum          | http_response_phases                 |
+| Count of DNS resolution time in microseconds                                   | netprobe_response_dns_us_count        | http_response_phases                 |
+| Quantiles of TCP connect time in microseconds                                  | netprobe_response_connect_us          | http_response_phases                 |
+| Total sum of TCP connect time in microseconds                                  | netprobe_response_connect_us_sum      | http_response_phases                 |
+| Count of TCP connect time in microseconds                                      | netprobe_response_connect_us_count    | http_response_phases                 |
+| Quantiles of TLS handshake time in microseconds                                | netprobe_response_tls_us              | http_response_phases                 |
+| Total sum of TLS handshake time in microseconds                                | netprobe_response_tls_us_sum          | http_response_phases                 |
+| Count of TLS handshake time in microseconds                                    | netprobe_response_tls_us_count        | http_response_phases                 |
+| Quantiles of time to first byte in microseconds                                | netprobe_response_ttfb_us             | http_response_phases                 |
+| Total sum of time to first byte in microseconds                                | netprobe_response_ttfb_us_sum         | http_response_phases                 |
+| Count of time to first byte in microseconds                                    | netprobe_response_ttfb_us_count       | http_response_phases                 |
