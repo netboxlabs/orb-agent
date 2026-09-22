@@ -9,7 +9,7 @@ tap by name or by tag.
 | [`pcap`](#packet-capture-pcap) | Live packet capture from a network interface, or a pcap file. |
 | [`flow`](#sflownetflow-flow) | sFlow and Netflow records received on a UDP port. |
 | [`dnstap`](#dnstap) | dnstap stream from a DNS server, over a unix socket or TCP. |
-| [`netprobe`](#netprobe) | Active probes against a list of targets. |
+| [`netprobe`](input_netprobe.md) | Active probes against a list of targets: ICMP, TCP, HTTP and DNS over HTTPS. |
 
 `sflow` is also accepted as an input type and is handled by the same module as
 `flow`. A `mock` input exists for testing and is not documented here.
@@ -418,6 +418,10 @@ input:
 
 ## Netprobe
 
+The netprobe input actively probes a list of targets rather than observing
+traffic, and it has enough settings of its own, differing by test type, to carry
+its own page.
+
 > **Example:** Pktvisor Netprobe Tap Configuration
 > ```yaml
 > orb:
@@ -427,163 +431,21 @@ input:
 >         default_netprobe:
 >           input_type: netprobe
 >           config:
->             targets:
->               primary_site:
->                 target: www.example.com
->               secondary_site:
->                 target: www.example.net
 >             test_type: ping
 >             interval_msec: 2000
 >             timeout_msec: 1000
 >             packets_per_test: 10
 >             packets_interval_msec: 25
 >             packet_payload_size: 56
+>             targets:
+>               primary_site:
+>                 target: www.example.com
+>               secondary_site:
+>                 target: www.example.net
 >           tags:
 >             netprobe: true
 > ```
 
-### netprobe configuration
-
-The following configs are available for netprobe inputs:
-
-|                             Config                             | Type |          Required           | Default |
-|:--------------------------------------------------------------:|:----:|:---------------------------:|:-------:|
-|                 [targets](#targets)                  | map  |              ✅              |    -    |
-|             [test_type](#test_type)             | str  |              ✅              |    -    |
-|         [interval_msec](#interval_msec)         | int  |              ❌              |  5000   |
-|         [timeout_msec](#timeout_msec)          | int  |              ❌              |  2000   |
-|      [packets_per_test](#packets_per_test)      | int  |              ❌              |    1    |
-| [packets_interval_msec](#packets_interval_msec) | int  |              ❌              |   25    |
-|   [packet_payload_size](#packet_payload_size)   | int  |              ❌              |   48    |
-
-### targets
-
-Type: *map*
-
-The targets the probe runs against, keyed by a name of your choosing. Each entry
-sets the address to test. An input with no `targets` fails to start with
-`no targets specified`.
-
-```yaml
-targets:
-  target_name:
-    target: address to test
-```
-
-Example:
-
-```yaml
-targets:
-  primary_site:
-    target: www.example.com
-  secondary_site:
-    target: 192.0.2.10
-```
-
-Each target may also carry a `port`, which is required when `test_type` is `tcp`:
-
-```yaml
-targets:
-  web:
-    target: 192.0.2.10
-    port: 443
-```
-
-### test_type
-
-Type: *str*
-
-Defines the type of the test to be performed. Type options are listed below:
-
-- ping: sends ICMP echo requests to each target to verify the systems are reachable.
-- tcp: sets up a TCP connection to each target on the configured `port`.
-- udp: sends UDP probes to each target.
-- http: performs an HTTP request against each target.
-- doh: performs a DNS over HTTPS query against each target.
-
-The `http` and `doh` types accept further settings, such as `http_method`, `qname`
-and `qtype`, which are not covered here. See the
-[pktvisor source](https://github.com/netboxlabs/pktvisor/blob/develop/src/inputs/netprobe/NetProbeInputStream.h)
-for the full list of accepted keys.
-
-```yaml
-test_type: str
-```
-Example:
-```yaml
-test_type: ping
-```
-
-### interval_msec
-
-Type: *int*
-
-How often to run the probe (in milliseconds).
-
-```yaml
-interval_msec: int
-```
-Example:
-```yaml
-interval_msec: 5000
-```
-
-### timeout_msec
-
-Type: *int*
-
-Probe timeout (in milliseconds).
-
-```yaml
-timeout_msec: int
-```
-Example:
-```yaml
-timeout_msec: 2000
-```
-
-### packets_per_test
-
-Type: *int*
-
-Number of packets to be sent in each test.
-
-```yaml
-packets_per_test: int
-```
-Example:
-```yaml
-packets_per_test: 1
-```
-
-### packets_interval_msec
-
-Type: *int*
-
-Time interval between packets per test (in milliseconds).
-
-```yaml
-packets_interval_msec: int
-```
-Example:
-```yaml
-packets_interval_msec: 25
-```
-
-### packet_payload_size
-
-Type: *int*
-
-Defines the payload of the packets sent in the tests.
-
-```yaml
-packet_payload_size: int
-```
-Example:
-```yaml
-packet_payload_size: 48
-```
-
-### netprobe filters
-
-There are no specific filters for Netprobe input.
+See [Netprobe input](input_netprobe.md) for the test types (`ping`, `tcp`,
+`http`, `doh`), the per-target keys, the timing settings and the HTTP response
+checks.

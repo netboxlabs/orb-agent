@@ -6,6 +6,7 @@ The `pktvisor` backend embeds the [pktvisord](https://github.com/netboxlabs/pktv
 | Page | Contents |
 |:--|:--|
 | [Inputs](inputs.md) | The data streams a policy can consume: `pcap`, `flow`, `dnstap`, `netprobe`, with their configuration and filters. |
+| [Netprobe input](input_netprobe.md) | The active probe input in detail: ICMP, TCP, HTTP and DNS over HTTPS tests, their targets and response checks. |
 | [Handlers](handlers.md) | The handler section, the available handler types and versions, metric groups, and the configurations shared by all handlers. |
 | [Metrics](metrics.md) | Every metric each handler produces. |
 

@@ -52,9 +52,11 @@ kind: collection
 
 The netprobe handler accepts `recorded_stream`, `xact_ttl_secs` and
 `xact_ttl_ms`. `recorded_stream` is presence-based, so setting it to `false`
-still enables it; omit the key to disable. What is probed, including the required `targets` map, is
-configured on the netprobe **input** instead; see
-[netprobe configuration](inputs.md#netprobe-configuration).
+still enables it; omit the key to disable.
+
+What is probed, including the required `targets` map, is configured on the
+netprobe input instead. See [Netprobe input](input_netprobe.md) for the test
+types, their settings and the HTTP response checks.
 
 Netprobe settings describe the probe rather than the host the agent runs on, so
 they are often worth setting on the policy's `input` rather than on the tap. A
