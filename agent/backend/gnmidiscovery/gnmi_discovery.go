@@ -154,8 +154,7 @@ func (d *gnmiDiscoveryBackend) buildArgs() []string {
 	} else {
 		args = append(args, "--diode-target", d.diodeTarget)
 		if !d.diodeTargetFromOtel {
-			args = append(
-				args,
+			args = append(args,
 				"--diode-client-id", d.diodeClientID,
 				"--diode-client-secret", d.diodeClientSecret,
 			)

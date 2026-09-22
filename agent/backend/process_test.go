@@ -617,6 +617,7 @@ func TestStartProcess_RefusesWhileTheListenAddressIsHeld(t *testing.T) {
 		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
 	})
 	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse), "the refusal is marked as the address being held: %v", err)
 	assert.Contains(t, err.Error(), holder.Addr().String(), "the error names the address")
 	assert.Contains(t, err.Error(), "in use", "the error says the address is held")
 	assert.Empty(t, captured.exec, "nothing is spawned while the address is held")
@@ -651,4 +652,36 @@ func TestStartProcess_ReleasesTheProbedListenAddress(t *testing.T) {
 	child, err := net.Listen("tcp", addr)
 	require.NoError(t, err, "the address is free again for the child")
 	_ = child.Close()
+}
+
+// A readiness check that passed may have been answered by another process on
+// the address, with the child dead at its own bind by then: the child's exit
+// is checked again after the check passes, before the backend is called ready.
+func TestStartProcess_AChildDeadAfterAPassingReadinessCheckIsNotReady(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(4242)
+	var checked atomic.Bool
+	fake.statusFn = func() CmdStatus {
+		if checked.Load() {
+			return CmdStatus{PID: 4242, Complete: true, Exit: 1}
+		}
+		return CmdStatus{PID: 4242}
+	}
+	stubNewCmdOptions(t, fake)
+
+	err := StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) {
+			// Answered by another process; the child dies right after.
+			checked.Store(true)
+			return "1.0.0", nil
+		},
+	})
+	require.Error(t, err, "a child that died is not ready, whatever answered the check")
+	assert.Contains(t, err.Error(), "process ended unexpectedly")
 }

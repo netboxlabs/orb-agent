@@ -58,6 +58,7 @@ func TestDeviceDiscoveryStartRefusesWhileItsListenAddressIsHeld(t *testing.T) {
 	defer cancel()
 	err = be.Start(ctx, cancel)
 	require.Error(t, err, "the start is refused")
+	assert.ErrorIs(t, err, backend.ErrListenAddrInUse, "the refusal keeps its mark through the backend")
 	assert.Contains(t, err.Error(), holder.Addr().String(), "the error names the held address")
 	assert.Contains(t, err.Error(), "in use", "the error says the address is held")
 }

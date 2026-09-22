@@ -137,8 +137,7 @@ func (d *networkDiscoveryBackend) buildArgs() []string {
 			"--diode-target", d.diodeTarget,
 		}
 		if !d.diodeTargetFromOtel {
-			opts = append(
-				opts,
+			opts = append(opts,
 				"--diode-client-id", d.diodeClientID,
 				"--diode-client-secret", d.diodeClientSecret,
 			)

@@ -150,7 +150,7 @@ Optional OpenTelemetry export for backend metrics.
 
 Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends, `snmp_telemetry` and `gnmi_telemetry` accept optional `host` and `port` overrides.
 
-A backend is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own, which happens when two agents share a host network (`network_mode: host`) with the same backend ports. Give each agent its own ports in that case.
+Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own, which happens when two agents share a host network (`network_mode: host`) with the same backend ports, or when a backend process from an earlier run of the agent is still alive. Give each agent its own ports in the first case; end the leftover process in the second.
 
 | Key | Backend | Default port | Notes |
 |-----|---------|-------------|-------|

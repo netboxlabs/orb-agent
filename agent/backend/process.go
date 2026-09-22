@@ -65,13 +65,13 @@ type StartSpec struct {
 	NameUnderscore string // underscore form passed only to StopProcess (e.g. "network_discovery")
 	Exec           string
 	Args           []string
-	// ListenAddr is the host:port the backend is told to listen on. When set,
-	// StartProcess refuses to spawn while another process holds it: the
-	// readiness check asks that address and takes whatever answers, so with
-	// the port held elsewhere (another agent sharing the host network) it
-	// would report the other process's answer as the child's, and the
-	// policies replayed after it would go to the other process too. Empty
-	// skips the check.
+	// ListenAddr is the host:port the backend serves its API on, the address
+	// the readiness check asks. When set, StartProcess refuses to spawn while
+	// another process holds it: the check takes whatever answers on that
+	// address, so with the port held elsewhere (another agent sharing the
+	// host network, a child left over from an earlier run) it would report
+	// the other process's answer as the child's, and the policies replayed
+	// after it would go to the other process too. Empty skips the check.
 	ListenAddr     string
 	LogLine        func(line string, isStderr bool)  // per-backend normalizer adapter
 	SetProc        func(Commander, <-chan CmdStatus) // publishes proc+statusChan to the backend BEFORE the readiness loop (see CRITICAL below)
@@ -92,6 +92,12 @@ type StartSpec struct {
 	ReadinessBudget time.Duration
 }
 
+// ErrListenAddrInUse marks a start refused because another process holds the
+// address the backend would listen on. It is the environment refusing the
+// start, not the binary failing, and a caller that would otherwise treat a
+// failed start as a bad binary reads it to leave the binary alone.
+var ErrListenAddrInUse = errors.New("listen address in use")
+
 // EnsureListenAddrFree is the probe StartProcess runs on a spec's ListenAddr.
 // It is a variable so that a test standing a server in for the child on that
 // address can stub it, the way NewCmdOptions stands a Commander in for the
@@ -100,17 +106,27 @@ var EnsureListenAddrFree = ensureListenAddrFree
 
 // ensureListenAddrFree binds addr and releases it at once, so a backend that
 // is about to be told to listen there is refused while another process holds
-// it, with the bind error saying why. The window between the release and the
-// child's own bind is one the child reports itself, by failing to start.
+// it, with the bind error saying why. For a hostname it binds the address
+// net.Listen picks, the IPv4 loopback for localhost, which is also the
+// address the readiness check dials first. This narrows the window in which
+// the check can be answered by another process to the time between the
+// release and the child's own bind; the check after readiness below catches
+// a child that lost that race and died, and only an answer that proves it
+// came from the child would close it.
 func ensureListenAddrFree(addr string) error {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("listen address %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", addr, err)
+		return fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, addr, err)
 	}
-	return l.Close()
+	// The address was free; a failure to release the probe's own socket is
+	// nothing the child needs to know about.
+	_ = l.Close()
+	return nil
 }
 
 // StartProcess launches the process, streams stdout/stderr to LogLine, then:
+//   - when ListenAddr is set, binds and releases it first, and refuses the
+//     start with ErrListenAddrInUse while another process holds it;
 //   - builds the Cmd, proc.Start(), and IMMEDIATELY calls spec.SetProc(proc, statusChan)
 //     to publish them to the backend (the CRITICAL step — see below), then spawns the
 //     stream goroutine.
@@ -120,7 +136,10 @@ func ensureListenAddrFree(addr string) error {
 //   - logs "<NameDisplay> process started" (pid), then runs a 0..9 backoff loop;
 //     EACH iteration first re-checks proc.Status().Complete and, if complete,
 //     StopProcess + returns errors.New(NameDisplay+" process ended unexpectedly,
-//     check log"); else calls ReadinessCheck. On success logs "<NameDisplay>
+//     check log"); else calls ReadinessCheck. On success re-checks
+//     proc.Status().Complete, since another process on the address may have
+//     answered for a child that then died at its bind, and returns the same
+//     "process ended unexpectedly" error if so; else logs "<NameDisplay>
 //     readiness ok, got version" with "version" = the returned string; on per-iter
 //     failure logs "<NameDisplay> is not ready, trying again with backoff" with attr
 //     key "backoff_duration" and sleeps startProcessSleep(time.Duration(backoff) *
@@ -243,6 +262,15 @@ func StartProcess(spec StartSpec) error {
 		if readinessErr == nil {
 			if ctx.Err() != nil {
 				return cancelled()
+			}
+			// A check that passed does not say the child answered it: on a
+			// shared network another process on the same address answers
+			// for a child that has not bound yet, and a child that lost
+			// the bind is usually dead by now, which its exit says. This
+			// narrows that window; it does not close it.
+			if status := proc.Status(); status.Complete {
+				StopProcess(spec.Logger, proc, statusChan, DefaultStopGracePeriod, spec.NameUnderscore)
+				return errors.New(spec.NameDisplay + " process ended unexpectedly, check log")
 			}
 			spec.Logger.Info(spec.NameDisplay+" readiness ok, got version", "version", version)
 			break

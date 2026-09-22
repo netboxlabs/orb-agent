@@ -116,7 +116,6 @@ func TestWorkerBackendStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubListenProbe(t)
 	require.NoError(t, be.Start(ctx, cancel))
 
 	startTime := be.GetStartTime()
@@ -217,7 +216,6 @@ func TestWorkerUsesOtelTargetWithoutCredentials(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubListenProbe(t)
 	require.NoError(t, be.Start(ctx, cancel))
 	require.NoError(t, be.Stop(ctx))
 
@@ -287,7 +285,6 @@ func TestWorkerGetRunningStatusAPIFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubListenProbe(t)
 	require.NoError(t, be.Start(ctx, cancel))
 
 	status, message, err := be.GetRunningStatus()
@@ -317,7 +314,6 @@ func TestWorkerBackendCompleted(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubListenProbe(t)
 	err := be.Start(ctx, cancel)
 	assert.Error(t, err)
 
@@ -386,7 +382,6 @@ func TestWorkerBackendStartWithDryRunIncludesHostAndPort(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stubListenProbe(t)
 	require.NoError(t, be.Start(ctx, cancel))
 	require.NoError(t, be.Stop(ctx))
 
@@ -428,14 +423,4 @@ func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(op
 	t.Cleanup(func() {
 		backend.NewCmdOptions = original
 	})
-}
-
-// stubListenProbe stubs the probe that refuses a held listen address: a test
-// that stands a server in for the child on the configured address has that
-// address held on purpose.
-func stubListenProbe(t *testing.T) {
-	t.Helper()
-	orig := backend.EnsureListenAddrFree
-	backend.EnsureListenAddrFree = func(string) error { return nil }
-	t.Cleanup(func() { backend.EnsureListenAddrFree = orig })
 }

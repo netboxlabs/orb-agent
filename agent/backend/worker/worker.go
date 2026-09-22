@@ -174,8 +174,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 			"--diode-target", d.diodeTarget,
 		}
 		if !d.diodeTargetFromOtel {
-			opts = append(
-				opts,
+			opts = append(opts,
 				"--diode-client-id", d.diodeClientID,
 				"--diode-client-secret", d.diodeClientSecret,
 			)
