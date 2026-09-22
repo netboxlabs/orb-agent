@@ -1,4 +1,4 @@
-# Netprobe input
+# Netprobe
 
 The `netprobe` input is the one input that generates traffic rather than
 observing it. Instead of watching packets on an interface, it runs an active

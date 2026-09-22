@@ -1,4 +1,4 @@
-# DHCP handler (dhcp)
+# DHCP (dhcp)
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-dhcp)
 - [Metrics Group](#metrics-group)
@@ -33,7 +33,6 @@ input:
 kind: collection
 ```
 
-**Handler Type**: "dhcp"
 
 ## Monitoring DHCP services
 

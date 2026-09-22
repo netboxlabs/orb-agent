@@ -1,4 +1,4 @@
-# Input resources handler (input_resources)
+# Input resources (input_resources)
 
 The `input_resources` handler reports what an input stream itself is costing the
 agent: CPU, memory, and how much is attached to it.

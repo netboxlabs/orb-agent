@@ -1,4 +1,4 @@
-# Network handler (net)
+# Network (net)
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-netv2)
 - [Metrics Group](#metrics-group-20)
@@ -50,7 +50,6 @@ input:
 kind: collection
 ```
 
-**Handler Type**: "net"
 
 ## Metrics Group (2.0)
 
@@ -188,7 +187,6 @@ input:
 kind: collection
 ```
 
-**Handler Type**: "net"
 
 ## Metrics Group (1.0)
 
