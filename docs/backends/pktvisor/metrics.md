@@ -1,4 +1,4 @@
-# Pktvisor metrics
+# Metrics
 
 The metrics each handler produces, grouped by handler type. The
 `input_resources` handler is not listed here; its four metrics are on
@@ -6,8 +6,6 @@ The metrics each handler produces, grouped by handler type. The
 metric only when the metric group it belongs to is enabled; see
 [metric groups](handlers/README.md#handlers-section-analysis) for how to enable and disable them,
 and each handler's own page for which groups it supports.
-
-The Orb metrics currently provided come from the various supported pktvisor handlers and are listed here by handler.
 
 For handlers that have metric groups, the groups that must be enabled for a
 metric to exist are listed in the "Metric Groups" column. `any group*` means the

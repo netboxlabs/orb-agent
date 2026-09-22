@@ -1,4 +1,4 @@
-# DNS handler (dns)
+# DNS (dns)
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-dnsv2)
 - [Metrics Group](#metrics-group-20)
@@ -57,7 +57,6 @@ config:
 kind: collection
 ```
 
-**Handler Type**: "dns"
 
 ## Monitoring authoritative DNS
 
@@ -462,7 +461,6 @@ config:
 kind: collection
 ```
 
-**Handler Type**: "dns"
 
 ## Metrics Group (1.0)
 

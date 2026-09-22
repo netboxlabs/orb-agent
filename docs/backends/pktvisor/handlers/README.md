@@ -1,4 +1,4 @@
-# Pktvisor handlers
+# Handlers
 
 Handlers are the modules that turn an input stream into metrics. A policy names
 one or more handler modules, each with its own type, configuration, filters and
@@ -11,14 +11,14 @@ versions of a type; when it is omitted the handler resolves to version `1.0`.
 
 | Type | Versions | Reference |
 |:--|:--|:--|
-| `dns` | `1.0`, `2.0` | [DNS handler](dns.md) |
-| `net` | `1.0`, `2.0` | [Network handler](net.md) |
-| `flow` | `1.0` | [Flow handler](flow.md) |
-| `dhcp` | `1.0` | [DHCP handler](dhcp.md) |
-| `bgp` | `1.0` | [BGP handler](bgp.md) |
-| `pcap` | `1.0` | [Packet capture handler](pcap.md) |
-| `netprobe` | `1.0` | [Netprobe handler](netprobe.md) |
-| `input_resources` | `1.0` | [Input resources handler](input_resources.md) |
+| `dns` | `1.0`, `2.0` | [DNS](dns.md) |
+| `net` | `1.0`, `2.0` | [Network](net.md) |
+| `flow` | `1.0` | [Flow](flow.md) |
+| `dhcp` | `1.0` | [DHCP](dhcp.md) |
+| `bgp` | `1.0` | [BGP](bgp.md) |
+| `pcap` | `1.0` | [Packet capture](pcap.md) |
+| `netprobe` | `1.0` | [Netprobe](netprobe.md) |
+| `input_resources` | `1.0` | [Input resources](input_resources.md) |
 
 Because the default is `1.0`, a module written as `type: dns` with no
 `require_version` runs the 1.0 handler. Use `require_version: "2.0"` to select the

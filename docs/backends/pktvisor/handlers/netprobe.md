@@ -1,4 +1,4 @@
-# Netprobe handler (netprobe)
+# Netprobe (netprobe)
 
 - [Example of policy](#example-of-policy-with-input-netprobe-and-handler-netprobe)
 - [Metrics Group](#metrics-group)
@@ -29,7 +29,6 @@ input:
 kind: collection
 ```
 
-**Handler Type**: "netprobe"
 
 ## Metrics Group
 

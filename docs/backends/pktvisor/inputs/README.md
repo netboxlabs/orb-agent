@@ -1,4 +1,4 @@
-# Pktvisor inputs
+# Inputs
 
 An input is the data stream a policy analyses. Each input is declared once on the
 agent as a *tap*, under `orb.backends.pktvisor.taps`, and a policy then selects a

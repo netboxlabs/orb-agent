@@ -1,4 +1,4 @@
-# BGP handler (bgp)
+# BGP (bgp)
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-bgp)
 - [Metrics Group](#metrics-group)
@@ -35,7 +35,6 @@ config:
 kind: collection
 ```
 
-**Handler Type**: "bgp"
 
 ## Metrics Group
 
