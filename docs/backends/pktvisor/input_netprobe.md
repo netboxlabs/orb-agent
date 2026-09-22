@@ -32,11 +32,13 @@ orb:
 ## Test types
 
 `test_type` is required and selects which probe runs. It also decides which of
-the settings below apply, in two different ways. The HTTP response checks and
-the `proxy` and `tls` options are **rejected** when the test type cannot use
-them, so the input fails to start. The packet pacing settings are **accepted by
-any test type** but only `ping` acts on them, so setting them elsewhere is
-silently ignored rather than reported.
+the settings below apply, in two different ways. The HTTP request `body`, the
+HTTP response checks and the `proxy` and `tls` options are **rejected** when the
+test type cannot use them, naming the offending key, so the input fails to
+start. The packet pacing settings are **accepted by any test type** but only
+`ping` acts on them, so on another test type they have no effect. They are still
+validated: a `packets_per_test` of 0, or a pacing product that overruns
+`interval_msec`, stops any input whatever its test type.
 
 | `test_type` | Probe | Documented in |
 |:--|:--|:--|
@@ -101,13 +103,16 @@ it:
 - `packets_per_test` × `packets_interval_msec` must not be greater than
   `interval_msec`, so that one test finishes before the next begins.
 
-Both are checked for every test type, using the defaults for any value not set.
-A `tcp` tap with an `interval_msec` below 25 therefore fails on the second
-constraint, reported against `packets_per_test`, even though it never set it.
+Both are checked for every test type, using the defaults for any value not set,
+and the `timeout_msec` one is checked first. So a `tcp` tap that lowers
+`interval_msec` below 25 and lowers `timeout_msec` to match still fails, on the
+second constraint and reported against a `packets_per_test` it never set,
+because the default pacing of one packet every 25ms no longer fits the
+interval.
 
-How `timeout_msec` is enforced depends on the test type. For `http` and `doh` it
-is the request timeout and the probe applies it directly. For `ping` and `tcp`
-the probe does not enforce it; it is passed to the netprobe handler as the
+How `timeout_msec` takes effect depends on the test type. For `http` and `doh`
+it is the request timeout and the probe applies it directly. For `ping` and
+`tcp` the probe does not enforce it at all; it is passed to the netprobe handler as the
 transaction time to live, so an unanswered test is counted as timed out once it
 elapses. A handler that sets its own [`xact_ttl_ms` or
 `xact_ttl_secs`](handler_netprobe.md#configurations) takes precedence over it.
@@ -123,7 +128,7 @@ interval_msec: 5000
 ### timeout_msec
 
 How long a single test may take before it is treated as failed, in
-milliseconds. It must not be greater than `interval_msec`.
+milliseconds.
 
 ```yaml
 timeout_msec: 2000
@@ -225,8 +230,8 @@ per interval.
 ## HTTP probes (`test_type: http`)
 
 Issues an HTTP request to each target URL and reports the response, optionally
-asserting on it. `target` must be a URL, and an invalid one is rejected when the
-input starts.
+asserting on it. `target` must be an `http://` or `https://` URL, and an invalid
+one is rejected when the input starts.
 
 ```yaml
 orb:
@@ -249,6 +254,10 @@ orb:
                 headers:
                   Accept: application/json
 ```
+
+Note that this example sets a per-target header, which turns off redirect
+following (see [Request](#request) below), so a redirect would be reported as
+the response and scored against `expected_status`.
 
 ### Request
 
@@ -306,10 +315,13 @@ response is considered successful if its status is in the range 200 to 399.
 | `max_response_size_bytes` | int | Largest acceptable body size. `0` requires an empty body. |
 | `fail_if_header_matches` | map | Header name to regular expression; a match fails the check. |
 | `fail_if_header_not_matches` | map | Header name to regular expression; failing to match fails the check. |
-| | | Header names are matched case insensitively, and the pattern is an unanchored search, so `MISS` also matches `MISS-FROM-EDGE`. Anchor it with `^` and `$` for an exact match. |
 | `max_last_modified_diff_secs` | int | Largest acceptable age from the `Last-Modified` header. `0` disables the check. A response whose `Last-Modified` header is missing or unparseable fails it. |
 | `valid_http_versions` | str[] | Accepted HTTP versions. Each entry is `1.0`, `1.1`, `2` or `3`. |
 | `body_check_max_bytes` | int | How much of the body is captured for body checks. Default 524288. Must be greater than 0. |
+
+Header names in `fail_if_header_matches` and `fail_if_header_not_matches` are
+matched case insensitively, and the pattern is an unanchored search, so `MISS`
+also matches `MISS-FROM-EDGE`. Anchor it with `^` and `$` for an exact match.
 
 Order of evaluation: `failure_status` is matched first and a match always
 fails. Otherwise `expected_status` decides if it is set, and the 200 to 399
@@ -353,10 +365,6 @@ A failed status check is counted as `netprobe_http_status_failures`, while a
 response whose status passed but whose assertions failed is counted as
 `netprobe_content_failures`, so the two causes stay distinguishable. See
 [netprobe metrics](metrics.md#netprobe-metrics).
-
-Note that the example above sets a per-target header, which turns off redirect
-following, so a redirect would be reported as the response and scored against
-`expected_status`.
 
 ## DNS over HTTPS probes (`test_type: doh`)
 
