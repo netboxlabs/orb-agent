@@ -7,6 +7,11 @@ test against a list of targets on a schedule and reports how each one answered.
 A netprobe tap declares the test type and the targets; the
 [netprobe handler](handler_netprobe.md) turns the results into metrics.
 
+The examples here declare the settings on the tap. Because they describe the
+probe rather than the host the agent runs on, any of them can instead be set on
+a policy's [`input.config`](inputs.md#input-in-a-policy), which overrides the
+tap for that policy.
+
 ```yaml
 orb:
   backends:
@@ -27,8 +32,11 @@ orb:
 ## Test types
 
 `test_type` is required and selects which probe runs. It also decides which of
-the settings below apply: a setting that belongs to another test type is
-rejected when the input starts, rather than ignored.
+the settings below apply, in two different ways. The HTTP response checks and
+the `proxy` and `tls` options are **rejected** when the test type cannot use
+them, so the input fails to start. The packet pacing settings are **accepted by
+any test type** but only `ping` acts on them, so setting them elsewhere is
+silently ignored rather than reported.
 
 | `test_type` | Probe | Documented in |
 |:--|:--|:--|
@@ -52,7 +60,7 @@ Each entry accepts:
 
 | Key | Type | Applies to | Description |
 |:--|:--|:--|:--|
-| `target` | str | all | What to probe. An IP address or hostname for `ping` and `tcp`; a URL for `http` and `doh`. Required. |
+| `target` | str | all | What to probe. An IP address or hostname for `ping` and `tcp`; an `http://` or `https://` URL for `http` and `doh`. Required. |
 | `port` | int | `tcp` | The TCP port to connect to. Required for `tcp`. |
 | `ip_version` | int | all | `4` or `6`. Forces address family. |
 | `resolve` | str[] | `http`, `doh` | Static DNS overrides, each `host:port:address`. |
@@ -81,7 +89,7 @@ These apply to every test type unless noted.
 | Config | Type | Default | Description |
 |:--|:--|:--|:--|
 | [`interval_msec`](#interval_msec) | int | 5000 | How often each test runs. |
-| [`timeout_msec`](#timeout_msec) | int | 2000 | How long a single test may take. Must not exceed `interval_msec`. |
+| [`timeout_msec`](#timeout_msec) | int | 2000 | How long a single test may take. Must not exceed `interval_msec`. Enforced by the probe for `http` and `doh` only. |
 | [`packets_per_test`](#packets_per_test) | int | 1 | `ping` only. Packets sent per test. Must be greater than 0. |
 | [`packets_interval_msec`](#packets_interval_msec) | int | 25 | `ping` only. Gap between those packets. |
 | [`packet_payload_size`](#packet_payload_size) | int | 48 | `ping` only. Payload bytes per packet. Maximum 65500. |
@@ -93,8 +101,16 @@ it:
 - `packets_per_test` × `packets_interval_msec` must not be greater than
   `interval_msec`, so that one test finishes before the next begins.
 
-`timeout_msec` is also what the netprobe handler uses as its transaction time to
-live, so a probe that does not answer within it is counted as timed out.
+Both are checked for every test type, using the defaults for any value not set.
+A `tcp` tap with an `interval_msec` below 25 therefore fails on the second
+constraint, reported against `packets_per_test`, even though it never set it.
+
+How `timeout_msec` is enforced depends on the test type. For `http` and `doh` it
+is the request timeout and the probe applies it directly. For `ping` and `tcp`
+the probe does not enforce it; it is passed to the netprobe handler as the
+transaction time to live, so an unanswered test is counted as timed out once it
+elapses. A handler that sets its own [`xact_ttl_ms` or
+`xact_ttl_secs`](handler_netprobe.md#configurations) takes precedence over it.
 
 ### interval_msec
 
@@ -107,7 +123,7 @@ interval_msec: 5000
 ### timeout_msec
 
 How long a single test may take before it is treated as failed, in
-milliseconds.
+milliseconds. It must not be greater than `interval_msec`.
 
 ```yaml
 timeout_msec: 2000
@@ -115,7 +131,9 @@ timeout_msec: 2000
 
 ### packets_per_test
 
-`ping` only. How many echo requests each test sends.
+`ping` only. How many echo requests each test sends. The send loop counts in a
+single byte, so keep this at 255 or below; at 256 it wraps to zero and only one
+packet is sent.
 
 ```yaml
 packets_per_test: 5
@@ -132,8 +150,8 @@ packets_interval_msec: 25
 ### packet_payload_size
 
 `ping` only. The payload carried by each echo request, in bytes, up to 65500.
-`pktvisord` raises values below its own minimum to that minimum, so a very small
-value does not produce a smaller packet.
+Each packet begins with an 8-byte marker the probe uses to recognise its own
+replies, so values below 8 are raised to 8 rather than rejected.
 
 ```yaml
 packet_payload_size: 56
@@ -244,6 +262,13 @@ orb:
 Per-target `headers` add request headers for that target only. The probe sets
 its own `User-Agent` of the form `pktvisor/<version>`.
 
+**Redirects are followed only when neither per-target `headers` nor a request
+`body` is set.** Setting either one turns redirect following off, so that custom
+headers are not leaked to a redirect target on another host and a body is not
+re-sent, and the 30x response is reported as the result instead. If you set
+headers or a body and the target redirects, include the redirect status in
+`expected_status` or probe the final URL directly.
+
 `tls` accepts:
 
 | Key | Type | Default | Description |
@@ -276,14 +301,15 @@ response is considered successful if its status is in the range 200 to 399.
 | `not_contains` | str | Substring the body must not contain. |
 | `body_not_matches_regex` | str | Regular expression the body must not match. |
 | `json_path` | str | JSON Pointer (RFC 6901) that must resolve in the body. |
-| `json_equals` | str | Value that `json_path` must equal. Requires `json_path`. |
+| `json_equals` | str | Value that `json_path` must equal. Requires `json_path`. A non-string value is compared against its compact JSON form, such as `true`, `42` or `{"a":1}`. |
 | `min_response_size_bytes` | int | Smallest acceptable body size. |
 | `max_response_size_bytes` | int | Largest acceptable body size. `0` requires an empty body. |
 | `fail_if_header_matches` | map | Header name to regular expression; a match fails the check. |
 | `fail_if_header_not_matches` | map | Header name to regular expression; failing to match fails the check. |
-| `max_last_modified_diff_secs` | int | Largest acceptable age from the `Last-Modified` header. `0` disables the check. |
+| | | Header names are matched case insensitively, and the pattern is an unanchored search, so `MISS` also matches `MISS-FROM-EDGE`. Anchor it with `^` and `$` for an exact match. |
+| `max_last_modified_diff_secs` | int | Largest acceptable age from the `Last-Modified` header. `0` disables the check. A response whose `Last-Modified` header is missing or unparseable fails it. |
 | `valid_http_versions` | str[] | Accepted HTTP versions. Each entry is `1.0`, `1.1`, `2` or `3`. |
-| `body_check_max_bytes` | int | How much of the body is captured for body checks. Default 524288. |
+| `body_check_max_bytes` | int | How much of the body is captured for body checks. Default 524288. Must be greater than 0. |
 
 Order of evaluation: `failure_status` is matched first and a match always
 fails. Otherwise `expected_status` decides if it is set, and the 200 to 399
@@ -292,8 +318,19 @@ status has passed.
 
 If a body is larger than `body_check_max_bytes` it is truncated, and the body,
 regular expression, JSON and negative checks are skipped rather than failed,
-because a truncated body cannot settle them either way. Raise
-`body_check_max_bytes` if you need to assert on something beyond the default.
+because a truncated body cannot settle them either way. The probe logs a warning
+when it skips them. Raise `body_check_max_bytes` if you need to assert on
+something beyond the default.
+
+`not_contains` is the exception: a forbidden substring found inside the captured
+prefix still fails the check, because its presence there does not depend on the
+part that was dropped.
+
+Response headers have their own capture limit, which is separate from
+`body_check_max_bytes` and not configurable. When it is reached,
+`fail_if_header_matches` is failed rather than passed, since a forbidden header
+could be among the ones that were dropped. `fail_if_header_not_matches` is
+unaffected.
 
 `min_response_size_bytes` must not exceed `max_response_size_bytes`.
 
@@ -317,9 +354,14 @@ response whose status passed but whose assertions failed is counted as
 `netprobe_content_failures`, so the two causes stay distinguishable. See
 [netprobe metrics](metrics.md#netprobe-metrics).
 
+Note that the example above sets a per-target header, which turns off redirect
+following, so a redirect would be reported as the response and scored against
+`expected_status`.
+
 ## DNS over HTTPS probes (`test_type: doh`)
 
-Sends a DNS query over HTTPS to each target URL.
+Sends a DNS query over HTTPS to each target URL. As with HTTP probes, `target`
+must be an `http://` or `https://` URL.
 
 | Config | Type | Default | Description |
 |:--|:--|:--|:--|
@@ -351,21 +393,27 @@ orb:
                 target: https://dns.example.net/dns-query
 ```
 
-A response counts as a DNS failure when the HTTP status was a success but the
-DNS payload was not NOERROR or could not be parsed, which is counted separately
-as `netprobe_dns_response_failures`.
-
 ## Filters
 
 The netprobe input has no filters. What is probed is decided by `targets`.
 
 ## Metrics
 
-All test types share the netprobe handler's metrics: attempts, successes,
-response times, and the failure counters. HTTP and DoH probes add the status,
-content and DNS failure counters, the top status codes and response codes, the
-TLS certificate expiry gauge, and the `http_response_phases` metric group,
-which breaks a response down into DNS, connect, TLS and time to first byte.
+All test types share the netprobe handler's core metrics: attempts, successes
+and response times. Transport failures land in `netprobe_dns_lookup_failures`,
+`netprobe_connect_failures` and `netprobe_packets_timeout` whatever the test
+type.
+
+HTTP and DoH probes add the status counters, the top status codes, the TLS
+certificate expiry gauge and the `http_response_phases` metric group, which
+breaks a response down into DNS, connect, TLS and time to first byte. Beyond
+that the two differ:
+
+- HTTP only: `netprobe_content_failures` for a response whose status passed but
+  whose assertions failed, and `netprobe_response_size_bytes`.
+- DoH only: `netprobe_dns_response_failures` and `netprobe_top_rcodes`, for a
+  response whose HTTP status was a success but whose DNS payload was not
+  NOERROR or would not parse.
 
 See [netprobe metrics](metrics.md#netprobe-metrics) for the full list and
 [the handler page](handler_netprobe.md) for enabling metric groups.
