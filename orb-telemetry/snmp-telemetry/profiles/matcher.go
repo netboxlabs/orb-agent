@@ -10,8 +10,18 @@ import (
 
 // wildcardEntry holds a wildcard prefix pattern and its associated profile.
 type wildcardEntry struct {
-	prefix  string // e.g. "1.3.6.1.4.1.9." (OID up to but not including the "*")
+	prefix  string // the arc the wildcard names, e.g. "1.3.6.1.4.1.9" for "1.3.6.1.4.1.9.*"
 	profile *Profile
+}
+
+// covers reports whether oid is the arc the wildcard names or lies below it.
+// ktranslate resolves a device by probing "<sysObjectID>.*" before any
+// shorter prefix, so a wildcard includes its own arc: RouterOS reports
+// 1.3.6.1.4.1.14988.1 itself and is written as "1.3.6.1.4.1.14988.1.*". The
+// dot after the prefix keeps 1.3.6.1.4.1.14988.10 out, since the star stands
+// for whole arcs.
+func (e wildcardEntry) covers(oid string) bool {
+	return oid == e.prefix || strings.HasPrefix(oid, e.prefix+".")
 }
 
 // matchRedirect is one compiled redirect entry, from either `matches` or
@@ -128,7 +138,7 @@ func NewMatcher(profiles []*Profile, logger *slog.Logger) *Matcher {
 	}
 	for oid, claims := range byWildcard {
 		m.wildcardIndex = append(m.wildcardIndex, wildcardEntry{
-			prefix:  strings.TrimSuffix(oid, "*"),
+			prefix:  strings.TrimSuffix(oid, ".*"),
 			profile: claims.kept(),
 		})
 	}
@@ -261,7 +271,7 @@ func (m *Matcher) Match(deviceSysOID string) (*Profile, bool) {
 
 	// Wildcard match (first entry is the longest/most-specific prefix)
 	for _, entry := range m.wildcardIndex {
-		if strings.HasPrefix(normalized, entry.prefix) {
+		if entry.covers(normalized) {
 			return entry.profile, true
 		}
 	}
@@ -320,8 +330,9 @@ func (m *Matcher) ProfileCount() int {
 // reports whether the pattern is a wildcard the index can carry.
 //
 // ktranslate resolves a device sysObjectID by probing its profile map with
-// successively shorter "<prefix>.*" keys, so a star only ever stands for whole
-// arcs below prefix. A pattern written without the dot, "1.3.6.1.4.1.43.45*",
+// "<sysObjectID>.*" and then successively shorter "<prefix>.*" keys, so a
+// star stands for the arc it follows and whole arcs below it, never for part
+// of one. A pattern written without the dot, "1.3.6.1.4.1.43.45*",
 // therefore selects the subtree under 1.3.6.1.4.1.43.45 rather than every arc
 // whose digits start with 45, and canonicalising it here puts both spellings
 // on one key. Upstream does not read the dotless form at all: no probe it

@@ -489,6 +489,10 @@ declaring `1.3.6.1.4.1.9.*` therefore leaves a device covered by a bundled
 the two never claim the same pattern. To take a device from a bundled profile,
 declare the OID or the pattern that profile declares.
 
+A wildcard covers the arc it names as well as the arcs below it, as it does
+in ktranslate: `1.3.6.1.4.1.14988.1.*` matches a RouterOS device that reports
+`1.3.6.1.4.1.14988.1` itself, and not `1.3.6.1.4.1.14988.10`.
+
 Each symbol becomes one metric, named `snmp.` followed by the symbol name in
 lower case, so `hrProcessorLoad` is exported as `snmp.hrprocessorload`.
 
