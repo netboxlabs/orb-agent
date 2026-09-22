@@ -112,9 +112,9 @@ interval.
 
 How `timeout_msec` takes effect depends on the test type. For `http` and `doh`
 it is the request timeout and the probe applies it directly. For `ping` and
-`tcp` the probe does not enforce it at all; it is passed to the netprobe handler as the
-transaction time to live, so an unanswered test is counted as timed out once it
-elapses. A handler that sets its own [`xact_ttl_ms` or
+`tcp` the probe does not enforce it at all; it is passed to the netprobe
+handler as the transaction time to live, so an unanswered test is counted as
+timed out once it elapses. A handler that sets its own [`xact_ttl_ms` or
 `xact_ttl_secs`](handler_netprobe.md#configurations) takes precedence over it.
 
 ### interval_msec
