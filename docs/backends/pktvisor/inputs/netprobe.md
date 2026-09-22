@@ -5,11 +5,11 @@ observing it. Instead of watching packets on an interface, it runs an active
 test against a list of targets on a schedule and reports how each one answered.
 
 A netprobe tap declares the test type and the targets; the
-[netprobe handler](handler_netprobe.md) turns the results into metrics.
+[netprobe handler](../handlers/netprobe.md) turns the results into metrics.
 
 The examples here declare the settings on the tap. Because they describe the
 probe rather than the host the agent runs on, any of them can instead be set on
-a policy's [`input.config`](inputs.md#input-in-a-policy), which overrides the
+a policy's [`input.config`](README.md#input-in-a-policy), which overrides the
 tap for that policy.
 
 ```yaml
@@ -115,7 +115,7 @@ it is the request timeout and the probe applies it directly. For `ping` and
 `tcp` the probe does not enforce it at all; it is passed to the netprobe
 handler as the transaction time to live, so an unanswered test is counted as
 timed out once it elapses. A handler that sets its own [`xact_ttl_ms` or
-`xact_ttl_secs`](handler_netprobe.md#configurations) takes precedence over it.
+`xact_ttl_secs`](../handlers/netprobe.md#configurations) takes precedence over it.
 
 ### interval_msec
 
@@ -191,7 +191,7 @@ orb:
 ```
 
 Sending ICMP requires the agent to have permission to use raw sockets. See the
-agent's [running instructions](../../../README.md#running-the-agent) for the
+agent's [running instructions](../../../../README.md#running-the-agent) for the
 container options that grant it.
 
 ## TCP probes (`test_type: tcp`)
@@ -364,7 +364,7 @@ fail_if_header_matches:
 A failed status check is counted as `netprobe_http_status_failures`, while a
 response whose status passed but whose assertions failed is counted as
 `netprobe_content_failures`, so the two causes stay distinguishable. See
-[netprobe metrics](metrics.md#netprobe-metrics).
+[netprobe metrics](../metrics.md#netprobe-metrics).
 
 ## DNS over HTTPS probes (`test_type: doh`)
 
@@ -423,5 +423,5 @@ that the two differ:
   response whose HTTP status was a success but whose DNS payload was not
   NOERROR or would not parse.
 
-See [netprobe metrics](metrics.md#netprobe-metrics) for the full list and
-[the handler page](handler_netprobe.md) for enabling metric groups.
+See [netprobe metrics](../metrics.md#netprobe-metrics) for the full list and
+[the handler page](../handlers/netprobe.md) for enabling metric groups.

@@ -1,11 +1,11 @@
-# Packet capture handler (pcap)
+# BGP handler (bgp)
 
-- [Example of policy](#example-of-policy-with-input-pcap-and-handler-pcap)
+- [Example of policy](#example-of-policy-with-input-pcap-and-handler-bgp)
 - [Metrics Group](#metrics-group)
 - [Filters](#filters)
 - [Configurations](#configurations)
 
-## Example of policy with input pcap and handler PCAP
+## Example of policy with input pcap and handler BGP
 
 ```yaml
 handlers:
@@ -13,13 +13,16 @@ handlers:
     deep_sample_rate: 100
     num_periods: 8
   modules:
-    default_pcap:
-      type: pcap
+    default_bgp:
+      type: bgp
       config:
         topn_count: 25
 input:
   input_type: pcap
-  tap: default_pcap
+  tap_selector:
+    all:
+      - key1: value1
+      - key2: value
   filter:
     bpf: net 192.168.1.0/24
   config:
@@ -27,16 +30,18 @@ input:
     host_spec: 192.168.1.0/24
     pcap_source: libpcap
     debug: true
+config:
+  merge_like_handlers: true
 kind: collection
 ```
 
-**Handler Type**: "pcap"
+**Handler Type**: "bgp"
 
 ## Metrics Group
 
-- [Check pcap metrics](metrics.md#pcap-metrics)
+- [Check BGP metrics](../metrics.md#bgp-metrics)
 
-- No metrics group available.
+- No metrics group available
 
 ## Filters
 
@@ -44,5 +49,5 @@ kind: collection
 
 ## Configurations
 
-- [Abstract configurations](handlers.md#abstract-configurations).
+- [Abstract configurations](README.md#abstract-configurations).
 - `recorded_stream`. Marks the stream as a recording rather than live traffic. Presence-based: setting it to `false` still enables it, so omit the key to disable.

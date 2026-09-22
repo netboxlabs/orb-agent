@@ -2,9 +2,9 @@
 
 The metrics each handler produces, grouped by handler type. The
 `input_resources` handler is not listed here; its four metrics are on
-[its own page](handler_input_resources.md). A handler emits a
+[its own page](handlers/input_resources.md). A handler emits a
 metric only when the metric group it belongs to is enabled; see
-[metric groups](handlers.md#handlers-section-analysis) for how to enable and disable them,
+[metric groups](handlers/README.md#handlers-section-analysis) for how to enable and disable them,
 and each handler's own page for which groups it supports.
 
 The Orb metrics currently provided come from the various supported pktvisor handlers and are listed here by handler.
@@ -29,7 +29,7 @@ writes the maximum observed value into `_sum`, not a sum, so it does not mean
 what the Prometheus summary convention implies.
 
 ## DHCP Metrics
-[Check how to activate dhcp metrics](handler_dhcp.md)
+[Check how to activate dhcp metrics](handlers/dhcp.md)
 
 | Metric                                                                                   | Prometheus Name                |
 |------------------------------------------------------------------------------------------|--------------------------------|
@@ -55,7 +55,7 @@ what the Prometheus summary convention implies.
 | Total DHCP and DHCPv6 wire packets matching the configured filters                                                                       | dhcp_wire_packets_total        |
 
 ## DNS Metrics
-[Check how to activate/deactivate dns metrics](handler_dns.md)
+[Check how to activate/deactivate dns metrics](handlers/dns.md)
 
 ### DNS 2.0
 
@@ -178,7 +178,7 @@ what the Prometheus summary convention implies.
 | Count of response/query size ratios                                                                                | dns_xact_ratio_quantiles_count    | dns_transaction + quantiles                |
 
 ## Network Metrics
-[Check how to activate/deactivate network metrics](handler_net.md)
+[Check how to activate/deactivate network metrics](handlers/net.md)
 
 ### Network 2.0
 
@@ -261,7 +261,7 @@ what the Prometheus summary convention implies.
 | Count of packets of unknown direction                           | packets_unknown_dir               | counters      |
 
 ## PCAP Metrics
-[Check how to activate pcap metrics](handler_pcap.md)
+[Check how to activate pcap metrics](handlers/pcap.md)
 
 | Metric                                        | Prometheus Name            |
 |-----------------------------------------------|----------------------------|
@@ -270,7 +270,7 @@ what the Prometheus summary convention implies.
 | Total TCP wire packets that failed reassembly | pcap_tcp_reassembly_errors |
 
 ## BGP metrics
-[Check how to activate bgp metrics](handler_bgp.md)
+[Check how to activate bgp metrics](handlers/bgp.md)
 
 | Metric                                                                                | Prometheus Name               |
 |---------------------------------------------------------------------------------------|-------------------------------|
@@ -291,7 +291,7 @@ what the Prometheus summary convention implies.
 | Total BGP wire packets matching the configured filter(s)                              | bgp_wire_packets_total        |
 
 ## Flow metrics
-[Check how to activate/deactivate flow metrics](handler_flow.md)
+[Check how to activate/deactivate flow metrics](handlers/flow.md)
 
 | Metric                                                                                 | Prometheus Name                   | Metric Groups               |
 |----------------------------------------------------------------------------------------|-----------------------------------|-----------------------------|
@@ -370,7 +370,7 @@ what the Prometheus summary convention implies.
 | Top out ECN by packets                                                                 | flow_top_out_ecn_packets          | top_tos + by_packets        |
 
 ## Netprobe Metrics
-[Check how to activate/deactivate netprobe metrics](handler_netprobe.md)
+[Check how to activate/deactivate netprobe metrics](handlers/netprobe.md)
 
 | Metric                                                                     | Prometheus Name                       | Metric Groups                        |
 |----------------------------------------------------------------------------|---------------------------------------|--------------------------------------|

@@ -9,14 +9,14 @@ tap by name or by tag.
 | [`pcap`](#packet-capture-pcap) | Live packet capture from a network interface, or a pcap file. |
 | [`flow`](#sflownetflow-flow) | sFlow and Netflow records received on a UDP port. |
 | [`dnstap`](#dnstap) | dnstap stream from a DNS server, over a unix socket or TCP. |
-| [`netprobe`](input_netprobe.md) | Active probes against a list of targets: ICMP, TCP, HTTP and DNS over HTTPS. |
+| [`netprobe`](netprobe.md) | Active probes against a list of targets: ICMP, TCP, HTTP and DNS over HTTPS. |
 
 `sflow` is also accepted as an input type and is handled by the same module as
 `flow`. A `mock` input exists for testing and is not documented here.
 
 A tap declares the input type and its configuration; the policy that uses it may
 override parts of that configuration. See [Input in a policy](#input-in-a-policy) below and
-the [policy structure](README.md#policy-structure) for how the two fit together.
+the [policy structure](../README.md#policy-structure) for how the two fit together.
 
 ## Input in a policy
 
@@ -89,7 +89,7 @@ input:
 
 A selector that matches more than one tap attaches the policy to each of them,
 which generates a separate set of metrics per tap. See
-[`merge_like_handlers`](handlers.md#merge_like_handlers) for scraping them together.
+[`merge_like_handlers`](../handlers/README.md#merge_like_handlers) for scraping them together.
 
 ## Declaring a tap
 
@@ -449,6 +449,6 @@ its own page.
 >             netprobe: true
 > ```
 
-See [Netprobe input](input_netprobe.md) for the test types (`ping`, `tcp`,
+See [Netprobe input](netprobe.md) for the test types (`ping`, `tcp`,
 `http`, `doh`), the per-target keys, the timing settings and the HTTP response
 checks.

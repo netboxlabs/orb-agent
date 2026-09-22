@@ -68,7 +68,7 @@ kind: collection
 
 ## Metrics Group
 
-- [Check the flow metrics belonging to each group](metrics.md#flow-metrics)
+- [Check the flow metrics belonging to each group](../metrics.md#flow-metrics)
 
 |   Metric Group   | Default  |
 |:----------------:|:--------:|
@@ -233,7 +233,7 @@ asn_notfound: true
 
 - [recorded_stream](#recorded_stream). Presence-based.
 
-- [Abstract configurations](handlers.md#abstract-configurations).
+- [Abstract configurations](README.md#abstract-configurations).
 
 ### sample_rate_scaling
 

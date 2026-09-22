@@ -37,7 +37,7 @@ kind: collection
 
 ## Metrics Group
 
-- [Check dhcp metrics](metrics.md#dhcp-metrics)
+- [Check dhcp metrics](../metrics.md#dhcp-metrics)
 
 - No metrics group available
 
@@ -47,6 +47,6 @@ kind: collection
 
 ## Configurations
 
-- [Abstract configurations](handlers.md#abstract-configurations).
+- [Abstract configurations](README.md#abstract-configurations).
 - `recorded_stream`. Marks the stream as a recording rather than live traffic. Presence-based: setting it to `false` still enables it, so omit the key to disable.
 - `xact_ttl_secs` / `xact_ttl_ms`: *int*. Time to live for transactions, in seconds or milliseconds.

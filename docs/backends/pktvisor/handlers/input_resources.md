@@ -31,7 +31,7 @@ These carry the `resources` schema prefix, so they are exported as
 `resources_handler_count`.
 
 These are useful for sizing: an input with many policies attached shows the cost
-of that fan-out directly, which is what [`merge_like_handlers`](handlers.md#merge_like_handlers)
+of that fan-out directly, which is what [`merge_like_handlers`](README.md#merge_like_handlers)
 is meant to reduce when a policy uses a tap selector.
 
 ## Configuration

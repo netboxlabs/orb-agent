@@ -3,17 +3,13 @@ The `pktvisor` backend embeds the [pktvisord](https://github.com/netboxlabs/pktv
 
 ## Reference
 
+The two sections of a policy have a folder each.
+
 | Page | Contents |
 |:--|:--|
-| [Inputs](inputs.md) | The data streams a policy can consume: `pcap`, `flow`, `dnstap`, `netprobe`, with their configuration and filters. |
-| [Netprobe input](input_netprobe.md) | The active probe input in detail: ICMP, TCP, HTTP and DNS over HTTPS tests, their targets and response checks. |
-| [Handlers](handlers.md) | The handler section, the available handler types and versions, metric groups, and the configurations shared by all handlers. |
-| [Metrics](metrics.md) | The metrics each handler produces. The `input_resources` metrics are on [its own page](handler_input_resources.md). |
-
-Handler references: [DNS](handler_dns.md), [Network](handler_net.md),
-[Flow](handler_flow.md), [DHCP](handler_dhcp.md), [BGP](handler_bgp.md),
-[Packet capture](handler_pcap.md), [Netprobe](handler_netprobe.md),
-[Input resources](handler_input_resources.md).
+| [Inputs](inputs/README.md) | The data streams a policy can consume, and how a tap is declared. Covers `pcap`, `flow` and `dnstap` inline, with [`netprobe`](inputs/netprobe.md) on its own page. |
+| [Handlers](handlers/README.md) | The handler section, the available handler types and versions, metric groups, and the settings shared by every handler. One page per handler: [DNS](handlers/dns.md), [Network](handlers/net.md), [Flow](handlers/flow.md), [DHCP](handlers/dhcp.md), [BGP](handlers/bgp.md), [Packet capture](handlers/pcap.md), [Netprobe](handlers/netprobe.md), [Input resources](handlers/input_resources.md). |
+| [Metrics](metrics.md) | The metrics each handler produces. The `input_resources` metrics are on [its own page](handlers/input_resources.md). |
 
 ## Configuration
 Orb writes a temporary pktvisor configuration file on startup based on the `orb.backends.pktvisor` block. Any key that is not handled explicitly is forwarded to `visor.config` in the generated file, so you can pass through native pktvisor options such as logging, crashpad, or custom data paths when needed.
@@ -31,7 +27,7 @@ Pktvisor ships with the Orb agent container image. If you run Orb on a bare host
 ### Taps
 A tap names a data source once, on the agent, so that policies can refer to it.
 Each tap sets an `input_type`, its `config`, and optional `tags` that a policy can
-select on. See [Inputs](inputs.md) for the configuration each input type accepts.
+select on. See [Inputs](inputs/README.md) for the configuration each input type accepts.
 
 A tap has no `filter` key: filters belong to the policy's `input`, and a `filter`
 written on a tap is ignored without an error. For packet capture a BPF expression
@@ -82,10 +78,10 @@ orb:
 
 | Section | Required | Description |
 |:--|:--|:--|
-| [`input`](inputs.md) | yes | The data stream to analyse: a tap name or tag selector, plus the input type and any filters. |
-| [`handlers`](handlers.md) | yes | The analyzer modules to run on that input, and their configuration, filters and metric groups. |
-| [`config`](handlers.md#config-section) | no | Policy level settings. Currently only `merge_like_handlers`. |
-| [`kind`](handlers.md#kind-section) | yes | The only supported value is `collection`. |
+| [`input`](inputs/README.md) | yes | The data stream to analyse: a tap name or tag selector, plus the input type and any filters. |
+| [`handlers`](handlers/README.md) | yes | The analyzer modules to run on that input, and their configuration, filters and metric groups. |
+| [`config`](handlers/README.md#config-section) | no | Policy level settings. Currently only `merge_like_handlers`. |
+| [`kind`](handlers/README.md#kind-section) | yes | The only supported value is `collection`. |
 
 A policy name must be unique within the backend. Policy, tap and handler module
 names must match `[a-zA-Z_][a-zA-Z0-9_-]*`, so they start with a letter or
@@ -124,7 +120,7 @@ orb:
         kind: collection
 ```
 
-Note the `require_version: "2.0"` on the DNS module. A module that omits `require_version` runs version `1.0` of that handler; see [available handlers](handlers.md#available-handlers).
+Note the `require_version: "2.0"` on the DNS module. A module that omits `require_version` runs version `1.0` of that handler; see [available handlers](handlers/README.md#available-handlers).
 
 ## Additional resources
 - [Pktvisor project home](https://github.com/netboxlabs/pktvisor) — feature overview, module reference, and deployment notes.

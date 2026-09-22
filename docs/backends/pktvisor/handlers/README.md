@@ -11,14 +11,14 @@ versions of a type; when it is omitted the handler resolves to version `1.0`.
 
 | Type | Versions | Reference |
 |:--|:--|:--|
-| `dns` | `1.0`, `2.0` | [DNS handler](handler_dns.md) |
-| `net` | `1.0`, `2.0` | [Network handler](handler_net.md) |
-| `flow` | `1.0` | [Flow handler](handler_flow.md) |
-| `dhcp` | `1.0` | [DHCP handler](handler_dhcp.md) |
-| `bgp` | `1.0` | [BGP handler](handler_bgp.md) |
-| `pcap` | `1.0` | [Packet capture handler](handler_pcap.md) |
-| `netprobe` | `1.0` | [Netprobe handler](handler_netprobe.md) |
-| `input_resources` | `1.0` | [Input resources handler](handler_input_resources.md) |
+| `dns` | `1.0`, `2.0` | [DNS handler](dns.md) |
+| `net` | `1.0`, `2.0` | [Network handler](net.md) |
+| `flow` | `1.0` | [Flow handler](flow.md) |
+| `dhcp` | `1.0` | [DHCP handler](dhcp.md) |
+| `bgp` | `1.0` | [BGP handler](bgp.md) |
+| `pcap` | `1.0` | [Packet capture handler](pcap.md) |
+| `netprobe` | `1.0` | [Netprobe handler](netprobe.md) |
+| `input_resources` | `1.0` | [Input resources handler](input_resources.md) |
 
 Because the default is `1.0`, a module written as `type: dns` with no
 `require_version` runs the 1.0 handler. Use `require_version: "2.0"` to select the
@@ -36,7 +36,7 @@ There is the possibility of defining settings on the policy level. Currently, th
 
 ### merge_like_handlers
 
-When `merge_like_handlers` config is true, metrics from all handlers of the same type are scraped together. This is useful when the [tap_selector](inputs.md) is used, as, by default, metrics are generated separately for each tap in the policy and this can be very expensive, depending on the number of taps.
+When `merge_like_handlers` config is true, metrics from all handlers of the same type are scraped together. This is useful when the [tap_selector](../inputs/README.md) is used, as, by default, metrics are generated separately for each tap in the policy and this can be very expensive, depending on the number of taps.
 
 The `merge_like_handlers` filter usage syntax is:
 

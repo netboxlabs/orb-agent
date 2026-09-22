@@ -61,7 +61,7 @@ kind: collection
 
 ## Metrics Group (2.0)
 
-- [Check the dns metrics belonging to each group](metrics.md#dns-metrics)
+- [Check the dns metrics belonging to each group](../metrics.md#dns-metrics)
 
 | Metric Group  | Default  |
 |:-------------:|:--------:|
@@ -437,7 +437,7 @@ kind: collection
 
 ## Metrics Group (1.0)
 
-- [Check the dns metrics belonging to each group](metrics.md#dns-metrics)
+- [Check the dns metrics belonging to each group](../metrics.md#dns-metrics)
 
 |     Metric Group     | Default  |
 |:--------------------:|:--------:|
@@ -766,7 +766,7 @@ dnstap_msg_type: auth
 - [recorded_stream](#recorded_stream). Presence-based.
 - [xact_ttl_secs](#xact_ttl_ms-or-xact_ttl_secs): *int*.
 - [xact_ttl_ms](#xact_ttl_ms-or-xact_ttl_secs): *int*.
-- [Abstract configurations](handlers.md#abstract-configurations).
+- [Abstract configurations](README.md#abstract-configurations).
 
 ### public_suffix_list
 

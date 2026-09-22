@@ -33,7 +33,7 @@ kind: collection
 
 ## Metrics Group
 
-- [Check the netprobe metrics belonging to each group](metrics.md#netprobe-metrics)
+- [Check the netprobe metrics belonging to each group](../metrics.md#netprobe-metrics)
 
 | Metric Group | Default  |
 |:------------:|:--------:|
@@ -48,20 +48,20 @@ kind: collection
 
 ## Configurations
 
-- [Abstract configurations](handlers.md#abstract-configurations).
+- [Abstract configurations](README.md#abstract-configurations).
 
 The netprobe handler accepts `recorded_stream`, `xact_ttl_secs` and
 `xact_ttl_ms`. `recorded_stream` is presence-based, so setting it to `false`
 still enables it; omit the key to disable.
 
 What is probed, including the required `targets` map, is configured on the
-netprobe input instead. See [Netprobe input](input_netprobe.md) for the test
+netprobe input instead. See [Netprobe input](../inputs/netprobe.md) for the test
 types, their settings and the HTTP response checks.
 
 Netprobe settings describe the probe rather than the host the agent runs on, so
 they are often worth setting on the policy's `input` rather than on the tap. A
 policy input may override any of the tap's netprobe settings; see
-[Input in a policy](inputs.md#input-in-a-policy).
+[Input in a policy](../inputs/README.md#input-in-a-policy).
 
 ```yaml
 handlers:

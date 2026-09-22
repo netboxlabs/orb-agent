@@ -54,7 +54,7 @@ kind: collection
 
 ## Metrics Group (2.0)
 
-- [Check the net metrics belonging to each group](metrics.md#network-metrics)
+- [Check the net metrics belonging to each group](../metrics.md#network-metrics)
 
 | Metric Group  | Default |
 |:-------------:|:-------:|
@@ -192,7 +192,7 @@ kind: collection
 
 ## Metrics Group (1.0)
 
-- [Check the net metrics belonging to each group](metrics.md#network-metrics)
+- [Check the net metrics belonging to each group](../metrics.md#network-metrics)
 
 | Metric Group  | Default |
 |:-------------:|:-------:|
@@ -298,7 +298,7 @@ only_asn_number:
 ## Configurations
 
 - [recorded_stream](#recorded_stream). Presence-based.
-- [Abstract configurations](handlers.md#abstract-configurations).
+- [Abstract configurations](README.md#abstract-configurations).
 
 ### recorded_stream
 
