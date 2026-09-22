@@ -132,7 +132,9 @@ func TestGnmiTelemetryBackendStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	probed := mocks.CaptureListenAddr(t)
 	require.NoError(t, be.Start(ctx, cancel))
+	assert.Equal(t, serverURL.Host, *probed, "the probe guards the address the readiness check asks")
 
 	version, err := be.Version()
 	require.NoError(t, err)
@@ -312,13 +314,8 @@ func TestGnmiTelemetryBackendRefusesToConfigureWithoutOTLP(t *testing.T) {
 }
 
 func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(options backend.CmdOptions, name string, args []string)) {
-	// A test that stands a server in for the child on the configured address
-	// has that address held on purpose: the probe that refuses a held
-	// address is stubbed out here, along with the process.
-	origProbe := backend.EnsureListenAddrFree
-	backend.EnsureListenAddrFree = func(string) error { return nil }
-	t.Cleanup(func() { backend.EnsureListenAddrFree = origProbe })
 	t.Helper()
+	mocks.AllowHeldListenAddr(t)
 
 	original := backend.NewCmdOptions
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {

@@ -66,12 +66,14 @@ type StartSpec struct {
 	Exec           string
 	Args           []string
 	// ListenAddr is the host:port the backend serves its API on, the address
-	// the readiness check asks. When set, StartProcess refuses to spawn while
-	// another process holds it: the check takes whatever answers on that
-	// address, so with the port held elsewhere (another agent sharing the
-	// host network, a child left over from an earlier run) it would report
-	// the other process's answer as the child's, and the policies replayed
-	// after it would go to the other process too. Empty skips the check.
+	// the readiness check asks. It is required: StartProcess refuses to spawn
+	// while another process holds it, since the check takes whatever answers
+	// on that address, and with the port held elsewhere (another agent
+	// sharing the host network, a child left over from an earlier run) it
+	// would report the other process's answer as the child's, and the
+	// policies replayed after it would go to the other process too. A
+	// backend has no readiness check without an address to ask, so a spec
+	// without one is refused as incomplete.
 	ListenAddr     string
 	LogLine        func(line string, isStderr bool)  // per-backend normalizer adapter
 	SetProc        func(Commander, <-chan CmdStatus) // publishes proc+statusChan to the backend BEFORE the readiness loop (see CRITICAL below)
@@ -124,9 +126,10 @@ func ensureListenAddrFree(addr string) error {
 	return nil
 }
 
-// StartProcess launches the process, streams stdout/stderr to LogLine, then:
-//   - when ListenAddr is set, binds and releases it first, and refuses the
-//     start with ErrListenAddrInUse while another process holds it;
+// StartProcess checks the spec is complete, returns the cancellation if Ctx
+// is already done, binds and releases ListenAddr, refusing the start with
+// ErrListenAddrInUse while another process holds it, and only then launches
+// the process and streams stdout/stderr to LogLine:
 //   - builds the Cmd, proc.Start(), and IMMEDIATELY calls spec.SetProc(proc, statusChan)
 //     to publish them to the backend (the CRITICAL step — see below), then spawns the
 //     stream goroutine.
@@ -165,8 +168,8 @@ func ensureListenAddrFree(addr string) error {
 // spec.ReadinessBudget; both are optional and their zero values keep the
 // historical behaviour.
 func StartProcess(spec StartSpec) error {
-	if spec.Logger == nil || spec.SetProc == nil || spec.LogLine == nil || spec.ReadinessCheck == nil {
-		return errors.New("StartProcess: Logger, SetProc, LogLine, and ReadinessCheck are required")
+	if spec.Logger == nil || spec.SetProc == nil || spec.LogLine == nil || spec.ReadinessCheck == nil || spec.ListenAddr == "" {
+		return errors.New("StartProcess: Logger, SetProc, LogLine, ReadinessCheck, and ListenAddr are required")
 	}
 
 	ctx := spec.Ctx
@@ -179,11 +182,9 @@ func StartProcess(spec StartSpec) error {
 	if spec.ReadinessBudget == 0 {
 		spec.ReadinessBudget = ReadinessBudgetFrom(ctx)
 	}
-	if spec.ListenAddr != "" {
-		if err := EnsureListenAddrFree(spec.ListenAddr); err != nil {
-			spec.Logger.Error(spec.NameDisplay+" cannot start", "error", err)
-			return fmt.Errorf("%s: %w", spec.NameDisplay, err)
-		}
+	if err := EnsureListenAddrFree(spec.ListenAddr); err != nil {
+		spec.Logger.Error(spec.NameDisplay+" cannot start", "error", err)
+		return fmt.Errorf("%s: %w", spec.NameDisplay, err)
 	}
 
 	proc := NewCmdOptions(CmdOptions{

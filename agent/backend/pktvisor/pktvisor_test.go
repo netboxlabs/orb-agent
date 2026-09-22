@@ -103,8 +103,10 @@ func TestPktvisorBackendStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(baseCtx)
 	defer cancel()
 
+	probed := mocks.CaptureListenAddr(t)
 	err = be.Start(ctx, cancel)
 	require.NoError(t, err)
+	assert.Equal(t, serverURL.Host, *probed, "the probe guards the address the readiness check asks")
 
 	startTime := be.GetStartTime()
 	assert.False(t, startTime.IsZero(), "Expected start time to be set")
@@ -298,13 +300,8 @@ func createExecutable(t *testing.T, name string) {
 }
 
 func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(options backend.CmdOptions, name string, args []string)) {
-	// A test that stands a server in for the child on the configured address
-	// has that address held on purpose: the probe that refuses a held
-	// address is stubbed out here, along with the process.
-	origProbe := backend.EnsureListenAddrFree
-	backend.EnsureListenAddrFree = func(string) error { return nil }
-	t.Cleanup(func() { backend.EnsureListenAddrFree = origProbe })
 	t.Helper()
+	mocks.AllowHeldListenAddr(t)
 
 	original := backend.NewCmdOptions
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {

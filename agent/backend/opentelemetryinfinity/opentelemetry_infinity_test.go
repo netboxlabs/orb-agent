@@ -131,11 +131,12 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 
 	// Start the backend
 	ctx, cancel := context.WithCancel(context.Background())
-	stubListenProbe(t)
+	probed := mocks.CaptureListenAddr(t)
 	err = be.Start(ctx, cancel)
 
 	// Assert successful start
 	assert.NoError(t, err)
+	assert.Equal(t, serverURL.Host, *probed, "the probe guards the address the readiness check asks")
 
 	// Get Running status
 	status, _, err := be.GetRunningStatus()
@@ -196,18 +197,8 @@ func TestOpenTelemetryBackendCompleted(t *testing.T) {
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	stubListenProbe(t)
+	mocks.AllowHeldListenAddr(t)
 	err = be.Start(ctx, cancel)
 
 	assert.Error(t, err)
-}
-
-// stubListenProbe stubs the probe that refuses a held listen address: a test
-// that stands a server in for the child on the configured address has that
-// address held on purpose.
-func stubListenProbe(t *testing.T) {
-	t.Helper()
-	orig := backend.EnsureListenAddrFree
-	backend.EnsureListenAddrFree = func(string) error { return nil }
-	t.Cleanup(func() { backend.EnsureListenAddrFree = orig })
 }
