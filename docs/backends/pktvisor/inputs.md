@@ -171,7 +171,7 @@ pcap_file: "path/to/file"
 
 Type: *str*
 
-`pcap_source` specifies the type of library to use. Default: libpcap. Options: libpcap or af_packet (linux).
+`pcap_source` specifies the type of library to use. Default: `libpcap`. Options are `libpcap`, `af_packet` (Linux) and `mock` (for testing).
 
 ```yaml
 pcap_source: "af_packet"
@@ -217,7 +217,7 @@ host_spec: "192.168.0.1/24"
 
 Type: *bool*
 
-When `true` activate debug logs
+When `true` activate debug logs. It applies to live capture only and is ignored when `pcap_file` is set
 
 ```yaml
 debug: true
@@ -227,7 +227,7 @@ debug: true
 
 Type: *int*
 
-Sets the limit of cached packets to be reassembled. Default value: `300000`.
+Sets the maximum number of TCP connections tracked for reassembly. The cache is keyed by connection, not by packet. Default value: `300000`.
 
 To remove limit set `tcp_packet_reassembly_cache_limit` to `0`.
 

@@ -80,7 +80,7 @@ kind: collection
 
 |                         Filter                          |  Type   | Input  |
 |:-------------------------------------------------------:|:-------:|:------:|
-|             [`only_rcode`](#only_rcode-v2)              | *str[]* |  PCAP  |
+|             [`only_rcode`](#only_rcode-v2)              | *int* or *str[]* |  PCAP  |
 |        [`exclude_noerror`](#exclude_noerror-v2)         | *bool*  |  PCAP  |
 |   [`only_dnssec_response`](#only_dnssec_response-v2)    | *bool*  |  PCAP  |
 |           [`answer_count`](#answer_count-v2)            |  *int*  |  PCAP  |
@@ -94,7 +94,7 @@ kind: collection
 
 ### only_rcode (v2)
 
-Type: *str[]*
+Type: *int* or *str[]*
 
 Input: PCAP
 
@@ -108,7 +108,7 @@ Supported types are in the table below (if you use any other code that is not in
 |:-----------------:|:--------------:|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:---------------------------------------------------------:|
 |        `0`        |    NOERROR     |                                                                                                                      No error condition                                                                                                                       | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `1`        |    FORMERR     |                                                                                               Format error - The name server was unable to interpret the query.                                                                                               | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
-|        `2`        |    SERVFAIL     |                                                                           Server failure - The name server was unable to process this query due to a problem with the name server.                                                                            | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
+|        `2`        |    SRVFAIL      |                                                                           Server failure - The name server was unable to process this query due to a problem with the name server.                                                                            | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `3`        |    NXDOMAIN    |                                                Name Error - Meaningful only for responses from an authoritative name server, this code signifies that the domain name referenced in the query does not exist.                                                 | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `4`        |     NOTIMP     |                                                                                        Not Implemented - The name server does not support the requested kind of query.                                                                                        | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `5`        |    REFUSED     | The name server refuses to perform the specified operation for  policy reasons.  For example, a name server may not wish to provide the information to the particular requester, or a name server may not wish to perform a particular operation (e.g., zone) | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
@@ -135,7 +135,7 @@ only_rcode:
   - str
 ```
 
-with the `int` referring to the response code to be filtered, written as string. So, in order to have multiple filters on the same policy, multiple handlers must be created, each with a rcode type.
+with the `int` referring to the response code to be filtered, written as string.
 
 ### exclude_noerror (v2)
 
@@ -150,7 +150,7 @@ The `exclude_noerror` filter usage syntax is:
 exclude_noerror: true
 ```
 
-Attention: the filter of `exclude_noerror` is dominant in relation to the filter of only_rcode, that is, if the filter of `exclude_noerror` is true, even if the filter of only_rcode is set, the results will be composed only by responses without any type of error (all type of errors will be kept).
+Attention: `exclude_noerror` is dominant over `only_rcode`, that is, if `exclude_noerror` is true then even if `only_rcode` is set, the results will be composed only of responses that returned some kind of error. NOERROR responses are dropped.
 
 ### only_dnssec_response (v2)
 
@@ -436,7 +436,7 @@ kind: collection
 
 |                       Filter                       |  Type   | Input  |
 |:--------------------------------------------------:|:-------:|:------:|
-|           [`only_rcode`](#only_rcode-v1)           | *str[]* |  PCAP  |
+|           [`only_rcode`](#only_rcode-v1)           | *int* or *str[]* |  PCAP  |
 |      [`exclude_noerror`](#exclude_noerror-v1)      | *bool*  |  PCAP  |
 | [`only_dnssec_response`](#only_dnssec_response-v1) | *bool*  |  PCAP  |
 |         [`answer_count`](#answer_count-v1)         |  *int*  |  PCAP  |
@@ -451,7 +451,7 @@ kind: collection
 
 ### only_rcode (v1)
 
-Type: *str[]*
+Type: *int* or *str[]*
 
 Input: PCAP
 
@@ -465,7 +465,7 @@ Supported types are in the table below (if you use any other code that is not in
 |:-----------------:|:--------------:|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------:|:---------------------------------------------------------:|
 |        `0`        |    NOERROR     |                                                                                                                      No error condition                                                                                                                       | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `1`        |    FORMERR     |                                                                                               Format error - The name server was unable to interpret the query.                                                                                               | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
-|        `2`        |    SERVFAIL     |                                                                           Server failure - The name server was unable to process this query due to a problem with the name server.                                                                            | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
+|        `2`        |    SRVFAIL      |                                                                           Server failure - The name server was unable to process this query due to a problem with the name server.                                                                            | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `3`        |    NXDOMAIN    |                                                Name Error - Meaningful only for responses from an authoritative name server, this code signifies that the domain name referenced in the query does not exist.                                                 | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `4`        |     NOTIMP     |                                                                                        Not Implemented - The name server does not support the requested kind of query.                                                                                        | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
 |        `5`        |    REFUSED     | The name server refuses to perform the specified operation for  policy reasons.  For example, a name server may not wish to provide the information to the particular requester, or a name server may not wish to perform a particular operation (e.g., zone) | [[RFC1035]](https://www.rfc-editor.org/rfc/rfc1035.html)  |
@@ -492,7 +492,7 @@ only_rcode:
   - str
 ```
 
-with the `int` referring to the response code to be filtered, written as string. So, in order to have multiple filters on the same policy, multiple handlers must be created, each with a rcode type.
+with the `int` referring to the response code to be filtered, written as string.
 
 ### exclude_noerror (v1)
 
@@ -750,6 +750,10 @@ public_suffix_list: true
 ```
 
 ### recorded_stream
+
+> The key is presence-based: the handler checks only whether `recorded_stream`
+> is set, never its value, so `recorded_stream: false` still enables it. Omit
+> the key entirely to disable.
 
 This configuration is useful when a pcap_file is used in taps/input configuration. Set it to True when you want to load an offline traffic (from a pcap_file).
 

@@ -356,6 +356,10 @@ exclude_ips_from_summarization:
 
 ### recorded_stream
 
+> The key is presence-based: the handler checks only whether `recorded_stream`
+> is set, never its value, so `recorded_stream: false` still enables it. Omit
+> the key entirely to disable.
+
 This configuration is useful when a pcap_file is used in taps/input configuration. Set it to True when you want to load an offline traffic (from a pcap_file).
 
 The `recorded_stream` configuration usage syntax is:

@@ -51,7 +51,8 @@ kind: collection
 - [Abstract configurations](handlers.md#abstract-configurations).
 
 The netprobe handler accepts `recorded_stream`, `xact_ttl_secs` and
-`xact_ttl_ms`. What is probed, including the required `targets` map, is
+`xact_ttl_ms`. `recorded_stream` is presence-based, so setting it to `false`
+still enables it; omit the key to disable. What is probed, including the required `targets` map, is
 configured on the netprobe **input** instead; see
 [netprobe configuration](inputs.md#netprobe-configuration).
 

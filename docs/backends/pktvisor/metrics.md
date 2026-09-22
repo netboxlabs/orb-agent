@@ -15,10 +15,16 @@ them are disabled.
 Metrics are further split by Prometheus labels rather than by name where a
 handler reports per direction, per device or per target:
 
-- DNS 2.0 and Network 2.0 carry a `direction` label (`in`, `out`, `unknown`)
-  where the 1.0 handlers encoded the direction in the metric name.
+- Most DNS 2.0 and Network 2.0 series carry a `direction` label (`in`, `out`,
+  `unknown`) where the 1.0 handlers encoded the direction in the metric name.
+  The `*_rates_events`, `*_events`, `*_deep_samples` and `*_filtered` series are
+  written without it.
 - Flow metrics carry a `device` label, and most also carry `device_interface`.
 - Netprobe metrics carry a `target` label.
+
+One caveat on the `_sum` series: for quantile and rate metrics `pktvisord`
+writes the maximum observed value into `_sum`, not a sum, so it does not mean
+what the Prometheus summary convention implies.
 
 ## DHCP Metrics
 [Check how to activate dhcp metrics](handler_dhcp.md)
@@ -397,5 +403,5 @@ handler reports per direction, per device or per target:
 | Total sum of TLS handshake time in microseconds                           | netprobe_response_tls_us_sum         | http_response_phases                 |
 | Count of TLS handshake time in microseconds                               | netprobe_response_tls_us_count       | http_response_phases                 |
 | Quantiles of time to first byte in microseconds                            | netprobe_response_ttfb_us             | http_response_phases                 |
-| Total sum of time to first byte time in microseconds                      | netprobe_response_ttfb_us_sum        | http_response_phases                 |
-| Count of time to first byte time in microseconds                          | netprobe_response_ttfb_us_count      | http_response_phases                 |
+| Total sum of time to first byte in microseconds                      | netprobe_response_ttfb_us_sum        | http_response_phases                 |
+| Count of time to first byte in microseconds                          | netprobe_response_ttfb_us_count      | http_response_phases                 |
