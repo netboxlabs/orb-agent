@@ -107,21 +107,33 @@ func withOrigin(origin, path string) string {
 	return origin + ":" + path
 }
 
+// streamHandle is one stream an attempt registered: the cancel of its
+// producer's context and the gnmic-side name it holds.
+type streamHandle struct {
+	cancel context.CancelFunc
+	name   string
+}
+
 // gnmicSession wraps a gnmic Target and implements Session.
 type gnmicSession struct {
 	tg *target.Target
-	// subCancel cancels the context driving the active SubscribeChan producer
-	// goroutine. It is set by Subscribe and invoked by Close so the producer
-	// always observes cancellation, even while it is blocked in gnmic's
-	// internal retry-timer wait (which only selects on this context).
-	subCancel context.CancelFunc
-	// subGen numbers the subscription attempts made on this session, so each
-	// one registers with gnmic under a name no other attempt owns.
+	// streams is every stream the active attempt registered with gnmic, one
+	// per origin the attempt carries. Each holds the cancel of the context
+	// driving its SubscribeChan producer goroutine, invoked by StopSubscribe
+	// and Close so the producer always observes cancellation, even while it
+	// is blocked in gnmic's internal retry-timer wait (which only selects on
+	// that context), and the gnmic-side name it registered under. Empty until
+	// an attempt registers, and again once it is stopped.
+	streams []streamHandle
+	// endAttempt ends the attempt the streams belong to when it spans more
+	// than one: it releases the forwarders that merge the streams' channels,
+	// which a stream's own cancel cannot reach while one is waiting to
+	// deliver to a caller that has stopped reading. Nil for a single-stream
+	// attempt, whose producer selects on its own context.
+	endAttempt context.CancelFunc
+	// subGen numbers the streams opened on this session, so each one
+	// registers with gnmic under a name no other stream owns.
 	subGen atomic.Uint64
-	// subName is the gnmic-side name of the attempt subCancel drives, the one
-	// StopSubscribe tears down. Empty until stream registers the first attempt,
-	// and again once one is stopped.
-	subName string
 	// encoding is the request encoding negotiated from the target's advertised
 	// Capabilities (set by Capabilities()); empty until then, defaulting to
 	// json_ietf via enc(). Used for Get, where a leaf-path request yields a flat
@@ -373,17 +385,18 @@ func (s *gnmicSession) Capabilities(ctx context.Context) (*CapabilitiesResult, e
 // the same connection so the prior subscription doesn't keep retrying in the
 // background. Idempotent; a no-op when no subscription is active.
 func (s *gnmicSession) StopSubscribe() {
-	if s.subCancel != nil {
-		s.subCancel()
-		s.subCancel = nil
-	}
-	// Only ever the name this session registered: a fixed name would be the
+	// Only ever the names this session registered: a fixed name would be the
 	// next attempt's too, and stopping it here (or from the old producer's own
 	// deferred StopSubscription) would cancel the stream the ladder just
 	// opened. Empty means no attempt of ours is registered.
-	if s.subName != "" {
-		s.tg.StopSubscription(s.subName)
-		s.subName = ""
+	for _, h := range s.streams {
+		h.cancel()
+		s.tg.StopSubscription(h.name)
+	}
+	s.streams = nil
+	if s.endAttempt != nil {
+		s.endAttempt()
+		s.endAttempt = nil
 	}
 }
 
@@ -468,10 +481,10 @@ func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeReque
 	// Own context for the producer so Close() can stop it independently of the
 	// caller's ctx lifetime.
 	subCtx, cancel := context.WithCancel(ctx)
-	s.subCancel = cancel
-	s.subName = s.nextSubscriptionName()
+	name := s.nextSubscriptionName()
+	s.streams = append(s.streams, streamHandle{cancel: cancel, name: name})
 
-	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, s.subName)
+	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, name)
 
 	notes := make(chan Notification)
 	errs := make(chan error, 1)
@@ -657,14 +670,156 @@ func (s *gnmicSession) acceptedSubscriptions(ctx context.Context, subs []Subscri
 }
 
 // SubscribeMany is Subscribe with per-subscription mode and origin.
+//
+// A target takes one origin per Subscribe RPC: SR Linux refuses a request
+// that mixes its native paths with OpenConfig ones ("Mixing of different
+// origins is not supported"), and a profile written for it does exactly that,
+// so the subscriptions are grouped by origin and each group streams on an RPC
+// of its own. The attempt is one all the same: its channels carry every
+// stream's notifications, one sync response goes out once every stream has
+// answered its own, naming every path they carry between them, and the first
+// stream to fail or end ends the attempt, the others torn down with it, since
+// half a profile served on one rung is not what the ladder decides on.
 func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error) {
 	s.StopSubscribe()
 	subs = s.acceptedSubscriptions(ctx, subs)
-	req, err := buildSubscribeRequest(s.subEnc(), subs)
-	if err != nil {
-		return nil, nil, err
+	groups := groupByOrigin(subs)
+	if len(groups) <= 1 {
+		req, err := buildSubscribeRequest(s.subEnc(), subs)
+		if err != nil {
+			return nil, nil, err
+		}
+		return s.stream(ctx, req, subscribedPaths(subs))
 	}
-	return s.stream(ctx, req, subscribedPaths(subs))
+
+	// One context for the attempt: each stream's context derives from it, so
+	// ending it tears every stream down, and it is what releases a forwarder
+	// below that is waiting to deliver to a caller that has stopped reading,
+	// which StopSubscribe and Close do through the session's endAttempt.
+	attemptCtx, endAttempt := context.WithCancel(ctx)
+	s.endAttempt = endAttempt
+	type opened struct {
+		notes <-chan Notification
+		errs  <-chan error
+		paths []string
+	}
+	var streams []opened
+	for _, group := range groups {
+		req, err := buildSubscribeRequest(s.subEnc(), group)
+		if err != nil {
+			s.StopSubscribe()
+			return nil, nil, err
+		}
+		notes, errs, err := s.stream(attemptCtx, req, subscribedPaths(group))
+		if err != nil {
+			s.StopSubscribe()
+			return nil, nil, err
+		}
+		streams = append(streams, opened{notes: notes, errs: errs, paths: subscribedPaths(group)})
+	}
+
+	out := make(chan Notification)
+	outErrs := make(chan error, 1)
+	var (
+		mu      sync.Mutex
+		pending = len(streams)
+		carried []string
+		ended   bool
+	)
+	// end delivers the attempt's error, if any, once, and tears the streams
+	// down; the forwarders then close out on their way out.
+	end := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if ended {
+			return
+		}
+		ended = true
+		if err != nil {
+			outErrs <- err
+		}
+		endAttempt()
+	}
+	var wg sync.WaitGroup
+	for _, st := range streams {
+		wg.Add(1)
+		go func(st opened) {
+			defer wg.Done()
+			synced := false
+			for {
+				select {
+				case <-attemptCtx.Done():
+					return
+				case err, ok := <-st.errs:
+					if ok && err != nil {
+						end(err)
+						return
+					}
+					if !ok {
+						st.errs = nil
+					}
+				case n, ok := <-st.notes:
+					if !ok {
+						// The stream ended: forward the error it may have
+						// queued, else end the attempt as a stream closing
+						// does, which the consumer reads the same way.
+						select {
+						case err := <-st.errs:
+							end(err)
+						default:
+							end(nil)
+						}
+						return
+					}
+					if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
+						if synced {
+							continue
+						}
+						synced = true
+						mu.Lock()
+						carried = append(carried, st.paths...)
+						pending--
+						last := pending == 0
+						paths := append([]string(nil), carried...)
+						mu.Unlock()
+						if !last {
+							continue
+						}
+						n = Notification{SyncDone: true, Paths: paths}
+					}
+					select {
+					case out <- n:
+					case <-attemptCtx.Done():
+						return
+					}
+				}
+			}
+		}(st)
+	}
+	go func() {
+		wg.Wait()
+		close(out)
+		close(outErrs)
+	}()
+	return out, outErrs, nil
+}
+
+// groupByOrigin splits subscriptions into one group per origin, in the order
+// the origins first appear.
+func groupByOrigin(subs []Subscription) [][]Subscription {
+	var order []string
+	groups := map[string][]Subscription{}
+	for _, sub := range subs {
+		if _, seen := groups[sub.Origin]; !seen {
+			order = append(order, sub.Origin)
+		}
+		groups[sub.Origin] = append(groups[sub.Origin], sub)
+	}
+	out := make([][]Subscription, 0, len(order))
+	for _, origin := range order {
+		out = append(out, groups[origin])
+	}
+	return out
 }
 
 // subscribedPaths is the path of every subscription in a list, the paths the
@@ -876,8 +1031,11 @@ func (s *gnmicSession) GetConfig(ctx context.Context) ([]byte, error) {
 // subscribe context so the gnmic producer goroutine exits (even if blocked in
 // its internal retry-timer wait), then closes the target's gRPC connection.
 func (s *gnmicSession) Close() error {
-	if s.subCancel != nil {
-		s.subCancel()
+	for _, h := range s.streams {
+		h.cancel()
+	}
+	if s.endAttempt != nil {
+		s.endAttempt()
 	}
 	return s.tg.Close()
 }
