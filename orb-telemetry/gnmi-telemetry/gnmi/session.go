@@ -2,6 +2,7 @@ package gnmi
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -23,9 +24,10 @@ type Notification struct {
 	Timestamp int64
 	// Paths are the request paths this notification speaks for: on a Get
 	// snapshot, every path of a request the target answered whole and only the
-	// ones that answered when the Get recovered path by path; on a stream's
-	// sync response, the subscriptions the stream carries, which is fewer than
-	// the request when a path was pruned. It is transport-level, like
+	// ones that answered when the Get recovered path by path; on an attempt's
+	// sync response, the subscriptions its streams carry between them, in
+	// the order the streams synced, which is fewer than the request when a
+	// path was pruned. It is transport-level, like
 	// Timestamp, and only a snapshot or a sync response carries it. A caller
 	// that reconciles what a dump restates speaks only for these: a path whose
 	// Get failed, or whose subscription never opened, is a path the dump says
@@ -58,6 +60,29 @@ type CapabilitiesResult struct {
 	Encodings     []string
 }
 
+// ErrBeforeData marks an error a stream reported before it had served any
+// data of its own. An attempt over several streams may be productive on one
+// while another rejects the mode, and the consumer, which reads a refusal
+// from how much it has seen, cannot tell that from a failure after the target
+// accepted; so the session says it, with the target's own code wrapped for
+// the consumer to read.
+var ErrBeforeData = errors.New("before the stream served data")
+
+// ErrAfterData marks an error a stream reported after it had served data of
+// its own: the target accepted the mode and served it, so whatever the code,
+// the failure is one the same rung reconnects through. Together with
+// ErrBeforeData it makes the verdict on a stream's error complete from the
+// session's side, so it cannot depend on which stream's data the consumer
+// happened to receive before the attempt ended.
+var ErrAfterData = errors.New("after the stream served data")
+
+// ErrStreamSilent marks a stream that served nothing at all: it answered
+// neither data nor its sync response within the probe deadline, or ended
+// before answering either. There is no code to read, and the ladder
+// advances through it as it does through a stream the consumer saw send
+// nothing.
+var ErrStreamSilent = errors.New("the stream served nothing")
+
 // Mode is a delivery mode.
 type Mode string
 
@@ -88,13 +113,16 @@ type Session interface {
 	// returns a notifications channel and an errors channel. The channels
 	// close when ctx is cancelled or the stream ends.
 	Subscribe(ctx context.Context, mode Mode, paths []string, sampleIntervalMs int) (<-chan Notification, <-chan error, error)
-	// SubscribeMany opens one stream carrying every subscription with its own
-	// mode and origin. It tears down a previous subscription first, like
-	// Subscribe, and its channels close when ctx is cancelled or the stream
-	// ends. A path the target refuses on a Get probe is pruned, once per
-	// session; a probe that reached no verdict keeps its path, which the
-	// stream then decides on; a target that refuses every probe gets the full
-	// request.
+	// SubscribeMany opens the streams carrying every subscription with its
+	// own mode and origin, one stream per origin, since a target takes one
+	// origin per Subscribe RPC. It tears down a previous attempt first, like
+	// Subscribe. Its channels carry every stream's notifications, deliver one
+	// sync response once every stream has answered its own, naming every
+	// path they carry, and close when ctx is cancelled or the attempt ends,
+	// which the first stream to fail or end does for all of them. A path the
+	// target refuses on a Get probe is pruned, once per session; a probe that
+	// reached no verdict keeps its path, which the stream then decides on; a
+	// target that refuses every probe gets the full request.
 	SubscribeMany(ctx context.Context, subs []Subscription) (<-chan Notification, <-chan error, error)
 	// GetOnce performs a single gNMI Get over paths.
 	GetOnce(ctx context.Context, paths []string) (Notification, error)

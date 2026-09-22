@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -165,7 +166,8 @@ func TestProfileSelectionUsesTheDetectedNOS(t *testing.T) {
 	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "acme_nos.yaml"), []byte(
-		"extends: _base\nmatch: {nos: sonic}\n"), 0o600))
+		"extends: _base\nmatch: {nos: sonic}\n",
+	), 0o600))
 	profileStore, err := profiles.LoadProfiles(dir, nil)
 	require.NoError(t, err)
 	sess := &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{NOS: "SONiC"}, SubscribeManyFn: streamOf()}
@@ -1000,7 +1002,8 @@ func TestGetRungWithNoPollablePathReportsIt(t *testing.T) {
 	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "native_only.yaml"), []byte(
-		"match: {}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    attributes: {slot: slot}\n    metrics:\n      - {leaf: free, name: mem_free, type: gauge}\n"), 0o600))
+		"match: {}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    attributes: {slot: slot}\n    metrics:\n      - {leaf: free, name: mem_free, type: gauge}\n",
+	), 0o600))
 	profileStore, err := profiles.LoadProfiles(dir, nil)
 	require.NoError(t, err)
 	sess := &gnmi.FakeSession{
@@ -1170,7 +1173,8 @@ func TestCollectorsSharingASchemaRegistryRefuseADisagreeingSeries(t *testing.T) 
 	// that names it, so the store loads.
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "nokia_srlinux.yaml"), []byte(
-		"extends: _base\nmatch: {vendor: nokia}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    attributes:\n      slot: slot\n    metrics:\n      - {leaf: free, name: memory_free_native, type: counter, unit: By}\n"), 0o600))
+		"extends: _base\nmatch: {vendor: nokia}\nsubscriptions:\n  - path: /platform/control[slot=*]/memory\n    mode: sample\n    origin: \"\"\n    attributes:\n      slot: slot\n    metrics:\n      - {leaf: free, name: memory_free_native, type: counter, unit: By}\n",
+	), 0o600))
 	disagreeing, err := profiles.LoadProfiles(dir, nil)
 	require.NoError(t, err)
 
@@ -2409,4 +2413,132 @@ func TestACompletedSyncResetsTheBackoff(t *testing.T) {
 	waitFor(t, 5*time.Second, func() bool { return len(dialer.dials()) >= 7 })
 	assert.Less(t, dialer.dials()[6].Sub(released), 10*c.backoffBase,
 		"the attempt that answered its sync reset the backoff, so the reconnect did not wait the climbed one")
+}
+
+// With one stream per origin, a stream can reject after another has served
+// data: the attempt is not productive on that stream, so the rejection is the
+// mode refusal it says it is, and the ladder walks. The session marks such an
+// error as coming before the stream's data.
+func TestModeLadderOnAStreamRefusingAfterAnotherServed(t *testing.T) {
+	testReader(t)
+	var calls atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			calls.Add(1)
+			for _, s := range subs {
+				if s.Mode == gnmi.OnChange {
+					out := make(chan gnmi.Notification)
+					errs := make(chan error, 1)
+					go func() {
+						defer close(out)
+						defer close(errs)
+						// One stream served, then another rejected the mode.
+						select {
+						case out <- sample(1, time.Now().UnixNano()):
+						case <-ctx.Done():
+							return
+						}
+						errs <- fmt.Errorf("%w: %w", gnmi.ErrBeforeData, status.Error(codes.Unimplemented, "on_change not supported"))
+					}()
+					return out, errs, nil
+				}
+			}
+			return streamOf(sample(1, time.Now().UnixNano()))(ctx, subs)
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "sample"
+	})
+	assert.Equal(t, int64(2), calls.Load(), "one on_change request, then one sample request")
+}
+
+// A stream the session reports silent, one that answered nothing before its
+// sync within the probe deadline, is the refusal the consumer's own dump
+// deadline would have read, whatever another stream delivered.
+func TestModeLadderOnASilentStream(t *testing.T) {
+	testReader(t)
+	var calls atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			calls.Add(1)
+			for _, s := range subs {
+				if s.Mode == gnmi.OnChange {
+					out := make(chan gnmi.Notification)
+					errs := make(chan error, 1)
+					go func() {
+						defer close(out)
+						defer close(errs)
+						select {
+						case out <- sample(1, time.Now().UnixNano()):
+						case <-ctx.Done():
+							return
+						}
+						errs <- fmt.Errorf("%w: a stream sent nothing within the probe deadline", gnmi.ErrStreamSilent)
+					}()
+					return out, errs, nil
+				}
+			}
+			return streamOf(sample(1, time.Now().UnixNano()))(ctx, subs)
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool {
+		st := c.TargetStatuses("p")
+		return len(st) == 1 && st[0].Mode == "sample"
+	})
+	assert.Equal(t, int64(2), calls.Load(), "one on_change request, then one sample request")
+}
+
+// A rejection marked as after the stream's data is the stream failing once
+// the target served it, and the same rung reconnects through it even when
+// none of that data reached the consumer: the notification in flight when a
+// sibling stream ended the attempt is dropped, and the verdict must not turn
+// on it.
+func TestARejectionAfterAStreamsDataKeepsTheRung(t *testing.T) {
+	testReader(t)
+	var onChange atomic.Int64
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(ctx context.Context, subs []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			for _, s := range subs {
+				if s.Mode == gnmi.OnChange {
+					onChange.Add(1)
+					out := make(chan gnmi.Notification)
+					errs := make(chan error, 1)
+					go func() {
+						defer close(out)
+						defer close(errs)
+						// Nothing reaches the consumer before the error.
+						errs <- fmt.Errorf("%w: %w", gnmi.ErrAfterData, status.Error(codes.Unimplemented, "rejected after serving"))
+					}()
+					return out, errs, nil
+				}
+			}
+			return streamOf(sample(1, time.Now().UnixNano()))(ctx, subs)
+		},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	c.backoffBase = 10 * time.Millisecond
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool { return onChange.Load() >= 3 })
+	st := c.TargetStatuses("p")
+	require.Len(t, st, 1)
+	assert.Equal(t, "on_change", st[0].Mode, "the rung is kept and reconnected, not stepped down")
 }
