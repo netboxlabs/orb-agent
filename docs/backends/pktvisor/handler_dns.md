@@ -1,15 +1,15 @@
 # DNS handler (dns)
 
-- [Example of policy](#example-of-policy-with-input-pcap-and-handler-dns-v2)
-- [Metrics Group](#metrics-group-2-0)
-- [Filters](#filters-2-0)
+- [Example of policy](#example-of-policy-with-input-pcap-and-handler-dnsv2)
+- [Metrics Group](#metrics-group-20)
+- [Filters](#filters-20)
 - [Configurations](#configurations)
 
 ## Example of policy with input pcap and handler DNS(v2)
 
 ``` yaml
 handlers:
-  config:
+  window_config:
     deep_sample_rate: 100
     num_periods: 5
     topn_count: 10
@@ -19,8 +19,6 @@ handlers:
       require_version: "2.0"
       config:
         public_suffix_list: true
-        deep_sample_rate: 50
-        num_periods: 2
         topn_count: 25
         topn_percentile_threshold: 10
       filter:
@@ -83,17 +81,17 @@ kind: collection
 
 |                         Filter                          |  Type   | Input  |
 |:-------------------------------------------------------:|:-------:|:------:|
-|             [`only_rcode`](#only-rcode-v2)              | *str[]* |  PCAP  |
-|        [`exclude_noerror`](#exclude-noerror-v2)         | *bool*  |  PCAP  |
-|   [`only_dnssec_response`](#only-dnssec-response-v2)    | *bool*  |  PCAP  |
-|           [`answer_count`](#answer-count-v2)            |  *int*  |  PCAP  |
-|             [`only_qtype`](#only-qtype-v2)              | *str[]* |  PCAP  |
-|             [`only_qname`](#only-qname-v2)              | *str[]* |  PCAP  |
-|      [`only_qname_suffix`](#only-qname-suffix-v2)       | *str[]* |  PCAP  |
-|        [`geoloc_notfound`](#geoloc-notfound-v2)         | *bool*  |  PCAP  |
-|           [`asn_notfound`](#asn-notfound-v2)            | *bool*  |  PCAP  |
-| [`only_xact_directions`](#only-xact-directions-v2) | *str[]* |  PCAP  |
-|        [`dnstap_msg_type`](#dnstap-msg-type-v2)         |  *str*  | DNSTAP |
+|             [`only_rcode`](#only_rcode-v2)              | *str[]* |  PCAP  |
+|        [`exclude_noerror`](#exclude_noerror-v2)         | *bool*  |  PCAP  |
+|   [`only_dnssec_response`](#only_dnssec_response-v2)    | *bool*  |  PCAP  |
+|           [`answer_count`](#answer_count-v2)            |  *int*  |  PCAP  |
+|             [`only_qtype`](#only_qtype-v2)              | *str[]* |  PCAP  |
+|             [`only_qname`](#only_qname-v2)              | *str[]* |  PCAP  |
+|      [`only_qname_suffix`](#only_qname_suffix-v2)       | *str[]* |  PCAP  |
+|        [`geoloc_notfound`](#geoloc_notfound-v2)         | *bool*  |  PCAP  |
+|           [`asn_notfound`](#asn_notfound-v2)            | *bool*  |  PCAP  |
+| [`only_xact_directions`](#only_xact_directions-v2) | *str[]* |  PCAP  |
+|        [`dnstap_msg_type`](#dnstap_msg_type-v2)         |  *str*  | DNSTAP |
 
 ### only_rcode (v2)
 
@@ -216,7 +214,7 @@ Type: *str[]*
 
 Input: PCAP
 
-DNS record types are records that provide important information about a hostname or domain. Supported default types can be seen [here](https://github.com/orb-community/pktvisor/blob/develop/libs/visor_dns/dns.h#L30).
+DNS record types are records that provide important information about a hostname or domain. Supported default types can be seen [here](https://github.com/netboxlabs/pktvisor/blob/develop/libs/visor_dns/dns.h#L30).
 
 The `only_qtype` filter usage syntax is:
 
@@ -338,6 +336,11 @@ asn_notfound: true
 
 ### only_xact_directions (v2)
 
+> **Not currently usable.** The 2.0 handler implements this filter but does not
+> list it among its accepted keys, so a policy that sets it is rejected with
+> `only_xact_directions is an invalid/unsupported config or filter`. Tracked
+> against pktvisor; the filter is documented here for when that is corrected.
+
 Type: *str[]*
 
 Input: PCAP
@@ -378,7 +381,7 @@ dnstap_msg_type: auth
 
 ``` yaml
 handlers:
-  config:
+  window_config:
     deep_sample_rate: 100
     num_periods: 5
     topn_count: 10
@@ -387,8 +390,6 @@ handlers:
       type: dns
       config:
         public_suffix_list: true
-        deep_sample_rate: 50
-        num_periods: 2
         topn_count: 25
         topn_percentile_threshold: 10
       filter:
@@ -449,18 +450,18 @@ kind: collection
 
 |                       Filter                       |  Type   | Input  |
 |:--------------------------------------------------:|:-------:|:------:|
-|           [`only_rcode`](#only-rcode-v1)           | *str[]* |  PCAP  |
-|      [`exclude_noerror`](#exclude-noerror-v1)      | *bool*  |  PCAP  |
-| [`only_dnssec_response`](#only-dnssec-response-v1) | *bool*  |  PCAP  |
-|         [`answer_count`](#answer-count-v1)         |  *int*  |  PCAP  |
-|           [`only_qtype`](#only-qtype-v1)           | *str[]* |  PCAP  |
-|           [`only_qname`](#only-qname-v1)           | *str[]* |  PCAP  |
-|    [`only_qname_suffix`](#only-qname-suffix-v1)    | *str[]* |  PCAP  |
-|      [`geoloc_notfound`](#geoloc-notfound-v1)      | *bool*  |  PCAP  |
-|         [`asn_notfound`](#asn-notfound-v1)         | *bool*  |  PCAP  |
-|         [`only_queries`](#only-queries-v1)         | *bool*  |  PCAP  |
-|       [`only_responses`](#only-responses-v1)       | *bool*  |  PCAP  |
-|      [`dnstap_msg_type`](#dnstap-msg-type-v1)      |  *str*  | DNSTAP |
+|           [`only_rcode`](#only_rcode-v1)           | *str[]* |  PCAP  |
+|      [`exclude_noerror`](#exclude_noerror-v1)      | *bool*  |  PCAP  |
+| [`only_dnssec_response`](#only_dnssec_response-v1) | *bool*  |  PCAP  |
+|         [`answer_count`](#answer_count-v1)         |  *int*  |  PCAP  |
+|           [`only_qtype`](#only_qtype-v1)           | *str[]* |  PCAP  |
+|           [`only_qname`](#only_qname-v1)           | *str[]* |  PCAP  |
+|    [`only_qname_suffix`](#only_qname_suffix-v1)    | *str[]* |  PCAP  |
+|      [`geoloc_notfound`](#geoloc_notfound-v1)      | *bool*  |  PCAP  |
+|         [`asn_notfound`](#asn_notfound-v1)         | *bool*  |  PCAP  |
+|         [`only_queries`](#only_queries-v1)         | *bool*  |  PCAP  |
+|       [`only_responses`](#only_responses-v1)       | *bool*  |  PCAP  |
+|      [`dnstap_msg_type`](#dnstap_msg_type-v1)      |  *str*  | DNSTAP |
 
 ### only_rcode (v1)
 
@@ -584,7 +585,7 @@ Type: *str[]*
 
 Input: PCAP
 
-DNS record types are records that provide important information about a hostname or domain. Supported default types can be seen [here](https://github.com/orb-community/pktvisor/blob/develop/libs/visor_dns/dns.h#L30).
+DNS record types are records that provide important information about a hostname or domain. Supported default types can be seen [here](https://github.com/netboxlabs/pktvisor/blob/develop/libs/visor_dns/dns.h#L30).
 
 The `only_qtype` filter usage syntax is:
 
@@ -749,10 +750,10 @@ dnstap_msg_type: auth
 
 ## Configurations
 
-- [public_suffix_list](#public-suffix-list): *bool*.
-- [recorded_stream](#recorded-stream): *bool*.
-- [xact_ttl_secs](#xact-ttl-ms): *int*.
-- [xact_ttl_ms](#xact-ttl-ms): *int*.
+- [public_suffix_list](#public_suffix_list): *bool*.
+- [recorded_stream](#recorded_stream): *bool*.
+- [xact_ttl_secs](#xact_ttl_ms-or-xact_ttl_secs): *int*.
+- [xact_ttl_ms](#xact_ttl_ms-or-xact_ttl_secs): *int*.
 - [Abstract configurations](handlers.md#abstract-configurations).
 
 ### public_suffix_list
@@ -761,7 +762,7 @@ Some names to be resolved by a dns server have public suffixes. These suffixes c
 
 The example below illustrates the benefit of using this type of configuration. The qnames consider each part of the name to be resolved. When a name has a public suffix, generic information is generated. Note that in the standard configuration, Qname2 and Qname3 are the same for both domains. With the public suffix setting `true` (which makes the entire public part be considered as a single part), Qname3 already displays relevant information about the name.
 
-The list of suffixes considered public can be accessed [here](https://github.com/orb-community/pktvisor/blob/develop/libs/visor_dns/PublicSuffixList.h).
+The list of suffixes considered public can be accessed [here](https://github.com/netboxlabs/pktvisor/blob/develop/libs/visor_dns/PublicSuffixList.h).
 
 |            Name             | Qname2 Standard | Qname3 Standard | Qname2 Public Suffix | Qname3 Public Suffix |
 |:---------------------------:|:---------------:|:---------------:|:--------------------:|:--------------------:|
@@ -784,14 +785,14 @@ The `recorded_stream` configuration usage syntax is:
 recorded_stream: true
 ```
 
-### xact_ttl_ms
+### xact_ttl_ms or xact_ttl_secs
 
-Type: OR **xact_ttl_secs**
+Type: *int*
 
 Both configurations have the same functionality, that is, defines the time to live of transactions, and only change the unit of measurement to be configured. This configuration causes the metrics to be generated for complete transactions (query and response) within the established time limit.
 
-> - xact_ttl_ms: Defines the time to live of transactions in milliseconds.
- - xact_ttl_secs: Defines the time to live of transactions in seconds.
+- xact_ttl_ms: Defines the time to live of transactions in milliseconds.
+- xact_ttl_secs: Defines the time to live of transactions in seconds.
 
 Note that `xact_ttl_ms` is dominant over `xact_ttl_secs`, that is, if `xact_ttl_ms` exists, even if `xact_ttl_secs` also exists, the value of `xact_ttl_ms` will be considered.
 

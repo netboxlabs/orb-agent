@@ -94,9 +94,12 @@ orb:
         input:
           input_type: pcap
           tap: edge_dns
+        config:
+          merge_like_handlers: true
         handlers:
-          config:
-            merge_like_handlers: true
+          window_config:
+            num_periods: 5
+            deep_sample_rate: 100
           modules:
             dns_summary:
               type: dns

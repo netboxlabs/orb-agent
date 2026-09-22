@@ -1,15 +1,15 @@
 # Network handler (net)
 
-- [Example of policy](#example-of-policy-with-input-pcap-and-handler-net-v2)
-- [Metrics Group](#metrics-group-2-0)
-- [Filters](#filters-2-0)
+- [Example of policy](#example-of-policy-with-input-pcap-and-handler-netv2)
+- [Metrics Group](#metrics-group-20)
+- [Filters](#filters-20)
 - [Configurations](#configurations)
 
 ## Example of policy with input pcap and handler NET(v2)
 
 ```yaml
 handlers:
-  config:
+  window_config:
     deep_sample_rate: 100
     num_periods: 5
     topn_count: 10
@@ -18,8 +18,6 @@ handlers:
       type: net
       require_version: "2.0"
       config:
-        deep_sample_rate: 1
-        num_periods: 2
         topn_count: 25
       filter:
         geoloc_notfound: true
@@ -71,10 +69,10 @@ kind: collection
 
 |                     Filter                     |  Type   |    Input     |
 |:----------------------------------------------:|:-------:|:------------:|
-|  [`geoloc_notfound`](#geoloc-notfound-v2)  | *bool*  | PCAP, DNSTAP |
-|     [`asn_notfound`](#asn-notfound-v2)     | *bool*  | PCAP, DNSTAP |
-| [`only_geoloc_prefix`](#only-geoloc-prefix-v2) | *str[]* | PCAP, DNSTAP |
-|    [`only_asn_number`](#only-asn-number-v2)    | *str[]* | PCAP, DNSTAP |
+|  [`geoloc_notfound`](#geoloc_notfound-v2)  | *bool*  | PCAP, DNSTAP |
+|     [`asn_notfound`](#asn_notfound-v2)     | *bool*  | PCAP, DNSTAP |
+| [`only_geoloc_prefix`](#only_geoloc_prefix-v2) | *str[]* | PCAP, DNSTAP |
+|    [`only_asn_number`](#only_asn_number-v2)    | *str[]* | PCAP, DNSTAP |
 
 ### geoloc_notfound (v2)
 
@@ -152,7 +150,7 @@ only_asn_number:
 
 ```yaml
 handlers:
-  config:
+  window_config:
     deep_sample_rate: 100
     num_periods: 5
     topn_count: 10
@@ -160,8 +158,6 @@ handlers:
     default_net:
       type: net
       config:
-        deep_sample_rate: 1
-        num_periods: 2
         topn_count: 25
       filter:
         geoloc_notfound: true
@@ -211,10 +207,10 @@ kind: collection
 
 |                     Filter                     |  Type   |    Input     |
 |:----------------------------------------------:|:-------:|:------------:|
-|  [`geoloc_notfound`](#geoloc-notfound-v1)  | *bool*  | PCAP, DNSTAP |
-|     [`asn_notfound`](#asn-notfound-v1)     | *bool*  | PCAP, DNSTAP |
-| [`only_geoloc_prefix`](#only-geoloc-prefix-v1) | *str[]* | PCAP, DNSTAP |
-|    [`only_asn_number`](#only-asn-number-v2)    | *str[]* | PCAP, DNSTAP |
+|  [`geoloc_notfound`](#geoloc_notfound-v1)  | *bool*  | PCAP, DNSTAP |
+|     [`asn_notfound`](#asn_notfound-v1)     | *bool*  | PCAP, DNSTAP |
+| [`only_geoloc_prefix`](#only_geoloc_prefix-v1) | *str[]* | PCAP, DNSTAP |
+|    [`only_asn_number`](#only_asn_number-v1)    | *str[]* | PCAP, DNSTAP |
 
 ### geoloc_notfound (v1)
 
@@ -265,7 +261,7 @@ SA - South America
 * Country: the two-character ISO 3166-1 country code
 * Subdivision: the region-portion of the ISO 3166-2 code for the region
 
-    The `only_geoloc_prefix` filter usage syntax is:
+The `only_geoloc_prefix` filter usage syntax is:
 
 ```yaml
 only_geoloc_prefix:
@@ -279,13 +275,15 @@ only_geoloc_prefix:
   - US/CA
 ```
 
-    **only_asn_number:** *str[]*
+### only_asn_number (v1)
 
-    Input: PCAP
+Type: *str[]*
 
-    Based on source and destination IP, it is possible to determine the ASN (Autonomous System Number). In this way it is possible to filter the data considering a specific ASN using the filter `only_asn_number`.
+Input: PCAP
 
-    The `only_asn_number` filter usage syntax is:
+Based on source and destination IP, it is possible to determine the ASN (Autonomous System Number). In this way it is possible to filter the data considering a specific ASN using the filter `only_asn_number`.
+
+The `only_asn_number` filter usage syntax is:
 
 ```yaml
 only_asn_number:
@@ -301,7 +299,7 @@ only_asn_number:
 
 ## Configurations
 
-- [recorded_stream](#recorded-stream): *bool*.
+- [recorded_stream](#recorded_stream): *bool*.
 - [Abstract configurations](handlers.md#abstract-configurations).
 
 ### recorded_stream

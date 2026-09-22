@@ -9,7 +9,7 @@
 
 ```yaml
 handlers:
-    config:
+    window_config:
         deep_sample_rate: 95
         num_periods: 6
         topn_count: 8
@@ -18,10 +18,7 @@ handlers:
             type: flow
             config:
                 sample_rate_scaling: false
-                deep_sample_rate: 85
-                num_periods: 5
                 topn_count: 7
-                first_filter_if_as_label: true
                 enrichment: true
                 device_map:
                   192.168.3.32:
@@ -35,7 +32,7 @@ handlers:
                 exclude_unknown_asns_from_summarization: true
                 exclude_asns_from_summarization:
                   - 16509
-                exclude_ips_from_summarization_flow:
+                exclude_ips_from_summarization:
                   - 192.168.3.32/32
             metric_groups:
                 enable:
@@ -55,12 +52,12 @@ handlers:
                     - 10853
                     - 10860-10890
                 only_device_interfaces:
-                    - 216.239.38.10:
+                    192.0.2.10:
                         - 2
-                only_directions: "in"
+                only_directions: ["in"]
                 only_ips:
                   - 192.168.2.1/24
-                  - 192.158.1.38/32
+                  - 192.0.2.38/32
                 geoloc_notfound: true
                 asn_notfound: true
 input:
@@ -93,12 +90,12 @@ kind: collection
 
 |                       Filter                        |  Type   | Input |
 |:---------------------------------------------------:|:-------:|:-----:|
-| [`only_device_interfaces`](#only-device-interfaces) | *str[]* | FLOW  |
-|        [`only_directions`](#only-directions)        |  *str*  | FLOW  |
-|            [`only_ips`](#only-ips)             | *str[]* | FLOW  |
-|          [`only_ports`](#only-ports)           | *str[]* | FLOW  |
-|     [`geoloc_notfound`](#geoloc-notfound)      | *bool*  | FLOW  |
-|        [`asn_notfound`](#asn-notfound)         | *bool*  | FLOW  |
+| [`only_device_interfaces`](#only_device_interfaces) | *str[]* | FLOW  |
+|        [`only_directions`](#only_directions)        | *str[]* | FLOW  |
+|            [`only_ips`](#only_ips)             | *str[]* | FLOW  |
+|          [`only_ports`](#only_ports)           | *str[]* | FLOW  |
+|     [`geoloc_notfound`](#geoloc_notfound)      | *bool*  | FLOW  |
+|        [`asn_notfound`](#asn_notfound)         | *bool*  | FLOW  |
 
 ### only_device_interfaces
 
@@ -114,18 +111,18 @@ The `only_device_interfaces` filter usage syntax is:
 
 ```yaml
 only_device_interfaces:
-  - device:
+  device:
     - interface
 ```
 Example:
 ```yaml
 only_device_interfaces:
-  - 216.239.38.10:
+  192.0.2.10:
     - 2 #port can be passed as int
     - 4-10 #port can be passed as range. Ports from 4 to 10: all ports in this interval will be accepted.
     - "1" #port can be passed as str
-  - 192.158.1.38: [9, 4-10]
-  - 192.168.2.32:
+  192.0.2.38: [9, 4-10]
+  192.0.2.32:
     - "*" #all ports
 ```
 
@@ -164,7 +161,7 @@ Example:
 ```yaml
 only_ips:
   - 192.168.1.1/24
-  - 192.158.1.38/32
+  - 192.0.2.38/32
 ```
 
 ### only_ports
@@ -219,25 +216,24 @@ asn_notfound: true
 
 ## Configurations
 
-- [sample_rate_scaling](#sample-rate-scaling): *bool*
+- [sample_rate_scaling](#sample_rate_scaling): *bool*
 
-- [first_filter_if_as_label](#first-filter-if-as-label): *bool*
 
 - [enrichment](#enrichment): *bool*
 
-- [device_map](#device-map): *map*
+- [device_map](#device_map): *map*
 
-- [summarize_ips_by_asn](#summarize-ips-by-asn): *bool*
+- [summarize_ips_by_asn](#summarize_ips_by_asn): *bool*
 
-- [exclude_asns_from_summarization](#exclude-asns-from-summarization): *str[]*
+- [exclude_asns_from_summarization](#exclude_asns_from_summarization): *str[]*
 
-- [exclude_unknown_asns_from_summarization](#exclude-unknown-asns-from-summarization): *bool*
+- [exclude_unknown_asns_from_summarization](#exclude_unknown_asns_from_summarization): *bool*
 
-- [subnets_for_summarization](#subnets-for-summarization): *str[]*
+- [subnets_for_summarization](#subnets_for_summarization): *str[]*
 
-- [exclude_ips_from_summarization](#exclude-ips-from-summarization-flow) *str[]*
+- [exclude_ips_from_summarization](#exclude_ips_from_summarization) *str[]*
 
-- [recorded_stream](#recorded-stream): *bool*
+- [recorded_stream](#recorded_stream): *bool*
 
 - [Abstract configurations](handlers.md#abstract-configurations).
 
@@ -249,16 +245,6 @@ The `sample_rate_scaling` filter usage syntax is:
 
 ```yaml
 sample_rate_scaling: false
-```
-
-### first_filter_if_as_label
-
-This configuration requires the `only_interfaces` filter to be active (true). If this setting is `true`, the interfaces will be used as labels for the metrics.
-
-The `first_filter_if_as_label` filter usage syntax is:
-
-```yaml
-first_filter_if_as_label: true
 ```
 
 ### enrichment
@@ -299,7 +285,7 @@ device_map:
         description: This is an interface map example
 ```
 
-Summarization is a useful strategy for visualization, but also for decreasing the cardinality of the data, and two types of summarization are supported: by [asn](#summarize-ips-by-asn) and by [subnets](#subnets-for-summarization), and summarization by ASN is dominant over subnet, i.e. If both configurations are present, only the IPs of an excluded asn or an unknown asn (if [exclude_unknown_asns_from_summarization](#exclude-unknown-asns-from-summarization) is true) will be summarized by subnet.
+Summarization is a useful strategy for visualization, but also for decreasing the cardinality of the data, and two types of summarization are supported: by [asn](#summarize_ips_by_asn) and by [subnets](#subnets_for_summarization), and summarization by ASN is dominant over subnet, i.e. If both configurations are present, only the IPs of an excluded asn or an unknown asn (if [exclude_unknown_asns_from_summarization](#exclude_unknown_asns_from_summarization) is true) will be summarized by subnet.
 
 ### summarize_ips_by_asn
 
@@ -313,7 +299,7 @@ summarize_ips_by_asn: true
 
 ### exclude_asns_from_summarization
 
-This configuration must be used in conjunction with [summarize_ips_by_asn](#summarize-ips-by-asn), in order to exclude ASNs from summarization. In this case, packets transacted by excluded ASNs will be exposed by IPs.
+This configuration must be used in conjunction with [summarize_ips_by_asn](#summarize_ips_by_asn), in order to exclude ASNs from summarization. In this case, packets transacted by excluded ASNs will be exposed by IPs.
 
 The `exclude_asns_from_summarization` configuration usage syntax is:
 
@@ -325,7 +311,7 @@ exclude_asns_from_summarization:
 
 ### exclude_unknown_asns_from_summarization
 
-This configuration must be used in conjunction with [summarize_ips_by_asn](#summarize-ips-by-asn), in order to expose IPs from packets transacted by unknown ASNs.
+This configuration must be used in conjunction with [summarize_ips_by_asn](#summarize_ips_by_asn), in order to expose IPs from packets transacted by unknown ASNs.
 
 The `exclude_unknown_asns_from_summarization` configuration usage syntax is:
 
@@ -335,7 +321,7 @@ exclude_unknown_asns_from_summarization: true
 
 ### subnets_for_summarization
 
-This configuration allows the summarization of flow data by subnets. Attention: This configuration will only work properly if the [summarize_ips_by_asn](#summarize-ips-by-asn) configuration is not set for the IP, since [summarize_ips_by_asn](#summarize-ips-by-asn) is dominant.
+This configuration allows the summarization of flow data by subnets. Attention: This configuration will only work properly if the [summarize_ips_by_asn](#summarize_ips_by_asn) configuration is not set for the IP, since [summarize_ips_by_asn](#summarize_ips_by_asn) is dominant.
 
 The `subnets_for_summarization` configuration usage syntax is:
 
@@ -356,14 +342,14 @@ subnets_for_summarization:
   - ::/64
 ```
 
-### exclude_ips_from_summarization_flow
+### exclude_ips_from_summarization
 
-This configuration must be used in conjunction with [summarize_ips_by_asn](#summarize-ips-by-asn) or [subnets_for_summarization](#subnets-for-summarization) and will remove the specified IPs from the summarization.
+This configuration must be used in conjunction with [summarize_ips_by_asn](#summarize_ips_by_asn) or [subnets_for_summarization](#subnets_for_summarization) and will remove the specified IPs from the summarization.
 
-The `exclude_ips_from_summarization_flow` configuration usage syntax is:
+The `exclude_ips_from_summarization` configuration usage syntax is:
 
 ```yaml
-exclude_ips_from_summarization_flow:
+exclude_ips_from_summarization:
   - 192.168.2.1/31
 ```
 

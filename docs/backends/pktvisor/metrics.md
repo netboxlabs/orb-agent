@@ -38,6 +38,8 @@ For handlers that have metric groups, the metric groups that must be enabled for
 ## DNS Metrics
 [Check how to activate/deactivate dns metrics](handler_dns.md)
 
+### DNS 2.0
+
 | Metric                                                                                                                 | Prometheus Name                     | Metric Groups |
 |------------------------------------------------------------------------------------------------------------------------|-------------------------------------|---------------|
 | Quantiles of all DNS wire packets before filtering per second	                                                         | dns_rates_observed_pps              | any group*    |
@@ -94,6 +96,8 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Count of transaction timing (query/reply pairs) in microseconds                                                        | dns_xact_time_us_count              | xact_times    |
 | Total sum of transaction timing (query/reply pairs) in microseconds                                                    | dns_xact_time_us_sum                | xact_times    |
 | Total DNS transactions (query/reply pairs)                                                                             | dns_xacts                           | counters      |
+
+### DNS 1.0
 
 | Metric                                                                                                             | Prometheus Name                       | Metric Groups                   |
 |--------------------------------------------------------------------------------------------------------------------|---------------------------------------|---------------------------------|
@@ -159,6 +163,8 @@ For handlers that have metric groups, the metric groups that must be enabled for
 ## Network Metrics
 [Check how to activate/deactivate network metrics](handler_net.md)
 
+### Network 2.0
+
 | Metric                                                                  | Prometheus Name              | Metric Groups |
 |-------------------------------------------------------------------------|------------------------------|---------------|
 | IP cardinality                                                          | net_cardinality_ips          | cardinality   |
@@ -188,6 +194,8 @@ For handlers that have metric groups, the metric groups that must be enabled for
  | Top IPv6 addresses                                                      | net_top_ipv6_packets         | top_ips       |
  | Count of total packets matching the configured filter(s)                | net_total_packets            | counters      |
  | Count of UDP packets                                                    | net_udp_packets              | counters      |
+
+### Network 1.0
 
 | Metric                                                          | Prometheus Name                     | Metric Groups |
 |-----------------------------------------------------------------|-------------------------------------|---------------|
@@ -271,11 +279,11 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Metric                                                                                 | Prometheus Name                   | Metric Groups               |
 |----------------------------------------------------------------------------------------|-----------------------------------|-----------------------------|
 | Conversations cardinality                                                              | flow_cardinality_conversations    | cardinality + conversations |
-| Destination IP cardinality                                                             | flow_cardinality_dst_ips_out      | cardinality                 | ok
+| Destination IP cardinality                                                             | flow_cardinality_dst_ips_out      | cardinality                 |
 | Destination ports cardinality                                                          | flow_cardinality_dst_ports_out    | cardinality                 |
-| Source IP cardinality                                                                  | flow_cardinality_src_ips_in       | cardinality                 | ok
+| Source IP cardinality                                                                  | flow_cardinality_src_ips_in       | cardinality                 |
 | Source ports cardinality                                                               | flow_cardinality_src_ports_in     | cardinality                 |
-| Count of in by bytes                                                                   | flow_in_bytes                     | counters + by_bytes         | ok
+| Count of in by bytes                                                                   | flow_in_bytes                     | counters + by_bytes         |
 | Count of in IPv4 by bytes                                                              | flow_in_ipv4_bytes                | counters + by_bytes         |
 | Count of in IPv4 by packets                                                            | flow_in_ipv4_packets              | counters + by_packets       |
 | Count of in IPv6 by bytes                                                              | flow_in_ipv6_bytes                | counters + by_bytes         |
@@ -287,7 +295,7 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Count of in TCP by packets                                                             | flow_in_tcp_packets               | counters + by_packets       |
 | Count of in UDP by bytes                                                               | flow_in_udp_bytes                 | counters + by_bytes         |
 | Count of in UDP by packets                                                             | flow_in_udp_packets               | counters + by_packets       |
-| Count of out by bytes                                                                  | flow_out_bytes                    | counters + by_bytes         | ok
+| Count of out by bytes                                                                  | flow_out_bytes                    | counters + by_bytes         |
 | Count of out IPV4 by bytes                                                             | flow_out_ipv4_bytes               | counters + by_bytes         |
 | Count of out IPV4 by packets                                                           | flow_out_ipv4_packets             | counters + by_packets       |
 | Count of out IPV6 by bytes                                                             | flow_out_ipv6_bytes               | counters + by_bytes         |
@@ -299,44 +307,44 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Count of out TCP by packets                                                            | flow_out_tcp_packets              | counters + by_packets       |
 | Count of out UDP by bytes                                                              | flow_out_udp_bytes                | counters + by_bytes         |
 | Count of out UDP by packets                                                            | flow_out_udp_packets              | counters + by_packets       |
-| Count of total flows records seen that did not match the configured filter(s) (if any) | flow_records_filtered             | counters                    | ok
-| Count of total flows records that match the configured filter(s) (if any)              | flow_records_flows                | counters                    | ok
-| Top ASNs by IP by bytes                                                                | flow_top_asn_bytes                | top_geo + by_bytes          | ok
+| Count of total flows records seen that did not match the configured filter(s) (if any) | flow_records_filtered             | counters                    |
+| Count of total flows records that match the configured filter(s) (if any)              | flow_records_flows                | counters                    |
+| Top ASNs by IP by bytes                                                                | flow_top_asn_bytes                | top_geo + by_bytes          |
 | Top ASNs by IP by packets                                                              | flow_top_asn_packets              | top_geo + by_packets        |
 | Top source IP addresses and port by bytes                                              | flow_top_conversations_bytes      | conversations + by_bytes    |
 | Top source IP addresses and port by packets                                            | flow_top_conversations_packets    | conversations + by_packets  |
-| Top GeoIP locations by bytes                                                           | flow_top_geo_loc_bytes            | top_geo + by_bytes          | ok
+| Top GeoIP locations by bytes                                                           | flow_top_geo_loc_bytes            | top_geo + by_bytes          |
 | Top GeoIP locations by packets                                                         | flow_top_geo_loc_packets          | top_geo + by_packets        |
 | Top in destination IP addresses and port by bytes                                      | flow_top_in_dst_ip_ports_bytes    | top_ips_ports + by_bytes    |
 | Top in destination IP addresses and port by packets                                    | flow_top_in_dst_ip_ports_packets  | top_ips_ports + by_packets  |
-| Top in destination IP addresses by bytes                                               | flow_top_in_dst_ips_bytes         | top_ips + by_bytes          | ok
+| Top in destination IP addresses by bytes                                               | flow_top_in_dst_ips_bytes         | top_ips + by_bytes          |
 | Top in destination IP addresses by packets                                             | flow_top_in_dst_ips_packets       | top_ips + by_packets        |
-| Top in destination ports by bytes                                                      | flow_top_in_dst_ports_bytes       | top_ports + by_bytes        | ok
+| Top in destination ports by bytes                                                      | flow_top_in_dst_ports_bytes       | top_ports + by_bytes        |
 | Top in destination ports by packets                                                    | flow_top_in_dst_ports_packets     | top_ports + by_packets      |
 | Top input interfaces by bytes                                                          | flow_top_in_interfaces_bytes      | top_interfaces + by_bytes   |
 | Top input interfaces by packets                                                        | flow_top_in_interfaces_packets    | top_interfaces + by_packets |
 | Top in source IP addresses and port by bytes                                           | flow_top_in_src_ip_ports_bytes    | top_ips_ports + by_bytes    |
 | Top in source IP addresses and port by packets                                         | flow_top_in_src_ip_ports_packets  | top_ips_ports + by_packets  |
-| Top in source IP addresses by bytes                                                    | flow_top_in_src_ips_bytes         | top_ips + by_bytes          | ok
+| Top in source IP addresses by bytes                                                    | flow_top_in_src_ips_bytes         | top_ips + by_bytes          |
 | Top in source IP addresses by packets                                                  | flow_top_in_src_ips_packets       | top_ips + by_packets        |
-| Top in source ports by bytes                                                           | flow_top_in_src_ports_bytes       | top_ports + by_bytes        | ok
+| Top in source ports by bytes                                                           | flow_top_in_src_ports_bytes       | top_ports + by_bytes        |
 | Top in source ports by packets                                                         | flow_top_in_src_ports_packets     | top_ports + by_packets      |
 | Top out destination IP addresses and port by bytes                                     | flow_top_out_dst_ip_ports_bytes   | top_ips_ports + by_bytes    |
 | Top out destination IP addresses and port by packets                                   | flow_top_out_dst_ip_ports_packets | top_ips_ports + by_packets  |
-| Top out destination IP addresses by bytes                                              | flow_top_out_dst_ips_bytes        | top_ips + by_bytes          | ok
+| Top out destination IP addresses by bytes                                              | flow_top_out_dst_ips_bytes        | top_ips + by_bytes          |
 | Top out destination IP addresses by packets                                            | flow_top_out_dst_ips_packets      | top_ips + by_packets        |
-| Top out destination ports by bytes                                                     | flow_top_out_dst_ports_bytes      | top_ports + by_bytes        | ok
+| Top out destination ports by bytes                                                     | flow_top_out_dst_ports_bytes      | top_ports + by_bytes        |
 | Top out destination ports by packets                                                   | flow_top_out_dst_ports_packets    | top_ports + by_packets      |
 | Top output interfaces by bytes                                                         | flow_top_out_interfaces_bytes     | top_interfaces + by_bytes   |
 | Top output interfaces by packets                                                       | flow_top_out_interfaces_packets   | top_interfaces + by_packets |
 | Top out source IP addresses and port by bytes                                          | flow_top_out_src_ip_ports_bytes   | top_ips_ports + by_bytes    |
 | Top out source IP addresses and port by packets                                        | flow_top_out_src_ip_ports_packets | top_ips_ports + by_packets  |
-| Top out source IP addresses by bytes                                                   | flow_top_out_src_ips_bytes        | top_ips + by_bytes          | ok
+| Top out source IP addresses by bytes                                                   | flow_top_out_src_ips_bytes        | top_ips + by_bytes          |
 | Top out source IP addresses by packets                                                 | flow_top_out_src_ips_packets      | top_ips + by_packets        |
-| Top out source ports by bytes                                                          | flow_top_out_src_ports_bytes      | top_ports + by_bytes        | ok
+| Top out source ports by bytes                                                          | flow_top_out_src_ports_bytes      | top_ports + by_bytes        |
 | Top out source ports by packets                                                        | flow_top_out_src_ports_packets    | top_ports + by_packets      |
-| Top in DSCP by bytes                                                                   | flow_top_in_dscp_bytes            | top_tos + by_bytes          | ok
-| Top out DSCP by bytes                                                                  | flow_top_out_dscp_bytes           | top_tos + by_bytes          | ok
+| Top in DSCP by bytes                                                                   | flow_top_in_dscp_bytes            | top_tos + by_bytes          |
+| Top out DSCP by bytes                                                                  | flow_top_out_dscp_bytes           | top_tos + by_bytes          |
 | Top in ECN by bytes                                                                    | flow_top_in_ecn_bytes             | top_tos + by_bytes          |
 | Top out ECN by bytes                                                                   | flow_top_out_ecn_bytes            | top_tos + by_bytes          |
 | Top in DSCP by packets                                                                 | flow_top_in_dscp_packets          | top_tos + by_packets        |

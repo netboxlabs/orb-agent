@@ -9,7 +9,7 @@
 
 ```yaml
 handlers:
-  config:
+  window_config:
     deep_sample_rate: 100
     num_periods: 8
     topn_count: 10
@@ -17,8 +17,6 @@ handlers:
     default_pcap:
       type: pcap
       config:
-        deep_sample_rate: 6
-        num_periods: 3
         topn_count: 25
 input:
   input_type: pcap

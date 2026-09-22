@@ -7,79 +7,156 @@ tap by name or by tag.
 | Input type | Purpose |
 |:--|:--|
 | [`pcap`](#packet-capture-pcap) | Live packet capture from a network interface, or a pcap file. |
-| [`flow`](#sflow-netflow-flow) | sFlow and Netflow records received on a UDP port. |
+| [`flow`](#sflownetflow-flow) | sFlow and Netflow records received on a UDP port. |
 | [`dnstap`](#dnstap) | dnstap stream from a DNS server, over a unix socket or TCP. |
-| [`netprobe`](#netprobe) | Active probes (ping) against a list of targets. |
+| [`netprobe`](#netprobe) | Active probes against a list of targets. |
 
 `sflow` is also accepted as an input type and is handled by the same module as
 `flow`. A `mock` input exists for testing and is not documented here.
 
 A tap declares the input type and its configuration; the policy that uses it may
-override parts of that configuration. See [Inputs in a policy](inputs.md) below and
+override parts of that configuration. See [Input in a policy](#input-in-a-policy) below and
 the [policy structure](README.md#policy-structure) for how the two fit together.
 
-For configure pktvisor you could specify `taps`. It's defined under `visor` top level key ([check an example](https://raw.githubusercontent.com/orb-community/orb/develop/cmd/agent/agent.example.yaml)).
+## Input in a policy
 
-The tap section specifies what data the agent should be listening in on and the goal of Taps is to abstract away host level details such as ethernet interface or dnstap socket location so that collection policies can apply to a broad set of pktvisor agents without worrying about these details. See [here](https://github.com/orb-community/pktvisor/blob/develop/RFCs/2021-04-16-75-taps.md) for more information.
+A policy's `input` section names the data stream it analyses. It selects a tap,
+declares what type that tap is, and may narrow or adjust it.
 
-Single or multiple taps can be configured in the same agent.
+**Required**
+
+`input_type` - the type of input. It is validated against the type of the tap
+selected by `tap` or `tap_selector`; if they disagree, the policy fails.
+
+`tap` - the name of a tap declared under `orb.backends.pktvisor.taps`, or
+`tap_selector` - tags to match against the declared taps. A selector matches on
+`any` of the given tags or on `all` of them.
+
+**Optional**
+
+`filter` - what data to include from the input.
+
+`config` - how the input is used. These keys are the same ones the tap accepts,
+documented per input type below.
+
+A tap's configuration and the policy input's configuration are merged, with the
+policy input's values taking precedence for any key set in both.
+
+### Selecting a tap by name
 
 ```yaml
-visor:
-  taps:
-    first_tap_name:
-      input_type: type
-      config: ...
-      filter: ...
-      tags:
-        key1: value1
-        key2: value2
-    second_tap_name:
-      input_type: type
-      config: ...
-      filter: ...
-      tags:
-        key1: value1
-        key3: value3
+input:
+  tap: tap_name
+  input_type: type_of_input
+  filter:
+    bpf: ...
+  config:
+    ...
+```
+
+### Selecting taps by tag
+
+Matching any of the tags:
+
+```yaml
+input:
+  tap_selector:
+    any:
+      - key1: value1
+      - key2: value2
+  input_type: type_of_input
+  filter:
+    bpf: ...
+  config:
+    ...
+```
+
+Matching all of them:
+
+```yaml
+input:
+  tap_selector:
+    all:
+      - key1: value1
+      - key2: value2
+  input_type: type_of_input
+  filter:
+    bpf: ...
+  config:
+    ...
+```
+
+A selector that matches more than one tap attaches the policy to each of them,
+which generates a separate set of metrics per tap. See
+[`merge_like_handlers`](handlers.md#merge_like_handlers) for scraping them together.
+
+## Declaring a tap
+
+A tap abstracts away host level details, such as the ethernet interface or the
+dnstap socket location, so that a policy can apply to a broad set of agents
+without naming them. Taps are declared under `orb.backends.pktvisor.taps`, and a
+single agent can declare as many as it needs.
+
+```yaml
+orb:
+  backends:
+    pktvisor:
+      taps:
+        first_tap_name:
+          input_type: type
+          config: ...
+          filter: ...
+          tags:
+            key1: value1
+            key2: value2
+        second_tap_name:
+          input_type: type
+          config: ...
+          filter: ...
+          tags:
+            key1: value1
+            key3: value3
 ```
 
 The following inputs are supported: `pcap`, `flow`, `dnstap` and `netprobe`. For each input type, specific configuration, filters and tags can be defined.
 
 ## Packet Capture (pcap)
 
-> **Example:** Example: Pktvisor PCAP Tap Configuration
+> **Example:** Pktvisor PCAP Tap Configuration
 > ```yaml
-> visor:
->   taps:
->     my_pcap_tap:
->       input_type: pcap
->       config:
->         pcap_source: "libpcap"
->         debug: true
->         iface: auto
->         host_spec: "192.168.0.1/24"
->       filter:
->         bpf: "port 53"
->       tags:
->         pcap: true
+> orb:
+>   backends:
+>     pktvisor:
+>       taps:
+>         my_pcap_tap:
+>           input_type: pcap
+>           config:
+>             pcap_source: "libpcap"
+>             debug: true
+>             iface: auto
+>             host_spec: "192.168.0.1/24"
+>           filter:
+>             bpf: "port 53"
+>           tags:
+>             pcap: true
 > ```
 
 ### pcap configuration
 
-There are 5 configurations for pcap input: `pcap_file`, `pcap_source`, `iface`, `host_spec` and `debug`.
+The following configurations are available for pcap inputs.
 
 |                                       Config                                       | Type |
 |:----------------------------------------------------------------------------------:|:-----|
-|                         [pcap_file](#pcap-file)                         | str  |
-|                       [pcap_source](#pcap-source)                       | str  |
-|                          [iface](#pcap-source)                          | str  |
-|                         [host_spec](#host-spec)                         | str  |
+|                         [pcap_file](#pcap_file)                         | str  |
+|                       [pcap_source](#pcap_source)                       | str  |
+|                          [iface](#iface)                          | str  |
+|                         [host_spec](#host_spec)                         | str  |
 |                             [debug](#debug)                             | bool |
-| [tcp_packet_reassembly_cache_limit](#tcp-packet-reassembly-cache-limit) | int  |
+| [tcp_packet_reassembly_cache_limit](#tcp_packet_reassembly_cache_limit) | int  |
 
 ### pcap_file
 
-Type: : *str*
+Type: *str*
 
 One option of using pktvisor is for reading existing network data files. In this case, the path to the file must be passed. This variable is dominant, so if a file is passed, pktvisor will do the entire process based on the file.
 
@@ -89,7 +166,7 @@ pcap_file: "path/to/file"
 
 ### pcap_source
 
-Type: : *str*
+Type: *str*
 
 `pcap_source` specifies the type of library to use. Default: libpcap. Options: libpcap or af_packet (linux).
 
@@ -99,7 +176,7 @@ pcap_source: "af_packet"
 
 ### iface
 
-Type: : *str*
+Type: *str*
 
 Name of the interface to bind.
 
@@ -121,7 +198,7 @@ iface: eth0
 
 ### host_spec
 
-Type: : *str*
+Type: *str*
 
 The `host_spec` setting is useful to determine the direction of observed packets, once knowing the host ip, it is possible to determine the data flow direction, ie if they are being sent by the observed host (from host) or received (to host).
 
@@ -135,7 +212,7 @@ host_spec: "192.168.0.1/24"
 
 ### debug
 
-Type: : *bool*
+Type: *bool*
 
 When `true` activate debug logs
 
@@ -145,7 +222,7 @@ debug: true
 
 ### tcp_packet_reassembly_cache_limit
 
-Type: : *int*
+Type: *int*
 
 Sets the limit of cached packets to be reassembled. Default value: `300000`.
 
@@ -177,18 +254,20 @@ bpf: "port 53"
 
 ## sFlow/Netflow (flow)
 
-> **Example:** Example: Pktvisor FLOW Tap Configuration
+> **Example:** Pktvisor FLOW Tap Configuration
 > ```yaml
-> visor:
->   taps:
->     my_flow_tap:
->       input_type: flow
->       config:
->         port: 6343
->         bind: 192.168.1.1
->         flow_type: sflow
->       tags:
->         flow: true
+> orb:
+>   backends:
+>     pktvisor:
+>       taps:
+>         my_flow_tap:
+>           input_type: flow
+>           config:
+>             port: 6343
+>             bind: 192.168.1.1
+>             flow_type: sflow
+>           tags:
+>             flow: true
 > ```
 
 ### flow configuration
@@ -199,11 +278,11 @@ There are 3 configs for flow inputs: `port`, `bind` and `flow_type`.
 |:----------------------------------:|:-----|
 |   [port](#port-flow)    | int  |
 |   [bind](#port-flow)    | str  |
-| [flow_type](#flow-type) | str  |
+| [flow_type](#flow_type) | str  |
 
 ### port (flow)
 
-Type: : *int* and **bind**: *str*
+Type: *int* and **bind**: *str*
 
 The other option for using flow is specifying a port AND an ip to bind (only udp bind is supported). Note that, in this case, both variables must be set.
 
@@ -219,7 +298,7 @@ bind: 192.168.1.1
 
 ### flow_type
 
-Type: : *str*
+Type: *str*
 
 Default: sflow. options: sflow or netflow (ipfix is supported on netflow).
 
@@ -237,19 +316,21 @@ There are no specific filters for the FLOW input.
 
 ## dnstap
 
-> **Example:** Example: Pktvisor DNSTAP Tap Configuration
+> **Example:** Pktvisor DNSTAP Tap Configuration
 > ```yaml
-> visor:
->   taps:
->     my_dnstap_tap:
->       input_type: dnstap
->       config:
->         socket: path/to/file.sock
->         tcp: 192.168.8.2:235
->       filter:
->         only_hosts: 192.168.1.4/32
->       tags:
->         dnstap: true
+> orb:
+>   backends:
+>     pktvisor:
+>       taps:
+>         my_dnstap_tap:
+>           input_type: dnstap
+>           config:
+>             socket: path/to/file.sock
+>             tcp: 192.168.8.2:235
+>           filter:
+>             only_hosts: 192.168.1.4/32
+>           tags:
+>             dnstap: true
 > ```
 
 ### dnstap configuration
@@ -258,13 +339,13 @@ The 3 existing DNSTAP configurations (`dnstap_file`, `socket` and `tcp`) are mut
 
 |                  Config                  | Type |
 |:----------------------------------------:|:-----|
-| [dnstap_file](#dnstap-file) | str  |
-|      [socket](#socket)      | int  |
+| [dnstap_file](#dnstap_file) | str  |
+|      [socket](#socket)      | str  |
 |         [tcp](#tcp)         | str  |
 
 ### dnstap_file
 
-Type: : *str*
+Type: *str*
 
 One option of using pktvisor is for reading existing network data files. In this case, the path to the file must be passed. This variable is dominant, so if a file is passed, pktvisor will do the entire process based on the file.
 
@@ -274,7 +355,7 @@ dnstap_file: path/to/file
 
 ### socket
 
-Type: : *str*
+Type: *str*
 
 Path to socket file containing port and ip to bind
 
@@ -284,7 +365,7 @@ socket: path/to/file.sock
 
 ### tcp
 
-Type: : *str*
+Type: *str*
 
 The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with port:ip (only ipv4 is supported for now).
 
@@ -300,11 +381,11 @@ tcp: 192.168.8.2:235
 
 |                  Filter                  | Type |
 |:----------------------------------------:|:-----|
-| [`only_hosts`](#only-hosts) | str  |
+| [`only_hosts`](#only_hosts) | str  |
 
 ### only_hosts
 
-Type: : *str*
+Type: *str*
 
 `only_hosts` filters data from a specific host.
 
@@ -318,21 +399,28 @@ only_hosts: 192.168.1.4/32
 
 ## Netprobe
 
-> **Example:** Example: Pktvisor Netprobe Tap Configuration
+> **Example:** Pktvisor Netprobe Tap Configuration
 > ```yaml
-> visor:
->   taps:
->     default_netprobe:
->       input_type: netprobe
->       config:
->         test_type: ping
->         interval_msec: 2000
->         timeout_msec: 1000
->         packets_per_test: 10
->         packets_interval_msec: 25
->         packet_payload_size: 56
->       tags:
->         netprobe: true
+> orb:
+>   backends:
+>     pktvisor:
+>       taps:
+>         default_netprobe:
+>           input_type: netprobe
+>           config:
+>             targets:
+>               primary_site:
+>                 target: www.example.com
+>               secondary_site:
+>                 target: www.example.net
+>             test_type: ping
+>             interval_msec: 2000
+>             timeout_msec: 1000
+>             packets_per_test: 10
+>             packets_interval_msec: 25
+>             packet_payload_size: 56
+>           tags:
+>             netprobe: true
 > ```
 
 ### netprobe configuration
@@ -341,22 +429,55 @@ The following configs are available for netprobe inputs:
 
 |                             Config                             | Type |          Required           | Default |
 |:--------------------------------------------------------------:|:----:|:---------------------------:|:-------:|
-|             [test_type](#test-type)             | str  |              ✅              |    -    |
-|         [interval_msec](#interval-msec)         | int  |              ❌              |  5000   |
-|         [timeout_msec](#interval-msec)          | int  |              ❌              |  2000   |
-|      [packets_per_test](#packets-per-test)      | int  |              ❌              |    1    |
-| [packets_interval_msec](#packets-interval-msec) | int  |              ❌              |   25    |
-|   [packet_payload_size](#packet-payload-size)   | int  |              ❌              |   48    |
+|                 [targets](#targets)                  | map  |              ✅              |    -    |
+|             [test_type](#test_type)             | str  |              ✅              |    -    |
+|         [interval_msec](#interval_msec)         | int  |              ❌              |  5000   |
+|         [timeout_msec](#timeout_msec)          | int  |              ❌              |  2000   |
+|      [packets_per_test](#packets_per_test)      | int  |              ❌              |    1    |
+| [packets_interval_msec](#packets_interval_msec) | int  |              ❌              |   25    |
+|   [packet_payload_size](#packet_payload_size)   | int  |              ❌              |   48    |
 |                  [port](#port-netprobe)                  | int  | `Required if test_type=tcp` |    -    |
+
+### targets
+
+Type: *map*
+
+The targets the probe runs against, keyed by a name of your choosing. Each entry
+sets the address to test. An input with no `targets` fails to start with
+`no targets specified`.
+
+```yaml
+targets:
+  target_name:
+    target: address to test
+```
+
+Example:
+
+```yaml
+targets:
+  primary_site:
+    target: www.example.com
+  secondary_site:
+    target: 192.0.2.10
+```
 
 ### test_type
 
-Type: : *str*
+Type: *str*
 
 Defines the type of the test to be performed. Type options are listed below:
 
-- ping: implements a ping prober that can probe multiple targets. The test will run against the targets to verify if the systems are working fine.
-- tcp: TCP probe sets up a TCP connection to the configured targets using the defined port.
+- ping: sends ICMP echo requests to each target to verify the systems are reachable.
+- tcp: sets up a TCP connection to each target on the configured `port`.
+- udp: sends UDP probes to each target.
+- http: performs an HTTP request against each target.
+- doh: performs a DNS over HTTPS query against each target.
+
+The `http` and `doh` types accept further settings, such as `http_method`, `qname`
+and `qtype`, which are not covered here. See the
+[pktvisor source](https://github.com/netboxlabs/pktvisor/blob/develop/src/inputs/netprobe/NetProbeInputStream.h)
+for the full list of accepted keys.
 
 ```yaml
 test_type: str
@@ -368,7 +489,7 @@ test_type: ping
 
 ### interval_msec
 
-Type: : *int*
+Type: *int*
 
 How often to run the probe (in milliseconds).
 
@@ -382,7 +503,7 @@ interval_msec: 5000
 
 ### timeout_msec
 
-Type: : *int*
+Type: *int*
 
 Probe timeout (in milliseconds).
 
@@ -396,7 +517,7 @@ timeout_msec: 2000
 
 ### packets_per_test
 
-Type: : *int*
+Type: *int*
 
 Number of packets to be sent in each test.
 
@@ -410,7 +531,7 @@ packets_per_test: 1
 
 ### packets_interval_msec
 
-Type: : *int*
+Type: *int*
 
 Time interval between packets per test (in milliseconds).
 
@@ -424,7 +545,7 @@ packets_interval_msec: 25
 
 ### packet_payload_size
 
-Type: : *int*
+Type: *int*
 
 Defines the payload of the packets sent in the tests.
 
@@ -438,7 +559,7 @@ packet_payload_size: 48
 
 ### port (netprobe)
 
-Type: : *int*
+Type: *int*
 
 Specifies the port on which the TCP test will run (It is only used if the test_type is TCP. Otherwise, is ignored if set).
 

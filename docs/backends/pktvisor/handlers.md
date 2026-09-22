@@ -52,13 +52,13 @@ The only option for now is `"collection"`.
 
 ## Handlers section (Analysis)
 
-Handlers are the modules responsible for extracting metrics from inputs. For each handler type, specific configuration, filters and group of metrics can be defined, and there are also configs (abstract configuration) that can be applied to all handlers:
+Handlers are the modules responsible for extracting metrics from inputs. For each handler type, specific configuration, filters and group of metrics can be defined, and there are also window settings ([abstract configurations](#abstract-configurations)) that apply to every handler in the policy:
 
 **Default handler structure:**
 
 ```yaml
 handlers:
-  config:
+  window_config:
     deep_sample_rate: 100
     num_periods: 5
     topn_count: 10
@@ -114,14 +114,32 @@ metric_groups:
 
 ## Abstract Configurations
 
-There are general configurations, which can be applied to all handlers. These settings can be reset for each module, within the specific module configs. In this case, the configuration inside the module will override the configuration passed in general handler.
+These four settings size the metric window and apply to every handler in the
+policy. They are set under `window_config`, a sibling of `modules`:
+
+```yaml
+handlers:
+  window_config:
+    num_periods: 5
+    deep_sample_rate: 100
+  modules:
+    ...
+```
+
+`window_config` is merged over each module's own `config`, so where the same key
+appears in both, the `window_config` value wins.
+
+`num_periods` and `deep_sample_rate` always have a value, defaulting to 5 and 100
+when `window_config` is omitted, so setting either inside a module's `config` has
+no effect. `topn_count` and `topn_percentile_threshold` have no window default, so
+a module's `config` value for those is used unless `window_config` also sets it.
 
 |                  Abstract Configuration                   | Type  |     Default      |
 |:---------------------------------------------------------:|:-----:|:----------------:|
-|          [`deep_sample_rate`](#deep-sample-rate)          | *int* | 100 (per second) |
-|               [`num_periods`](#num-periods)               | *int* |        5         |
-|                [`topn_count`](#topn-count)                | *int* |        10        |
- | [`topn_percentile_threshold`](#topn-percentile-threshold) | *int* |        0         |
+|          [`deep_sample_rate`](#deep_sample_rate)          | *int* | 100 (per second) |
+|               [`num_periods`](#num_periods)               | *int* |        5         |
+|                [`topn_count`](#topn_count)                | *int* |        10        |
+ | [`topn_percentile_threshold`](#topn_percentile_threshold) | *int* |        0         |
 
 ### deep_sample_rate
 
@@ -138,7 +156,7 @@ deep_sample_rate: int
 
 ### num_periods
 
-`num_periods` determines the amount of minutes of data that will be available on the metrics endpoint. Allowed values are in the range [2,10]. Default value is 5.
+`num_periods` determines the amount of minutes of data that will be available on the metrics endpoint. Allowed values are in the range [1,10]. Default value is 5.
 
 The `num_periods` usage syntax is:
 

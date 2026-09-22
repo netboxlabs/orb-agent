@@ -17,15 +17,15 @@ handlers:
           - counters
           - quantiles
           - histograms
-      config:
-        targets:
-          primary_site:
-            target: www.example.com
-          secondary_site:
-            target: www.example.net
 input:
   input_type: netprobe
   tap: default_netprobe
+  config:
+    targets:
+      primary_site:
+        target: www.example.com
+      secondary_site:
+        target: www.example.net
 kind: collection
 ```
 
@@ -40,6 +40,7 @@ kind: collection
 | `quantiles`  | disabled |
 |  `counters`  | enabled  |
 | `histograms` | enabled  |
+| `http_response_phases` | disabled |
 
 ## Filters
 
@@ -49,34 +50,14 @@ kind: collection
 
 - [Abstract configurations](handlers.md#abstract-configurations).
 
-|                          Config                          | Type |          Required           | Default |
-|:--------------------------------------------------------:|:----:|:---------------------------:|:-------:|
-|               [targets](#targets)               | map  |              ✅              |    -    |
+The netprobe handler itself takes no configuration of its own. What is probed,
+including the required `targets` map, is configured on the netprobe **input**;
+see [netprobe configuration](inputs.md#netprobe-configuration).
 
-### targets
-
-Type: : *map*
-
-Here, the targets against which the probe will run are defined.
-For each target is required to specify the target name and the address to be tested.
-
-```yaml
-targets: map
-```
-Example:
-```yaml
-targets:
-  target_name:
-    target: ipv4 address to test
-```
-Generic Example:
-```yaml
-targets:
-  primary_site:
-    target: www.example.com
-```
-
-- In netprobe policies it makes a lot of sense to use the settings from the input directly in the policy, since the settings are more related to the probe than the device the orb agent is running on. Therefore, it is worth reinforcing here the ability to override all tap settings in the policy. See here the available configurations for netprobe.
+Netprobe settings describe the probe rather than the host the agent runs on, so
+they are often worth setting on the policy's `input` rather than on the tap. A
+policy input may override any of the tap's netprobe settings; see
+[Input in a policy](inputs.md#input-in-a-policy).
 
 ```yaml
     handlers:
@@ -88,16 +69,15 @@ targets:
               - counters
               - quantiles
               - histograms
-          config:
-            targets:
-              primary_site:
-                target: www.example.com
-              secondary_site:
-                target: www.example.net
     input:
       input_type: netprobe
       tap: default_netprobe
       config:
+        targets:
+          primary_site:
+            target: www.example.com
+          secondary_site:
+            target: www.example.net
         test_type: ping
         interval_msec: 2500
         timeout_msec: 2000
