@@ -227,6 +227,21 @@ type getServer struct {
 	// pushAfterSync sends one update after the sync response under an origin,
 	// the way a target with something under the path behaves.
 	pushAfterSync map[string]bool
+	// refuseAfter refuses a request under an origin once that long has
+	// passed, so another stream has served something first.
+	refuseAfter map[string]time.Duration
+	// neverSync holds a request under an origin open without ever answering
+	// its sync response, the way a target that accepted the RPC and then went
+	// quiet behaves; with pushBeforeSync it first sends one update.
+	neverSync      map[string]bool
+	pushBeforeSync map[string]bool
+	// endAfterSync ends a request under an origin with the given status once
+	// it has answered its sync response and whatever pushAfterSync sends,
+	// the way a target evicting a subscription it had accepted behaves.
+	endAfterSync map[string]codes.Code
+	// refuseAfterData refuses a request under an origin after it has sent one
+	// update, the way a target that starts serving and then rejects behaves.
+	refuseAfterData map[string]bool
 	// subscribes is the origins each Subscribe request carried, in order.
 	subscribes [][]string
 	// streamsOpen counts the subscriptions the server is holding open.
@@ -447,9 +462,44 @@ func (g *getServer) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	if g.oneOriginPerRPC && len(origins) > 1 {
 		return status.Error(codes.Unimplemented, "Mixing of different origins is not supported for Subscribe RPC")
 	}
+	update := func(origin string) error {
+		return stream.Send(&gnmiproto.SubscribeResponse{
+			Response: &gnmiproto.SubscribeResponse_Update{Update: &gnmiproto.Notification{
+				Update: []*gnmiproto.Update{{
+					Path: &gnmiproto.Path{Origin: origin, Elem: []*gnmiproto.PathElem{{Name: "system"}, {Name: "state"}, {Name: "uptime"}}},
+					Val:  &gnmiproto.TypedValue{Value: &gnmiproto.TypedValue_UintVal{UintVal: 1}},
+				}},
+			}},
+		})
+	}
 	for origin := range origins {
+		if d := g.refuseAfter[origin]; d > 0 {
+			select {
+			case <-time.After(d):
+			case <-stream.Context().Done():
+				return stream.Context().Err()
+			}
+			return status.Errorf(codes.Unimplemented, "origin %q is not served", origin)
+		}
 		if g.refuseOrigin != nil && g.refuseOrigin[origin] {
 			return status.Errorf(codes.Unimplemented, "origin %q is not served", origin)
+		}
+		if g.refuseAfterData[origin] {
+			if err := update(origin); err != nil {
+				return err
+			}
+			return status.Errorf(codes.Unimplemented, "origin %q rejected after serving", origin)
+		}
+		if g.neverSync[origin] {
+			if g.pushBeforeSync[origin] {
+				if err := update(origin); err != nil {
+					return err
+				}
+			}
+			g.streamsOpen.Add(1)
+			defer g.streamsOpen.Add(-1)
+			<-stream.Context().Done()
+			return stream.Context().Err()
 		}
 		if d := g.syncDelay[origin]; d > 0 {
 			select {
@@ -466,16 +516,12 @@ func (g *getServer) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	}
 	for origin := range origins {
 		if g.pushAfterSync[origin] {
-			if err := stream.Send(&gnmiproto.SubscribeResponse{
-				Response: &gnmiproto.SubscribeResponse_Update{Update: &gnmiproto.Notification{
-					Update: []*gnmiproto.Update{{
-						Path: &gnmiproto.Path{Origin: origin, Elem: []*gnmiproto.PathElem{{Name: "system"}, {Name: "state"}, {Name: "uptime"}}},
-						Val:  &gnmiproto.TypedValue{Value: &gnmiproto.TypedValue_UintVal{UintVal: 1}},
-					}},
-				}},
-			}); err != nil {
+			if err := update(origin); err != nil {
 				return err
 			}
+		}
+		if code, ok := g.endAfterSync[origin]; ok {
+			return status.Errorf(code, "origin %q ended", origin)
 		}
 	}
 	g.streamsOpen.Add(1)
@@ -969,12 +1015,19 @@ func TestSubscribeManyEndsTheAttemptWhenOneStreamFails(t *testing.T) {
 	})
 	require.NoError(t, err, "the refusal is reported on the stream, not on the call")
 
-	select {
-	case err := <-errs:
+	refusal := func(err error) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "is not served", "the refusing stream's error is the attempt's")
-	case n := <-notes:
-		t.Fatalf("a notification arrived before the refusal: %+v", n)
+	}
+	select {
+	case err := <-errs:
+		refusal(err)
+	case n, ok := <-notes:
+		if ok {
+			t.Fatalf("a notification arrived before the refusal: %+v", n)
+		}
+		// The channels closed first: the error was queued before they did.
+		refusal(<-errs)
 	case <-time.After(10 * time.Second):
 		t.Fatal("the refusal never reached the caller")
 	}
@@ -988,9 +1041,9 @@ func TestSubscribeManyEndsTheAttemptWhenOneStreamFails(t *testing.T) {
 		"the surviving stream is torn down with the attempt")
 }
 
-// StopSubscribe releases every stream an attempt registered, not only the
-// first.
-func TestStopSubscribeReleasesEveryStreamOfTheAttempt(t *testing.T) {
+// StopSubscribe closes every stream of the attempt on the target and releases
+// every handle.
+func TestStopSubscribeClosesEveryStreamOnTheTarget(t *testing.T) {
 	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
 	srv := &getServer{holds: map[string]bool{memory: true, native: true}, oneOriginPerRPC: true}
 	s := getSession(t, srv)
@@ -1030,6 +1083,9 @@ func TestStopSubscribeAndCloseReleaseForwardersNobodyIsReading(t *testing.T) {
 			s := getSession(t, srv)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			// The count is process-wide: start from a quiet baseline so an
+			// earlier test's attempt still unwinding is not read as ours.
+			require.Eventually(t, func() bool { return attemptGoroutines() == 0 }, 10*time.Second, 50*time.Millisecond)
 
 			_, _, err := s.SubscribeMany(ctx, []Subscription{
 				{Path: memory, Origin: "openconfig", Mode: Sample, SampleIntervalMs: 1000},
@@ -1057,6 +1113,229 @@ func TestStopSubscribeAndCloseReleaseForwardersNobodyIsReading(t *testing.T) {
 // channels behind them.
 func attemptGoroutines() int {
 	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	return strings.Count(string(buf[:n]), "(*gnmicSession).SubscribeMany.func")
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			return strings.Count(string(buf[:n]), "(*gnmicSession).SubscribeMany.func")
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+}
+
+// A stream that rejects before it has served anything has refused the
+// attempt's mode, whatever another stream delivered meanwhile. The consumer
+// reads a refusal from how much it has seen, which across streams it cannot
+// tell, so the error says it: it is marked as coming before that stream's
+// data, with the target's code kept for the consumer to read.
+func TestAStreamRefusingBeforeItsDataIsMarkedSo(t *testing.T) {
+	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
+	srv := &getServer{
+		holds:           map[string]bool{memory: true, native: true},
+		oneOriginPerRPC: true,
+		pushAfterSync:   map[string]bool{"openconfig": true},
+		refuseAfter:     map[string]time.Duration{"": 300 * time.Millisecond},
+	}
+	s := getSession(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	notes, errs, err := s.SubscribeMany(ctx, []Subscription{
+		{Path: memory, Origin: "openconfig", Mode: Sample, SampleIntervalMs: 1000},
+		{Path: native, Origin: "", Mode: Sample, SampleIntervalMs: 1000},
+	})
+	require.NoError(t, err)
+
+	var data int
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case n, ok := <-notes:
+			if ok && !n.SyncDone {
+				data++
+			}
+			if !ok {
+				notes = nil
+			}
+		case err := <-errs:
+			require.Error(t, err)
+			assert.Greater(t, data, 0, "the other stream served data before the refusal")
+			assert.True(t, errors.Is(err, ErrBeforeData), "the refusal is marked as before the stream's data: %v", err)
+			assert.Equal(t, codes.Unimplemented, status.Code(err), "the target's code is kept for the consumer to read")
+			return
+		case <-deadline:
+			t.Fatal("the refusal never reached the caller")
+		}
+	}
+}
+
+// A stream that answers neither data nor its sync within the probe deadline
+// ends the attempt, as the consumer's own dump deadline would have, which the
+// swallowed per-stream syncs and another stream's data keep it from seeing.
+// One that served nothing at all is reported as silent, the refusal the
+// ladder advances through; one that served data and then stalled is a plain
+// failure the same rung reconnects through.
+func TestAStreamThatNeverSyncsEndsTheAttempt(t *testing.T) {
+	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
+	for name, tc := range map[string]struct {
+		pushBeforeSync bool
+		silent         bool
+	}{
+		"silent":  {pushBeforeSync: false, silent: true},
+		"stalled": {pushBeforeSync: true, silent: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := &getServer{
+				holds:           map[string]bool{memory: true, native: true},
+				oneOriginPerRPC: true,
+				pushAfterSync:   map[string]bool{"openconfig": true},
+				neverSync:       map[string]bool{"": true},
+				pushBeforeSync:  map[string]bool{"": tc.pushBeforeSync},
+			}
+			s := getSession(t, srv)
+			s.probeTimeout = 300 * time.Millisecond
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			notes, errs, err := s.SubscribeMany(ctx, []Subscription{
+				{Path: memory, Origin: "openconfig", Mode: Sample, SampleIntervalMs: 1000},
+				{Path: native, Origin: "", Mode: Sample, SampleIntervalMs: 1000},
+			})
+			require.NoError(t, err)
+
+			deadline := time.After(5 * time.Second)
+			for {
+				select {
+				case n, ok := <-notes:
+					if ok {
+						assert.False(t, n.SyncDone, "no sync while a stream has not answered its own")
+					} else {
+						notes = nil
+					}
+				case err := <-errs:
+					require.Error(t, err)
+					assert.Equal(t, tc.silent, errors.Is(err, ErrStreamSilent), "silence is reported as such and a stall is not: %v", err)
+					assert.Eventually(t, func() bool { return srv.streamsOpen.Load() == 0 }, 10*time.Second, 20*time.Millisecond,
+						"the attempt is torn down")
+					return
+				case <-deadline:
+					t.Fatal("the attempt outlived the probe deadline with a stream that never synced")
+				}
+			}
+		})
+	}
+}
+
+// A stream the target ends after answering its sync is a stream closing, not
+// a silent one: the target accepted the subscription, and the same rung
+// reconnects through the close, as the consumer does for a single stream
+// that closes after its sync. gnmic reports a Canceled end as a bare close.
+func TestAStreamEndedAfterItsSyncIsNotSilent(t *testing.T) {
+	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
+	srv := &getServer{
+		holds:           map[string]bool{memory: true, native: true},
+		oneOriginPerRPC: true,
+		pushAfterSync:   map[string]bool{"openconfig": true},
+		syncDelay:       map[string]time.Duration{"": 200 * time.Millisecond},
+		endAfterSync:    map[string]codes.Code{"": codes.Canceled},
+	}
+	s := getSession(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	notes, errs, err := s.SubscribeMany(ctx, []Subscription{
+		{Path: memory, Origin: "openconfig", Mode: Sample, SampleIntervalMs: 1000},
+		{Path: native, Origin: "", Mode: Sample, SampleIntervalMs: 1000},
+	})
+	require.NoError(t, err)
+
+	assertOrdinaryClose(t, notes, errs)
+}
+
+// assertOrdinaryClose reads an attempt to its end and requires that it ended
+// with an error that is neither silence nor a mode rejection: a stream the
+// target ended after accepting it reconnects on the same rung, and the
+// consumer reads that from the error, since a bare close would be judged
+// from its own view of the attempt, which never saw the swallowed sync.
+func assertOrdinaryClose(t *testing.T, notes <-chan Notification, errs <-chan error) {
+	t.Helper()
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case _, ok := <-notes:
+			if !ok {
+				notes = nil
+			}
+		case err, ok := <-errs:
+			if !ok {
+				t.Fatal("the attempt ended with no error at all: the consumer would judge the close from its own view")
+			}
+			require.Error(t, err)
+			assert.False(t, errors.Is(err, ErrStreamSilent), "a stream that synced is not silent: %v", err)
+			assert.Equal(t, codes.Unknown, status.Code(err), "the close carries no code a consumer reads as a refusal: %v", err)
+			return
+		case <-deadline:
+			t.Fatal("the attempt never ended")
+		}
+	}
+}
+
+// The same close when the ending stream synced first and the other is still
+// in its dump: the combined sync never went out, so the consumer has seen
+// nothing, and a bare close would be judged a refusal from that nothing.
+func TestAStreamEndedAfterItsSyncBeforeTheOthersIsNotSilent(t *testing.T) {
+	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
+	srv := &getServer{
+		holds:           map[string]bool{memory: true, native: true},
+		oneOriginPerRPC: true,
+		syncDelay:       map[string]time.Duration{"openconfig": 400 * time.Millisecond},
+		endAfterSync:    map[string]codes.Code{"": codes.Canceled},
+	}
+	s := getSession(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	notes, errs, err := s.SubscribeMany(ctx, []Subscription{
+		{Path: memory, Origin: "openconfig", Mode: Sample, SampleIntervalMs: 1000},
+		{Path: native, Origin: "", Mode: Sample, SampleIntervalMs: 1000},
+	})
+	require.NoError(t, err)
+	assertOrdinaryClose(t, notes, errs)
+}
+
+// An error a stream reports after it has served data is not marked as
+// before its data: the target accepted the mode and served it, so the same
+// rung reconnects through the failure.
+func TestAStreamRefusingAfterItsDataIsNotMarked(t *testing.T) {
+	const memory, native = "/system/memory/state", "/platform/control[slot=*]/memory"
+	srv := &getServer{
+		holds:           map[string]bool{memory: true, native: true},
+		oneOriginPerRPC: true,
+		refuseAfterData: map[string]bool{"": true},
+	}
+	s := getSession(t, srv)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	notes, errs, err := s.SubscribeMany(ctx, []Subscription{
+		{Path: memory, Origin: "openconfig", Mode: Sample, SampleIntervalMs: 1000},
+		{Path: native, Origin: "", Mode: Sample, SampleIntervalMs: 1000},
+	})
+	require.NoError(t, err)
+
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case _, ok := <-notes:
+			if !ok {
+				notes = nil
+			}
+		case err := <-errs:
+			require.Error(t, err)
+			assert.False(t, errors.Is(err, ErrBeforeData), "the stream served before it was refused: %v", err)
+			assert.Equal(t, codes.Unimplemented, status.Code(err), "the target's code is kept")
+			return
+		case <-deadline:
+			t.Fatal("the refusal never reached the caller")
+		}
+	}
 }

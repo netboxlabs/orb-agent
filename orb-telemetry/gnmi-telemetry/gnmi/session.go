@@ -2,6 +2,7 @@ package gnmi
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -23,9 +24,10 @@ type Notification struct {
 	Timestamp int64
 	// Paths are the request paths this notification speaks for: on a Get
 	// snapshot, every path of a request the target answered whole and only the
-	// ones that answered when the Get recovered path by path; on a stream's
-	// sync response, the subscriptions the stream carries, which is fewer than
-	// the request when a path was pruned. It is transport-level, like
+	// ones that answered when the Get recovered path by path; on an attempt's
+	// sync response, the subscriptions its streams carry between them, in
+	// the order the streams synced, which is fewer than the request when a
+	// path was pruned. It is transport-level, like
 	// Timestamp, and only a snapshot or a sync response carries it. A caller
 	// that reconciles what a dump restates speaks only for these: a path whose
 	// Get failed, or whose subscription never opened, is a path the dump says
@@ -57,6 +59,21 @@ type CapabilitiesResult struct {
 	Models        []string
 	Encodings     []string
 }
+
+// ErrBeforeData marks an error a stream reported before it had served any
+// data of its own. An attempt over several streams may be productive on one
+// while another rejects the mode, and the consumer, which reads a refusal
+// from how much it has seen, cannot tell that from a failure after the target
+// accepted; so the session says it, with the target's own code wrapped for
+// the consumer to read.
+var ErrBeforeData = errors.New("before the stream served data")
+
+// ErrStreamSilent marks a stream that served nothing at all: it answered
+// neither data nor its sync response within the probe deadline, or ended
+// before answering either. There is no code to read, and the ladder
+// advances through it as it does through a stream the consumer saw send
+// nothing.
+var ErrStreamSilent = errors.New("the stream served nothing")
 
 // Mode is a delivery mode.
 type Mode string

@@ -110,11 +110,18 @@ by design. That bound applies to a call
 whose context carries no deadline of its own; a caller that already set one, the
 sweep below, keeps its own and the reading it draws from it.
 
-Then one STREAM subscription per target carries every path of its profile in a
-single request, each path with the mode the profile gives it: `sample` paths at
-the policy's `metrics_interval`, `on_change` paths as such, and each with its own
-origin. TARGET_DEFINED is never requested, so a device's own idea of a sample
-interval never replaces the policy's.
+Then the paths of the profile are subscribed as STREAM subscriptions, each
+path with the mode the profile gives it: `sample` paths at the policy's
+`metrics_interval`, `on_change` paths as such, and each with its own origin. A
+device takes one origin per Subscribe request, so the paths go on one request
+per origin, one for most profiles and two for one that adds a native path to
+the OpenConfig set, as the SR Linux profile does; the streams are one attempt
+to the ladder below, which reads one sync response once every stream has
+answered its own and is refused or reconnected for all of them at once. Each
+stream has to answer, with data or its sync response, within the probe
+deadline on its own: another stream's traffic does not keep it open.
+TARGET_DEFINED is never requested, so a device's own idea of a sample interval
+never replaces the policy's.
 
 The first subscribe on a session probes each of those paths first, with a
 one-path Get under that path's own origin, and leaves out the ones the target
@@ -146,13 +153,16 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
 1. The profile's own modes, with `on_change` paths streaming on change.
 2. Every path as SAMPLE at `metrics_interval`, which is where a device that
    rejects ON_CHANGE lands. A stream that reports InvalidArgument or
-   Unimplemented is read as a refusal too, as long as the stream has not delivered data yet,
+   Unimplemented is read as a refusal too, as long as that stream has not
+   delivered data yet, whatever another stream of the attempt has delivered,
    since a device may accept the RPC and fail the subscription on the stream, and
    so is one that ends with no error at all, or sends nothing at all within the
-   probe deadline, before its first sync response or data. A stream that fails
-   under any other code keeps the rung it held and reconnects on it, before the
-   sync response as well as after, an initial dump that stalled after data
-   among them: an Unavailable during the initial dump is the
+   probe deadline, before its first sync response or data; a stream the device
+   ends after its sync response is a close, not a refusal. A stream that fails
+   under any other code does not step down from the rung it held: the
+   reconnect starts the ladder over, before the sync response as well as
+   after, an initial dump that stalled after data among them: an
+   Unavailable during the initial dump is the
    connection going, not the mode being refused, and a subscription over an empty
    subtree sends a sync and no data at all.
 3. Get polling at `metrics_interval`, last. A subscription whose profile gives

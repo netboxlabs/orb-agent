@@ -389,15 +389,18 @@ func (s *gnmicSession) StopSubscribe() {
 	// next attempt's too, and stopping it here (or from the old producer's own
 	// deferred StopSubscription) would cancel the stream the ladder just
 	// opened. Empty means no attempt of ours is registered.
+	// The attempt ends before its streams do, so a forwarder reads the stop
+	// as the outside cancellation it is rather than as its stream ending,
+	// and queues no error for an attempt the caller stopped on purpose.
+	if s.endAttempt != nil {
+		s.endAttempt()
+		s.endAttempt = nil
+	}
 	for _, h := range s.streams {
 		h.cancel()
 		s.tg.StopSubscription(h.name)
 	}
 	s.streams = nil
-	if s.endAttempt != nil {
-		s.endAttempt()
-		s.endAttempt = nil
-	}
 }
 
 // nextSubscriptionName returns the gnmic-side name for this session's next
@@ -426,10 +429,10 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	// validating the new request — so a build error can never leak the previous
 	// producer goroutine + gRPC stream. The auto-fallback ladder in the runner
 	// calls Subscribe twice on the same session (on_change, then sample on
-	// downgrade); cancelling subCancel is the only thing that unblocks a producer
-	// parked in gnmic's retry-timer wait. Cancel funcs are idempotent, so a later
-	// Close() calling subCancel again is harmless. No attempt is registered
-	// before the first subscribe, so this is safe there too.
+	// downgrade); cancelling a stream's context is the only thing that unblocks
+	// a producer parked in gnmic's retry-timer wait. Cancel funcs are
+	// idempotent, so a later Close() cancelling again is harmless. No attempt
+	// is registered before the first subscribe, so this is safe there too.
 	s.StopSubscribe()
 
 	// A gNMI SubscribeRequest is ATOMIC: a strict target (e.g. Nokia SR Linux)
@@ -490,6 +493,9 @@ func (s *gnmicSession) stream(ctx context.Context, req *gnmiproto.SubscribeReque
 	errs := make(chan error, 1)
 
 	go func() {
+		// errs closes before notes, by defer order: a reader that finds
+		// notes closed can still drain the error queued ahead of the
+		// close, which the attempt's forwarders rely on.
 		defer close(notes)
 		defer close(errs)
 		for {
@@ -726,8 +732,10 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 		carried []string
 		ended   bool
 	)
-	// end delivers the attempt's error, if any, once, and tears the streams
-	// down; the forwarders then close out on their way out.
+	// end delivers the attempt's error once and tears the streams down; the
+	// forwarders then close out on their way out. Every end carries an
+	// error, never nil: the consumer judges a bare close from its own view
+	// of the attempt, and that view never saw the per-stream syncs.
 	end := func(err error) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -735,24 +743,49 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 			return
 		}
 		ended = true
-		if err != nil {
-			outErrs <- err
-		}
+		outErrs <- err
 		endAttempt()
 	}
+	// Each forwarder judges its own stream the way the consumer judges a
+	// stream of its own, since the consumer cannot see the streams apart:
+	// an error before the stream served data is marked as such, so a mode
+	// rejection on one stream reads as a refusal however much another has
+	// delivered; and a stream that answers neither data nor its sync within
+	// the probe deadline ends the attempt, silent when it served nothing,
+	// which the ladder advances through, stalled when it did, which the
+	// same rung reconnects through. The consumer's own dump deadline cannot
+	// stand in: another stream's data keeps it armed, and the per-stream
+	// syncs never reach it.
+	dumpDeadline := s.probeDeadline()
 	var wg sync.WaitGroup
 	for _, st := range streams {
 		wg.Add(1)
 		go func(st opened) {
 			defer wg.Done()
-			synced := false
+			synced, delivered := false, false
+			dump := time.NewTimer(dumpDeadline)
+			defer dump.Stop()
+			dumpDue := dump.C
+			before := func(err error) error {
+				if delivered {
+					return err
+				}
+				return fmt.Errorf("%w: %w", ErrBeforeData, err)
+			}
 			for {
 				select {
 				case <-attemptCtx.Done():
 					return
+				case <-dumpDue:
+					if delivered {
+						end(errors.New("the initial dump of a stream stalled before its sync response"))
+					} else {
+						end(fmt.Errorf("%w: a stream sent nothing within the probe deadline", ErrStreamSilent))
+					}
+					return
 				case err, ok := <-st.errs:
 					if ok && err != nil {
-						end(err)
+						end(before(err))
 						return
 					}
 					if !ok {
@@ -761,21 +794,42 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 				case n, ok := <-st.notes:
 					if !ok {
 						// The stream ended: forward the error it may have
-						// queued, else end the attempt as a stream closing
-						// does, which the consumer reads the same way.
+						// queued, else end the attempt with a verdict of
+						// this stream's own. A stream closing before its
+						// sync and before it served anything is a silent
+						// one; one the target ends after accepting it is a
+						// close the same rung reconnects through, and it is
+						// said as a plain error rather than a bare close,
+						// since the consumer would judge a bare close from
+						// its own view of the attempt, which never saw the
+						// sync this stream answered.
 						select {
 						case err := <-st.errs:
-							end(err)
+							if err != nil {
+								end(before(err))
+								return
+							}
 						default:
-							end(nil)
 						}
+						if !delivered && !synced {
+							end(fmt.Errorf("%w: stream closed", ErrStreamSilent))
+							return
+						}
+						end(errors.New("a stream of the attempt ended"))
 						return
+					}
+					if !synced {
+						if !dump.Stop() {
+							<-dump.C
+						}
+						dump.Reset(dumpDeadline)
 					}
 					if n.SyncDone && len(n.Updates) == 0 && len(n.Deletes) == 0 {
 						if synced {
 							continue
 						}
 						synced = true
+						dumpDue = nil
 						mu.Lock()
 						carried = append(carried, st.paths...)
 						pending--
@@ -786,6 +840,8 @@ func (s *gnmicSession) SubscribeMany(ctx context.Context, subs []Subscription) (
 							continue
 						}
 						n = Notification{SyncDone: true, Paths: paths}
+					} else {
+						delivered = true
 					}
 					select {
 					case out <- n:
@@ -1031,11 +1087,11 @@ func (s *gnmicSession) GetConfig(ctx context.Context) ([]byte, error) {
 // subscribe context so the gnmic producer goroutine exits (even if blocked in
 // its internal retry-timer wait), then closes the target's gRPC connection.
 func (s *gnmicSession) Close() error {
-	for _, h := range s.streams {
-		h.cancel()
-	}
 	if s.endAttempt != nil {
 		s.endAttempt()
+	}
+	for _, h := range s.streams {
+		h.cancel()
 	}
 	return s.tg.Close()
 }

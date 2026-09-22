@@ -190,7 +190,8 @@ func (c *Collector) ensureTargetUp() {
 					v = 1
 				}
 				o.ObserveInt64(inst, v, metric.WithAttributes(
-					attribute.String("device_ip", k.host), attribute.String("policy", k.policy), attribute.String("mode", s.Mode)))
+					attribute.String("device_ip", k.host), attribute.String("policy", k.policy), attribute.String("mode", s.Mode),
+				))
 			}
 			return nil
 		}, inst)
@@ -463,7 +464,16 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		return fmt.Errorf("%w: %v", errEarlyStreamFailure, err)
 	}
 	early := func(err error) error {
-		if productive {
+		// A stream the session reports silent answered nothing before its
+		// sync: there is no code to read, as when the dump deadline below
+		// fires before any data, and the ladder advances through it. A
+		// rejection marked as before the stream's data is read as if
+		// nothing had been delivered, since another stream of the attempt
+		// is what delivered it.
+		if errors.Is(err, gnmi.ErrStreamSilent) {
+			return refused(err)
+		}
+		if productive && !errors.Is(err, gnmi.ErrBeforeData) {
 			return err
 		}
 		// A stream that failed is not refusing the mode by failing, whether it
