@@ -17,8 +17,8 @@ handler reports per direction, per device or per target:
 
 - Most DNS 2.0 and Network 2.0 series carry a `direction` label (`in`, `out`,
   `unknown`) where the 1.0 handlers encoded the direction in the metric name.
-  The `*_rates_events`, `*_events`, `*_deep_samples` and `*_filtered` series are
-  written without it.
+  The `*_rates_observed_pps`, `*_observed_packets`, `*_deep_sampled_packets` and
+  `*_filtered_packets` series are written without it.
 - Flow metrics carry a `device` label, and most also carry `device_interface`.
 - Netprobe metrics carry a `target` label.
 
