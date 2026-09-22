@@ -1,4 +1,6 @@
-# Packet capture (pcap)
+# Packet capture
+
+Handler type: `pcap`
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-pcap)
 - [Metrics Group](#metrics-group)

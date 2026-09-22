@@ -1,4 +1,6 @@
-# DHCP (dhcp)
+# DHCP
+
+Handler type: `dhcp`
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-dhcp)
 - [Metrics Group](#metrics-group)

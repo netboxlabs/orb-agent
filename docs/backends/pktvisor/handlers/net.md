@@ -1,4 +1,6 @@
-# Network (net)
+# Network
+
+Handler type: `net`
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-netv2)
 - [Metrics Group](#metrics-group-20)

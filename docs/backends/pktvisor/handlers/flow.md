@@ -1,4 +1,6 @@
-# Flow (flow)
+# Flow
+
+Handler type: `flow`
 
 - [Example of policy](#example-of-policy-with-input-flow-and-handler-flow)
 - [Metrics Group](#metrics-group)

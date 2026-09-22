@@ -1,4 +1,6 @@
-# DNS (dns)
+# DNS
+
+Handler type: `dns`
 
 - [Example of policy](#example-of-policy-with-input-pcap-and-handler-dnsv2)
 - [Metrics Group](#metrics-group-20)
