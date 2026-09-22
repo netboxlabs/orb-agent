@@ -156,7 +156,7 @@ Each backend key enables that backend. An empty value (no sub-keys) uses all def
 | `snmp_discovery` | SNMP-based discovery | 8070 | Optional `host`/`port` overrides |
 | `network_discovery` | Network/port scan discovery | 8073 | Optional `host`/`port` overrides |
 | `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
-| `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor.md) |
+| `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor/README.md) |
 | `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
 | `snmp_telemetry` | SNMP metrics and traps | 8078 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [SNMP Telemetry docs](../backends/snmp_telemetry.md) |
 | `gnmi_telemetry` | gNMI streaming telemetry metrics | 8079 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [gNMI Telemetry docs](../backends/gnmi_telemetry.md) |
