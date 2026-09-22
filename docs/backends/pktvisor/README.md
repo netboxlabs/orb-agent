@@ -20,7 +20,7 @@ Orb writes a temporary pktvisor configuration file on startup based on the `orb.
 ### Backend settings
 | Parameter | Type | Required | Default | Description |
 |:---------:|:----:|:--------:|:-------:|-------------|
-| `host` | string | no | `localhost` | Admin API host exposed by `pktvisord`. Use this when `pktvisord` runs outside the Orb container. |
+| `host` | string | no | `localhost` | Admin API host. Written to `visor.config.host`, which is the address the `pktvisord` the agent starts binds its admin API to, and the address the agent uses to reach it. Change it only to alter that bind address. |
 | `port` | string | no | `10853` | Admin API port. Written to `visor.config.port`, which is the port `pktvisord` binds its admin API to. |
 | `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not validated as required, but an agent with no taps has nothing for a policy to analyse. |
 | *other keys* | any | no | – | Added verbatim under `visor.config` (for example `log_level`, crashpad options, or storage paths). |

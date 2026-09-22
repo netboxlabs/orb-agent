@@ -344,7 +344,6 @@ There are no specific filters for the FLOW input.
 >           input_type: dnstap
 >           config:
 >             socket: path/to/file.sock
->             tcp: 192.168.8.2:235
 >           tags:
 >             dnstap: true
 > ```
@@ -383,7 +382,7 @@ socket: path/to/file.sock
 
 Type: *str*
 
-The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with port:ip (only ipv4 is supported for now).
+The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now).
 
 ```yaml
 tcp: ip:port

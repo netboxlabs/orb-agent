@@ -18,7 +18,6 @@ handlers:
             config:
                 sample_rate_scaling: false
                 topn_count: 7
-                enrichment: true
                 device_map:
                   192.168.3.32:
                     name: Device1

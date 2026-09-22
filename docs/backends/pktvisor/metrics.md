@@ -7,7 +7,18 @@ and each handler's own page for which groups it supports.
 
 The Orb metrics currently provided come from the various supported pktvisor handlers and are listed here by handler.
 
-For handlers that have metric groups, the metric groups that must be enabled for the metric to exist are listed in "Metric Groups" column. `any group*` means that the metric will exist for any valid metric groups that is enabled.
+For handlers that have metric groups, the groups that must be enabled for a
+metric to exist are listed in the "Metric Groups" column. `any group*` means the
+metric is emitted regardless of which groups are enabled, including when all of
+them are disabled.
+
+Metrics are further split by Prometheus labels rather than by name where a
+handler reports per direction, per device or per target:
+
+- DNS 2.0 and Network 2.0 carry a `direction` label (`in`, `out`, `unknown`)
+  where the 1.0 handlers encoded the direction in the metric name.
+- Flow metrics carry a `device` label, and most also carry `device_interface`.
+- Netprobe metrics carry a `target` label.
 
 ## DHCP Metrics
 [Check how to activate dhcp metrics](handler_dhcp.md)
@@ -33,7 +44,7 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Total DHCP packets with message type REQUEST                                             | dhcp_wire_packets_request      |
 | Total DHCPv6 packets with message type REQUEST                                           | dhcp_wire_packets_request_v6   |
 | Total DHCPv6 packets with message type SOLICIT                                           | dhcp_wire_packets_solicit      |
-| DORA packet counts                                                                       | dhcp_wire_packets_total        |
+| Total DHCP and DHCPv6 wire packets matching the configured filters                                                                       | dhcp_wire_packets_total        |
 
 ## DNS Metrics
 [Check how to activate/deactivate dns metrics](handler_dns.md)
@@ -138,8 +149,6 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Count of DNS packets received over TCP                                                                             | dns_wire_packets_tcp               | counters                        |
 | Count of DNS packets matched by policy                                                                             | dns_wire_packets_total             | counters                        |
 | Count of DNS packets received over UDP                                                                             | dns_wire_packets_udp               | counters                        |
-| Total DNS wire packets received over DNS over HTTPS                                                                | dns_wire_packets_doh               | counters (dnstap)               |
-| Total DNS wire packets received over DNS over TLS                                                                  | dns_wire_packets_dot               | counters (dnstap)               |
 | Total number of DNS transactions that timed out                                                                    | dns_xact_counts_timed_out         | dns_transaction                 |
 | Total DNS transactions (query/reply pairs)                                                                         | dns_xact_counts_total              | dns_transaction                 |
 | Cumulative counters for the buckets of transaction timing (query/reply pairs) when host is server, in microseconds | dns_xact_in_histogram_us_bucket  | dns_transaction + histograms                      |
@@ -379,6 +388,14 @@ For handlers that have metric groups, the metric groups that must be enabled for
 | Total sum of response size in bytes                                        | netprobe_response_size_bytes_sum      | quantiles                            |
 | Count of response size in bytes                                            | netprobe_response_size_bytes_count    | quantiles                            |
 | Quantiles of DNS resolution time in microseconds                           | netprobe_response_dns_us              | http_response_phases                 |
+| Total sum of DNS resolution time in microseconds                          | netprobe_response_dns_us_sum         | http_response_phases                 |
+| Count of DNS resolution time in microseconds                              | netprobe_response_dns_us_count       | http_response_phases                 |
 | Quantiles of TCP connect time in microseconds                              | netprobe_response_connect_us          | http_response_phases                 |
+| Total sum of TCP connect time in microseconds                             | netprobe_response_connect_us_sum     | http_response_phases                 |
+| Count of TCP connect time in microseconds                                 | netprobe_response_connect_us_count   | http_response_phases                 |
 | Quantiles of TLS handshake time in microseconds                            | netprobe_response_tls_us              | http_response_phases                 |
+| Total sum of TLS handshake time in microseconds                           | netprobe_response_tls_us_sum         | http_response_phases                 |
+| Count of TLS handshake time in microseconds                               | netprobe_response_tls_us_count       | http_response_phases                 |
 | Quantiles of time to first byte in microseconds                            | netprobe_response_ttfb_us             | http_response_phases                 |
+| Total sum of time to first byte time in microseconds                      | netprobe_response_ttfb_us_sum        | http_response_phases                 |
+| Count of time to first byte time in microseconds                          | netprobe_response_ttfb_us_count      | http_response_phases                 |

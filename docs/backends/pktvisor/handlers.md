@@ -130,15 +130,17 @@ handlers:
 for the keys it actually sets. A module's value for a key `window_config` does not
 mention survives.
 
-There is one special case. When `handlers.window_config` is absent, pktvisord
-substitutes `num_periods: 5` and `deep_sample_rate: 100` and merges those, so a
-module-level value for either of those two keys is discarded. Setting them per
+There is one special case. When `handlers.window_config` is absent, or is present
+but is not a map, pktvisord substitutes `num_periods: 5` and
+`deep_sample_rate: 100` and merges those, so a module-level value for either of
+those two keys is discarded. A `window_config` that is not a map is not an error,
+so this substitution is silent. Setting them per
 module is therefore only meaningful if `window_config` is present and does not
 name them.
 
-Those two fallbacks are themselves configurable for the whole process: any key
-set on the `pktvisor` backend other than `host`, `port` and `taps` is passed
-through to `visor.config`, where `periods` and `max_deep_sample` change them.
+Those two fallbacks are themselves configurable for the whole process: every key
+set on the `pktvisor` backend other than `taps` is passed through to
+`visor.config`, where `periods` and `max_deep_sample` change them.
 
 |                  Abstract Configuration                   | Type  |     Default      |
 |:---------------------------------------------------------:|:-----:|:----------------:|

@@ -135,19 +135,7 @@ only_rcode:
   - str
 ```
 
-with the `int` referring to the response code to be filtered, written as string.
-
-Example:
-
-If you want to filter only successful queries responses you should use (note that all that the query will be discarded and the result will be just the responses):
-
-```yaml
-only_rcode:
-  - "NXDOMAIN"
-  - "2"
-```
-
-Important information is that only one response code is possible for each handler. So, in order to have multiple filters on the same policy, multiple handlers must be created, each with a rcode type.
+with the `int` referring to the response code to be filtered, written as string. So, in order to have multiple filters on the same policy, multiple handlers must be created, each with a rcode type.
 
 ### exclude_noerror (v2)
 
@@ -504,19 +492,7 @@ only_rcode:
   - str
 ```
 
-with the `int` referring to the response code to be filtered, written as string.
-
-Example:
-
-If you want to filter only successful queries responses you should use (note that all that the query will be discarded and the result will be just the responses):
-
-```yaml
-only_rcode:
-  - "NXDOMAIN"
-  - "2"
-```
-
-Important information is that only one response code is possible for each handler. So, in order to have multiple filters on the same policy, multiple handlers must be created, each with a rcode type.
+with the `int` referring to the response code to be filtered, written as string. So, in order to have multiple filters on the same policy, multiple handlers must be created, each with a rcode type.
 
 ### exclude_noerror (v1)
 

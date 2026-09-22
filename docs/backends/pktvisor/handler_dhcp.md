@@ -48,4 +48,5 @@ kind: collection
 ## Configurations
 
 - [Abstract configurations](handlers.md#abstract-configurations).
-- `recorded_stream`: *bool*. Marks the stream as a recording rather than live traffic. It also accepts `xact_ttl_secs` and `xact_ttl_ms`.
+- `recorded_stream`: *bool*. Marks the stream as a recording rather than live traffic.
+- `xact_ttl_secs` / `xact_ttl_ms`: *int*. Time to live for transactions, in seconds or milliseconds.
