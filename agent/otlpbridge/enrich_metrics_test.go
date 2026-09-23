@@ -154,6 +154,20 @@ func TestEnrichMetricsWithPolicy(t *testing.T) {
 		enrichMetricsWithPolicy(req, repoWith(t, policies.PolicyData{ID: "", Name: "noid", Backend: "pktvisor"}), slog.Default())
 		assert.Equal(t, map[string]string{"policy_name": "noid"}, attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes))
 	})
+
+	t.Run("non-string policy_name is treated as no policy", func(t *testing.T) {
+		repo := &countingRepo{PolicyRepo: repoWith(t, core)}
+		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(
+				&commonv1.KeyValue{Key: "policy_name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_IntValue{IntValue: 7}}},
+			)},
+		}}}
+		enrichMetricsWithPolicy(req, repo, slog.Default())
+		attrs := attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes)
+		assert.NotContains(t, attrs, "orb.policy_id")
+		assert.NotContains(t, attrs, "orb.backend")
+		assert.Equal(t, 0, repo.calls, "repo was not called")
+	})
 }
 
 func TestSetStringAttribute(t *testing.T) {
