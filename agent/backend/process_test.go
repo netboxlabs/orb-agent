@@ -735,6 +735,64 @@ func TestReserveListenAddrPicksAFreePort(t *testing.T) {
 	_ = child.Close()
 }
 
+// localhostIPv6 returns the IPv6 loopback the host resolves localhost to, or
+// skips the test on a host that has none or cannot bind it.
+func localhostIPv6(t *testing.T) string {
+	t.Helper()
+	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), "localhost")
+	require.NoError(t, err)
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			continue
+		}
+		probe, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			t.Skipf("localhost resolves to %s but it cannot be bound: %v", ip, err)
+		}
+		_ = probe.Close()
+		return ip.String()
+	}
+	t.Skip("localhost does not resolve to an IPv6 address on this host")
+	return ""
+}
+
+// The readiness check dials every address its host resolves to and takes
+// the first that answers, so a hostname reserves every one of them: a
+// process holding only the IPv6 loopback would answer for the child on the
+// IPv4 one.
+func TestReserveListenAddrRefusesAHostWhoseOtherAddressIsHeld(t *testing.T) {
+	v6 := localhostIPv6(t)
+	holder, err := net.Listen("tcp", net.JoinHostPort(v6, "0"))
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+	_, port, err := net.SplitHostPort(holder.Addr().String())
+	require.NoError(t, err)
+
+	_, err = ReserveListenAddr(net.JoinHostPort("localhost", port))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+	assert.Contains(t, err.Error(), net.JoinHostPort(v6, port), "names the held address")
+}
+
+// A hostname with port 0 picks one port free on every address the host
+// resolves to and returns it under the hostname, the one the child is told.
+func TestReserveListenAddrPicksOnePortForEveryAddressOfAHost(t *testing.T) {
+	v6 := localhostIPv6(t)
+
+	addr, err := ReserveListenAddr("localhost:0")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, "localhost", host)
+	assert.NotEqual(t, "0", port)
+
+	for _, h := range []string{"127.0.0.1", v6} {
+		child, err := net.Listen("tcp", net.JoinHostPort(h, port))
+		require.NoError(t, err, "the picked port is free on %s", h)
+		_ = child.Close()
+	}
+}
+
 // A held address is refused with the sentinel, the same way StartProcess
 // reports it.
 func TestReserveListenAddrRefusesAHeldAddress(t *testing.T) {

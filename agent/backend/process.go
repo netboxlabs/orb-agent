@@ -130,15 +130,47 @@ func namesAPort(addr string) bool {
 }
 
 func reserveListenAddr(addr string) (string, error) {
-	l, err := net.Listen("tcp", addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		return "", fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, addr, err)
+		return "", fmt.Errorf("%w: %s: %w", ErrListenAddrInUse, addr, err)
 	}
-	bound := l.Addr().String()
-	// The address was free; a failure to release the probe's own socket is
-	// nothing the child needs to know about.
-	_ = l.Close()
-	return bound, nil
+	// The readiness check dials every address the host resolves to and takes
+	// the first that answers, so a hostname reserves all of them: a listen
+	// on the hostname alone binds one family, and a process holding the
+	// port on the other would answer for the child. An IP literal, or the
+	// empty host that is every interface, is the one address it names.
+	hosts := []string{host}
+	if host != "" && net.ParseIP(host) == nil {
+		ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s cannot be resolved, so the readiness check could not reach this backend: %w", ErrListenAddrInUse, addr, err)
+		}
+		hosts = hosts[:0]
+		for _, ip := range ips {
+			hosts = append(hosts, ip.String())
+		}
+	}
+	// Every address is held until all are bound, so one port is free on all
+	// of them; a failure to release the probe's own sockets is nothing the
+	// child needs to know about.
+	var held []net.Listener
+	defer func() {
+		for _, l := range held {
+			_ = l.Close()
+		}
+	}()
+	for _, h := range hosts {
+		l, err := net.Listen("tcp", net.JoinHostPort(h, port))
+		if err != nil {
+			return "", fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, net.JoinHostPort(h, port), err)
+		}
+		held = append(held, l)
+		if n, _ := net.LookupPort("tcp", port); n == 0 {
+			// Port 0 picked one on the first address; the rest bind that one.
+			_, port, _ = net.SplitHostPort(l.Addr().String())
+		}
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 // StartProcess checks the spec is complete, returns the cancellation if Ctx
