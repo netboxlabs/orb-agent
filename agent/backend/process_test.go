@@ -838,38 +838,76 @@ func stubLookupListenHost(t *testing.T, ips ...string) *context.Context {
 	return &seen
 }
 
-// unroutableAddr is a documentation-range address no host has, so a bind on
-// it fails the way a bind on the IPv6 loopback fails where IPv6 is disabled.
-const unroutableAddr = "192.0.2.1"
-
-// A host may resolve to an address in a family it cannot bind, the IPv6
-// loopback where IPv6 is disabled but the hosts file keeps the entry: that
-// address is skipped, since the readiness check cannot dial it either, and
-// the port is reserved on the rest.
-func TestReserveListenAddrSkipsAnAddressTheHostCannotBind(t *testing.T) {
-	stubLookupListenHost(t, "127.0.0.1", unroutableAddr)
-
-	addr, err := ReserveListenAddr(context.Background(), "example.test:0")
-	require.NoError(t, err)
-	host, port, err := net.SplitHostPort(addr)
-	require.NoError(t, err)
-	assert.Equal(t, "example.test", host)
-	assert.NotEqual(t, "0", port)
-
-	child, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
-	require.NoError(t, err, "the port is reserved on the address the host can bind")
-	_ = child.Close()
+// stubListenFamilies stands in for a host with the given address families.
+func stubListenFamilies(t *testing.T, v4, v6 bool) {
+	t.Helper()
+	orig := listenFamilies
+	listenFamilies = func() (bool, bool) { return v4, v6 }
+	t.Cleanup(func() { listenFamilies = orig })
 }
 
-// A host with no address it can bind is refused: nothing could listen there
-// and the readiness check could reach nothing.
-func TestReserveListenAddrRefusesAHostWithNoBindableAddress(t *testing.T) {
-	stubLookupListenHost(t, unroutableAddr)
+// otherHostAddr is a documentation-range address, one another host would
+// have: this host cannot bind it, but a client here can dial it.
+const otherHostAddr = "192.0.2.1"
+
+// A host that resolves to an address this host does not have is refused:
+// the reservation cannot cover it while the readiness check could dial it
+// and take another machine's answer for the child's.
+func TestReserveListenAddrRefusesAnAddressAnotherHostHas(t *testing.T) {
+	stubLookupListenHost(t, "127.0.0.1", otherHostAddr)
+	stubListenFamilies(t, true, true)
 
 	_, err := ReserveListenAddr(context.Background(), "example.test:0")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrListenAddrInUse))
-	assert.Contains(t, err.Error(), unroutableAddr)
+	assert.Contains(t, err.Error(), otherHostAddr)
+}
+
+// A host may resolve to an address in a family this host has no address in,
+// the IPv6 loopback where IPv6 is disabled but the hosts file keeps the
+// entry: that address is left out, since nothing here can listen there and
+// the readiness check cannot dial it either, and the port is reserved on
+// the rest.
+func TestReserveListenAddrLeavesOutAFamilyTheHostHasNoAddressIn(t *testing.T) {
+	v6 := localhostIPv6(t)
+	stubLookupListenHost(t, "127.0.0.1", v6)
+	stubListenFamilies(t, true, false)
+	// The IPv6 loopback is held on the port, which proves it was never bound.
+	free, err := ReserveListenAddr(context.Background(), "127.0.0.1:0")
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(free)
+	require.NoError(t, err)
+	holder, err := net.Listen("tcp", net.JoinHostPort(v6, port))
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+
+	addr, err := ReserveListenAddr(context.Background(), net.JoinHostPort("example.test", port))
+	require.NoError(t, err)
+	assert.Equal(t, net.JoinHostPort("example.test", port), addr)
+}
+
+// A host with no address this host can bind is refused: nothing could listen
+// there and the readiness check could reach nothing.
+func TestReserveListenAddrRefusesAHostWithNoBindableAddress(t *testing.T) {
+	stubLookupListenHost(t, otherHostAddr)
+	stubListenFamilies(t, false, false)
+
+	_, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+}
+
+// A hosts file or a resolver may return an address more than once; it is
+// bound once, not refused as held by the probe's own first bind.
+func TestReserveListenAddrBindsARepeatedAddressOnce(t *testing.T) {
+	stubLookupListenHost(t, "127.0.0.1", "127.0.0.1")
+	stubListenFamilies(t, true, true)
+
+	addr, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.NotEqual(t, "0", port)
 }
 
 // The hostname is resolved under the caller's context, so a stalled resolver

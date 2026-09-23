@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"syscall"
 	"time"
 )
 
@@ -125,6 +124,30 @@ var ReserveListenAddr = reserveListenAddr
 // the reservation an address the host has no route to bind.
 var lookupListenHost = net.DefaultResolver.LookupIPAddr
 
+// listenFamilies reports whether this host has an IPv4 and an IPv6 address
+// at all; a variable so a test can stand in for a host that lacks one.
+var listenFamilies = interfaceFamilies
+
+func interfaceFamilies() (v4, v6 bool) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		// Unknown; the bind decides.
+		return true, true
+	}
+	for _, a := range addrs {
+		ip, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip.IP.To4() != nil {
+			v4 = true
+		} else {
+			v6 = true
+		}
+	}
+	return v4, v6
+}
+
 // namesAPort reports whether addr is host:port with a port other than 0.
 func namesAPort(addr string) bool {
 	_, port, err := net.SplitHostPort(addr)
@@ -133,6 +156,32 @@ func namesAPort(addr string) bool {
 	}
 	n, err := net.LookupPort("tcp", port)
 	return err == nil && n != 0
+}
+
+// resolvedListenHosts is the addresses a listen host resolves to that this
+// host can be asked to bind, each once. An address in a family this host
+// has no address in, the IPv6 loopback where IPv6 is disabled but the hosts
+// file keeps the entry, is left out: nothing here can listen there and the
+// readiness check cannot dial it either. An address in a family this host
+// does have is kept whether or not it is this host's, since the readiness
+// check could dial it and take another machine's answer for the child's;
+// the bind then refuses it.
+func resolvedListenHosts(ips []net.IPAddr) []string {
+	v4, v6 := listenFamilies()
+	seen := make(map[string]bool, len(ips))
+	hosts := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if ip.IP.To4() != nil && !v4 || ip.IP.To4() == nil && !v6 {
+			continue
+		}
+		h := ip.String()
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		hosts = append(hosts, h)
+	}
+	return hosts
 }
 
 func reserveListenAddr(ctx context.Context, addr string) (string, error) {
@@ -151,9 +200,9 @@ func reserveListenAddr(ctx context.Context, addr string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("%w: %s cannot be resolved, so the readiness check could not reach this backend: %w", ErrListenAddrInUse, addr, err)
 		}
-		hosts = hosts[:0]
-		for _, ip := range ips {
-			hosts = append(hosts, ip.String())
+		hosts = resolvedListenHosts(ips)
+		if len(hosts) == 0 {
+			return "", fmt.Errorf("%w: no address of %s is in a family this host has, so nothing could listen there", ErrListenAddrInUse, addr)
 		}
 	}
 	// Every address is held until all are bound, so one port is free on all
@@ -165,19 +214,9 @@ func reserveListenAddr(ctx context.Context, addr string) (string, error) {
 			_ = l.Close()
 		}
 	}()
-	var unbindable error
 	for _, h := range hosts {
 		l, err := net.Listen("tcp", net.JoinHostPort(h, port))
-		switch {
-		case err == nil:
-		case errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EAFNOSUPPORT):
-			// A family the host has no address in, the IPv6 loopback where
-			// IPv6 is disabled but the hosts file keeps the entry: nothing
-			// can listen there and the readiness check cannot dial it, so
-			// it guards nothing and is left out.
-			unbindable = fmt.Errorf("%s cannot be bound: %w", net.JoinHostPort(h, port), err)
-			continue
-		default:
+		if err != nil {
 			return "", fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, net.JoinHostPort(h, port), err)
 		}
 		held = append(held, l)
@@ -185,9 +224,6 @@ func reserveListenAddr(ctx context.Context, addr string) (string, error) {
 			// Port 0 picked one on the first address; the rest bind that one.
 			_, port, _ = net.SplitHostPort(l.Addr().String())
 		}
-	}
-	if len(held) == 0 {
-		return "", fmt.Errorf("%w: no address of %s can be bound, so nothing could listen there: %w", ErrListenAddrInUse, addr, unbindable)
 	}
 	return net.JoinHostPort(host, port), nil
 }
