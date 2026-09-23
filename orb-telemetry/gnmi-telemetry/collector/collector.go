@@ -174,12 +174,13 @@ func (c *Collector) ensureTargetUp(policyName string) {
 		return
 	}
 	c.upMu.Lock()
-	defer c.upMu.Unlock()
 	if c.upRegistered[policyName] {
+		c.upMu.Unlock()
 		return
 	}
 	inst, err := m.Int64ObservableGauge("gnmi." + targetUpSeries)
 	if err != nil {
+		c.upMu.Unlock()
 		c.logger.Error("failed to create target_up", "policy", policyName, "error", err)
 		return
 	}
@@ -211,11 +212,26 @@ func (c *Collector) ensureTargetUp(policyName string) {
 		return nil
 	}, inst)
 	if err != nil {
+		c.upMu.Unlock()
 		c.logger.Error("failed to register target_up", "policy", policyName, "error", err)
 		return
 	}
-	c.exporter.register(policyName, reg)
-	c.upRegistered[policyName] = true
+	taken := c.exporter.register(policyName, reg)
+	if taken {
+		c.upRegistered[policyName] = true
+	}
+	c.upMu.Unlock()
+	if !taken {
+		// The exporter closed between the meter existing and this
+		// registration landing on it: the collector is closing or closed, so
+		// the callback is given straight back rather than left to leak past
+		// the point close ever looks at the exporter's registrations again.
+		// upMu is already released, following the same ordering rule Close
+		// and ForgetPolicy hold to.
+		if err := reg.Unregister(); err != nil {
+			c.logger.Warn("failed to unregister target_up refused by a closed exporter", "policy", policyName, "error", err)
+		}
+	}
 }
 
 // CollectTarget starts the target's loop and returns. A second call for the

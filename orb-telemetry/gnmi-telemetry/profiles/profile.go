@@ -110,9 +110,11 @@ var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "net
 
 // reservedMetrics are the metric names the backend writes for its own health,
 // taken from the package that owns those instruments so the two cannot drift.
-// The exporter registers one instrument per metric name, so a profile metric
-// named after one of them would stand a second instrument, of whatever kind
-// the profile declared, beside the backend's own.
+// They stay on the plain, policy-less scope; a profile metric named after one
+// of them would export under a policy's scope instead, but the backend sees
+// one metric name across scopes, so it would still read as the same name
+// meaning two different things, of whatever kind the profile declared beside
+// the backend's own.
 var reservedMetrics = func() map[string]bool {
 	out := map[string]bool{}
 	for _, n := range metrics.HealthNames() {
@@ -502,11 +504,12 @@ type metricSchema struct {
 }
 
 // schemaConflicts reports, for each profile that disagrees, the first metric
-// name it defines with a kind or unit another profile already claimed. The SDK
-// holds one instrument per metric name however many profiles feed it, so a
-// store where if_in_octets is a byte counter in one profile and a packet gauge
-// in another exports that name as two conflicting streams; Validate cannot see
-// it, because its uniqueness check is within a single profile.
+// name it defines with a kind or unit another profile already claimed. The
+// collector holds one instrument per policy and metric name, so a store where
+// if_in_octets is a byte counter in one profile and a packet gauge in another
+// would export that name as two conflicting streams under any policy whose
+// targets match both profiles; Validate cannot see it, because its uniqueness
+// check is within a single profile.
 //
 // Which profile keeps a name is fixed rather than left to the map order the
 // profiles resolved in: the definitions of the profiles still standing as

@@ -285,6 +285,28 @@ func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
 	assert.Equal(t, 3.0, g.DataPoints[0].Value, "a policy of the same name registers afresh")
 }
 
+// forgetPolicy alone, with the store left untouched, still stops the
+// export: it gives the callback back rather than filtering what the callback
+// would have visited, so a series the store still holds is not exported once
+// its policy's callback is gone. ForgetPolicy on the collector purges the
+// store first, but the exporter's own half of the contract does not depend
+// on that order.
+func TestExporterForgetPolicyStopsExportWithTheSeriesStillInTheStore(t *testing.T) {
+	reader := testReader(t)
+	e := newExporter(newStore(100), nil, nil)
+	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1")}
+	now := time.Now().UnixNano()
+	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 1, now, age))
+	require.Len(t, collectByPolicy(t, reader), 1)
+
+	e.forgetPolicy("core")
+
+	_, stored := e.store.get(seriesKey{metric: "cpu", policy: "core", attrs: attrKey(attrs)})
+	require.True(t, stored, "the series is still in the store")
+	byPolicy := collectByPolicy(t, reader)
+	assert.Empty(t, byPolicy["core"], "but nothing is exported for it once the callback is gone")
+}
+
 func TestFlattenUpdate(t *testing.T) {
 	scalar := gnmi.Update{Path: "/system/memory/state/physical", Value: uint64(1)}
 	assert.Equal(t, []gnmi.Update{scalar}, flattenUpdate(scalar), "a scalar update is already one leaf")

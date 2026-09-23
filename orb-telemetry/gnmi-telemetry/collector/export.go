@@ -267,7 +267,7 @@ func (e *exporter) ensureCounter(policy, name, unit string) string {
 	}
 	inst, err := m.Int64ObservableCounter("gnmi."+name, metric.WithUnit(unit))
 	if err != nil {
-		e.logger.Error("failed to create counter", "name", name, "error", err)
+		e.logger.Error("failed to create counter", "name", name, "policy", policy, "error", err)
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
@@ -277,7 +277,7 @@ func (e *exporter) ensureCounter(policy, name, unit string) string {
 		return nil
 	}, inst)
 	if err != nil {
-		e.logger.Error("failed to register counter callback", "name", name, "error", err)
+		e.logger.Error("failed to register counter callback", "name", name, "policy", policy, "error", err)
 		return ""
 	}
 	e.counters[key] = inst
@@ -307,7 +307,7 @@ func (e *exporter) ensureGauge(policy, name, unit string) string {
 	}
 	inst, err := m.Float64ObservableGauge("gnmi."+name, metric.WithUnit(unit))
 	if err != nil {
-		e.logger.Error("failed to create gauge", "name", name, "error", err)
+		e.logger.Error("failed to create gauge", "name", name, "policy", policy, "error", err)
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
@@ -317,7 +317,7 @@ func (e *exporter) ensureGauge(policy, name, unit string) string {
 		return nil
 	}, inst)
 	if err != nil {
-		e.logger.Error("failed to register gauge callback", "name", name, "error", err)
+		e.logger.Error("failed to register gauge callback", "name", name, "policy", policy, "error", err)
 		return ""
 	}
 	e.gauges[key] = inst
@@ -326,11 +326,21 @@ func (e *exporter) ensureGauge(policy, name, unit string) string {
 }
 
 // register adds a callback the collector owns (the target_up gauge) so
-// close unregisters it with the rest.
-func (e *exporter) register(policy string, reg metric.Registration) {
+// close unregisters it with the rest. It reports whether it took the
+// registration: once closed, the exporter has already given every
+// registration it holds back to the meter and cleared regs, so one arriving
+// after that would sit in regs forever, past the point close ever looks at
+// it again. The caller owns reg in that case and must unregister it itself,
+// with no lock of the exporter held, following the same ordering rule as
+// close and forgetPolicy.
+func (e *exporter) register(policy string, reg metric.Registration) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return false
+	}
 	e.regs[policy] = append(e.regs[policy], reg)
+	return true
 }
 
 // forgetPolicy gives the policy's callbacks back to the meter and drops its
@@ -338,7 +348,10 @@ func (e *exporter) register(policy string, reg metric.Registration) {
 // arriving later registers afresh. Unregister waits for a running
 // collection, which takes the store's lock, so it runs with no lock of the
 // exporter or the store held. The schema claims are per name and shared
-// with every other policy on this exporter, so they stay.
+// with every other policy on this exporter, so they stay. The caller has
+// already stopped the policy's writers and waited for them (the collector
+// stops its loops and joins them before calling this), so no observation
+// for this policy can still be in flight to race the unregistration.
 func (e *exporter) forgetPolicy(policy string) {
 	e.mu.Lock()
 	regs := e.regs[policy]

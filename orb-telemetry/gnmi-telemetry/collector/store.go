@@ -38,7 +38,9 @@ func attrKey(attrs []attribute.KeyValue) string {
 
 // point is a series' last value: i for counters, f for gauges, the local time
 // the update that set it arrived, the age past which it is withheld from
-// export, and how many resets were seen.
+// export, and how many resets were seen. Its policy is not stored here: it is
+// a field of the key that reaches every function taking a point, and keeping
+// it out of the point as well is one fewer place for it to drift from the key.
 type point struct {
 	i      int64
 	f      float64
@@ -46,18 +48,27 @@ type point struct {
 	maxAge time.Duration
 	resets int
 	attrs  []attribute.KeyValue
-	policy string
 }
 
 // store keeps the last value per series, bounded per metric name by a budget.
 // Bounding here rather than only in the SDK keeps a series the backend chose
 // over one the SDK would fold into its overflow set. The count lives on the
-// budget rather than here because every store in the process writes to the
-// same instruments and so draws on one allowance.
+// budget rather than here because the budget bounds each metric name across
+// the whole process, which is stricter than the SDK's per-instrument limit
+// now that each policy has its own instrument: two policies each admitting
+// the full allowance of a name would together draw on the process's one
+// bound for it, not two.
+//
+// index mirrors series as policy -> metric -> key -> point, so a callback
+// registered for one policy's instrument selects that policy's series of one
+// metric directly instead of scanning every series the store holds. It is
+// maintained everywhere a series is inserted into or removed from series, and
+// remove is the one place that keeps the two in step.
 type store struct {
 	mu     sync.RWMutex
 	budget *Budget
 	series map[seriesKey]*point
+	index  map[string]map[string]map[seriesKey]*point
 }
 
 // newStore gives one store a budget of its own. A collector sharing the
@@ -67,7 +78,11 @@ func newStore(perMetricLimit int) *store {
 }
 
 func newStoreOn(budget *Budget) *store {
-	return &store{budget: budget, series: map[seriesKey]*point{}}
+	return &store{
+		budget: budget,
+		series: map[seriesKey]*point{},
+		index:  map[string]map[string]map[seriesKey]*point{},
+	}
 }
 
 // setCounter records a cumulative value at its arrival time; a value below
@@ -95,8 +110,9 @@ func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribu
 		if !s.budget.take(k.metric) {
 			return false
 		}
-		pt = &point{attrs: attrs, policy: k.policy}
+		pt = &point{attrs: attrs}
 		s.series[k] = pt
+		s.indexInsert(k, pt)
 	}
 	apply(pt, fresh)
 	pt.ts = ts
@@ -114,41 +130,76 @@ func (s *store) get(k seriesKey) (point, bool) {
 	return *pt, true
 }
 
+// indexInsert adds a key that has just gone into series to the policy index
+// too. Called with the write lock held.
+func (s *store) indexInsert(k seriesKey, pt *point) {
+	byMetric, ok := s.index[k.policy]
+	if !ok {
+		byMetric = map[string]map[seriesKey]*point{}
+		s.index[k.policy] = byMetric
+	}
+	byKey, ok := byMetric[k.metric]
+	if !ok {
+		byKey = map[seriesKey]*point{}
+		byMetric[k.metric] = byKey
+	}
+	byKey[k] = pt
+}
+
+// remove withdraws one series from series, from the policy index and gives
+// its slot back to the budget, all three in one place so every deletion path
+// keeps series and index in step. Called with the write lock held.
+func (s *store) remove(k seriesKey) {
+	delete(s.series, k)
+	if byMetric, ok := s.index[k.policy]; ok {
+		if byKey, ok := byMetric[k.metric]; ok {
+			delete(byKey, k)
+			if len(byKey) == 0 {
+				delete(byMetric, k.metric)
+			}
+		}
+		if len(byMetric) == 0 {
+			delete(s.index, k.policy)
+		}
+	}
+	s.budget.release(k.metric)
+}
+
 // forEach visits every series of one metric and one policy whose last update
-// arrived within its own maxAge of now. A series with no age is never
-// withheld, which is how a leaf the device streams on change keeps its last
-// value until the device deletes it. A series past its age is dropped as it
-// is withheld, in the same pass: withholding it alone would leave it holding
-// a slot of the metric's bound forever, and a device that renamed its
-// interfaces would eventually refuse every new series. Deleting during the
-// range is defined behaviour in Go, and the write lock is held for it; visit
-// must not call back into the store.
+// arrived within its own maxAge of now, reading the policy index rather than
+// scanning every series the store holds: a callback runs once per (policy,
+// metric) instrument, so without the index a collection over many policies
+// and metric names would cost their product times every series in the store.
+// A series with no age is never withheld, which is how a leaf the device
+// streams on change keeps its last value until the device deletes it. A
+// series past its age is dropped as it is withheld, in the same pass:
+// withholding it alone would leave it holding a slot of the metric's bound
+// forever, and a device that renamed its interfaces would eventually refuse
+// every new series. Deleting during the range is defined behaviour in Go, and
+// the write lock is held for it; visit must not call back into the store.
 func (s *store) forEach(metric, policy string, now time.Time, visit func(seriesKey, point)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for k, pt := range s.series {
-		if k.metric != metric || k.policy != policy {
-			continue
-		}
+	for k, pt := range s.index[policy][metric] {
 		if pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
-			delete(s.series, k)
-			s.budget.release(k.metric)
+			s.remove(k)
 			continue
 		}
 		visit(k, *pt)
 	}
 }
 
-// forgetPolicy withdraws every series the policy wrote.
+// forgetPolicy withdraws every series the policy wrote, reading the policy
+// index rather than scanning the whole store.
 func (s *store) forgetPolicy(policy string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for k, pt := range s.series {
-		if pt.policy == policy {
-			delete(s.series, k)
-			s.budget.release(k.metric)
+	for _, byKey := range s.index[policy] {
+		for k := range byKey {
+			s.remove(k)
 		}
 	}
+	delete(s.index, policy)
 }
 
 // releaseAll withdraws every series the store holds and returns each one's
@@ -164,6 +215,7 @@ func (s *store) releaseAll() {
 		s.budget.release(k.metric)
 	}
 	s.series = map[seriesKey]*point{}
+	s.index = map[string]map[string]map[seriesKey]*point{}
 }
 
 // deleteMatching withdraws every series of one of the named metrics that
@@ -183,18 +235,16 @@ func (s *store) releaseAll() {
 func (s *store) deleteMatching(policy string, names map[string]struct{}, want []attribute.KeyValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for k, pt := range s.series {
-		if k.policy != policy {
-			continue
-		}
+	for metric, byKey := range s.index[policy] {
 		if names != nil {
-			if _, ok := names[k.metric]; !ok {
+			if _, ok := names[metric]; !ok {
 				continue
 			}
 		}
-		if hasAll(pt.attrs, want) {
-			delete(s.series, k)
-			s.budget.release(k.metric)
+		for k, pt := range byKey {
+			if hasAll(pt.attrs, want) {
+				s.remove(k)
+			}
 		}
 	}
 }
@@ -218,21 +268,19 @@ func (s *store) deleteMatching(policy string, names map[string]struct{}, want []
 func (s *store) evictBefore(policy string, names map[string]struct{}, want []attribute.KeyValue, before int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for k, pt := range s.series {
-		if k.policy != policy {
-			continue
-		}
-		if pt.maxAge != 0 || pt.ts >= before {
-			continue
-		}
+	for metric, byKey := range s.index[policy] {
 		if names != nil {
-			if _, ok := names[k.metric]; !ok {
+			if _, ok := names[metric]; !ok {
 				continue
 			}
 		}
-		if hasAll(pt.attrs, want) {
-			delete(s.series, k)
-			s.budget.release(k.metric)
+		for k, pt := range byKey {
+			if pt.maxAge != 0 || pt.ts >= before {
+				continue
+			}
+			if hasAll(pt.attrs, want) {
+				s.remove(k)
+			}
 		}
 	}
 }

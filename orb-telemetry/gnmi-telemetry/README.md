@@ -393,11 +393,13 @@ rather than wrapped into a false reset.
 Cardinality is bounded at ten thousand attribute sets per instrument, the SDK's
 limit, and the backend holds its own series one short of it so a series it chose
 is never the one folded into the SDK's overflow bucket. That bound is one for
-the process: there is one instrument per metric name however many policies and
-profile sets write to it, so every policy running draws on the same allowance.
-Series are the product of the devices the policies name and the path keys their
-profiles promote, so policies over a wide prefix whose devices each have
-hundreds of interfaces are what approach it. An update refused by that bound is
+the process, and stricter than the SDK's own: each policy has its own
+instrument for a metric name, on its own scope, but the backend keeps its
+bound on the name across every policy's instrument, so every policy running
+draws on the same allowance. Series are the product of the devices the
+policies name and the path keys their profiles promote, so policies over a
+wide prefix whose devices each have hundreds of interfaces are what approach
+it. An update refused by that bound is
 counted, not exported. `gnmi.target_up` draws on the same allowance, one series
 per target, so a target refused a slot keeps collecting and its up point alone
 stands down until a slot frees.

@@ -23,12 +23,13 @@ type schema struct {
 }
 
 // Schemas records the kind and unit each exported metric name was first
-// registered with. It belongs to the process, not to a collector, for the
-// reason the Budget does: the SDK holds one instrument per metric name however
-// many collectors write to it, and the profiles a collector loads are only
-// checked for agreement within their own store. Two profile sets that disagree
-// about if_in_octets would otherwise have that one instrument created twice
-// with different kinds or units and exported as duplicate streams. Safe for
+// registered with. It belongs to the process, not to a collector: the
+// backend sees one metric name across every policy's scope, however many
+// collectors write it, so the registry keeps one kind and unit per name
+// across all of them, and the profiles a collector loads are only checked
+// for agreement within their own store. Two profile sets that disagree about
+// if_in_octets would otherwise have that name exported as two conflicting
+// streams, one per policy's scope, with different kinds or units. Safe for
 // concurrent use.
 //
 // A claim is held by the exporters writing the name and released when the

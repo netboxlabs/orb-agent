@@ -1067,10 +1067,12 @@ func TestGetRungWithNoPollablePathReportsIt(t *testing.T) {
 	})
 }
 
-// The manager builds one collector per profile set and every one of them
-// writes to the same SDK instrument per metric name, so the series bound they
-// are given has to be one bound. A collector reaching it refuses the series
-// and counts the refusal, whichever collector filled the allowance.
+// The manager builds one collector per profile set, and the series bound
+// each of them draws on is kept one for the process: it bounds each metric
+// name across every policy's instrument, stricter than the SDK's own
+// per-instrument limit now that each policy has its own. A collector
+// reaching it refuses the series and counts the refusal, whichever collector
+// filled the allowance.
 func TestCollectorsSharingABudgetRefuseSeriesPastIt(t *testing.T) {
 	reader := testReader(t)
 	budget := newBudget(1)
@@ -1203,9 +1205,9 @@ func TestTargetUpIsBoundedByTheSharedBudget(t *testing.T) {
 	waitFor(t, 3*time.Second, func() bool { return onlyUp("10.0.0.2") })
 }
 
-// The SDK holds one instrument per metric name however many collectors write
-// to it, so two profile sets that disagree about a name would have that one
-// instrument export as two streams with different kinds or units. The first
+// The backend sees one metric name across every policy's scope however many
+// collectors write it, so two profile sets that disagree about a name would
+// have it exported as two streams with different kinds or units. The first
 // definition the process registers is the one it exports, and a series that
 // disagrees is refused and counted rather than handed over.
 func TestCollectorsSharingASchemaRegistryRefuseADisagreeingSeries(t *testing.T) {
@@ -2616,6 +2618,9 @@ func TestTargetUp_OneScopePerPolicy(t *testing.T) {
 		v, ok := g.DataPoints[0].Attributes.Value("device_ip")
 		require.True(t, ok)
 		assert.Equal(t, "10.0.0.1", v.AsString())
+		_, ok = g.DataPoints[0].Attributes.Value("mode")
+		require.True(t, ok, "mode is on the datapoint")
+		assert.Equal(t, 2, g.DataPoints[0].Attributes.Len(), "device_ip and mode, nothing else")
 	}
 	_, unscoped := by[""]["gnmi.target_up"]
 	assert.False(t, unscoped, "target_up never leaves on the process scope")
@@ -2657,9 +2662,9 @@ func TestForgetPolicy_StopsExportingThatPolicy(t *testing.T) {
 }
 
 // Unregister waits for a running collection, whose callbacks take the
-// store's lock and loopsMu, so ForgetPolicy and Close must hold neither
-// while unregistering. A fake registration that checks the locks are free
-// pins that down without a race.
+// store's lock and loopsMu, so ForgetPolicy and Close must hold neither of
+// those, nor upMu, while unregistering. A fake registration that checks the
+// locks are free pins that down without a race.
 type lockCheckingRegistration struct {
 	embedded.Registration
 	c            *Collector
@@ -2683,6 +2688,11 @@ func (r *lockCheckingRegistration) Unregister() error {
 		r.c.exporter.mu.Unlock()
 	} else {
 		r.err = errors.New("Unregister called with exporter.mu held")
+	}
+	if r.c.upMu.TryLock() {
+		r.c.upMu.Unlock()
+	} else {
+		r.err = errors.New("Unregister called with upMu held")
 	}
 	return nil
 }
@@ -2708,4 +2718,92 @@ func TestClose_UnregistersWithNoCollectorLockHeld(t *testing.T) {
 
 	assert.Equal(t, int32(1), reg.unregistered.Load())
 	assert.NoError(t, reg.err)
+}
+
+// A target arriving for a closed collector still finds a meter, PolicyMeter
+// not being torn down by Close, but the exporter it would register on is
+// closed, so register refuses the registration and ensureTargetUp gives the
+// callback straight back rather than leaking it in upRegistered or the
+// exporter's regs.
+func TestEnsureTargetUp_AfterCloseLeaksNothing(t *testing.T) {
+	testReader(t)
+	c := New(&gnmi.FakeDialer{Session: &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}}}, loadStore(t), nil)
+	c.Close()
+
+	c.ensureTargetUp("p")
+
+	c.upMu.Lock()
+	assert.Empty(t, c.upRegistered)
+	c.upMu.Unlock()
+	c.exporter.mu.Lock()
+	assert.Empty(t, c.exporter.regs)
+	c.exporter.mu.Unlock()
+}
+
+// A collection running concurrently with ForgetPolicy is what the ordering
+// rule on Unregister exists for: Unregister waits for a running collection,
+// which takes the store's lock, so ForgetPolicy must hold neither the store's
+// lock nor its own before calling it, or the two would deadlock. This drives
+// that race for real rather than tracing it: two readers hammer Collect while
+// policy "a" is started, restarted and forgotten thirty times alongside a
+// policy "b" that is only ever started. -race is what actually catches a
+// wrong lock order here; the 20s deadline is only so a genuine deadlock fails
+// the test instead of hanging the suite.
+func TestForgetPolicy_RacesACollectionSafely(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+		SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	var readers sync.WaitGroup
+	readers.Add(2)
+	collectLoop := func() {
+		defer readers.Done()
+		var rm metricdata.ResourceMetrics
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				_ = reader.Collect(context.Background(), &rm)
+			}
+		}
+	}
+	go collectLoop()
+	go collectLoop()
+
+	start := func(policy string) {
+		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
+	}
+
+	rounds := make(chan struct{})
+	go func() {
+		defer close(rounds)
+		for i := 0; i < 30; i++ {
+			start("a")
+			start("b")
+			c.ForgetPolicy("a")
+		}
+	}()
+
+	select {
+	case <-rounds:
+	case <-time.After(20 * time.Second):
+		t.Fatal("30 rounds of start/start/ForgetPolicy did not finish in time")
+	}
+	close(done)
+	readers.Wait()
+
+	waitFor(t, 3*time.Second, func() bool {
+		_, up := collectByPolicy(t, reader)["b"]["gnmi.target_up"]
+		return up
+	})
+	by := collectByPolicy(t, reader)
+	assert.Empty(t, by["a"], "policy a's scope is empty after the last ForgetPolicy")
 }

@@ -169,8 +169,6 @@ func TestStoreKeepsPoliciesApart(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 1.0, pt1.f)
 	assert.Equal(t, 2.0, pt2.f)
-	assert.Equal(t, "p1", pt1.policy)
-	assert.Equal(t, "p2", pt2.policy)
 }
 
 // A delete or a reconcile speaks for one policy's target. With the policy
@@ -216,4 +214,96 @@ func TestStoreForEachIsScopedToThePolicy(t *testing.T) {
 	assert.False(t, ok, "p1's stale series is dropped in the same pass")
 	_, ok = s.get(k2)
 	assert.True(t, ok, "p2's series is neither visited nor touched")
+}
+
+// indexKeys flattens the store's policy index back to a flat key set, so a
+// test can compare it against series's key set directly: the two must hold
+// exactly the same keys after every operation that inserts into or removes
+// from the store, or forEach would either miss a live series through the
+// index or visit one that series no longer has.
+func indexKeys(s *store) map[seriesKey]struct{} {
+	out := map[seriesKey]struct{}{}
+	for _, byMetric := range s.index {
+		for _, byKey := range byMetric {
+			for k := range byKey {
+				out[k] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func seriesKeys(s *store) map[seriesKey]struct{} {
+	out := map[seriesKey]struct{}{}
+	for k := range s.series {
+		out[k] = struct{}{}
+	}
+	return out
+}
+
+// Every path that inserts into or removes from series has its own copy of
+// the same bookkeeping against the policy index: a fresh set, a stale drop
+// inside forEach, deleteMatching, evictBefore, forgetPolicy and releaseAll.
+// This walks all six and checks after each one that the index reaches
+// exactly the keys series does, no more and no fewer.
+func TestStoreIndexStaysInStepWithSeries(t *testing.T) {
+	s := newStore(100)
+	now := time.Unix(1000, 0)
+	assertInStep := func() {
+		t.Helper()
+		assert.Equal(t, seriesKeys(s), indexKeys(s), "index and series must hold exactly the same keys")
+	}
+	assertInStep()
+
+	k1, a1 := series("m1", "1", "p1", "a")
+	k2, a2 := series("m1", "1", "p1", "b")
+	k3, a3 := series("m2", "1", "p1", "a")
+	k4, a4 := series("m1", "1", "p2", "a")
+	kStale, aStale := series("m2", "1", "p1", "stale")
+	require.True(t, s.setGauge(k1, 1, now.UnixNano(), age, a1))
+	require.True(t, s.setGauge(k2, 1, now.UnixNano(), age, a2))
+	require.True(t, s.setGauge(k3, 1, now.UnixNano(), age, a3))
+	require.True(t, s.setGauge(k4, 1, now.UnixNano(), age, a4))
+	require.True(t, s.setGauge(kStale, 1, now.Add(-2*age).UnixNano(), age, aStale))
+	assertInStep()
+
+	// forEach's stale drop removes kStale in the same pass it visits m2/p1.
+	var seen []seriesKey
+	s.forEach("m2", "p1", now, func(k seriesKey, _ point) { seen = append(seen, k) })
+	assert.Equal(t, []seriesKey{k3}, seen)
+	_, ok := s.get(kStale)
+	assert.False(t, ok)
+	assertInStep()
+
+	// deleteMatching withdraws k1 by its attributes and leaves k2.
+	s.deleteMatching("p1", map[string]struct{}{"m1": {}}, []attribute.KeyValue{attribute.String("interface_name", "a")})
+	_, ok = s.get(k1)
+	assert.False(t, ok)
+	_, ok = s.get(k2)
+	assert.True(t, ok)
+	assertInStep()
+
+	// evictBefore withdraws an ageless series older than the mark.
+	kOld, aOld := series("m1", "1", "p1", "old")
+	require.True(t, s.setGauge(kOld, 1, now.Add(-time.Hour).UnixNano(), 0, aOld))
+	assertInStep()
+	s.evictBefore("p1", nil, nil, now.UnixNano())
+	_, ok = s.get(kOld)
+	assert.False(t, ok)
+	assertInStep()
+
+	// forgetPolicy withdraws everything p1 still has (k2, k3) and leaves p2's.
+	s.forgetPolicy("p1")
+	_, ok = s.get(k2)
+	assert.False(t, ok)
+	_, ok = s.get(k3)
+	assert.False(t, ok)
+	_, ok = s.get(k4)
+	assert.True(t, ok, "p2's series survives p1's forgetPolicy")
+	assertInStep()
+
+	// releaseAll withdraws everything left, including p2's.
+	s.releaseAll()
+	assert.Empty(t, s.series)
+	assertInStep()
 }
