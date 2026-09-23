@@ -41,11 +41,17 @@ func attrCount(attrs []*commonv1.KeyValue, key string) int {
 	return n
 }
 
-// scopeFor builds a ScopeMetrics the way the telemetry backends do: the
-// policy on the scope, device dimensions on the datapoint.
+// scopeFor builds a snmp-telemetry ScopeMetrics the way the telemetry
+// backends do: the policy on the scope, device dimensions on the datapoint.
 func scopeFor(scopeAttrs ...*commonv1.KeyValue) *metricsv1.ScopeMetrics {
+	return scopeNamed("snmp-telemetry", scopeAttrs...)
+}
+
+// scopeNamed is scopeFor under an explicit scope name, which is what tells
+// the bridge which backend produced the metrics.
+func scopeNamed(scopeName string, scopeAttrs ...*commonv1.KeyValue) *metricsv1.ScopeMetrics {
 	return &metricsv1.ScopeMetrics{
-		Scope: &commonv1.InstrumentationScope{Name: "snmp-telemetry", Attributes: scopeAttrs},
+		Scope: &commonv1.InstrumentationScope{Name: scopeName, Attributes: scopeAttrs},
 		Metrics: []*metricsv1.Metric{{
 			Name: "snmp.cpuutil",
 			Data: &metricsv1.Metric_Gauge{Gauge: &metricsv1.Gauge{DataPoints: []*metricsv1.NumberDataPoint{{
@@ -66,16 +72,16 @@ func repoWith(t *testing.T, ps ...policies.PolicyData) policies.PolicyRepo {
 	return repo
 }
 
-// countingRepo counts GetByName calls so a test can prove one lookup per
-// distinct name per request.
+// countingRepo counts GetAll calls so a test can prove the repository is
+// read once per request, and not at all for a request naming no policy.
 type countingRepo struct {
 	policies.PolicyRepo
 	calls int
 }
 
-func (c *countingRepo) GetByName(name string) (policies.PolicyData, error) {
+func (c *countingRepo) GetAll() ([]policies.PolicyData, error) {
 	c.calls++
-	return c.PolicyRepo.GetByName(name)
+	return c.PolicyRepo.GetAll()
 }
 
 func TestEnrichMetricsWithPolicy(t *testing.T) {
@@ -86,7 +92,7 @@ func TestEnrichMetricsWithPolicy(t *testing.T) {
 		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
 			ScopeMetrics: []*metricsv1.ScopeMetrics{
 				scopeFor(strAttr("policy_name", "core")),
-				scopeFor(strAttr("policy_name", "edge")),
+				scopeNamed("pktvisor/edge", strAttr("policy_name", "edge")),
 				scopeFor(), // process-level health metrics carry no policy
 			},
 		}}}
@@ -125,14 +131,62 @@ func TestEnrichMetricsWithPolicy(t *testing.T) {
 		assert.Equal(t, "core", attrMap(attrs)["policy_name"], "the policy name stays")
 	})
 
-	t.Run("one lookup per distinct name per request", func(t *testing.T) {
+	t.Run("the repository is read once per request", func(t *testing.T) {
 		repo := &countingRepo{PolicyRepo: repoWith(t, core, edge)}
 		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{
 			{ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(strAttr("policy_name", "core")), scopeFor(strAttr("policy_name", "core"))}},
-			{ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor(strAttr("policy_name", "edge")), scopeFor(strAttr("policy_name", "missing")), scopeFor(strAttr("policy_name", "missing"))}},
+			{ScopeMetrics: []*metricsv1.ScopeMetrics{scopeNamed("pktvisor/edge", strAttr("policy_name", "edge")), scopeFor(strAttr("policy_name", "missing")), scopeFor(strAttr("policy_name", "missing"))}},
 		}}
 		enrichMetricsWithPolicy(req, repo, slog.Default())
-		assert.Equal(t, 3, repo.calls, "core, edge and missing are each looked up once")
+		assert.Equal(t, 1, repo.calls, "one snapshot serves every scope of the request")
+		assert.Equal(t, "id-core", attrMap(req.ResourceMetrics[0].ScopeMetrics[1].Scope.Attributes)["orb.policy_id"])
+		assert.Equal(t, "id-edge", attrMap(req.ResourceMetrics[1].ScopeMetrics[0].Scope.Attributes)["orb.policy_id"])
+		assert.NotContains(t, attrMap(req.ResourceMetrics[1].ScopeMetrics[2].Scope.Attributes), "orb.policy_id")
+
+		unscoped := &countingRepo{PolicyRepo: repoWith(t, core)}
+		enrichMetricsWithPolicy(&collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{ScopeMetrics: []*metricsv1.ScopeMetrics{scopeFor()}}}}, unscoped, slog.Default())
+		assert.Equal(t, 0, unscoped.calls, "a request naming no policy never reads the repository")
+	})
+
+	t.Run("same name on two backends is resolved by the scope's backend", func(t *testing.T) {
+		pkt := policies.PolicyData{ID: "id-pkt", Name: "shared", Backend: "pktvisor"}
+		snmp := policies.PolicyData{ID: "id-snmp", Name: "shared", Backend: "snmp_telemetry"}
+		gnmi := policies.PolicyData{ID: "id-gnmi", Name: "shared", Backend: "gnmi_telemetry"}
+		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			ScopeMetrics: []*metricsv1.ScopeMetrics{
+				scopeNamed("pktvisor/shared", strAttr("policy_name", "shared")),
+				scopeNamed("snmp-telemetry", strAttr("policy_name", "shared")),
+				scopeNamed("gnmi-telemetry", strAttr("policy_name", "shared")),
+			},
+		}}}
+		enrichMetricsWithPolicy(req, repoWith(t, pkt, snmp, gnmi), slog.Default())
+		scopes := req.ResourceMetrics[0].ScopeMetrics
+		assert.Equal(t, map[string]string{"policy_name": "shared", "orb.policy_id": "id-pkt", "orb.backend": "pktvisor"}, attrMap(scopes[0].Scope.Attributes))
+		assert.Equal(t, map[string]string{"policy_name": "shared", "orb.policy_id": "id-snmp", "orb.backend": "snmp_telemetry"}, attrMap(scopes[1].Scope.Attributes))
+		assert.Equal(t, map[string]string{"policy_name": "shared", "orb.policy_id": "id-gnmi", "orb.backend": "gnmi_telemetry"}, attrMap(scopes[2].Scope.Attributes))
+	})
+
+	t.Run("a same-named policy on another backend never attributes a scope", func(t *testing.T) {
+		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			ScopeMetrics: []*metricsv1.ScopeMetrics{scopeNamed("gnmi-telemetry", strAttr("policy_name", "core"))},
+		}}}
+		enrichMetricsWithPolicy(req, repoWith(t, core), slog.Default()) // core is an snmp_telemetry policy
+		assert.Equal(t, map[string]string{"policy_name": "core"}, attrMap(req.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes))
+	})
+
+	t.Run("an unknown scope name resolves by name only when it is unambiguous", func(t *testing.T) {
+		pkt := policies.PolicyData{ID: "id-pkt", Name: "shared", Backend: "pktvisor"}
+		snmp := policies.PolicyData{ID: "id-snmp", Name: "shared", Backend: "snmp_telemetry"}
+		req := &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+			ScopeMetrics: []*metricsv1.ScopeMetrics{
+				scopeNamed("custom-collector", strAttr("policy_name", "core")),
+				scopeNamed("custom-collector", strAttr("policy_name", "shared")),
+			},
+		}}}
+		enrichMetricsWithPolicy(req, repoWith(t, core, pkt, snmp), slog.Default())
+		scopes := req.ResourceMetrics[0].ScopeMetrics
+		assert.Equal(t, "id-core", attrMap(scopes[0].Scope.Attributes)["orb.policy_id"], "a unique name still resolves")
+		assert.Equal(t, map[string]string{"policy_name": "shared"}, attrMap(scopes[1].Scope.Attributes), "an ambiguous name is left unattributed")
 	})
 
 	t.Run("nil request, repo, resource and scope are safe", func(t *testing.T) {

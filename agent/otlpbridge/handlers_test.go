@@ -257,7 +257,7 @@ func TestMetricsHandler_Export_WithoutRepo_PassesThrough(t *testing.T) {
 func TestMetricsHandler_Export_DiodeMarkedScopedMetrics_StillIngest(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)
-	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-core", Name: "core", Backend: "snmp_telemetry"}))
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-core", Name: "core", Backend: "pktvisor"}))
 	bridge, fp := newBridgeWithRepo(t, "protobuf", repo)
 	defer func() { _ = bridge.Stop(context.Background()) }()
 	s := &metricsServer{bridge: bridge}
