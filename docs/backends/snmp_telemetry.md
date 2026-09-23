@@ -90,7 +90,7 @@ Three rules matter when writing agent config:
 The full parameter tables are in the backend README under [Policy Configuration](../../orb-telemetry/snmp-telemetry/README.md#policy-configuration) and [Receiving traps](../../orb-telemetry/snmp-telemetry/README.md#receiving-traps).
 
 ## Metrics
-Poll metrics are described in the backend README. Trap reception adds three:
+Every series of a policy is exported under an instrumentation scope carrying `policy_name`, one scope per policy; datapoints carry the device attributes (`device_ip`, `device_port`, `netbox_id`, `snmp_context`) and the profile's tags. Poll metrics are described in the backend README. Trap reception adds three:
 
 - `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps and informs attributed to a policy.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap.

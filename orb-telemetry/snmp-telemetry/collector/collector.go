@@ -82,8 +82,9 @@ func appendDerivedAttr(attrs []attribute.KeyValue, name, value string) []attribu
 // dimension the exported series cannot express is one that silently merges two
 // devices' points.
 //
-// Every field here has an exported attribute in appendIdentityAttrs. Adding one
-// without the other is what made this identity wrong twice.
+// Every field here is exported: policy as the scope's policy_name (see
+// ensureInstrument), the rest as datapoint attributes in appendIdentityAttrs.
+// Adding one without the other is what made this identity wrong twice.
 type deviceKey struct {
 	policy  string
 	host    string
@@ -303,13 +304,17 @@ type MetricsCollector struct {
 	storeMu     sync.RWMutex
 	deviceStore map[deviceKey]map[string][]observedPoint
 
-	// Registered observable gauge instruments (one per unique metric name).
-	// closed is set by Close and is final: a collector no policy is using must
-	// not install a callback that nothing is left to unregister.
-	gaugeMu       sync.Mutex
-	closed        bool
-	instruments   map[string]metric.Int64ObservableGauge
-	registrations []metric.Registration // held so Close can give them back
+	// Registered observable gauge instruments, one per policy and metric
+	// name, each on its policy's meter so the policy's series export under
+	// its own scope. closed is set by Close and is final: a collector no
+	// policy is using must not install a callback that nothing is left to
+	// unregister.
+	gaugeMu     sync.Mutex
+	closed      bool
+	instruments map[instrumentKey]metric.Int64ObservableGauge
+	// registrations is held per policy so ForgetPolicy can give exactly that
+	// policy's callbacks back and Close all of them.
+	registrations map[string][]metric.Registration
 
 	// Profiles already checked for conversions the collector cannot apply.
 	reviewMu         sync.Mutex
@@ -321,6 +326,15 @@ type MetricsCollector struct {
 // so the receiver names its traps by its own set.
 func (c *MetricsCollector) TrapNames() map[string]string { return c.matcher.TrapNames() }
 
+// instrumentKey names one observable gauge: a metric name on one policy's
+// meter. The same metric name under two policies is two instruments on two
+// meters, which is what keeps two policies polling one endpoint apart now
+// that the datapoint does not carry the policy.
+type instrumentKey struct {
+	policy string
+	name   string
+}
+
 // NewMetricsCollector creates a MetricsCollector.
 func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Matcher, logger *slog.Logger) *MetricsCollector {
 	return &MetricsCollector{
@@ -331,7 +345,8 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 		deviceProfile:    make(map[deviceKey]string),
 		interruptedRuns:  make(map[deviceKey]int),
 		deviceStore:      make(map[deviceKey]map[string][]observedPoint),
-		instruments:      make(map[string]metric.Int64ObservableGauge),
+		instruments:      make(map[instrumentKey]metric.Int64ObservableGauge),
+		registrations:    make(map[string][]metric.Registration),
 		reviewedProfiles: make(map[string]struct{}),
 	}
 }
@@ -424,45 +439,60 @@ func (c *MetricsCollector) restorePollWindows(key deviceKey, windows map[string]
 	c.pollState[key] = windows
 }
 
-// ensureInstrument lazily registers an observable gauge callback for metricName.
-// The callback reads from the shared deviceStore on every OTLP export cycle.
-func (c *MetricsCollector) ensureInstrument(name, description string) {
+// ensureInstrument lazily registers an observable gauge callback for
+// metricName on policyName's meter. The callback reads the shared
+// deviceStore on every OTLP export cycle and observes only that policy's
+// devices, so each policy's series leave under its own scope and the
+// datapoint carries no policy of its own.
+func (c *MetricsCollector) ensureInstrument(policyName, name, description string) {
 	c.gaugeMu.Lock()
 	defer c.gaugeMu.Unlock()
 	if c.closed {
 		return
 	}
-	if _, ok := c.instruments[name]; ok {
+	key := instrumentKey{policy: policyName, name: name}
+	if _, ok := c.instruments[key]; ok {
 		return
 	}
-	m := metrics.GetMeter()
+	m := metrics.PolicyMeter(policyName)
 	if m == nil {
 		return
 	}
 	g, err := m.Int64ObservableGauge(name, metric.WithDescription(description))
 	if err != nil {
-		c.logger.Error("Failed to create observable gauge", "name", name, "error", err)
+		c.logger.Error("Failed to create observable gauge", "name", name, "policy", policyName, "error", err)
 		return
 	}
-	// Capture name and g by value for the closure.
-	gInst := g
-	metricName := name
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		c.storeMu.RLock()
 		defer c.storeMu.RUnlock()
-		for _, deviceMetrics := range c.deviceStore {
-			for _, pt := range deviceMetrics[metricName] {
-				o.ObserveInt64(gInst, pt.value, metric.WithAttributes(pt.attrs...))
+		for device, deviceMetrics := range c.deviceStore {
+			if device.policy != policyName {
+				continue
+			}
+			for _, pt := range deviceMetrics[name] {
+				o.ObserveInt64(g, pt.value, metric.WithAttributes(pt.attrs...))
 			}
 		}
 		return nil
-	}, gInst)
+	}, g)
 	if err != nil {
-		c.logger.Error("Failed to register observable gauge callback", "name", name, "error", err)
+		c.logger.Error("Failed to register observable gauge callback", "name", name, "policy", policyName, "error", err)
 		return
 	}
-	c.instruments[name] = g
-	c.registrations = append(c.registrations, reg)
+	c.instruments[key] = g
+	c.registrations[policyName] = append(c.registrations[policyName], reg)
+}
+
+// unregister gives registrations back to the meter. It is called with no
+// collector lock held: Unregister waits for a running collection, and the
+// callback it waits for takes storeMu.
+func (c *MetricsCollector) unregister(regs []metric.Registration) {
+	for _, reg := range regs {
+		if err := reg.Unregister(); err != nil {
+			c.logger.Error("Failed to unregister observable gauge callback", "error", err)
+		}
+	}
 }
 
 // Close releases everything the collector holds, once no policy is using it.
@@ -480,17 +510,16 @@ func (c *MetricsCollector) ensureInstrument(name, description string) {
 // under storeMu and the two wait on each other.
 func (c *MetricsCollector) Close() {
 	c.gaugeMu.Lock()
-	regs := c.registrations
-	c.registrations = nil
-	c.instruments = make(map[string]metric.Int64ObservableGauge)
+	var regs []metric.Registration
+	for _, policyRegs := range c.registrations {
+		regs = append(regs, policyRegs...)
+	}
+	c.registrations = make(map[string][]metric.Registration)
+	c.instruments = make(map[instrumentKey]metric.Int64ObservableGauge)
 	c.closed = true
 	c.gaugeMu.Unlock()
 
-	for _, reg := range regs {
-		if err := reg.Unregister(); err != nil {
-			c.logger.Error("Failed to unregister observable gauge callback", "error", err)
-		}
-	}
+	c.unregister(regs)
 
 	c.storeMu.Lock()
 	c.deviceStore = make(map[deviceKey]map[string][]observedPoint)
@@ -514,9 +543,23 @@ func (c *MetricsCollector) Close() {
 }
 
 // ForgetPolicy drops every observation and poll timestamp owned by policyName,
-// so a policy that has been stopped stops exporting. Devices named by other
-// policies are untouched, which is what keying on the policy name buys.
+// and gives the policy's gauge callbacks back to the meter, so a policy that
+// has been stopped stops exporting and its scope goes quiet. Devices named
+// by other policies, and their callbacks, are untouched, which is what
+// keying on the policy name buys. A policy of the same name arriving later
+// registers afresh.
 func (c *MetricsCollector) ForgetPolicy(policyName string) {
+	c.gaugeMu.Lock()
+	regs := c.registrations[policyName]
+	delete(c.registrations, policyName)
+	for key := range c.instruments {
+		if key.policy == policyName {
+			delete(c.instruments, key)
+		}
+	}
+	c.gaugeMu.Unlock()
+	c.unregister(regs)
+
 	c.storeMu.Lock()
 	for key := range c.deviceStore {
 		if key.policy == policyName {
@@ -604,15 +647,16 @@ func (c *MetricsCollector) forgetDevice(key deviceKey) {
 	c.interruptMu.Unlock()
 }
 
-// appendIdentityAttrs renders every dimension of a device key as an attribute.
-// Without them the series of two devices the collector keeps apart would be
+// appendIdentityAttrs renders every datapoint dimension of a device key as an
+// attribute. The policy is not among them: a policy's series are registered
+// on that policy's meter, so the exporter names it once on the scope. Without
+// the rest, the series of two devices the collector keeps apart would be
 // indistinguishable, and the observable gauge would receive duplicate points
 // for one attribute set. A dimension that is empty is left off rather than
 // exported as blank, so the common target carries no dead attributes.
 func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.KeyValue {
 	attrs = append(attrs, attribute.String("device_ip", key.host))
 	attrs = append(attrs, attribute.Int("device_port", int(key.port)))
-	attrs = append(attrs, attribute.String("policy", key.policy))
 	if key.id != "" {
 		attrs = append(attrs, attribute.String("netbox_id", key.id))
 	}
@@ -645,7 +689,10 @@ func reservedAttrNameSet() map[string]struct{} {
 	// profile could then overwrite. A dimension added to deviceKey without a
 	// value here fails TestReservedAttrNames_AreTheExportedIdentity.
 	probe := deviceKey{policy: "p", host: "h", port: 1, id: "i", context: "c"}
-	names := map[string]struct{}{rowIndexAttr: {}}
+	// policy is reserved by name: it is the scope's attribute, not the
+	// datapoint's, and a profile tag of that name would put a second policy
+	// label on the datapoint beside it.
+	names := map[string]struct{}{rowIndexAttr: {}, "policy": {}}
 	for _, attr := range appendIdentityAttrs(nil, probe) {
 		names[string(attr.Key)] = struct{}{}
 	}
@@ -914,7 +961,7 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 
 	// Ensure an observable gauge callback is registered for each metric name.
 	for name := range newStore {
-		c.ensureInstrument(name, name+" (SNMP profile metric)")
+		c.ensureInstrument(key.policy, name, name+" (SNMP profile metric)")
 	}
 
 	return nil

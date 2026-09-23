@@ -6,14 +6,16 @@ exports them as OTLP metrics.
 
 For each target, the backend walks the device over SNMP, matches its
 `sysObjectID` against the loaded profiles, and emits the matched profile's
-metrics as OTLP gauges. Each gauge carries `device_ip`, `device_port` and
-`policy` attributes, plus `netbox_id` when the target sets an `id` and
-`snmp_context` when its authentication sets a `context_name`. Together they are
-the device identity, so two policies polling one device, one host answering on
-two ports, or one policy naming an endpoint twice under different IDs or
-contexts, stay distinct series. Metrics are sent only when
-`--otel-endpoint` is set; without it, targets are still polled but nothing is
-exported.
+metrics as OTLP gauges. Every series of a policy is exported under an
+instrumentation scope named `snmp-telemetry` with the attribute
+`policy_name` set to the policy, one scope per policy. Each gauge carries
+`device_ip` and `device_port` attributes, plus `netbox_id` when the target
+sets an `id` and `snmp_context` when its authentication sets a
+`context_name`. Together with the scope they are the device identity, so two
+policies polling one device, one host answering on two ports, or one policy
+naming an endpoint twice under different IDs or contexts, stay distinct
+series. Metrics are sent only when `--otel-endpoint` is set; without it,
+targets are still polled but nothing is exported.
 
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
