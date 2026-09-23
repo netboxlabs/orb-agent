@@ -10,12 +10,13 @@ import (
 )
 
 // series builds a key and the attribute set behind it, the way the exporter
-// does, so the store learns the policy from the attributes.
+// does: the policy is part of the key and never an attribute, since the
+// exporter names it on the scope.
 func series(metric, device, policy, iface string) (seriesKey, []attribute.KeyValue) {
 	attrs := []attribute.KeyValue{
-		attribute.String("device_ip", device), attribute.String("policy", policy), attribute.String("interface_name", iface),
+		attribute.String("device_ip", device), attribute.String("interface_name", iface),
 	}
-	return seriesKey{metric: metric, attrs: attrKey(attrs)}, attrs
+	return seriesKey{metric: metric, policy: policy, attrs: attrKey(attrs)}, attrs
 }
 
 const age = 30 * time.Second
@@ -58,7 +59,7 @@ func TestStoreForgetPolicyAndDeleteByAttributes(t *testing.T) {
 	assert.False(t, ok, "the policy's series is gone")
 	_, ok = s.get(k2)
 	assert.True(t, ok, "another policy's series stays")
-	s.deleteMatching(map[string]struct{}{"g": {}}, []attribute.KeyValue{attribute.String("policy", "p2"), attribute.String("interface_name", "a")})
+	s.deleteMatching("p2", map[string]struct{}{"g": {}}, []attribute.KeyValue{attribute.String("interface_name", "a")})
 	_, ok = s.get(k2)
 	assert.False(t, ok, "a series carrying every named attribute is withdrawn")
 	_, ok = s.get(k3)
@@ -70,12 +71,12 @@ func TestStoreStalenessIsPerSeries(t *testing.T) {
 	now := time.Unix(1000, 0)
 	kf, af := series("g", "1", "p", "fresh")
 	ks, as := series("g", "1", "p", "stale")
-	kl, al := series("g", "1", "slow", "long")
+	kl, al := series("g", "1", "p", "long")
 	require.True(t, s.setGauge(kf, 1, now.Add(-10*time.Second).UnixNano(), age, af))
 	require.True(t, s.setGauge(ks, 1, now.Add(-100*time.Second).UnixNano(), age, as))
 	require.True(t, s.setGauge(kl, 1, now.Add(-100*time.Second).UnixNano(), 10*time.Minute, al))
 	var seen []string
-	s.forEach("g", now, func(k seriesKey, _ point) { seen = append(seen, k.attrs) })
+	s.forEach("g", "p", now, func(k seriesKey, _ point) { seen = append(seen, k.attrs) })
 	assert.ElementsMatch(t, []string{kf.attrs, kl.attrs}, seen, "a series is withheld only past its own policy's age")
 	_, ok := s.get(ks)
 	assert.False(t, ok, "the series it withheld is dropped, not kept forever")
@@ -90,7 +91,7 @@ func TestStoreReclaimsStaleSeriesAtItsLimit(t *testing.T) {
 	require.True(t, s.setGauge(kf, 1, now.Add(-10*time.Second).UnixNano(), age, af))
 	require.True(t, s.setGauge(ks, 1, now.Add(-100*time.Second).UnixNano(), age, as))
 	require.False(t, s.setGauge(kn, 1, now.UnixNano(), age, an), "the metric is at its limit")
-	s.forEach("g", now, func(seriesKey, point) {})
+	s.forEach("g", "p", now, func(seriesKey, point) {})
 	assert.Len(t, s.series, 1, "the stale series is reclaimed, not only withheld")
 	assert.True(t, s.setGauge(kn, 1, now.UnixNano(), age, an), "the slot it freed takes a new series")
 }
@@ -107,7 +108,7 @@ func TestStoreSeriesWithNoAgeIsNeverStale(t *testing.T) {
 	k, attrs := series("g", "1", "p", "on-change")
 	require.True(t, s.setGauge(k, 1, now.Add(-time.Hour).UnixNano(), 0, attrs))
 	var seen int
-	s.forEach("g", now, func(seriesKey, point) { seen++ })
+	s.forEach("g", "p", now, func(seriesKey, point) { seen++ })
 	assert.Equal(t, 1, seen, "a series with no age is exported however old it is")
 	_, ok := s.get(k)
 	assert.True(t, ok, "and it is not evicted")
@@ -146,8 +147,73 @@ func TestStoresShareOneSeriesBudget(t *testing.T) {
 	assert.True(t, second.setGauge(k3, 1, 1, age, a3), "the slot one store frees is one another can take")
 
 	require.False(t, first.setGauge(k1, 1, 1, age, a1), "the allowance is full again")
-	second.deleteMatching(map[string]struct{}{"g": {}}, []attribute.KeyValue{
-		attribute.String("policy", "p2"), attribute.String("interface_name", "b"),
+	second.deleteMatching("p2", map[string]struct{}{"g": {}}, []attribute.KeyValue{
+		attribute.String("interface_name", "b"),
 	})
 	assert.True(t, first.setGauge(k1, 1, 1, age, a1), "a slot a delete frees in one store is one another can take")
+}
+
+// Two policies writing the same metric with the same attributes are two
+// series: the policy is part of the key, so nothing about the attributes
+// has to tell them apart.
+func TestStoreKeepsPoliciesApart(t *testing.T) {
+	s := newStore(10)
+	k1, a1 := series("g", "1", "p1", "a")
+	k2, a2 := series("g", "1", "p2", "a")
+	require.NotEqual(t, k1, k2)
+	require.True(t, s.setGauge(k1, 1, 1, age, a1))
+	require.True(t, s.setGauge(k2, 2, 1, age, a2))
+	pt1, ok := s.get(k1)
+	require.True(t, ok)
+	pt2, ok := s.get(k2)
+	require.True(t, ok)
+	assert.Equal(t, 1.0, pt1.f)
+	assert.Equal(t, 2.0, pt2.f)
+	assert.Equal(t, "p1", pt1.policy)
+	assert.Equal(t, "p2", pt2.policy)
+}
+
+// A delete or a reconcile speaks for one policy's target. With the policy
+// gone from the attributes, the policy argument is what keeps it from
+// withdrawing another policy's series on the same device.
+func TestStoreDeleteAndEvictAreScopedToThePolicy(t *testing.T) {
+	s := newStore(10)
+	k1, a1 := series("g", "1", "p1", "a")
+	k2, a2 := series("g", "1", "p2", "a")
+	require.True(t, s.setGauge(k1, 1, 5, 0, a1))
+	require.True(t, s.setGauge(k2, 1, 5, 0, a2))
+
+	s.deleteMatching("p1", nil, []attribute.KeyValue{attribute.String("device_ip", "1")})
+	_, ok := s.get(k1)
+	assert.False(t, ok, "the named policy's series is withdrawn")
+	_, ok = s.get(k2)
+	assert.True(t, ok, "the other policy's series on the same device stays")
+
+	require.True(t, s.setGauge(k1, 1, 5, 0, a1))
+	s.evictBefore("p2", nil, []attribute.KeyValue{attribute.String("device_ip", "1")}, 10)
+	_, ok = s.get(k2)
+	assert.False(t, ok, "the named policy's ageless series older than the mark is evicted")
+	_, ok = s.get(k1)
+	assert.True(t, ok, "the other policy's series stays")
+}
+
+// forEach visits one policy's series of a metric and nobody else's, and
+// still evicts the aged series it visits.
+func TestStoreForEachIsScopedToThePolicy(t *testing.T) {
+	s := newStore(10)
+	now := time.Unix(1000, 0)
+	k1, a1 := series("g", "1", "p1", "a")
+	k2, a2 := series("g", "1", "p2", "a")
+	ks, as := series("g", "1", "p1", "stale")
+	require.True(t, s.setGauge(k1, 1, now.UnixNano(), age, a1))
+	require.True(t, s.setGauge(k2, 2, now.UnixNano(), age, a2))
+	require.True(t, s.setGauge(ks, 3, now.Add(-2*age).UnixNano(), age, as))
+
+	var seen []float64
+	s.forEach("g", "p1", now, func(_ seriesKey, pt point) { seen = append(seen, pt.f) })
+	assert.Equal(t, []float64{1}, seen, "only p1's fresh series is visited")
+	_, ok := s.get(ks)
+	assert.False(t, ok, "p1's stale series is dropped in the same pass")
+	_, ok = s.get(k2)
+	assert.True(t, ok, "p2's series is neither visited nor touched")
 }

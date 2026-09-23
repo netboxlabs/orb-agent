@@ -336,7 +336,7 @@ func (c *Collector) runOnce(ctx context.Context, target config.Target, opts Opti
 	if previous := l.snapshot().Profile; previous != "" && previous != profile.Name {
 		c.logger.Info("gnmi profile changed, withdrawing the target's series",
 			"policy", opts.PolicyName, "host", target.Host, "from", previous, "to", profile.Name)
-		c.store.deleteMatching(nil, baseAttrs(target, opts))
+		c.store.deleteMatching(opts.PolicyName, nil, baseAttrs(target, opts))
 	}
 	l.update(func(s *TargetStatus) { s.Profile = profile.Name })
 
@@ -526,7 +526,7 @@ func (c *Collector) consume(ctx context.Context, notes <-chan gnmi.Notification,
 		if n.Paths != nil {
 			covered = polledMetrics(profileMetrics(p), requested)
 		}
-		c.store.evictBefore(covered, baseAttrs(target, opts), started)
+		c.store.evictBefore(opts.PolicyName, covered, baseAttrs(target, opts), started)
 		// A sync response is the stream saying its dump is complete, which is as
 		// good a sign of recovery as a value: a stream over a subtree with nothing
 		// in it carries no value at all, and the target would stand at the error of
@@ -713,7 +713,7 @@ func (c *Collector) poll(ctx context.Context, sess gnmi.Session, subs []gnmi.Sub
 			}
 		}
 		if polled := polledMetrics(metricsByPath, fresh); len(polled) > 0 {
-			c.store.evictBefore(polled, baseAttrs(target, opts), started)
+			c.store.evictBefore(opts.PolicyName, polled, baseAttrs(target, opts), started)
 		}
 		l.update(func(s *TargetStatus) { s.LastNotification = time.Now(); s.LastError = ""; s.LastErrorAt = time.Time{} })
 		select {
@@ -800,7 +800,7 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 				if !ok {
 					continue
 				}
-				c.store.deleteMatching(map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
+				c.store.deleteMatching(opts.PolicyName, map[string]struct{}{m.Name: {}}, append(append([]attribute.KeyValue(nil), base...), promoted(sub, keys)...))
 			}
 		}
 	}
@@ -824,14 +824,14 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
 				continue
 			}
-			dropped = c.exporter.observeCounter(m.Name, m.Unit, attrs, v, ts, maxAge)
+			dropped = c.exporter.observeCounter(opts.PolicyName, m.Name, m.Unit, attrs, v, ts, maxAge)
 		default:
 			v, ok := gaugeValue(*m, u.Value)
 			if !ok {
 				metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "unconvertible_value")))
 				continue
 			}
-			dropped = c.exporter.observeGauge(m.Name, m.Unit, attrs, v, ts, maxAge)
+			dropped = c.exporter.observeGauge(opts.PolicyName, m.Name, m.Unit, attrs, v, ts, maxAge)
 		}
 		if dropped != "" {
 			metrics.GetUpdatesDropped().Add(ctx, 1, metric.WithAttributes(attribute.String("reason", dropped)))

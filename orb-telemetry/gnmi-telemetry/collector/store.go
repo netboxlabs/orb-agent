@@ -10,10 +10,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// seriesKey identifies one exported series: a metric name and its attribute
-// set rendered as a stable string.
+// seriesKey identifies one exported series: a metric name, the policy that
+// wrote it, and its attribute set rendered as a stable string. The policy is
+// a key field rather than an attribute because the exporter names it on the
+// instrumentation scope: two policies watching one device with the same
+// attributes are two series, on two scopes.
 type seriesKey struct {
 	metric string
+	policy string
 	attrs  string
 }
 
@@ -91,22 +95,13 @@ func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribu
 		if !s.budget.take(k.metric) {
 			return false
 		}
-		pt = &point{attrs: attrs, policy: policyOf(attrs)}
+		pt = &point{attrs: attrs, policy: k.policy}
 		s.series[k] = pt
 	}
 	apply(pt, fresh)
 	pt.ts = ts
 	pt.maxAge = maxAge
 	return true
-}
-
-func policyOf(attrs []attribute.KeyValue) string {
-	for _, kv := range attrs {
-		if kv.Key == "policy" {
-			return kv.Value.AsString()
-		}
-	}
-	return ""
 }
 
 func (s *store) get(k seriesKey) (point, bool) {
@@ -119,20 +114,20 @@ func (s *store) get(k seriesKey) (point, bool) {
 	return *pt, true
 }
 
-// forEach visits every series of one metric whose last update arrived within
-// its own maxAge of now. A series with no age is never withheld, which is how
-// a leaf the device streams on change keeps its last value until the device
-// deletes it. A series past its age is dropped as it is withheld, in the same
-// pass: withholding it alone would leave it holding a slot of the metric's
-// bound forever, and a device that renamed its interfaces would eventually
-// refuse every new series. Deleting during the range is defined behaviour in
-// Go, and the write lock is held for it; visit must not call back into the
-// store.
-func (s *store) forEach(metric string, now time.Time, visit func(seriesKey, point)) {
+// forEach visits every series of one metric and one policy whose last update
+// arrived within its own maxAge of now. A series with no age is never
+// withheld, which is how a leaf the device streams on change keeps its last
+// value until the device deletes it. A series past its age is dropped as it
+// is withheld, in the same pass: withholding it alone would leave it holding
+// a slot of the metric's bound forever, and a device that renamed its
+// interfaces would eventually refuse every new series. Deleting during the
+// range is defined behaviour in Go, and the write lock is held for it; visit
+// must not call back into the store.
+func (s *store) forEach(metric, policy string, now time.Time, visit func(seriesKey, point)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, pt := range s.series {
-		if k.metric != metric {
+		if k.metric != metric || k.policy != policy {
 			continue
 		}
 		if pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
@@ -181,10 +176,17 @@ func (s *store) releaseAll() {
 // A nil name set means every metric, as it does for evictBefore: a caller that
 // really is speaking for the whole of what the attributes select, such as a
 // target changing profile, names none.
-func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyValue) {
+//
+// The policy is named explicitly: it is no longer an attribute, and without
+// it a delete for one policy's target would withdraw another policy's series
+// on the same device.
+func (s *store) deleteMatching(policy string, names map[string]struct{}, want []attribute.KeyValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, pt := range s.series {
+		if k.policy != policy {
+			continue
+		}
 		if names != nil {
 			if _, ok := names[k.metric]; !ok {
 				continue
@@ -209,10 +211,17 @@ func (s *store) deleteMatching(names map[string]struct{}, want []attribute.KeyVa
 // the whole profile reconciles against. A caller that covered only part of the
 // profile names the metrics it covered: a snapshot says nothing about a
 // subtree it never asked for, so it must not withdraw one.
-func (s *store) evictBefore(names map[string]struct{}, want []attribute.KeyValue, before int64) {
+//
+// The policy is named explicitly: it is no longer an attribute, and without
+// it a reconcile for one policy's target would withdraw another policy's
+// series on the same device.
+func (s *store) evictBefore(policy string, names map[string]struct{}, want []attribute.KeyValue, before int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for k, pt := range s.series {
+		if k.policy != policy {
+			continue
+		}
 		if pt.maxAge != 0 || pt.ts >= before {
 			continue
 		}

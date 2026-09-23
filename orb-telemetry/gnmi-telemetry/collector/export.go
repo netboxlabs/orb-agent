@@ -169,14 +169,14 @@ func newExporter(st *store, logger *slog.Logger, schemas *Schemas) *exporter {
 // stored, or the reason it was dropped. The instrument is ensured FIRST: a
 // series refused there must not be left in the store, holding a budget slot
 // against a name this collector will never export.
-func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) string {
-	if reason := e.ensureCounter(name, unit); reason != "" {
+func (e *exporter) observeCounter(policy, name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) string {
+	if reason := e.ensureCounter(policy, name, unit); reason != "" {
 		return reason
 	}
 	if !exporting() {
 		return ""
 	}
-	if !e.store.setCounter(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
+	if !e.store.setCounter(seriesKey{metric: name, policy: policy, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return dropSeriesLimit
 	}
 	return ""
@@ -184,14 +184,14 @@ func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue,
 
 // observeGauge stores a gauge value with its arrival time and staleness age,
 // and ensures its instrument, returning the reason it was dropped or "".
-func (e *exporter) observeGauge(name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) string {
-	if reason := e.ensureGauge(name, unit); reason != "" {
+func (e *exporter) observeGauge(policy, name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) string {
+	if reason := e.ensureGauge(policy, name, unit); reason != "" {
 		return reason
 	}
 	if !exporting() {
 		return ""
 	}
-	if !e.store.setGauge(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
+	if !e.store.setGauge(seriesKey{metric: name, policy: policy, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return dropSeriesLimit
 	}
 	return ""
@@ -235,7 +235,7 @@ func (e *exporter) admit(name, kind, unit string) string {
 // ensureCounter registers the name as a counter in the process registry and
 // creates the instrument on first use. It returns the reason to drop the
 // observation, or "".
-func (e *exporter) ensureCounter(name, unit string) string {
+func (e *exporter) ensureCounter(policy, name, unit string) string {
 	if reason := e.admit(name, kindCounter, unit); reason != "" {
 		return reason
 	}
@@ -257,7 +257,7 @@ func (e *exporter) ensureCounter(name, unit string) string {
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		e.store.forEach(name, time.Now(), func(_ seriesKey, pt point) {
+		e.store.forEach(name, policy, time.Now(), func(_ seriesKey, pt point) {
 			o.ObserveInt64(inst, pt.i, metric.WithAttributes(pt.attrs...))
 		})
 		return nil
@@ -273,7 +273,7 @@ func (e *exporter) ensureCounter(name, unit string) string {
 
 // ensureGauge is ensureCounter for a gauge: the same registration, and the
 // same reason back.
-func (e *exporter) ensureGauge(name, unit string) string {
+func (e *exporter) ensureGauge(policy, name, unit string) string {
 	if reason := e.admit(name, kindGauge, unit); reason != "" {
 		return reason
 	}
@@ -295,7 +295,7 @@ func (e *exporter) ensureGauge(name, unit string) string {
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		e.store.forEach(name, time.Now(), func(_ seriesKey, pt point) {
+		e.store.forEach(name, policy, time.Now(), func(_ seriesKey, pt point) {
 			o.ObserveFloat64(inst, pt.f, metric.WithAttributes(pt.attrs...))
 		})
 		return nil
