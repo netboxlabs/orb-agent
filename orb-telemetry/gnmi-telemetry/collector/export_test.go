@@ -21,7 +21,7 @@ func testReader(t *testing.T) *sdkmetric.ManualReader {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
-	metrics.SetMeterForTest(provider.Meter("test"))
+	metrics.SetMeterProviderForTest(provider)
 	t.Cleanup(metrics.ResetMeter)
 	return reader
 }
