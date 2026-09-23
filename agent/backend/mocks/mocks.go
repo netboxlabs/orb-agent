@@ -185,9 +185,9 @@ func SetupFailingProcess(mockCmd *MockCmd, errorMsg string) {
 // address held on purpose, so the probe is set aside along with the process.
 func AllowHeldListenAddr(t testing.TB) {
 	t.Helper()
-	orig := backend.EnsureListenAddrFree
-	backend.EnsureListenAddrFree = func(string) error { return nil }
-	t.Cleanup(func() { backend.EnsureListenAddrFree = orig })
+	orig := backend.ReserveListenAddr
+	backend.ReserveListenAddr = func(addr string) (string, error) { return addr, nil }
+	t.Cleanup(func() { backend.ReserveListenAddr = orig })
 }
 
 // CaptureListenAddr sets the probe aside like AllowHeldListenAddr and records
@@ -197,11 +197,11 @@ func AllowHeldListenAddr(t testing.TB) {
 func CaptureListenAddr(t testing.TB) *string {
 	t.Helper()
 	var addr string
-	orig := backend.EnsureListenAddrFree
-	backend.EnsureListenAddrFree = func(a string) error {
+	orig := backend.ReserveListenAddr
+	backend.ReserveListenAddr = func(a string) (string, error) {
 		addr = a
-		return nil
+		return a, nil
 	}
-	t.Cleanup(func() { backend.EnsureListenAddrFree = orig })
+	t.Cleanup(func() { backend.ReserveListenAddr = orig })
 	return &addr
 }

@@ -73,7 +73,8 @@ type StartSpec struct {
 	// would report the other process's answer as the child's, and the
 	// policies replayed after it would go to the other process too. A
 	// backend has no readiness check without an address to ask, so a spec
-	// without one is refused as incomplete.
+	// without one, or with port 0, is refused as incomplete: a backend that
+	// listens on any open port reserves one with ReserveListenAddr first.
 	ListenAddr     string
 	LogLine        func(line string, isStderr bool)  // per-backend normalizer adapter
 	SetProc        func(Commander, <-chan CmdStatus) // publishes proc+statusChan to the backend BEFORE the readiness loop (see CRITICAL below)
@@ -100,34 +101,38 @@ type StartSpec struct {
 // failed start as a bad binary reads it to leave the binary alone.
 var ErrListenAddrInUse = errors.New("listen address in use")
 
-// EnsureListenAddrFree is the probe StartProcess runs on a spec's ListenAddr.
+// ReserveListenAddr binds addr, releases it at once and returns the address
+// it bound. With a port, it is the probe StartProcess runs on a spec's
+// ListenAddr: a backend about to be told to listen there is refused while
+// another process holds it, with the bind error saying why. With port 0, it
+// picks a free port, which is how a backend that is to listen on any open
+// port learns the one to be told before its spec is built. For a hostname it
+// binds the address net.Listen picks, the IPv4 loopback for localhost, which
+// is also the address the readiness check dials first. The release narrows
+// the window in which the check can be answered by another process to the
+// time between it and the child's own bind; the check after readiness below
+// catches a child that lost that race and died, and only an answer that
+// proves it came from the child would close it.
+//
 // It is a variable so that a test standing a server in for the child on that
 // address can stub it, the way NewCmdOptions stands a Commander in for the
 // process.
-var EnsureListenAddrFree = ensureListenAddrFree
+var ReserveListenAddr = reserveListenAddr
 
-// ensureListenAddrFree binds addr and releases it at once, so a backend that
-// is about to be told to listen there is refused while another process holds
-// it, with the bind error saying why. For a hostname it binds the address
-// net.Listen picks, the IPv4 loopback for localhost, which is also the
-// address the readiness check dials first. This narrows the window in which
-// the check can be answered by another process to the time between the
-// release and the child's own bind; the check after readiness below catches
-// a child that lost that race and died, and only an answer that proves it
-// came from the child would close it.
-func ensureListenAddrFree(addr string) error {
+func reserveListenAddr(addr string) (string, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, addr, err)
+		return "", fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, addr, err)
 	}
+	bound := l.Addr().String()
 	// The address was free; a failure to release the probe's own socket is
 	// nothing the child needs to know about.
 	_ = l.Close()
-	return nil
+	return bound, nil
 }
 
 // StartProcess checks the spec is complete, returns the cancellation if Ctx
-// is already done, binds and releases ListenAddr, refusing the start with
+// is already done, reserves and releases ListenAddr, refusing the start with
 // ErrListenAddrInUse while another process holds it, and only then launches
 // the process and streams stdout/stderr to LogLine:
 //   - builds the Cmd, proc.Start(), and IMMEDIATELY calls spec.SetProc(proc, statusChan)
@@ -182,7 +187,13 @@ func StartProcess(spec StartSpec) error {
 	if spec.ReadinessBudget == 0 {
 		spec.ReadinessBudget = ReadinessBudgetFrom(ctx)
 	}
-	if err := EnsureListenAddrFree(spec.ListenAddr); err != nil {
+	// Port 0 would probe fine and tell the child to pick a port the readiness
+	// check cannot know: a backend that listens on any open port reserves
+	// one before building its spec.
+	if _, port, err := net.SplitHostPort(spec.ListenAddr); err != nil || port == "0" {
+		return fmt.Errorf("StartProcess: ListenAddr %q must name the port the child is told, reserve one with ReserveListenAddr first", spec.ListenAddr)
+	}
+	if _, err := ReserveListenAddr(spec.ListenAddr); err != nil {
 		spec.Logger.Error(spec.NameDisplay+" cannot start", "error", err)
 		return fmt.Errorf("%s: %w", spec.NameDisplay, err)
 	}

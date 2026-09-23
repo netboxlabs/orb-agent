@@ -111,7 +111,7 @@ func TestStartProcess_RequiredFieldsValidated(t *testing.T) {
 	noop := func(string, bool) {}
 	setProc := func(Commander, <-chan CmdStatus) {}
 	ready := func() (string, error) { return "", nil }
-	full := StartSpec{Logger: testProcessLogger(), SetProc: setProc, LogLine: noop, ReadinessCheck: ready, ListenAddr: "127.0.0.1:0"}
+	full := StartSpec{Logger: testProcessLogger(), SetProc: setProc, LogLine: noop, ReadinessCheck: ready, ListenAddr: testListenAddr(t)}
 
 	tests := []struct {
 		name string
@@ -161,7 +161,7 @@ func TestStartProcess_Success(t *testing.T) {
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "test-exec",
-		ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr:     testListenAddr(t),
 		Args:           []string{"--flag"},
 		LogLine: func(line string, isStderr bool) {
 			logMu.Lock()
@@ -220,7 +220,7 @@ func TestStartProcess_SetProcBeforeReadiness(t *testing.T) {
 		NameDisplay:    "guard",
 		NameUnderscore: "guard",
 		Exec:           "guard-exec",
-		ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr:     testListenAddr(t),
 		LogLine:        func(string, bool) {},
 		SetProc: func(c Commander, _ <-chan CmdStatus) {
 			published = c
@@ -258,7 +258,7 @@ func TestStartProcess_StartupCompleteError(t *testing.T) {
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
 			Exec:           "test-exec",
-			ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+			ListenAddr:     testListenAddr(t),
 			LogLine:        func(string, bool) {},
 			SetProc:        func(Commander, <-chan CmdStatus) {},
 			ReadinessCheck: func() (string, error) {
@@ -293,7 +293,7 @@ func TestStartProcess_StartupError(t *testing.T) {
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "test-exec",
-		ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr:     testListenAddr(t),
 		LogLine:        func(string, bool) {},
 		SetProc:        func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "", nil },
@@ -333,7 +333,7 @@ func TestStartProcess_ProcessEndedDuringReadiness(t *testing.T) {
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
 			Exec:           "test-exec",
-			ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+			ListenAddr:     testListenAddr(t),
 			LogLine:        func(string, bool) {},
 			SetProc:        func(Commander, <-chan CmdStatus) {},
 			ReadinessCheck: func() (string, error) {
@@ -372,7 +372,7 @@ func TestStartProcess_ReadinessTimeout(t *testing.T) {
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
 			Exec:           "test-exec",
-			ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+			ListenAddr:     testListenAddr(t),
 			LogLine:        func(string, bool) {},
 			SetProc:        func(Commander, <-chan CmdStatus) {},
 			ReadinessCheck: func() (string, error) {
@@ -406,7 +406,7 @@ func TestStartProcess_PassesExecAndArgs(t *testing.T) {
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "my-binary",
-		ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr:     testListenAddr(t),
 		Args:           []string{"run", "--flag", "value"},
 		LogLine:        func(string, bool) {},
 		SetProc:        func(Commander, <-chan CmdStatus) {},
@@ -460,7 +460,7 @@ func TestStartProcess_CancelledDuringTheStartupWait(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		ListenAddr: "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr: testListenAddr(t),
 		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "1", nil },
@@ -486,7 +486,7 @@ func TestStartProcess_CancelledDuringAReadinessBackoff(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		ListenAddr: "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr: testListenAddr(t),
 		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) {
@@ -516,7 +516,7 @@ func TestStartProcess_GivesUpWhenTheReadinessBudgetIsSpent(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		ListenAddr: "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr: testListenAddr(t),
 		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck:  func() (string, error) { checks.Add(1); return "", errors.New("not yet") },
@@ -545,7 +545,7 @@ func TestStartProcess_StopsTheChildWhenCancelledDuringASuccessfulReadinessCheck(
 	var checks atomic.Int32
 
 	err := StartProcess(StartSpec{
-		ListenAddr: "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr: testListenAddr(t),
 		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) {
@@ -573,7 +573,7 @@ func TestStartProcess_ReadsTheReadinessBudgetFromTheContext(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		ListenAddr: "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr: testListenAddr(t),
 		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "", errors.New("not yet") },
@@ -595,7 +595,7 @@ func TestStartProcess_SpecBudgetWinsOverTheContextBudget(t *testing.T) {
 	stubNewCmdOptions(t, fake)
 
 	err := StartProcess(StartSpec{
-		ListenAddr: "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr: testListenAddr(t),
 		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck:  func() (string, error) { return "", errors.New("not yet") },
@@ -696,7 +696,7 @@ func TestStartProcess_AChildDeadAfterAPassingReadinessCheckIsNotReady(t *testing
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "test-exec",
-		ListenAddr:     "127.0.0.1:0", // any free port; the probe is not what this test is about
+		ListenAddr:     testListenAddr(t),
 		LogLine:        func(string, bool) {},
 		SetProc:        func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) {
@@ -707,4 +707,66 @@ func TestStartProcess_AChildDeadAfterAPassingReadinessCheckIsNotReady(t *testing
 	})
 	require.Error(t, err, "a child that died is not ready, whatever answered the check")
 	assert.Contains(t, err.Error(), "process ended unexpectedly")
+}
+
+// testListenAddr is a free loopback address for a spec whose test is not
+// about the probe: reserved so it names a real port, released for the probe
+// to find free.
+func testListenAddr(t *testing.T) string {
+	t.Helper()
+	addr, err := ReserveListenAddr("127.0.0.1:0")
+	require.NoError(t, err)
+	return addr
+}
+
+// With port 0 the reservation picks a free port and returns it, which is how
+// a backend that listens on any open port learns the one to be told; the
+// port is released for the child to bind.
+func TestReserveListenAddrPicksAFreePort(t *testing.T) {
+	addr, err := ReserveListenAddr("127.0.0.1:0")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", host)
+	assert.NotEqual(t, "0", port, "the picked port is a concrete one")
+
+	child, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the picked port is released for the child")
+	_ = child.Close()
+}
+
+// A held address is refused with the sentinel, the same way StartProcess
+// reports it.
+func TestReserveListenAddrRefusesAHeldAddress(t *testing.T) {
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+
+	_, err = ReserveListenAddr(holder.Addr().String())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+}
+
+// A spec still carrying port 0 would probe fine and tell the child to pick a
+// port the readiness check cannot know, so it is refused before anything is
+// spawned: the port is reserved before the spec is built.
+func TestStartProcess_RefusesAnUnreservedPortZero(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(4242)
+	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+	captured := stubNewCmdOptions(t, fake)
+
+	err := StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     "127.0.0.1:0",
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ReserveListenAddr")
+	assert.Empty(t, captured.exec, "nothing is spawned")
 }
