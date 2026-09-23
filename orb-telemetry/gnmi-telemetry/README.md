@@ -503,8 +503,9 @@ subscriptions:
   for both attributes. Every key the path wildcards must be promoted by some
   attribute, since the key value is the only thing telling the elements of the
   list apart and an unpromoted one has them all write a single series. The
-  attribute name on the left may not be `device_ip`, `policy` or `netbox_id`,
-  which the collector sets itself.
+  attribute name on the left may not be `device_ip` or `netbox_id`, which the
+  collector sets itself, or `policy`, which is reserved because the policy is
+  the `policy_name` of the series' instrumentation scope.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own
