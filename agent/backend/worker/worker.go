@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -194,6 +195,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		NameUnderscore: "worker",
 		Exec:           d.resolveExecPath(),
 		Args:           dOptions,
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p
