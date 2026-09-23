@@ -103,11 +103,15 @@ func TestCollectTargetExportsMatchedUpdatesAndDropsTheRest(t *testing.T) {
 	sum := got["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
 	require.Len(t, sum.DataPoints, 1)
 	assert.Equal(t, int64(1394), sum.DataPoints[0].Value)
-	for k, want := range map[string]string{"device_ip": "10.0.0.1", "policy": "p", "netbox_id": "42", "interface_name": "e1"} {
+	for k, want := range map[string]string{"device_ip": "10.0.0.1", "netbox_id": "42", "interface_name": "e1"} {
 		v, ok := sum.DataPoints[0].Attributes.Value(attribute.Key(k))
 		require.True(t, ok, k)
 		assert.Equal(t, want, v.AsString(), k)
 	}
+	_, hasPolicy := sum.DataPoints[0].Attributes.Value("policy")
+	assert.False(t, hasPolicy, "the policy is the scope's, not the datapoint's")
+	_, inScope := collectByPolicy(t, reader)["p"]["gnmi.if_in_octets"]
+	assert.True(t, inScope, "the series left under the policy's scope")
 	g := got["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 	assert.Equal(t, 1.0, g.DataPoints[0].Value)
 	_, unmatched := got["gnmi.x"]
@@ -138,6 +142,40 @@ func TestCollectTargetExportsMatchedUpdatesAndDropsTheRest(t *testing.T) {
 	assert.Equal(t, "nokia_srlinux", st[0].Profile)
 	assert.Equal(t, "on_change", st[0].Mode)
 	assert.True(t, st[0].Up)
+}
+
+// Two policies subscribing to one device produce one series each, on their
+// own scopes, with identical datapoint attributes.
+func TestCollectTarget_SameDeviceUnderTwoPoliciesExportsInBothScopes(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+		SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, policy := range []string{"core", "edge"} {
+		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", "42"), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
+	}
+	waitFor(t, 3*time.Second, func() bool {
+		by := collectByPolicy(t, reader)
+		_, a := by["core"]["gnmi.if_in_octets"]
+		_, b := by["edge"]["gnmi.if_in_octets"]
+		return a && b
+	})
+	by := collectByPolicy(t, reader)
+	for _, policy := range []string{"core", "edge"} {
+		sum := by[policy]["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+		require.Len(t, sum.DataPoints, 1, policy)
+		assert.Equal(t, int64(1394), sum.DataPoints[0].Value)
+		v, ok := sum.DataPoints[0].Attributes.Value("device_ip")
+		require.True(t, ok)
+		assert.Equal(t, "10.0.0.1", v.AsString())
+		_, hasPolicy := sum.DataPoints[0].Attributes.Value("policy")
+		assert.False(t, hasPolicy)
+	}
 }
 
 func TestSrlOverlayUsesNativeOriginForItsSubscription(t *testing.T) {

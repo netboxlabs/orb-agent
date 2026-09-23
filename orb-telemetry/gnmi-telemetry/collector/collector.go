@@ -199,7 +199,8 @@ func (c *Collector) ensureTargetUp() {
 			c.logger.Error("failed to register target_up", "error", err)
 			return
 		}
-		c.exporter.register(reg)
+		// Task 4 registers target_up per policy.
+		c.exporter.register("", reg)
 	})
 }
 
@@ -839,11 +840,12 @@ func (c *Collector) apply(ctx context.Context, n gnmi.Notification, rung string,
 	}
 }
 
-// baseAttrs is what every series of one target and policy carries, and so
-// what selects them all: the device, the policy, and the NetBox id when the
-// target names one.
-func baseAttrs(target config.Target, opts Options) []attribute.KeyValue {
-	base := []attribute.KeyValue{attribute.String("device_ip", target.Host), attribute.String("policy", opts.PolicyName)}
+// baseAttrs is what every series of one target carries on the datapoint: the
+// device, and the NetBox id when the target names one. The policy is not
+// among them: it is the scope's policy_name, and the store keys on it, so
+// selecting a target's series takes the policy beside these.
+func baseAttrs(target config.Target, _ Options) []attribute.KeyValue {
+	base := []attribute.KeyValue{attribute.String("device_ip", target.Host)}
 	if target.ID != "" {
 		base = append(base, attribute.String("netbox_id", target.ID))
 	}

@@ -39,6 +39,30 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata
 	return out
 }
 
+// collectByPolicy runs one collection and indexes metrics by the policy_name
+// of the scope they were exported under ("" for the process scope), then by
+// name. collect flattens scopes, which is right for a single-policy test;
+// this is for tests that care which scope a series left under.
+func collectByPolicy(t *testing.T, reader *sdkmetric.ManualReader) map[string]map[string]metricdata.Metrics {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	out := map[string]map[string]metricdata.Metrics{}
+	for _, sm := range rm.ScopeMetrics {
+		policy := ""
+		if v, ok := sm.Scope.Attributes.Value(attribute.Key(metrics.PolicyNameAttribute)); ok {
+			policy = v.AsString()
+		}
+		if out[policy] == nil {
+			out[policy] = map[string]metricdata.Metrics{}
+		}
+		for _, m := range sm.Metrics {
+			out[policy][m.Name] = m
+		}
+	}
+	return out
+}
+
 // fallbacks totals the gnmi.mode_fallback_total counter. testReader installs
 // the meter the metrics package hands its health counters out on, so the
 // ladder's own accounting arrives through the same manual reader as the series.
@@ -168,7 +192,7 @@ func TestConvertValue(t *testing.T) {
 func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {
 	reader := testReader(t)
 	e := newExporter(newStore(100), nil, nil)
-	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1"), attribute.String("policy", "p"), attribute.String("interface_name", "e1")}
+	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1"), attribute.String("interface_name", "e1")}
 	require.Empty(t, e.observeCounter("p", "if_in_octets", "By", attrs, 1394, time.Now().UnixNano(), age))
 	require.Empty(t, e.observeGauge("p", "if_oper_status", "", attrs, 1, time.Now().UnixNano(), age))
 
@@ -187,17 +211,78 @@ func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {
 	require.True(t, ok, "gauges export as a float64 gauge")
 	require.Len(t, g.DataPoints, 1)
 	assert.Equal(t, 1.0, g.DataPoints[0].Value)
+
+	byPolicy := collectByPolicy(t, reader)
+	_, inScope := byPolicy["p"]["gnmi.if_in_octets"]
+	assert.True(t, inScope, "the series left under its policy's scope")
+	_, hasPolicy := sum.DataPoints[0].Attributes.Value("policy")
+	assert.False(t, hasPolicy, "the policy is on the scope, not the datapoint")
 }
 
 func TestExporterWithholdsStaleSeries(t *testing.T) {
 	reader := testReader(t)
 	e := newExporter(newStore(100), nil, nil)
-	attrs := []attribute.KeyValue{attribute.String("device_ip", "1"), attribute.String("policy", "p")}
+	attrs := []attribute.KeyValue{attribute.String("device_ip", "1")}
 	require.Empty(t, e.observeGauge("p", "cpu_utilization", "%", attrs, 12, time.Now().Add(-time.Minute).UnixNano(), age))
 	_, stored := e.store.get(seriesKey{metric: "cpu_utilization", policy: "p", attrs: attrKey(attrs)})
 	require.True(t, stored, "the store accepted the write")
 	got := collect(t, reader)
 	assert.NotContains(t, got, "gnmi.cpu_utilization", "a series older than its age is withheld from export")
+}
+
+// The same metric under two policies is two instruments on two meters, so
+// each policy's series export under its own scope and never merge.
+func TestExporterExportsEachPolicyUnderItsOwnScope(t *testing.T) {
+	reader := testReader(t)
+	e := newExporter(newStore(100), nil, nil)
+	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1"), attribute.String("interface_name", "e1")}
+	now := time.Now().UnixNano()
+	require.Empty(t, e.observeCounter("core", "if_in_octets", "By", attrs, 10, now, age))
+	require.Empty(t, e.observeCounter("edge", "if_in_octets", "By", attrs, 20, now, age))
+
+	byPolicy := collectByPolicy(t, reader)
+	core := byPolicy["core"]["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+	edge := byPolicy["edge"]["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+	require.Len(t, core.DataPoints, 1)
+	require.Len(t, edge.DataPoints, 1)
+	assert.Equal(t, int64(10), core.DataPoints[0].Value)
+	assert.Equal(t, int64(20), edge.DataPoints[0].Value)
+	_, unscoped := byPolicy[""]["gnmi.if_in_octets"]
+	assert.False(t, unscoped, "nothing of a policy's leaves on the process scope")
+}
+
+// forgetPolicy gives the policy's callbacks back and drops its instrument
+// entries, so its scope goes quiet, another policy's is untouched, and a
+// later observation under the same name registers afresh.
+func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
+	reader := testReader(t)
+	e := newExporter(newStore(100), nil, nil)
+	attrs := []attribute.KeyValue{attribute.String("device_ip", "10.0.0.1")}
+	now := time.Now().UnixNano()
+	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 1, now, age))
+	require.Empty(t, e.observeGauge("edge", "cpu", "%", attrs, 2, now, age))
+	require.Len(t, collectByPolicy(t, reader), 2)
+
+	e.store.forgetPolicy("core")
+	e.forgetPolicy("core")
+
+	byPolicy := collectByPolicy(t, reader)
+	_, coreLeft := byPolicy["core"]["gnmi.cpu"]
+	assert.False(t, coreLeft, "a forgotten policy exports nothing")
+	_, edgeLeft := byPolicy["edge"]["gnmi.cpu"]
+	assert.True(t, edgeLeft, "the other policy is untouched")
+	e.mu.Lock()
+	_, stillKeyed := e.gauges[instrumentKey{policy: "core", name: "cpu"}]
+	_, regsLeft := e.regs["core"]
+	e.mu.Unlock()
+	assert.False(t, stillKeyed)
+	assert.False(t, regsLeft)
+
+	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 3, time.Now().UnixNano(), age))
+	byPolicy = collectByPolicy(t, reader)
+	g := byPolicy["core"]["gnmi.cpu"].Data.(metricdata.Gauge[float64])
+	require.Len(t, g.DataPoints, 1)
+	assert.Equal(t, 3.0, g.DataPoints[0].Value, "a policy of the same name registers afresh")
 }
 
 func TestFlattenUpdate(t *testing.T) {
