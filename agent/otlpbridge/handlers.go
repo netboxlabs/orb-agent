@@ -70,6 +70,12 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 		}
 	}
 
+	// Every metrics backend names its policy on the instrumentation scope;
+	// stamp the id and backend the platform validates against, from the
+	// policies this agent runs. Outside fleet mode there is no repository
+	// and the request is forwarded as it arrived.
+	enrichMetricsWithPolicy(req, s.bridge.GetPolicyRepo(), s.bridge.logger)
+
 	payload, err := s.bridge.enc.Marshal(req)
 	if err != nil {
 		return nil, err
