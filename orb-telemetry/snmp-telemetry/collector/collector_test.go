@@ -2567,7 +2567,7 @@ func TestReservedAttrNames_AreTheExportedIdentity(t *testing.T) {
 		assert.True(t, reservedTagName(attr),
 			"deviceKey.%s is exported as %q, so a profile tag of that name would overwrite it", field, attr)
 	}
-	assert.True(t, reservedTagName("policy"), "a profile tag must not reintroduce a policy datapoint label")
+	assert.True(t, reservedTagName(metrics.PolicyNameAttribute), "a profile tag must not shadow the scope's policy_name")
 	assert.True(t, reservedTagName(rowIndexAttr), "a row identity is as overwritable as a device identity")
 	assert.Len(t, reservedAttrNames, len(datapointIdentityAttrs())+2,
 		"the reserved set names an attribute the exported identity does not build")
@@ -2619,7 +2619,7 @@ func TestCollectTarget_DeviceTagCannotOverwriteIdentity(t *testing.T) {
 		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
 	})
 	p.MetricTags = []profiles.MetricTag{
-		{Tag: "policy", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
+		{Tag: "policy_name", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
 		{Tag: "device_ip", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
 		{Tag: "netbox_id", Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
 		{Column: &profiles.TagColumn{OID: nameOID, Name: "SysName"}},
@@ -2644,10 +2644,10 @@ func TestCollectTarget_DeviceTagCannotOverwriteIdentity(t *testing.T) {
 		assert.Equal(t, 1, attrCount(pts[0], attr), "%s must be appended once", attr)
 	}
 	assert.Equal(t, "sensor-1", exported["SysName"], "a tag taking no reserved name still lands")
-	assert.Equal(t, 0, attrCount(pts[0], "policy"), "a policy tag is dropped and the identity adds none")
+	assert.Equal(t, 0, attrCount(pts[0], "policy_name"), "a policy_name tag is dropped and the identity adds none")
 
 	assert.Equal(t, 3, strings.Count(logs.String(), "Ignoring metric tag that would overwrite"), "logs: %s", logs.String())
-	assert.Contains(t, logs.String(), "tag=policy")
+	assert.Contains(t, logs.String(), "tag=policy_name")
 	assert.Contains(t, logs.String(), "tag=device_ip")
 	assert.Contains(t, logs.String(), "tag=netbox_id")
 	assert.Contains(t, logs.String(), "profile=reserved-device-tag.yml")
@@ -2720,7 +2720,7 @@ func TestReviewProfile_ReservedTagIsReportedOncePerProfile(t *testing.T) {
 
 	p := &profiles.Profile{
 		RelPath:    "vendor/reserved.yml",
-		MetricTags: []profiles.MetricTag{{Tag: "policy", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.1.5.0", Name: "SysName"}}},
+		MetricTags: []profiles.MetricTag{{Tag: "policy_name", Column: &profiles.TagColumn{OID: "1.3.6.1.2.1.1.5.0", Name: "SysName"}}},
 	}
 	c := &MetricsCollector{logger: logger, reviewedProfiles: map[string]struct{}{}}
 	for range 3 {
