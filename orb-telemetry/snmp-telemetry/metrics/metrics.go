@@ -238,7 +238,11 @@ func GetMeter() metric.Meter {
 // scope, so a policy's series arrive grouped under its name and no
 // datapoint has to repeat it. It is nil when export is disabled. The
 // provider caches meters by scope, so calling this per registration is a
-// lookup and needs no cache here.
+// lookup and needs no cache here; that cache, and the instrument and
+// aggregator each metric name registers into it, is held for the life of the
+// process with no eviction, so it grows with the number of distinct policy
+// names ever seen, not the number active at once, and only a process
+// restart clears it.
 func PolicyMeter(policyName string) metric.Meter {
 	if provider == nil {
 		return nil

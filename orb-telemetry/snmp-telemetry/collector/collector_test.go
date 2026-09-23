@@ -1649,6 +1649,68 @@ func TestForgetPolicyAndClose_DropTheMatchedProfiles(t *testing.T) {
 	assert.Zero(t, left, "Close must release the matched profiles with the rest")
 }
 
+// assertPolicyDevicesMatchesStore fails the test unless policyDevices indexes
+// exactly deviceStore's keys: every device under a policy's set names that
+// policy, and the union of every policy's set is exactly deviceStore's key
+// set, no more and no less. A callback trusts this index instead of walking
+// deviceStore itself, so the two disagreeing would mean a policy's callback
+// silently stops observing a device deviceStore still holds, or keeps
+// observing one it no longer does.
+func assertPolicyDevicesMatchesStore(t *testing.T, c *MetricsCollector) {
+	t.Helper()
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	indexed := map[deviceKey]struct{}{}
+	for policy, devices := range c.policyDevices {
+		for dev := range devices {
+			assert.Equal(t, policy, dev.policy, "policyDevices[%q] holds a key for another policy: %+v", policy, dev)
+			indexed[dev] = struct{}{}
+		}
+	}
+	stored := map[deviceKey]struct{}{}
+	for dev := range c.deviceStore {
+		stored[dev] = struct{}{}
+	}
+	assert.Equal(t, stored, indexed, "policyDevices must index exactly deviceStore's keys, no more and no less")
+}
+
+// The side index is maintained at every place deviceStore gains or loses a
+// key, so it must stay exactly in step across every one of them: the publish
+// in collect (two policies, one of them polling two devices), forgetDevice
+// (one device of a policy that keeps others), ForgetPolicy (a whole policy)
+// and Close (everything).
+func TestPolicyDevices_StaysInStepWithDeviceStore(t *testing.T) {
+	const (
+		hostA       = "10.0.0.42"
+		hostB       = "10.0.0.43"
+		cpuOID      = "1.3.6.1.4.1.9999.42.1"
+		sysObjValue = "1.3.6.1.4.1.9999.42"
+	)
+	p := profileWithOID(sysObjValue, "index.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	ctx := context.Background()
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "policy-a", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostB), mustAuth(), "policy-a", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "policy-b", DialOptions{}))
+	assertPolicyDevicesMatchesStore(t, c)
+
+	c.forgetDevice(testKey("policy-a", hostA))
+	assertPolicyDevicesMatchesStore(t, c)
+
+	c.ForgetPolicy("policy-a")
+	assertPolicyDevicesMatchesStore(t, c)
+
+	c.Close()
+	assertPolicyDevicesMatchesStore(t, c)
+}
+
 // ---------------------------------------------------------------------------
 // Interrupted runs
 // ---------------------------------------------------------------------------
@@ -6249,16 +6311,63 @@ func TestCollectTarget_UnsetEnumMemberIsReportedOnce(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // fakeRegistration stands in for the meter's record of a callback, so a test
-// can see whether the collector handed it back.
+// can see whether the collector handed it back. When t and collector are
+// set, Unregister also asserts that neither gaugeMu nor storeMu is held while
+// it runs, by trying to take each and releasing it immediately: the real
+// Unregister waits for a running collection to finish, and the collection's
+// callback takes storeMu, so calling Unregister under either lock would have
+// the two wait on each other forever. Existing tests that leave t and
+// collector unset get the old behaviour unchanged.
 type fakeRegistration struct {
 	embedded.Registration
 	unregistered atomic.Int32
 	err          error
+
+	t         *testing.T
+	collector *MetricsCollector
 }
 
 func (f *fakeRegistration) Unregister() error {
 	f.unregistered.Add(1)
+	if f.collector != nil {
+		if f.collector.gaugeMu.TryLock() {
+			f.collector.gaugeMu.Unlock()
+		} else {
+			f.t.Error("Unregister ran with gaugeMu held")
+		}
+		if f.collector.storeMu.TryLock() {
+			f.collector.storeMu.Unlock()
+		} else {
+			f.t.Error("Unregister ran with storeMu held")
+		}
+	}
 	return f.err
+}
+
+// Unregister must run with no collector lock held, on both paths that call
+// it: ForgetPolicy, tested here, and Close, tested next. A regression that
+// moved c.unregister inside the gaugeMu or storeMu critical section would
+// pass every other test in this file, since fakeRegistration otherwise just
+// counts calls, and would only deadlock against a real meter under load; this
+// is what catches it directly.
+func TestForgetPolicy_UnregistersWithNoCollectorLockHeld(t *testing.T) {
+	c := newCollector(nil, nil)
+	reg := &fakeRegistration{t: t, collector: c}
+	c.registrations = map[string][]metric.Registration{"a": {reg}}
+
+	c.ForgetPolicy("a")
+
+	assert.Equal(t, int32(1), reg.unregistered.Load())
+}
+
+func TestClose_UnregistersWithNoCollectorLockHeld(t *testing.T) {
+	c := newCollector(nil, nil)
+	reg := &fakeRegistration{t: t, collector: c}
+	c.registrations = map[string][]metric.Registration{"a": {reg}}
+
+	c.Close()
+
+	assert.Equal(t, int32(1), reg.unregistered.Load())
 }
 
 // The manager deleting its cache entry does not free a collector: every
@@ -6293,6 +6402,8 @@ func TestClose_ReportsAFailedUnregisterAndCarriesOn(t *testing.T) {
 	assert.Equal(t, int32(1), healthy.unregistered.Load(), "a failure ahead of it must not strand a later registration")
 	assert.Equal(t, int32(1), failing.unregistered.Load(), "a discarded collector must not be unregistered twice")
 	assert.Contains(t, logs.String(), "pipeline closed")
+	assert.Contains(t, logs.String(), "policy=p", "the failure names the policy it belongs to")
+	assert.Contains(t, logs.String(), "level=WARN", "a failure to unregister is tolerated, not actionable")
 }
 
 // withManualReader installs a provider the test can collect from, so what

@@ -301,8 +301,17 @@ type MetricsCollector struct {
 
 	// Observable gauge store: device -> metricName -> observations.
 	// Updated after each CollectTarget run; read by OTLP callbacks on every export cycle.
-	storeMu     sync.RWMutex
-	deviceStore map[deviceKey]map[string][]observedPoint
+	//
+	// policyDevices is a side index of deviceStore's keys grouped by policy, so
+	// a per-policy callback can walk its own devices instead of the whole
+	// store and skipping every other policy's keys. It is maintained under
+	// storeMu at every place deviceStore gains or loses a key: the publish in
+	// collect, forgetDevice, ForgetPolicy and Close. A callback reads it under
+	// storeMu.RLock only, the same lock deviceStore itself is read under, so
+	// the two can never disagree about what a policy currently owns.
+	storeMu       sync.RWMutex
+	deviceStore   map[deviceKey]map[string][]observedPoint
+	policyDevices map[string]map[deviceKey]struct{}
 
 	// Registered observable gauge instruments, one per policy and metric
 	// name, each on its policy's meter so the policy's series export under
@@ -345,6 +354,7 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 		deviceProfile:    make(map[deviceKey]string),
 		interruptedRuns:  make(map[deviceKey]int),
 		deviceStore:      make(map[deviceKey]map[string][]observedPoint),
+		policyDevices:    make(map[string]map[deviceKey]struct{}),
 		instruments:      make(map[instrumentKey]metric.Int64ObservableGauge),
 		registrations:    make(map[string][]metric.Registration),
 		reviewedProfiles: make(map[string]struct{}),
@@ -440,9 +450,11 @@ func (c *MetricsCollector) restorePollWindows(key deviceKey, windows map[string]
 }
 
 // ensureInstrument lazily registers an observable gauge callback for
-// metricName on policyName's meter. The callback reads the shared
-// deviceStore on every OTLP export cycle and observes only that policy's
-// devices, so each policy's series leave under its own scope and the
+// metricName on policyName's meter. The callback reads policyDevices on
+// every OTLP export cycle to find that policy's devices, rather than the
+// whole deviceStore, so a callback's cost is its own policy's devices, not
+// every policy's, regardless of how many other policies share the
+// collector. Each policy's series leave under its own scope and the
 // datapoint carries no policy of its own.
 func (c *MetricsCollector) ensureInstrument(policyName, name, description string) {
 	c.gaugeMu.Lock()
@@ -466,11 +478,8 @@ func (c *MetricsCollector) ensureInstrument(policyName, name, description string
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		c.storeMu.RLock()
 		defer c.storeMu.RUnlock()
-		for device, deviceMetrics := range c.deviceStore {
-			if device.policy != policyName {
-				continue
-			}
-			for _, pt := range deviceMetrics[name] {
+		for device := range c.policyDevices[policyName] {
+			for _, pt := range c.deviceStore[device][name] {
 				o.ObserveInt64(g, pt.value, metric.WithAttributes(pt.attrs...))
 			}
 		}
@@ -484,13 +493,19 @@ func (c *MetricsCollector) ensureInstrument(policyName, name, description string
 	c.registrations[policyName] = append(c.registrations[policyName], reg)
 }
 
-// unregister gives registrations back to the meter. It is called with no
-// collector lock held: Unregister waits for a running collection, and the
-// callback it waits for takes storeMu.
-func (c *MetricsCollector) unregister(regs []metric.Registration) {
+// unregister gives policyName's registrations back to the meter. It is
+// called with no collector lock held: Unregister waits for a running
+// collection, and the callback it waits for takes storeMu.
+//
+// A failure here is tolerated: the meter keeps calling a callback that could
+// not be unregistered until the process exits, which is a benign leak rather
+// than a wrong export, so it is logged at WARN, with the policy it belongs
+// to, rather than ERROR (the OBS-3837 convention: ERROR is reserved for a
+// failure that needs acting on).
+func (c *MetricsCollector) unregister(policyName string, regs []metric.Registration) {
 	for _, reg := range regs {
 		if err := reg.Unregister(); err != nil {
-			c.logger.Error("Failed to unregister observable gauge callback", "error", err)
+			c.logger.Warn("Failed to unregister observable gauge callback", "policy", policyName, "error", err)
 		}
 	}
 }
@@ -510,19 +525,21 @@ func (c *MetricsCollector) unregister(regs []metric.Registration) {
 // under storeMu and the two wait on each other.
 func (c *MetricsCollector) Close() {
 	c.gaugeMu.Lock()
-	var regs []metric.Registration
-	for _, policyRegs := range c.registrations {
-		regs = append(regs, policyRegs...)
-	}
+	regs := c.registrations
 	c.registrations = make(map[string][]metric.Registration)
 	c.instruments = make(map[instrumentKey]metric.Int64ObservableGauge)
 	c.closed = true
 	c.gaugeMu.Unlock()
 
-	c.unregister(regs)
+	// unregister per policy, not as one flattened slice, so a failure the log
+	// carries names the policy it belongs to.
+	for policyName, policyRegs := range regs {
+		c.unregister(policyName, policyRegs)
+	}
 
 	c.storeMu.Lock()
 	c.deviceStore = make(map[deviceKey]map[string][]observedPoint)
+	c.policyDevices = make(map[string]map[deviceKey]struct{})
 	c.storeMu.Unlock()
 
 	c.pollMu.Lock()
@@ -558,7 +575,7 @@ func (c *MetricsCollector) ForgetPolicy(policyName string) {
 		}
 	}
 	c.gaugeMu.Unlock()
-	c.unregister(regs)
+	c.unregister(policyName, regs)
 
 	c.storeMu.Lock()
 	for key := range c.deviceStore {
@@ -566,6 +583,7 @@ func (c *MetricsCollector) ForgetPolicy(policyName string) {
 			delete(c.deviceStore, key)
 		}
 	}
+	delete(c.policyDevices, policyName)
 	c.storeMu.Unlock()
 
 	c.pollMu.Lock()
@@ -636,6 +654,12 @@ func (c *MetricsCollector) noteProfile(key deviceKey, id string) {
 func (c *MetricsCollector) forgetDevice(key deviceKey) {
 	c.storeMu.Lock()
 	delete(c.deviceStore, key)
+	if devices := c.policyDevices[key.policy]; devices != nil {
+		delete(devices, key)
+		if len(devices) == 0 {
+			delete(c.policyDevices, key.policy)
+		}
+	}
 	c.storeMu.Unlock()
 
 	c.pollMu.Lock()
@@ -668,8 +692,10 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 
 // reservedAttrNames are the attribute keys the collector's own identity owns.
 // A profile tag carrying one of them would replace the value rather than sit
-// beside it, since a duplicate key resolves last-value-wins, and two policies
-// polling one endpoint would then export series nothing tells apart.
+// beside it, since a duplicate key resolves last-value-wins. For the device
+// dimensions that would leave two devices, or two rows, sharing one series
+// with nothing left to tell them apart; for `policy` it would reintroduce a
+// policy label on the datapoint beside the scope's `policy_name`.
 //
 // The device dimensions are read back from appendIdentityAttrs rather than
 // restated, so a dimension added to the identity reserves its name by the same
@@ -950,6 +976,12 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	emptyRun := len(newStore) == 0
 	if !emptyRun || failed == 0 {
 		c.deviceStore[key] = newStore
+		devices := c.policyDevices[key.policy]
+		if devices == nil {
+			devices = make(map[deviceKey]struct{})
+			c.policyDevices[key.policy] = devices
+		}
+		devices[key] = struct{}{}
 		storePublished = true
 	}
 	c.storeMu.Unlock()

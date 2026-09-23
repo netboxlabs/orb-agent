@@ -15,7 +15,11 @@ sets an `id` and `snmp_context` when its authentication sets a
 policies polling one device, one host answering on two ports, or one policy
 naming an endpoint twice under different IDs or contexts, stay distinct
 series. Metrics are sent only when `--otel-endpoint` is set; without it,
-targets are still polled but nothing is exported.
+targets are still polled but nothing is exported. The OTLP provider caches a
+meter per distinct policy name, plus one instrument and aggregator per metric
+name exported under it, for the life of the process with no eviction: memory
+grows with how many distinct policy names the process has ever seen, not how
+many are active, and only a restart clears it.
 
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
@@ -223,7 +227,8 @@ A trap is counted, not stored. Three metrics describe what arrived:
 the trap definitions in the policy's own profile set, the bundled ones plus
 whatever its `profiles_dir` adds or overrides, about two hundred names. Two
 policies on one socket may therefore name one OID differently, each under
-its own `policy` label; the RFC 1215 names win over any profile's spelling.
+its own policy's scope (`policy_name`); the RFC 1215 names win over any
+profile's spelling.
 Any other trap is labelled `other`. A raw OID never appears as a label, because a
 sender chooses its own trap OID and a metric label a sender controls is
 unbounded.
@@ -550,10 +555,11 @@ one of those is dropped rather than exported undecoded under a metric named for
 an address.
 
 A profile's `metric_tags` become attributes beside the ones above, on the device
-or on the row. A tag that takes one of the device identity names, or
-`row_index`, is dropped rather than applied: a duplicate attribute resolves to
+or on the row. A tag that takes one of the device identity names, `row_index`,
+or `policy`, is dropped rather than applied: a duplicate attribute resolves to
 whichever value came last, so honouring it would replace the value that tells
-two devices or two rows apart. The profile still loads and every metric it
+two devices or two rows apart, or put a policy label back on the datapoint
+beside the scope's `policy_name`. The profile still loads and every metric it
 declares is still collected, since a bundled profile is vendored and cannot be
 edited. The backend logs one warning naming the tag and the profile the first
 time a device matches that profile. No bundled profile declares such a tag, so

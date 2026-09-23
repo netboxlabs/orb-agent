@@ -328,11 +328,16 @@ func TestTally_BaselinesAreBounded(t *testing.T) {
 	assert.LessOrEqual(t, ta.seriesCount()+ta.baselineCount(), 2*maxSeries)
 }
 
-// The SDK keeps the last of its cardinality-limit slots for its own overflow
-// point, so a tally holding as many live series as the limit would have one
-// of them folded, losing its policy and device. The cap is one short of the
-// limit, and a provider configured exactly as this process configures its
-// own exports every live series with its attributes intact.
+// Each policy's traps_received counter is its own instrument on its own
+// meter now, so a single policy's series no longer approach the SDK's
+// cardinality limit the way they did when every policy shared one
+// instrument: "core" here sits at seriesLimit, and every other policy holds
+// exactly one, both far under the limit on their own instruments. What the
+// test still proves is that no live series is folded across any of these
+// per-policy instruments: a provider configured exactly as this process
+// configures its own exports every one of them, "core"'s seriesLimit and
+// every overflowing policy's one, with its attributes intact, so a policy
+// pushed to the tally's own cap never loses a series to the SDK's fold.
 func TestTally_LiveSeriesNeverReachTheSDKFold(t *testing.T) {
 	reader := withProvider(t, sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
 
@@ -471,7 +476,7 @@ func TestTally_RegisterAttachesPoliciesActivatedBeforeIt(t *testing.T) {
 }
 
 // Activating a policy twice registers once, and Withdraw on a policy never
-// activated, or Close without Register, does nothing.
+// activated does nothing.
 func TestTally_PolicyRegistrationIsIdempotent(t *testing.T) {
 	withProvider(t)
 	ta := NewTally(testLogger)
@@ -508,4 +513,70 @@ func TestTally_CloseGivesEveryPolicyCounterBack(t *testing.T) {
 	assert.Empty(t, ta.policyRegs)
 	assert.Nil(t, ta.registration)
 	ta.regMu.Unlock()
+
+	ta.Activate("core")
+	ta.regMu.Lock()
+	assert.Len(t, ta.policyRegs, 1, "a policy activated after Close registers again")
+	ta.regMu.Unlock()
+
+	ta.Close()
+	ta.regMu.Lock()
+	assert.Empty(t, ta.policyRegs, "the registration Close reinstalled must go back too")
+	ta.regMu.Unlock()
+}
+
+// Unregister must run with neither mu nor regMu held: it waits for a running
+// collection, whose callback takes mu, so calling it under mu would have the
+// two wait on each other forever, and calling it under regMu would still
+// serialise every Activate behind a slow Unregister on the same goroutine.
+// This drives Activate/Received/Withdraw against a real provider while a
+// second goroutine calls Collect in a loop, so a regression that moved
+// unregisterPolicy's Unregister call inside either lock deadlocks against an
+// in-flight collection instead of merely being exercised without one. The
+// test is bounded by a timeout rather than trusting -race alone, since a
+// deadlock produces no race to report, only a goroutine that never returns.
+func TestTally_ActivateReceivedWithdrawDoNotDeadlockAgainstCollect(t *testing.T) {
+	reader := withProvider(t)
+	ta := NewTally(testLogger)
+	ta.Register()
+	t.Cleanup(ta.Close)
+
+	stopCollecting := make(chan struct{})
+	collectingStopped := make(chan struct{})
+	go func() {
+		defer close(collectingStopped)
+		var rm metricdata.ResourceMetrics
+		for {
+			select {
+			case <-stopCollecting:
+				return
+			default:
+			}
+			_ = reader.Collect(context.Background(), &rm)
+		}
+	}()
+
+	churning := make(chan struct{})
+	go func() {
+		defer close(churning)
+		for i := range 300 {
+			policy := fmt.Sprintf("race-%d", i%10)
+			ta.Activate(policy)
+			ta.Received("10.0.0.1", policy, "linkDown", V2c)
+			ta.Withdraw(policy)
+		}
+	}()
+
+	select {
+	case <-churning:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Activate/Received/Withdraw did not finish against a running collection: a lock-ordering regression likely deadlocked")
+	}
+
+	close(stopCollecting)
+	select {
+	case <-collectingStopped:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the collecting goroutine did not stop: Collect is likely deadlocked on a tally lock")
+	}
 }

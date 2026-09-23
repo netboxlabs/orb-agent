@@ -434,24 +434,36 @@ func (t *Tally) unregisterPolicy(policy string) {
 	}
 }
 
+// namedRegistration pairs a registration with the policy it belongs to, so a
+// failure to unregister it can be logged with that name. The process-level
+// registration (drops and datagrams) belongs to no policy and carries "".
+type namedRegistration struct {
+	policy string
+	reg    metric.Registration
+}
+
 // Close unregisters every callback, the process counters and each policy's.
 // Safe to call without Register. The active set is kept: a policy still
 // leased is still active, and only its lease's release withdraws it.
 func (t *Tally) Close() {
 	t.regMu.Lock()
-	regs := make([]metric.Registration, 0, len(t.policyRegs)+1)
+	regs := make([]namedRegistration, 0, len(t.policyRegs)+1)
 	if t.registration != nil {
-		regs = append(regs, t.registration)
+		regs = append(regs, namedRegistration{reg: t.registration})
 		t.registration = nil
 	}
 	for policy, reg := range t.policyRegs {
-		regs = append(regs, reg)
+		regs = append(regs, namedRegistration{policy: policy, reg: reg})
 		delete(t.policyRegs, policy)
 	}
 	t.regMu.Unlock()
-	for _, reg := range regs {
-		if err := reg.Unregister(); err != nil {
-			t.logger.Warn("Failed to unregister trap counter callback", "error", err)
+	for _, nr := range regs {
+		if err := nr.reg.Unregister(); err != nil {
+			if nr.policy == "" {
+				t.logger.Warn("Failed to unregister trap counter callback", "error", err)
+				continue
+			}
+			t.logger.Warn("Failed to unregister trap counter callback", "policy", nr.policy, "error", err)
 		}
 	}
 }
