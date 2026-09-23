@@ -101,12 +101,13 @@ var metricName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 const maxMetricNameLen = 255 - len("gnmi.")
 
 // reservedAttributes are the attribute names the collector owns on every
-// series it writes: device_ip and netbox_id on the datapoint, and policy,
-// which is the policy_name of the instrumentation scope and must not be put
-// back on the datapoint by a promoted key. A profile that promotes a path key
-// under one of them would have the collector's value and its own on the
-// same series.
-var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "netbox_id": true}
+// series it writes: device_ip and netbox_id on the datapoint, and
+// policy_name, which the collector sets on the instrumentation scope. A
+// profile that promotes a path key under one of the datapoint names would
+// have the collector's value and its own on the same series; one promoting
+// policy_name would put a device-supplied value on the datapoint under the
+// key a receiver flattening scope attributes reads the policy from.
+var reservedAttributes = map[string]bool{"device_ip": true, "policy_name": true, "netbox_id": true}
 
 // reservedMetrics are the metric names the backend writes for its own health,
 // taken from the package that owns those instruments so the two cannot drift.
