@@ -378,7 +378,8 @@ metrics:
 // The bundled set carries three enum members written with no value. Each one
 // would otherwise take 0: two of them label a state the device really reports,
 // and the fortinet enum already gives 0 to `none`, so the two collide and the
-// name a lookup returns varies with map order.
+// name a lookup returns varies with map order. The WLC member appears twice
+// because the repo-maintained `cisco-wlc-models.yml` stub inherits the entry.
 func TestEnum_BundledMembersWithNoValue(t *testing.T) {
 	l, err := LoadProfiles("", silentLogger)
 	require.NoError(t, err)
@@ -408,6 +409,7 @@ func TestEnum_BundledMembersWithNoValue(t *testing.T) {
 	}
 	assert.Equal(t, map[string][]string{
 		"cisco/cisco-wlc.yml":             {"bsnAPIfOperStatus.metric_tags"},
+		"cisco/cisco-wlc-models.yml":      {"bsnAPIfOperStatus.metric_tags"},
 		"fortinet/fortinet-appliance.yml": {"fmDeviceEntState.canceled"},
 		"vmware/esx.yml":                  {"vmwSubsystemType.battery"},
 	}, found)
