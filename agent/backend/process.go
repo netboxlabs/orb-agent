@@ -119,6 +119,16 @@ var ErrListenAddrInUse = errors.New("listen address in use")
 // process.
 var ReserveListenAddr = reserveListenAddr
 
+// namesAPort reports whether addr is host:port with a port other than 0.
+func namesAPort(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	n, err := net.LookupPort("tcp", port)
+	return err == nil && n != 0
+}
+
 func reserveListenAddr(addr string) (string, error) {
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -187,10 +197,11 @@ func StartProcess(spec StartSpec) error {
 	if spec.ReadinessBudget == 0 {
 		spec.ReadinessBudget = ReadinessBudgetFrom(ctx)
 	}
-	// Port 0 would probe fine and tell the child to pick a port the readiness
+	// Port 0, in any spelling net.Listen reads as "any port" (an empty one
+	// too), would probe fine and tell the child to pick a port the readiness
 	// check cannot know: a backend that listens on any open port reserves
 	// one before building its spec.
-	if _, port, err := net.SplitHostPort(spec.ListenAddr); err != nil || port == "0" {
+	if !namesAPort(spec.ListenAddr) {
 		return fmt.Errorf("StartProcess: ListenAddr %q must name the port the child is told, reserve one with ReserveListenAddr first", spec.ListenAddr)
 	}
 	if _, err := ReserveListenAddr(spec.ListenAddr); err != nil {

@@ -751,22 +751,28 @@ func TestReserveListenAddrRefusesAHeldAddress(t *testing.T) {
 // port the readiness check cannot know, so it is refused before anything is
 // spawned: the port is reserved before the spec is built.
 func TestStartProcess_RefusesAnUnreservedPortZero(t *testing.T) {
-	stubProcessTimers(t)
-	fake := newFakeCommander(4242)
-	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
-	captured := stubNewCmdOptions(t, fake)
+	// Every spelling net.Listen reads as "any port", including the empty
+	// one a `port: ""` config yields, and an address with no port at all.
+	for _, addr := range []string{"127.0.0.1:0", "127.0.0.1:", "127.0.0.1:00", "nohostport"} {
+		t.Run(addr, func(t *testing.T) {
+			stubProcessTimers(t)
+			fake := newFakeCommander(4242)
+			fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+			captured := stubNewCmdOptions(t, fake)
 
-	err := StartProcess(StartSpec{
-		Logger:         testProcessLogger(),
-		NameDisplay:    "test-backend",
-		NameUnderscore: "test_backend",
-		Exec:           "test-exec",
-		ListenAddr:     "127.0.0.1:0",
-		LogLine:        func(string, bool) {},
-		SetProc:        func(Commander, <-chan CmdStatus) {},
-		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ReserveListenAddr")
-	assert.Empty(t, captured.exec, "nothing is spawned")
+			err := StartProcess(StartSpec{
+				Logger:         testProcessLogger(),
+				NameDisplay:    "test-backend",
+				NameUnderscore: "test_backend",
+				Exec:           "test-exec",
+				ListenAddr:     addr,
+				LogLine:        func(string, bool) {},
+				SetProc:        func(Commander, <-chan CmdStatus) {},
+				ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ReserveListenAddr")
+			assert.Empty(t, captured.exec, "nothing is spawned")
+		})
+	}
 }
