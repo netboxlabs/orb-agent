@@ -250,7 +250,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 // Nothing else is excluded. A space, a percent sequence, a query or fragment
 // character and a non-ASCII name all survive the round trip. Invalid UTF-8
 // cannot reach here at all, the YAML parser having refused the document, which
-// is what the exported "policy" metric attribute needs of the name.
+// is what the exported `policy_name` scope attribute needs of the name.
 func ValidatePolicyName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("policy name must not be empty or only whitespace")

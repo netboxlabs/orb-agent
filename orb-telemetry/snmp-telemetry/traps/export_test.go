@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
@@ -17,6 +18,50 @@ import (
 )
 
 var testLogger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+
+// exportedCounters runs one collection and indexes every counter datapoint
+// as "<policy_name>|<metric>|k=v|...", policy_name being the scope's
+// attribute or "" for the process scope. Trap counts join to poll metrics by
+// scope, so the scope is part of what a test asserts.
+func exportedCounters(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		policy := ""
+		if v, ok := sm.Scope.Attributes.Value(attribute.Key(metrics.PolicyNameAttribute)); ok {
+			policy = v.AsString()
+		}
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			require.True(t, ok, "%s must be a sum", m.Name)
+			assert.True(t, sum.IsMonotonic, "%s must be monotonic", m.Name)
+			for _, dp := range sum.DataPoints {
+				key := policy + "|" + m.Name
+				for _, kv := range dp.Attributes.ToSlice() {
+					key += "|" + string(kv.Key) + "=" + kv.Value.String()
+				}
+				got[key] = dp.Value
+			}
+		}
+	}
+	return got
+}
+
+// withProvider installs a provider the test collects from and returns its
+// reader.
+func withProvider(t *testing.T, opts ...sdkmetric.Option) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(append(opts, sdkmetric.WithReader(reader))...)
+	metrics.SetMeterProviderForTest(provider)
+	t.Cleanup(func() {
+		metrics.ResetMeter()
+		_ = provider.Shutdown(context.Background())
+	})
+	return reader
+}
 
 // F6: a synchronous counter cannot be forgotten. The tally is a map the
 // package owns, so a withdrawn policy's series disappears, which is the
@@ -51,44 +96,29 @@ func TestTally_RegisterWithoutAMeterIsSafe(t *testing.T) {
 	assert.NotPanics(t, func() { ta.Register(); ta.Received("10.0.0.5", "p", "linkDown", V2c); ta.Close() })
 }
 
-// The observable counters report what the map holds, with the attribute names
-// the polled series already use, so trap counts join to poll metrics.
+// The observable counters report what the map holds. A policy's trap series
+// export under that policy's scope with the device attributes the polled
+// series use and no policy attribute of their own; the process-level drop
+// and datagram counts stay on the plain scope.
 func TestTally_ExportsThroughObservableCounters(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
-	t.Cleanup(metrics.ResetMeter)
+	reader := withProvider(t)
 
 	ta := NewTally(testLogger)
 	ta.Register()
 	t.Cleanup(ta.Close)
+	ta.Activate("core")
 	ta.Datagram()
 	ta.Received("10.0.0.5", "core", "linkDown", V2c)
 	ta.Received("10.0.0.5", "core", "linkDown", V2c)
 	ta.Dropped(DropUnknownSource)
 
-	var rm metricdata.ResourceMetrics
-	require.NoError(t, reader.Collect(context.Background(), &rm))
-
-	got := map[string]int64{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			sum, ok := m.Data.(metricdata.Sum[int64])
-			require.True(t, ok, "%s must be a sum", m.Name)
-			assert.True(t, sum.IsMonotonic, "%s must be monotonic", m.Name)
-			for _, dp := range sum.DataPoints {
-				key := m.Name
-				for _, kv := range dp.Attributes.ToSlice() {
-					key += "|" + string(kv.Key) + "=" + kv.Value.String()
-				}
-				got[key] = dp.Value
-			}
-		}
+	got := exportedCounters(t, reader)
+	assert.Equal(t, int64(2), got["core|snmp.traps_received|device_ip=10.0.0.5|trap_name=linkDown|version=2c"])
+	assert.Equal(t, int64(1), got["|snmp.traps_dropped|reason=unknown_source"])
+	assert.Equal(t, int64(1), got["|snmp.traps_datagrams"])
+	for key := range got {
+		assert.NotContains(t, key, "|policy=", "the policy is the scope's, not the datapoint's: %s", key)
 	}
-	assert.Equal(t, int64(2), got["snmp.traps_received|device_ip=10.0.0.5|policy=core|trap_name=linkDown|version=2c"])
-	assert.Equal(t, int64(1), got["snmp.traps_dropped|reason=unknown_source"])
-	assert.Equal(t, int64(1), got["snmp.traps_datagrams"])
 }
 
 // The map is bounded from the network side. Real series stop at seriesLimit,
@@ -198,37 +228,16 @@ func TestTally_EvictsDormantSeriesBeforeFolding(t *testing.T) {
 // collection, and when it reappears the exported value is the resumed total,
 // never a smaller number than the SDK already reported for that series.
 func TestTally_DormantSeriesAreNotExportedAndResumeOnReturn(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
-	t.Cleanup(metrics.ResetMeter)
+	reader := withProvider(t)
 
 	ta := NewTally(testLogger)
 	ta.Register()
 	t.Cleanup(ta.Close)
-	const key = "snmp.traps_received|device_ip=10.0.0.5|policy=core|trap_name=linkDown|version=2c"
+	ta.Activate("core")
+	const key = "core|snmp.traps_received|device_ip=10.0.0.5|trap_name=linkDown|version=2c"
 	export := func() (int64, bool) {
-		var rm metricdata.ResourceMetrics
-		require.NoError(t, reader.Collect(context.Background(), &rm))
-		for _, sm := range rm.ScopeMetrics {
-			for _, m := range sm.Metrics {
-				sum, ok := m.Data.(metricdata.Sum[int64])
-				if !ok {
-					continue
-				}
-				for _, dp := range sum.DataPoints {
-					k := m.Name
-					for _, kv := range dp.Attributes.ToSlice() {
-						k += "|" + string(kv.Key) + "=" + kv.Value.String()
-					}
-					if k == key {
-						return dp.Value, true
-					}
-				}
-			}
-		}
-		return 0, false
+		v, ok := exportedCounters(t, reader)[key]
+		return v, ok
 	}
 
 	for range 3 {
@@ -319,25 +328,30 @@ func TestTally_BaselinesAreBounded(t *testing.T) {
 	assert.LessOrEqual(t, ta.seriesCount()+ta.baselineCount(), 2*maxSeries)
 }
 
-// The SDK keeps the last of its cardinality-limit slots for its own overflow
-// point, so a tally holding as many live series as the limit would have one
-// of them folded, losing its policy and device. The cap is one short of the
-// limit, and a provider configured exactly as this process configures its
-// own exports every live series with its attributes intact.
+// Each policy's traps_received counter is its own instrument on its own
+// meter now, so a single policy's series no longer approach the SDK's
+// cardinality limit the way they did when every policy shared one
+// instrument: "core" here sits at seriesLimit, and every other policy holds
+// exactly one. A single policy's own instrument tops out at seriesLimit live
+// entries plus its own overflow series, which stays below the SDK's
+// CardinalityLimit. What the test still proves is that no live series is
+// folded across any of these per-policy instruments: a provider configured
+// exactly as this process configures its own exports every one of them,
+// "core"'s seriesLimit and every overflowing policy's one, with its
+// attributes intact, so a policy pushed to the tally's own cap never loses
+// a series to the SDK's fold.
 func TestTally_LiveSeriesNeverReachTheSDKFold(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
-	t.Cleanup(metrics.ResetMeter)
+	reader := withProvider(t, sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
 
 	ta := NewTally(testLogger)
 	ta.Register()
 	t.Cleanup(ta.Close)
+	ta.Activate("core")
 	for i := range seriesLimit {
 		ta.Received(fmt.Sprintf("10.%d.%d.%d", i>>16&255, i>>8&255, i&255), "core", "linkDown", V2c)
 	}
 	for i := range maxSeries - seriesLimit {
+		ta.Activate(fmt.Sprintf("p%d", i))
 		ta.Received("198.51.100.1", fmt.Sprintf("p%d", i), "linkUp", V2c)
 	}
 	require.Equal(t, maxSeries, ta.seriesCount())
@@ -416,4 +430,162 @@ func TestTally_WithdrawnSetIsBoundedByRetainedState(t *testing.T) {
 	assert.GreaterOrEqual(t, ta.withdrawnCount(), 1, "policies with retained series keep their markers")
 	assert.LessOrEqual(t, ta.withdrawnCount(), maxSeries+maxBaselines, "markers are bounded by retained state")
 	assert.Less(t, ta.withdrawnCount(), churn/2, "and far below the number of policies deleted")
+}
+
+// Activate attaches the policy's counter to its own scope and Withdraw
+// detaches it, so a deleted policy's scope exports nothing while its totals
+// are kept for a return.
+func TestTally_ActivateAttachesAPolicyScopeAndWithdrawDetachesIt(t *testing.T) {
+	reader := withProvider(t)
+	ta := NewTally(testLogger)
+	ta.Register()
+	t.Cleanup(ta.Close)
+
+	ta.Activate("core")
+	ta.Activate("edge")
+	ta.Received("10.0.0.5", "core", "linkDown", V2c)
+	ta.Received("10.0.0.6", "edge", "linkUp", V2c)
+
+	got := exportedCounters(t, reader)
+	assert.Equal(t, int64(1), got["core|snmp.traps_received|device_ip=10.0.0.5|trap_name=linkDown|version=2c"])
+	assert.Equal(t, int64(1), got["edge|snmp.traps_received|device_ip=10.0.0.6|trap_name=linkUp|version=2c"])
+
+	ta.Withdraw("core")
+	got = exportedCounters(t, reader)
+	_, coreExported := got["core|snmp.traps_received|device_ip=10.0.0.5|trap_name=linkDown|version=2c"]
+	assert.False(t, coreExported, "a withdrawn policy's scope exports nothing")
+	assert.Equal(t, int64(1), got["edge|snmp.traps_received|device_ip=10.0.0.6|trap_name=linkUp|version=2c"], "another policy is untouched")
+
+	ta.Activate("core")
+	ta.Received("10.0.0.5", "core", "linkDown", V2c)
+	got = exportedCounters(t, reader)
+	assert.Equal(t, int64(2), got["core|snmp.traps_received|device_ip=10.0.0.5|trap_name=linkDown|version=2c"], "a returning policy resumes its total under its scope")
+}
+
+// A policy activated before the meter exists is attached when Register
+// runs, so nothing counted in between is lost to the export.
+func TestTally_RegisterAttachesPoliciesActivatedBeforeIt(t *testing.T) {
+	reader := withProvider(t)
+	ta := NewTally(testLogger)
+	t.Cleanup(ta.Close)
+
+	ta.Activate("core")
+	ta.Received("10.0.0.5", "core", "linkDown", V2c)
+	ta.Register()
+
+	got := exportedCounters(t, reader)
+	assert.Equal(t, int64(1), got["core|snmp.traps_received|device_ip=10.0.0.5|trap_name=linkDown|version=2c"])
+}
+
+// Activating a policy twice registers once, and Withdraw on a policy never
+// activated does nothing.
+func TestTally_PolicyRegistrationIsIdempotent(t *testing.T) {
+	withProvider(t)
+	ta := NewTally(testLogger)
+	ta.Register()
+	t.Cleanup(ta.Close)
+
+	ta.Activate("core")
+	ta.Activate("core")
+	ta.regMu.Lock()
+	assert.Len(t, ta.policyRegs, 1)
+	ta.regMu.Unlock()
+
+	assert.NotPanics(t, func() { ta.Withdraw("never-activated") })
+	ta.Withdraw("core")
+	ta.regMu.Lock()
+	assert.Empty(t, ta.policyRegs)
+	ta.regMu.Unlock()
+}
+
+// Close gives every policy's counter back along with the process counters,
+// and a later Activate on a closed tally registers again: the tally is
+// reused across a Register/Close cycle only in tests, but it must not
+// strand a registration either way.
+func TestTally_CloseGivesEveryPolicyCounterBack(t *testing.T) {
+	withProvider(t)
+	ta := NewTally(testLogger)
+	ta.Register()
+	ta.Activate("core")
+	ta.Activate("edge")
+
+	ta.Close()
+
+	ta.regMu.Lock()
+	assert.Empty(t, ta.policyRegs)
+	assert.Nil(t, ta.registration)
+	ta.regMu.Unlock()
+
+	ta.Activate("core")
+	ta.regMu.Lock()
+	assert.Len(t, ta.policyRegs, 1, "a policy activated after Close registers again")
+	ta.regMu.Unlock()
+
+	ta.Close()
+	ta.regMu.Lock()
+	assert.Empty(t, ta.policyRegs, "the registration Close reinstalled must go back too")
+	ta.regMu.Unlock()
+}
+
+// Unregister waits for a running collection, whose callback takes mu, so
+// calling it under mu would have the two wait on each other forever. regMu
+// is different: no callback here takes it, and RegisterCallback takes the
+// SDK's pipeline lock without holding mu, so unregistering under regMu only
+// serialises a later Activate behind a slow Unregister on the same
+// goroutine rather than deadlocking against the collecting goroutine. This
+// test drives Activate/Received/Withdraw against a real provider while a
+// second goroutine calls Collect in a loop, so a regression that moved
+// unregisterPolicy's Unregister call under mu deadlocks against an
+// in-flight collection instead of merely being exercised without one; it
+// cannot catch a regression that moved it under regMu instead, since that
+// never deadlocks here. The timeouts below turn a mu deadlock into a
+// failure whose message names what happened, rather than a silent hang;
+// they do not themselves end the run, since t.Cleanup(ta.Close) would then
+// wait on the same stuck Unregister, so a hung run still depends on go
+// test's own -timeout to terminate, as it did when this was verified
+// against a deliberately reintroduced regression.
+func TestTally_ActivateReceivedWithdrawDoNotDeadlockAgainstCollect(t *testing.T) {
+	reader := withProvider(t)
+	ta := NewTally(testLogger)
+	ta.Register()
+	t.Cleanup(ta.Close)
+
+	stopCollecting := make(chan struct{})
+	collectingStopped := make(chan struct{})
+	go func() {
+		defer close(collectingStopped)
+		var rm metricdata.ResourceMetrics
+		for {
+			select {
+			case <-stopCollecting:
+				return
+			default:
+			}
+			_ = reader.Collect(context.Background(), &rm)
+		}
+	}()
+
+	churning := make(chan struct{})
+	go func() {
+		defer close(churning)
+		for i := range 300 {
+			policy := fmt.Sprintf("race-%d", i%10)
+			ta.Activate(policy)
+			ta.Received("10.0.0.1", policy, "linkDown", V2c)
+			ta.Withdraw(policy)
+		}
+	}()
+
+	select {
+	case <-churning:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Activate/Received/Withdraw did not finish against a running collection: a lock-ordering regression likely deadlocked")
+	}
+
+	close(stopCollecting)
+	select {
+	case <-collectingStopped:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the collecting goroutine did not stop: Collect is likely deadlocked on a tally lock")
+	}
 }

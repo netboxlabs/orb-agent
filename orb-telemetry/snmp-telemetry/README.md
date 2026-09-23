@@ -6,14 +6,20 @@ exports them as OTLP metrics.
 
 For each target, the backend walks the device over SNMP, matches its
 `sysObjectID` against the loaded profiles, and emits the matched profile's
-metrics as OTLP gauges. Each gauge carries `device_ip`, `device_port` and
-`policy` attributes, plus `netbox_id` when the target sets an `id` and
-`snmp_context` when its authentication sets a `context_name`. Together they are
-the device identity, so two policies polling one device, one host answering on
-two ports, or one policy naming an endpoint twice under different IDs or
-contexts, stay distinct series. Metrics are sent only when
-`--otel-endpoint` is set; without it, targets are still polled but nothing is
-exported.
+metrics as OTLP gauges. Every series of a policy is exported under an
+instrumentation scope named `snmp-telemetry` with the attribute
+`policy_name` set to the policy, one scope per policy. Each gauge carries
+`device_ip` and `device_port` attributes, plus `netbox_id` when the target
+sets an `id` and `snmp_context` when its authentication sets a
+`context_name`. Together with the scope they are the device identity, so two
+policies polling one device, one host answering on two ports, or one policy
+naming an endpoint twice under different IDs or contexts, stay distinct
+series. Metrics are sent only when `--otel-endpoint` is set; without it,
+targets are still polled but nothing is exported. The OTLP provider caches a
+meter per distinct policy name, plus one instrument and aggregator per metric
+name exported under it, for the life of the process with no eviction: memory
+grows with how many distinct policy names the process has ever seen, not how
+many are active, and only a restart clears it.
 
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
@@ -169,9 +175,10 @@ still supplies the v3 users. A policy with neither `metrics_interval` nor
 
 A trap is counted, not stored. Three metrics describe what arrived:
 
-- `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps
-  from a device a policy on that socket names, once per policy naming it,
-  with the same `device_ip` and `policy` labels every polled series carries.
+- `snmp.traps_received{device_ip, trap_name, version}` counts traps from a
+  device a policy on that socket names, once per policy naming it, under
+  that policy's scope (`policy_name`), with the same `device_ip` label every
+  polled series carries.
   The counter is monotonic: a deleted policy's series stop being exported but
   keep their totals, so a policy recreated under the same name continues
   the count rather than restarting it, and nothing downstream sees a
@@ -220,7 +227,8 @@ A trap is counted, not stored. Three metrics describe what arrived:
 the trap definitions in the policy's own profile set, the bundled ones plus
 whatever its `profiles_dir` adds or overrides, about two hundred names. Two
 policies on one socket may therefore name one OID differently, each under
-its own `policy` label; the RFC 1215 names win over any profile's spelling.
+its own policy's scope (`policy_name`); the RFC 1215 names win over any
+profile's spelling.
 Any other trap is labelled `other`. A raw OID never appears as a label, because a
 sender chooses its own trap OID and a metric label a sender controls is
 unbounded.
@@ -547,10 +555,11 @@ one of those is dropped rather than exported undecoded under a metric named for
 an address.
 
 A profile's `metric_tags` become attributes beside the ones above, on the device
-or on the row. A tag that takes one of the device identity names, or
-`row_index`, is dropped rather than applied: a duplicate attribute resolves to
+or on the row. A tag that takes one of the device identity names, `row_index`,
+or `policy`, is dropped rather than applied: a duplicate attribute resolves to
 whichever value came last, so honouring it would replace the value that tells
-two devices or two rows apart. The profile still loads and every metric it
+two devices or two rows apart, or put a policy label back on the datapoint
+beside the scope's `policy_name`. The profile still loads and every metric it
 declares is still collected, since a bundled profile is vendored and cannot be
 edited. The backend logs one warning naming the tag and the profile the first
 time a device matches that profile. No bundled profile declares such a tag, so

@@ -23,6 +23,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/embedded"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
@@ -1256,9 +1258,113 @@ func TestCollectTarget_PoliciesDoNotOverwriteEachOther(t *testing.T) {
 	assert.Equal(t, "id-a", attrValue(storeA["snmp.cpuutil"][0], "netbox_id"))
 	assert.Equal(t, "id-b", attrValue(storeB["snmp.cpuutil"][0], "netbox_id"))
 
-	// The two series would otherwise be indistinguishable at the OTLP endpoint.
-	assert.Equal(t, "policy-a", attrValue(storeA["snmp.cpuutil"][0], "policy"))
-	assert.Equal(t, "policy-b", attrValue(storeB["snmp.cpuutil"][0], "policy"))
+	assert.Equal(t, 0, attrCount(storeA["snmp.cpuutil"][0], "policy"), "the policy is the scope's, not the datapoint's")
+	assert.Equal(t, 0, attrCount(storeB["snmp.cpuutil"][0], "policy"))
+}
+
+// Two policies polling one endpoint were once told apart by a policy
+// attribute on every datapoint. They are now different instruments on
+// different meters: each policy's series export under its own scope, with
+// the same datapoint attributes, and the SDK never folds them.
+func TestCollectTarget_SamePolledDeviceUnderTwoPoliciesExportsInBothScopes(t *testing.T) {
+	const (
+		host        = "10.0.0.21"
+		cpuOID      = "1.3.6.1.4.1.9999.21.1"
+		sysObjValue = "1.3.6.1.4.1.9999.21"
+	)
+	reader := withManualReader(t)
+	p := profileWithOID(sysObjValue, "shared-scope.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	makeWalker := func(v int) *recordingWalker {
+		return &recordingWalker{responses: map[string]map[string]snmp.PDU{
+			sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+			sysDescrOID:    {},
+			cpuOID:         {cpuOID: intPDU(cpuOID, v)},
+		}}
+	}
+	c := newCollector(nil, p)
+	ctx := context.Background()
+	target := config.Target{Host: host, Port: 161}
+
+	c.clientFactory = walkerFactory(makeWalker(11))
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-a", DialOptions{}))
+	c.clientFactory = walkerFactory(makeWalker(22))
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-b", DialOptions{}))
+
+	byPolicy := exportedByPolicy(t, reader, "snmp.cpuutil")
+	require.Len(t, byPolicy["policy-a"], 1)
+	require.Len(t, byPolicy["policy-b"], 1)
+	assert.Equal(t, int64(11), byPolicy["policy-a"][0].value)
+	assert.Equal(t, int64(22), byPolicy["policy-b"][0].value)
+	for _, policy := range []string{"policy-a", "policy-b"} {
+		attrs := byPolicy[policy][0].attrs
+		assert.Equal(t, host, attrs["device_ip"])
+		assert.NotContains(t, attrs, "policy", "the policy is the scope's, not the datapoint's")
+		assert.NotContains(t, attrs, metrics.PolicyNameAttribute)
+	}
+	assert.Len(t, byPolicy, 2, "one scope per policy and nothing else")
+}
+
+// ForgetPolicy gives the forgotten policy's callbacks back to the meter and
+// leaves every other policy's in place, so a stopped policy's scope stops
+// exporting and a policy of the same name registers afresh next time.
+func TestForgetPolicy_GivesOnlyThatPolicysCallbacksBack(t *testing.T) {
+	c := newCollector(nil, nil)
+	a, b := &fakeRegistration{}, &fakeRegistration{}
+	c.registrations = map[string][]metric.Registration{"a": {a}, "b": {b}}
+	c.instruments = map[instrumentKey]metric.Int64ObservableGauge{
+		{policy: "a", name: "snmp.x"}: nil,
+		{policy: "b", name: "snmp.x"}: nil,
+	}
+
+	c.ForgetPolicy("a")
+
+	assert.Equal(t, int32(1), a.unregistered.Load(), "the forgotten policy's callback goes back")
+	assert.Equal(t, int32(0), b.unregistered.Load(), "another policy's callback stays")
+	assert.NotContains(t, c.registrations, "a")
+	assert.Contains(t, c.registrations, "b")
+	_, stillA := c.instruments[instrumentKey{policy: "a", name: "snmp.x"}]
+	assert.False(t, stillA, "the next collection for that name must register afresh")
+	_, stillB := c.instruments[instrumentKey{policy: "b", name: "snmp.x"}]
+	assert.True(t, stillB)
+}
+
+// End to end: after ForgetPolicy the policy's scope carries nothing, the
+// other policy's scope is untouched, and a later collection under the
+// forgotten name exports again.
+func TestForgetPolicy_StopsExportingThatPolicy(t *testing.T) {
+	const (
+		host        = "10.0.0.22"
+		cpuOID      = "1.3.6.1.4.1.9999.22.1"
+		sysObjValue = "1.3.6.1.4.1.9999.22"
+	)
+	reader := withManualReader(t)
+	p := profileWithOID(sysObjValue, "forget-scope.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	ctx := context.Background()
+	target := config.Target{Host: host, Port: 161}
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-a", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-b", DialOptions{}))
+	require.Len(t, exportedByPolicy(t, reader, "snmp.cpuutil"), 2)
+
+	c.ForgetPolicy("policy-a")
+
+	byPolicy := exportedByPolicy(t, reader, "snmp.cpuutil")
+	assert.Empty(t, byPolicy["policy-a"], "a forgotten policy exports nothing")
+	assert.Len(t, byPolicy["policy-b"], 1, "the other policy is untouched")
+
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-a", DialOptions{}))
+	byPolicy = exportedByPolicy(t, reader, "snmp.cpuutil")
+	assert.Len(t, byPolicy["policy-a"], 1, "a policy of the same name registers afresh")
+	assert.Len(t, byPolicy["policy-b"], 1)
 }
 
 func TestCollectTarget_SameHostDifferentPortStaysSeparate(t *testing.T) {
@@ -1541,6 +1647,68 @@ func TestForgetPolicyAndClose_DropTheMatchedProfiles(t *testing.T) {
 	left := len(c.deviceProfile)
 	c.profileMu.Unlock()
 	assert.Zero(t, left, "Close must release the matched profiles with the rest")
+}
+
+// assertPolicyDevicesMatchesStore fails the test unless policyDevices indexes
+// exactly deviceStore's keys: every device under a policy's set names that
+// policy, and the union of every policy's set is exactly deviceStore's key
+// set, no more and no less. A callback trusts this index instead of walking
+// deviceStore itself, so the two disagreeing would mean a policy's callback
+// silently stops observing a device deviceStore still holds, or keeps
+// observing one it no longer does.
+func assertPolicyDevicesMatchesStore(t *testing.T, c *MetricsCollector) {
+	t.Helper()
+	c.storeMu.RLock()
+	defer c.storeMu.RUnlock()
+	indexed := map[deviceKey]struct{}{}
+	for policy, devices := range c.policyDevices {
+		for dev := range devices {
+			assert.Equal(t, policy, dev.policy, "policyDevices[%q] holds a key for another policy: %+v", policy, dev)
+			indexed[dev] = struct{}{}
+		}
+	}
+	stored := map[deviceKey]struct{}{}
+	for dev := range c.deviceStore {
+		stored[dev] = struct{}{}
+	}
+	assert.Equal(t, stored, indexed, "policyDevices must index exactly deviceStore's keys, no more and no less")
+}
+
+// The side index is maintained at every place deviceStore gains or loses a
+// key, so it must stay exactly in step across every one of them: the publish
+// in collect (two policies, one of them polling two devices), forgetDevice
+// (one device of a policy that keeps others), ForgetPolicy (a whole policy)
+// and Close (everything).
+func TestPolicyDevices_StaysInStepWithDeviceStore(t *testing.T) {
+	const (
+		hostA       = "10.0.0.42"
+		hostB       = "10.0.0.43"
+		cpuOID      = "1.3.6.1.4.1.9999.42.1"
+		sysObjValue = "1.3.6.1.4.1.9999.42"
+	)
+	p := profileWithOID(sysObjValue, "index.yml", []profiles.MetricEntry{
+		{Symbol: &profiles.Symbol{Name: "cpuUtil", OID: cpuOID}},
+	})
+	w := &recordingWalker{responses: map[string]map[string]snmp.PDU{
+		sysObjectIDOID: {sysObjectIDOID: oIDPDU(sysObjValue)},
+		sysDescrOID:    {},
+		cpuOID:         {cpuOID: intPDU(cpuOID, 7)},
+	}}
+	c := newCollector(walkerFactory(w), p)
+	ctx := context.Background()
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "policy-a", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostB), mustAuth(), "policy-a", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, mustTarget(hostA), mustAuth(), "policy-b", DialOptions{}))
+	assertPolicyDevicesMatchesStore(t, c)
+
+	c.forgetDevice(testKey("policy-a", hostA))
+	assertPolicyDevicesMatchesStore(t, c)
+
+	c.ForgetPolicy("policy-a")
+	assertPolicyDevicesMatchesStore(t, c)
+
+	c.Close()
+	assertPolicyDevicesMatchesStore(t, c)
 }
 
 // ---------------------------------------------------------------------------
@@ -2323,37 +2491,68 @@ func TestCollectTarget_ExportedAttrsCarryEveryKeyDimension(t *testing.T) {
 		pts := c.deviceStore[key]["snmp.cpuutil"]
 		require.Len(t, pts, 1)
 		assert.Equal(t, key.host, attrValue(pts[0], "device_ip"))
-		assert.Equal(t, key.policy, attrValue(pts[0], "policy"))
+		assert.Equal(t, 0, attrCount(pts[0], "policy"), "the policy is carried by the scope")
 		assert.Equal(t, int64(key.port), attrInt(pts[0], "device_port"),
 			"the exported identity must carry the port the internal key does")
 	}
 }
 
 // keyDimensionAttrs names the exported attribute that carries each field of
-// deviceKey. A dimension added to the internal key without an attribute here
-// fails TestDeviceKey_EveryDimensionIsExported, which is what keeps the key and
+// deviceKey. Every field but policy is a datapoint attribute; policy is the
+// policy_name attribute of the instrumentation scope, since every series of
+// a policy is registered on that policy's meter (see ensureInstrument). A
+// dimension added to the internal key without an entry here fails
+// TestDeviceKey_EveryDimensionIsExported, which is what keeps the key and
 // the exported series in step.
 var keyDimensionAttrs = map[string]string{
-	"policy":  "policy",
+	"policy":  metrics.PolicyNameAttribute,
 	"host":    "device_ip",
 	"port":    "device_port",
 	"id":      "netbox_id",
 	"context": "snmp_context",
 }
 
+// datapointIdentityAttrs is keyDimensionAttrs without the scope-level
+// policy: the names appendIdentityAttrs puts on every datapoint.
+func datapointIdentityAttrs() map[string]string {
+	out := map[string]string{}
+	for field, attr := range keyDimensionAttrs {
+		if field != "policy" {
+			out[field] = attr
+		}
+	}
+	return out
+}
+
 // TestDeviceKey_EveryDimensionIsExported fails when deviceKey gains a field the
-// exported attribute set does not name. Two devices the collector keeps apart
-// internally have to be distinguishable in the series it exports, or one
-// device's points land on the other's attribute set.
+// exported identity does not name. Two devices the collector keeps apart
+// internally have to be distinguishable in what it exports, or one device's
+// points land on the other's series.
 func TestDeviceKey_EveryDimensionIsExported(t *testing.T) {
 	typ := reflect.TypeOf(deviceKey{})
 	for i := range typ.NumField() {
 		name := typ.Field(i).Name
 		assert.Contains(t, keyDimensionAttrs, name,
-			"deviceKey.%s distinguishes two devices but no exported attribute carries it", name)
+			"deviceKey.%s distinguishes two devices but nothing exported carries it", name)
 	}
 	assert.Len(t, keyDimensionAttrs, typ.NumField(),
 		"keyDimensionAttrs names an attribute for a field deviceKey no longer has")
+}
+
+// The datapoint carries every key dimension but the policy, and nothing
+// else from the key: the policy is on the scope.
+func TestAppendIdentityAttrs_CarriesEveryDimensionButThePolicy(t *testing.T) {
+	attrs := appendIdentityAttrs(nil, deviceKey{policy: "p", host: "h", port: 1, id: "i", context: "c"})
+	got := map[string]struct{}{}
+	for _, a := range attrs {
+		got[string(a.Key)] = struct{}{}
+	}
+	for field, attr := range datapointIdentityAttrs() {
+		assert.Contains(t, got, attr, "deviceKey.%s must be exported on the datapoint as %s", field, attr)
+	}
+	assert.NotContains(t, got, "policy")
+	assert.NotContains(t, got, metrics.PolicyNameAttribute)
+	assert.Len(t, got, len(datapointIdentityAttrs()))
 }
 
 // ---------------------------------------------------------------------------
@@ -2361,16 +2560,16 @@ func TestDeviceKey_EveryDimensionIsExported(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestReservedAttrNames_AreTheExportedIdentity ties the names a profile tag may
-// not take to the attributes the identity actually builds. The collector reads
-// the set back from appendIdentityAttrs, so a dimension added there reserves
-// its name by the same edit; this fails if the two ever part company.
+// not take to the attributes the identity builds, plus policy: a tag of that
+// name would put a policy label back on the datapoint beside the scope's.
 func TestReservedAttrNames_AreTheExportedIdentity(t *testing.T) {
-	for field, attr := range keyDimensionAttrs {
+	for field, attr := range datapointIdentityAttrs() {
 		assert.True(t, reservedTagName(attr),
 			"deviceKey.%s is exported as %q, so a profile tag of that name would overwrite it", field, attr)
 	}
+	assert.True(t, reservedTagName("policy"), "a profile tag must not reintroduce a policy datapoint label")
 	assert.True(t, reservedTagName(rowIndexAttr), "a row identity is as overwritable as a device identity")
-	assert.Len(t, reservedAttrNames, len(keyDimensionAttrs)+1,
+	assert.Len(t, reservedAttrNames, len(datapointIdentityAttrs())+2,
 		"the reserved set names an attribute the exported identity does not build")
 }
 
@@ -2440,11 +2639,12 @@ func TestCollectTarget_DeviceTagCannotOverwriteIdentity(t *testing.T) {
 	pts := c.testDeviceStoreKeyed(key)["snmp.cpuutil"]
 	require.Len(t, pts, 1)
 	exported := exportedAttrs(pts[0])
-	for attr, want := range map[string]string{"policy": "p", "device_ip": host, "netbox_id": "17"} {
+	for attr, want := range map[string]string{"device_ip": host, "netbox_id": "17"} {
 		assert.Equal(t, want, exported[attr], "the exported %s must be the collector's own", attr)
 		assert.Equal(t, 1, attrCount(pts[0], attr), "%s must be appended once", attr)
 	}
 	assert.Equal(t, "sensor-1", exported["SysName"], "a tag taking no reserved name still lands")
+	assert.Equal(t, 0, attrCount(pts[0], "policy"), "a policy tag is dropped and the identity adds none")
 
 	assert.Equal(t, 3, strings.Count(logs.String(), "Ignoring metric tag that would overwrite"), "logs: %s", logs.String())
 	assert.Contains(t, logs.String(), "tag=policy")
@@ -6111,16 +6311,63 @@ func TestCollectTarget_UnsetEnumMemberIsReportedOnce(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // fakeRegistration stands in for the meter's record of a callback, so a test
-// can see whether the collector handed it back.
+// can see whether the collector handed it back. When t and collector are
+// set, Unregister also asserts that neither gaugeMu nor storeMu is held while
+// it runs, by trying to take each and releasing it immediately: the real
+// Unregister waits for a running collection to finish, and the collection's
+// callback takes storeMu, so calling Unregister under either lock would have
+// the two wait on each other forever. Existing tests that leave t and
+// collector unset get the old behaviour unchanged.
 type fakeRegistration struct {
 	embedded.Registration
 	unregistered atomic.Int32
 	err          error
+
+	t         *testing.T
+	collector *MetricsCollector
 }
 
 func (f *fakeRegistration) Unregister() error {
 	f.unregistered.Add(1)
+	if f.collector != nil {
+		if f.collector.gaugeMu.TryLock() {
+			f.collector.gaugeMu.Unlock()
+		} else {
+			f.t.Error("Unregister ran with gaugeMu held")
+		}
+		if f.collector.storeMu.TryLock() {
+			f.collector.storeMu.Unlock()
+		} else {
+			f.t.Error("Unregister ran with storeMu held")
+		}
+	}
 	return f.err
+}
+
+// Unregister must run with no collector lock held, on both paths that call
+// it: ForgetPolicy, tested here, and Close, tested next. A regression that
+// moved c.unregister inside the gaugeMu or storeMu critical section would
+// pass every other test in this file, since fakeRegistration otherwise just
+// counts calls, and would only deadlock against a real meter under load; this
+// is what catches it directly.
+func TestForgetPolicy_UnregistersWithNoCollectorLockHeld(t *testing.T) {
+	c := newCollector(nil, nil)
+	reg := &fakeRegistration{t: t, collector: c}
+	c.registrations = map[string][]metric.Registration{"a": {reg}}
+
+	c.ForgetPolicy("a")
+
+	assert.Equal(t, int32(1), reg.unregistered.Load())
+}
+
+func TestClose_UnregistersWithNoCollectorLockHeld(t *testing.T) {
+	c := newCollector(nil, nil)
+	reg := &fakeRegistration{t: t, collector: c}
+	c.registrations = map[string][]metric.Registration{"a": {reg}}
+
+	c.Close()
+
+	assert.Equal(t, int32(1), reg.unregistered.Load())
 }
 
 // The manager deleting its cache entry does not free a collector: every
@@ -6131,7 +6378,7 @@ func (f *fakeRegistration) Unregister() error {
 func TestClose_GivesEveryCallbackBackToTheMeter(t *testing.T) {
 	c := newCollector(nil, nil)
 	first, second := &fakeRegistration{}, &fakeRegistration{}
-	c.registrations = []metric.Registration{first, second}
+	c.registrations = map[string][]metric.Registration{"p": {first, second}}
 
 	c.Close()
 
@@ -6147,7 +6394,7 @@ func TestClose_ReportsAFailedUnregisterAndCarriesOn(t *testing.T) {
 	c := NewMetricsCollector(nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
 	failing := &fakeRegistration{err: errors.New("pipeline closed")}
 	healthy := &fakeRegistration{}
-	c.registrations = []metric.Registration{failing, healthy}
+	c.registrations = map[string][]metric.Registration{"p": {failing, healthy}}
 
 	c.Close()
 	c.Close()
@@ -6155,6 +6402,58 @@ func TestClose_ReportsAFailedUnregisterAndCarriesOn(t *testing.T) {
 	assert.Equal(t, int32(1), healthy.unregistered.Load(), "a failure ahead of it must not strand a later registration")
 	assert.Equal(t, int32(1), failing.unregistered.Load(), "a discarded collector must not be unregistered twice")
 	assert.Contains(t, logs.String(), "pipeline closed")
+	assert.Contains(t, logs.String(), "policy=p", "the failure names the policy it belongs to")
+	assert.Contains(t, logs.String(), "level=WARN", "a failure to unregister is tolerated, not actionable")
+}
+
+// withManualReader installs a provider the test can collect from, so what
+// the collector registers is read back as the exporter would see it.
+func withManualReader(t *testing.T) *sdkmetric.ManualReader {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	metrics.SetMeterProviderForTest(provider)
+	t.Cleanup(func() {
+		metrics.ResetMeter()
+		_ = provider.Shutdown(context.Background())
+	})
+	return reader
+}
+
+// exportedPoint is one gauge datapoint as the exporter sees it.
+type exportedPoint struct {
+	value int64
+	attrs map[string]string
+}
+
+// exportedByPolicy runs one collection and indexes metricName's gauge points
+// by the policy_name of the scope each was exported under. A scope with no
+// policy_name fails the test: every gauge the collector registers belongs to
+// a policy.
+func exportedByPolicy(t *testing.T, reader *sdkmetric.ManualReader, metricName string) map[string][]exportedPoint {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	out := map[string][]exportedPoint{}
+	for _, sm := range rm.ScopeMetrics {
+		policy, ok := sm.Scope.Attributes.Value(attribute.Key(metrics.PolicyNameAttribute))
+		require.True(t, ok, "scope %q exported without a policy_name", sm.Scope.Name)
+		for _, m := range sm.Metrics {
+			if m.Name != metricName {
+				continue
+			}
+			g, ok := m.Data.(metricdata.Gauge[int64])
+			require.True(t, ok, "%s must be an int64 gauge", m.Name)
+			for _, dp := range g.DataPoints {
+				attrs := map[string]string{}
+				for _, kv := range dp.Attributes.ToSlice() {
+					attrs[string(kv.Key)] = kv.Value.String()
+				}
+				out[policy.AsString()] = append(out[policy.AsString()], exportedPoint{value: dp.Value, attrs: attrs})
+			}
+		}
+	}
+	return out
 }
 
 // withMeter installs a real meter for the length of the test, so
@@ -6178,12 +6477,12 @@ func TestClose_EndsTheCollectorsRegistrations(t *testing.T) {
 	withMeter(t)
 	c := newCollector(nil, nil)
 
-	c.ensureInstrument("snmp.close.first", "first")
-	c.ensureInstrument("snmp.close.second", "second")
-	require.Len(t, c.registrations, 2, "ensureInstrument must keep what Close has to give back")
+	c.ensureInstrument("p", "snmp.close.first", "first")
+	c.ensureInstrument("p", "snmp.close.second", "second")
+	require.Len(t, c.registrations["p"], 2, "ensureInstrument must keep what Close has to give back")
 
 	c.Close()
-	c.ensureInstrument("snmp.close.third", "third")
+	c.ensureInstrument("p", "snmp.close.third", "third")
 
 	assert.Empty(t, c.registrations, "a discarded collector must not install a callback nothing will unregister")
 	assert.Empty(t, c.instruments)
@@ -7771,7 +8070,7 @@ func TestCollectTarget_AProfileWithNoDeviceTagsIsUnaffected(t *testing.T) {
 	pts := c.testDeviceStore("p", host)["snmp.cpuutil"]
 	require.Len(t, pts, 1)
 	assert.Equal(t, host, attrValue(pts[0], "device_ip"))
-	assert.Equal(t, "p", attrValue(pts[0], "policy"))
+	assert.Equal(t, 0, attrCount(pts[0], "policy"))
 
 	w.walkCalls = nil
 	require.NoError(t, c.CollectTarget(context.Background(), mustTarget(host), mustAuth(), "p", DialOptions{}))
