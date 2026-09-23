@@ -694,8 +694,9 @@ func appendIdentityAttrs(attrs []attribute.KeyValue, key deviceKey) []attribute.
 // A profile tag carrying one of them would replace the value rather than sit
 // beside it, since a duplicate key resolves last-value-wins. For the device
 // dimensions that would leave two devices, or two rows, sharing one series
-// with nothing left to tell them apart; for `policy` it would reintroduce a
-// policy label on the datapoint beside the scope's `policy_name`.
+// with nothing left to tell them apart; for `policy_name` it would put a
+// device-supplied value on the datapoint under the key the scope carries the
+// policy in, which a receiver flattening scope attributes reads.
 //
 // The device dimensions are read back from appendIdentityAttrs rather than
 // restated, so a dimension added to the identity reserves its name by the same
@@ -715,10 +716,10 @@ func reservedAttrNameSet() map[string]struct{} {
 	// profile could then overwrite. A dimension added to deviceKey without a
 	// value here fails TestReservedAttrNames_AreTheExportedIdentity.
 	probe := deviceKey{policy: "p", host: "h", port: 1, id: "i", context: "c"}
-	// policy is reserved by name: it is the scope's attribute, not the
-	// datapoint's, and a profile tag of that name would put a second policy
-	// label on the datapoint beside it.
-	names := map[string]struct{}{rowIndexAttr: {}, "policy": {}}
+	// policy_name is reserved by name: it is the scope's attribute, not the
+	// datapoint's, and a profile tag of that name would shadow it once a
+	// receiver flattens scope attributes onto the datapoint.
+	names := map[string]struct{}{rowIndexAttr: {}, metrics.PolicyNameAttribute: {}}
 	for _, attr := range appendIdentityAttrs(nil, probe) {
 		names[string(attr.Key)] = struct{}{}
 	}

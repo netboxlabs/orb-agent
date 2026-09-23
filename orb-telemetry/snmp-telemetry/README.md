@@ -556,10 +556,10 @@ an address.
 
 A profile's `metric_tags` become attributes beside the ones above, on the device
 or on the row. A tag that takes one of the device identity names, `row_index`,
-or `policy`, is dropped rather than applied: a duplicate attribute resolves to
-whichever value came last, so honouring it would replace the value that tells
-two devices or two rows apart, or put a policy label back on the datapoint
-beside the scope's `policy_name`. The profile still loads and every metric it
+or `policy_name`, is dropped rather than applied: a duplicate attribute resolves
+to whichever value came last, so honouring it would replace the value that tells
+two devices or two rows apart, or shadow the scope's `policy_name` once a
+receiver flattens scope attributes onto the datapoint. The profile still loads and every metric it
 declares is still collected, since a bundled profile is vendored and cannot be
 edited. The backend logs one warning naming the tag and the profile the first
 time a device matches that profile. No bundled profile declares such a tag, so
