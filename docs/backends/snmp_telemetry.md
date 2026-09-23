@@ -92,7 +92,7 @@ The full parameter tables are in the backend README under [Policy Configuration]
 ## Metrics
 Every series of a policy is exported under an instrumentation scope carrying `policy_name`, one scope per policy; datapoints carry the device attributes (`device_ip`, `device_port`, `netbox_id`, `snmp_context`) and the profile's tags. Poll metrics are described in the backend README. Trap reception adds three:
 
-- `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps and informs attributed to a policy.
+- `snmp.traps_received{device_ip, trap_name, version}` counts traps and informs attributed to a policy, under that policy's scope.
 - `snmp.traps_dropped{reason}` counts datagrams that produced no trap.
 - `snmp.traps_datagrams` counts every datagram read from any trap socket.
 

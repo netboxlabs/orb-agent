@@ -171,9 +171,10 @@ still supplies the v3 users. A policy with neither `metrics_interval` nor
 
 A trap is counted, not stored. Three metrics describe what arrived:
 
-- `snmp.traps_received{device_ip, policy, trap_name, version}` counts traps
-  from a device a policy on that socket names, once per policy naming it,
-  with the same `device_ip` and `policy` labels every polled series carries.
+- `snmp.traps_received{device_ip, trap_name, version}` counts traps from a
+  device a policy on that socket names, once per policy naming it, under
+  that policy's scope (`policy_name`), with the same `device_ip` label every
+  polled series carries.
   The counter is monotonic: a deleted policy's series stop being exported but
   keep their totals, so a policy recreated under the same name continues
   the count rather than restarting it, and nothing downstream sees a
