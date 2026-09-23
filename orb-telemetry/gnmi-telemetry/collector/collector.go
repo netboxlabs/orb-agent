@@ -110,7 +110,12 @@ type Collector struct {
 	loops       map[loopKey]*loop
 	backoffBase time.Duration
 	closed      bool
-	upOnce      sync.Once
+	// upMu guards upRegistered, the policies whose target_up gauge is on
+	// their meter. Registration runs under it, never under loopsMu: a
+	// running collection holds the SDK's pipeline lock while its callback
+	// waits for loopsMu, and RegisterCallback waits for that pipeline lock.
+	upMu         sync.Mutex
+	upRegistered map[string]bool
 }
 
 // New builds a collector over a profile store, with a series budget and a
@@ -138,6 +143,7 @@ func NewWithShared(dialer gnmi.Dialer, profileStore *profiles.Store, logger *slo
 	return &Collector{
 		dialer: dialer, profiles: profileStore, logger: logger, store: st, budget: budget, schemas: schemas,
 		exporter: newExporter(st, logger, schemas), loops: map[loopKey]*loop{}, backoffBase: time.Second,
+		upRegistered: map[string]bool{},
 	}
 }
 
@@ -156,52 +162,60 @@ func (c *Collector) Schemas() *Schemas { return c.schemas }
 // what profile validation reserves, so no profile can name this gauge.
 const targetUpSeries = metrics.TargetUp
 
-// ensureTargetUp registers the gnmi.target_up gauge once: 1 while a target
-// has a live stream or poll, 0 while it reconnects. A collector built before
-// the meter exists registers nothing and keeps its once, so the first target
-// that arrives with a meter registers the gauge.
-func (c *Collector) ensureTargetUp() {
-	m := metrics.GetMeter()
+// ensureTargetUp registers the gnmi.target_up gauge for policyName once, on
+// the policy's meter: 1 while a target of that policy has a live stream or
+// poll, 0 while it reconnects. A collector built before the meter exists
+// registers nothing and keeps nothing, so the first target that arrives with
+// a meter registers the gauge. The callback observes only that policy's
+// loops, with device_ip and mode: the policy is the scope's.
+func (c *Collector) ensureTargetUp(policyName string) {
+	m := metrics.PolicyMeter(policyName)
 	if m == nil {
 		return
 	}
-	c.upOnce.Do(func() {
-		inst, err := m.Int64ObservableGauge("gnmi." + targetUpSeries)
-		if err != nil {
-			c.logger.Error("failed to create target_up", "error", err)
-			return
-		}
-		reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-			c.loopsMu.Lock()
-			defer c.loopsMu.Unlock()
-			for k, l := range c.loops {
-				// A loop refused a slot when it started asks again here: the
-				// allowance it wanted may since have been freed by a policy
-				// that was forgotten, and this is its next observation. A loop
-				// still without one observes nothing, so the point the SDK
-				// would fold into its overflow set is never handed over.
-				if !l.upSlot && !c.budget.take(targetUpSeries) {
-					continue
-				}
-				l.upSlot = true
-				s := l.snapshot()
-				v := int64(0)
-				if s.Up {
-					v = 1
-				}
-				o.ObserveInt64(inst, v, metric.WithAttributes(
-					attribute.String("device_ip", k.host), attribute.String("policy", k.policy), attribute.String("mode", s.Mode),
-				))
+	c.upMu.Lock()
+	defer c.upMu.Unlock()
+	if c.upRegistered[policyName] {
+		return
+	}
+	inst, err := m.Int64ObservableGauge("gnmi." + targetUpSeries)
+	if err != nil {
+		c.logger.Error("failed to create target_up", "policy", policyName, "error", err)
+		return
+	}
+	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		c.loopsMu.Lock()
+		defer c.loopsMu.Unlock()
+		for k, l := range c.loops {
+			if k.policy != policyName {
+				continue
 			}
-			return nil
-		}, inst)
-		if err != nil {
-			c.logger.Error("failed to register target_up", "error", err)
-			return
+			// A loop refused a slot when it started asks again here: the
+			// allowance it wanted may since have been freed by a policy
+			// that was forgotten, and this is its next observation. A loop
+			// still without one observes nothing, so the point the SDK
+			// would fold into its overflow set is never handed over.
+			if !l.upSlot && !c.budget.take(targetUpSeries) {
+				continue
+			}
+			l.upSlot = true
+			s := l.snapshot()
+			v := int64(0)
+			if s.Up {
+				v = 1
+			}
+			o.ObserveInt64(inst, v, metric.WithAttributes(
+				attribute.String("device_ip", k.host), attribute.String("mode", s.Mode),
+			))
 		}
-		// Task 4 registers target_up per policy.
-		c.exporter.register("", reg)
-	})
+		return nil
+	}, inst)
+	if err != nil {
+		c.logger.Error("failed to register target_up", "policy", policyName, "error", err)
+		return
+	}
+	c.exporter.register(policyName, reg)
+	c.upRegistered[policyName] = true
 }
 
 // CollectTarget starts the target's loop and returns. A second call for the
@@ -215,7 +229,7 @@ func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opt
 	default:
 		return fmt.Errorf("mode %q is not auto, on_change or sample", opts.Mode)
 	}
-	c.ensureTargetUp()
+	c.ensureTargetUp(opts.PolicyName)
 	k := loopKey{opts.PolicyName, target.Host}
 	loopCtx, cancel := context.WithCancel(ctx)
 	l := &loop{cancel: cancel, done: make(chan struct{}), status: TargetStatus{Host: target.Host}}
@@ -963,8 +977,10 @@ func (c *Collector) releaseUpSlot(l *loop) {
 	c.budget.release(targetUpSeries)
 }
 
-// ForgetPolicy stops the policy's loops, waits for them, and withdraws its
-// series, in that order, so no loop writes after the withdrawal.
+// ForgetPolicy stops the policy's loops, waits for them, withdraws its
+// series, and gives its callbacks (series and target_up) back to the meter,
+// in that order, so no loop writes after the withdrawal and no callback
+// exports it afterwards. A policy of the same name registers afresh.
 func (c *Collector) ForgetPolicy(policyName string) {
 	c.loopsMu.Lock()
 	var stopped []*loop
@@ -981,6 +997,10 @@ func (c *Collector) ForgetPolicy(policyName string) {
 		<-l.done
 	}
 	c.store.forgetPolicy(policyName)
+	c.upMu.Lock()
+	delete(c.upRegistered, policyName)
+	c.upMu.Unlock()
+	c.exporter.forgetPolicy(policyName)
 }
 
 // TargetStatuses reports the policy's targets.
@@ -1015,4 +1035,7 @@ func (c *Collector) Close() {
 	}
 	c.exporter.close()
 	c.store.releaseAll()
+	c.upMu.Lock()
+	c.upRegistered = map[string]bool{}
+	c.upMu.Unlock()
 }

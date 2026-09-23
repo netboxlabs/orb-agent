@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric/embedded"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -1024,13 +1025,16 @@ func TestTargetUpRegistersWhenTheMeterArrivesLate(t *testing.T) {
 	metrics.ResetMeter()
 	sess := &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}, SubscribeManyFn: streamOf(sample(1, time.Now().UnixNano()))}
 	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
-	c.ensureTargetUp()
+	c.ensureTargetUp("p")
 	reader := testReader(t)
 	defer c.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Second, Mode: "auto", PolicyName: "p"}))
-	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.target_up"]; return ok })
+	waitFor(t, 3*time.Second, func() bool {
+		_, ok := collectByPolicy(t, reader)["p"]["gnmi.target_up"]
+		return ok
+	})
 }
 
 // Every subscription of this profile carries an origin of its own, so Get
@@ -1165,7 +1169,7 @@ func TestTargetUpIsBoundedByTheSharedBudget(t *testing.T) {
 		return c
 	}
 	upDevices := func() []string {
-		m, ok := collect(t, reader)["gnmi.target_up"]
+		m, ok := collectByPolicy(t, reader)["p"]["gnmi.target_up"]
 		if !ok {
 			return nil
 		}
@@ -2579,4 +2583,129 @@ func TestARejectionAfterAStreamsDataKeepsTheRung(t *testing.T) {
 	st := c.TargetStatuses("p")
 	require.Len(t, st, 1)
 	assert.Equal(t, "on_change", st[0].Mode, "the rung is kept and reconnected, not stepped down")
+}
+
+// target_up is one gauge per policy on that policy's meter: two policies on
+// one host give one point each under their own scopes, carrying device_ip
+// and mode and no policy attribute.
+func TestTargetUp_OneScopePerPolicy(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+		SubscribeManyFn: streamOf(sample(1, time.Now().UnixNano())),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for _, policy := range []string{"core", "edge"} {
+		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
+	}
+	waitFor(t, 3*time.Second, func() bool {
+		by := collectByPolicy(t, reader)
+		_, a := by["core"]["gnmi.target_up"]
+		_, b := by["edge"]["gnmi.target_up"]
+		return a && b
+	})
+	by := collectByPolicy(t, reader)
+	for _, policy := range []string{"core", "edge"} {
+		g := by[policy]["gnmi.target_up"].Data.(metricdata.Gauge[int64])
+		require.Len(t, g.DataPoints, 1, policy)
+		_, hasPolicy := g.DataPoints[0].Attributes.Value("policy")
+		assert.False(t, hasPolicy)
+		v, ok := g.DataPoints[0].Attributes.Value("device_ip")
+		require.True(t, ok)
+		assert.Equal(t, "10.0.0.1", v.AsString())
+	}
+	_, unscoped := by[""]["gnmi.target_up"]
+	assert.False(t, unscoped, "target_up never leaves on the process scope")
+}
+
+// ForgetPolicy silences the policy's scope, series and target_up alike,
+// leaves the other policy's, and a policy of the same name registers afresh.
+func TestForgetPolicy_StopsExportingThatPolicy(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps:            &gnmi.CapabilitiesResult{Vendor: "Nokia", Encodings: []string{"PROTO"}},
+		SubscribeManyFn: streamOf(sample(1394, time.Now().UnixNano())),
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	start := func(policy string) {
+		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
+	}
+	exported := func(policy string) bool {
+		by := collectByPolicy(t, reader)
+		_, series := by[policy]["gnmi.if_in_octets"]
+		_, up := by[policy]["gnmi.target_up"]
+		return series && up
+	}
+	start("core")
+	start("edge")
+	waitFor(t, 3*time.Second, func() bool { return exported("core") && exported("edge") })
+
+	c.ForgetPolicy("core")
+
+	by := collectByPolicy(t, reader)
+	assert.Empty(t, by["core"], "a forgotten policy exports nothing under its scope")
+	assert.True(t, exported("edge"), "the other policy is untouched")
+
+	start("core")
+	waitFor(t, 3*time.Second, func() bool { return exported("core") })
+}
+
+// Unregister waits for a running collection, whose callbacks take the
+// store's lock and loopsMu, so ForgetPolicy and Close must hold neither
+// while unregistering. A fake registration that checks the locks are free
+// pins that down without a race.
+type lockCheckingRegistration struct {
+	embedded.Registration
+	c            *Collector
+	unregistered atomic.Int32
+	err          error
+}
+
+func (r *lockCheckingRegistration) Unregister() error {
+	r.unregistered.Add(1)
+	if r.c.loopsMu.TryLock() {
+		r.c.loopsMu.Unlock()
+	} else {
+		r.err = errors.New("Unregister called with loopsMu held")
+	}
+	if r.c.store.mu.TryLock() {
+		r.c.store.mu.Unlock()
+	} else {
+		r.err = errors.New("Unregister called with store.mu held")
+	}
+	if r.c.exporter.mu.TryLock() {
+		r.c.exporter.mu.Unlock()
+	} else {
+		r.err = errors.New("Unregister called with exporter.mu held")
+	}
+	return nil
+}
+
+func TestForgetPolicy_UnregistersWithNoCollectorLockHeld(t *testing.T) {
+	c := New(&gnmi.FakeDialer{Session: &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}}}, loadStore(t), nil)
+	defer c.Close()
+	reg := &lockCheckingRegistration{c: c}
+	c.exporter.register("core", reg)
+
+	c.ForgetPolicy("core")
+
+	assert.Equal(t, int32(1), reg.unregistered.Load())
+	assert.NoError(t, reg.err)
+}
+
+func TestClose_UnregistersWithNoCollectorLockHeld(t *testing.T) {
+	c := New(&gnmi.FakeDialer{Session: &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}}}, loadStore(t), nil)
+	reg := &lockCheckingRegistration{c: c}
+	c.exporter.register("core", reg)
+
+	c.Close()
+
+	assert.Equal(t, int32(1), reg.unregistered.Load())
+	assert.NoError(t, reg.err)
 }

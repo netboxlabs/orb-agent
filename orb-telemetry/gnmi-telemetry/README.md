@@ -7,9 +7,13 @@ For each target the backend dials gNMI, asks the device for its Capabilities,
 selects a metric profile from the vendor and network OS it reports, and opens
 one subscription carrying every path that profile names. Each notification is
 matched back to the profile, converted, and written into a last-value store that
-observable instruments read on the export cadence. Every series carries
-`device_ip` and `policy` attributes, plus `netbox_id` when the target sets an
-`id` and whatever path keys its profile promotes, such as `interface_name`.
+observable instruments read on the export cadence. Every series of a policy is
+exported under an instrumentation scope named `gnmi-telemetry` with the
+attribute `policy_name` set to the policy, one scope per policy. Every series
+carries `device_ip`, plus `netbox_id` when the target sets an `id` and
+whatever path keys its profile promotes, such as `interface_name`. The SDK
+keeps a meter, and an instrument per metric name, for every distinct policy
+name seen over the process lifetime; a restart clears it.
 Metrics are sent only when `--otel-endpoint` is set; without it, targets are
 still subscribed but nothing is exported.
 
@@ -329,9 +333,10 @@ with reason `schema_conflict`.
 
 Every series carries:
 
-- `device_ip`, the target's host as the policy named it, and `policy`, the
-  policy that created the series. Together they are the identity, so two
-  policies watching one device keep separate series.
+- `device_ip`, the target's host as the policy named it. The policy is not a
+  datapoint attribute: it is the `policy_name` of the instrumentation scope
+  the series is exported under, so two policies watching one device keep
+  separate series on separate scopes.
 - `netbox_id`, when the target sets `id`.
 - Whatever the profile's subscription promotes from the path keys:
   `interface_name` on the interface subtrees, `cpu_index`, `component_name`,
@@ -402,7 +407,7 @@ Seven metrics describe the backend itself rather than a device:
 | Metric | Kind | Attributes | Meaning |
 | --- | --- | --- | --- |
 | `gnmi.targets_active` | up-down counter | none | Targets with a running loop, across every policy. |
-| `gnmi.target_up` | gauge | `device_ip`, `policy`, `mode` | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
+| `gnmi.target_up` | gauge | `device_ip`, `mode` (under the policy's scope) | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
 | `gnmi.subscription_reconnects_total` | counter | none | Reconnects after a stream ended or failed. Backoff runs from one second to a thirty second cap, and resets after an attempt that served: one that delivered data, or one whose stream answered the sync response closing its initial dump, which is all a subscription over an empty subtree ever carries. |
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
