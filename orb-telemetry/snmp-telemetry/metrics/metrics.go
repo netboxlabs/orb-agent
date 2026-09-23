@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	otlpmetric "go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -17,9 +18,23 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
+// scopeName names the instrumentation scope every meter of this process
+// belongs to. A policy's meter carries it too, distinguished by the
+// PolicyNameAttribute on the scope rather than by a different name.
+const scopeName = "snmp-telemetry"
+
+// PolicyNameAttribute is the instrumentation-scope attribute naming the
+// policy whose series a ScopeMetrics holds. It is the same key pktvisor
+// puts on its per-policy scopes, so the agent's bridge reads one convention.
+const PolicyNameAttribute = "policy_name"
+
 // Global variables for meter and cache
 var (
-	meterProvider      *sdkmetric.MeterProvider
+	meterProvider *sdkmetric.MeterProvider
+	// provider is where meters come from: the SDK provider above once
+	// SetupMetricsExport ran, or whatever a test installed. It is nil while
+	// export is disabled, and every Get*/PolicyMeter answers nil then.
+	provider           metric.MeterProvider
 	meter              metric.Meter
 	cacheLock          sync.Mutex
 	counterCache       = map[string]metric.Int64Counter{}
@@ -125,7 +140,8 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 	)
 	meterProvider = sdkmetric.NewMeterProvider(append(providerOptions(), sdkmetric.WithReader(reader))...)
 	otel.SetMeterProvider(meterProvider)
-	meter = otel.Meter("snmp-telemetry")
+	provider = meterProvider
+	meter = provider.Meter(scopeName)
 	logger = logg
 	return nil
 }
@@ -216,15 +232,33 @@ func GetMeter() metric.Meter {
 	return meter
 }
 
-// ResetMeter resets the meter to nil for testing purposes.
+// PolicyMeter returns the meter every series of policyName is exported
+// under: the process scope with policy_name=policyName as an
+// instrumentation attribute. The SDK exports one ScopeMetrics per distinct
+// scope, so a policy's series arrive grouped under its name and no
+// datapoint has to repeat it. It is nil when export is disabled. The
+// provider caches meters by scope, so calling this per registration is a
+// lookup and needs no cache here.
+func PolicyMeter(policyName string) metric.Meter {
+	if provider == nil {
+		return nil
+	}
+	return provider.Meter(scopeName,
+		metric.WithInstrumentationAttributes(attribute.String(PolicyNameAttribute, policyName)))
+}
+
+// ResetMeter resets the provider and meter to nil for testing purposes.
 func ResetMeter() {
+	provider = nil
 	meter = nil
 }
 
-// SetMeterForTest installs a meter without an exporter, for tests that read
-// instruments through a manual reader. ResetMeter undoes it.
-func SetMeterForTest(m metric.Meter) {
-	meter = m
+// SetMeterProviderForTest installs a provider without an exporter, for tests
+// that read instruments through a manual reader. Both the plain meter and
+// the policy meters come from it. ResetMeter undoes it.
+func SetMeterProviderForTest(p metric.MeterProvider) {
+	provider = p
+	meter = p.Meter(scopeName)
 }
 
 // Shutdown gracefully shuts down the metrics exporter

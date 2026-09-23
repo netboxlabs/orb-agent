@@ -57,7 +57,7 @@ func TestTally_ExportsThroughObservableCounters(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
+	metrics.SetMeterProviderForTest(provider)
 	t.Cleanup(metrics.ResetMeter)
 
 	ta := NewTally(testLogger)
@@ -201,7 +201,7 @@ func TestTally_DormantSeriesAreNotExportedAndResumeOnReturn(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
+	metrics.SetMeterProviderForTest(provider)
 	t.Cleanup(metrics.ResetMeter)
 
 	ta := NewTally(testLogger)
@@ -328,7 +328,7 @@ func TestTally_LiveSeriesNeverReachTheSDKFold(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	metrics.SetMeterForTest(provider.Meter("test"))
+	metrics.SetMeterProviderForTest(provider)
 	t.Cleanup(metrics.ResetMeter)
 
 	ta := NewTally(testLogger)
