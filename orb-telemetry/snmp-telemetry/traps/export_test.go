@@ -332,12 +332,14 @@ func TestTally_BaselinesAreBounded(t *testing.T) {
 // meter now, so a single policy's series no longer approach the SDK's
 // cardinality limit the way they did when every policy shared one
 // instrument: "core" here sits at seriesLimit, and every other policy holds
-// exactly one, both far under the limit on their own instruments. What the
-// test still proves is that no live series is folded across any of these
-// per-policy instruments: a provider configured exactly as this process
-// configures its own exports every one of them, "core"'s seriesLimit and
-// every overflowing policy's one, with its attributes intact, so a policy
-// pushed to the tally's own cap never loses a series to the SDK's fold.
+// exactly one. A single policy's own instrument tops out at seriesLimit live
+// entries plus its own overflow series, which stays below the SDK's
+// CardinalityLimit. What the test still proves is that no live series is
+// folded across any of these per-policy instruments: a provider configured
+// exactly as this process configures its own exports every one of them,
+// "core"'s seriesLimit and every overflowing policy's one, with its
+// attributes intact, so a policy pushed to the tally's own cap never loses
+// a series to the SDK's fold.
 func TestTally_LiveSeriesNeverReachTheSDKFold(t *testing.T) {
 	reader := withProvider(t, sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
 
@@ -525,16 +527,23 @@ func TestTally_CloseGivesEveryPolicyCounterBack(t *testing.T) {
 	ta.regMu.Unlock()
 }
 
-// Unregister must run with neither mu nor regMu held: it waits for a running
-// collection, whose callback takes mu, so calling it under mu would have the
-// two wait on each other forever, and calling it under regMu would still
-// serialise every Activate behind a slow Unregister on the same goroutine.
-// This drives Activate/Received/Withdraw against a real provider while a
+// Unregister waits for a running collection, whose callback takes mu, so
+// calling it under mu would have the two wait on each other forever. regMu
+// is different: no callback here takes it, and RegisterCallback takes the
+// SDK's pipeline lock without holding mu, so unregistering under regMu only
+// serialises a later Activate behind a slow Unregister on the same
+// goroutine rather than deadlocking against the collecting goroutine. This
+// test drives Activate/Received/Withdraw against a real provider while a
 // second goroutine calls Collect in a loop, so a regression that moved
-// unregisterPolicy's Unregister call inside either lock deadlocks against an
-// in-flight collection instead of merely being exercised without one. The
-// test is bounded by a timeout rather than trusting -race alone, since a
-// deadlock produces no race to report, only a goroutine that never returns.
+// unregisterPolicy's Unregister call under mu deadlocks against an
+// in-flight collection instead of merely being exercised without one; it
+// cannot catch a regression that moved it under regMu instead, since that
+// never deadlocks here. The timeouts below turn a mu deadlock into a
+// failure whose message names what happened, rather than a silent hang;
+// they do not themselves end the run, since t.Cleanup(ta.Close) would then
+// wait on the same stuck Unregister, so a hung run still depends on go
+// test's own -timeout to terminate, as it did when this was verified
+// against a deliberately reintroduced regression.
 func TestTally_ActivateReceivedWithdrawDoNotDeadlockAgainstCollect(t *testing.T) {
 	reader := withProvider(t)
 	ta := NewTally(testLogger)
