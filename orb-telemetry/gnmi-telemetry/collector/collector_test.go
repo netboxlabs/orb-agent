@@ -2778,8 +2778,15 @@ func TestForgetPolicy_RacesACollectionSafely(t *testing.T) {
 	go collectLoop()
 	go collectLoop()
 
+	// start runs off the test goroutine, so a failure can't call t.FailNow
+	// (require.NoError, t.Fatal and friends) there: it would only unwind that
+	// goroutine, not the test. Errors are collected instead and asserted back
+	// on the test goroutine once the rounds are done.
+	errs := make(chan error, 60)
 	start := func(policy string) {
-		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
+		if err := c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}); err != nil {
+			errs <- err
+		}
 	}
 
 	rounds := make(chan struct{})
@@ -2795,10 +2802,19 @@ func TestForgetPolicy_RacesACollectionSafely(t *testing.T) {
 	select {
 	case <-rounds:
 	case <-time.After(20 * time.Second):
+		// done is closed before Fatal so the two Collect goroutines above
+		// return instead of leaking past this test on the deadlock path
+		// this deadline exists to catch.
+		close(done)
+		readers.Wait()
 		t.Fatal("30 rounds of start/start/ForgetPolicy did not finish in time")
 	}
 	close(done)
 	readers.Wait()
+	close(errs)
+	for err := range errs {
+		assert.NoError(t, err, "CollectTarget failed during the race")
+	}
 
 	waitFor(t, 3*time.Second, func() bool {
 		_, up := collectByPolicy(t, reader)["b"]["gnmi.target_up"]

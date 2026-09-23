@@ -110,11 +110,13 @@ var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "net
 
 // reservedMetrics are the metric names the backend writes for its own health,
 // taken from the package that owns those instruments so the two cannot drift.
-// They stay on the plain, policy-less scope; a profile metric named after one
-// of them would export under a policy's scope instead, but the backend sees
-// one metric name across scopes, so it would still read as the same name
-// meaning two different things, of whatever kind the profile declared beside
-// the backend's own.
+// Most of them are process-level counters that stay on the plain, policy-less
+// scope, but target_up is the exception: the collector registers it itself,
+// on each policy's scope, alongside that policy's series. Either way the
+// backend owns these names on every scope they appear under, so a profile
+// metric named after one of them would stand a second instrument, of
+// whatever kind the profile declared, beside the backend's own on the same
+// scope.
 var reservedMetrics = func() map[string]bool {
 	out := map[string]bool{}
 	for _, n := range metrics.HealthNames() {
