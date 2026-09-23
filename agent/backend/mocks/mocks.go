@@ -1,6 +1,7 @@
 package mocks
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -186,7 +187,7 @@ func SetupFailingProcess(mockCmd *MockCmd, errorMsg string) {
 func AllowHeldListenAddr(t testing.TB) {
 	t.Helper()
 	orig := backend.ReserveListenAddr
-	backend.ReserveListenAddr = func(addr string) (string, error) { return addr, nil }
+	backend.ReserveListenAddr = func(_ context.Context, addr string) (string, error) { return addr, nil }
 	t.Cleanup(func() { backend.ReserveListenAddr = orig })
 }
 
@@ -198,7 +199,7 @@ func CaptureListenAddr(t testing.TB) *string {
 	t.Helper()
 	var addr string
 	orig := backend.ReserveListenAddr
-	backend.ReserveListenAddr = func(a string) (string, error) {
+	backend.ReserveListenAddr = func(_ context.Context, a string) (string, error) {
 		addr = a
 		return a, nil
 	}

@@ -447,6 +447,33 @@ func TestStartProcess_ReturnsBeforeSpawningWhenTheContextIsDone(t *testing.T) {
 	assert.Equal(t, int32(0), fake.stopCalls.Load())
 }
 
+// A cancellation that lands while the address is being reserved, a resolver
+// answering late, returns before anything is spawned.
+func TestStartProcess_ReturnsBeforeSpawningWhenCancelledDuringTheProbe(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(1)
+	captured := stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	orig := ReserveListenAddr
+	ReserveListenAddr = func(_ context.Context, addr string) (string, error) {
+		cancel()
+		return addr, nil
+	}
+	t.Cleanup(func() { ReserveListenAddr = orig })
+
+	err := StartProcess(StartSpec{
+		ListenAddr: "127.0.0.1:1",
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1", nil },
+		Ctx:            ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, captured.exec, "no command is built for a start cancelled while its address was reserved")
+	assert.Equal(t, int32(0), fake.stopCalls.Load())
+}
+
 // A cancellation during the startup wait stops the child and returns at
 // once, with the cancellation as the cause.
 func TestStartProcess_CancelledDuringTheStartupWait(t *testing.T) {
@@ -714,7 +741,7 @@ func TestStartProcess_AChildDeadAfterAPassingReadinessCheckIsNotReady(t *testing
 // to find free.
 func testListenAddr(t *testing.T) string {
 	t.Helper()
-	addr, err := ReserveListenAddr("127.0.0.1:0")
+	addr, err := ReserveListenAddr(context.Background(), "127.0.0.1:0")
 	require.NoError(t, err)
 	return addr
 }
@@ -723,7 +750,7 @@ func testListenAddr(t *testing.T) string {
 // a backend that listens on any open port learns the one to be told; the
 // port is released for the child to bind.
 func TestReserveListenAddrPicksAFreePort(t *testing.T) {
-	addr, err := ReserveListenAddr("127.0.0.1:0")
+	addr, err := ReserveListenAddr(context.Background(), "127.0.0.1:0")
 	require.NoError(t, err)
 	host, port, err := net.SplitHostPort(addr)
 	require.NoError(t, err)
@@ -768,7 +795,7 @@ func TestReserveListenAddrRefusesAHostWhoseOtherAddressIsHeld(t *testing.T) {
 	_, port, err := net.SplitHostPort(holder.Addr().String())
 	require.NoError(t, err)
 
-	_, err = ReserveListenAddr(net.JoinHostPort("localhost", port))
+	_, err = ReserveListenAddr(context.Background(), net.JoinHostPort("localhost", port))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrListenAddrInUse))
 	assert.Contains(t, err.Error(), net.JoinHostPort(v6, port), "names the held address")
@@ -779,7 +806,7 @@ func TestReserveListenAddrRefusesAHostWhoseOtherAddressIsHeld(t *testing.T) {
 func TestReserveListenAddrPicksOnePortForEveryAddressOfAHost(t *testing.T) {
 	v6 := localhostIPv6(t)
 
-	addr, err := ReserveListenAddr("localhost:0")
+	addr, err := ReserveListenAddr(context.Background(), "localhost:0")
 	require.NoError(t, err)
 	host, port, err := net.SplitHostPort(addr)
 	require.NoError(t, err)
@@ -793,6 +820,70 @@ func TestReserveListenAddrPicksOnePortForEveryAddressOfAHost(t *testing.T) {
 	}
 }
 
+// stubLookupListenHost makes the reservation resolve every hostname to the
+// given addresses and records the context it was handed.
+func stubLookupListenHost(t *testing.T, ips ...string) *context.Context {
+	t.Helper()
+	var seen context.Context
+	orig := lookupListenHost
+	lookupListenHost = func(ctx context.Context, _ string) ([]net.IPAddr, error) {
+		seen = ctx
+		out := make([]net.IPAddr, 0, len(ips))
+		for _, ip := range ips {
+			out = append(out, net.IPAddr{IP: net.ParseIP(ip)})
+		}
+		return out, nil
+	}
+	t.Cleanup(func() { lookupListenHost = orig })
+	return &seen
+}
+
+// unroutableAddr is a documentation-range address no host has, so a bind on
+// it fails the way a bind on the IPv6 loopback fails where IPv6 is disabled.
+const unroutableAddr = "192.0.2.1"
+
+// A host may resolve to an address in a family it cannot bind, the IPv6
+// loopback where IPv6 is disabled but the hosts file keeps the entry: that
+// address is skipped, since the readiness check cannot dial it either, and
+// the port is reserved on the rest.
+func TestReserveListenAddrSkipsAnAddressTheHostCannotBind(t *testing.T) {
+	stubLookupListenHost(t, "127.0.0.1", unroutableAddr)
+
+	addr, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, "example.test", host)
+	assert.NotEqual(t, "0", port)
+
+	child, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
+	require.NoError(t, err, "the port is reserved on the address the host can bind")
+	_ = child.Close()
+}
+
+// A host with no address it can bind is refused: nothing could listen there
+// and the readiness check could reach nothing.
+func TestReserveListenAddrRefusesAHostWithNoBindableAddress(t *testing.T) {
+	stubLookupListenHost(t, unroutableAddr)
+
+	_, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+	assert.Contains(t, err.Error(), unroutableAddr)
+}
+
+// The hostname is resolved under the caller's context, so a stalled resolver
+// ends with the start's cancellation rather than on its own clock.
+func TestReserveListenAddrResolvesUnderTheCallersContext(t *testing.T) {
+	seen := stubLookupListenHost(t, "127.0.0.1")
+	type key struct{}
+	ctx := context.WithValue(context.Background(), key{}, "the start's context")
+
+	_, err := ReserveListenAddr(ctx, "example.test:0")
+	require.NoError(t, err)
+	assert.Equal(t, "the start's context", (*seen).Value(key{}))
+}
+
 // A held address is refused with the sentinel, the same way StartProcess
 // reports it.
 func TestReserveListenAddrRefusesAHeldAddress(t *testing.T) {
@@ -800,7 +891,7 @@ func TestReserveListenAddrRefusesAHeldAddress(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = holder.Close() }()
 
-	_, err = ReserveListenAddr(holder.Addr().String())
+	_, err = ReserveListenAddr(context.Background(), holder.Addr().String())
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrListenAddrInUse))
 }

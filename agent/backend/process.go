@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"syscall"
 	"time"
 )
 
@@ -106,9 +107,10 @@ var ErrListenAddrInUse = errors.New("listen address in use")
 // ListenAddr: a backend about to be told to listen there is refused while
 // another process holds it, with the bind error saying why. With port 0, it
 // picks a free port, which is how a backend that is to listen on any open
-// port learns the one to be told before its spec is built. For a hostname it
-// binds the address net.Listen picks, the IPv4 loopback for localhost, which
-// is also the address the readiness check dials first. The release narrows
+// port learns the one to be told before its spec is built. A hostname is
+// resolved under ctx and every address it resolves to is bound, since the
+// readiness check dials all of them and takes the first that answers; an
+// address in a family the host cannot bind is left out. The release narrows
 // the window in which the check can be answered by another process to the
 // time between it and the child's own bind; the check after readiness below
 // catches a child that lost that race and died, and only an answer that
@@ -118,6 +120,10 @@ var ErrListenAddrInUse = errors.New("listen address in use")
 // address can stub it, the way NewCmdOptions stands a Commander in for the
 // process.
 var ReserveListenAddr = reserveListenAddr
+
+// lookupListenHost resolves a listen hostname; a variable so a test can hand
+// the reservation an address the host has no route to bind.
+var lookupListenHost = net.DefaultResolver.LookupIPAddr
 
 // namesAPort reports whether addr is host:port with a port other than 0.
 func namesAPort(addr string) bool {
@@ -129,7 +135,7 @@ func namesAPort(addr string) bool {
 	return err == nil && n != 0
 }
 
-func reserveListenAddr(addr string) (string, error) {
+func reserveListenAddr(ctx context.Context, addr string) (string, error) {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return "", fmt.Errorf("%w: %s: %w", ErrListenAddrInUse, addr, err)
@@ -141,7 +147,7 @@ func reserveListenAddr(addr string) (string, error) {
 	// empty host that is every interface, is the one address it names.
 	hosts := []string{host}
 	if host != "" && net.ParseIP(host) == nil {
-		ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+		ips, err := lookupListenHost(ctx, host)
 		if err != nil {
 			return "", fmt.Errorf("%w: %s cannot be resolved, so the readiness check could not reach this backend: %w", ErrListenAddrInUse, addr, err)
 		}
@@ -159,9 +165,19 @@ func reserveListenAddr(addr string) (string, error) {
 			_ = l.Close()
 		}
 	}()
+	var unbindable error
 	for _, h := range hosts {
 		l, err := net.Listen("tcp", net.JoinHostPort(h, port))
-		if err != nil {
+		switch {
+		case err == nil:
+		case errors.Is(err, syscall.EADDRNOTAVAIL) || errors.Is(err, syscall.EAFNOSUPPORT):
+			// A family the host has no address in, the IPv6 loopback where
+			// IPv6 is disabled but the hosts file keeps the entry: nothing
+			// can listen there and the readiness check cannot dial it, so
+			// it guards nothing and is left out.
+			unbindable = fmt.Errorf("%s cannot be bound: %w", net.JoinHostPort(h, port), err)
+			continue
+		default:
 			return "", fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, net.JoinHostPort(h, port), err)
 		}
 		held = append(held, l)
@@ -169,6 +185,9 @@ func reserveListenAddr(addr string) (string, error) {
 			// Port 0 picked one on the first address; the rest bind that one.
 			_, port, _ = net.SplitHostPort(l.Addr().String())
 		}
+	}
+	if len(held) == 0 {
+		return "", fmt.Errorf("%w: no address of %s can be bound, so nothing could listen there: %w", ErrListenAddrInUse, addr, unbindable)
 	}
 	return net.JoinHostPort(host, port), nil
 }
@@ -236,9 +255,14 @@ func StartProcess(spec StartSpec) error {
 	if !namesAPort(spec.ListenAddr) {
 		return fmt.Errorf("StartProcess: ListenAddr %q must name the port the child is told, reserve one with ReserveListenAddr first", spec.ListenAddr)
 	}
-	if _, err := ReserveListenAddr(spec.ListenAddr); err != nil {
+	if _, err := ReserveListenAddr(ctx, spec.ListenAddr); err != nil {
 		spec.Logger.Error(spec.NameDisplay+" cannot start", "error", err)
 		return fmt.Errorf("%s: %w", spec.NameDisplay, err)
+	}
+	// The reservation resolves the host, which can take a while; a start
+	// cancelled meanwhile spawns nothing.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s start cancelled: %w", spec.NameDisplay, err)
 	}
 
 	proc := NewCmdOptions(CmdOptions{
