@@ -68,13 +68,16 @@ type Manager struct {
 	// the whole manager.
 	dialer gnmi.Dialer
 	// budget is the series bound every collector this manager builds shares.
-	// The cache below holds one collector per profiles directory, and the SDK
-	// holds one instrument per metric name across all of them, so the bound
-	// has to be one for the process rather than one per collector.
+	// The cache below holds one collector per profiles directory, and the
+	// budget bounds each metric name across the whole process, which is
+	// stricter than the SDK's per-instrument limit now that each policy has
+	// its own instrument, so the bound has to be one for the process rather
+	// than one per collector.
 	budget *collector.Budget
 	// schemas is the metric-name schema registry every collector this manager
-	// builds shares, for the same reason: one instrument per metric name across
-	// every profile set, so one kind and unit per name across them too.
+	// builds shares, for the same reason: the backend sees one metric name
+	// across every policy's scope, however many profile sets feed it, so the
+	// registry keeps one kind and unit per name across them too.
 	schemas *collector.Schemas
 
 	collectorsMu    sync.Mutex
@@ -286,7 +289,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 // Nothing else is excluded. A space, a percent sequence, a query or fragment
 // character and a non-ASCII name all survive the round trip. Invalid UTF-8
 // cannot reach here at all, the YAML parser having refused the document, which
-// is what the exported "policy" metric attribute needs of the name.
+// is what the exported `policy_name` scope attribute needs of the name.
 func ValidatePolicyName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("policy name must not be empty or only whitespace")
@@ -820,8 +823,8 @@ func carriesCredential(t config.Target) bool {
 // map, the sweep's pre-marking and the collector's loop key are all keyed on the
 // bare host, so a second entry for a host already named is silently dropped
 // somewhere below validation rather than refused here. Keying those on the port
-// as well would not help: both entries would export device_ip and policy
-// attributes that are equal, and collide in the series store instead.
+// as well would not help: both entries would export equal device_ip under the
+// same policy scope, and collide in the series store instead.
 //
 // Only single endpoints are compared. A CIDR or range is left to the sweep's
 // expansion dedupe, where an explicitly named host beats the candidate the

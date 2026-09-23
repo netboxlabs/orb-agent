@@ -8,12 +8,13 @@ import (
 
 // Budget is the per-metric-name series bound. It belongs to the process, not
 // to a collector: the bound exists to keep the SDK from folding a series the
-// backend chose into its overflow set, and the SDK holds one instrument per
-// metric name however many collectors write to it. A manager builds one
+// backend chose into its overflow set, and it bounds each metric name across
+// the whole process, which is stricter than the SDK's per-instrument limit
+// now that each policy has its own instrument. A manager builds one
 // collector per profile set, so a bound held per collector would let two
-// profile sets each admit the full allowance of if_in_octets and hand that one
-// instrument twice what it accepts, losing the device_ip and policy attributes
-// the bound is there to protect. Safe for concurrent use.
+// profile sets each admit the full allowance of if_in_octets and together
+// draw twice the allowance the name is meant to have across the process.
+// Safe for concurrent use.
 type Budget struct {
 	mu      sync.Mutex
 	perName map[string]int

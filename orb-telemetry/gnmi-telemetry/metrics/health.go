@@ -40,10 +40,11 @@ var healthNames = []string{
 }
 
 // HealthNames returns the metric names the backend owns for its own health,
-// without the "gnmi." prefix. Profile validation reserves them: one instrument
-// serves a metric name however many writers it has, so a profile metric named
-// after one of these would have the exporter register a second instrument, of
-// whatever kind the profile declared, under a name the backend already writes.
+// without the "gnmi." prefix. Profile validation reserves them: the backend
+// owns these names on every scope they could appear under, so a profile
+// metric named after one of these would stand a second instrument, of
+// whatever kind the profile declared, beside the backend's own on the
+// policy's scope.
 func HealthNames() []string {
 	return append([]string(nil), healthNames...)
 }

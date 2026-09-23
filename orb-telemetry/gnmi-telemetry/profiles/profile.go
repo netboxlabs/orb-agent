@@ -100,16 +100,24 @@ var metricName = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 // a slot of the collector's budget for a name that is never exported.
 const maxMetricNameLen = 255 - len("gnmi.")
 
-// reservedAttributes are the attribute names the collector sets on every
-// series it writes. A profile that promotes a path key under one of them
-// would have the collector's value and its own on the same series.
-var reservedAttributes = map[string]bool{"device_ip": true, "policy": true, "netbox_id": true}
+// reservedAttributes are the attribute names the collector owns on every
+// series it writes: device_ip and netbox_id on the datapoint, and
+// policy_name, which the collector sets on the instrumentation scope. A
+// profile that promotes a path key under one of the datapoint names would
+// have the collector's value and its own on the same series; one promoting
+// policy_name would put a device-supplied value on the datapoint under the
+// key a receiver flattening scope attributes reads the policy from.
+var reservedAttributes = map[string]bool{"device_ip": true, "policy_name": true, "netbox_id": true}
 
 // reservedMetrics are the metric names the backend writes for its own health,
 // taken from the package that owns those instruments so the two cannot drift.
-// The exporter registers one instrument per metric name, so a profile metric
-// named after one of them would stand a second instrument, of whatever kind
-// the profile declared, beside the backend's own.
+// Most of them are process-level counters that stay on the plain, policy-less
+// scope, but target_up is the exception: the collector registers it itself,
+// on each policy's scope, alongside that policy's series. Either way the
+// backend owns these names on every scope they appear under, so a profile
+// metric named after one of them would stand a second instrument, of
+// whatever kind the profile declared, beside the backend's own on the same
+// scope.
 var reservedMetrics = func() map[string]bool {
 	out := map[string]bool{}
 	for _, n := range metrics.HealthNames() {
@@ -499,11 +507,12 @@ type metricSchema struct {
 }
 
 // schemaConflicts reports, for each profile that disagrees, the first metric
-// name it defines with a kind or unit another profile already claimed. The SDK
-// holds one instrument per metric name however many profiles feed it, so a
-// store where if_in_octets is a byte counter in one profile and a packet gauge
-// in another exports that name as two conflicting streams; Validate cannot see
-// it, because its uniqueness check is within a single profile.
+// name it defines with a kind or unit another profile already claimed. The
+// collector holds one instrument per policy and metric name, so a store where
+// if_in_octets is a byte counter in one profile and a packet gauge in another
+// would export that name as two conflicting streams under any policy whose
+// targets match both profiles; Validate cannot see it, because its uniqueness
+// check is within a single profile.
 //
 // Which profile keeps a name is fixed rather than left to the map order the
 // profiles resolved in: the definitions of the profiles still standing as
