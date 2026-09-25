@@ -255,6 +255,7 @@ type deviceRef struct {
 	kind      devRefKind
 	literal   string // populated when kind == devRefStatic
 	sourceOID string // populated when kind == devRefDynamic; format: ".1.3.6..." or "1.3.6..."
+	user      bool   // registered by a file in lookup_extensions_dir
 }
 
 // oidPattern matches an SNMP numeric OID (optionally leading dot).
@@ -336,6 +337,13 @@ func lookupOIDBothSpellings[V any](m map[string]V, oid string) (V, bool) {
 	}
 	var zero V
 	return zero, false
+}
+
+// UserDefined reports whether the model for deviceOID comes from a file in
+// lookup_extensions_dir, where an operator named it deliberately.
+func (d *DeviceLookup) UserDefined(deviceOID string) bool {
+	ref, ok := lookupOIDBothSpellings(d.devicesByVendor, deviceOID)
+	return ok && ref.user
 }
 
 // GetDevice returns the device name for a given device OID using only the
@@ -492,6 +500,7 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		parseErr := loadYAMLFile(data, fileRefs)
 		if parseErr == nil {
 			for oid, ref := range fileRefs {
+				ref.user = true
 				devicesByVendor[oid] = ref
 			}
 		}

@@ -1189,3 +1189,25 @@ func TestCountManufacturerEntries_MatchesResolverRules(t *testing.T) {
 		})
 	}
 }
+
+func TestDeviceLookup_UserDefined(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`devices:
+  ".1.3.6.1.4.1.99999.1.1": "Operator Model"
+  ".1.3.6.1.4.1.9.1.1690": "Renamed Bundled Model"
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.99999.1.1"), "a model only the operator names")
+	assert.True(t, lookup.UserDefined("1.3.6.1.4.1.99999.1.1"), "either OID spelling")
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "an operator entry replacing a bundled one")
+
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	model, err := bundled.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err, "the bundled catalog carries this OID")
+	assert.NotEmpty(t, model)
+	assert.False(t, bundled.UserDefined(".1.3.6.1.4.1.9.1.1690"), "a bundled model is not the operator's")
+	assert.False(t, bundled.UserDefined(".1.3.6.1.4.1.99999.1.1"), "an unknown OID")
+}

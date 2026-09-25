@@ -2251,9 +2251,12 @@ func TestTranslateAsStack_MemberNameTemplate(t *testing.T) {
 	})
 }
 
+// chassisModelSysObjectID is under enterprise 9, one of chassisModelVendors.
+const chassisModelSysObjectID = ".1.3.6.1.4.1.9.1.1"
+
 // standaloneWithModel is one chassis row reporting model as its
 // entPhysicalModelName, under a master whose device type came from the
-// sysObjectID lookup.
+// sysObjectID lookup of a vendor whose chassis rows name the part.
 func standaloneWithModel(model string) (*diode.Device, []diode.Entity, ObjectIDValueMap) {
 	mfg := &diode.Manufacturer{Name: strPtr("VendorA")}
 	master := &diode.Device{
@@ -2265,6 +2268,7 @@ func standaloneWithModel(model string) (*diode.Device, []diode.Entity, ObjectIDV
 		".1.3.6.1.2.1.47.1.1.1.1.5.1":  {Value: "3"},
 		".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0001"},
 		".1.3.6.1.2.1.47.1.1.1.1.13.1": {Value: model},
+		oidSysObjectIDScalar:           {Value: chassisModelSysObjectID},
 	}
 	return master, []diode.Entity{master}, oids
 }
@@ -2291,7 +2295,11 @@ func TestTranslateAsStack_StandalonePinnedModelWins(t *testing.T) {
 }
 
 func TestTranslateAsStack_StandaloneUnusableChassisModelKeepsLookup(t *testing.T) {
-	for _, model := range []string{"", "   ", "N/A", "unknown", "None", "-", "bad\x01model", strings.Repeat("M", 101)} {
+	unusable := []string{"", "   ", "bad\x01model", "\xff\xfe", strings.Repeat("M", 101), strings.Repeat("é", 101)}
+	for placeholder := range chassisModelPlaceholders {
+		unusable = append(unusable, placeholder, strings.ToUpper(placeholder))
+	}
+	for _, model := range unusable {
 		master, entities, oids := standaloneWithModel(model)
 
 		TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
@@ -2310,10 +2318,94 @@ func TestTranslateAsStack_StandaloneWithoutDeviceTypeStaysWithout(t *testing.T) 
 }
 
 func TestTranslateAsStack_StandaloneChassisModelAtNetBoxLimit(t *testing.T) {
-	model := strings.Repeat("M", 100)
-	master, entities, oids := standaloneWithModel(model)
+	for _, model := range []string{strings.Repeat("M", 100), strings.Repeat("é", 100)} {
+		master, entities, oids := standaloneWithModel(model)
+
+		TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
+
+		assert.Equal(t, model, *master.DeviceType.Model, "NetBox's 100-character model column still fits")
+	}
+}
+
+func TestTranslateAsStack_StandaloneOtherVendorsKeepLookup(t *testing.T) {
+	for _, sysObjectID := range []string{
+		".1.3.6.1.4.1.99999.1.1", // an enterprise not in chassisModelVendors
+		".1.3.6.1.4.1.90.1.1",    // shares a leading digit with an allowed one
+		".1.3.6.1.4.1",           // no enterprise arc
+		".1.3.6.1.2.1.9.1.1",     // not under enterprises
+		"",
+	} {
+		master, entities, oids := standaloneWithModel("PN-48P-A")
+		oids[oidSysObjectIDScalar] = Value{Value: sysObjectID}
+
+		TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
+
+		assert.Equal(t, "vendorProductName48", *master.DeviceType.Model, "sysObjectID %q", sysObjectID)
+	}
+	master, entities, oids := standaloneWithModel("PN-48P-A")
+	delete(oids, oidSysObjectIDScalar)
+	TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
+	assert.Equal(t, "vendorProductName48", *master.DeviceType.Model, "no sysObjectID walked")
+}
+
+func TestTranslateAsStack_EveryChassisModelVendorTakesChassisModel(t *testing.T) {
+	for enterprise := range chassisModelVendors {
+		master, entities, oids := standaloneWithModel("PN-48P-A")
+		oids[oidSysObjectIDScalar] = Value{Value: "1.3.6.1.4.1." + enterprise + ".1.1"}
+
+		TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
+
+		assert.Equal(t, "PN-48P-A", *master.DeviceType.Model, "enterprise %s", enterprise)
+	}
+}
+
+func TestTranslateAsStack_StandalonePaddedSysObjectIDStillMatches(t *testing.T) {
+	master, entities, oids := standaloneWithModel("PN-48P-A")
+	oids[oidSysObjectIDScalar] = Value{Value: " " + chassisModelSysObjectID + "\x00"}
 
 	TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
 
-	assert.Equal(t, model, *master.DeviceType.Model, "NetBox's 100-character model column still fits")
+	assert.Equal(t, "PN-48P-A", *master.DeviceType.Model)
+	assert.Equal(t, chassisModelSysObjectID, SysObjectID(oids))
+}
+
+// A lone row that survived only because rows sharing its neighbour's member id
+// were refused is not the whole chassis: it keeps the serial but not the type.
+func TestTranslateAsStack_StandaloneAfterRefusedRowsKeepsLookup(t *testing.T) {
+	master, entities, oids := standaloneWithModel("PN-48P-A")
+	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1"] = Value{Value: "1"}
+	for _, idx := range []string{"1000", "2000"} {
+		oids[".1.3.6.1.2.1.47.1.1.1.1.4."+idx] = Value{Value: "0"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.5."+idx] = Value{Value: "3"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.6."+idx] = Value{Value: "2"}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.11."+idx] = Value{Value: "SN-" + idx}
+		oids[".1.3.6.1.2.1.47.1.1.1.1.13."+idx] = Value{Value: "PN-OTHER"}
+	}
+
+	TranslateAsStack(entities, oids, nil, nil, "", false, slog.Default())
+
+	assert.Equal(t, "SN0001", *master.Serial)
+	assert.Equal(t, "vendorProductName48", *master.DeviceType.Model)
+}
+
+// A pinned model wins on a stack too: the master and every member keep it.
+func TestTranslateAsStack_StackPinnedModelWins(t *testing.T) {
+	master, entities, oids := standaloneWithModel("PN-48P-A")
+	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1"] = Value{Value: "1"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.4.1000"] = Value{Value: "0"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.5.1000"] = Value{Value: "3"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1000"] = Value{Value: "2"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.11.1000"] = Value{Value: "SN0002"}
+	oids[".1.3.6.1.2.1.47.1.1.1.1.13.1000"] = Value{Value: "PN-24P-B"}
+
+	out := TranslateAsStack(entities, oids, nil, nil, "", true, slog.Default())
+
+	var models []string
+	for _, e := range out {
+		if d, ok := e.(*diode.Device); ok {
+			models = append(models, d.DeviceType.GetModel())
+		}
+	}
+	assert.Equal(t, []string{"vendorProductName48", "vendorProductName48"}, models)
+	assert.Equal(t, "vendorProductName48", *master.DeviceType.Model)
 }
