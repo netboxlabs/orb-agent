@@ -956,6 +956,81 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	assert.Equal(t, "FOC1234A", *devices[0].Serial)
 }
 
+// fixedLookup answers every sysObjectID with one manufacturer and one
+// product name, standing in for the vendor lookup tables.
+type fixedLookup struct{}
+
+func (fixedLookup) GetManufacturer(string) (string, error) { return "VendorA", nil }
+func (fixedLookup) GetDevice(string) (string, error)       { return "vendorProductName48", nil }
+func (fixedLookup) GetDeviceModel(string, map[string]string) (string, error) {
+	return "vendorProductName48", nil
+}
+
+// standaloneModelDevice runs one standalone target whose sysObjectID resolves
+// to a product name and whose chassis row reports a part number, with the
+// given policy-level device model default, and returns its Device.
+func standaloneModelDevice(t *testing.T, pinnedModel string) *diode.Device {
+	t.Helper()
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.2": {
+				"1.3.6.1.2.1.1.2.0": {Value: ".1.3.6.1.4.1.99999.1.1", Type: gosnmp.ObjectIdentifier, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "switch-1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0001", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.13": {
+				".1.3.6.1.2.1.47.1.1.1.1.13.1": {Value: "PN-48P-A", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := chassisEntries()
+	entries[0].MappingEntries = append(entries[0].MappingEntries,
+		config.MappingEntry{OID: "1.3.6.1.2.1.1.2", Entity: "device", Field: "platform"})
+	runner := queryTargetRunner(factory, entries)
+	runner.manufacturers = fixedLookup{}
+	runner.deviceLookup = fixedLookup{}
+	runner.config.Defaults.Device.Model = pinnedModel
+
+	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	require.NoError(t, err)
+	var devices []*diode.Device
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok {
+			devices = append(devices, d)
+		}
+	}
+	require.Len(t, devices, 1)
+	require.NotNil(t, devices[0].DeviceType)
+	return devices[0]
+}
+
+// A standalone device is typed after its chassis row's model, the part number
+// a curated device type records, not the sysObjectID product name.
+func TestRunWithMetadata_StandaloneTypedByChassisModel(t *testing.T) {
+	device := standaloneModelDevice(t, "")
+	assert.Equal(t, "PN-48P-A", device.DeviceType.GetModel())
+	assert.Equal(t, "VendorA", device.DeviceType.GetManufacturer().GetName())
+}
+
+// An operator-set device model still wins over the chassis row.
+func TestRunWithMetadata_StandalonePinnedModelWins(t *testing.T) {
+	device := standaloneModelDevice(t, "Operator Model")
+	assert.Equal(t, "Operator Model", device.DeviceType.GetModel())
+}
+
 // TestRunWithMetadata_EmitsFullStackShape asserts the complete emission
 // shape for a 2-member stack end-to-end through the runner pipeline:
 // TranslateAsStack, annotators, and PruneNestedRefs. Checks:

@@ -691,7 +691,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
 		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
-		targetDefaults.StackMemberNameTemplate, r.logger)
+		targetDefaults.StackMemberNameTemplate, targetDefaults.Device.Model != "", r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path

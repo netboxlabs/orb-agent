@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
@@ -332,6 +333,44 @@ func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *di
 		dev.DeviceType = master.DeviceType
 	}
 	return dev
+}
+
+// chassisModelMaxLen is NetBox's DeviceType.model column length.
+const chassisModelMaxLen = 100
+
+// chassisModelPlaceholders are values a chassis row reports when it names
+// no model. Matched exactly, case-insensitively, after trimming.
+var chassisModelPlaceholders = map[string]struct{}{
+	"unknown": {},
+	"n/a":     {},
+	"na":      {},
+	"none":    {},
+	"null":    {},
+	"-":       {},
+}
+
+// standaloneChassisModel names a standalone device's type after the model
+// its chassis row reports, as buildMemberDevice does for every stack member.
+// The sysObjectID lookup yields a MIB product name, while the chassis row
+// carries the part number a curated device type records, so one model of
+// switch gets one type whether stacked or not. The looked-up manufacturer
+// is kept. A master with no device type is left alone: there is no
+// manufacturer to give a new one. An empty, placeholder, unprintable or
+// over-long value keeps the looked-up model.
+func standaloneChassisModel(master *diode.Device, model string) {
+	if master.DeviceType == nil || model == "" || !validAssetTagText(model) {
+		return
+	}
+	if _, placeholder := chassisModelPlaceholders[strings.ToLower(model)]; placeholder {
+		return
+	}
+	if utf8.RuneCountInString(model) > chassisModelMaxLen {
+		return
+	}
+	master.DeviceType = &diode.DeviceType{
+		Model:        StringPtr(model),
+		Manufacturer: master.DeviceType.Manufacturer,
+	}
 }
 
 func sortByID(members []ChassisMember) []ChassisMember {
@@ -873,8 +912,10 @@ func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
 //     when the walk carries a vendor chassis-serial scalar such as
 //     jnxBoxSerialNo or mtxrSerialNumber (see applyVendorSerialFallback);
 //     otherwise no Serial assignment is possible.
-//   - 1 chassis row -> set master.Serial on the existing Device,
-//     return entities unchanged otherwise (standalone case).
+//   - 1 chassis row -> set master.Serial on the existing Device and,
+//     unless modelPinned, its device type model from the row's
+//     entPhysicalModelName (see standaloneChassisModel); return entities
+//     unchanged in shape (standalone case).
 //   - >= 2 chassis rows -> emit master + top-level VirtualChassis +
 //     member Devices, re-point each Interface's Device ref to its
 //     owning member, skip interfaces whose parsed member id was
@@ -892,6 +933,9 @@ func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
 // the highest-precedence Diode matcher, so cross-target duplicates
 // would merge two devices onto one record). nil means always allow.
 //
+// modelPinned reports that the operator set the device model in the
+// target's defaults; a standalone device then keeps it.
+//
 // Must be called from the runner AFTER mapper.MapObjectIDsToEntity
 // returns and BEFORE annotate*/Ingest. See runner.go.
 func TranslateAsStack(
@@ -900,6 +944,7 @@ func TranslateAsStack(
 	ifIndexByIface map[*diode.Interface]int,
 	claimAssetTag func(tag string) bool,
 	memberNameTemplate string,
+	modelPinned bool,
 	logger *slog.Logger,
 ) []diode.Entity {
 	master := CurrentDeviceFrom(entities)
@@ -959,6 +1004,9 @@ func TranslateAsStack(
 	if !inv.IsStack() {
 		s := inv.Members[0].Serial
 		master.Serial = &s
+		if !modelPinned {
+			standaloneChassisModel(master, inv.Members[0].Model)
+		}
 		if tag, ok := assetTags[inv.Members[0].ID]; ok && master.AssetTag == nil && claim(tag) {
 			master.AssetTag = StringPtr(tag)
 		}

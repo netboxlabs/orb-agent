@@ -80,7 +80,7 @@ func TestVendorSerial_TrimsPaddingAndIgnoresEmpty(t *testing.T) {
 func TestTranslateAsStack_JunosWithoutEntityMIB_TakesJnxBoxSerialNo(t *testing.T) {
 	master := &diode.Device{Name: strPtr("ex4550-core")}
 	iface := &diode.Interface{Name: strPtr("xe-0/0/0"), Device: master}
-	out := TranslateAsStack([]diode.Entity{master, iface}, fixtureJunosNoEntityMIB(), nil, nil, "", slog.Default())
+	out := TranslateAsStack([]diode.Entity{master, iface}, fixtureJunosNoEntityMIB(), nil, nil, "", false, slog.Default())
 
 	assert.Len(t, out, 2, "shape unchanged: no virtual chassis invented")
 	require.NotNil(t, master.Serial)
@@ -89,7 +89,7 @@ func TestTranslateAsStack_JunosWithoutEntityMIB_TakesJnxBoxSerialNo(t *testing.T
 
 func TestTranslateAsStack_RouterOSEmptyChassisSerial_TakesMtxrSerialNumber(t *testing.T) {
 	master := &diode.Device{Name: strPtr("ccr1016-edge")}
-	out := TranslateAsStack([]diode.Entity{master}, fixtureRouterOSComponentSerialsOnly(), nil, nil, "", slog.Default())
+	out := TranslateAsStack([]diode.Entity{master}, fixtureRouterOSComponentSerialsOnly(), nil, nil, "", false, slog.Default())
 
 	assert.Len(t, out, 1)
 	require.NotNil(t, master.Serial)
@@ -109,7 +109,7 @@ func TestTranslateAsStack_EntityMIBChassisSerialKeepsPriorityOverVendorScalar(t 
 	oids[oidJnxBoxSerialNo] = Value{Value: "SOMETHING-ELSE"}
 
 	master := &diode.Device{Name: strPtr("qfx5100")}
-	TranslateAsStack([]diode.Entity{master}, oids, nil, nil, "", slog.Default())
+	TranslateAsStack([]diode.Entity{master}, oids, nil, nil, "", false, slog.Default())
 
 	require.NotNil(t, master.Serial)
 	assert.Equal(t, testEntitySerialQFX, *master.Serial)
@@ -129,7 +129,7 @@ func TestTranslateAsStack_VirtualChassisIgnoresVendorScalar(t *testing.T) {
 	oids[oidJnxBoxSerialNo] = Value{Value: "MEMBER1SER"}
 
 	master := &diode.Device{Name: strPtr("vc")}
-	out := TranslateAsStack([]diode.Entity{master}, oids, nil, nil, "", slog.Default())
+	out := TranslateAsStack([]diode.Entity{master}, oids, nil, nil, "", false, slog.Default())
 
 	assert.Greater(t, len(out), 1, "a two-member stack is still emitted as one")
 	require.NotNil(t, master.Serial)
@@ -140,7 +140,7 @@ func TestTranslateAsStack_NoSerialAnywhereLeavesNil(t *testing.T) {
 	oids := fixtureJunosNoEntityMIB()
 	oids[oidJnxBoxSerialNo] = Value{Value: ""}
 	master := &diode.Device{Name: strPtr("ex4550-core")}
-	TranslateAsStack([]diode.Entity{master}, oids, nil, nil, "", slog.Default())
+	TranslateAsStack([]diode.Entity{master}, oids, nil, nil, "", false, slog.Default())
 	assert.Nil(t, master.Serial, "nothing is invented when no source answers")
 }
 
@@ -194,7 +194,7 @@ func TestVendorSerialFallback_ThroughFullMapperPipeline(t *testing.T) {
 			cfg := newTestMappingConfig(t, logger)
 			mapper := NewObjectIDMapper(cfg, logger, &config.Defaults{}, "10.0.0.1")
 			ents := mapper.MapObjectIDsToEntity(oids)
-			ents = TranslateAsStack(ents, oids, mapper.InterfacesByIfIndex(), nil, "", logger)
+			ents = TranslateAsStack(ents, oids, mapper.InterfacesByIfIndex(), nil, "", false, logger)
 
 			dev := CurrentDeviceFrom(ents)
 			require.NotNil(t, dev, "the mapper still emits the device")

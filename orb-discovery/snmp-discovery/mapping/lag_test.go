@@ -274,7 +274,7 @@ func lagMembershipRowsDoNotDisplaceInterfaceRows(t *testing.T) {
 	assert.True(t, names["xe-0/0/2"])
 	assert.True(t, names["ae23"])
 
-	ents = TranslateAsStack(ents, oids, byIfIndex, nil, "", logger)
+	ents = TranslateAsStack(ents, oids, byIfIndex, nil, "", false, logger)
 	require.Equal(t, 1, AttachLagMembership(oids, byIfIndex, logger))
 	for iface, idx := range byIfIndex {
 		switch idx {
