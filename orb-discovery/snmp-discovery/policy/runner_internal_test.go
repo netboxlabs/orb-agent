@@ -966,6 +966,7 @@ func (fixedLookup) GetDevice(string) (string, error)       { return "vendorProdu
 func (fixedLookup) GetDeviceModel(string, map[string]string) (string, error) {
 	return "vendorProductName48", nil
 }
+
 func (l fixedLookup) UserDefined(oid string) bool {
 	return l.user && oid == ".1.3.6.1.4.1.9.1.1" // the sysObjectID standaloneModelDevice walks
 }

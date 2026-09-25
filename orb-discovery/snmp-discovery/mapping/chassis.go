@@ -339,13 +339,13 @@ func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *di
 type ModelPin int
 
 const (
-	// ModelNotPinned: the chassis row may name the model.
+	// ModelNotPinned leaves the chassis row free to name the model.
 	ModelNotPinned ModelPin = iota
-	// ModelPinnedByLookup: a lookup_extensions_dir entry names it. A
+	// ModelPinnedByLookup means a lookup_extensions_dir entry names it. A
 	// standalone device keeps it; stack members keep their own chassis
 	// models, as they always have.
 	ModelPinnedByLookup
-	// ModelPinnedByDefaults: defaults or override_defaults set it, a hard
+	// ModelPinnedByDefaults means defaults or override_defaults set it, a hard
 	// override for the master and every stack member.
 	ModelPinnedByDefaults
 )
