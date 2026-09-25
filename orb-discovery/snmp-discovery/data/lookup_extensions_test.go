@@ -1682,3 +1682,14 @@ func TestDeviceLookup_UserFileRestoringBundledModelIsNotUserDefined(t *testing.T
 	assert.Equal(t, model, got, "files load in name order, so the later one wins")
 	assert.False(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "the winning entry is the bundled one")
 }
+
+// A user entry is judged against the bundled catalog by its dotted key, so
+// every bundled key must be spelled with the leading dot.
+func TestDeviceLookup_BundledKeysAreDotted(t *testing.T) {
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	require.NotEmpty(t, bundled.devicesByVendor)
+	for oid := range bundled.devicesByVendor {
+		assert.True(t, strings.HasPrefix(oid, "."), "bundled key %q", oid)
+	}
+}
