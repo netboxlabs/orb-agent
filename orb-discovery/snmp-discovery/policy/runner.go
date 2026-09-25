@@ -301,6 +301,29 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 	return &r.scope.Authentication
 }
 
+// userDefinedModels is implemented by a device lookup that can say whether a
+// model came from lookup_extensions_dir.
+type userDefinedModels interface {
+	UserDefined(deviceOID string) bool
+}
+
+// The production lookup must keep answering, or a lookup pin silently lapses.
+var _ userDefinedModels = (*data.DeviceLookup)(nil)
+
+// modelPin reports whether the operator named this target's device model: in
+// its defaults, which pins every device of the target, or in a
+// lookup_extensions_dir entry for its sysObjectID, which pins a standalone
+// device. Either wins over the model a chassis row reports.
+func (r *Runner) modelPin(defaults *config.Defaults, sysOID string) mapping.ModelPin {
+	if defaults.Device.Model != "" {
+		return mapping.ModelPinnedByDefaults
+	}
+	if lookup, ok := r.deviceLookup.(userDefinedModels); ok && lookup.UserDefined(mapping.TrimSNMPString(sysOID)) {
+		return mapping.ModelPinnedByLookup
+	}
+	return mapping.ModelNotPinned
+}
+
 // resolveTargetDefaults returns the defaults to use for a target
 // Merges target-level override defaults with policy-level defaults
 func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
@@ -691,7 +714,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
 		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
-		targetDefaults.StackMemberNameTemplate, r.logger)
+		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, sysOID), r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path

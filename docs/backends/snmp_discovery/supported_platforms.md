@@ -4,7 +4,7 @@ This page lists the vendors with bundled device model coverage for the [SNMP dis
 
 The backend works with **any SNMPv1, SNMPv2c, or SNMPv3 capable device**. Entity discovery (interfaces, IP addresses, VLANs, LAG membership) is derived from standard MIBs (IF-MIB, IP-MIB, LLDP-MIB, BRIDGE-MIB, etc.) and is therefore vendor-agnostic.
 
-What differs by vendor is the **device model name** populated in NetBox. snmp-discovery resolves a device's `sysObjectID` OID against a library of bundled YAML lookup extensions, turning the raw OID into a recognizable model name (for example `catalyst2955C12` instead of `.1.3.6.1.4.1.9.1.489`). When no match is found, the raw OID is kept.
+What differs by vendor is the **device model name** populated in NetBox. snmp-discovery resolves a device's `sysObjectID` OID against a library of bundled YAML lookup extensions, turning the raw OID into a recognizable model name (for example `catalyst2955C12` instead of `.1.3.6.1.4.1.9.1.489`). When no match is found, the raw OID is kept. For Cisco, HP ProCurve and ArubaOS-Switch, Palo Alto Networks, Arista and Aruba CX, a standalone device whose chassis row reports its part number in ENTITY-MIB `entPhysicalModelName` is named after that instead (see [Device Model Lookup](./README.md#device-model-lookup) for the exact `sysObjectID` arcs).
 
 > Compatibility note: coverage of a vendor file does not guarantee that every product line or firmware variant has a model entry. Report gaps via a GitHub issue against [orb-agent](https://github.com/netboxlabs/orb-agent/issues).
 

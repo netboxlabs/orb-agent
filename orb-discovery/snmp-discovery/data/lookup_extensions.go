@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -255,6 +256,7 @@ type deviceRef struct {
 	kind      devRefKind
 	literal   string // populated when kind == devRefStatic
 	sourceOID string // populated when kind == devRefDynamic; format: ".1.3.6..." or "1.3.6..."
+	user      bool   // a lookup_extensions_dir entry that changes or adds a model
 }
 
 // oidPattern matches an SNMP numeric OID (optionally leading dot).
@@ -336,6 +338,14 @@ func lookupOIDBothSpellings[V any](m map[string]V, oid string) (V, bool) {
 	}
 	var zero V
 	return zero, false
+}
+
+// UserDefined reports whether the model for deviceOID comes from a file in
+// lookup_extensions_dir that changes or adds it, where an operator named it
+// deliberately. An entry copied unchanged from the bundled files does not count.
+func (d *DeviceLookup) UserDefined(deviceOID string) bool {
+	ref, ok := lookupOIDBothSpellings(d.devicesByVendor, deviceOID)
+	return ok && ref.user
 }
 
 // GetDevice returns the device name for a given device OID using only the
@@ -470,6 +480,9 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		return nil, 0, fmt.Errorf("failed to read directory %s: %w", dir, err)
 	}
 
+	// The catalog before any user file: an entry is the operator's naming only
+	// when it differs from this, however many user files repeat it.
+	bundled := maps.Clone(devicesByVendor)
 	var results []ExtensionFileResult
 	skipped := 0
 	for _, file := range files {
@@ -490,8 +503,14 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		// contributes nothing.
 		fileRefs := make(map[string]deviceRef)
 		parseErr := loadYAMLFile(data, fileRefs)
+		fileRefs = normalizeOIDKeys(fileRefs)
 		if parseErr == nil {
 			for oid, ref := range fileRefs {
+				// Only an entry that changes or adds a model is the operator's
+				// naming: a copied bundled entry names nothing new.
+				if b, ok := bundled[oid]; !ok || b != ref {
+					ref.user = true
+				}
 				devicesByVendor[oid] = ref
 			}
 		}
@@ -503,6 +522,22 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		})
 	}
 	return results, skipped, nil
+}
+
+// normalizeOIDKeys spells every key with the bundled files' leading dot, so an
+// entry written without it replaces the bundled entry rather than sitting
+// beside it unread. When a file spells one OID both ways, the dotted entry
+// wins, as it did when both were kept and the dotted one was read first.
+func normalizeOIDKeys(refs map[string]deviceRef) map[string]deviceRef {
+	normalized := make(map[string]deviceRef, len(refs))
+	for oid, ref := range refs {
+		key := "." + strings.TrimPrefix(oid, ".")
+		if _, seen := normalized[key]; seen && !strings.HasPrefix(oid, ".") {
+			continue
+		}
+		normalized[key] = ref
+	}
+	return normalized
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {
