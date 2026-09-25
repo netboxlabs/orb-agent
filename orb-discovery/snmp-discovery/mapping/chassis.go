@@ -392,8 +392,8 @@ var chassisModelPlaceholders = map[string]struct{}{
 // would make a worse type name than the lookup's.
 var chassisModelVendors = []string{"9", "11.2.3.7", "25461", "30065", "47196"}
 
-// SysObjectID is the walked sysObjectID, trimmed, or "" when it was not walked.
-func SysObjectID(oids ObjectIDValueMap) string {
+// sysObjectID is the walked sysObjectID, trimmed, or "" when it was not walked.
+func sysObjectID(oids ObjectIDValueMap) string {
 	v, ok := oids[oidSysObjectIDScalar]
 	if !ok {
 		return ""
@@ -405,7 +405,7 @@ func SysObjectID(oids ObjectIDValueMap) string {
 // in chassisModelVendors, matched on whole arcs.
 func chassisModelVendor(oids ObjectIDValueMap) bool {
 	const enterprises = "1.3.6.1.4.1."
-	oid := strings.TrimPrefix(SysObjectID(oids), ".")
+	oid := strings.TrimPrefix(sysObjectID(oids), ".")
 	if !strings.HasPrefix(oid, enterprises) {
 		return false
 	}
