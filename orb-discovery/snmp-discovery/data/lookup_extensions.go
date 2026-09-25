@@ -256,7 +256,7 @@ type deviceRef struct {
 	kind      devRefKind
 	literal   string // populated when kind == devRefStatic
 	sourceOID string // populated when kind == devRefDynamic; format: ".1.3.6..." or "1.3.6..."
-	user      bool   // registered by a file in lookup_extensions_dir
+	user      bool   // a lookup_extensions_dir entry that changes or adds a model
 }
 
 // oidPattern matches an SNMP numeric OID (optionally leading dot).

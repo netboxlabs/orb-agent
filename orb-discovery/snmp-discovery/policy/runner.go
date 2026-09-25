@@ -307,6 +307,9 @@ type userDefinedModels interface {
 	UserDefined(deviceOID string) bool
 }
 
+// The production lookup must keep answering, or a lookup pin silently lapses.
+var _ userDefinedModels = (*data.DeviceLookup)(nil)
+
 // modelPin reports whether the operator named this target's device model: in
 // its defaults, which pins every device of the target, or in a
 // lookup_extensions_dir entry for its sysObjectID, which pins a standalone
