@@ -2372,7 +2372,7 @@ func TestTranslateAsStack_StandalonePaddedSysObjectIDStillMatches(t *testing.T) 
 	TranslateAsStack(entities, oids, nil, nil, "", ModelNotPinned, slog.Default())
 
 	assert.Equal(t, "PN-48P-A", *master.DeviceType.Model)
-	assert.Equal(t, chassisModelSysObjectID, SysObjectID(oids))
+	assert.Equal(t, chassisModelSysObjectID, sysObjectID(oids))
 }
 
 // A lone row that survived only because rows sharing its neighbour's member id
@@ -2449,22 +2449,10 @@ func TestTranslateAsStack_StandalonePinnedByLookupKeepsLookup(t *testing.T) {
 
 // A pinned model wins on a stack too: the master and every member keep it.
 func TestTranslateAsStack_StackPinnedModelWins(t *testing.T) {
-	master, entities, oids := standaloneWithModel("PN-48P-A")
-	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1"] = Value{Value: "1"}
-	oids[".1.3.6.1.2.1.47.1.1.1.1.4.1000"] = Value{Value: "0"}
-	oids[".1.3.6.1.2.1.47.1.1.1.1.5.1000"] = Value{Value: "3"}
-	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1000"] = Value{Value: "2"}
-	oids[".1.3.6.1.2.1.47.1.1.1.1.11.1000"] = Value{Value: "SN0002"}
-	oids[".1.3.6.1.2.1.47.1.1.1.1.13.1000"] = Value{Value: "PN-24P-B"}
+	master, entities, oids := twoMemberStack()
 
 	out := TranslateAsStack(entities, oids, nil, nil, "", ModelPinnedByDefaults, slog.Default())
 
-	var models []string
-	for _, e := range out {
-		if d, ok := e.(*diode.Device); ok {
-			models = append(models, d.DeviceType.GetModel())
-		}
-	}
-	assert.Equal(t, []string{"vendorProductName48", "vendorProductName48"}, models)
+	assert.Equal(t, []string{"vendorProductName48", "vendorProductName48"}, deviceModels(out))
 	assert.Equal(t, "vendorProductName48", *master.DeviceType.Model)
 }

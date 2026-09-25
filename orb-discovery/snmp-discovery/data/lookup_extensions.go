@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -479,6 +480,9 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		return nil, 0, fmt.Errorf("failed to read directory %s: %w", dir, err)
 	}
 
+	// The catalog before any user file: an entry is the operator's naming only
+	// when it differs from this, however many user files repeat it.
+	bundled := maps.Clone(devicesByVendor)
 	var results []ExtensionFileResult
 	skipped := 0
 	for _, file := range files {
@@ -499,16 +503,12 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		// contributes nothing.
 		fileRefs := make(map[string]deviceRef)
 		parseErr := loadYAMLFile(data, fileRefs)
+		fileRefs = normalizeOIDKeys(fileRefs)
 		if parseErr == nil {
 			for oid, ref := range fileRefs {
-				// One spelling per OID, the bundled files' leading-dot one, so an
-				// entry written without the dot replaces the bundled entry rather
-				// than sitting beside it unread.
-				oid = "." + strings.TrimPrefix(oid, ".")
 				// Only an entry that changes or adds a model is the operator's
 				// naming: a copied bundled entry names nothing new.
-				if bundled, ok := devicesByVendor[oid]; !ok || bundled.kind != ref.kind ||
-					bundled.literal != ref.literal || bundled.sourceOID != ref.sourceOID {
+				if b, ok := bundled[oid]; !ok || b != ref {
 					ref.user = true
 				}
 				devicesByVendor[oid] = ref
@@ -522,6 +522,22 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		})
 	}
 	return results, skipped, nil
+}
+
+// normalizeOIDKeys spells every key with the bundled files' leading dot, so an
+// entry written without it replaces the bundled entry rather than sitting
+// beside it unread. When a file spells one OID both ways, the dotted entry
+// wins, as it did when both were kept and the dotted one was read first.
+func normalizeOIDKeys(refs map[string]deviceRef) map[string]deviceRef {
+	normalized := make(map[string]deviceRef, len(refs))
+	for oid, ref := range refs {
+		key := "." + strings.TrimPrefix(oid, ".")
+		if _, seen := normalized[key]; seen && !strings.HasPrefix(oid, ".") {
+			continue
+		}
+		normalized[key] = ref
+	}
+	return normalized
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {

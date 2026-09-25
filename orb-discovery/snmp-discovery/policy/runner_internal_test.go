@@ -1056,6 +1056,10 @@ func TestRunWithMetadata_StackPinnedModel(t *testing.T) {
 
 	byLookup := modelDevices(t, fixedLookup{user: true}, "", standaloneTarget, true)
 	assert.Equal(t, []string{"PN-48P-A", "PN-24P-B"}, deviceTypeModels(byLookup))
+
+	both := modelDevices(t, fixedLookup{user: true}, "Operator Model", standaloneTarget, true)
+	assert.Equal(t, []string{"Operator Model", "Operator Model"}, deviceTypeModels(both),
+		"defaults outrank a lookup entry, so they still pin the whole stack")
 }
 
 var standaloneTarget = config.Target{Host: "192.0.2.1", Port: 161}

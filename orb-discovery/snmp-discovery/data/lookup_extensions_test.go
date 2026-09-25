@@ -1241,3 +1241,54 @@ func TestDeviceLookup_UndottedUserKeyReplacesBundledEntry(t *testing.T) {
 	assert.Equal(t, "Operator Model", model, "the operator's entry wins however its key is spelled")
 	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"))
 }
+
+func TestDeviceLookup_ModelRepeatedAcrossUserFilesStaysUserDefined(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.yaml", "b.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name),
+			[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \"Site Model\"\n"), 0o644))
+	}
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Site Model", model)
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "a second file repeating the entry keeps it the operator's")
+}
+
+func TestDeviceLookup_BothSpellingsInOneFileDottedWins(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`devices:
+  "1.3.6.1.4.1.99999.1": "Undotted"
+  ".1.3.6.1.4.1.99999.1": "Dotted"
+`), 0o644))
+	for range 20 {
+		lookup, err := LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+		model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.99999.1", nil)
+		require.NoError(t, err)
+		require.Equal(t, "Dotted", model)
+		assert.Equal(t, 1, lookup.UserExtensionFiles()[0].Entries, "one OID, however it is spelled")
+	}
+}
+
+func TestDeviceLookup_UserFileRestoringBundledModelIsNotUserDefined(t *testing.T) {
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	model, err := bundled.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.yaml"),
+		[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \"Site Model\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.yaml"),
+		[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \""+model+"\"\n"), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	got, err := lookup.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+	assert.Equal(t, model, got, "files load in name order, so the later one wins")
+	assert.False(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "the winning entry is the bundled one")
+}

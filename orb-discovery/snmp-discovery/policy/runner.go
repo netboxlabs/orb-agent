@@ -311,11 +311,11 @@ type userDefinedModels interface {
 // its defaults, which pins every device of the target, or in a
 // lookup_extensions_dir entry for its sysObjectID, which pins a standalone
 // device. Either wins over the model a chassis row reports.
-func (r *Runner) modelPin(defaults *config.Defaults, oids mapping.ObjectIDValueMap) mapping.ModelPin {
+func (r *Runner) modelPin(defaults *config.Defaults, sysOID string) mapping.ModelPin {
 	if defaults.Device.Model != "" {
 		return mapping.ModelPinnedByDefaults
 	}
-	if lookup, ok := r.deviceLookup.(userDefinedModels); ok && lookup.UserDefined(mapping.SysObjectID(oids)) {
+	if lookup, ok := r.deviceLookup.(userDefinedModels); ok && lookup.UserDefined(mapping.TrimSNMPString(sysOID)) {
 		return mapping.ModelPinnedByLookup
 	}
 	return mapping.ModelNotPinned
@@ -711,7 +711,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
 		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
-		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, oids), r.logger)
+		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, sysOID), r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path
