@@ -1211,3 +1211,33 @@ func TestDeviceLookup_UserDefined(t *testing.T) {
 	assert.False(t, bundled.UserDefined(".1.3.6.1.4.1.9.1.1690"), "a bundled model is not the operator's")
 	assert.False(t, bundled.UserDefined(".1.3.6.1.4.1.99999.1.1"), "an unknown OID")
 }
+
+func TestDeviceLookup_CopiedBundledEntryIsNotUserDefined(t *testing.T) {
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	model, err := bundled.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "copied.yaml"),
+		[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \""+model+"\"\n"), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	assert.False(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"),
+		"seeding the directory with a bundled file names nothing new")
+}
+
+func TestDeviceLookup_UndottedUserKeyReplacesBundledEntry(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`devices:
+  "1.3.6.1.4.1.9.1.1690": "Operator Model"
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Operator Model", model, "the operator's entry wins however its key is spelled")
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"))
+}

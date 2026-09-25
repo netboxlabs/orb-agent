@@ -301,28 +301,28 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 	return &r.scope.Authentication
 }
 
-// resolveTargetDefaults returns the defaults to use for a target
-// Merges target-level override defaults with policy-level defaults
 // userDefinedModels is implemented by a device lookup that can say whether a
 // model came from lookup_extensions_dir.
 type userDefinedModels interface {
 	UserDefined(deviceOID string) bool
 }
 
-// modelPinned reports whether the operator named this target's device model,
-// in its defaults or in a lookup_extensions_dir entry for its sysObjectID.
-// Either one wins over the model a chassis row reports.
-func (r *Runner) modelPinned(defaults *config.Defaults, oids mapping.ObjectIDValueMap) bool {
+// modelPin reports whether the operator named this target's device model: in
+// its defaults, which pins every device of the target, or in a
+// lookup_extensions_dir entry for its sysObjectID, which pins a standalone
+// device. Either wins over the model a chassis row reports.
+func (r *Runner) modelPin(defaults *config.Defaults, oids mapping.ObjectIDValueMap) mapping.ModelPin {
 	if defaults.Device.Model != "" {
-		return true
+		return mapping.ModelPinnedByDefaults
 	}
-	lookup, ok := r.deviceLookup.(userDefinedModels)
-	if !ok {
-		return false
+	if lookup, ok := r.deviceLookup.(userDefinedModels); ok && lookup.UserDefined(mapping.SysObjectID(oids)) {
+		return mapping.ModelPinnedByLookup
 	}
-	return lookup.UserDefined(mapping.SysObjectID(oids))
+	return mapping.ModelNotPinned
 }
 
+// resolveTargetDefaults returns the defaults to use for a target
+// Merges target-level override defaults with policy-level defaults
 func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
 	if target.OverrideDefaults != nil {
 		r.logger.Debug("merging target-level override defaults", "host", target.Host)
@@ -711,7 +711,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
 		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
-		targetDefaults.StackMemberNameTemplate, r.modelPinned(targetDefaults, oids), r.logger)
+		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, oids), r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path

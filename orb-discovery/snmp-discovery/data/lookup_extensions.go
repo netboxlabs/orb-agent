@@ -340,7 +340,8 @@ func lookupOIDBothSpellings[V any](m map[string]V, oid string) (V, bool) {
 }
 
 // UserDefined reports whether the model for deviceOID comes from a file in
-// lookup_extensions_dir, where an operator named it deliberately.
+// lookup_extensions_dir that changes or adds it, where an operator named it
+// deliberately. An entry copied unchanged from the bundled files does not count.
 func (d *DeviceLookup) UserDefined(deviceOID string) bool {
 	ref, ok := lookupOIDBothSpellings(d.devicesByVendor, deviceOID)
 	return ok && ref.user
@@ -500,7 +501,16 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		parseErr := loadYAMLFile(data, fileRefs)
 		if parseErr == nil {
 			for oid, ref := range fileRefs {
-				ref.user = true
+				// One spelling per OID, the bundled files' leading-dot one, so an
+				// entry written without the dot replaces the bundled entry rather
+				// than sitting beside it unread.
+				oid = "." + strings.TrimPrefix(oid, ".")
+				// Only an entry that changes or adds a model is the operator's
+				// naming: a copied bundled entry names nothing new.
+				if bundled, ok := devicesByVendor[oid]; !ok || bundled.kind != ref.kind ||
+					bundled.literal != ref.literal || bundled.sourceOID != ref.sourceOID {
+					ref.user = true
+				}
 				devicesByVendor[oid] = ref
 			}
 		}

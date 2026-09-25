@@ -975,6 +975,15 @@ func (l fixedLookup) UserDefined(oid string) bool {
 // whose chassis row reports a part number, and returns its Device.
 func standaloneModelDevice(t *testing.T, lookup fixedLookup, defaultModel string, target config.Target) *diode.Device {
 	t.Helper()
+	devices := modelDevices(t, lookup, defaultModel, target, false)
+	require.Len(t, devices, 1)
+	return devices[0]
+}
+
+// modelDevices runs the target of standaloneModelDevice, with a second chassis
+// row of another model when stacked, and returns its Devices.
+func modelDevices(t *testing.T, lookup fixedLookup, defaultModel string, target config.Target, stacked bool) []*diode.Device {
+	t.Helper()
 	walker := &staticWalker{
 		pdus: map[string]map[string]snmp.PDU{
 			".1.3.6.1.2.1.1.2.0": {
@@ -1008,17 +1017,45 @@ func standaloneModelDevice(t *testing.T, lookup fixedLookup, defaultModel string
 	runner.deviceLookup = lookup
 	runner.config.Defaults.Device.Model = defaultModel
 
+	if stacked {
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.4"][".1.3.6.1.2.1.47.1.1.1.1.4.1000"] = snmp.PDU{Value: 0, Type: gosnmp.Integer, IdentifierSize: 2}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.5"][".1.3.6.1.2.1.47.1.1.1.1.5.1000"] = snmp.PDU{Value: 3, Type: gosnmp.Integer, IdentifierSize: 2}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.6"] = map[string]snmp.PDU{
+			".1.3.6.1.2.1.47.1.1.1.1.6.1":    {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+			".1.3.6.1.2.1.47.1.1.1.1.6.1000": {Value: 2, Type: gosnmp.Integer, IdentifierSize: 2},
+		}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.11"][".1.3.6.1.2.1.47.1.1.1.1.11.1000"] = snmp.PDU{Value: "SN0002", Type: gosnmp.OctetString, IdentifierSize: 2}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.13"][".1.3.6.1.2.1.47.1.1.1.1.13.1000"] = snmp.PDU{Value: "PN-24P-B", Type: gosnmp.OctetString, IdentifierSize: 2}
+	}
+
 	entities, _, err := runner.queryTarget(context.Background(), target)
 	require.NoError(t, err)
 	var devices []*diode.Device
 	for _, e := range entities {
 		if d, ok := e.(*diode.Device); ok {
+			require.NotNil(t, d.DeviceType)
 			devices = append(devices, d)
 		}
 	}
-	require.Len(t, devices, 1)
-	require.NotNil(t, devices[0].DeviceType)
-	return devices[0]
+	return devices
+}
+
+func deviceTypeModels(devices []*diode.Device) []string {
+	models := make([]string, 0, len(devices))
+	for _, d := range devices {
+		models = append(models, d.DeviceType.GetModel())
+	}
+	return models
+}
+
+// A device model set in the defaults is carried by a stack's master and every
+// member; a lookup_extensions_dir entry leaves members on their own models.
+func TestRunWithMetadata_StackPinnedModel(t *testing.T) {
+	pinned := modelDevices(t, fixedLookup{}, "Operator Model", standaloneTarget, true)
+	assert.Equal(t, []string{"Operator Model", "Operator Model"}, deviceTypeModels(pinned))
+
+	byLookup := modelDevices(t, fixedLookup{user: true}, "", standaloneTarget, true)
+	assert.Equal(t, []string{"PN-48P-A", "PN-24P-B"}, deviceTypeModels(byLookup))
 }
 
 var standaloneTarget = config.Target{Host: "192.0.2.1", Port: 161}
@@ -1043,6 +1080,14 @@ func TestRunWithMetadata_StandaloneTargetOverrideModelWins(t *testing.T) {
 	target.OverrideDefaults = &config.Defaults{Device: config.DeviceDefaults{Model: "Target Model"}}
 	device := standaloneModelDevice(t, fixedLookup{}, "", target)
 	assert.Equal(t, "Target Model", device.DeviceType.GetModel())
+}
+
+// Defaults that name only the manufacturer leave the model to the chassis row.
+func TestRunWithMetadata_StandaloneManufacturerDefaultDoesNotPinModel(t *testing.T) {
+	target := standaloneTarget
+	target.OverrideDefaults = &config.Defaults{Device: config.DeviceDefaults{Manufacturer: "VendorB", Platform: "os-b"}}
+	device := standaloneModelDevice(t, fixedLookup{}, "", target)
+	assert.Equal(t, "PN-48P-A", device.DeviceType.GetModel())
 }
 
 // And so does a model the operator named in lookup_extensions_dir.
