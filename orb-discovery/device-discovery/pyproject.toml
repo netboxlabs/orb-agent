@@ -39,6 +39,7 @@ dependencies = [
     "opentelemetry-sdk~=1.32",
     "opentelemetry-exporter-otlp~=1.32",
     "netmiko~=4.6",
+    "paramiko>=4,<5",  # 5.x dropped the SHA-1 key exchanges older switches need
     "ntc-templates~=9.2",
     "pan-python~=0.25",
     "pyaoscx~=2.6",
