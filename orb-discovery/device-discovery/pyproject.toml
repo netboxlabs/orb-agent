@@ -39,11 +39,7 @@ dependencies = [
     "opentelemetry-sdk~=1.32",
     "opentelemetry-exporter-otlp~=1.32",
     "netmiko~=4.6",
-    # paramiko 5 removed the SHA-1 key exchanges (diffie-hellman-group14-sha1,
-    # -group-exchange-sha1, -group1-sha1) and ssh-rsa host key signatures, so SSH
-    # to older devices that offer nothing newer, such as many IOS switches, fails
-    # with "no acceptable kex algorithm". Same bound as netmiko's own par4 extra.
-    "paramiko>=4,<5",
+    "paramiko>=4,<5",  # 5.x dropped the SHA-1 key exchanges older switches need
     "ntc-templates~=9.2",
     "pan-python~=0.25",
     "pyaoscx~=2.6",
