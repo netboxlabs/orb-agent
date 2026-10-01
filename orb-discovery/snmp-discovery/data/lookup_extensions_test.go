@@ -1536,3 +1536,24 @@ modules:
 	assert.Equal(t, 1, files[0].Entries)
 	assert.Error(t, files[0].ModulesErr)
 }
+
+// The file-level check must not panic where the section decoders fail cleanly.
+func TestDeviceLookup_FileLevelCheckDoesNotPanic(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "odd.yaml"), []byte(`devices: !!binary '!!!'
+manufacturers: !!binary '!!!'
+? {a: 1}
+: x
+<<: {k: v}
+`), 0o644))
+	var lookup *DeviceLookup
+	require.NotPanics(t, func() {
+		var err error
+		lookup, err = LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+	})
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].Err)
+}
