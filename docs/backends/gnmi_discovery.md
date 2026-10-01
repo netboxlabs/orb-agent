@@ -229,3 +229,19 @@ orb:
               username: admin
               netbox_id: 42              # honoured: a bare address, not a range
 ```
+
+## Delivery mode in the log
+
+In `auto` mode the agent tries `ON_CHANGE` first and steps down to `SAMPLE`, then
+`GET`, for devices that do not offer streaming. Many platforms serve `GET` and
+`SAMPLE` but not `ON_CHANGE`, so a downgrade is expected rather than an error.
+The step down and the first successful ingest are each logged once per
+connection:
+
+```
+INFO  on_change not available, using sample  policy=… host=… reason=…
+INFO  discovery flushed                      policy=… host=… active_mode=sample entities=47
+```
+
+The second line is the one that confirms the target is discovering. After it the
+target stays quiet, since the line is per connection rather than per flush.
