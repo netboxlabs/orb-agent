@@ -230,38 +230,18 @@ orb:
               netbox_id: 42              # honoured: a bare address, not a range
 ```
 
-## Checking a target
+## Delivery mode in the log
 
 In `auto` mode the agent tries `ON_CHANGE` first and steps down to `SAMPLE`, then
-`GET`, for devices that do not offer streaming. Many platforms support `GET` and
-`SAMPLE` but not `ON_CHANGE`, so a downgrade is normal and not an error. Each
-step is logged once per connection:
+`GET`, for devices that do not offer streaming. Many platforms serve `GET` and
+`SAMPLE` but not `ON_CHANGE`, so a downgrade is expected rather than an error.
+The step down and the first successful ingest are each logged once per
+connection:
 
 ```
 INFO  on_change not available, using sample  policy=… host=… reason=…
 INFO  discovery flushed                      policy=… host=… active_mode=sample entities=47
 ```
 
-The second line is the one that confirms discovery is working. It is logged once
-per connection rather than once per flush, so a steady target stays quiet after
-it.
-
-For the current state of every target, including one that has not flushed yet,
-query the backend:
-
-```bash
-curl -s localhost:8075/api/v1/status
-```
-
-Each target reports:
-
-| Field | Meaning |
-|:--|:--|
-| `active_mode` | The mode the target settled on: `on_change`, `sample` or `get`. |
-| `fallback_reason` | Why it is not on the preferred mode, when it stepped down. |
-| `last_sync` | The last completed initial sync or snapshot boundary. |
-| `last_flush` | The last successful ingest into Diode. A recent value means data is flowing. |
-| `last_error` | The most recent error of any kind, whether dial, TLS, capabilities, stream or ingest. |
-
-A target with `active_mode: sample` and a recent `last_flush` is healthy, whatever
-the downgrade line said.
+The second line is the one that confirms the target is discovering. After it the
+target stays quiet, since the line is per connection rather than per flush.
