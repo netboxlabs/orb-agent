@@ -558,7 +558,8 @@ func isLookupExtensionFile(file os.DirEntry) bool {
 // for a vendor-type OID (entPhysicalVendorType). Keys take the leading dot the
 // walk reports; when a file spells one OID both ways, the dotted entry wins,
 // so the name never depends on map order. Blank names and keys are skipped,
-// and so is 0.0, the null vendor type unrelated rows share.
+// and so is 0.0, the null vendor type unrelated rows share. On an error it adds
+// nothing, so a broken section applies no entry.
 func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 	var fileData struct {
 		Modules map[string]string `yaml:"modules"`
