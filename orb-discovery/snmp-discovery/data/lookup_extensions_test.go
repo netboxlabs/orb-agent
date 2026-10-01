@@ -1292,7 +1292,10 @@ func TestDeviceLookup_UnparseableFileRegistersNoModules(t *testing.T) {
 
 	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
 	assert.False(t, ok)
-	assert.Equal(t, 0, lookup.UserExtensionFiles()[0].ModuleEntries)
+	files := lookup.UserExtensionFiles()
+	assert.Equal(t, 0, files[0].ModuleEntries)
+	assert.Error(t, files[0].Err, "a file that is not valid YAML is reported once, by Err")
+	assert.NoError(t, files[0].ModulesErr)
 }
 
 // A modules: section that cannot be read is skipped on its own: the file's

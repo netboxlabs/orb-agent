@@ -3,6 +3,7 @@ package data
 import (
 	"bufio"
 	"embed"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -308,11 +309,13 @@ type ExtensionFileResult struct {
 	// ModuleEntries is how many module vendor types the file names in its
 	// modules: section.
 	ModuleEntries int
-	// ModulesErr is set when the modules: section could not be parsed. Only
-	// that section is skipped; the file's devices still apply.
+	// ModulesErr is set when the modules: section holds a value of the wrong
+	// type. Only that section is skipped; the file's devices still apply. A
+	// file that is not valid YAML at all is reported by Err alone.
 	ModulesErr error
-	// Err is set when the file could not be parsed. Such a file is skipped
-	// rather than failing the whole load, so the rest still apply.
+	// Err is set when the file is not valid YAML or its devices: section is
+	// malformed. Its devices are skipped rather than failing the whole load,
+	// so the other files still apply.
 	Err error
 }
 
@@ -509,6 +512,12 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		// one section never costs the other its entries.
 		fileModules := make(map[string]string)
 		modulesErr := loadModuleYAML(data, fileModules)
+		var typeErr *yaml.TypeError
+		if modulesErr != nil && !errors.As(modulesErr, &typeErr) {
+			// Not valid YAML at all: the devices parse failed the same way and
+			// Err already says so, so the file gets one warning, not two.
+			modulesErr = nil
+		}
 		maps.Copy(moduleModels, fileModules)
 		results = append(results, ExtensionFileResult{
 			Name:                file.Name(),

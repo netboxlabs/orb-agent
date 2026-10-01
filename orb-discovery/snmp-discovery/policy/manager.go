@@ -473,6 +473,7 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 				"directory", safeDir,
 				"file", sanitizeLogValue(f.Name),
 				"manufacturer_entries", f.ManufacturerEntries,
+				"module_entries", f.ModuleEntries,
 				"error", sanitizeLogValue(f.Err.Error()))
 		case f.Entries == 0 && f.ManufacturerEntries == 0 && f.ModuleEntries == 0 && f.ModulesErr == nil:
 			// Only when no recognised section contributed. A file carrying just
