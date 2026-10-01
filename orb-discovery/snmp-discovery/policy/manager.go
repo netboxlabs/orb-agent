@@ -466,9 +466,8 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 		}
 		switch {
 		case f.Err != nil:
-			// Only the devices section is lost. Its manufacturers and modules
-			// sections are parsed separately and still apply, so do not imply
-			// the whole file was discarded.
+			// The devices section, or the whole file, could not be read. The
+			// counts show what the other sections still contributed.
 			m.logger.Warn("lookup extension file has an unparseable devices section; its device entries were skipped",
 				"directory", safeDir,
 				"file", sanitizeLogValue(f.Name),

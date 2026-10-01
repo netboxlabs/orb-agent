@@ -1259,10 +1259,10 @@ func TestDeviceLookup_ModuleModels(t *testing.T) {
 	lookup, err := LoadDeviceLookupExtensions(dir)
 	require.NoError(t, err)
 
-	for _, oid := range []string{".1.3.6.1.4.1.99999.3.1.9.4.673", "1.3.6.1.4.1.99999.3.1.9.4.673"} {
+	for _, oid := range []string{".1.3.6.1.4.1.99999.3.1.9.4.673", "1.3.6.1.4.1.99999.3.1.9.4.673", " .1.3.6.1.4.1.99999.3.1.9.4.673 "} {
 		model, ok := lookup.GetModuleModel(oid)
 		assert.True(t, ok, oid)
-		assert.Equal(t, "PN-MPU-A", model, "either spelling of the vendor type")
+		assert.Equal(t, "PN-MPU-A", model, "either spelling of the vendor type, padded or not")
 	}
 	model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.680")
 	assert.True(t, ok)
@@ -1382,6 +1382,77 @@ func TestDeviceLookup_NilLookupNamesNoModule(t *testing.T) {
 	var lookup *DeviceLookup
 	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
 	assert.False(t, ok)
+}
+
+// A blank key would otherwise name every module that reports no vendor type.
+func TestDeviceLookup_BlankModuleKeyNamesNoModule(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  "": Everything
+  ".": Everything Else
+  " ": Everything Again
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, lookup.UserExtensionFiles()[0].ModuleEntries)
+	_, ok := lookup.GetModuleModel("")
+	assert.False(t, ok)
+}
+
+func TestDeviceLookup_BlankVendorTypeNamesNoModule(t *testing.T) {
+	lookup := &DeviceLookup{moduleModels: map[string]string{"": "Everything", ".": "Everything"}}
+	for _, oid := range []string{"", " "} {
+		_, ok := lookup.GetModuleModel(oid)
+		assert.False(t, ok, "%q", oid)
+	}
+}
+
+// A file that cannot be read as a mapping fails as a whole, so Err reports it
+// and the modules section adds no second error.
+func TestDeviceLookup_FileLevelErrorIsReportedOnce(t *testing.T) {
+	for name, content := range map[string]string{
+		"duplicate top-level key": "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\ndevices:\n  \".1.3.6.1.4.1.99999.1.2\": B\n",
+		"list root":               "- \".1.3.6.1.4.1.99999.1.1\"\n",
+		"scalar root":             "just text\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.yaml"), []byte(content), 0o644))
+			lookup, err := LoadDeviceLookupExtensions(dir)
+			require.NoError(t, err)
+
+			files := lookup.UserExtensionFiles()
+			require.Len(t, files, 1)
+			assert.Error(t, files[0].Err)
+			assert.NoError(t, files[0].ModulesErr)
+		})
+	}
+}
+
+// Any error confined to the modules section is reported, not only a value of
+// the wrong type, and the file's devices still apply.
+func TestDeviceLookup_ModulesSectionErrorOfAnyKindIsReported(t *testing.T) {
+	for name, modules := range map[string]string{
+		"wrong tag":       "  \".1.3.6.1.4.1.99999.3.1.9.4.673\": !!int abc\n",
+		"scalar merge":    "  <<: oops\n",
+		"duplicate key":   "  \".1.3.6.1.4.1.99999.3.1.9.4.673\": A\n  \".1.3.6.1.4.1.99999.3.1.9.4.673\": B\n",
+		"list for a name": "  \".1.3.6.1.4.1.99999.3.1.9.4.673\": [A]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"),
+				[]byte("devices:\n  \".1.3.6.1.4.1.99999.1.1\": \"Operator Model\"\nmodules:\n"+modules), 0o644))
+			lookup, err := LoadDeviceLookupExtensions(dir)
+			require.NoError(t, err)
+
+			files := lookup.UserExtensionFiles()
+			require.Len(t, files, 1)
+			assert.NoError(t, files[0].Err)
+			assert.Error(t, files[0].ModulesErr)
+			assert.Equal(t, 1, files[0].Entries)
+		})
+	}
 }
 
 // Files load in name order, so a later file renames a module vendor type
