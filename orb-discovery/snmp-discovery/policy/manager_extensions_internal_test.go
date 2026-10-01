@@ -90,7 +90,7 @@ func TestLogReportedExtensionFiles_WarnsOnUnparseableFile(t *testing.T) {
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "unparseable devices or modules section") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "unparseable devices section") {
 			warned = true
 			if l.File != "broken.yaml" || l.Err == "" {
 				t.Errorf("warning must name the file and the parse error, got file=%q err=%q", l.File, l.Err)
@@ -347,5 +347,53 @@ func TestLogReportedExtensionFiles_ModulesOnlyFileIsCounted(t *testing.T) {
 	}
 	if info.ModuleEntries != 2 {
 		t.Errorf("module_entries = %d, want 2", info.ModuleEntries)
+	}
+}
+
+// A modules: section that cannot be parsed is called out on its own, and the
+// file is not also reported as contributing nothing.
+func TestLogReportedExtensionFiles_WarnsOnUnparseableModulesSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "modules.yaml", "modules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: [PN-MPU-A]\n")
+
+	var warned bool
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level != "WARN" {
+			continue
+		}
+		switch {
+		case strings.Contains(l.Msg, "unparseable modules section"):
+			warned = true
+			if l.File != "modules.yaml" || l.Err == "" {
+				t.Errorf("warning must name the file and the parse error, got file=%q err=%q", l.File, l.Err)
+			}
+		case strings.Contains(l.Msg, "contributed no"):
+			t.Errorf("a file with a broken modules section must not also be reported as empty: %q", l.Msg)
+		}
+	}
+	if !warned {
+		t.Error("an unparseable modules section must produce a WARN carrying the parse error")
+	}
+}
+
+// Module entries still apply, and are still counted, when the same file's
+// devices: section cannot be parsed.
+func TestLogReportedExtensionFiles_CountsModulesBesideABrokenDevicesSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "mixed.yaml",
+		"devices: [not-a-map]\nmodules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: PN-MPU-A\n")
+
+	var info *logLine
+	lines := captureExtensionLogs(t, dir)
+	for i := range lines {
+		if lines[i].Level == "INFO" && lines[i].Msg == "loaded device lookup extensions" {
+			info = &lines[i]
+		}
+	}
+	if info == nil {
+		t.Fatal("expected an INFO summary line")
+	}
+	if info.ModuleEntries != 1 {
+		t.Errorf("module_entries = %d, want 1", info.ModuleEntries)
 	}
 }

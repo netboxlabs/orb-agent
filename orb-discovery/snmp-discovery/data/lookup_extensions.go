@@ -308,6 +308,9 @@ type ExtensionFileResult struct {
 	// ModuleEntries is how many module vendor types the file names in its
 	// modules: section.
 	ModuleEntries int
+	// ModulesErr is set when the modules: section could not be parsed. Only
+	// that section is skipped; the file's devices still apply.
+	ModulesErr error
 	// Err is set when the file could not be parsed. Such a file is skipped
 	// rather than failing the whole load, so the rest still apply.
 	Err error
@@ -496,27 +499,24 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		// on success keeps the pre-existing behaviour that a rejected file
 		// contributes nothing.
 		fileRefs := make(map[string]deviceRef)
-		fileModules := make(map[string]string)
 		parseErr := loadYAMLFile(data, fileRefs)
-		if parseErr == nil {
-			parseErr = loadModuleYAML(data, fileModules)
-		}
 		if parseErr == nil {
 			for oid, ref := range fileRefs {
 				devicesByVendor[oid] = ref
 			}
-			maps.Copy(moduleModels, fileModules)
-		} else {
-			// A rejected file contributes nothing, so it reports nothing either.
-			// Its modules map is still empty: that section is read last.
-			clear(fileRefs)
 		}
+		// Read on its own, as the manufacturers: section is, so a mistake in
+		// one section never costs the other its entries.
+		fileModules := make(map[string]string)
+		modulesErr := loadModuleYAML(data, fileModules)
+		maps.Copy(moduleModels, fileModules)
 		results = append(results, ExtensionFileResult{
 			Name:                file.Name(),
 			Entries:             len(fileRefs),
 			ManufacturerEntries: countManufacturerEntries(data),
 			ModuleEntries:       len(fileModules),
 			Err:                 parseErr,
+			ModulesErr:          modulesErr,
 		})
 	}
 	return results, skipped, nil
@@ -530,7 +530,9 @@ func isLookupExtensionFile(file os.DirEntry) bool {
 
 // loadModuleYAML reads a file's modules: section, which names the module type
 // for a vendor-type OID (entPhysicalVendorType). Keys take the leading dot the
-// walk reports, and blank names are skipped.
+// walk reports; when a file spells one OID both ways, the dotted entry wins,
+// so the name never depends on map order. Blank names are skipped, and so is
+// 0.0, the null vendor type unrelated rows share.
 func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 	var fileData struct {
 		Modules map[string]string `yaml:"modules"`
@@ -539,9 +541,15 @@ func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
 	for oid, model := range fileData.Modules {
-		if model = strings.TrimSpace(model); model != "" {
-			moduleModels["."+strings.TrimPrefix(strings.TrimSpace(oid), ".")] = model
+		oid = strings.TrimSpace(oid)
+		key := "." + strings.TrimPrefix(oid, ".")
+		if model = strings.TrimSpace(model); model == "" || key == ".0.0" {
+			continue
 		}
+		if _, seen := moduleModels[key]; seen && !strings.HasPrefix(oid, ".") {
+			continue
+		}
+		moduleModels[key] = model
 	}
 	return nil
 }
@@ -549,6 +557,9 @@ func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 // GetModuleModel returns the module type model an operator's modules: entry
 // names for a vendor-type OID, in either spelling.
 func (d *DeviceLookup) GetModuleModel(vendorTypeOID string) (string, bool) {
+	if d == nil {
+		return "", false
+	}
 	return lookupOIDBothSpellings(d.moduleModels, strings.TrimSpace(vendorTypeOID))
 }
 

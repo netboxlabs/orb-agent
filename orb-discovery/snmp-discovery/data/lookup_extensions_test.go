@@ -1295,9 +1295,9 @@ func TestDeviceLookup_UnparseableFileRegistersNoModules(t *testing.T) {
 	assert.Equal(t, 0, lookup.UserExtensionFiles()[0].ModuleEntries)
 }
 
-// A file whose modules: section cannot be read is rejected whole, its devices
-// included, and reports nothing it did not register.
-func TestDeviceLookup_BrokenModulesSectionRejectsTheFile(t *testing.T) {
+// A modules: section that cannot be read is skipped on its own: the file's
+// devices still apply.
+func TestDeviceLookup_BrokenModulesSectionKeepsTheFileDevices(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices:
   ".1.3.6.1.4.1.99999.1.1": "Operator Model"
@@ -1307,13 +1307,78 @@ modules:
 	lookup, err := LoadDeviceLookupExtensions(dir)
 	require.NoError(t, err)
 
-	_, err = lookup.GetDeviceModel(".1.3.6.1.4.1.99999.1.1", nil)
-	assert.Error(t, err, "the file's devices are not registered")
+	model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.99999.1.1", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Operator Model", model)
+	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.False(t, ok)
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.NoError(t, files[0].Err)
+	assert.Error(t, files[0].ModulesErr)
+	assert.Equal(t, 1, files[0].Entries)
+	assert.Equal(t, 0, files[0].ModuleEntries)
+}
+
+// And a devices: section that cannot be read leaves the file's modules.
+func TestDeviceLookup_BrokenDevicesSectionKeepsTheFileModules(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices: [not-a-map]
+modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": PN-MPU-A
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.True(t, ok)
+	assert.Equal(t, "PN-MPU-A", model)
 	files := lookup.UserExtensionFiles()
 	require.Len(t, files, 1)
 	assert.Error(t, files[0].Err)
-	assert.Equal(t, 0, files[0].Entries)
-	assert.Equal(t, 0, files[0].ModuleEntries)
+	assert.NoError(t, files[0].ModulesErr)
+	assert.Equal(t, 1, files[0].ModuleEntries)
+}
+
+// One file spelling a vendor type both ways names it by the dotted entry,
+// whatever order the map yields.
+func TestDeviceLookup_ModuleBothSpellingsInOneFileDottedWins(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  "1.3.6.1.4.1.99999.3.1.9.4.673": Undotted
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": Dotted
+`), 0o644))
+	for range 20 {
+		lookup, err := LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+		model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+		require.True(t, ok)
+		require.Equal(t, "Dotted", model)
+		assert.Equal(t, 1, lookup.UserExtensionFiles()[0].ModuleEntries)
+	}
+}
+
+// 0.0 is the null vendor type that unrelated rows share, so it names nothing.
+func TestDeviceLookup_ZeroDotZeroNamesNoModule(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  "0.0": Everything
+  ".0.0": Everything Else
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	for _, oid := range []string{"0.0", ".0.0"} {
+		_, ok := lookup.GetModuleModel(oid)
+		assert.False(t, ok, oid)
+	}
+	assert.Equal(t, 0, lookup.UserExtensionFiles()[0].ModuleEntries)
+}
+
+func TestDeviceLookup_NilLookupNamesNoModule(t *testing.T) {
+	var lookup *DeviceLookup
+	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.False(t, ok)
 }
 
 // Files load in name order, so a later file renames a module vendor type

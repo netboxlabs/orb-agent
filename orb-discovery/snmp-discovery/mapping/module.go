@@ -244,7 +244,7 @@ func effectivePID(model, vendorType string) string {
 // in the containment tree. hasModuleParent is true when an ancestor in
 // the entPhysicalTable chain is itself class=9. Effective PID prefers
 // trimmed Model and falls back to trimmed VendorType when Model is
-// blank — Aruba CX populates VendorType where Cisco populates Model.
+// blank.
 func classifyModule(model, vendorType string, hasModuleParent bool) ModuleType {
 	pid := strings.TrimSpace(model)
 	if pid == "" {

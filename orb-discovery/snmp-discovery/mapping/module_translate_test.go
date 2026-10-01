@@ -597,7 +597,7 @@ func skuDescrOIDs(sysObjectID, descr string) ObjectIDValueMap {
 
 func moduleTypeModels(t *testing.T, oids ObjectIDValueMap) []string {
 	t.Helper()
-	dev := &diode.Device{Name: strPtr("comware")}
+	dev := &diode.Device{Name: strPtr("switch-1")}
 	entities, _ := TranslateModules(oids, nil, map[int]*diode.Device{0: dev}, modeLinecards(), nil, slog.Default())
 	var models []string
 	for _, e := range entities {
@@ -608,17 +608,18 @@ func moduleTypeModels(t *testing.T, oids ObjectIDValueMap) []string {
 	return models
 }
 
-// A Comware module reports no model name; its part number ends its descr.
-func TestTranslateModules_ComwarePartNumberFromDescr(t *testing.T) {
+// A module of an enterprise-25506 device reports no model name; its part
+// number ends its descr.
+func TestTranslateModules_PartNumberFromDescr(t *testing.T) {
 	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
 	assert.Equal(t, []string{"JZ123A"}, moduleTypeModels(t, oids))
 
 	oids = skuDescrOIDs("1.3.6.1.4.1.25506.11.1.172", " Example Module J9123A ")
-	assert.Equal(t, []string{"J9123A"}, moduleTypeModels(t, oids), "undotted sysObjectID, padded descr, numeric SKU form")
+	assert.Equal(t, []string{"J9123A"}, moduleTypeModels(t, oids), "undotted sysObjectID, numeric SKU form")
 }
 
 // Without a part-number-shaped last token, the module keeps today's name.
-func TestTranslateModules_ComwareDescrWithoutPartNumberKeepsVendorType(t *testing.T) {
+func TestTranslateModules_DescrWithoutPartNumberKeepsVendorType(t *testing.T) {
 	for _, descr := range []string{
 		"MODULE LEVEL2",          // generic class text
 		"JZ123A Example Module",  // the part number is not the last token
@@ -627,6 +628,9 @@ func TestTranslateModules_ComwareDescrWithoutPartNumberKeepsVendorType(t *testin
 		"Example Module JZ1234A", // too long
 		"Example Module KZ123A",  // not the J-prefixed SKU shape
 		"Example Module JZ123AB", // trailing letters
+		"Example Module XJZ123A", // the part number embedded in a longer token
+		"Example Module JUMPER",  // letters where the digits belong
+		"Example Module JZ1234",  // a digit where the final letter belongs
 		"",
 	} {
 		oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", descr)
@@ -634,8 +638,8 @@ func TestTranslateModules_ComwareDescrWithoutPartNumberKeepsVendorType(t *testin
 	}
 }
 
-// The descr's last token is read only for Comware, whose recorded walks put
-// the part number there.
+// The descr's last token is read only on enterprise-25506 devices, where one
+// recorded walk shows the part number there.
 func TestTranslateModules_OtherVendorsDescrIsNotAPartNumber(t *testing.T) {
 	for _, sysObjectID := range []string{".1.3.6.1.4.1.99999.1.1", ".1.3.6.1.4.1.255061.1", ".1.3.6.1.2.1.25506.1", ""} {
 		oids := skuDescrOIDs(sysObjectID, "Example 48-port Module JZ123A")
@@ -660,7 +664,7 @@ func (f fakeModuleModels) GetModuleModel(vendorType string) (string, bool) {
 
 func moduleTypeModelsWith(t *testing.T, oids ObjectIDValueMap, lookup ModuleModelLookup) []string {
 	t.Helper()
-	dev := &diode.Device{Name: strPtr("comware")}
+	dev := &diode.Device{Name: strPtr("switch-1")}
 	entities, _ := TranslateModulesWithAlias(oids, nil, map[int]*diode.Device{0: dev}, modeLinecards(), nil,
 		slog.Default(), nil, lookup)
 	var models []string
