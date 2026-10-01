@@ -228,6 +228,11 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	}
 
 	warnedNoIdentity := false // rate-limit the no-identity warning to once per connection
+	// The downgrade to sample/get is logged, so without this a target that is
+	// discovering normally over a fallback mode says only that on_change was
+	// unavailable and nothing else, which reads as a failure. Logged once per
+	// connection, like the warning above, so a steady target stays quiet.
+	loggedFirstFlush := false
 
 	// Config capture (options.capture_config): fetch the CONFIG datastore once per
 	// connection — on the first flush, which fires right after the initial sync —
@@ -366,7 +371,18 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			return
 		}
 		r.runStore.UpdateRun(r.name, t.Host, run.ID, RunStatusCompleted, nil, len(entities))
-		r.setState(t.Host, func(s *targetState) { s.LastFlush = time.Now(); s.LastError = "" })
+		first, mode := false, ""
+		r.setState(t.Host, func(s *targetState) {
+			s.LastFlush = time.Now()
+			s.LastError = ""
+			if !loggedFirstFlush {
+				loggedFirstFlush, first, mode = true, true, s.ActiveMode
+			}
+		})
+		if first {
+			r.logger.Info("discovery flushed", "policy", r.name, "host", t.Host,
+				"active_mode", mode, "entities", len(entities))
+		}
 		metrics.GetFlushes().Add(r.ctx, 1)
 	}
 
@@ -423,7 +439,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			return nil // ctx cancelled during/after on_change attempt
 		}
 
-		r.logger.Info("on_change unsupported, trying sample", "policy", r.name, "host", t.Host, "reason", ocReason)
+		r.logger.Info("on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		notes, errs, s2 := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if s2 == nil {
@@ -437,7 +453,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if r.ctx.Err() != nil {
 			return nil // ctx cancelled during/after sample attempt
 		}
-		r.logger.Info("sample unsupported, falling back to get", "policy", r.name, "host", t.Host, "reason", s2)
+		r.logger.Info("sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		// Tear down the SAMPLE subscription before switching to Get on the same
 		// session — Subscribe/Close are the only other teardown points and Close is
