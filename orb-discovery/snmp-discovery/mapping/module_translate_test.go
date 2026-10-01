@@ -579,3 +579,73 @@ func TestTranslateModules_ModuleTypeModel_FallsBackToVendorTypeWhenModelBlank(t 
 	assert.Equal(t, "aruba-jl363a", *modules[0].ModuleType.Model,
 		"blank Model must fall back to VendorType, not Unknown")
 }
+
+// skuDescrOIDs is one chassis and one line module whose model name is blank
+// and whose vendor type is an OID, under the given sysObjectID, with descr as
+// the module's entPhysicalDescr.
+func skuDescrOIDs(sysObjectID, descr string) ObjectIDValueMap {
+	oids := buildOIDs([]fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SN0001", "", "Example Chassis", ".1.3.6.1.4.1.25506.3.1.9.1.1"},
+		{"100", "1", "5", "1", "Slot 1", "", "", "Slot 1", ""},
+		{"101", "100", "9", "1", "Board 1", "SN0101", "", descr, ".1.3.6.1.4.1.25506.3.1.9.4.673"},
+	})
+	if sysObjectID != "" {
+		oids[oidSysObjectIDScalar] = Value{Value: sysObjectID}
+	}
+	return oids
+}
+
+func moduleTypeModels(t *testing.T, oids ObjectIDValueMap) []string {
+	t.Helper()
+	dev := &diode.Device{Name: strPtr("comware")}
+	entities, _ := TranslateModules(oids, nil, map[int]*diode.Device{0: dev}, modeLinecards(), nil, slog.Default())
+	var models []string
+	for _, e := range entities {
+		if m, ok := e.(*diode.Module); ok {
+			models = append(models, m.GetModuleType().GetModel())
+		}
+	}
+	return models
+}
+
+// A Comware module reports no model name; its part number ends its descr.
+func TestTranslateModules_ComwarePartNumberFromDescr(t *testing.T) {
+	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
+	assert.Equal(t, []string{"JZ123A"}, moduleTypeModels(t, oids))
+
+	oids = skuDescrOIDs("1.3.6.1.4.1.25506.11.1.172", " Example Module J9123A ")
+	assert.Equal(t, []string{"J9123A"}, moduleTypeModels(t, oids), "undotted sysObjectID, padded descr, numeric SKU form")
+}
+
+// Without a part-number-shaped last token, the module keeps today's name.
+func TestTranslateModules_ComwareDescrWithoutPartNumberKeepsVendorType(t *testing.T) {
+	for _, descr := range []string{
+		"MODULE LEVEL2",          // generic class text
+		"JZ123A Example Module",  // the part number is not the last token
+		"Example Module jz123a",  // lower case
+		"Example Module JZ12A",   // too short
+		"Example Module JZ1234A", // too long
+		"Example Module KZ123A",  // not the J-prefixed SKU shape
+		"Example Module JZ123AB", // trailing letters
+		"",
+	} {
+		oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", descr)
+		assert.Equal(t, []string{".1.3.6.1.4.1.25506.3.1.9.4.673"}, moduleTypeModels(t, oids), "descr %q", descr)
+	}
+}
+
+// The descr's last token is read only for Comware, whose recorded walks put
+// the part number there.
+func TestTranslateModules_OtherVendorsDescrIsNotAPartNumber(t *testing.T) {
+	for _, sysObjectID := range []string{".1.3.6.1.4.1.99999.1.1", ".1.3.6.1.4.1.255061.1", ".1.3.6.1.2.1.25506.1", ""} {
+		oids := skuDescrOIDs(sysObjectID, "Example 48-port Module JZ123A")
+		assert.Equal(t, []string{".1.3.6.1.4.1.25506.3.1.9.4.673"}, moduleTypeModels(t, oids), "sysObjectID %q", sysObjectID)
+	}
+}
+
+// A model name the module reports still wins over its descr.
+func TestTranslateModules_ModelNameWinsOverDescrPartNumber(t *testing.T) {
+	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
+	oids[".1.3.6.1.2.1.47.1.1.1.1.13.101"] = Value{Value: "JZ999A"}
+	assert.Equal(t, []string{"JZ999A"}, moduleTypeModels(t, oids))
+}

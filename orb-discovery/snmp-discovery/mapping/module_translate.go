@@ -18,6 +18,7 @@ package mapping
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -73,6 +74,7 @@ func TranslateModulesWithAlias(
 	if len(inv.Modules) == 0 && len(inv.SubModules) == 0 && len(inv.EmptyBays) == 0 {
 		return nil, nil
 	}
+	partInDescr := descrCarriesPartNumber(oids)
 
 	assignMemberID(&inv, chassisInv, oids, logger)
 
@@ -144,7 +146,7 @@ func TranslateModulesWithAlias(
 				attribute.String("vendor", vendorFromDevice(device)),
 			))
 		}
-		mod := emitModule(device, bay, m, defaults)
+		mod := emitModule(device, bay, m, defaults, partInDescr)
 		entities = append(entities, mod)
 		if c := metrics.GetModulesEmitted(); c != nil {
 			c.Add(context.Background(), 1, metric.WithAttributes(
@@ -237,7 +239,7 @@ func TranslateModulesWithAlias(
 				))
 			}
 
-			mod := emitModule(device, subBay, tr, defaults)
+			mod := emitModule(device, subBay, tr, defaults, partInDescr)
 			entities = append(entities, mod)
 			if c := metrics.GetModulesEmitted(); c != nil {
 				c.Add(context.Background(), 1, metric.WithAttributes(
@@ -317,18 +319,17 @@ func emitModuleBay(device *diode.Device, m ModuleEntry) *diode.ModuleBay {
 
 // emitModule constructs a Module entity attached to its ModuleBay.
 // Carries Device (NetBox matching scope) and a ModuleType built from
-// the PID (Model) + the manufacturer resolved from the emitted Device.
+// the PID (see moduleTypeModel) + the manufacturer resolved from the
+// emitted Device.
 // Manufacturer precedence: Device.DeviceType.Manufacturer.Name first
 // (so the ModuleType label always matches what NetBox sees on the
 // owning device), then the policy-level defaults, finally "Unknown".
 // Sharing vendorFromDevice with the metrics path keeps the label and
 // the emitted entity identical strings.
-func emitModule(device *diode.Device, bay *diode.ModuleBay, m ModuleEntry, defaults *config.Defaults) *diode.Module {
-	// Mirrors classifyModule's Model -> VendorType -> Unknown fallback so
-	// the emitted ModuleType label matches the classification. Aruba CX
-	// populates entPhysicalVendorType where Cisco populates ModelName;
-	// using Model alone would emit "Unknown" for valid Aruba hardware.
-	model := modelOrVendorType(m.Model, m.VendorType)
+func emitModule(device *diode.Device, bay *diode.ModuleBay, m ModuleEntry, defaults *config.Defaults,
+	partInDescr bool,
+) *diode.Module {
+	model := moduleTypeModel(m, partInDescr)
 	mfgName := resolveModuleManufacturer(device, defaults)
 	moduleType := &diode.ModuleType{
 		Model: &model,
@@ -366,6 +367,50 @@ func vendorFromDevice(d *diode.Device) string {
 		return name
 	}
 	return "Unknown"
+}
+
+// comwareEnterprise is the sysObjectID arc of Comware devices. Their module
+// rows leave entPhysicalModelName blank and end entPhysicalDescr with the
+// part number ("... Main Processing Unit JC614A").
+const comwareEnterprise = ".1.3.6.1.4.1.25506."
+
+// hpePartNumberRe matches an HPE networking part number: J, a letter or a
+// digit, three digits and a letter (JC614A, J9146A).
+var hpePartNumberRe = regexp.MustCompile(`^J[A-Z0-9][0-9]{3}[A-Z]$`)
+
+// descrCarriesPartNumber reports whether the walked sysObjectID is a
+// Comware device's, whose module descriptions end with the part number.
+func descrCarriesPartNumber(oids ObjectIDValueMap) bool {
+	v, ok := oids[oidSysObjectIDScalar]
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix("."+strings.TrimPrefix(trimSNMPString(v.Value), "."), comwareEnterprise)
+}
+
+// descrPartNumber is the part number ending descr, or "" when its last token
+// is not shaped like one.
+func descrPartNumber(descr string) string {
+	fields := strings.Fields(descr)
+	if len(fields) == 0 {
+		return ""
+	}
+	if last := fields[len(fields)-1]; hpePartNumberRe.MatchString(last) {
+		return last
+	}
+	return ""
+}
+
+// moduleTypeModel names a module's type: its entPhysicalModelName, else, on a
+// device whose descriptions carry it (partInDescr), the part number ending
+// its entPhysicalDescr, else its vendor type, as modelOrVendorType does.
+func moduleTypeModel(m ModuleEntry, partInDescr bool) string {
+	if strings.TrimSpace(m.Model) == "" && partInDescr {
+		if part := descrPartNumber(m.Description); part != "" {
+			return part
+		}
+	}
+	return modelOrVendorType(m.Model, m.VendorType)
 }
 
 // modelOrVendorType prefers a non-blank trimmed model, falling back to
