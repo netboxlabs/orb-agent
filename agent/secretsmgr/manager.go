@@ -51,10 +51,35 @@ func (v *dummyManager) Start(_ context.Context) error {
 func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]bool)) {
 }
 
+// SolvePolicySecrets passes provider-specific placeholders through untouched
+// (pre-existing behavior), but fails fast on a generic ${secret://…} reference:
+// it explicitly asks for the active secrets manager, and there is none — better
+// a clear error than the literal placeholder reaching the backend.
 func (v *dummyManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
+	if _, err := processValue(payload.Data, genericScheme, payload.ID, rejectGenericRef); err != nil {
+		return payload, err
+	}
 	return payload, nil
 }
 
+// SolveConfigSecrets applies the same fail-fast rule to config-level values.
 func (v *dummyManager) SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
+	if _, err := processValue(backends, genericScheme, "_backends", rejectGenericRef); err != nil {
+		return backends, configManager, err
+	}
+	cmMap, err := structToMap(configManager)
+	if err != nil {
+		return backends, configManager, err
+	}
+	if _, err := processValue(cmMap, genericScheme, "_config_manager", rejectGenericRef); err != nil {
+		return backends, configManager, err
+	}
 	return backends, configManager, nil
+}
+
+// rejectGenericRef is the dummy manager's resolver: any ${secret://…} reference
+// is an error because no secrets manager is configured to resolve it. The
+// message is neutral because the reference may sit in a policy or in config.
+func rejectGenericRef(body, _ string) (string, error) {
+	return "", fmt.Errorf("a managed secret reference (${secret://%s}) was found but no secrets manager is configured", body)
 }

@@ -56,6 +56,9 @@ Supported secrets managers:
 - [Delinea Secret Server](./docs/secretsmgr/delinea.md)
 - [Delinea DevOps Secrets Vault (DSV)](./docs/secretsmgr/dsv.md)
 
+Regardless of which provider is active, policies can also reference secrets via the
+provider-agnostic [`${secret://…}` scheme](./docs/secretsmgr/secret_references.md).
+
 The secrets manager to use, and its connection settings, can also be selected and configured entirely via environment variables — independently of the config manager and without editing the YAML file. See [Environment-Driven Configuration](./docs/advanced_config/env_config.md).
 
 ### Environment variable configuration
