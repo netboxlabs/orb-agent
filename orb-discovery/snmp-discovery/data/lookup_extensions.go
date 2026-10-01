@@ -309,8 +309,8 @@ type ExtensionFileResult struct {
 	// modules: section.
 	ModuleEntries int
 	// ModulesErr is set when the modules: section cannot be read. Only that
-	// section is skipped; the file's devices still apply. A file that is not a
-	// valid YAML mapping is reported by Err alone.
+	// section is skipped; the devices: section is read on its own. A file that
+	// is not a valid YAML mapping is reported by Err alone.
 	ModulesErr error
 	// Err is set when the file is not a valid YAML mapping or its devices:
 	// section is malformed. Its devices are skipped rather than failing the
@@ -529,11 +529,23 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 	return results, skipped, nil
 }
 
-// isYAMLMapping reports whether data reads as a YAML mapping at the top level.
-// When it does not, an error belongs to the file rather than to one section.
+// isYAMLMapping reports whether data decodes as a YAML mapping at the top
+// level. It can say no for a file whose devices still parse (alias limits), so
+// pair it with a failed devices parse before treating an error as the file's.
 func isYAMLMapping(data []byte) bool {
 	var root map[string]yaml.Node
-	return yaml.Unmarshal(data, &root) == nil
+	return unmarshalRecovered(data, &root) == nil
+}
+
+// unmarshalRecovered is yaml.Unmarshal with a panic returned as an error:
+// yaml.v3 can panic on a merge key beside a complex key.
+func unmarshalRecovered(data []byte, out any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	return yaml.Unmarshal(data, out)
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {
@@ -547,18 +559,11 @@ func isLookupExtensionFile(file os.DirEntry) bool {
 // walk reports; when a file spells one OID both ways, the dotted entry wins,
 // so the name never depends on map order. Blank names and keys are skipped,
 // and so is 0.0, the null vendor type unrelated rows share.
-func loadModuleYAML(data []byte, moduleModels map[string]string) (err error) {
-	// yaml.v3 can panic on a merge key beside a complex key; keep that to this
-	// section rather than failing the load.
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("failed to parse YAML: %v", r)
-		}
-	}()
+func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 	var fileData struct {
 		Modules map[string]string `yaml:"modules"`
 	}
-	if err := yaml.Unmarshal(data, &fileData); err != nil {
+	if err := unmarshalRecovered(data, &fileData); err != nil {
 		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
 	for oid, model := range fileData.Modules {
