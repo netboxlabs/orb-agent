@@ -503,7 +503,7 @@ A curated set of vendor lookup files ships with the orb-agent and orb-discovery 
 
 ### File format
 
-Lookup files must have a `.yaml` or `.yml` extension and contain a `devices` section keyed by OID (note the leading `.`):
+Lookup files must have a `.yaml` or `.yml` extension and contain a `devices`, `manufacturers` or `modules` section. The `devices` section is keyed by OID (note the leading `.`):
 
 ```yaml
 devices:
@@ -538,7 +538,7 @@ modules:
   .1.3.6.1.4.1.25506.3.1.9.4.680: JC623A
 ```
 
-An entry applies only to a module that reports no model name of its own, because one vendor type often stands for several models. Module names are read from `lookup_extensions_dir` only; no bundled file carries them.
+An entry applies only to a module that reports no model name of its own, because one vendor type often stands for several models. An entry for `0.0`, the null vendor type that unrelated rows share, is ignored. Module names are read from `lookup_extensions_dir` only; no bundled file carries them.
 
 ### Dynamic model resolution (shared sysObjectID)
 

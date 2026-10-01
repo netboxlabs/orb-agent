@@ -457,17 +457,24 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 	total, mfrTotal, moduleTotal := 0, 0, 0
 	for _, f := range files {
 		mfrTotal += f.ManufacturerEntries
+		moduleTotal += f.ModuleEntries
+		if f.ModulesErr != nil {
+			m.logger.Warn("lookup extension file has an unparseable modules section; its module entries were skipped",
+				"directory", safeDir,
+				"file", sanitizeLogValue(f.Name),
+				"error", sanitizeLogValue(f.ModulesErr.Error()))
+		}
 		switch {
 		case f.Err != nil:
-			// Only the devices section is lost. A manufacturers section in the
-			// same file is parsed separately by the manufacturer resolver and
-			// still applies, so do not imply the whole file was discarded.
-			m.logger.Warn("lookup extension file has an unparseable devices or modules section; its device and module entries were skipped",
+			// Only the devices section is lost. Its manufacturers and modules
+			// sections are parsed separately and still apply, so do not imply
+			// the whole file was discarded.
+			m.logger.Warn("lookup extension file has an unparseable devices section; its device entries were skipped",
 				"directory", safeDir,
 				"file", sanitizeLogValue(f.Name),
 				"manufacturer_entries", f.ManufacturerEntries,
 				"error", sanitizeLogValue(f.Err.Error()))
-		case f.Entries == 0 && f.ManufacturerEntries == 0 && f.ModuleEntries == 0:
+		case f.Entries == 0 && f.ManufacturerEntries == 0 && f.ModuleEntries == 0 && f.ModulesErr == nil:
 			// Only when no recognised section contributed. A file carrying just
 			// a manufacturers: or modules: block declares no devices by design,
 			// so warning about it would nag a healthy config.
@@ -475,7 +482,6 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 				"directory", safeDir, "file", sanitizeLogValue(f.Name))
 		default:
 			total += f.Entries
-			moduleTotal += f.ModuleEntries
 		}
 	}
 	m.logger.Info("loaded device lookup extensions",

@@ -380,16 +380,16 @@ func vendorFromDevice(d *diode.Device) string {
 }
 
 // comwareEnterprise is the sysObjectID arc of Comware devices. Their module
-// rows leave entPhysicalModelName blank and end entPhysicalDescr with the
-// part number ("... Main Processing Unit JC614A").
+// rows can leave entPhysicalModelName blank and may end entPhysicalDescr with
+// the part number ("... Main Processing Unit JX123A").
 const comwareEnterprise = ".1.3.6.1.4.1.25506."
 
 // hpePartNumberRe matches an HPE networking part number: J, a letter or a
-// digit, three digits and a letter (JC614A, J9146A).
+// digit, three digits and a letter (JX123A, J9123A).
 var hpePartNumberRe = regexp.MustCompile(`^J[A-Z0-9][0-9]{3}[A-Z]$`)
 
 // descrCarriesPartNumber reports whether the walked sysObjectID is a
-// Comware device's, whose module descriptions end with the part number.
+// Comware device's, whose module descriptions may end with the part number.
 func descrCarriesPartNumber(oids ObjectIDValueMap) bool {
 	v, ok := oids[oidSysObjectIDScalar]
 	if !ok {
@@ -443,8 +443,7 @@ func moduleTypeModel(m ModuleEntry, naming moduleNaming) string {
 // modelOrVendorType prefers a non-blank trimmed model, falling back to
 // the trimmed vendorType, and finally "Unknown". Parallels
 // classifyModule so the emitted ModuleType.Model matches the type
-// classification for vendors (e.g. Aruba CX) that populate
-// entPhysicalVendorType instead of entPhysicalModelName.
+// classification.
 func modelOrVendorType(model, vendorType string) string {
 	if v := strings.TrimSpace(model); v != "" {
 		return v
