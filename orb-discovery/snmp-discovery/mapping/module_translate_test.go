@@ -144,7 +144,7 @@ func TestTranslateModules_FullMode_EmitsTransceiversAsSubBayedModules(t *testing
 
 	entities, ifaceMap := TranslateModulesWithAlias(
 		oids, nil, memberDevices, modeFull(), nil, logger,
-		aliasMap,
+		aliasMap, nil,
 	)
 
 	var bays []*diode.ModuleBay
@@ -184,7 +184,7 @@ func TestTranslateModules_FullMode_SubBayDeviceRooted(t *testing.T) {
 	memberDevices := map[int]*diode.Device{0: dev}
 
 	entities, _ := TranslateModulesWithAlias(
-		oids, nil, memberDevices, modeFull(), nil, logger, nil,
+		oids, nil, memberDevices, modeFull(), nil, logger, nil, nil,
 	)
 
 	// The transceiver's bay carries the port-shaped name from the
@@ -222,7 +222,7 @@ func TestTranslateModules_FullMode_EmptyBayEmittedAsBareModuleBay(t *testing.T) 
 	memberDevices := map[int]*diode.Device{0: dev}
 
 	entities, _ := TranslateModulesWithAlias(
-		buildOIDs(rows), nil, memberDevices, modeFull(), nil, logger, nil,
+		buildOIDs(rows), nil, memberDevices, modeFull(), nil, logger, nil, nil,
 	)
 
 	var bays []*diode.ModuleBay
@@ -259,7 +259,7 @@ func TestTranslateModules_SubBayWorkaround_NotLinkedToParentLinecard(t *testing.
 	memberDevices := map[int]*diode.Device{0: dev}
 
 	entities, _ := TranslateModulesWithAlias(
-		oids, nil, memberDevices, modeFull(), nil, logger, nil,
+		oids, nil, memberDevices, modeFull(), nil, logger, nil, nil,
 	)
 
 	// Identify which bays are sub-bays (transceiver-shaped). The 9404R
@@ -334,7 +334,7 @@ func TestTranslateModules_FullMode_EmitsTransceiversNestedTwoLevelsDeep(t *testi
 	memberDevices := map[int]*diode.Device{0: dev}
 
 	entities, _ := TranslateModulesWithAlias(
-		buildOIDs(rows), nil, memberDevices, modeFull(), nil, logger, nil,
+		buildOIDs(rows), nil, memberDevices, modeFull(), nil, logger, nil, nil,
 	)
 
 	var transceiverSeen bool
@@ -428,7 +428,7 @@ func TestTranslateModulesWithAlias_VCOfModular_DispatchesPerMember(t *testing.T)
 
 	entities, _ := TranslateModulesWithAlias(
 		buildOIDs(rows), chassisInv, memberDevices,
-		modeLinecards(), nil, logger, nil,
+		modeLinecards(), nil, logger, nil, nil,
 	)
 
 	var modules []*diode.Module
@@ -472,7 +472,7 @@ func TestTranslateModulesWithAlias_ModulesPrecedeInterfacesAfterSplice(t *testin
 	memberDevices := map[int]*diode.Device{0: dev}
 
 	moduleEntities, _ := TranslateModulesWithAlias(
-		oids, nil, memberDevices, modeLinecards(), nil, logger, nil,
+		oids, nil, memberDevices, modeLinecards(), nil, logger, nil, nil,
 	)
 	require.NotEmpty(t, moduleEntities)
 
@@ -648,4 +648,56 @@ func TestTranslateModules_ModelNameWinsOverDescrPartNumber(t *testing.T) {
 	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
 	oids[".1.3.6.1.2.1.47.1.1.1.1.13.101"] = Value{Value: "JZ999A"}
 	assert.Equal(t, []string{"JZ999A"}, moduleTypeModels(t, oids))
+}
+
+// fakeModuleModels stands in for the operator's modules: lookup.
+type fakeModuleModels map[string]string
+
+func (f fakeModuleModels) GetModuleModel(vendorType string) (string, bool) {
+	model, ok := f[vendorType]
+	return model, ok
+}
+
+func moduleTypeModelsWith(t *testing.T, oids ObjectIDValueMap, lookup ModuleModelLookup) []string {
+	t.Helper()
+	dev := &diode.Device{Name: strPtr("comware")}
+	entities, _ := TranslateModulesWithAlias(oids, nil, map[int]*diode.Device{0: dev}, modeLinecards(), nil,
+		slog.Default(), nil, lookup)
+	var models []string
+	for _, e := range entities {
+		if m, ok := e.(*diode.Module); ok {
+			models = append(models, m.GetModuleType().GetModel())
+		}
+	}
+	return models
+}
+
+// An operator's modules: entry names a module that reports no model name,
+// ahead of the descr's part number and the vendor type, for any vendor.
+func TestTranslateModules_ModuleLookupNamesABlankModel(t *testing.T) {
+	lookup := fakeModuleModels{".1.3.6.1.4.1.25506.3.1.9.4.673": "Operator Module"}
+
+	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
+	assert.Equal(t, []string{"Operator Module"}, moduleTypeModelsWith(t, oids, lookup))
+
+	oids = skuDescrOIDs(".1.3.6.1.4.1.99999.1.1", "Example Module")
+	assert.Equal(t, []string{"Operator Module"}, moduleTypeModelsWith(t, oids, lookup), "any vendor")
+}
+
+// A model name the module reports is never replaced by a lookup entry: vendor
+// types are often shared across models.
+func TestTranslateModules_ModuleLookupLeavesAReportedModel(t *testing.T) {
+	lookup := fakeModuleModels{".1.3.6.1.4.1.25506.3.1.9.4.673": "Operator Module"}
+	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
+	oids[".1.3.6.1.2.1.47.1.1.1.1.13.101"] = Value{Value: "JZ999A"}
+
+	assert.Equal(t, []string{"JZ999A"}, moduleTypeModelsWith(t, oids, lookup))
+}
+
+// Without an entry for the vendor type, the module is named as before.
+func TestTranslateModules_ModuleLookupMissFallsThrough(t *testing.T) {
+	lookup := fakeModuleModels{".1.3.6.1.4.1.25506.3.1.9.4.1": "Other Module"}
+	oids := skuDescrOIDs(".1.3.6.1.4.1.25506.11.1.172", "Example 48-port Module JZ123A")
+	assert.Equal(t, []string{"JZ123A"}, moduleTypeModelsWith(t, oids, lookup))
+	assert.Equal(t, []string{"JZ123A"}, moduleTypeModelsWith(t, oids, nil), "no lookup at all")
 }

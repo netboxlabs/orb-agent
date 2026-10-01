@@ -458,6 +458,13 @@ When the `discover_modules` policy option is enabled, snmp-discovery emits NetBo
 | `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors). PSU and fan modules are recognised by the PID classifier so they label correctly in metrics, but are **never** emitted as `Module` entities — useful when operators care about the slot inventory but not power/cooling FRUs. Transceiver sub-bays are skipped. |
 | `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. Per-port linkage uses `entAliasMappingTable` (RFC 6933) when present to map transceiver rows to their owning `ifIndex`. |
 
+**Module type names.** A module's type is named by the first of these that gives a value:
+
+1. The module row's `entPhysicalModelName`.
+2. A `modules:` entry in a `lookup_extensions_dir` file for the row's `entPhysicalVendorType` (see [Module names](#module-names-modules)).
+3. On Comware devices (`sysObjectID` under `1.3.6.1.4.1.25506`), the part number that ends the row's `entPhysicalDescr`, such as `JC614A` in `HP A10500 Main Processing Unit JC614A`. Only a last word shaped like an HPE part number is taken.
+4. The row's `entPhysicalVendorType`, which is usually an OID, and finally `Unknown`.
+
 **Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
 
 **Virtual-chassis-of-modular** (e.g. Cisco StackWise Virtual on Catalyst 9500 / 9600, Catalyst 9300 stack with FRU uplink modules). When a VC member is itself a modular chassis, modules and bays are dispatched per member via the `ChassisInventory.Members` map: each `Module` / `ModuleBay` carries `device=` set to the member that physically owns the slot, and the `Module.module_bay` reference points at that member's bay. Master identity follows the same lowest-member-id pinning as the VC envelope itself. The emission order becomes: `Device(master)` → `VirtualChassis` → `Device(non-master members)` → all `ModuleBay` + `Module` per member → `Interface` / `IPAddress` per member.
@@ -520,6 +527,18 @@ cp orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb
 ```
 
 When snmp-discovery encounters a device, it reads the device's `sysObjectID`, searches the YAML files in `lookup_extensions_dir` for a match, and falls back to the raw OID when no match is found.
+
+### Module names (`modules:`)
+
+A lookup file can also carry a `modules:` section that names the module type for an `entPhysicalVendorType` OID. Use it for modules that report no `entPhysicalModelName` and whose type would otherwise be named after the OID:
+
+```yaml
+modules:
+  .1.3.6.1.4.1.25506.3.1.9.4.673: JC614A
+  .1.3.6.1.4.1.25506.3.1.9.4.680: JC623A
+```
+
+An entry applies only to a module that reports no model name of its own, because one vendor type often stands for several models. Module names are read from `lookup_extensions_dir` only; no bundled file carries them.
 
 ### Dynamic model resolution (shared sysObjectID)
 

@@ -22,6 +22,7 @@ type logLine struct {
 	Entries             int    `json:"entries"`
 	Files               int    `json:"files"`
 	ManufacturerEntries int    `json:"manufacturer_entries"`
+	ModuleEntries       int    `json:"module_entries"`
 	Err                 string `json:"error"`
 }
 
@@ -70,7 +71,7 @@ func TestLogReportedExtensionFiles_WarnsOnFileThatContributesNothing(t *testing.
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "no device or manufacturer entries") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no device, manufacturer or module entries") {
 			warned = true
 			if l.File != "fs_custom.yaml" {
 				t.Errorf("warning names file %q, want fs_custom.yaml", l.File)
@@ -89,7 +90,7 @@ func TestLogReportedExtensionFiles_WarnsOnUnparseableFile(t *testing.T) {
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "unparseable devices section") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "unparseable devices or modules section") {
 			warned = true
 			if l.File != "broken.yaml" || l.Err == "" {
 				t.Errorf("warning must name the file and the parse error, got file=%q err=%q", l.File, l.Err)
@@ -266,7 +267,7 @@ func TestLogReportedExtensionFiles_WarnsWhenNeitherSectionContributes(t *testing
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "no device or manufacturer entries") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no device, manufacturer or module entries") {
 			warned = true
 		}
 	}
@@ -321,5 +322,30 @@ func TestLogReportedExtensionFiles_ParseFailureScopedToDeviceSection(t *testing.
 	if found.ManufacturerEntries != 1 {
 		t.Errorf("manufacturer_entries = %d, want 1 so the operator sees that part still applied",
 			found.ManufacturerEntries)
+	}
+}
+
+// A file carrying only a modules: section is a healthy config: it must not be
+// warned about, and its entries are counted in the summary.
+func TestLogReportedExtensionFiles_ModulesOnlyFileIsCounted(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "modules.yaml",
+		"modules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: PN-MPU-A\n  .1.3.6.1.4.1.99999.3.1.9.4.680: PN-48GT-B\n")
+
+	var info *logLine
+	lines := captureExtensionLogs(t, dir)
+	for i := range lines {
+		if lines[i].Level == "WARN" {
+			t.Errorf("unexpected warning: %q", lines[i].Msg)
+		}
+		if lines[i].Level == "INFO" && lines[i].Msg == "loaded device lookup extensions" {
+			info = &lines[i]
+		}
+	}
+	if info == nil {
+		t.Fatal("expected an INFO summary line")
+	}
+	if info.ModuleEntries != 2 {
+		t.Errorf("module_entries = %d, want 2", info.ModuleEntries)
 	}
 }

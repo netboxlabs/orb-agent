@@ -40,7 +40,13 @@ func TranslateModules(
 	defaults *config.Defaults,
 	logger *slog.Logger,
 ) ([]diode.Entity, map[string]*diode.Module) {
-	return TranslateModulesWithAlias(oids, chassisInv, memberDevices, options, defaults, logger, nil)
+	return TranslateModulesWithAlias(oids, chassisInv, memberDevices, options, defaults, logger, nil, nil)
+}
+
+// ModuleModelLookup names a module type for a vendor-type OID, from an
+// operator's modules: lookup entries.
+type ModuleModelLookup interface {
+	GetModuleModel(vendorTypeOID string) (string, bool)
 }
 
 // TranslateModulesWithAlias is the full-fidelity entry point used by
@@ -53,6 +59,9 @@ func TranslateModules(
 //     members can reuse the same canonical ifName locally and an
 //     ifName-keyed map would collapse distinct transceivers.
 //
+// moduleModels, when not nil, names the type of a module that reports no
+// model name (see moduleTypeModel).
+//
 // Returns (nil, nil) when:
 //   - mode == "off"
 //   - the ENTITY-MIB walk produced no modules and no bays at all
@@ -64,6 +73,7 @@ func TranslateModulesWithAlias(
 	defaults *config.Defaults,
 	logger *slog.Logger,
 	aliasMap map[string]string,
+	moduleModels ModuleModelLookup,
 ) ([]diode.Entity, map[string]*diode.Module) {
 	mode := options.ModuleDiscoveryMode()
 	if mode == config.DiscoverModulesOff {
@@ -74,7 +84,7 @@ func TranslateModulesWithAlias(
 	if len(inv.Modules) == 0 && len(inv.SubModules) == 0 && len(inv.EmptyBays) == 0 {
 		return nil, nil
 	}
-	partInDescr := descrCarriesPartNumber(oids)
+	naming := moduleNaming{partInDescr: descrCarriesPartNumber(oids), lookup: moduleModels}
 
 	assignMemberID(&inv, chassisInv, oids, logger)
 
@@ -146,7 +156,7 @@ func TranslateModulesWithAlias(
 				attribute.String("vendor", vendorFromDevice(device)),
 			))
 		}
-		mod := emitModule(device, bay, m, defaults, partInDescr)
+		mod := emitModule(device, bay, m, defaults, naming)
 		entities = append(entities, mod)
 		if c := metrics.GetModulesEmitted(); c != nil {
 			c.Add(context.Background(), 1, metric.WithAttributes(
@@ -239,7 +249,7 @@ func TranslateModulesWithAlias(
 				))
 			}
 
-			mod := emitModule(device, subBay, tr, defaults, partInDescr)
+			mod := emitModule(device, subBay, tr, defaults, naming)
 			entities = append(entities, mod)
 			if c := metrics.GetModulesEmitted(); c != nil {
 				c.Add(context.Background(), 1, metric.WithAttributes(
@@ -327,9 +337,9 @@ func emitModuleBay(device *diode.Device, m ModuleEntry) *diode.ModuleBay {
 // Sharing vendorFromDevice with the metrics path keeps the label and
 // the emitted entity identical strings.
 func emitModule(device *diode.Device, bay *diode.ModuleBay, m ModuleEntry, defaults *config.Defaults,
-	partInDescr bool,
+	naming moduleNaming,
 ) *diode.Module {
-	model := moduleTypeModel(m, partInDescr)
+	model := moduleTypeModel(m, naming)
 	mfgName := resolveModuleManufacturer(device, defaults)
 	moduleType := &diode.ModuleType{
 		Model: &model,
@@ -401,11 +411,28 @@ func descrPartNumber(descr string) string {
 	return ""
 }
 
-// moduleTypeModel names a module's type: its entPhysicalModelName, else, on a
-// device whose descriptions carry it (partInDescr), the part number ending
-// its entPhysicalDescr, else its vendor type, as modelOrVendorType does.
-func moduleTypeModel(m ModuleEntry, partInDescr bool) string {
-	if strings.TrimSpace(m.Model) == "" && partInDescr {
+// moduleNaming is what a target offers for naming modules that report no
+// model name.
+type moduleNaming struct {
+	partInDescr bool              // descriptions end with the part number (descrCarriesPartNumber)
+	lookup      ModuleModelLookup // the operator's modules: entries, or nil
+}
+
+// moduleTypeModel names a module's type: its entPhysicalModelName, else the
+// operator's modules: entry for its vendor type, else, on a device whose
+// descriptions carry it, the part number ending its entPhysicalDescr, else
+// its vendor type, as modelOrVendorType does. A reported model name is never
+// replaced, because one vendor type often stands for several models.
+func moduleTypeModel(m ModuleEntry, naming moduleNaming) string {
+	if strings.TrimSpace(m.Model) != "" {
+		return modelOrVendorType(m.Model, m.VendorType)
+	}
+	if naming.lookup != nil {
+		if model, ok := naming.lookup.GetModuleModel(m.VendorType); ok {
+			return model
+		}
+	}
+	if naming.partInDescr {
 		if part := descrPartNumber(m.Description); part != "" {
 			return part
 		}
