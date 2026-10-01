@@ -467,7 +467,7 @@ Each OID is resolved independently, so a single file can cover as many models as
 
 The startup logs report how many files were read from the directory and the total number of device and module entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
 
-- a file whose `devices:` or `modules:` section cannot be parsed has that section skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. A wrong value in one section does not drop the other's entries, but a file that is not valid YAML at all contributes nothing. Indenting with tabs lands here, because YAML rejects them outright
+- a file whose `devices:` or `modules:` section cannot be parsed has that section skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. A wrong value in one section does not drop the other's entries, but a file that is not valid YAML at all, or repeats a top-level key such as `devices:`, contributes nothing. Indenting with tabs lands here, because YAML rejects them outright
 - a file that parses but registers nothing, which is what a wrong or missing top-level key produces, is warned about individually
 
 A file that loads cleanly is counted in the totals rather than logged by name, so if you need to confirm one specific file's contribution, put it in the directory on its own and compare the entry total.
