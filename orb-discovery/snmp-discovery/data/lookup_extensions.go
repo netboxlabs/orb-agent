@@ -3,7 +3,6 @@ package data
 import (
 	"bufio"
 	"embed"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -309,12 +308,12 @@ type ExtensionFileResult struct {
 	// ModuleEntries is how many module vendor types the file names in its
 	// modules: section.
 	ModuleEntries int
-	// ModulesErr is set when the modules: section holds a value of the wrong
-	// type. Only that section is skipped; the file's devices still apply. A
-	// file that is not valid YAML at all is reported by Err alone.
+	// ModulesErr is set when the modules: section cannot be read although the
+	// file can. Only that section is skipped; the file's devices still apply.
+	// A file that is not a valid YAML mapping is reported by Err alone.
 	ModulesErr error
-	// Err is set when the file is not valid YAML or its devices: section is
-	// malformed. Its devices are skipped rather than failing the whole load,
+	// Err is set when the file is not a valid YAML mapping or its devices:
+	// section is malformed. Its devices are skipped rather than failing the whole load,
 	// so the other files still apply.
 	Err error
 }
@@ -512,10 +511,9 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		// one section never costs the other its entries.
 		fileModules := make(map[string]string)
 		modulesErr := loadModuleYAML(data, fileModules)
-		var typeErr *yaml.TypeError
-		if modulesErr != nil && !errors.As(modulesErr, &typeErr) {
-			// Not valid YAML at all: the devices parse failed the same way and
-			// Err already says so, so the file gets one warning, not two.
+		if modulesErr != nil && !isYAMLMapping(data) {
+			// The file as a whole is unreadable: the devices parse failed the
+			// same way and Err already says so, so it gets one warning, not two.
 			modulesErr = nil
 		}
 		maps.Copy(moduleModels, fileModules)
@@ -531,6 +529,13 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 	return results, skipped, nil
 }
 
+// isYAMLMapping reports whether data reads as a YAML mapping at the top level.
+// When it does not, an error belongs to the file rather than to one section.
+func isYAMLMapping(data []byte) bool {
+	var root map[string]yaml.Node
+	return yaml.Unmarshal(data, &root) == nil
+}
+
 func isLookupExtensionFile(file os.DirEntry) bool {
 	return !file.IsDir() &&
 		(strings.HasSuffix(strings.ToLower(file.Name()), ".yaml") ||
@@ -540,8 +545,8 @@ func isLookupExtensionFile(file os.DirEntry) bool {
 // loadModuleYAML reads a file's modules: section, which names the module type
 // for a vendor-type OID (entPhysicalVendorType). Keys take the leading dot the
 // walk reports; when a file spells one OID both ways, the dotted entry wins,
-// so the name never depends on map order. Blank names are skipped, and so is
-// 0.0, the null vendor type unrelated rows share.
+// so the name never depends on map order. Blank names and keys are skipped,
+// and so is 0.0, the null vendor type unrelated rows share.
 func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 	var fileData struct {
 		Modules map[string]string `yaml:"modules"`
@@ -552,7 +557,7 @@ func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 	for oid, model := range fileData.Modules {
 		oid = strings.TrimSpace(oid)
 		key := "." + strings.TrimPrefix(oid, ".")
-		if model = strings.TrimSpace(model); model == "" || key == ".0.0" {
+		if model = strings.TrimSpace(model); model == "" || key == "." || key == ".0.0" {
 			continue
 		}
 		if _, seen := moduleModels[key]; seen && !strings.HasPrefix(oid, ".") {
@@ -566,10 +571,11 @@ func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 // GetModuleModel returns the module type model an operator's modules: entry
 // names for a vendor-type OID, in either spelling.
 func (d *DeviceLookup) GetModuleModel(vendorTypeOID string) (string, bool) {
-	if d == nil {
+	vendorTypeOID = strings.TrimSpace(vendorTypeOID)
+	if d == nil || vendorTypeOID == "" {
 		return "", false
 	}
-	return lookupOIDBothSpellings(d.moduleModels, strings.TrimSpace(vendorTypeOID))
+	return lookupOIDBothSpellings(d.moduleModels, vendorTypeOID)
 }
 
 // loadYAMLFile loads a single YAML file and merges its data into

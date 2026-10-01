@@ -383,33 +383,46 @@ func TestLogReportedExtensionFiles_CountsModulesBesideABrokenDevicesSection(t *t
 	writeExtFile(t, dir, "mixed.yaml",
 		"devices: [not-a-map]\nmodules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: PN-MPU-A\n")
 
-	var info *logLine
+	var info, warn *logLine
 	lines := captureExtensionLogs(t, dir)
 	for i := range lines {
-		if lines[i].Level == "INFO" && lines[i].Msg == "loaded device lookup extensions" {
+		switch {
+		case lines[i].Level == "INFO" && lines[i].Msg == "loaded device lookup extensions":
 			info = &lines[i]
+		case lines[i].Level == "WARN" && strings.Contains(lines[i].Msg, "unparseable devices section"):
+			warn = &lines[i]
 		}
 	}
-	if info == nil {
-		t.Fatal("expected an INFO summary line")
+	if info == nil || warn == nil {
+		t.Fatal("expected an INFO summary line and a devices-section WARN")
 	}
 	if info.ModuleEntries != 1 {
 		t.Errorf("module_entries = %d, want 1", info.ModuleEntries)
 	}
+	if warn.ModuleEntries != 1 {
+		t.Errorf("the devices-section warning must say the modules still apply: module_entries = %d, want 1", warn.ModuleEntries)
+	}
 }
 
-// A file that is not valid YAML at all gets one warning, not one per section.
-func TestLogReportedExtensionFiles_SyntaxErrorWarnsOnce(t *testing.T) {
-	dir := t.TempDir()
-	writeExtFile(t, dir, "broken.yaml", "devices:\n\t.1.3.6.1.4.1.52642.1.439.0: S3400\n")
+// A file that cannot be read as a whole gets one warning, not one per section.
+func TestLogReportedExtensionFiles_FileLevelErrorWarnsOnce(t *testing.T) {
+	for name, content := range map[string]string{
+		"syntax error":            "devices:\n\t.1.3.6.1.4.1.99999.1.1: Operator Model\n",
+		"duplicate top-level key": "devices:\n  .1.3.6.1.4.1.99999.1.1: A\ndevices:\n  .1.3.6.1.4.1.99999.1.2: B\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeExtFile(t, dir, "broken.yaml", content)
 
-	var warnings []string
-	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" {
-			warnings = append(warnings, l.Msg)
-		}
-	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "unparseable devices section") {
-		t.Errorf("want one devices-section warning, got %q", warnings)
+			var warnings []string
+			for _, l := range captureExtensionLogs(t, dir) {
+				if l.Level == "WARN" {
+					warnings = append(warnings, l.Msg)
+				}
+			}
+			if len(warnings) != 1 || !strings.Contains(warnings[0], "unparseable devices section") {
+				t.Errorf("want one devices-section warning, got %q", warnings)
+			}
+		})
 	}
 }
