@@ -1,0 +1,14 @@
+# Wildcard sysObjectID for the bundled netapp/netapp-cluster.yml profile.
+# Kentik lists two exact ONTAP models (789.2.3, 789.2.5); DataDog/integrations-core
+# default_profiles/netapp.yaml at c545ca5b168e1ccbffba82121cda46fa09459a46 (BSD-3-Clause,
+# see ../LICENSE) claims the whole 789.2 subtree, which is every ONTAP product.
+# The exact Kentik entries keep winning for the models they name; every other
+# ONTAP model lands here and inherits the same NETAPP-MIB metrics.
+---
+extends:
+  - netapp-cluster.yml
+
+provider: kentik-nas
+
+sysobjectid:
+  - 1.3.6.1.4.1.789.2.*    # NetApp ONTAP
