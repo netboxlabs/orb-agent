@@ -397,3 +397,19 @@ func TestLogReportedExtensionFiles_CountsModulesBesideABrokenDevicesSection(t *t
 		t.Errorf("module_entries = %d, want 1", info.ModuleEntries)
 	}
 }
+
+// A file that is not valid YAML at all gets one warning, not one per section.
+func TestLogReportedExtensionFiles_SyntaxErrorWarnsOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "broken.yaml", "devices:\n\t.1.3.6.1.4.1.52642.1.439.0: S3400\n")
+
+	var warnings []string
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level == "WARN" {
+			warnings = append(warnings, l.Msg)
+		}
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "unparseable devices section") {
+		t.Errorf("want one devices-section warning, got %q", warnings)
+	}
+}

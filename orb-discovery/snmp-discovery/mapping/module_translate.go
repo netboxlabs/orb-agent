@@ -441,9 +441,8 @@ func moduleTypeModel(m ModuleEntry, naming moduleNaming) string {
 }
 
 // modelOrVendorType prefers a non-blank trimmed model, falling back to
-// the trimmed vendorType, and finally "Unknown". Parallels
-// classifyModule so the emitted ModuleType.Model matches the type
-// classification.
+// the trimmed vendorType, and finally "Unknown", the same effective PID
+// classifyModule reads.
 func modelOrVendorType(model, vendorType string) string {
 	if v := strings.TrimSpace(model); v != "" {
 		return v
