@@ -1470,3 +1470,69 @@ func TestDeviceLookup_LaterFileRenamesAModuleInAnySpelling(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, "Second Name", model)
 }
+
+// Each section can be broken on its own, and then each is reported.
+func TestDeviceLookup_BothSectionsBrokenReportsBoth(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices: [not-a-map]
+modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": [PN-MPU-A]
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].Err)
+	assert.Error(t, files[0].ModulesErr)
+}
+
+// A root merge can trip yaml's alias limit for the modules decode and not the
+// devices one, so the modules error must not be folded into a nil Err.
+func TestDeviceLookup_ModulesAliasLimitIsReportedBesideReadableDevices(t *testing.T) {
+	keys := make([]string, 1500)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%d: v", i)
+	}
+	var b strings.Builder
+	b.WriteString("base: &b {" + strings.Join(keys, ", ") + "}\n<<: *b\ndevices:\n")
+	for i := range 10 {
+		fmt.Fprintf(&b, "  \".1.3.6.1.4.1.99999.1.%d\": Model %d\n", i, i)
+	}
+	b.WriteString("modules:\n  \".1.3.6.1.4.1.99999.3.1.9.4.673\": PN-MPU-A\n")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "merged.yaml"), []byte(b.String()), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	require.NoError(t, files[0].Err)
+	assert.Equal(t, 10, files[0].Entries)
+	assert.Error(t, files[0].ModulesErr)
+}
+
+// yaml.v3 panics on a merge beside a complex key. Inside modules: that is a
+// modules error, not a failed load.
+func TestDeviceLookup_ModulesDecodePanicIsAModulesError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices:
+  ".1.3.6.1.4.1.99999.1.1": "Operator Model"
+modules:
+  ? {a: 1}
+  : x
+  <<: {k: v}
+`), 0o644))
+	var lookup *DeviceLookup
+	require.NotPanics(t, func() {
+		var err error
+		lookup, err = LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+	})
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.NoError(t, files[0].Err)
+	assert.Equal(t, 1, files[0].Entries)
+	assert.Error(t, files[0].ModulesErr)
+}

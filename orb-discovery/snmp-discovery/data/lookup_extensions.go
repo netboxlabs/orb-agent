@@ -308,13 +308,13 @@ type ExtensionFileResult struct {
 	// ModuleEntries is how many module vendor types the file names in its
 	// modules: section.
 	ModuleEntries int
-	// ModulesErr is set when the modules: section cannot be read although the
-	// file can. Only that section is skipped; the file's devices still apply.
-	// A file that is not a valid YAML mapping is reported by Err alone.
+	// ModulesErr is set when the modules: section cannot be read. Only that
+	// section is skipped; the file's devices still apply. A file that is not a
+	// valid YAML mapping is reported by Err alone.
 	ModulesErr error
 	// Err is set when the file is not a valid YAML mapping or its devices:
-	// section is malformed. Its devices are skipped rather than failing the whole load,
-	// so the other files still apply.
+	// section is malformed. Its devices are skipped rather than failing the
+	// whole load, so the other files still apply.
 	Err error
 }
 
@@ -511,9 +511,9 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 		// one section never costs the other its entries.
 		fileModules := make(map[string]string)
 		modulesErr := loadModuleYAML(data, fileModules)
-		if modulesErr != nil && !isYAMLMapping(data) {
-			// The file as a whole is unreadable: the devices parse failed the
-			// same way and Err already says so, so it gets one warning, not two.
+		if modulesErr != nil && parseErr != nil && !isYAMLMapping(data) {
+			// The file as a whole is unreadable and Err already says so, so the
+			// lookup report warns once.
 			modulesErr = nil
 		}
 		maps.Copy(moduleModels, fileModules)
@@ -547,7 +547,14 @@ func isLookupExtensionFile(file os.DirEntry) bool {
 // walk reports; when a file spells one OID both ways, the dotted entry wins,
 // so the name never depends on map order. Blank names and keys are skipped,
 // and so is 0.0, the null vendor type unrelated rows share.
-func loadModuleYAML(data []byte, moduleModels map[string]string) error {
+func loadModuleYAML(data []byte, moduleModels map[string]string) (err error) {
+	// yaml.v3 can panic on a merge key beside a complex key; keep that to this
+	// section rather than failing the load.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("failed to parse YAML: %v", r)
+		}
+	}()
 	var fileData struct {
 		Modules map[string]string `yaml:"modules"`
 	}

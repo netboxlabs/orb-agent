@@ -426,3 +426,22 @@ func TestLogReportedExtensionFiles_FileLevelErrorWarnsOnce(t *testing.T) {
 		})
 	}
 }
+
+// A file whose devices and modules sections are each broken warns for both.
+func TestLogReportedExtensionFiles_WarnsForEachBrokenSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "mixed.yaml",
+		"devices: [not-a-map]\nmodules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: [PN-MPU-A]\n")
+
+	var devicesWarned, modulesWarned bool
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level != "WARN" {
+			continue
+		}
+		devicesWarned = devicesWarned || strings.Contains(l.Msg, "unparseable devices section")
+		modulesWarned = modulesWarned || strings.Contains(l.Msg, "unparseable modules section")
+	}
+	if !devicesWarned || !modulesWarned {
+		t.Errorf("want both section warnings, got devices=%v modules=%v", devicesWarned, modulesWarned)
+	}
+}
