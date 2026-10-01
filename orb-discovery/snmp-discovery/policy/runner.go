@@ -301,6 +301,17 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 	return &r.scope.Authentication
 }
 
+// The production lookup names modules from an operator's modules: entries.
+var _ mapping.ModuleModelLookup = (*data.DeviceLookup)(nil)
+
+// moduleModels is the device lookup when it can name module types, else nil.
+func (r *Runner) moduleModels() mapping.ModuleModelLookup {
+	if lookup, ok := r.deviceLookup.(mapping.ModuleModelLookup); ok {
+		return lookup
+	}
+	return nil
+}
+
 // resolveTargetDefaults returns the defaults to use for a target
 // Merges target-level override defaults with policy-level defaults
 func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
@@ -728,7 +739,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		moduleEntities, ifaceModuleMap := mapping.TranslateModulesWithAlias(
 			oids, chassisInv, memberDevices,
 			&r.config.Options, targetDefaults,
-			r.logger, aliasMap,
+			r.logger, aliasMap, r.moduleModels(),
 		)
 
 		entitiesForTarget = mapping.SpliceModulesAfterDevices(entitiesForTarget, moduleEntities)

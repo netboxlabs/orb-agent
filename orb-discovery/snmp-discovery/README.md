@@ -463,7 +463,7 @@ devices:
   .1.3.6.1.4.1.9.1.3233: Catalyst 1300-24P-4G
 ```
 
-Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. If you run the agent in a container, mount this directory into it.
+Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. A file can also carry a `modules:` section naming the module type for an `entPhysicalVendorType` OID, for modules that report no model name of their own. If you run the agent in a container, mount this directory into it.
 
 The startup logs report how many files were read from the directory and the total number of entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
 
