@@ -1557,3 +1557,25 @@ manufacturers: !!binary '!!!'
 	require.Len(t, files, 1)
 	assert.Error(t, files[0].Err)
 }
+
+// A modules: section with one bad value is skipped whole, including the
+// entries around it that did decode.
+func TestDeviceLookup_BrokenModulesSectionAppliesNoEntry(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": PN-MPU-A
+  ".1.3.6.1.4.1.99999.3.1.9.4.680": [PN-48GT-B]
+  ".1.3.6.1.4.1.99999.3.1.9.4.681": PN-48GT-C
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	for _, oid := range []string{".1.3.6.1.4.1.99999.3.1.9.4.673", ".1.3.6.1.4.1.99999.3.1.9.4.681"} {
+		_, ok := lookup.GetModuleModel(oid)
+		assert.False(t, ok, oid)
+	}
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].ModulesErr)
+	assert.Equal(t, 0, files[0].ModuleEntries)
+}
