@@ -16,7 +16,7 @@ import (
 
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	gpath "github.com/openconfig/gnmic/pkg/api/path"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/gnmi-telemetry/metrics"
 )

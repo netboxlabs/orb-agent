@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"

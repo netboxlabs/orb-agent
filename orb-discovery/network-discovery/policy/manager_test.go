@@ -2,6 +2,7 @@ package policy_test
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/policy"
@@ -162,4 +164,15 @@ func TestManagerGetPolicyStatuses(t *testing.T) {
 	// If no runs were created, statuses will be empty
 	// If runs were created, statuses will include the policy
 	// This depends on whether the runner actually ran and created runs
+}
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key; the
+// maintained fork returns an error, so the request gets an answer.
+func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
+	manager := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	var err error
+	require.NotPanics(t, func() {
+		_, err = manager.ParsePolicies([]byte("policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"))
+	})
+	assert.ErrorContains(t, err, "unhashable")
 }

@@ -7,7 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
 )

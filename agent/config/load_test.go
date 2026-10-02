@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 const sampleYAML = `
@@ -483,5 +483,25 @@ func TestDecimalIntHook_KindMatchedBitSize(t *testing.T) {
 	}
 	if got != int64(10) {
 		t.Errorf("hook(%q) = %#v; want int64(10) (decimal, not octal)", "010", got)
+	}
+}
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key; the
+// maintained fork returns an error, so a bad config file is reported, not a
+// crash.
+func TestLoad_MergeBesideComplexKeyIsAnError(t *testing.T) {
+	t.Parallel()
+	p := writeTempConfig(t, "orb:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n")
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("Load panicked: %v", r)
+			}
+		}()
+		_, err = loadWithEnv([]string{p}, nil, emptyEnviron)
+	}()
+	if err == nil || !strings.Contains(err.Error(), "unhashable") {
+		t.Fatalf("want a parse error naming the unhashable key, got %v", err)
 	}
 }
