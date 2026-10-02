@@ -46,3 +46,10 @@ func TestTenantParameters_UnmarshalBadKind(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "tenant: expected string or mapping")
 }
+
+func TestTenantParameters_UnmarshalMappingMissingName(t *testing.T) {
+	var d Defaults
+	err := yaml.Unmarshal([]byte("tenant:\n  group: customers\n  tags: [a]\n"), &d)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tenant: mapping requires name")
+}

@@ -88,6 +88,9 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 		if err := node.Decode(&a); err != nil {
 			return err
 		}
+		if a.Name == "" {
+			return fmt.Errorf("tenant: mapping requires name")
+		}
 		*t = TenantParameters(a)
 		return nil
 	default:
