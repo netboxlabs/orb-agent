@@ -38,10 +38,12 @@ var _ Manager = (*cyberarkManager)(nil)
 type cyberarkManager struct {
 	pollingBase
 
-	config     config.CyberArkManager
-	preLogger  *slog.Logger
-	endpoint   *url.URL
-	httpClient *http.Client
+	config    config.CyberArkManager
+	preLogger *slog.Logger
+	endpoint  *url.URL
+	// endpointShown is endpoint as logs and errors may print it.
+	endpointShown string
+	httpClient    *http.Client
 }
 
 // Start validates configuration, builds the TLS-aware HTTP client, and wires
@@ -67,7 +69,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
-	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", redactURL(c.config.URL))
+	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", displayURL(c.config.URL))
 
 	if c.config.URL == "" {
 		return fmt.Errorf("cyberark: url is required")
@@ -80,14 +82,15 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	}
 	parsedURL, err := url.Parse(c.config.URL)
 	if err != nil {
-		// url.Error repeats the raw url, which may carry a password.
+		// The parse error repeats the raw url, or a piece of it, which may
+		// carry a password; only its cause is kept, and none when '@' appears.
 		var uerr *url.Error
-		if errors.As(err, &uerr) {
-			err = uerr.Err
+		if strings.Contains(c.config.URL, "@") || !errors.As(err, &uerr) {
+			return errors.New("cyberark: url does not parse")
 		}
-		return fmt.Errorf("cyberark: url does not parse: %w", err)
+		return fmt.Errorf("cyberark: url does not parse: %w", uerr.Err)
 	}
-	shown := parsedURL.Redacted()
+	shown := displayURL(c.config.URL)
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", shown, parsedURL.Scheme)
 	}
@@ -104,6 +107,10 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		parsedURL.Path += defaultCCPEndpointPath
 	}
 	c.endpoint = parsedURL
+	c.endpointShown = redactedPlaceholder
+	if !passwordUnlocatable(c.config.URL, parsedURL) {
+		c.endpointShown = parsedURL.Redacted()
+	}
 
 	if (c.config.ClientCert == "") != (c.config.ClientKey == "") {
 		return fmt.Errorf("cyberark: client_cert and client_key must both be set or both empty")
@@ -158,7 +165,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if err := c.startScheduler(c.config.Schedule); err != nil {
 		return err
 	}
-	c.preLogger.Info("secrets manager started", "active", "cyberark", "endpoint", c.endpoint.Redacted())
+	c.preLogger.Info("secrets manager started", "active", "cyberark", "endpoint", c.endpointShown)
 	return nil
 }
 
@@ -204,6 +211,12 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// net/http's error repeats the request url, masking only a password it
+		// read as userinfo, so the endpoint is reported as Start rendered it.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = fmt.Errorf("%s %s: %w", uerr.Op, c.endpointShown, uerr.Err)
+		}
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): %w",
 			body, ref.appID, ref.safe, ref.object, err)
 	}
@@ -225,7 +238,7 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 		return "", fmt.Errorf("cyberark: get account %s: HTTP 404 from %s without a CCP error body%s; "+
 			"the url likely does not point at the CCP web service: set it to the CCP base URL, "+
 			"or to the full endpoint URL ending in %s when CCP is not installed as AIMWebService",
-			body, c.endpoint.Redacted(), nonHTMLBodySnippet(resp.Header.Get("Content-Type"), bodyBytes), ccpAPIPath)
+			body, c.endpointShown, nonHTMLBodySnippet(resp.Header.Get("Content-Type"), bodyBytes), ccpAPIPath)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): HTTP %d: %s",
@@ -318,14 +331,30 @@ func nonHTMLBodySnippet(contentType string, b []byte) string {
 	return ": " + text
 }
 
-// redactURL masks any password in a URL for logging, or stands in for a URL
-// that does not parse, since its password could not be located.
-func redactURL(raw string) string {
+// redactedPlaceholder stands in for a url whose password cannot be located.
+const redactedPlaceholder = "<redacted>"
+
+// displayURL renders a configured url for logs and errors with any password
+// masked, or shows none of it when the password cannot be located.
+func displayURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
+		u = nil
+	}
+	switch {
+	case passwordUnlocatable(raw, u):
+		return redactedPlaceholder
+	case u == nil:
 		return "<unparseable>"
 	}
 	return u.Redacted()
+}
+
+// passwordUnlocatable reports an '@' that net/url did not read as userinfo,
+// such as one after a password containing an unescaped '/', '?' or '#'. The
+// password then sits in the host or path, where Redacted cannot mask it.
+func passwordUnlocatable(raw string, u *url.URL) bool {
+	return strings.Contains(raw, "@") && (u == nil || u.User == nil)
 }
 
 // isCCPEndpointPath reports whether a URL path already names the CCP endpoint.

@@ -606,23 +606,43 @@ func TestCyberArkStart_LogsRedactedEndpoint(t *testing.T) {
 	require.NotContains(t, buf.String(), "hunter2", "no startup log line may carry the url password")
 }
 
-func TestCyberArkStart_ErrorsRedactURLPassword(t *testing.T) {
-	for _, bad := range []string{
-		"ftp://svc:hunter2@ccp.example.com",
-		"https://svc:hunter2@",
-		"https://svc:hunter2@ccp.example.com?x=y",
-		"https://svc:hunter2@ccp example.com/",
+func TestCyberArkStart_NeverEchoesURLPassword(t *testing.T) {
+	// A password with an unescaped '/', '?' or '#' ends the authority early,
+	// so net/url never reads it as userinfo and cannot mask it.
+	for _, tc := range []struct {
+		url       string
+		forbidden []string
+	}{
+		{"ftp://svc:hunter2@ccp.example.com", []string{"hunter2"}},
+		{"https://svc:hunter2@", []string{"hunter2"}},
+		{"https://svc:hunter2@ccp.example.com?x=y", []string{"hunter2"}},
+		{"https://svc:hunter2@ccp example.com/", []string{"hunter2"}},
+		{"https://svc:hun/ter2@ccp.example.com", []string{"hun", "ter2"}},
+		{"https://svc:12/ter2@ccp.example.com", []string{"svc:12", "ter2"}},
+		{"https://svc:hun?ter2@ccp.example.com", []string{"hun", "ter2"}},
+		{"https://svc:hun#ter2@ccp.example.com", []string{"hun", "ter2"}},
+		{"https://svc:hun%zzter2@ccp.example.com", []string{"hun", "%zz", "ter2"}},
 	} {
-		t.Run(bad, func(t *testing.T) {
+		t.Run(tc.url, func(t *testing.T) {
 			var buf bytes.Buffer
 			c := &cyberarkManager{
 				preLogger: slog.New(slog.NewJSONHandler(&buf, nil)),
-				config:    config.CyberArkManager{URL: bad, AppID: "orb"},
+				config:    config.CyberArkManager{URL: tc.url, AppID: "orb"},
 			}
-			err := c.Start(context.Background())
-			require.Error(t, err)
-			require.NotContains(t, err.Error(), "hunter2")
-			require.NotContains(t, buf.String(), "hunter2")
+			var messages []string
+			if err := c.Start(context.Background()); err != nil {
+				messages = append(messages, err.Error())
+			} else {
+				_, err := c.fetch("Lab/DB-Account")
+				require.Error(t, err)
+				messages = append(messages, err.Error())
+			}
+			messages = append(messages, buf.String())
+			for _, m := range messages {
+				for _, f := range tc.forbidden {
+					require.NotContains(t, m, f)
+				}
+			}
 		})
 	}
 }
