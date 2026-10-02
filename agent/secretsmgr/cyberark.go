@@ -88,9 +88,6 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		}
 		return fmt.Errorf("cyberark: url does not parse: %w", uerr.Err)
 	}
-	if passwordUnlocatable(c.config.URL, parsedURL) {
-		return errors.New("cyberark: url has an '@' outside its userinfo; percent-encode any '/', '?', '#' or '@' in the username or password")
-	}
 	shown := parsedURL.Redacted()
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
 		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", shown, parsedURL.Scheme)
@@ -323,27 +320,14 @@ func nonHTMLBodySnippet(contentType string, b []byte) string {
 }
 
 // displayURL renders a configured url for the startup log with any password
-// masked, or shows none of it when the password cannot be located.
+// masked. A url that does not parse is not shown, since its password, if
+// any, cannot be located.
 func displayURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		u = nil
-	}
-	switch {
-	case passwordUnlocatable(raw, u):
-		return "<redacted>"
-	case u == nil:
 		return "<unparseable>"
 	}
 	return u.Redacted()
-}
-
-// passwordUnlocatable reports an '@' that net/url did not read as userinfo,
-// such as one after a password containing an unescaped '/', '?' or '#'. The
-// password then sits in the host or path, where Redacted cannot mask it and
-// requests would carry it to the wrong host.
-func passwordUnlocatable(raw string, u *url.URL) bool {
-	return strings.Contains(raw, "@") && (u == nil || u.User == nil)
 }
 
 // isCCPEndpointPath reports whether a URL path already names the CCP endpoint.
