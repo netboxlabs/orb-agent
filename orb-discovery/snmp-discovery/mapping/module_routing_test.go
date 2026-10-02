@@ -466,7 +466,8 @@ func TestAttachIfaceModules_EmptyMapsAreNoOp(t *testing.T) {
 }
 
 // twoBoardsOIDs is a chassis with a board in each of two slots, a port on
-// each board, a port on neither, and an optic in a cage on each board.
+// each board, a port on neither, an optic in a cage on each board, and a
+// fixed-port optic in a cage on the chassis itself.
 func twoBoardsOIDs() ObjectIDValueMap {
 	return buildOIDs([]fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "SN0001", "PN-CH-2", "Chassis", ""},
@@ -482,6 +483,8 @@ func twoBoardsOIDs() ObjectIDValueMap {
 		{"220", "200", "5", "2", "Cage 2/2", "", "", "Cage", ""},
 		{"221", "220", "9", "1", "Optic 2/2", "OPT0221", "SFP-10G-LR", "SFP-10GBase-LR", ""},
 		{"30", "1", "10", "3", "Mgmt", "", "", "Port", ""},
+		{"40", "1", "5", "4", "Cage 0/4", "", "", "Cage", ""},
+		{"41", "40", "9", "1", "Optic 0/4", "OPT0041", "SFP-10G-LR", "SFP-10GBase-LR", ""},
 	})
 }
 
@@ -500,16 +503,18 @@ func emitAllModules(inv ModuleInventory) map[string]*diode.Module {
 	return emitted
 }
 
-// Rows in different modules claiming one ifIndex leave it with no module:
-// either pick would be a guess, and the pick used to follow map order, so
-// the interface's module changed from one poll to the next.
+// Rows in unrelated modules claiming one ifIndex leave it with no module:
+// any pick would be a guess, and the pick used to follow map order, so the
+// interface's module changed from one poll to the next.
 func TestBuildIfaceModuleMap_RowsInDifferentModulesLinkNone(t *testing.T) {
 	inv := extractModuleInventory(twoBoardsOIDs(), slog.Default())
 	emitted := emitAllModules(inv)
 	for name, aliasMap := range map[string]map[string]string{
-		"ports on two boards":  {"110": "4", "210": "4"},
-		"optics on two boards": {"121": "4", "221": "4"},
-		"optics and ports":     {"121": "4", "221": "4", "110": "4"},
+		"ports on two boards":            {"110": "4", "210": "4"},
+		"optics on two boards":           {"121": "4", "221": "4"},
+		"optics and ports":               {"121": "4", "221": "4", "110": "4"},
+		"an optic and another board":     {"121": "4", "210": "4"},
+		"a fixed-port optic and a board": {"41": "4", "110": "4"},
 	} {
 		for range 20 {
 			got := buildIfaceModuleMap(inv, aliasMap, emitted)
@@ -518,9 +523,8 @@ func TestBuildIfaceModuleMap_RowsInDifferentModulesLinkNone(t *testing.T) {
 	}
 }
 
-// Rows that agree still link: a port and a row beneath it, or two rows on
-// one board.
-func TestBuildIfaceModuleMap_RowsInOneModuleStillLink(t *testing.T) {
+// Rows on one containment chain still link, to the most specific module.
+func TestBuildIfaceModuleMap_RowsOnOneChainLink(t *testing.T) {
 	inv := extractModuleInventory(twoBoardsOIDs(), slog.Default())
 	emitted := emitAllModules(inv)
 
@@ -529,9 +533,6 @@ func TestBuildIfaceModuleMap_RowsInOneModuleStillLink(t *testing.T) {
 
 	got = buildIfaceModuleMap(inv, map[string]string{"121": "8", "120": "8"}, emitted)
 	assert.Same(t, emitted["121"], got["8"], "the optic still wins over the board holding its cage")
-
-	got = buildIfaceModuleMap(inv, map[string]string{"121": "9", "210": "9"}, emitted)
-	assert.Same(t, emitted["121"], got["9"], "and over a port on another board")
 
 	got = buildIfaceModuleMap(inv, map[string]string{"110": "5", "30": "5"}, emitted)
 	assert.Same(t, emitted["100"], got["5"], "a row in no module does not contest one that is")

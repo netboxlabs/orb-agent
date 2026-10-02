@@ -117,112 +117,111 @@ func assignMemberID(inv *ModuleInventory, chassisInv *ChassisInventory, oids Obj
 }
 
 // buildIfaceModuleMap builds the {ifIndex -> *diode.Module} lookup the
-// runner needs to set Interface.Module on each transceiver-owning port.
-// Keying by ifIndex (decimal string) — not ifName — is required because
-// VC/stack targets (Juniper VC, some Aruba stacks) reuse the same
-// canonical ifName across members; an ifName-keyed map collapses
-// distinct transceivers onto a single entry and the runner attaches the
-// wrong member's module. ifIndex is globally unique in the SNMP walk
-// space, so collision is impossible.
+// runner needs to set Interface.Module on each port. Keying by ifIndex
+// (decimal string) — not ifName — is required because VC/stack targets
+// (Juniper VC, some Aruba stacks) reuse the same canonical ifName across
+// members; an ifName-keyed map collapses distinct ports onto a single entry
+// and the runner attaches the wrong member's module. ifIndex is globally
+// unique in the SNMP walk space, so collision is impossible.
 //
-// Only transceivers under inv.SubModules participate — top-level modules
-// (linecards, supervisors) aren't single-port entities and don't route
-// to an ifIndex. For each transceiver:
+// Each aliasMap row claims the nearest emitted module at or above it: a
+// transceiver claims itself, and an access port the line module holding
+// it. Fixed-port platforms put every access port under a line module, so
+// without the climb every one of them is emitted with no module reference.
+// A row that reaches no emitted module claims nothing.
 //
-//  1. aliasMap[EntIndex] gives the ifIndex (set up upstream by the
-//     entAliasMappingTable walk).
-//  2. emittedModules[EntIndex] is the *diode.Module the translator
-//     already produced; this map points the ifIndex at it.
-//
-// Any step that misses simply skips the transceiver — partial coverage
-// is normal (optic with no alias-table row, port-channel placeholder, etc.).
-//
-// An ifIndex links only when the rows claiming it agree on one module. Some
-// platforms alias one ifIndex from rows in several modules, such as a stack's
-// management port from each member; any pick would be a guess, and picking
-// in map order changed the interface's module from one poll to the next.
+// An ifIndex links only when its claims lie on one containment chain, and
+// then to the most specific module, so an optic wins over the line module
+// holding its cage. Some platforms alias one ifIndex from rows in unrelated
+// modules, such as a stack's management port from each member; any pick
+// there would be a guess, and picking in map order changed the interface's
+// module from one poll to the next.
 func buildIfaceModuleMap(
 	inv ModuleInventory,
 	aliasMap map[string]string,
 	emittedModules map[string]*diode.Module,
 ) map[string]*diode.Module {
-	optics := make(map[string]map[*diode.Module]struct{})
-	for _, list := range inv.SubModules {
-		for _, e := range list {
-			if e.Type != ModuleTypeTransceiver {
-				continue
-			}
-			ifIdx, ok := aliasMap[e.EntIndex]
-			if !ok {
-				continue
-			}
-			mod, ok := emittedModules[e.EntIndex]
-			if !ok {
-				continue
-			}
-			addModuleClaim(optics, ifIdx, mod)
-		}
-	}
-	// Second pass: a port that is not itself a module, and holds no
-	// transceiver the alias table knows about, still belongs to whatever
-	// module physically contains it. Fixed-port platforms put every access
-	// port under a line module, so without this every one of them is
-	// emitted with no module reference at all.
-	//
-	// Skips any ifIndex a transceiver claimed, linked or not: a transceiver
-	// is the more specific FRU for the port it occupies.
-	containing := make(map[string]map[*diode.Module]struct{})
+	claims := make(map[string]map[string]struct{})
 	for physIdx, ifIdx := range aliasMap {
-		if _, claimed := optics[ifIdx]; claimed {
+		modIdx, ok := nearestContainingModule(inv, emittedModules, physIdx)
+		if !ok {
 			continue
 		}
-		if mod, ok := nearestContainingModule(inv, emittedModules, physIdx); ok {
-			addModuleClaim(containing, ifIdx, mod)
+		if claims[ifIdx] == nil {
+			claims[ifIdx] = make(map[string]struct{})
 		}
+		claims[ifIdx][modIdx] = struct{}{}
 	}
 	out := make(map[string]*diode.Module)
-	for _, claims := range []map[string]map[*diode.Module]struct{}{optics, containing} {
-		for ifIdx, mods := range claims {
-			if len(mods) != 1 {
-				continue
-			}
-			for mod := range mods {
-				out[ifIdx] = mod
-			}
+	for ifIdx, mods := range claims {
+		if modIdx, ok := mostSpecificModule(inv, mods); ok {
+			out[ifIdx] = emittedModules[modIdx]
 		}
 	}
 	return out
 }
 
-// addModuleClaim records that a row aliased to ifIdx resolves to mod.
-func addModuleClaim(claims map[string]map[*diode.Module]struct{}, ifIdx string, mod *diode.Module) {
-	if claims[ifIdx] == nil {
-		claims[ifIdx] = make(map[*diode.Module]struct{})
+// mostSpecificModule returns the one claimed module that holds no other
+// claimed module, or false when the claims are not on one containment chain.
+func mostSpecificModule(inv ModuleInventory, mods map[string]struct{}) (string, bool) {
+	var innermost []string
+	for m := range mods {
+		holdsAnother := false
+		for other := range mods {
+			if other != m && containsEntity(inv, m, other) {
+				holdsAnother = true
+				break
+			}
+		}
+		if !holdsAnother {
+			innermost = append(innermost, m)
+		}
 	}
-	claims[ifIdx][mod] = struct{}{}
+	if len(innermost) != 1 {
+		return "", false
+	}
+	return innermost[0], true
+}
+
+// containsEntity reports whether ancestor sits above ent on its
+// entPhysicalContainedIn chain, with the same bounds as
+// nearestContainingModule.
+func containsEntity(inv ModuleInventory, ancestor, ent string) bool {
+	for hop := 0; hop < 32; hop++ {
+		parent, has := inv.ContainedIn[ent]
+		if !has || parent == "" || parent == "0" || parent == ent {
+			return false
+		}
+		if parent == ancestor {
+			return true
+		}
+		ent = parent
+	}
+	return false
 }
 
 // nearestContainingModule climbs entPhysicalContainedIn from physIdx and
-// returns the first emitted module found, starting with physIdx itself.
-// The walk is bounded at 32 hops and stops at a root, a missing parent or a
-// self-referencing row, so a malformed containment chain cannot spin.
+// returns the EntIndex of the first emitted module found, starting with
+// physIdx itself. The walk is bounded at 32 hops and stops at a root, a
+// missing parent or a self-referencing row, so a malformed containment
+// chain cannot spin.
 func nearestContainingModule(
 	inv ModuleInventory,
 	emittedModules map[string]*diode.Module,
 	physIdx string,
-) (*diode.Module, bool) {
+) (string, bool) {
 	ent := physIdx
 	for hop := 0; hop < 32; hop++ {
-		if mod, ok := emittedModules[ent]; ok {
-			return mod, true
+		if _, ok := emittedModules[ent]; ok {
+			return ent, true
 		}
 		parent, has := inv.ContainedIn[ent]
 		if !has || parent == "" || parent == "0" || parent == ent {
-			return nil, false
+			return "", false
 		}
 		ent = parent
 	}
-	return nil, false
+	return "", false
 }
 
 // aliasCandidate carries the parsed (logical index, ifIndex) for one
