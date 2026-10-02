@@ -22,6 +22,7 @@ type logLine struct {
 	Entries             int    `json:"entries"`
 	Files               int    `json:"files"`
 	ManufacturerEntries int    `json:"manufacturer_entries"`
+	ModuleEntries       int    `json:"module_entries"`
 	Err                 string `json:"error"`
 }
 
@@ -70,7 +71,7 @@ func TestLogReportedExtensionFiles_WarnsOnFileThatContributesNothing(t *testing.
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "no device or manufacturer entries") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no device, manufacturer or module entries") {
 			warned = true
 			if l.File != "fs_custom.yaml" {
 				t.Errorf("warning names file %q, want fs_custom.yaml", l.File)
@@ -266,7 +267,7 @@ func TestLogReportedExtensionFiles_WarnsWhenNeitherSectionContributes(t *testing
 
 	var warned bool
 	for _, l := range captureExtensionLogs(t, dir) {
-		if l.Level == "WARN" && strings.Contains(l.Msg, "no device or manufacturer entries") {
+		if l.Level == "WARN" && strings.Contains(l.Msg, "no device, manufacturer or module entries") {
 			warned = true
 		}
 	}
@@ -321,5 +322,126 @@ func TestLogReportedExtensionFiles_ParseFailureScopedToDeviceSection(t *testing.
 	if found.ManufacturerEntries != 1 {
 		t.Errorf("manufacturer_entries = %d, want 1 so the operator sees that part still applied",
 			found.ManufacturerEntries)
+	}
+}
+
+// A file carrying only a modules: section is a healthy config: it must not be
+// warned about, and its entries are counted in the summary.
+func TestLogReportedExtensionFiles_ModulesOnlyFileIsCounted(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "modules.yaml",
+		"modules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: PN-MPU-A\n  .1.3.6.1.4.1.99999.3.1.9.4.680: PN-48GT-B\n")
+
+	var info *logLine
+	lines := captureExtensionLogs(t, dir)
+	for i := range lines {
+		if lines[i].Level == "WARN" {
+			t.Errorf("unexpected warning: %q", lines[i].Msg)
+		}
+		if lines[i].Level == "INFO" && lines[i].Msg == "loaded device lookup extensions" {
+			info = &lines[i]
+		}
+	}
+	if info == nil {
+		t.Fatal("expected an INFO summary line")
+	}
+	if info.ModuleEntries != 2 {
+		t.Errorf("module_entries = %d, want 2", info.ModuleEntries)
+	}
+}
+
+// A modules: section that cannot be parsed is called out on its own, and the
+// file is not also reported as contributing nothing.
+func TestLogReportedExtensionFiles_WarnsOnUnparseableModulesSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "modules.yaml", "modules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: [PN-MPU-A]\n")
+
+	var warned bool
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level != "WARN" {
+			continue
+		}
+		switch {
+		case strings.Contains(l.Msg, "unparseable modules section"):
+			warned = true
+			if l.File != "modules.yaml" || l.Err == "" {
+				t.Errorf("warning must name the file and the parse error, got file=%q err=%q", l.File, l.Err)
+			}
+		case strings.Contains(l.Msg, "contributed no"):
+			t.Errorf("a file with a broken modules section must not also be reported as empty: %q", l.Msg)
+		}
+	}
+	if !warned {
+		t.Error("an unparseable modules section must produce a WARN carrying the parse error")
+	}
+}
+
+// Module entries still apply, and are still counted, when the same file's
+// devices: section cannot be parsed.
+func TestLogReportedExtensionFiles_CountsModulesBesideABrokenDevicesSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "mixed.yaml",
+		"devices: [not-a-map]\nmodules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: PN-MPU-A\n")
+
+	var info, warn *logLine
+	lines := captureExtensionLogs(t, dir)
+	for i := range lines {
+		switch {
+		case lines[i].Level == "INFO" && lines[i].Msg == "loaded device lookup extensions":
+			info = &lines[i]
+		case lines[i].Level == "WARN" && strings.Contains(lines[i].Msg, "unparseable devices section"):
+			warn = &lines[i]
+		}
+	}
+	if info == nil || warn == nil {
+		t.Fatal("expected an INFO summary line and a devices-section WARN")
+	}
+	if info.ModuleEntries != 1 {
+		t.Errorf("module_entries = %d, want 1", info.ModuleEntries)
+	}
+	if warn.ModuleEntries != 1 {
+		t.Errorf("the devices-section warning must say the modules still apply: module_entries = %d, want 1", warn.ModuleEntries)
+	}
+}
+
+// A file that cannot be read as a whole gets one warning, not one per section.
+func TestLogReportedExtensionFiles_FileLevelErrorWarnsOnce(t *testing.T) {
+	for name, content := range map[string]string{
+		"syntax error":            "devices:\n\t.1.3.6.1.4.1.99999.1.1: Operator Model\n",
+		"duplicate top-level key": "devices:\n  .1.3.6.1.4.1.99999.1.1: A\ndevices:\n  .1.3.6.1.4.1.99999.1.2: B\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeExtFile(t, dir, "broken.yaml", content)
+
+			var warnings []string
+			for _, l := range captureExtensionLogs(t, dir) {
+				if l.Level == "WARN" {
+					warnings = append(warnings, l.Msg)
+				}
+			}
+			if len(warnings) != 1 || !strings.Contains(warnings[0], "unparseable devices section") {
+				t.Errorf("want one devices-section warning, got %q", warnings)
+			}
+		})
+	}
+}
+
+// A file whose devices and modules sections are each broken warns for both.
+func TestLogReportedExtensionFiles_WarnsForEachBrokenSection(t *testing.T) {
+	dir := t.TempDir()
+	writeExtFile(t, dir, "mixed.yaml",
+		"devices: [not-a-map]\nmodules:\n  .1.3.6.1.4.1.99999.3.1.9.4.673: [PN-MPU-A]\n")
+
+	var devicesWarned, modulesWarned bool
+	for _, l := range captureExtensionLogs(t, dir) {
+		if l.Level != "WARN" {
+			continue
+		}
+		devicesWarned = devicesWarned || strings.Contains(l.Msg, "unparseable devices section")
+		modulesWarned = modulesWarned || strings.Contains(l.Msg, "unparseable modules section")
+	}
+	if !devicesWarned || !modulesWarned {
+		t.Errorf("want both section warnings, got devices=%v modules=%v", devicesWarned, modulesWarned)
 	}
 }

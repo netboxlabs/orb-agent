@@ -3,8 +3,10 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1388,4 +1390,69 @@ func TestNewRunner_NormalizesStackMemberTemplate(t *testing.T) {
 		assert.Equal(t, "{name}-css{id}", merged.StackMemberNameTemplate,
 			"an empty override must not clear the policy-level template")
 	})
+}
+
+// moduleNamingLookup names no device, and one module vendor type, as an
+// operator's modules: entry would.
+type moduleNamingLookup struct{}
+
+func (moduleNamingLookup) GetDevice(string) (string, error) { return "", fmt.Errorf("not found") }
+func (moduleNamingLookup) GetDeviceModel(string, map[string]string) (string, error) {
+	return "", fmt.Errorf("not found")
+}
+
+func (moduleNamingLookup) GetModuleModel(oid string) (string, bool) {
+	if oid == ".1.3.6.1.4.1.99999.3.1.9.4.673" {
+		return "Operator Module", true
+	}
+	return "", false
+}
+
+// The runner hands its lookup to module discovery, so an operator's modules:
+// entry names a module that reports no model name.
+func TestRunWithMetadata_ModuleLookupNamesModuleType(t *testing.T) {
+	col := func(n string) string { return "1.3.6.1.2.1.47.1.1.1.1." + n }
+	row := func(n, idx string, v any, typ gosnmp.Asn1BER) map[string]snmp.PDU {
+		return map[string]snmp.PDU{"." + col(n) + "." + idx: {Value: v, Type: typ, IdentifierSize: 2}}
+	}
+	merge := func(ms ...map[string]snmp.PDU) map[string]snmp.PDU {
+		out := map[string]snmp.PDU{}
+		for _, m := range ms {
+			maps.Copy(out, m)
+		}
+		return out
+	}
+	walker := &staticWalker{pdus: map[string]map[string]snmp.PDU{
+		"1.3.6.1.2.1.1.5": {"1.3.6.1.2.1.1.5.0": {Value: "switch-1", Type: gosnmp.OctetString, IdentifierSize: 1}},
+		col("2"): merge(row("2", "1", "Example Chassis", gosnmp.OctetString), row("2", "100", "Slot 1", gosnmp.OctetString),
+			row("2", "101", "Example Module", gosnmp.OctetString)),
+		col("3"): merge(row("3", "101", ".1.3.6.1.4.1.99999.3.1.9.4.673", gosnmp.ObjectIdentifier)),
+		col("4"): merge(row("4", "1", 0, gosnmp.Integer), row("4", "100", 1, gosnmp.Integer), row("4", "101", 100, gosnmp.Integer)),
+		col("5"): merge(row("5", "1", 3, gosnmp.Integer), row("5", "100", 5, gosnmp.Integer), row("5", "101", 9, gosnmp.Integer)),
+		col("6"): merge(row("6", "1", 0, gosnmp.Integer), row("6", "100", 1, gosnmp.Integer), row("6", "101", 1, gosnmp.Integer)),
+		col("7"): merge(row("7", "1", "Chassis", gosnmp.OctetString), row("7", "100", "Slot 1", gosnmp.OctetString),
+			row("7", "101", "Board 1", gosnmp.OctetString)),
+		col("11"): merge(row("11", "1", "SN0001", gosnmp.OctetString), row("11", "101", "SN0101", gosnmp.OctetString)),
+	}}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := chassisEntries()
+	entries[2].MappingEntries = append(entries[2].MappingEntries,
+		config.MappingEntry{OID: col("2"), Entity: "chassis_module", Field: "descr"},
+		config.MappingEntry{OID: col("3"), Entity: "chassis_module", Field: "vendor_type"})
+	runner := queryTargetRunner(factory, entries)
+	runner.deviceLookup = moduleNamingLookup{}
+	mode := config.DiscoverModulesLinecards
+	runner.config.Options.DiscoverModules = &mode
+
+	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	require.NoError(t, err)
+	var models []string
+	for _, e := range entities {
+		if m, ok := e.(*diode.Module); ok {
+			models = append(models, m.GetModuleType().GetModel())
+		}
+	}
+	assert.Equal(t, []string{"Operator Module"}, models)
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -281,6 +282,7 @@ type DeviceRetriever interface {
 // DeviceLookup represents a device lookup service.
 type DeviceLookup struct {
 	devicesByVendor      map[string]deviceRef
+	moduleModels         map[string]string // vendor-type OID -> module model, from user files only
 	userExtensionFile    []ExtensionFileResult
 	userExtensionSkipped int
 }
@@ -303,8 +305,16 @@ type ExtensionFileResult struct {
 	// directory is also read by NewManufacturerResolver, which applies those
 	// overrides. Callers must not treat such a file as contributing nothing.
 	ManufacturerEntries int
-	// Err is set when the file could not be parsed. Such a file is skipped
-	// rather than failing the whole load, so the rest still apply.
+	// ModuleEntries is how many module vendor types the file names in its
+	// modules: section.
+	ModuleEntries int
+	// ModulesErr is set when the modules: section cannot be read. Only that
+	// section is skipped; the devices: section is read on its own. A file that
+	// is not a valid YAML mapping is reported by Err alone.
+	ModulesErr error
+	// Err is set when the file is not a valid YAML mapping or its devices:
+	// section is malformed. Its devices are skipped rather than failing the
+	// whole load, so the other files still apply.
 	Err error
 }
 
@@ -388,6 +398,7 @@ func LoadDeviceLookupExtensions(dir string) (*DeviceLookup, error) {
 	devicesByVendor := make(map[string]deviceRef)
 	deviceLookup := DeviceLookup{
 		devicesByVendor: devicesByVendor,
+		moduleModels:    make(map[string]string),
 	}
 
 	err := loadBuiltInExtensions(devicesByVendor)
@@ -397,7 +408,7 @@ func LoadDeviceLookupExtensions(dir string) (*DeviceLookup, error) {
 
 	if dir != "" {
 		// Extend built in extensions with user provided extensions
-		results, skipped, err := loadUserProvidedExtensions(dir, devicesByVendor)
+		results, skipped, err := loadUserProvidedExtensions(dir, devicesByVendor, deviceLookup.moduleModels)
 		if err != nil {
 			return &deviceLookup, err
 		}
@@ -464,7 +475,8 @@ func countManufacturerEntries(data []byte) int {
 // bad file cannot cost an operator every other override they wrote. The failure
 // is returned in the results instead of being logged here, so it reaches the
 // structured logger the caller already holds.
-func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef) ([]ExtensionFileResult, int, error) {
+func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef, moduleModels map[string]string,
+) ([]ExtensionFileResult, int, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to read directory %s: %w", dir, err)
@@ -495,20 +507,88 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 				devicesByVendor[oid] = ref
 			}
 		}
+		// Read on its own, as the manufacturers: section is, so a mistake in
+		// one section never costs the other its entries.
+		fileModules := make(map[string]string)
+		modulesErr := loadModuleYAML(data, fileModules)
+		if modulesErr != nil && parseErr != nil && !isYAMLMapping(data) {
+			// The file as a whole is unreadable and Err already says so, so the
+			// lookup report warns once.
+			modulesErr = nil
+		}
+		maps.Copy(moduleModels, fileModules)
 		results = append(results, ExtensionFileResult{
 			Name:                file.Name(),
 			Entries:             len(fileRefs),
 			ManufacturerEntries: countManufacturerEntries(data),
+			ModuleEntries:       len(fileModules),
 			Err:                 parseErr,
+			ModulesErr:          modulesErr,
 		})
 	}
 	return results, skipped, nil
+}
+
+// isYAMLMapping reports whether data decodes as a YAML mapping at the top
+// level. It can say no for a file whose devices still parse (alias limits), so
+// pair it with a failed devices parse before treating an error as the file's.
+func isYAMLMapping(data []byte) bool {
+	var root map[string]yaml.Node
+	return unmarshalRecovered(data, &root) == nil
+}
+
+// unmarshalRecovered is yaml.Unmarshal with a panic returned as an error:
+// yaml.v3 can panic on a merge key beside a complex key.
+func unmarshalRecovered(data []byte, out any) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%v", r)
+		}
+	}()
+	return yaml.Unmarshal(data, out)
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {
 	return !file.IsDir() &&
 		(strings.HasSuffix(strings.ToLower(file.Name()), ".yaml") ||
 			strings.HasSuffix(strings.ToLower(file.Name()), ".yml"))
+}
+
+// loadModuleYAML reads a file's modules: section, which names the module type
+// for a vendor-type OID (entPhysicalVendorType). Keys take the leading dot the
+// walk reports; when a file spells one OID both ways, the dotted entry wins,
+// so the name never depends on map order. Blank names and keys are skipped,
+// and so is 0.0, the null vendor type unrelated rows share. On an error it adds
+// nothing, so a broken section applies no entry.
+func loadModuleYAML(data []byte, moduleModels map[string]string) error {
+	var fileData struct {
+		Modules map[string]string `yaml:"modules"`
+	}
+	if err := unmarshalRecovered(data, &fileData); err != nil {
+		return fmt.Errorf("failed to parse YAML: %w", err)
+	}
+	for oid, model := range fileData.Modules {
+		oid = strings.TrimSpace(oid)
+		key := "." + strings.TrimPrefix(oid, ".")
+		if model = strings.TrimSpace(model); model == "" || key == "." || key == ".0.0" {
+			continue
+		}
+		if _, seen := moduleModels[key]; seen && !strings.HasPrefix(oid, ".") {
+			continue
+		}
+		moduleModels[key] = model
+	}
+	return nil
+}
+
+// GetModuleModel returns the module type model an operator's modules: entry
+// names for a vendor-type OID, in either spelling.
+func (d *DeviceLookup) GetModuleModel(vendorTypeOID string) (string, bool) {
+	vendorTypeOID = strings.TrimSpace(vendorTypeOID)
+	if d == nil || vendorTypeOID == "" {
+		return "", false
+	}
+	return lookupOIDBothSpellings(d.moduleModels, vendorTypeOID)
 }
 
 // loadYAMLFile loads a single YAML file and merges its data into

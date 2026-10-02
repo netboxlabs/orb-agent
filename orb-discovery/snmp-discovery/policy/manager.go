@@ -454,25 +454,31 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 		return
 	}
 
-	total, mfrTotal := 0, 0
+	total, mfrTotal, moduleTotal := 0, 0, 0
 	for _, f := range files {
 		mfrTotal += f.ManufacturerEntries
+		moduleTotal += f.ModuleEntries
+		if f.ModulesErr != nil {
+			m.logger.Warn("lookup extension file has an unparseable modules section; its module entries were skipped",
+				"directory", safeDir,
+				"file", sanitizeLogValue(f.Name),
+				"error", sanitizeLogValue(f.ModulesErr.Error()))
+		}
 		switch {
 		case f.Err != nil:
-			// Only the devices section is lost. A manufacturers section in the
-			// same file is parsed separately by the manufacturer resolver and
-			// still applies, so do not imply the whole file was discarded.
+			// The devices section, or the whole file, could not be read. The
+			// counts show what the other sections still contributed.
 			m.logger.Warn("lookup extension file has an unparseable devices section; its device entries were skipped",
 				"directory", safeDir,
 				"file", sanitizeLogValue(f.Name),
 				"manufacturer_entries", f.ManufacturerEntries,
+				"module_entries", f.ModuleEntries,
 				"error", sanitizeLogValue(f.Err.Error()))
-		case f.Entries == 0 && f.ManufacturerEntries == 0:
-			// Only when neither recognised section contributed. A file carrying
-			// just a manufacturers: block declares no devices by design, and its
-			// overrides are applied by the manufacturer resolver over the same
-			// directory, so warning about it would nag a healthy config.
-			m.logger.Warn("lookup extension file contributed no device or manufacturer entries; check that it starts with a 'devices:' or 'manufacturers:' key and is indented with spaces",
+		case f.Entries == 0 && f.ManufacturerEntries == 0 && f.ModuleEntries == 0 && f.ModulesErr == nil:
+			// Only when no recognised section contributed. A file carrying just
+			// a manufacturers: or modules: block declares no devices by design,
+			// so warning about it would nag a healthy config.
+			m.logger.Warn("lookup extension file contributed no device, manufacturer or module entries; check that it starts with a 'devices:', 'manufacturers:' or 'modules:' key and is indented with spaces",
 				"directory", safeDir, "file", sanitizeLogValue(f.Name))
 		default:
 			total += f.Entries
@@ -480,7 +486,7 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 	}
 	m.logger.Info("loaded device lookup extensions",
 		"directory", safeDir, "files", len(files),
-		"entries", total, "manufacturer_entries", mfrTotal)
+		"entries", total, "manufacturer_entries", mfrTotal, "module_entries", moduleTotal)
 }
 
 // sanitizeLogValue flattens CR and LF so a value cannot forge additional log
