@@ -56,13 +56,15 @@ orb:
     active: cyberark
     sources:
       cyberark:
-        url: "https://ccp.corp.example.com/AIMWebServiceCert/api/Accounts"
+        url: "https://ccp.corp.example.com/AIMWebServiceCustom/api/Accounts"
         app_id: "orb-agent"
         client_cert: "/opt/orb/secrets/orb.crt"
         client_key:  "/opt/orb/secrets/orb.key"
 ```
 
-Any URL whose path ends in `/api/Accounts`, compared case-insensitively, is used exactly as given. Any other URL, including one with a path prefix for a reverse proxy, gets `/AIMWebService/api/Accounts` appended. The agent logs the endpoint it resolved at startup. If a lookup fails with `no CCP web service at …`, the web server answered 404 for that path, so the URL points at the wrong application; a missing account is reported as `account not found` instead.
+Any URL whose path ends in `/api/Accounts`, compared case-insensitively, is used as the endpoint, minus any trailing slash. Any other URL, including one with a path prefix for a reverse proxy, gets `/AIMWebService/api/Accounts` appended. The agent logs the endpoint it resolved at startup.
+
+A lookup that fails with `HTTP 404 … without a CCP error body` most likely means the URL does not point at the CCP web service, for example a base URL on a server where CCP is installed under another name. A missing account is reported as `account not found`, with CCP's own error code.
 
 ## Authentication
 

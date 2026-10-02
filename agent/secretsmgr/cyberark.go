@@ -213,9 +213,10 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 			return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
 				body, ref.appID, ref.safe, ref.object, detail)
 		}
-		return "", fmt.Errorf("cyberark: get account %s: no CCP web service at %s (HTTP 404 without a CCP error); "+
-			"set url to the CCP base URL, or to the full endpoint URL ending in %s when CCP is not installed as AIMWebService",
-			body, c.endpoint.Redacted(), ccpAPIPath)
+		return "", fmt.Errorf("cyberark: get account %s: HTTP 404 from %s without a CCP error body%s; "+
+			"the url likely does not point at the CCP web service: set it to the CCP base URL, "+
+			"or to the full endpoint URL ending in %s when CCP is not installed as AIMWebService",
+			body, c.endpoint.Redacted(), nonHTMLBodySnippet(resp.Header.Get("Content-Type"), bodyBytes), ccpAPIPath)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): HTTP %d: %s",
@@ -255,13 +256,37 @@ func ccpErrorDetail(b []byte) string {
 // body carried one.
 func ccpError(b []byte) (string, bool) {
 	var env ccpErrorEnvelope
-	if err := json.Unmarshal(b, &env); err != nil || env.ErrorMsg == "" {
+	if err := json.Unmarshal(b, &env); err != nil {
 		return "", false
 	}
-	if env.ErrorCode != "" {
+	switch {
+	case env.ErrorCode != "" && env.ErrorMsg != "":
 		return env.ErrorCode + ": " + env.ErrorMsg, true
+	case env.ErrorCode != "":
+		return env.ErrorCode, true
+	case env.ErrorMsg != "":
+		return env.ErrorMsg, true
 	}
-	return env.ErrorMsg, true
+	return "", false
+}
+
+// maxBodySnippet bounds how much of an unexpected response body an error carries.
+const maxBodySnippet = 200
+
+// nonHTMLBodySnippet returns ": <body>" for a short look at a non-CCP response,
+// such as a gateway's JSON error, or "" for an HTML error page or empty body.
+func nonHTMLBodySnippet(contentType string, b []byte) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/html") {
+		return ""
+	}
+	text := strings.Join(strings.Fields(string(b)), " ")
+	if text == "" || strings.HasPrefix(strings.ToLower(text), "<!doctype html") || strings.HasPrefix(strings.ToLower(text), "<html") {
+		return ""
+	}
+	if r := []rune(text); len(r) > maxBodySnippet {
+		text = string(r[:maxBodySnippet]) + "…"
+	}
+	return ": " + text
 }
 
 // isCCPEndpointPath reports whether a URL path already names the CCP endpoint.
