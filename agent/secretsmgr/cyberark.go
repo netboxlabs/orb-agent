@@ -297,7 +297,7 @@ func nonHTMLBodySnippet(contentType string, b []byte) string {
 	}, strings.ToValidUTF8(string(b), "\uFFFD"))
 	text := strings.Join(strings.Fields(printable), " ")
 	lower := strings.ToLower(text)
-	for _, marker := range []string{"<!doctype html", "<html", "<head", "<body"} {
+	for _, marker := range []string{"<!doctype html", "<html>", "<html ", "<head>", "<head ", "<body>", "<body "} {
 		if strings.Contains(lower, marker) {
 			return ""
 		}
