@@ -55,7 +55,8 @@ func (m *ChassisModuleMapper) Map(
 // transceivers) and downstream Diode emission as Module.Type.
 type ModuleType string
 
-// Module-type tags returned by classifyModule.
+// Module-type tags. classifyModule returns all but ModuleTypeBuiltIn, which
+// extractModuleInventory sets.
 const (
 	ModuleTypeLinecard    ModuleType = "linecard"
 	ModuleTypeSupervisor  ModuleType = "supervisor"
@@ -81,7 +82,7 @@ type ModuleEntry struct {
 	Model        string     // entPhysicalModelName
 	Description  string     // entPhysicalDescr
 	VendorType   string     // entPhysicalVendorType
-	Type         ModuleType // classifyModule output
+	Type         ModuleType // classifyModule output, or ModuleTypeBuiltIn
 	MemberID     int        // ChassisInventory.Members[].ID; 0 for standalone
 	ParentEntIdx string     // for transceivers, class=9 module they sit under; "" for top-level
 }
@@ -176,8 +177,9 @@ func isOpticSubEntity(r row, byIdx map[string]row) bool {
 var opticDescrIfaceRe = regexp.MustCompile(`^Xcvr for (\S+)$`)
 
 // fixedModuleDescrRe matches the row a fixed-configuration Cisco switch
-// publishes for its own ports ("Switch 1 - PN-SW-48 - Fixed Module 0").
-var fixedModuleDescrRe = regexp.MustCompile(`^(?:Switch \d+ - \S+ - )?Fixed Module \d+$`)
+// publishes for its own ports: "Switch 1 - PN-SW-48 - Fixed Module 0" on a
+// model that stacks, "PN-SW-8 - Fixed Module 0" on one that does not.
+var fixedModuleDescrRe = regexp.MustCompile(`^(?:Switch \d+ - )?(?:\S+ - )?Fixed Module \d+$`)
 
 // isBuiltInModule reports whether a module row is a Cisco switch's own
 // ports rather than a part: no model, no serial, and a descr naming a fixed
@@ -600,9 +602,13 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			Type:         classifyModule(r.Model, r.VendorType, parentModuleIdx != ""),
 			ParentEntIdx: parentModuleIdx,
 		}
-		// Kept in the inventory, so what sits beneath it resolves exactly as
-		// before, but never emitted.
+		// Kept in the inventory so the container holding it still counts as
+		// occupied rather than an empty bay. Never emitted.
 		if isBuiltInModule(r, cisco) {
+			logger.Debug("module discovery: built-in port module skipped",
+				"ent", r.EntIndex,
+				"descr", r.Descr,
+				"reason", "builtin_ports")
 			entry.Type = ModuleTypeBuiltIn
 		}
 		// A fixed-port optic's bay is named for the interface the row

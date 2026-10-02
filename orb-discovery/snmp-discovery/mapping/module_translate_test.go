@@ -726,7 +726,12 @@ func builtInModuleOIDs(sysObjectID, descr, serial, model string) ObjectIDValueMa
 // serial. That row is the switch, not a part, so it is not emitted: the port
 // attaches to no module, and the optic keeps its cage bay.
 func TestTranslateModules_BuiltInPortGroupIsNotAModule(t *testing.T) {
-	for _, descr := range []string{"Switch 1 - PN-SW-48 - Fixed Module 0", "Fixed Module 0"} {
+	for _, descr := range []string{
+		"Switch 1 - PN-SW-48 - Fixed Module 0",   // a stackable model
+		"PN-SW-8 - Fixed Module 0",               // a model that does not stack
+		"Fixed Module 0",                         // no part number
+		"Switch 12 - PN-SW-48 - Fixed Module 10", // numbers of any width
+	} {
 		oids := builtInModuleOIDs(".1.3.6.1.4.1.9.1.99999", descr, "", "")
 		dev := &diode.Device{Name: strPtr("switch-1")}
 		aliasMap := map[string]string{"1010": "1", "1012": "2"}
@@ -768,7 +773,26 @@ func TestTranslateModules_BuiltInPortGroupNeedsEverySignal(t *testing.T) {
 		"spaced part number": builtInModuleOIDs(cisco, "Switch 1 - PN SW 48 - Fixed Module 0", "", ""),
 		"other fixed part":   builtInModuleOIDs(cisco, "Fixed Uplink Module", "", ""),
 		"no switch number":   builtInModuleOIDs(cisco, "Switch - PN-SW-48 - Fixed Module 0", "", ""),
+		"word switch number": builtInModuleOIDs(cisco, "Switch A - PN-SW-48 - Fixed Module 0", "", ""),
 	} {
 		assert.Len(t, moduleTypeModels(t, oids), 1, name)
 	}
+}
+
+// Inside a container, the row still occupies it: the container is not
+// harvested as an empty bay once the row is left out.
+func TestTranslateModules_BuiltInPortGroupLeavesNoEmptyBay(t *testing.T) {
+	oids := buildOIDs([]fixtureRow{
+		{"1001", "0", "3", "1", "Switch 1", "SN0001", "PN-SW-48", "PN-SW-48", ".1.3.6.1.4.1.9.12.3.1.3.99999"},
+		{"1100", "1001", "5", "1", "Slot 0 Container", "", "", "Slot 0 Container", ""},
+		{"1101", "1100", "9", "1", "PN-SW-48 - Fixed Module 0", "", "", "PN-SW-48 - Fixed Module 0", ".1.3.6.1.4.1.9.12.3.1.9.99999"},
+		{"1110", "1101", "10", "1", "Port 1", "", "", "Port 1", ""},
+	})
+	oids[oidSysObjectIDScalar] = Value{Value: ".1.3.6.1.4.1.9.1.99999"}
+	dev := &diode.Device{Name: strPtr("switch-1")}
+
+	entities, ifaceMap := TranslateModulesWithAlias(oids, nil, map[int]*diode.Device{0: dev}, modeFull(), nil,
+		slog.Default(), map[string]string{"1110": "1"}, nil)
+	assert.Empty(t, entities)
+	assert.Empty(t, ifaceMap)
 }
