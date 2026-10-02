@@ -603,6 +603,28 @@ func TestCyberArkStart_LogsRedactedEndpoint(t *testing.T) {
 	}
 	require.NotNil(t, started, "startup must log the resolved endpoint")
 	require.Equal(t, "https://svc:xxxxx@ccp.example.com/AIMWebServiceCustom/api/Accounts", started["endpoint"])
+	require.NotContains(t, buf.String(), "hunter2", "no startup log line may carry the url password")
+}
+
+func TestCyberArkStart_ErrorsRedactURLPassword(t *testing.T) {
+	for _, bad := range []string{
+		"ftp://svc:hunter2@ccp.example.com",
+		"https://svc:hunter2@",
+		"https://svc:hunter2@ccp.example.com?x=y",
+		"https://svc:hunter2@ccp example.com/",
+	} {
+		t.Run(bad, func(t *testing.T) {
+			var buf bytes.Buffer
+			c := &cyberarkManager{
+				preLogger: slog.New(slog.NewJSONHandler(&buf, nil)),
+				config:    config.CyberArkManager{URL: bad, AppID: "orb"},
+			}
+			err := c.Start(context.Background())
+			require.Error(t, err)
+			require.NotContains(t, err.Error(), "hunter2")
+			require.NotContains(t, buf.String(), "hunter2")
+		})
+	}
 }
 
 func TestCyberArkFetch_FieldMissingFromResponse(t *testing.T) {

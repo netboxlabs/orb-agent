@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -66,7 +67,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
-	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", c.config.URL)
+	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", redactURL(c.config.URL))
 
 	if c.config.URL == "" {
 		return fmt.Errorf("cyberark: url is required")
@@ -79,16 +80,22 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	}
 	parsedURL, err := url.Parse(c.config.URL)
 	if err != nil {
-		return fmt.Errorf("cyberark: url %q does not parse: %w", c.config.URL, err)
+		// url.Error repeats the raw url, which may carry a password.
+		var uerr *url.Error
+		if errors.As(err, &uerr) {
+			err = uerr.Err
+		}
+		return fmt.Errorf("cyberark: url does not parse: %w", err)
 	}
+	shown := parsedURL.Redacted()
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", c.config.URL, parsedURL.Scheme)
+		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", shown, parsedURL.Scheme)
 	}
 	if parsedURL.Host == "" {
-		return fmt.Errorf("cyberark: url %q must include a host", c.config.URL)
+		return fmt.Errorf("cyberark: url %q must include a host", shown)
 	}
 	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
-		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", c.config.URL)
+		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", shown)
 	}
 	// A URL already ending in /api/Accounts is the full endpoint; any other
 	// URL is a base and gets the default web service path appended.
@@ -309,6 +316,16 @@ func nonHTMLBodySnippet(contentType string, b []byte) string {
 		text = string(r[:maxBodySnippet]) + "…"
 	}
 	return ": " + text
+}
+
+// redactURL masks any password in a URL for logging, or stands in for a URL
+// that does not parse, since its password could not be located.
+func redactURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable>"
+	}
+	return u.Redacted()
 }
 
 // isCCPEndpointPath reports whether a URL path already names the CCP endpoint.
