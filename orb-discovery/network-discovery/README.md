@@ -47,6 +47,8 @@ policies:
     config:
       schedule: "* * * * *" #Cron expression
       timeout: 10 #default 5 minutes
+      defaults:
+        tenant: "customer-a" # (Optional) Tenant on discovered IP addresses. Plain string or mapping: {name, group, description, comments, tags}
     scope:
       targets: [192.168.1.0/24] # REQUIRED param
       fast_mode: True # -F 

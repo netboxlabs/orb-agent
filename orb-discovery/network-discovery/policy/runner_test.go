@@ -91,7 +91,7 @@ func TestRunnerRun(t *testing.T) {
 						Description: "Test",
 						Comments:    "This is a test",
 						Vrf:         "test-vrf",
-						Tenant:      "test-tenant",
+						Tenant:      config.TenantParameters{Name: "test-tenant"},
 						Role:        "test-role",
 						Tags:        []string{"test", "ip"},
 					},
