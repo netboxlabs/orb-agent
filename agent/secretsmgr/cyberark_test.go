@@ -622,6 +622,7 @@ func TestCyberArkStart_NeverEchoesURLPassword(t *testing.T) {
 		{"https://svc:hun?ter2@ccp.example.com", []string{"hun", "ter2"}},
 		{"https://svc:hun#ter2@ccp.example.com", []string{"hun", "ter2"}},
 		{"https://svc:hun%zzter2@ccp.example.com", []string{"hun", "%zz", "ter2"}},
+		{"https://svc:hunter2@127.0.0.1:1", []string{"hunter2"}},
 	} {
 		t.Run(tc.url, func(t *testing.T) {
 			var buf bytes.Buffer
@@ -913,4 +914,16 @@ func TestCyberArk_SkipTLSVerify_AcceptsSelfSignedServer(t *testing.T) {
 	val, err := c.fetch("Lab/Acc")
 	require.NoError(t, err)
 	require.Equal(t, "skip-tls-ok", val)
+}
+
+func TestCyberArkStart_RejectsPasswordOutsideUserinfo(t *testing.T) {
+	// net/url reads "svc:12" as the host, so requests would carry the rest
+	// of the password in the path to that host.
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config:    config.CyberArkManager{URL: "https://svc:12/ter2@ccp.example.com", AppID: "orb"},
+	}
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "percent-encode")
 }
