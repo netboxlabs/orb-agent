@@ -774,6 +774,7 @@ func TestTranslateModules_BuiltInPortGroupNeedsEverySignal(t *testing.T) {
 		"other fixed part":   builtInModuleOIDs(cisco, "Fixed Uplink Module", "", ""),
 		"no switch number":   builtInModuleOIDs(cisco, "Switch - PN-SW-48 - Fixed Module 0", "", ""),
 		"word switch number": builtInModuleOIDs(cisco, "Switch A - PN-SW-48 - Fixed Module 0", "", ""),
+		"other leading word": builtInModuleOIDs(cisco, "Stack 1 - PN-SW-48 - Fixed Module 0", "", ""),
 	} {
 		assert.Len(t, moduleTypeModels(t, oids), 1, name)
 	}
