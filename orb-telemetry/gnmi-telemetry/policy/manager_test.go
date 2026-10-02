@@ -1040,3 +1040,14 @@ policies:
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "comma")
 }
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key; the
+// maintained fork returns an error, so the request gets an answer.
+func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
+	m := newTestManager()
+	var err error
+	require.NotPanics(t, func() {
+		_, err = m.ParsePolicies([]byte("policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"))
+	})
+	assert.ErrorContains(t, err, "unhashable")
+}

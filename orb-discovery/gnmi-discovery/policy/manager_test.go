@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
@@ -340,4 +341,15 @@ policies:
 	tgt := policies["p1"].Scope.Targets[0]
 	require.Equal(t, "10.9.9.9:9339", tgt.Host) // resolved, THEN default port appended
 	require.Equal(t, "/run/secrets/ca.pem", tgt.TLS.CAFile)
+}
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key; the
+// maintained fork returns an error, so the request gets an answer.
+func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
+	m := newTestManager(t)
+	var err error
+	require.NotPanics(t, func() {
+		_, err = m.ParsePolicies([]byte("policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"))
+	})
+	assert.ErrorContains(t, err, "unhashable")
 }

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // GetRunningStatus checks the status of the backend process

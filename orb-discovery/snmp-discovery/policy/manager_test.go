@@ -2,6 +2,7 @@ package policy_test
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -1568,4 +1569,17 @@ policies:
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "discover_modules")
 	assert.Contains(t, err.Error(), "fulls")
+}
+
+// gopkg.in/yaml.v3 panicked on a merge key beside a mapping used as a key. In
+// a policy request that is a parse error, so the caller gets an answer.
+func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	manager, err := policy.NewManager(context.Background(), logger, nil, nil)
+	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		_, err = manager.ParsePolicies([]byte("policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"))
+	})
+	assert.ErrorContains(t, err, "unhashable")
 }
