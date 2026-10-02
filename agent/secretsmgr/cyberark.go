@@ -11,8 +11,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -207,11 +209,11 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 
 	if resp.StatusCode == http.StatusNotFound {
 		// CCP reports a missing account as a 404 with its JSON error envelope.
-		// A 404 without one comes from the web server: nothing is installed at
-		// that path, which is a configuration error, not a missing account.
-		if detail, ok := ccpError(bodyBytes); ok {
+		// A 404 without one most likely comes from the web server because the
+		// url misses the CCP web service, so it is not reported as a missing account.
+		if isCCPError(bodyBytes) {
 			return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
-				body, ref.appID, ref.safe, ref.object, detail)
+				body, ref.appID, ref.safe, ref.object, ccpErrorDetail(bodyBytes))
 		}
 		return "", fmt.Errorf("cyberark: get account %s: HTTP 404 from %s without a CCP error body%s; "+
 			"the url likely does not point at the CCP web service: set it to the CCP base URL, "+
@@ -246,41 +248,61 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 // ccpErrorDetail extracts a human-readable message from a CCP non-2xx
 // response. Falls back to the raw body when the JSON envelope isn't present.
 func ccpErrorDetail(b []byte) string {
-	if detail, ok := ccpError(b); ok {
-		return detail
+	var env ccpErrorEnvelope
+	if err := json.Unmarshal(b, &env); err == nil && env.ErrorMsg != "" {
+		if env.ErrorCode != "" {
+			return env.ErrorCode + ": " + env.ErrorMsg
+		}
+		return env.ErrorMsg
 	}
 	return strings.TrimSpace(string(b))
 }
 
-// ccpError reports the message of CCP's JSON error envelope, and whether the
-// body carried one.
-func ccpError(b []byte) (string, bool) {
+// ccpErrorCodeRe matches CyberArk error codes such as APPAP004E or AIMWS030E.
+var ccpErrorCodeRe = regexp.MustCompile(`^[A-Z]{5}[0-9]{3}[A-Z]$`)
+
+// isCCPError reports whether a response body is CCP's JSON error envelope.
+// The code's shape is checked because encoding/json matches keys
+// case-insensitively, so a gateway's own "errorCode" would also decode.
+func isCCPError(b []byte) bool {
 	var env ccpErrorEnvelope
-	if err := json.Unmarshal(b, &env); err != nil {
-		return "", false
-	}
-	switch {
-	case env.ErrorCode != "" && env.ErrorMsg != "":
-		return env.ErrorCode + ": " + env.ErrorMsg, true
-	case env.ErrorCode != "":
-		return env.ErrorCode, true
-	case env.ErrorMsg != "":
-		return env.ErrorMsg, true
-	}
-	return "", false
+	return json.Unmarshal(b, &env) == nil && ccpErrorCodeRe.MatchString(env.ErrorCode)
 }
 
-// maxBodySnippet bounds how much of an unexpected response body an error carries.
-const maxBodySnippet = 200
+const (
+	// maxBodySnippet bounds how many characters of an unexpected body an error carries.
+	maxBodySnippet = 200
+	// maxBodyScan bounds how much of the body is inspected for the snippet.
+	maxBodyScan = 4096
+)
 
-// nonHTMLBodySnippet returns ": <body>" for a short look at a non-CCP response,
-// such as a gateway's JSON error, or "" for an HTML error page or empty body.
+// nonHTMLBodySnippet returns ": <text>" with a short, printable excerpt of a
+// non-CCP response, such as a gateway's JSON error, or "" for an HTML error
+// page or an empty body.
 func nonHTMLBodySnippet(contentType string, b []byte) string {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/html") {
 		return ""
 	}
-	text := strings.Join(strings.Fields(string(b)), " ")
-	if text == "" || strings.HasPrefix(strings.ToLower(text), "<!doctype html") || strings.HasPrefix(strings.ToLower(text), "<html") {
+	if len(b) > maxBodyScan {
+		b = b[:maxBodyScan]
+	}
+	printable := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		if !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(string(b), "\uFFFD"))
+	text := strings.Join(strings.Fields(printable), " ")
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"<!doctype html", "<html", "<head", "<body"} {
+		if strings.Contains(lower, marker) {
+			return ""
+		}
+	}
+	if text == "" {
 		return ""
 	}
 	if r := []rune(text); len(r) > maxBodySnippet {

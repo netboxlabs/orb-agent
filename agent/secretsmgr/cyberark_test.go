@@ -517,6 +517,52 @@ func TestCyberArkFetch_WebServer404KeepsNonHTMLBody(t *testing.T) {
 	require.Contains(t, err.Error(), `without a CCP error body: {"message":"no Route matched"}`)
 }
 
+func TestCyberArkFetch_GatewayErrorCodeIsNotCCP(t *testing.T) {
+	// encoding/json decodes "errorCode" into ErrorCode, so only CCP's code
+	// shape may classify a 404 as a missing account.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errorCode":"NotFound","message":"route"}`))
+	}))
+	defer srv.Close()
+
+	c := &cyberarkManager{preLogger: newTestLogger(), config: config.CyberArkManager{URL: srv.URL, AppID: "orb-agent"}}
+	require.NoError(t, c.Start(context.Background()))
+	_, err := c.fetch("Lab/DB-Account")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "account not found")
+	require.Contains(t, err.Error(), `{"errorCode":"NotFound","message":"route"}`)
+}
+
+func TestNonHTMLBodySnippet(t *testing.T) {
+	long := strings.Repeat("a", maxBodySnippet+50)
+	for _, tc := range []struct {
+		name, contentType, body, want string
+	}{
+		{"html content type", "text/html; charset=utf-8", "anything", ""},
+		{"html body without html content type", "text/plain", "<!DOCTYPE html><html>404</html>", ""},
+		{"html body after a BOM", "", "\ufeff<!DOCTYPE html><html>404</html>", ""},
+		{"xhtml with an xml prolog", "", `<?xml version="1.0"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0//EN"><html>`, ""},
+		{"page starting with head", "", "<head><title>404</title></head>", ""},
+		{"empty body", "application/json", "   ", ""},
+		{"whitespace collapsed", "application/json", "{\n  \"message\": \"no route\"\n}", `: { "message": "no route" }`},
+		{"control characters dropped", "", "x\x1b[31mRED\x1b[0m\x00", ": x[31mRED[0m"},
+		{"invalid utf-8 replaced", "", "ok\xff", ": ok\ufffd"},
+		{"capped", "", long, ": " + long[:maxBodySnippet] + "…"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, nonHTMLBodySnippet(tc.contentType, []byte(tc.body)))
+		})
+	}
+}
+
+func TestNonHTMLBodySnippet_BoundsLargeBodies(t *testing.T) {
+	body := []byte(strings.Repeat("x", 10*maxBodyScan) + "<html>")
+	require.Equal(t, ": "+strings.Repeat("x", maxBodySnippet)+"…", nonHTMLBodySnippet("", body),
+		"only the first maxBodyScan bytes are inspected")
+}
+
 func TestCyberArkFetch_404WithOnlyErrorCodeIsAccountNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
