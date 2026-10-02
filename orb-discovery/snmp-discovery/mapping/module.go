@@ -60,8 +60,9 @@ const (
 	ModuleTypeLinecard    ModuleType = "linecard"
 	ModuleTypeSupervisor  ModuleType = "supervisor"
 	ModuleTypeTransceiver ModuleType = "transceiver"
-	ModuleTypePSU         ModuleType = "psu" // classified for labelling only; never emitted as a module entity
-	ModuleTypeFan         ModuleType = "fan" // classified for labelling only; never emitted as a module entity
+	ModuleTypePSU         ModuleType = "psu"     // classified for labelling only; never emitted as a module entity
+	ModuleTypeFan         ModuleType = "fan"     // classified for labelling only; never emitted as a module entity
+	ModuleTypeBuiltIn     ModuleType = "builtin" // the device's own ports reported as a module; never emitted
 	ModuleTypeUnknown     ModuleType = "unknown"
 )
 
@@ -173,6 +174,18 @@ func isOpticSubEntity(r row, byIdx map[string]row) bool {
 // publishes "Lane 0 for Xcvr for Ethernet1" beneath each optic, and an
 // unanchored match would emit one bay per lane.
 var opticDescrIfaceRe = regexp.MustCompile(`^Xcvr for (\S+)$`)
+
+// fixedModuleDescrRe matches the row a fixed-configuration Cisco switch
+// publishes for its own ports ("Switch 1 - PN-SW-48 - Fixed Module 0").
+var fixedModuleDescrRe = regexp.MustCompile(`^(?:Switch \d+ - \S+ - )?Fixed Module \d+$`)
+
+// isBuiltInModule reports whether a module row is a Cisco switch's own
+// ports rather than a part: no model, no serial, and a descr naming a fixed
+// module. Emitting it gives every such switch a module type named after an
+// OID, or Unknown, holding all of its ports.
+func isBuiltInModule(r row, cisco bool) bool {
+	return cisco && r.Model == "" && r.Serial == "" && fixedModuleDescrRe.MatchString(r.Descr)
+}
 
 // servedInterface returns the interface an optic row names, or "" when the
 // row names none. The result is a bay label: a row that identifies its port
@@ -479,6 +492,7 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 		return ai < aj
 	})
 	seenSerial := make(map[string]struct{})
+	cisco := sysObjectIDUnder(oids, ciscoEnterprise)
 
 	// bayHasChild tracks bay-shaped rows that gained at least one
 	// module child — used by the empty-bay harvest below. Usually keyed
@@ -585,6 +599,11 @@ func extractModuleInventory(oids ObjectIDValueMap, logger *slog.Logger) ModuleIn
 			VendorType:   r.VendorType,
 			Type:         classifyModule(r.Model, r.VendorType, parentModuleIdx != ""),
 			ParentEntIdx: parentModuleIdx,
+		}
+		// Kept in the inventory, so what sits beneath it resolves exactly as
+		// before, but never emitted.
+		if isBuiltInModule(r, cisco) {
+			entry.Type = ModuleTypeBuiltIn
 		}
 		// A fixed-port optic's bay is named for the interface the row
 		// names. A modular optic keeps the derivation from its real cage,

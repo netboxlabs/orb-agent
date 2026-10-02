@@ -99,8 +99,9 @@ func TranslateModulesWithAlias(
 
 	for _, m := range inv.Modules {
 		// PSU / Fan are classified for labelling only — never emitted as
-		// module entities (mirrors device-discovery PR #419).
-		if m.Type == ModuleTypePSU || m.Type == ModuleTypeFan {
+		// module entities (mirrors device-discovery PR #419). Nor is a row
+		// that is the device's own ports rather than a part.
+		if m.Type == ModuleTypePSU || m.Type == ModuleTypeFan || m.Type == ModuleTypeBuiltIn {
 			continue
 		}
 		// A transceiver is full-mode-only. Modular optics are already
@@ -379,10 +380,14 @@ func vendorFromDevice(d *diode.Device) string {
 	return "Unknown"
 }
 
-// comwareEnterprise is the sysObjectID arc of Comware devices. Their module
-// rows can leave entPhysicalModelName blank and may end entPhysicalDescr with
-// the part number ("... Main Processing Unit JX123A").
-const comwareEnterprise = ".1.3.6.1.4.1.25506."
+const (
+	// ciscoEnterprise is the sysObjectID arc of Cisco devices.
+	ciscoEnterprise = ".1.3.6.1.4.1.9."
+	// comwareEnterprise is the sysObjectID arc of Comware devices. Their
+	// module rows can leave entPhysicalModelName blank and may end
+	// entPhysicalDescr with the part number ("... Main Processing Unit JX123A").
+	comwareEnterprise = ".1.3.6.1.4.1.25506."
+)
 
 // hpePartNumberRe matches an HPE networking part number: J, a letter or a
 // digit, three digits and a letter (JX123A, J9123A).
@@ -391,11 +396,17 @@ var hpePartNumberRe = regexp.MustCompile(`^J[A-Z0-9][0-9]{3}[A-Z]$`)
 // descrCarriesPartNumber reports whether the walked sysObjectID is a
 // Comware device's, whose module descriptions may end with the part number.
 func descrCarriesPartNumber(oids ObjectIDValueMap) bool {
+	return sysObjectIDUnder(oids, comwareEnterprise)
+}
+
+// sysObjectIDUnder reports whether the walked sysObjectID sits under arc,
+// given with leading and trailing dots.
+func sysObjectIDUnder(oids ObjectIDValueMap, arc string) bool {
 	v, ok := oids[oidSysObjectIDScalar]
 	if !ok {
 		return false
 	}
-	return strings.HasPrefix("."+strings.TrimPrefix(trimSNMPString(v.Value), "."), comwareEnterprise)
+	return strings.HasPrefix("."+strings.TrimPrefix(trimSNMPString(v.Value), "."), arc)
 }
 
 // descrPartNumber is the part number ending descr, or "" when its last token
