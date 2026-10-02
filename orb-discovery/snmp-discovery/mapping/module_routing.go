@@ -136,12 +136,17 @@ func assignMemberID(inv *ModuleInventory, chassisInv *ChassisInventory, oids Obj
 //
 // Any step that misses simply skips the transceiver — partial coverage
 // is normal (optic with no alias-table row, port-channel placeholder, etc.).
+//
+// An ifIndex links only when the rows claiming it agree on one module. Some
+// platforms alias one ifIndex from rows in several modules, such as a stack's
+// management port from each member; any pick would be a guess, and picking
+// in map order changed the interface's module from one poll to the next.
 func buildIfaceModuleMap(
 	inv ModuleInventory,
 	aliasMap map[string]string,
 	emittedModules map[string]*diode.Module,
 ) map[string]*diode.Module {
-	out := make(map[string]*diode.Module)
+	optics := make(map[string]map[*diode.Module]struct{})
 	for _, list := range inv.SubModules {
 		for _, e := range list {
 			if e.Type != ModuleTypeTransceiver {
@@ -155,7 +160,7 @@ func buildIfaceModuleMap(
 			if !ok {
 				continue
 			}
-			out[ifIdx] = mod
+			addModuleClaim(optics, ifIdx, mod)
 		}
 	}
 	// Second pass: a port that is not itself a module, and holds no
@@ -164,17 +169,37 @@ func buildIfaceModuleMap(
 	// port under a line module, so without this every one of them is
 	// emitted with no module reference at all.
 	//
-	// Runs after the transceiver pass and never overwrites it: a
-	// transceiver is the more specific FRU for the port it occupies.
+	// Skips any ifIndex a transceiver claimed, linked or not: a transceiver
+	// is the more specific FRU for the port it occupies.
+	containing := make(map[string]map[*diode.Module]struct{})
 	for physIdx, ifIdx := range aliasMap {
-		if _, taken := out[ifIdx]; taken {
+		if _, claimed := optics[ifIdx]; claimed {
 			continue
 		}
 		if mod, ok := nearestContainingModule(inv, emittedModules, physIdx); ok {
-			out[ifIdx] = mod
+			addModuleClaim(containing, ifIdx, mod)
+		}
+	}
+	out := make(map[string]*diode.Module)
+	for _, claims := range []map[string]map[*diode.Module]struct{}{optics, containing} {
+		for ifIdx, mods := range claims {
+			if len(mods) != 1 {
+				continue
+			}
+			for mod := range mods {
+				out[ifIdx] = mod
+			}
 		}
 	}
 	return out
+}
+
+// addModuleClaim records that a row aliased to ifIdx resolves to mod.
+func addModuleClaim(claims map[string]map[*diode.Module]struct{}, ifIdx string, mod *diode.Module) {
+	if claims[ifIdx] == nil {
+		claims[ifIdx] = make(map[*diode.Module]struct{})
+	}
+	claims[ifIdx][mod] = struct{}{}
 }
 
 // nearestContainingModule climbs entPhysicalContainedIn from physIdx and
