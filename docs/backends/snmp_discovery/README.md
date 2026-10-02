@@ -367,7 +367,7 @@ The same chassis row supplies the standalone device's `serial`. On platforms whe
 
 1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named `<sysName>` from the SNMP walk; serial taken from the lowest-id chassis row.
 2. **`VirtualChassis`** — named `<sysName>`, with `master` set to the inline matcher block of the master Device.
-3. **N − 1 member `Device` entities** — each named from `defaults.stack_member_name_template` (see [Member naming](#member-naming)), carrying `vc_position = <memberID>` and an inline `virtual_chassis` ref pointing to the same matcher block. Per-member serial comes from `entPhysicalSerialNum` on the member's chassis row; per-member model comes from `entPhysicalModelName` when populated.
+3. **N − 1 member `Device` entities** — each named from `defaults.stack_member_name_template` (see [Member naming](#member-naming)), carrying `vc_position = <memberID>` and an inline `virtual_chassis` ref pointing to the same matcher block. Per-member serial comes from `entPhysicalSerialNum` on the member's chassis row; per-member model comes from `entPhysicalModelName` when populated, unless `defaults` or `override_defaults` sets `device.model` (see [Override precedence](#override-precedence)), in which case the master and every member carry that model.
 4. **Interface / IPAddress entities** — routed to the member that physically owns them. Routing uses `entAliasMappingTable` (RFC 6933) when present, then falls back to ifName parsing: Cisco IOS/IOS-XE/NX-OS 3-tuple (`Gi1/0/1`, `Te2/1/0/3`, etc., including short forms `Te`/`Fo`/`Hu`/`Tw`/`Fi`/`Twe`), Junos FPC, Aruba CX numeric, H3C dashed. Subinterface unit suffixes (`Gi2/0/1.100`) strip to the parent before parsing.
 
 **Member naming.** Non-master member names are rendered from `defaults.stack_member_name_template`, which takes two placeholders: `{name}` (the stack name, taken from `sysName`) and `{id}` (the device-reported member id). The default `{name}-{id}` reproduces the naming this backend emitted before the option existed, so setting nothing changes nothing.
@@ -492,6 +492,8 @@ row and the target fails.
 
 The `lookup_extensions_dir` config option points to a directory of YAML files that map SNMP `sysObjectID` OIDs to human-readable device model names. Without these files, snmp-discovery would ingest raw OIDs (for example `.1.3.6.1.4.1.9.1.489`) instead of recognizable model names (for example `catalyst2955C12`).
 
+For some product lines the device's own chassis row names the model better than the lookup does. Cisco (`sysObjectID` under enterprise 9), HP ProCurve and ArubaOS-Switch (11.2.3.7), Palo Alto Networks (25461), Arista (30065) and Aruba CX (47196) report the orderable part number in `entPhysicalModelName` (for example `WS-C2960X-48FPD-L` rather than `catWsC2960x48fpdL`), which is what curated device types, such as those in the NetBox device-type library, record. A standalone device of those product lines is typed after its chassis row, as every stack member already is, so the same hardware gets one device type whether it is stacked or not. Other product lines, including Aruba wireless (14823), Comware (25506) and other HP products, keep the lookup name, as does any standalone device whose chassis row reports no usable model. An entry you add to `lookup_extensions_dir` that changes or adds a model wins over the chassis row for a standalone device; an unchanged copy of a bundled entry does not.
+
 A curated set of vendor lookup files ships with the orb-agent and orb-discovery images (see [SNMP Discovery — Supported Platforms](./supported_platforms.md)), and `lookup_extensions_dir` only needs to be set when you want to add extra files or override the bundled ones.
 
 ### File format
@@ -513,10 +515,11 @@ To add your own OIDs or override a bundled file:
 2. Create a YAML file in the format above with OIDs prefixed by `.`.
 3. Drop the file into the directory referenced by `lookup_extensions_dir`.
 
+The bundled files are always loaded, so the directory only needs the entries you add or change. To start from a bundled file, copy just that one:
+
 ```sh
-# Seed a local override directory from the bundled files
 git clone https://github.com/netboxlabs/orb-agent.git
-cp orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-extensions/
+cp orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/cisco.yaml /opt/orb/snmp-extensions/
 ```
 
 When snmp-discovery encounters a device, it reads the device's `sysObjectID`, searches the YAML files in `lookup_extensions_dir` for a match, and falls back to the raw OID when no match is found.
@@ -592,7 +595,8 @@ Overrides are layered — a value from `lookup_extensions_dir` wins over a value
 
 When multiple sources can supply a device's `manufacturer`, `model`, or `platform`, the highest-priority non-empty value wins:
 
-1. Per-target `override_defaults.device.{model,manufacturer,platform}` (hard override)
-2. User `lookup_extensions_dir/*.yaml` (`manufacturers:` and `devices:` including dynamic refs)
-3. Bundled `lookup_extensions/*.yaml` (`manufacturers:` and `devices:`)
-4. Raw IANA manufacturer name / raw `sysObjectID` model
+1. Per-target `override_defaults.device.{model,manufacturer,platform}`, then the policy's `defaults.device.{model,manufacturer,platform}` (hard overrides). A model set here is carried by a stack's master and every member.
+2. User `lookup_extensions_dir/*.yaml` (`manufacturers:` and `devices:` including dynamic refs). For the model, only an entry that changes or adds one counts, and a stack member's own chassis model (level 3) still wins over it, as it always has.
+3. The chassis row's `entPhysicalModelName` (model only). Every stack member takes any non-empty value. A standalone device of the product lines listed in [Device Model Lookup](#device-model-lookup) takes it unless it is empty, a placeholder, unprintable or over-long, or some chassis rows were refused as ambiguous.
+4. Bundled `lookup_extensions/*.yaml` (`manufacturers:` and `devices:`)
+5. Raw IANA manufacturer name / raw `sysObjectID` model
