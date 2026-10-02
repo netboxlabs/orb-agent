@@ -705,3 +705,70 @@ func TestTranslateModules_ModuleLookupMissFallsThrough(t *testing.T) {
 	assert.Equal(t, []string{"JZ123A"}, moduleTypeModelsWith(t, oids, lookup))
 	assert.Equal(t, []string{"JZ123A"}, moduleTypeModelsWith(t, oids, nil), "no lookup at all")
 }
+
+// builtInModuleOIDs is a fixed-configuration switch whose own ports sit under
+// a class=9 row: one access port, and a cage holding an optic.
+func builtInModuleOIDs(sysObjectID, descr, serial, model string) ObjectIDValueMap {
+	oids := buildOIDs([]fixtureRow{
+		{"1001", "0", "3", "1", "Switch 1", "SN0001", "PN-SW-48", "PN-SW-48", ".1.3.6.1.4.1.9.12.3.1.3.99999"},
+		{"1002", "1001", "9", "1", "Switch 1 Fixed Module 0", serial, model, descr, ".1.3.6.1.4.1.9.12.3.1.9.99999"},
+		{"1010", "1002", "10", "1", "Port 1", "", "", "Port 1", ""},
+		{"1011", "1002", "5", "2", "Port 2 Container", "", "", "Port 2 Container", ""},
+		{"1012", "1011", "9", "1", "Port 2 Transceiver", "OPT0001", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+	})
+	if sysObjectID != "" {
+		oids[oidSysObjectIDScalar] = Value{Value: sysObjectID}
+	}
+	return oids
+}
+
+// A Cisco switch reports its own ports as a module with no model and no
+// serial. That row is the switch, not a part, so it is not emitted: the port
+// attaches to no module, and the optic keeps its cage bay.
+func TestTranslateModules_BuiltInPortGroupIsNotAModule(t *testing.T) {
+	for _, descr := range []string{"Switch 1 - PN-SW-48 - Fixed Module 0", "Fixed Module 0"} {
+		oids := builtInModuleOIDs(".1.3.6.1.4.1.9.1.99999", descr, "", "")
+		dev := &diode.Device{Name: strPtr("switch-1")}
+		aliasMap := map[string]string{"1010": "1", "1012": "2"}
+
+		entities, ifaceMap := TranslateModulesWithAlias(oids, nil, map[int]*diode.Device{0: dev}, modeFull(), nil,
+			slog.Default(), aliasMap, nil)
+		var models, bays []string
+		for _, e := range entities {
+			switch v := e.(type) {
+			case *diode.Module:
+				models = append(models, v.GetModuleType().GetModel())
+			case *diode.ModuleBay:
+				bays = append(bays, v.GetName())
+			}
+		}
+		assert.Equal(t, []string{"SFP-10G-LR"}, models, descr)
+		assert.Equal(t, []string{"Port 2 Container"}, bays, descr)
+		assert.NotContains(t, ifaceMap, "1", "%s: the access port belongs to the switch itself", descr)
+		require.Contains(t, ifaceMap, "2", descr)
+		assert.Equal(t, "SFP-10G-LR", ifaceMap["2"].GetModuleType().GetModel(), descr)
+
+		assert.Empty(t, moduleTypeModels(t, oids), "%s: not emitted in linecards mode either", descr)
+	}
+}
+
+// Every signal is required: a model or a serial means a real part, the rule
+// is Cisco's, and the descr must name a fixed module exactly.
+func TestTranslateModules_BuiltInPortGroupNeedsEverySignal(t *testing.T) {
+	const cisco, descr = ".1.3.6.1.4.1.9.1.99999", "Switch 1 - PN-SW-48 - Fixed Module 0"
+	for name, oids := range map[string]ObjectIDValueMap{
+		"reports a model":    builtInModuleOIDs(cisco, descr, "", "PN-FM-48"),
+		"reports a serial":   builtInModuleOIDs(cisco, descr, "SN1002", ""),
+		"other vendor":       builtInModuleOIDs(".1.3.6.1.4.1.99999.1.1", descr, "", ""),
+		"no sysObjectID":     builtInModuleOIDs("", descr, "", ""),
+		"trailing text":      builtInModuleOIDs(cisco, descr+" (rev B)", "", ""),
+		"leading text":       builtInModuleOIDs(cisco, "Old "+descr, "", ""),
+		"no module number":   builtInModuleOIDs(cisco, "Switch 1 - PN-SW-48 - Fixed Module", "", ""),
+		"lower case":         builtInModuleOIDs(cisco, "switch 1 - PN-SW-48 - fixed module 0", "", ""),
+		"spaced part number": builtInModuleOIDs(cisco, "Switch 1 - PN SW 48 - Fixed Module 0", "", ""),
+		"other fixed part":   builtInModuleOIDs(cisco, "Fixed Uplink Module", "", ""),
+		"no switch number":   builtInModuleOIDs(cisco, "Switch - PN-SW-48 - Fixed Module 0", "", ""),
+	} {
+		assert.Len(t, moduleTypeModels(t, oids), 1, name)
+	}
+}
