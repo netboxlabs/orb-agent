@@ -21,24 +21,23 @@ const (
 	defaultCyberArkTimeoutUnit = time.Second
 	defaultCyberArkTimeout     = 60 * time.Second
 
-	// ccpEndpointPath is the CCP REST path appended to the configured base
-	// URL on every fetch. Shared with Start so it can reject configurations
-	// whose URL already ends with this suffix, which would otherwise produce
-	// "/AIMWebService/api/Accounts/AIMWebService/api/Accounts" at request
-	// time and consistent 404s.
-	ccpEndpointPath = "/AIMWebService/api/Accounts"
+	// defaultCCPEndpointPath is appended to a base URL. AIMWebService is only
+	// the default IIS application name; CCP installed under another name is
+	// configured by giving the full endpoint URL, which ends in ccpAPIPath.
+	defaultCCPEndpointPath = "/AIMWebService/api/Accounts"
+	ccpAPIPath             = "/api/Accounts"
 )
 
 var _ Manager = (*cyberarkManager)(nil)
 
 // cyberarkManager resolves ${cyberark://…} placeholders against the CyberArk
-// CCP REST endpoint (/AIMWebService/api/Accounts).
+// CCP REST endpoint (by default /AIMWebService/api/Accounts).
 type cyberarkManager struct {
 	pollingBase
 
 	config     config.CyberArkManager
 	preLogger  *slog.Logger
-	baseURL    *url.URL
+	endpoint   *url.URL
 	httpClient *http.Client
 }
 
@@ -89,17 +88,13 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
 		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", c.config.URL)
 	}
-	// Reject URLs that already point at the CCP endpoint. The agent appends
-	// "/AIMWebService/api/Accounts" itself; including it again in the
-	// configured URL produces "/AIMWebService/api/Accounts/AIMWebService/api/Accounts"
-	// at request time and consistent 404s. Operators copying examples from
-	// CyberArk integrations that already include the suffix would otherwise
-	// hit this only at runtime.
+	// A URL already ending in /api/Accounts is the full endpoint; any other
+	// URL is a base and gets the default web service path appended.
 	parsedURL.Path = strings.TrimRight(parsedURL.Path, "/")
-	if strings.HasSuffix(parsedURL.Path, ccpEndpointPath) {
-		return fmt.Errorf("cyberark: url %q already includes the CCP endpoint path %q; configure only the base URL (e.g. https://ccp.example.com)", c.config.URL, ccpEndpointPath)
+	if !isCCPEndpointPath(parsedURL.Path) {
+		parsedURL.Path += defaultCCPEndpointPath
 	}
-	c.baseURL = parsedURL
+	c.endpoint = parsedURL
 
 	if (c.config.ClientCert == "") != (c.config.ClientKey == "") {
 		return fmt.Errorf("cyberark: client_cert and client_key must both be set or both empty")
@@ -154,7 +149,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if err := c.startScheduler(c.config.Schedule); err != nil {
 		return err
 	}
-	c.preLogger.Info("secrets manager started", "active", "cyberark")
+	c.preLogger.Info("secrets manager started", "active", "cyberark", "endpoint", c.endpoint.Redacted())
 	return nil
 }
 
@@ -164,8 +159,8 @@ type ccpErrorEnvelope struct {
 	ErrorMsg  string `json:"ErrorMsg,omitempty"`
 }
 
-// fetch performs the GET /AIMWebService/api/Accounts call for the parsed
-// reference and returns the requested field. Defaults to the Content field
+// fetch performs the GET on the CCP endpoint for the parsed reference and
+// returns the requested field. Defaults to the Content field
 // (which holds the password in CCP's response model).
 func (c *cyberarkManager) fetch(body string) (string, error) {
 	ref, err := c.parseBody(body)
@@ -173,8 +168,7 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 		return "", err
 	}
 
-	u := *c.baseURL
-	u.Path = strings.TrimRight(u.Path, "/") + ccpEndpointPath
+	u := *c.endpoint
 	q := u.Query()
 	q.Set("AppID", ref.appID)
 	q.Set("Safe", ref.safe)
@@ -212,8 +206,16 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
-			body, ref.appID, ref.safe, ref.object, ccpErrorDetail(bodyBytes))
+		// CCP reports a missing account as a 404 with its JSON error envelope.
+		// A 404 without one comes from the web server: nothing is installed at
+		// that path, which is a configuration error, not a missing account.
+		if detail, ok := ccpError(bodyBytes); ok {
+			return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
+				body, ref.appID, ref.safe, ref.object, detail)
+		}
+		return "", fmt.Errorf("cyberark: get account %s: no CCP web service at %s (HTTP 404 without a CCP error); "+
+			"set url to the CCP base URL, or to the full endpoint URL ending in %s when CCP is not installed as AIMWebService",
+			body, c.endpoint.Redacted(), ccpAPIPath)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): HTTP %d: %s",
@@ -243,14 +245,29 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 // ccpErrorDetail extracts a human-readable message from a CCP non-2xx
 // response. Falls back to the raw body when the JSON envelope isn't present.
 func ccpErrorDetail(b []byte) string {
-	var env ccpErrorEnvelope
-	if err := json.Unmarshal(b, &env); err == nil && env.ErrorMsg != "" {
-		if env.ErrorCode != "" {
-			return env.ErrorCode + ": " + env.ErrorMsg
-		}
-		return env.ErrorMsg
+	if detail, ok := ccpError(b); ok {
+		return detail
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// ccpError reports the message of CCP's JSON error envelope, and whether the
+// body carried one.
+func ccpError(b []byte) (string, bool) {
+	var env ccpErrorEnvelope
+	if err := json.Unmarshal(b, &env); err != nil || env.ErrorMsg == "" {
+		return "", false
+	}
+	if env.ErrorCode != "" {
+		return env.ErrorCode + ": " + env.ErrorMsg, true
+	}
+	return env.ErrorMsg, true
+}
+
+// isCCPEndpointPath reports whether a URL path already names the CCP endpoint.
+// IIS paths are case-insensitive, so the match is too.
+func isCCPEndpointPath(p string) bool {
+	return strings.HasSuffix(strings.ToLower(p), strings.ToLower(ccpAPIPath))
 }
 
 // cyberarkRef holds a parsed placeholder body.
