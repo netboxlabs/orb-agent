@@ -343,8 +343,8 @@ func MemberDevicesFromEntities(
 	return out
 }
 
-// AttachIfaceModules sets Interface.Module on each transceiver-owning
-// interface referenced by entities. It walks three referrer shapes:
+// AttachIfaceModules sets Interface.Module on each interface referenced by
+// entities that ifaceModuleMap links to a module. It walks three referrer shapes:
 //
 //   - *diode.Interface directly in the slice (physical ports emitted as
 //     top-level entities).
@@ -359,8 +359,8 @@ func MemberDevicesFromEntities(
 // For each found interface we look up its ifIndex in ifIndexByIface (the
 // registry-derived pointer->ifIndex map) and use the decimal ifIndex to
 // pick the module from ifaceModuleMap. Lookups that miss are skipped:
-// partial coverage is normal (interfaces with no transceiver, ifIndexes
-// absent from entAliasMappingTable, etc.).
+// partial coverage is normal (interfaces in no emitted module, ifIndexes
+// absent from entAliasMappingTable or claimed from unrelated modules, etc.).
 //
 // Idempotent: re-running won't change a value already set. Defensive
 // against nil maps so the runner can call it unconditionally.

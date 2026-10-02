@@ -456,7 +456,7 @@ When the `discover_modules` policy option is enabled, snmp-discovery emits NetBo
 |---|---|
 | `off` *(default)* | No module / module-bay entities. Existing behaviour. |
 | `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors). PSU and fan modules are recognised by the PID classifier so they label correctly in metrics, but are **never** emitted as `Module` entities — useful when operators care about the slot inventory but not power/cooling FRUs. Transceiver sub-bays are skipped. |
-| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. Per-port linkage uses `entAliasMappingTable` (RFC 6933) when present to map transceiver rows to their owning `ifIndex`. |
+| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces are linked to the optic or line module holding them when the device populates `entAliasMappingTable` (RFC 6933); see [Interface.Module routing](#modules--modulebays). |
 
 **Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
 

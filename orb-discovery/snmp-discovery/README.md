@@ -393,7 +393,7 @@ Controlled by the `discover_modules` option under `config.options`:
 |---|---|
 | `off` *(default)* | No module / module-bay entities emitted. Zero behaviour change versus prior releases. |
 | `linecards` | One `ModuleBay` + `Module` per top-level chassis slot — line cards and supervisors only. PSU and fan modules are classified for metric labelling but NOT emitted. |
-| `full` | Everything `linecards` emits, plus one `ModuleBay` + `Module` per transceiver sub-bay. Physical interfaces backed by a transceiver carry an `Interface.Module` reference for per-port optic visibility. |
+| `full` | Everything `linecards` emits, plus one `ModuleBay` + `Module` per transceiver sub-bay. Interfaces are linked to the optic or line module holding them when the device populates `entAliasMappingTable`. |
 
 Virtual-chassis-of-modular targets are supported from day one: when the device reports 2+ chassis members, modules are dispatched per-member using the same chassis inventory the VC path produces.
 

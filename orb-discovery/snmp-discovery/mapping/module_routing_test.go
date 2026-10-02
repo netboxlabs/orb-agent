@@ -467,7 +467,8 @@ func TestAttachIfaceModules_EmptyMapsAreNoOp(t *testing.T) {
 
 // twoBoardsOIDs is a chassis with a board in each of two slots, a port on
 // each board, a port on neither, an optic in a cage on each board, and a
-// fixed-port optic in a cage on the chassis itself.
+// fixed-port optic in a cage on the chassis itself, and a port two
+// containers deep on board 1 holding an optic of its own.
 func twoBoardsOIDs() ObjectIDValueMap {
 	return buildOIDs([]fixtureRow{
 		{"1", "0", "3", "1", "Chassis", "SN0001", "PN-CH-2", "Chassis", ""},
@@ -485,6 +486,10 @@ func twoBoardsOIDs() ObjectIDValueMap {
 		{"30", "1", "10", "3", "Mgmt", "", "", "Port", ""},
 		{"40", "1", "5", "4", "Cage 0/4", "", "", "Cage", ""},
 		{"41", "40", "9", "1", "Optic 0/4", "OPT0041", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+		{"130", "100", "5", "3", "Bay 1/3", "", "", "Container", ""},
+		{"131", "130", "5", "1", "Sub-bay 1/3/1", "", "", "Container", ""},
+		{"132", "131", "10", "1", "Port 1/3/1", "", "", "Port", ""},
+		{"133", "132", "9", "1", "Optic 1/3/1", "OPT0133", "SFP-10G-LR", "SFP-10GBase-LR", ""},
 	})
 }
 
@@ -536,4 +541,17 @@ func TestBuildIfaceModuleMap_RowsOnOneChainLink(t *testing.T) {
 
 	got = buildIfaceModuleMap(inv, map[string]string{"110": "5", "30": "5"}, emitted)
 	assert.Same(t, emitted["100"], got["5"], "a row in no module does not contest one that is")
+}
+
+// Rows several containers below their module still link: the climbs are not
+// cut short of real nesting depths.
+func TestBuildIfaceModuleMap_DeepRowsLink(t *testing.T) {
+	inv := extractModuleInventory(twoBoardsOIDs(), slog.Default())
+	emitted := emitAllModules(inv)
+
+	got := buildIfaceModuleMap(inv, map[string]string{"132": "6"}, emitted)
+	assert.Same(t, emitted["100"], got["6"], "a port three levels down links to its board")
+
+	got = buildIfaceModuleMap(inv, map[string]string{"132": "6", "133": "6"}, emitted)
+	assert.Same(t, emitted["133"], got["6"], "and the optic four levels down wins over that board")
 }
