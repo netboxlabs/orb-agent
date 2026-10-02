@@ -5,14 +5,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
 )
@@ -21,24 +24,23 @@ const (
 	defaultCyberArkTimeoutUnit = time.Second
 	defaultCyberArkTimeout     = 60 * time.Second
 
-	// ccpEndpointPath is the CCP REST path appended to the configured base
-	// URL on every fetch. Shared with Start so it can reject configurations
-	// whose URL already ends with this suffix, which would otherwise produce
-	// "/AIMWebService/api/Accounts/AIMWebService/api/Accounts" at request
-	// time and consistent 404s.
-	ccpEndpointPath = "/AIMWebService/api/Accounts"
+	// defaultCCPEndpointPath is appended to a base URL. AIMWebService is only
+	// the default IIS application name; CCP installed under another name is
+	// configured by giving the full endpoint URL, which ends in ccpAPIPath.
+	defaultCCPEndpointPath = "/AIMWebService/api/Accounts"
+	ccpAPIPath             = "/api/Accounts"
 )
 
 var _ Manager = (*cyberarkManager)(nil)
 
 // cyberarkManager resolves ${cyberark://…} placeholders against the CyberArk
-// CCP REST endpoint (/AIMWebService/api/Accounts).
+// CCP REST endpoint (by default /AIMWebService/api/Accounts).
 type cyberarkManager struct {
 	pollingBase
 
 	config     config.CyberArkManager
 	preLogger  *slog.Logger
-	baseURL    *url.URL
+	endpoint   *url.URL
 	httpClient *http.Client
 }
 
@@ -65,7 +67,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 		*f.ptr = resolved
 	}
 
-	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", c.config.URL)
+	c.preLogger.Info("starting secrets manager", "active", "cyberark", "url", displayURL(c.config.URL))
 
 	if c.config.URL == "" {
 		return fmt.Errorf("cyberark: url is required")
@@ -78,28 +80,31 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	}
 	parsedURL, err := url.Parse(c.config.URL)
 	if err != nil {
-		return fmt.Errorf("cyberark: url %q does not parse: %w", c.config.URL, err)
+		// The parse error repeats the raw url, or a piece of it, which may
+		// carry a password; only its cause is kept, and none when '@' appears.
+		var uerr *url.Error
+		if strings.Contains(c.config.URL, "@") || !errors.As(err, &uerr) {
+			return errors.New("cyberark: url does not parse")
+		}
+		return fmt.Errorf("cyberark: url does not parse: %w", uerr.Err)
 	}
+	shown := parsedURL.Redacted()
 	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
-		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", c.config.URL, parsedURL.Scheme)
+		return fmt.Errorf("cyberark: url %q must use http or https (got scheme %q)", shown, parsedURL.Scheme)
 	}
 	if parsedURL.Host == "" {
-		return fmt.Errorf("cyberark: url %q must include a host", c.config.URL)
+		return fmt.Errorf("cyberark: url %q must include a host", shown)
 	}
 	if parsedURL.RawQuery != "" || parsedURL.Fragment != "" {
-		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", c.config.URL)
+		return fmt.Errorf("cyberark: url %q must not contain a query string or fragment", shown)
 	}
-	// Reject URLs that already point at the CCP endpoint. The agent appends
-	// "/AIMWebService/api/Accounts" itself; including it again in the
-	// configured URL produces "/AIMWebService/api/Accounts/AIMWebService/api/Accounts"
-	// at request time and consistent 404s. Operators copying examples from
-	// CyberArk integrations that already include the suffix would otherwise
-	// hit this only at runtime.
+	// A URL already ending in /api/Accounts is the full endpoint; any other
+	// URL is a base and gets the default web service path appended.
 	parsedURL.Path = strings.TrimRight(parsedURL.Path, "/")
-	if strings.HasSuffix(parsedURL.Path, ccpEndpointPath) {
-		return fmt.Errorf("cyberark: url %q already includes the CCP endpoint path %q; configure only the base URL (e.g. https://ccp.example.com)", c.config.URL, ccpEndpointPath)
+	if !isCCPEndpointPath(parsedURL.Path) {
+		parsedURL.Path += defaultCCPEndpointPath
 	}
-	c.baseURL = parsedURL
+	c.endpoint = parsedURL
 
 	if (c.config.ClientCert == "") != (c.config.ClientKey == "") {
 		return fmt.Errorf("cyberark: client_cert and client_key must both be set or both empty")
@@ -154,7 +159,7 @@ func (c *cyberarkManager) Start(ctx context.Context) error {
 	if err := c.startScheduler(c.config.Schedule); err != nil {
 		return err
 	}
-	c.preLogger.Info("secrets manager started", "active", "cyberark")
+	c.preLogger.Info("secrets manager started", "active", "cyberark", "endpoint", c.endpoint.Redacted())
 	return nil
 }
 
@@ -164,8 +169,8 @@ type ccpErrorEnvelope struct {
 	ErrorMsg  string `json:"ErrorMsg,omitempty"`
 }
 
-// fetch performs the GET /AIMWebService/api/Accounts call for the parsed
-// reference and returns the requested field. Defaults to the Content field
+// fetch performs the GET on the CCP endpoint for the parsed reference and
+// returns the requested field. Defaults to the Content field
 // (which holds the password in CCP's response model).
 func (c *cyberarkManager) fetch(body string) (string, error) {
 	ref, err := c.parseBody(body)
@@ -173,8 +178,7 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 		return "", err
 	}
 
-	u := *c.baseURL
-	u.Path = strings.TrimRight(u.Path, "/") + ccpEndpointPath
+	u := *c.endpoint
 	q := u.Query()
 	q.Set("AppID", ref.appID)
 	q.Set("Safe", ref.safe)
@@ -212,8 +216,17 @@ func (c *cyberarkManager) fetch(body string) (string, error) {
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
-			body, ref.appID, ref.safe, ref.object, ccpErrorDetail(bodyBytes))
+		// CCP reports a missing account as a 404 with its JSON error envelope.
+		// A 404 without one most likely comes from the web server because the
+		// url misses the CCP web service, so it is not reported as a missing account.
+		if isCCPError(bodyBytes) {
+			return "", fmt.Errorf("cyberark: account not found: %s (AppID=%s Safe=%s Object=%s): %s",
+				body, ref.appID, ref.safe, ref.object, ccpErrorDetail(bodyBytes))
+		}
+		return "", fmt.Errorf("cyberark: get account %s: HTTP 404 from %s without a CCP error body%s; "+
+			"the url likely does not point at the CCP web service: set it to the CCP base URL, "+
+			"or to the full endpoint URL ending in %s when CCP is not installed as AIMWebService",
+			body, c.endpoint.Redacted(), nonHTMLBodySnippet(resp.Header.Get("Content-Type"), bodyBytes), ccpAPIPath)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("cyberark: get account %s (AppID=%s Safe=%s Object=%s): HTTP %d: %s",
@@ -251,6 +264,76 @@ func ccpErrorDetail(b []byte) string {
 		return env.ErrorMsg
 	}
 	return strings.TrimSpace(string(b))
+}
+
+// ccpErrorCodeRe matches CyberArk error codes such as APPAP004E or AIMWS030E.
+var ccpErrorCodeRe = regexp.MustCompile(`^[A-Z]{5}[0-9]{3}[A-Z]$`)
+
+// isCCPError reports whether a response body is CCP's JSON error envelope.
+// The code's shape is checked because encoding/json matches keys
+// case-insensitively, so a gateway's own "errorCode" would also decode.
+func isCCPError(b []byte) bool {
+	var env ccpErrorEnvelope
+	return json.Unmarshal(b, &env) == nil && ccpErrorCodeRe.MatchString(env.ErrorCode)
+}
+
+const (
+	// maxBodySnippet bounds how many characters of an unexpected body an error carries.
+	maxBodySnippet = 200
+	// maxBodyScan bounds how much of the body is inspected for the snippet.
+	maxBodyScan = 4096
+)
+
+// nonHTMLBodySnippet returns ": <text>" with a short, printable excerpt of a
+// non-CCP response, such as a gateway's JSON error, or "" for an HTML error
+// page or an empty body.
+func nonHTMLBodySnippet(contentType string, b []byte) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(contentType)), "text/html") {
+		return ""
+	}
+	if len(b) > maxBodyScan {
+		b = b[:maxBodyScan]
+	}
+	printable := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		if !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, strings.ToValidUTF8(string(b), "\uFFFD"))
+	text := strings.Join(strings.Fields(printable), " ")
+	lower := strings.ToLower(text)
+	for _, marker := range []string{"<!doctype html", "<html>", "<html ", "<head>", "<head ", "<body>", "<body "} {
+		if strings.Contains(lower, marker) {
+			return ""
+		}
+	}
+	if text == "" {
+		return ""
+	}
+	if r := []rune(text); len(r) > maxBodySnippet {
+		text = string(r[:maxBodySnippet]) + "…"
+	}
+	return ": " + text
+}
+
+// displayURL renders a configured url for the startup log with any password
+// masked. A url that does not parse is not shown, since its password, if
+// any, cannot be located.
+func displayURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable>"
+	}
+	return u.Redacted()
+}
+
+// isCCPEndpointPath reports whether a URL path already names the CCP endpoint.
+// IIS paths are case-insensitive, so the match is too.
+func isCCPEndpointPath(p string) bool {
+	return strings.HasSuffix(strings.ToLower(p), strings.ToLower(ccpAPIPath))
 }
 
 // cyberarkRef holds a parsed placeholder body.
