@@ -92,7 +92,7 @@ var defaultInterfacePatterns = []compiledIfacePattern{
 	// longer prefixes win; bare GE is Huawei 1G) plus Eth-Trunk (LAG) and Vlanif
 	// (SVI). These tokens are vendor-unique and do not collide with the rules
 	// above, so they benefit fallback-to-_base discovery too. PortChannel (no
-	// hyphen) covers SONiC/Dell — the `Po\d+` rule above requires a digit right
+	// hyphen) covers SONiC/Dell — the `[Pp]o\d+` rule above requires a digit right
 	// after "Po" so it does not match "PortChannelNN".
 	{regexp.MustCompile(`^100GE\d`), "100gbase-x-qsfp28"},
 	{regexp.MustCompile(`^40GE\d`), "40gbase-x-qsfpp"},
