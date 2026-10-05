@@ -790,3 +790,20 @@ func TestTranslateLagMembershipToggle(t *testing.T) {
 	ents := TranslateWithOptions(base, lagSnap(nil), nil, "", &config.Options{EmitLagMembership: &off}, nil)
 	require.Nil(t, lagOf(t, ents, "Ethernet1"), "TranslateWithOptions passes the toggle through")
 }
+
+// A target that leaves the aggregate's state/type out still gets the link when
+// the aggregate's name is a known LAG form.
+func TestTranslateLagLinksAnUntypedAggregateByName(t *testing.T) {
+	store, err := LoadProfiles("")
+	require.NoError(t, err)
+	base, _ := store.Get("_base")
+	dev := &diode.Device{Name: strptr("r1")}
+	snap := lagSnap(map[string]any{
+		"/interfaces/interface[name=Ethernet1]/ethernet/state/aggregate-id": "lag-1",
+		"/interfaces/interface[name=Port-Channel1]/state/type":              nil,
+		"/interfaces/interface[name=lag-1]/state/admin-status":              "UP",
+	})
+	got := lagOf(t, translateInterfaces(base, snap, dev, nil, nil, nil), "Ethernet1")
+	require.NotNil(t, got)
+	require.Equal(t, "lag-1", *got.Name)
+}

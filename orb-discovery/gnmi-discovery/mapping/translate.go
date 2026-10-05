@@ -567,8 +567,8 @@ type lagClaim struct {
 // attachLagMembership sets Interface.Lag on each claimed member, as a
 // matcher-only reference, when the aggregate was emitted this cycle and typed
 // lag. Nothing is created: an aggregate missing from the payload (absent or
-// excluded) or of another type, and a member of a type NetBox refuses a LAG
-// parent on, are skipped with a warning, as in snmp-discovery and
+// excluded) or of another type is skipped with a warning, and so is a member
+// typed virtual (NetBox refuses a LAG parent on one), bridge or lag, as in
 // device-discovery.
 func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Device, logger *slog.Logger) {
 	if len(claims) == 0 {
@@ -594,7 +594,7 @@ func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Devic
 		case agg.Type == nil || *agg.Type != "lag":
 			warn("lag: aggregate interface is not typed lag; skipping member", "member", member, "aggregate", c.aggregate)
 		case c.member.Type != nil && (*c.member.Type == "virtual" || *c.member.Type == "bridge" || *c.member.Type == "lag"):
-			warn("lag: NetBox refuses a LAG parent on this interface type; skipping member",
+			warn("lag: member interface type cannot carry a LAG; skipping member",
 				"member", member, "interface_type", *c.member.Type, "aggregate", c.aggregate)
 		default:
 			c.member.Lag = &diode.Interface{Device: dev, Name: strptr(c.aggregate)}
