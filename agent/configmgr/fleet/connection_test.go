@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -287,7 +288,9 @@ func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
 //
 // Run with: go test -race -count=100 -run TestDispatchQueue_NoPanicOnConcurrentShutdown
 func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	// A full queue dispatches synchronously, and each {} payload fails to
+	// dispatch, so keep those errors out of the test output.
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	resetChan := make(chan struct{}, 1)
 	reconnectChan := make(chan struct{}, 1)
@@ -299,8 +302,19 @@ func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
 	const sendsPerGoroutine = 200
 	var wg sync.WaitGroup
 	var panics atomic.Int32
+	job := dispatchJob{
+		topic:   "orgs/test-org/agents/test-agent",
+		payload: []byte(`{}`),
+		orgID:   "test-org",
+		agentID: "test-agent",
+		topicActions: TopicActions{
+			Subscribe:   func(_ string) error { return nil },
+			Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
+			Unsubscribe: func(_ string) error { return nil },
+		},
+	}
 
-	// Spawn many goroutines that mirror the OnPublishReceived send path
+	// Spawn many goroutines on the OnPublishReceived send path
 	for i := 0; i < numSenders; i++ {
 		wg.Add(1)
 		go func() {
@@ -311,26 +325,7 @@ func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
 				}
 			}()
 			for j := 0; j < sendsPerGoroutine; j++ {
-				connection.dispatchMu.Lock()
-				if connection.shuttingDown {
-					connection.dispatchMu.Unlock()
-					return
-				}
-				select {
-				case connection.dispatchQueue <- dispatchJob{
-					payload: []byte(`{}`),
-					orgID:   "test-org",
-					agentID: "test-agent",
-					topicActions: TopicActions{
-						Subscribe:   func(_ string) error { return nil },
-						Publish:     func(_ context.Context, _ string, _ []byte) error { return nil },
-						Unsubscribe: func(_ string) error { return nil },
-					},
-				}:
-					connection.dispatchMu.Unlock()
-				default:
-					connection.dispatchMu.Unlock()
-				}
+				connection.enqueueOrDispatch(job)
 			}
 		}()
 	}

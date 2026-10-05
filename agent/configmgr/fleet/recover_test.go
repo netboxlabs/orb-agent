@@ -30,9 +30,12 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
+const recoverTestTopic = "orgs/test-org/agents/test-agent"
+
 // groupMembershipJob dispatches to Subscribe, which the test controls.
 func groupMembershipJob(subscribe func(string) error) dispatchJob {
 	return dispatchJob{
+		topic:   recoverTestTopic,
 		payload: []byte(`{"schema_version":"1.0","func":"group_membership","payload":{"full_list":false,"groups":[{"group_id":"test-group","name":"Test"}]}}`),
 		orgID:   "test-org",
 		agentID: "test-agent",
@@ -68,6 +71,7 @@ func TestDispatchWorkerSurvivesAHandlerPanic(t *testing.T) {
 	}
 	require.Contains(t, logs.String(), "panic handling MQTT message")
 	require.Contains(t, logs.String(), "handler failure")
+	require.Contains(t, logs.String(), "topic="+recoverTestTopic)
 }
 
 // With the queue full the message is handled on the callback's own goroutine,
@@ -80,9 +84,10 @@ func TestFullQueueFallbackSurvivesAHandlerPanic(t *testing.T) {
 	}
 
 	require.NotPanics(t, func() {
-		connection.enqueueOrDispatch(groupMembershipJob(func(string) error { panic("handler failure") }), "orgs/test-org/agents/test-agent")
+		connection.enqueueOrDispatch(groupMembershipJob(func(string) error { panic("handler failure") }))
 	})
 	require.Contains(t, logs.String(), "panic handling MQTT message")
+	require.Contains(t, logs.String(), "topic="+recoverTestTopic)
 }
 
 // A topic-specific handler runs on its own goroutine; a panic there is

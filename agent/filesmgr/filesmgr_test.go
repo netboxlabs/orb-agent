@@ -1401,3 +1401,63 @@ func TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls(t *test
 	assert.Equal(t, name, entries[0].Name)
 	assert.Equal(t, "2.0.0", entries[0].Version)
 }
+
+// TestManager_PanicLeavesNameUnlocked verifies that a panic while a name's
+// mutex is held does not leave it held. The agent's MQTT handler recovers
+// such a panic, so a leaked lock would hang every later call for that name.
+// A nil store makes the first step under the lock panic.
+func TestManager_PanicLeavesNameUnlocked(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+	spec := FileSpec{Name: "pkg", Version: "1.0.0", URL: srv.URL + "/x.tar.gz", SHA256: sha256Hex(archive), Extract: true}
+
+	ops := map[string]func(m Manager) error{
+		"ensure": func(m Manager) error {
+			_, err := m.Ensure(context.Background(), spec)
+			return err
+		},
+		"remove":   func(m Manager) error { return m.Remove(context.Background(), spec.Name) },
+		"rollback": func(m Manager) error { return m.Rollback(context.Background(), spec.Name) },
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestManager(t)
+			fm := m.(*filesmgr)
+			s := fm.store
+			fm.store = nil
+			require.Panics(t, func() { _ = op(m) })
+			fm.store = s
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = op(m)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the name is still locked after the panic")
+			}
+		})
+	}
+}
+
+// TestManager_EnsurePanicRecordsFailure verifies that a panic during Ensure
+// leaves the bundle reported as failed, not installing until the next attempt.
+func TestManager_EnsurePanicRecordsFailure(t *testing.T) {
+	m, _ := newTestManager(t)
+	fm := m.(*filesmgr)
+	fm.store = nil
+	require.Panics(t, func() {
+		_, _ = m.Ensure(context.Background(), FileSpec{
+			Name: "pkg", Version: "1.0.0", URL: "http://192.0.2.1/x.tar.gz", SHA256: strings.Repeat("0", 64), Extract: true,
+		})
+	})
+
+	pending := m.ListPending()
+	require.Len(t, pending, 1)
+	assert.Equal(t, FileEntryStateFailed, pending[0].State)
+	assert.Equal(t, "1.0.0", pending[0].Version)
+	assert.NotEmpty(t, pending[0].Error)
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -536,8 +537,17 @@ func (m *filesmgr) Ensure(ctx context.Context, spec FileSpec) (string, error) {
 	defer callMu.Unlock()
 
 	m.setPendingInstalling(spec.Name, spec.Version)
+	// A panic below is recovered by the caller; without this the bundle would
+	// be reported as installing until the next attempt.
+	completed := false
+	defer func() {
+		if !completed {
+			m.setPendingFailed(spec.Name, spec.Version, errors.New("install aborted by a panic"))
+		}
+	}()
 
 	path, err := m.ensureLocked(ctx, spec)
+	completed = true
 	if err != nil {
 		m.setPendingFailed(spec.Name, spec.Version, err)
 		return path, err
@@ -559,8 +569,22 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 		return "", fmt.Errorf("filesmgr: create root: %w", err)
 	}
 
+	path, ev, err := m.install(ctx, spec)
+	if ev != nil {
+		// Published after the name's mutex is released so a slow subscriber
+		// does not block other callers for this name.
+		m.bus.publish(*ev)
+	}
+	return path, err
+}
+
+// install performs the fetch, state write and symlink swap under the name's
+// mutex and returns the event to publish once it is released. The unlock is
+// deferred so a panic cannot leave the name locked.
+func (m *filesmgr) install(ctx context.Context, spec FileSpec) (string, *FileEvent, error) {
 	mu := m.mutexFor(spec.Name)
 	mu.Lock()
+	defer mu.Unlock()
 
 	// Capture the full pre-mutation tracked entry so we can restore it exactly
 	// if the symlink swap fails later — verbatim restoration avoids poisoning
@@ -583,19 +607,16 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 					if !spec.Extract && spec.Mode != 0 {
 						if info.Mode().Perm() != spec.Mode.Perm() {
 							if err := os.Chmod(existing.Path, spec.Mode); err != nil {
-								mu.Unlock()
-								return "", fmt.Errorf("chmod %s: %w", existing.Path, err)
+								return "", nil, fmt.Errorf("chmod %s: %w", existing.Path, err)
 							}
 						}
 					}
-					mu.Unlock()
-					return existing.Path, nil
+					return existing.Path, nil, nil
 				}
 				// SHA mismatch or hash error: fall through to re-fetch.
 			} else if spec.Extract {
 				// Extracted bundle: cannot cheaply re-verify; trust on-disk state.
-				mu.Unlock()
-				return existing.Path, nil
+				return existing.Path, nil, nil
 			}
 			// spec.Extract == false but path is a directory: on-disk state has
 			// diverged from what was recorded (e.g. operator tampering or a
@@ -609,15 +630,13 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 
 	// Step 1: fetch into the version directory.
 	if err := m.fetcher.fetch(ctx, spec, versionedDir); err != nil {
-		mu.Unlock()
-		return "", err
+		return "", nil, err
 	}
 
 	entryPath, err := m.computeEntryPath(spec, versionedDir)
 	if err != nil {
 		_ = os.RemoveAll(versionedDir)
-		mu.Unlock()
-		return "", err
+		return "", nil, err
 	}
 
 	entry := FileEntry{
@@ -633,8 +652,7 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 	if err := m.store.put(entry); err != nil {
 		// Roll back: remove the version dir we just fetched.
 		_ = os.RemoveAll(versionedDir)
-		mu.Unlock()
-		return "", err
+		return "", nil, err
 	}
 
 	// Step 3: swap "current" symlink (only for versioned placements).
@@ -659,13 +677,10 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 				}
 			}
 			_ = os.RemoveAll(versionedDir)
-			mu.Unlock()
-			return "", fmt.Errorf("swap current symlink: %w", err)
+			return "", nil, fmt.Errorf("swap current symlink: %w", err)
 		}
 	}
 
-	// Build the event before unlocking; publish after to avoid blocking other
-	// goroutines waiting on this name's mutex while a slow subscriber runs.
 	var ev FileEvent
 	if hadExisting {
 		prev := existing
@@ -673,9 +688,7 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 	} else {
 		ev = FileEvent{Type: EventInstalled, Entry: entry}
 	}
-	mu.Unlock()
-	m.bus.publish(ev)
-	return entryPath, nil
+	return entryPath, &ev, nil
 }
 
 func (m *filesmgr) Remove(_ context.Context, name string) error {
@@ -685,18 +698,8 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 	if err := m.ensureRoot(); err != nil {
 		return fmt.Errorf("filesmgr: create root: %w", err)
 	}
-	mu := m.mutexFor(name)
-	mu.Lock()
-
-	entry, ok := m.store.get(name)
-	if !ok {
-		mu.Unlock()
-		return nil
-	}
-
-	ev, err := m.removeLocked(name, entry)
-	mu.Unlock()
-	if err != nil {
+	ev, err := m.removeTracked(name)
+	if err != nil || ev == nil {
 		return err
 	}
 
@@ -709,8 +712,27 @@ func (m *filesmgr) Remove(_ context.Context, name string) error {
 	// of logical names ever Ensure'd, which is bounded in practice (small
 	// set of backend binaries and plugin names).
 
-	m.bus.publish(ev)
+	m.bus.publish(*ev)
 	return nil
+}
+
+// removeTracked removes name under its mutex, released by defer so a panic
+// cannot leave it held, and returns the event to publish, or nil when name is
+// not tracked.
+func (m *filesmgr) removeTracked(name string) (*FileEvent, error) {
+	mu := m.mutexFor(name)
+	mu.Lock()
+	defer mu.Unlock()
+
+	entry, ok := m.store.get(name)
+	if !ok {
+		return nil, nil
+	}
+	ev, err := m.removeLocked(name, entry)
+	if err != nil {
+		return nil, err
+	}
+	return &ev, nil
 }
 
 // removeLocked performs the disk and state mutations for a Remove operation and
@@ -737,36 +759,41 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	if err := m.ensureRoot(); err != nil {
 		return fmt.Errorf("filesmgr: create root: %w", err)
 	}
+	ev, err := m.rollbackTracked(name)
+	if err != nil {
+		return err
+	}
+	// Note: we intentionally do NOT delete the per-name mutex here, even when
+	// the rollback removed the entry. See the same comment in Remove for the
+	// full rationale: deleting the mutex after releasing it races with
+	// concurrent callers who already hold a reference to the old mutex but
+	// haven't locked it yet, breaking the serialization invariant.
+	m.bus.publish(ev)
+	return nil
+}
+
+// rollbackTracked swaps name back to its previous version, or removes it when
+// there is none, under its mutex, released by defer so a panic cannot leave
+// it held. It returns the event to publish once the mutex is released.
+func (m *filesmgr) rollbackTracked(name string) (FileEvent, error) {
 	mu := m.mutexFor(name)
 	mu.Lock()
+	defer mu.Unlock()
 
 	tracked, ok := m.store.getTracked(name)
 	if !ok {
-		mu.Unlock()
-		return fmt.Errorf("filesmgr: %s not tracked, nothing to roll back", name)
+		return FileEvent{}, fmt.Errorf("filesmgr: %s not tracked, nothing to roll back", name)
 	}
 	if tracked.Previous == nil {
 		// No previous version recorded. Roll back to "default" meaning no
 		// managed entry — consumers fall back to their baked binary.
 		// This is the first-install-failure recovery path.
-		ev, err := m.removeLocked(name, tracked.Current)
-		mu.Unlock()
-		if err != nil {
-			return err
-		}
-		// Note: we intentionally do NOT delete the per-name mutex here.
-		// See the same comment in Remove for the full rationale: deleting
-		// the mutex after releasing it races with concurrent callers who
-		// already hold a reference to the old mutex but haven't locked it
-		// yet, breaking the serialization invariant.
-		m.bus.publish(ev)
-		return nil
+		return m.removeLocked(name, tracked.Current)
 	}
 	// Rollback creates a symlink target relative to the name dir; an
 	// unversioned entry would yield a self-referential symlink, so reject.
 	if tracked.Current.Version == "" || tracked.Previous.Version == "" {
-		mu.Unlock()
-		return fmt.Errorf("filesmgr: rollback requires versioned entries (current=%q, previous=%q)",
+		return FileEvent{}, fmt.Errorf("filesmgr: rollback requires versioned entries (current=%q, previous=%q)",
 			tracked.Current.Version, tracked.Previous.Version)
 	}
 	prev := *tracked.Previous
@@ -774,8 +801,7 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	// The previous version's directory must still exist on disk.
 	versionDir := versionDirFromEntry(m.root, prev)
 	if _, err := os.Stat(versionDir); err != nil {
-		mu.Unlock()
-		return fmt.Errorf("filesmgr: previous version dir missing: %w", err)
+		return FileEvent{}, fmt.Errorf("filesmgr: previous version dir missing: %w", err)
 	}
 
 	// Atomic symlink swap back to the previous version's directory basename.
@@ -787,8 +813,7 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 	oldTarget, _ := os.Readlink(linkPath) // empty string if missing/not-symlink
 
 	if err := swapSymlink(versionBase, linkPath); err != nil {
-		mu.Unlock()
-		return fmt.Errorf("filesmgr: swap symlink: %w", err)
+		return FileEvent{}, fmt.Errorf("filesmgr: swap symlink: %w", err)
 	}
 
 	// Update store: previous becomes current, previous is cleared.
@@ -798,21 +823,15 @@ func (m *filesmgr) Rollback(_ context.Context, name string) error {
 		if oldTarget != "" {
 			_ = swapSymlink(oldTarget, linkPath)
 		}
-		mu.Unlock()
-		return fmt.Errorf("filesmgr: persist rollback: %w", err)
+		return FileEvent{}, fmt.Errorf("filesmgr: persist rollback: %w", err)
 	}
 
-	// Build the event before unlocking; publish after to avoid holding the
-	// per-name mutex while a slow subscriber runs.
 	rolledBackFrom := tracked.Current
-	ev := FileEvent{
+	return FileEvent{
 		Type:     EventRolledBack,
 		Entry:    prev,
 		Previous: &rolledBackFrom,
-	}
-	mu.Unlock()
-	m.bus.publish(ev)
-	return nil
+	}, nil
 }
 
 // versionDirFromEntry returns the on-disk version directory for an entry.

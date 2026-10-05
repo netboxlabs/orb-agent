@@ -28,6 +28,7 @@ type TopicMessageHandler func(topic string, payload []byte) error
 
 // dispatchJob represents a message to be processed by the dispatch worker
 type dispatchJob struct {
+	topic        string
 	payload      []byte
 	orgID        string
 	agentID      string
@@ -138,11 +139,11 @@ func (connection *MQTTConnection) startDispatchWorker() {
 // caller's goroutine when the queue is full. A job arriving during shutdown is
 // dropped. dispatchMu is held across the shuttingDown check and the send so
 // stopDispatchWorker cannot close the queue between them.
-func (connection *MQTTConnection) enqueueOrDispatch(job dispatchJob, topic string) {
+func (connection *MQTTConnection) enqueueOrDispatch(job dispatchJob) {
 	connection.dispatchMu.Lock()
 	if connection.shuttingDown {
 		connection.dispatchMu.Unlock()
-		connection.logger.Debug("ignoring message during shutdown", "topic", topic)
+		connection.logger.Debug("ignoring message during shutdown", "topic", job.topic)
 		return
 	}
 	select {
@@ -150,7 +151,7 @@ func (connection *MQTTConnection) enqueueOrDispatch(job dispatchJob, topic strin
 		connection.dispatchMu.Unlock()
 	default:
 		connection.dispatchMu.Unlock()
-		connection.logger.Warn("dispatch queue full, processing synchronously", "topic", topic)
+		connection.logger.Warn("dispatch queue full, processing synchronously", "topic", job.topic)
 		connection.processJob(job)
 	}
 }
@@ -175,7 +176,7 @@ func (connection *MQTTConnection) recoverHandlerPanic(topic string) {
 
 // processJob dispatches a single job to message handlers.
 func (connection *MQTTConnection) processJob(job dispatchJob) {
-	defer connection.recoverHandlerPanic("")
+	defer connection.recoverHandlerPanic(job.topic)
 	err := connection.messaging.DispatchToHandlers(
 		context.Background(),
 		job.payload,
@@ -395,6 +396,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 					orgID := parts[1]
 
 					connection.enqueueOrDispatch(dispatchJob{
+						topic:   pr.Packet.Topic,
 						payload: pr.Packet.Payload,
 						orgID:   orgID,
 						agentID: details.AgentID,
@@ -403,7 +405,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 							Publish:     connection.publishToTopic,
 							Unsubscribe: connection.unsubscribeFromTopic,
 						},
-					}, pr.Packet.Topic)
+					})
 
 					return true, nil
 				},
