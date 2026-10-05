@@ -534,18 +534,7 @@ func loadUserProvidedExtensions(dir string, devicesByVendor map[string]deviceRef
 // pair it with a failed devices parse before treating an error as the file's.
 func isYAMLMapping(data []byte) bool {
 	var root map[string]yaml.Node
-	return unmarshalRecovered(data, &root) == nil
-}
-
-// unmarshalRecovered is yaml.Unmarshal with a panic returned as an error:
-// yaml.v3 can panic on a merge key beside a complex key.
-func unmarshalRecovered(data []byte, out any) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("%v", r)
-		}
-	}()
-	return yaml.Unmarshal(data, out)
+	return yaml.Unmarshal(data, &root) == nil
 }
 
 func isLookupExtensionFile(file os.DirEntry) bool {
@@ -564,7 +553,7 @@ func loadModuleYAML(data []byte, moduleModels map[string]string) error {
 	var fileData struct {
 		Modules map[string]string `yaml:"modules"`
 	}
-	if err := unmarshalRecovered(data, &fileData); err != nil {
+	if err := yaml.Unmarshal(data, &fileData); err != nil {
 		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
 	for oid, model := range fileData.Modules {

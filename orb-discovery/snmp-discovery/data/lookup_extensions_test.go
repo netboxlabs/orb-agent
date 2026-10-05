@@ -1191,64 +1191,6 @@ func TestCountManufacturerEntries_MatchesResolverRules(t *testing.T) {
 	}
 }
 
-// mergeBesideComplexKey is a merge key next to a mapping used as a key, which
-// gopkg.in/yaml.v3 panicked on.
-const mergeBesideComplexKey = "? {a: 1}\n: x\n<<: {k: v}\n"
-
-// indented nests a block under a section key.
-func indented(block string) string {
-	return "  " + strings.ReplaceAll(strings.TrimSuffix(block, "\n"), "\n", "\n  ") + "\n"
-}
-
-// Such a file fails to parse rather than crashing the load.
-func TestDeviceLookup_MergeBesideComplexKeyIsAFileError(t *testing.T) {
-	for name, content := range map[string]string{
-		"in devices":       "devices:\n" + indented(mergeBesideComplexKey),
-		"in manufacturers": "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\nmanufacturers:\n" + indented(mergeBesideComplexKey),
-		"at the top level": mergeBesideComplexKey + "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\n",
-	} {
-		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "odd.yaml"), []byte(content), 0o644))
-			var lookup *DeviceLookup
-			require.NotPanics(t, func() {
-				var err error
-				lookup, err = LoadDeviceLookupExtensions(dir)
-				require.NoError(t, err)
-			})
-			files := lookup.UserExtensionFiles()
-			require.Len(t, files, 1)
-			assert.Equal(t, 0, files[0].ManufacturerEntries)
-			if name == "in manufacturers" {
-				assert.NoError(t, files[0].Err)
-				assert.Equal(t, 1, files[0].Entries, "the devices section still applies")
-			} else {
-				assert.Error(t, files[0].Err)
-			}
-		})
-	}
-}
-
-// The resolver skips such a file and keeps the others' overrides.
-func TestManufacturerResolver_MergeBesideComplexKeySkipsTheFile(t *testing.T) {
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.yaml"),
-		[]byte("manufacturers:\n"+indented(mergeBesideComplexKey)), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.yaml"),
-		[]byte("manufacturers:\n  \"99999\": \"Example Vendor\"\n"), 0o644))
-	builtin, err := NewManufacturerLookup()
-	require.NoError(t, err)
-
-	var resolver *ManufacturerResolver
-	require.NotPanics(t, func() {
-		resolver, err = NewManufacturerResolver(builtin, dir, nil)
-	})
-	require.NoError(t, err)
-	got, err := resolver.GetManufacturer("99999")
-	require.NoError(t, err)
-	assert.Equal(t, "Example Vendor", got)
-}
-
 func TestDeviceLookup_ModuleModels(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
@@ -1512,9 +1454,9 @@ func TestDeviceLookup_ModulesAliasLimitIsReportedBesideReadableDevices(t *testin
 	assert.Error(t, files[0].ModulesErr)
 }
 
-// yaml.v3 panics on a merge beside a complex key. Inside modules: that is a
-// modules error, not a failed load.
-func TestDeviceLookup_ModulesDecodePanicIsAModulesError(t *testing.T) {
+// A merge key beside a complex key inside modules: is a modules error, not a
+// failed load.
+func TestDeviceLookup_ModulesMergeBesideComplexKeyIsAModulesError(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices:
   ".1.3.6.1.4.1.99999.1.1": "Operator Model"
@@ -1537,8 +1479,8 @@ modules:
 	assert.Error(t, files[0].ModulesErr)
 }
 
-// The file-level check must not panic where the section decoders fail cleanly.
-func TestDeviceLookup_FileLevelCheckDoesNotPanic(t *testing.T) {
+// The file-level check fails cleanly where the section decoders do.
+func TestDeviceLookup_FileLevelCheckFailsCleanly(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "odd.yaml"), []byte(`devices: !!binary '!!!'
 manufacturers: !!binary '!!!'
@@ -1578,4 +1520,62 @@ func TestDeviceLookup_BrokenModulesSectionAppliesNoEntry(t *testing.T) {
 	require.Len(t, files, 1)
 	assert.Error(t, files[0].ModulesErr)
 	assert.Equal(t, 0, files[0].ModuleEntries)
+}
+
+// mergeBesideComplexKey is a merge key next to a mapping used as a key, which
+// gopkg.in/yaml.v3 panicked on.
+const mergeBesideComplexKey = "? {a: 1}\n: x\n<<: {k: v}\n"
+
+// indented nests a block under a section key.
+func indented(block string) string {
+	return "  " + strings.ReplaceAll(strings.TrimSuffix(block, "\n"), "\n", "\n  ") + "\n"
+}
+
+// Such a file fails to parse rather than crashing the load.
+func TestDeviceLookup_MergeBesideComplexKeyIsAFileError(t *testing.T) {
+	for name, content := range map[string]string{
+		"in devices":       "devices:\n" + indented(mergeBesideComplexKey),
+		"in manufacturers": "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\nmanufacturers:\n" + indented(mergeBesideComplexKey),
+		"at the top level": mergeBesideComplexKey + "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "odd.yaml"), []byte(content), 0o644))
+			var lookup *DeviceLookup
+			require.NotPanics(t, func() {
+				var err error
+				lookup, err = LoadDeviceLookupExtensions(dir)
+				require.NoError(t, err)
+			})
+			files := lookup.UserExtensionFiles()
+			require.Len(t, files, 1)
+			assert.Equal(t, 0, files[0].ManufacturerEntries)
+			if name == "in manufacturers" {
+				assert.NoError(t, files[0].Err)
+				assert.Equal(t, 1, files[0].Entries, "the devices section still applies")
+			} else {
+				assert.Error(t, files[0].Err)
+			}
+		})
+	}
+}
+
+// The resolver skips such a file and keeps the others' overrides.
+func TestManufacturerResolver_MergeBesideComplexKeySkipsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.yaml"),
+		[]byte("manufacturers:\n"+indented(mergeBesideComplexKey)), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.yaml"),
+		[]byte("manufacturers:\n  \"99999\": \"Example Vendor\"\n"), 0o644))
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+
+	var resolver *ManufacturerResolver
+	require.NotPanics(t, func() {
+		resolver, err = NewManufacturerResolver(builtin, dir, nil)
+	})
+	require.NoError(t, err)
+	got, err := resolver.GetManufacturer("99999")
+	require.NoError(t, err)
+	assert.Equal(t, "Example Vendor", got)
 }
