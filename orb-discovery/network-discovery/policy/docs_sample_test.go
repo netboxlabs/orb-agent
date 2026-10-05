@@ -334,6 +334,8 @@ func TestClassify(t *testing.T) {
 		{name: "key inside a list", doc: map[string]any{"items": []any{map[string]any{backend: ours}}}, shared: true, err: `sits under "items[]"`},
 		{name: "policy under backends", doc: map[string]any{"orb": map[string]any{"backends": map[string]any{backend: ours}}}, shared: true, err: "sits under backends"},
 		{name: "policy named like the backend", doc: map[string]any{"policies": map[string]any{backend + "1": ours["p"]}}, want: map[string]any{backend + "1": ours["p"]}},
+		{name: "null key at the root beside its policies", doc: map[string]any{backend: nil, "p": ours["p"]}, err: "holds no policies"},
+		{name: "policy under root backends", doc: map[string]any{"backends": map[string]any{backend: ours}}, err: "sits under backends"},
 		{name: "unrecognised", doc: map[string]any{"targets": []any{}}, err: "unrecognised"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -421,7 +423,8 @@ func TestCustomMapKeys(t *testing.T) {
 // wrapped in a minimal policy. Prose drifts from the parser silently, and the
 // examples are what operators copy.
 func TestDocumentedSamplesAreAccepted(t *testing.T) {
-	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m := policy.NewManager(context.Background(), logger, nil)
 
 	for _, page := range documentedPages {
 		raw, err := os.ReadFile(page.path)
@@ -448,8 +451,16 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 
 					payload, err := yaml.Marshal(map[string]any{"policies": policies})
 					require.NoError(t, err)
-					_, err = m.ParsePolicies(payload)
+					parsed, err := m.ParsePolicies(payload)
 					require.NoError(t, err, "block:\n%s", block.text)
+					// Starting a policy refuses more than parsing does: no
+					// targets, or a bad cron.
+					for name, p := range parsed {
+						require.NotEmpty(t, p.Scope.Targets, "%s has no targets", name)
+						r, err := policy.NewRunner(context.Background(), logger, name, p, nil, nil)
+						require.NoError(t, err, "block:\n%s", block.text)
+						require.NoError(t, r.Stop())
+					}
 
 					// ParsePolicies drops a key it does not know; the docs must not use one.
 					dec := yaml.NewDecoder(bytes.NewReader(payload))

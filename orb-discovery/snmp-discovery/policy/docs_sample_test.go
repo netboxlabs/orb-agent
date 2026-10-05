@@ -414,6 +414,8 @@ func TestClassify(t *testing.T) {
 		{name: "key inside a list", doc: map[string]any{"items": []any{map[string]any{backend: ours}}}, shared: true, err: `sits under "items[]"`},
 		{name: "policy under backends", doc: map[string]any{"orb": map[string]any{"backends": map[string]any{backend: ours}}}, shared: true, err: "sits under backends"},
 		{name: "policy named like the backend", doc: map[string]any{"policies": map[string]any{backend + "1": ours["p"]}}, want: sample{policies: map[string]any{backend + "1": ours["p"]}}},
+		{name: "null key at the root beside its policies", doc: map[string]any{backend: nil, "p": ours["p"]}, err: "holds no policies"},
+		{name: "policy under root backends", doc: map[string]any{"backends": map[string]any{backend: ours}}, err: "sits under backends"},
 		{name: "unrecognised", doc: map[string]any{"targets": []any{}}, err: "unrecognised"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -512,7 +514,8 @@ func TestDocumentedPatterns(t *testing.T) {
 // minimal policy, and a lookup file loads without error. Prose drifts from the
 // parser silently, and the examples are what operators copy.
 func TestDocumentedSamplesAreAccepted(t *testing.T) {
-	m, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	m, err := policy.NewManager(context.Background(), logger, nil, nil)
 	require.NoError(t, err)
 
 	for _, page := range documentedPages {
@@ -542,6 +545,9 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 					checked++
 					if found.lookup {
 						require.Len(t, docs, 1, "a lookup file holds one yaml document")
+						for section := range doc {
+							require.Contains(t, []string{"devices", "modules", "manufacturers"}, section, "a lookup file has no %q section", section)
+						}
 						dir := t.TempDir()
 						require.NoError(t, os.WriteFile(filepath.Join(dir, "doc.yaml"), []byte(block.text), 0o600))
 						lookup, err := data.LoadDeviceLookupExtensions(dir)
@@ -550,16 +556,26 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 						require.Len(t, files, 1)
 						require.NoError(t, files[0].Err)
 						require.NoError(t, files[0].ModulesErr)
-						require.Positive(t, files[0].Entries+files[0].ModuleEntries+files[0].ManufacturerEntries,
-							"the lookup example registers nothing")
+						registered := map[string]int{"devices": files[0].Entries, "modules": files[0].ModuleEntries, "manufacturers": files[0].ManufacturerEntries}
+						for section := range doc {
+							require.Positive(t, registered[section], "the %s section registers nothing", section)
+						}
 						continue
 					}
 					policies := found.policies
 
 					payload, err := yaml.Marshal(map[string]any{"policies": policies})
 					require.NoError(t, err)
-					_, err = m.ParsePolicies(payload)
+					parsed, err := m.ParsePolicies(payload)
 					require.NoError(t, err, "block:\n%s", block.text)
+					// Starting a policy refuses more than parsing does: no
+					// targets, a bad cron, or a timeout not above snmp_timeout.
+					for name, p := range parsed {
+						require.NotEmpty(t, p.Scope.Targets, "%s has no targets", name)
+						r, err := policy.NewRunner(context.Background(), logger, name, p, nil, nil, &config.Mapping{}, nil, nil, nil)
+						require.NoError(t, err, "block:\n%s", block.text)
+						require.NoError(t, r.Stop())
+					}
 
 					// ParsePolicies drops a key it does not know; the docs must not use one.
 					dec := yaml.NewDecoder(bytes.NewReader(payload))

@@ -39,7 +39,7 @@ policies:
     config:
       schedule: "0 */6 * * *" # Cron expression - every 6 hours
       timeout: 300 # Timeout for policy in seconds (default 2 minutes)
-      snmp_timeout: 300 # Timeout for SNMP operations in seconds (default 5 seconds)
+      snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds); must be below timeout
       snmp_probe_timeout: 1 # Timeout for SNMP probe operations in seconds (default 1 second)
       retries: 3 # Number of retries
       defaults:
