@@ -21,7 +21,7 @@ orb:
     active: cyberark
     sources:
       cyberark:
-        url: "https://ccp.corp.example.com"        # required — base URL of the CCP service
+        url: "https://ccp.corp.example.com"        # required — CCP server base URL, or the full endpoint URL (see below)
         app_id: "orb-agent"                        # required — provisioned in the Vault
         reason: "orb-agent policy resolution"      # optional — written to the CyberArk audit log on every fetch
         ca_bundle:   "/opt/orb/secrets/ccp-ca.pem" # optional — PEM CA chain for the CCP server cert
@@ -35,7 +35,7 @@ orb:
 
 | Option | Type | Required | Description |
 |--------|------|----------|-------------|
-| `url` | string | Yes | Base URL of the CCP web service, e.g. `https://ccp.corp.example.com`. A trailing slash is trimmed automatically. |
+| `url` | string | Yes | Base URL of the CCP server, e.g. `https://ccp.corp.example.com`, to which the agent appends `/AIMWebService/api/Accounts`. A URL whose path already ends in `/api/Accounts` is used as the endpoint unchanged; see [CCP under another web service name](#ccp-under-another-web-service-name). A trailing slash is trimmed automatically. |
 | `app_id` | string | Yes | CyberArk AppID provisioned for this agent. Used in every short-form lookup and as the default for qualified ones. |
 | `reason` | string | No | Free-text reason written to the CyberArk audit log on every fetch. Increases audit fidelity at the cost of one log line per fetch (including polling re-fetches). |
 | `ca_bundle` | string | No | Path to a PEM file containing the CA chain that signed the CCP server cert. Only needed when the CCP cert is not signed by a publicly-trusted CA. |
@@ -45,6 +45,26 @@ orb:
 | `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
 
 The following fields accept an environment-variable placeholder of the form `${VAR_NAME}`: `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key`. Placeholders are resolved at agent startup; an unset variable causes the agent to fail startup with a clear error.
+
+### CCP under another web service name
+
+`AIMWebService` is only the default name of the IIS application CCP is installed under. When your CCP uses another name, for example a separate application that requires client certificates, set `url` to the full endpoint URL instead of the base URL:
+
+```yaml
+orb:
+  secrets_manager:
+    active: cyberark
+    sources:
+      cyberark:
+        url: "https://ccp.corp.example.com/AIMWebServiceCustom/api/Accounts"
+        app_id: "orb-agent"
+        client_cert: "/opt/orb/secrets/orb.crt"
+        client_key:  "/opt/orb/secrets/orb.key"
+```
+
+Any URL whose path ends in `/api/Accounts`, compared case-insensitively, is used as the endpoint, minus any trailing slash. Any other URL, including one with a path prefix for a reverse proxy, gets `/AIMWebService/api/Accounts` appended. The agent logs the endpoint it resolved at startup.
+
+A lookup that fails with `HTTP 404 … without a CCP error body` most likely means the URL does not point at the CCP web service, for example a base URL on a server where CCP is installed under another name. A missing account is reported as `account not found`, with CCP's own error code.
 
 ## Authentication
 
