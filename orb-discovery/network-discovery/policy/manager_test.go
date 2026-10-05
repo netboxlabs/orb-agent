@@ -176,3 +176,33 @@ func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "unhashable")
 }
+
+// defaults.tenant goes through config.TenantParameters.UnmarshalYAML only when
+// that method and ParsePolicies use the same YAML library; otherwise the
+// decoder skips the method and a plain tenant name is rejected.
+func TestManager_ParsePolicies_Tenant(t *testing.T) {
+	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	parse := func(tenant string) (config.TenantParameters, error) {
+		policies, err := m.ParsePolicies([]byte("policies:\n  p1:\n    config:\n      defaults:\n" +
+			tenant + "    scope:\n      targets: [192.0.2.1]\n"))
+		if err != nil {
+			return config.TenantParameters{}, err
+		}
+		return policies["p1"].Config.Defaults.Tenant, nil
+	}
+
+	got, err := parse("        tenant: example-tenant\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.TenantParameters{Name: "example-tenant"}, got)
+
+	got, err = parse("        tenant:\n          name: example-tenant\n          group: example-group\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.TenantParameters{Name: "example-tenant", Group: "example-group"}, got)
+
+	_, err = parse("        tenant:\n          group: example-group\n")
+	assert.ErrorContains(t, err, "mapping requires name")
+
+	got, err = parse("        tenant: null\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.TenantParameters{}, got)
+}
