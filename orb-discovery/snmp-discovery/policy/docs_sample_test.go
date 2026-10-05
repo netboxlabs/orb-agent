@@ -3,6 +3,7 @@ package policy_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -37,63 +38,100 @@ var documentedPages = []documentedPage{
 
 var (
 	envReference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
-	fenceLine    = regexp.MustCompile("^\\s*(`{3,}|~{3,})\\s*(\\S*)")
+	// fenceLine matches a fenced code block delimiter: indentation, the fence
+	// and its info string.
+	fenceLine = regexp.MustCompile("^([ \t]*)(`{3,}|~{3,})(.*)$")
 )
+
+type fence struct {
+	indent int
+	marker string
+	info   string
+	line   int
+	isYAML bool
+}
+
+// parseFence returns the fence a markdown line holds, if any. A backtick
+// fence cannot carry a backtick in its info string; such a line is inline
+// code.
+func parseFence(line string, n int) (fence, bool) {
+	m := fenceLine.FindStringSubmatch(line)
+	if m == nil {
+		return fence{}, false
+	}
+	info := strings.TrimSpace(m[3])
+	if m[2][0] == '`' && strings.Contains(info, "`") {
+		return fence{}, false
+	}
+	lang, _, _ := strings.Cut(info, " ")
+	lang = strings.ToLower(lang)
+	return fence{indent: len(m[1]), marker: m[2], info: info, line: n, isYAML: lang == "yaml" || lang == "yml"}, true
+}
+
+// within reports whether f is a fence of open's kind, at least as long and
+// indented as a fence at open's level would be. A shorter or deeper one is
+// content, as in a markdown example quoting a yaml block.
+func (f fence) within(open fence) bool {
+	return f.marker[0] == open.marker[0] && len(f.marker) >= len(open.marker) && f.indent <= open.indent+3
+}
 
 type yamlBlock struct {
 	line int
 	text string
 }
 
-// yamlBlocks returns each yaml or yml fenced block of a markdown page. A fence
-// opening a block inside an open one means the first was never closed, which
-// fails the test rather than swallowing what follows.
-func yamlBlocks(t *testing.T, path string) []yamlBlock {
-	t.Helper()
-	raw, err := os.ReadFile(path)
-	require.NoError(t, err)
+// yamlBlocks returns each yaml or yml fenced block of a markdown page. A
+// fence with an info string inside an open block means that block was never
+// closed, which fails rather than swallowing what follows.
+func yamlBlocks(page string) ([]yamlBlock, error) {
 	var blocks []yamlBlock
 	var cur []string
-	var yamlFence, otherFence string
-	start := 0
-	closes := func(m []string, open string) bool {
-		return m != nil && m[2] == "" && m[1][0] == open[0] && len(m[1]) >= len(open)
-	}
-	for i, line := range strings.Split(string(raw), "\n") {
-		m := fenceLine.FindStringSubmatch(line)
+	var open *fence
+	for i, line := range strings.Split(page, "\n") {
+		f, ok := parseFence(line, i+1)
 		switch {
-		case yamlFence != "":
-			if closes(m, yamlFence) {
-				blocks = append(blocks, yamlBlock{start, strings.Join(cur, "\n")})
-				cur, yamlFence = nil, ""
-				continue
+		case open != nil && ok && f.within(*open) && f.info == "":
+			if open.isYAML {
+				blocks = append(blocks, yamlBlock{open.line, strings.Join(cur, "\n")})
 			}
-			require.Nil(t, m, "%s:%d: fence inside the yaml block opened at line %d, which is never closed", path, i+1, start)
-			cur = append(cur, line)
-		case otherFence != "":
-			if closes(m, otherFence) {
-				otherFence = ""
-				continue
+			cur, open = nil, nil
+		case open != nil && ok && f.within(*open):
+			return nil, fmt.Errorf("line %d: fence inside the block opened at line %d, which is never closed", i+1, open.line)
+		case open != nil:
+			if open.isYAML {
+				cur = append(cur, line)
 			}
-			// A shorter fence of the same kind is content, as in a markdown
-			// example quoting a yaml block.
-			nested := m != nil && m[2] != "" && m[1][0] == otherFence[0] && len(m[1]) >= len(otherFence)
-			require.False(t, nested, "%s:%d: fence inside the block opened at line %d, which is never closed", path, i+1, start)
-		case m != nil:
-			if lang := strings.ToLower(m[2]); lang == "yaml" || lang == "yml" {
-				yamlFence, start = m[1], i+1
-			} else {
-				otherFence, start = m[1], i+1
-			}
+		case ok:
+			open = &f
 		}
 	}
-	require.Empty(t, yamlFence, "%s ends inside the yaml block opened at line %d", path, start)
-	require.Empty(t, otherFence, "%s ends inside the block opened at line %d", path, start)
-	return blocks
+	if open != nil {
+		return nil, fmt.Errorf("the page ends inside the block opened at line %d", open.line)
+	}
+	return blocks, nil
+}
+
+// extraDocument returns an error when docs holds another non-empty yaml
+// document, which the checks would never see.
+func extraDocument(docs *yaml.Decoder) error {
+	for {
+		var next any
+		err := docs.Decode(&next)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if next != nil {
+			return errors.New("a second yaml document would go unchecked")
+		}
+	}
 }
 
 // customMaps are the keys whose mapping form a custom UnmarshalYAML decodes,
-// which KnownFields does not reach.
+// which KnownFields does not reach. vlan.group has one too, but it rejects
+// unknown keys itself.
 var customMaps = map[string]reflect.Type{
 	"vrf":      reflect.TypeFor[config.VrfParameters](),
 	"vrf_ipv4": reflect.TypeFor[config.VrfParameters](),
@@ -101,10 +139,9 @@ var customMaps = map[string]reflect.Type{
 	"tenant":   reflect.TypeFor[config.TenantParameters](),
 }
 
-// customMapKeys fails on a key in a customMaps mapping that its type does
-// not declare, which the decoder would drop silently.
-func customMapKeys(t *testing.T, v any) {
-	t.Helper()
+// customMapKeys returns an error for a key in a customMaps mapping that its
+// type does not declare, which the decoder would drop silently.
+func customMapKeys(v any) error {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, child := range v {
@@ -116,47 +153,132 @@ func customMapKeys(t *testing.T, v any) {
 						known[name] = true
 					}
 					for key := range m {
-						require.True(t, known[key], "%s has no %q key", k, key)
+						if !known[key] {
+							return fmt.Errorf("%s has no %q key", k, key)
+						}
 					}
 				}
 			}
-			customMapKeys(t, child)
+			if err := customMapKeys(child); err != nil {
+				return err
+			}
 		}
 	case []any:
 		for _, child := range v {
-			customMapKeys(t, child)
+			if err := customMapKeys(child); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
-// documentedPatterns compiles every interface_patterns match and
-// interface_exclude_patterns entry in v. The policy parser accepts an invalid
-// one, which then fails every scan.
-func documentedPatterns(t *testing.T, v any) {
-	t.Helper()
+// documentedPatterns returns an error for an interface_patterns match or
+// interface_exclude_patterns entry in v that does not compile. The policy
+// parser accepts both: an invalid match fails every scan of a target that
+// uses it, and an invalid exclude pattern is skipped with a warning.
+func documentedPatterns(v any) error {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, child := range v {
 			list, _ := child.([]any)
 			for _, item := range list {
+				var pattern string
 				switch k {
 				case "interface_patterns":
-					if p, ok := item.(map[string]any); ok {
-						_, err := regexp.Compile(fmt.Sprint(p["match"]))
-						require.NoError(t, err)
+					p, ok := item.(map[string]any)
+					if !ok {
+						continue
 					}
+					pattern = fmt.Sprint(p["match"])
 				case "interface_exclude_patterns":
-					_, err := regexp.Compile(fmt.Sprint(item))
-					require.NoError(t, err)
+					pattern = fmt.Sprint(item)
+				default:
+					continue
+				}
+				if _, err := regexp.Compile(pattern); err != nil {
+					return fmt.Errorf("%s: %w", k, err)
 				}
 			}
-			documentedPatterns(t, child)
+			if err := documentedPatterns(child); err != nil {
+				return err
+			}
 		}
 	case []any:
 		for _, child := range v {
-			documentedPatterns(t, child)
+			if err := documentedPatterns(child); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
+}
+
+func TestYamlBlocks(t *testing.T) {
+	for _, tc := range []struct {
+		name, page string
+		want       []string
+		err        string
+	}{
+		{name: "yaml and yml, any case", page: "```yaml\na: 1\n```\n```YML\nb: 2\n```\n~~~yaml\nc: 3\n~~~", want: []string{"a: 1", "b: 2", "c: 3"}},
+		{name: "other languages skipped", page: "```sh\nls\n```\n```yaml\na: 1\n```", want: []string{"a: 1"}},
+		{name: "shorter fence is content", page: "````yaml\nc: |\n  ```\n````", want: []string{"c: |\n  ```"}},
+		{name: "deeply indented fence is content", page: "```yaml\nc: |\n        ```\nd: 2\n```", want: []string{"c: |\n        ```\nd: 2"}},
+		{name: "quoted yaml in markdown", page: "````markdown\n```yaml\na: 1\n```\n````", want: nil},
+		{name: "inline code is no fence", page: "```yaml``` is the language\n```yaml\na: 1\n```", want: []string{"a: 1"}},
+		{name: "unclosed yaml block", page: "```yaml\na: 1\n```sh\nls\n```", err: "line 3: fence inside the block opened at line 1"},
+		{name: "unclosed other block", page: "```sh\nls\n```yaml\na: 1\n```", err: "line 3: fence inside the block opened at line 1"},
+		{name: "page ends inside a block", page: "```yaml\na: 1", err: "ends inside the block opened at line 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			blocks, err := yamlBlocks(tc.page)
+			if tc.err != "" {
+				require.ErrorContains(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			var got []string
+			for _, b := range blocks {
+				got = append(got, b.text)
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestExtraDocument(t *testing.T) {
+	for text, wantErr := range map[string]bool{
+		"a: 1":                 false,
+		"---\na: 1":            false,
+		"a: 1\n---\n":          false,
+		"a: 1\n...\n":          false,
+		"a: 1\n---\nb: 2":      true,
+		"a: 1\n---\n---\nb: 2": true,
+	} {
+		docs := yaml.NewDecoder(strings.NewReader(text))
+		var first any
+		require.NoError(t, docs.Decode(&first))
+		require.Equal(t, wantErr, extraDocument(docs) != nil, "%q", text)
+	}
+}
+
+func TestCustomMapKeys(t *testing.T) {
+	require.NoError(t, customMapKeys(map[string]any{"vrf": "mgmt", "tenant": "t1"}))
+	require.NoError(t, customMapKeys(map[string]any{"vrf_ipv6": map[string]any{"name": "mgmt", "rd": "65000:1"}}))
+	require.ErrorContains(t, customMapKeys(map[string]any{"vrf": map[string]any{"name": "mgmt", "route_distinguisher": "65000:1"}}), `vrf has no "route_distinguisher" key`)
+	require.ErrorContains(t, customMapKeys(map[string]any{"tenant": map[string]any{"name": "t1", "grup": "g1"}}), `tenant has no "grup" key`)
+	require.Error(t, customMapKeys(map[string]any{"p": []any{map[string]any{"vrf_ipv4": map[string]any{"nme": "mgmt"}}}}), "inside a list")
+}
+
+func TestDocumentedPatterns(t *testing.T) {
+	require.NoError(t, documentedPatterns(map[string]any{
+		"interface_patterns":         []any{map[string]any{"match": "^Gi", "type": "1000base-t"}},
+		"interface_exclude_patterns": []any{"^Null"},
+	}))
+	require.ErrorContains(t, documentedPatterns(map[string]any{"d": map[string]any{
+		"interface_patterns": []any{map[string]any{"match": "^Gi(", "type": "1000base-t"}},
+	}}), "interface_patterns")
+	require.ErrorContains(t, documentedPatterns(map[string]any{"interface_exclude_patterns": []any{"^Null["}}), "interface_exclude_patterns")
 }
 
 // Every documented example must be one this backend accepts: a policy parses
@@ -176,15 +298,22 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 	}
 
 	for _, page := range documentedPages {
-		for _, block := range yamlBlocks(t, page.path) {
+		raw, err := os.ReadFile(page.path)
+		require.NoError(t, err)
+		blocks, err := yamlBlocks(string(raw))
+		require.NoError(t, err, page.path)
+		for _, block := range blocks {
 			t.Run(fmt.Sprintf("%s/line-%d", page.label, block.line), func(t *testing.T) {
 				for _, ref := range envReference.FindAllStringSubmatch(block.text, -1) {
 					t.Setenv(ref[1], "example")
 				}
 				var doc map[string]any
 				docs := yaml.NewDecoder(strings.NewReader(block.text))
-				require.NoError(t, docs.Decode(&doc), "block:\n%s", block.text)
-				require.ErrorIs(t, docs.Decode(new(any)), io.EOF, "a second yaml document would go unchecked:\n%s", block.text)
+				if err := docs.Decode(&doc); err != nil && page.shared && !strings.Contains(block.text, "snmp_discovery") {
+					t.Skip("illustrative snippet for another backend")
+				} else {
+					require.NoError(t, err, "block:\n%s", block.text)
+				}
 
 				var policies map[string]any
 				switch {
@@ -214,6 +343,7 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 						"scope": map[string]any{"targets": []any{target}, "authentication": doc["authentication"]},
 					}}
 				case doc["devices"] != nil || doc["modules"] != nil || doc["manufacturers"] != nil:
+					require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
 					dir := t.TempDir()
 					require.NoError(t, os.WriteFile(filepath.Join(dir, "doc.yaml"), []byte(block.text), 0o600))
 					lookup, err := data.LoadDeviceLookupExtensions(dir)
@@ -230,6 +360,7 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 				default:
 					t.Fatalf("unrecognised documented block; teach this test its shape:\n%s", block.text)
 				}
+				require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
 
 				payload, err := yaml.Marshal(map[string]any{"policies": policies})
 				require.NoError(t, err)
@@ -240,8 +371,8 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 				dec := yaml.NewDecoder(bytes.NewReader(payload))
 				dec.KnownFields(true)
 				require.NoError(t, dec.Decode(&config.Policies{}), "block:\n%s", block.text)
-				customMapKeys(t, policies)
-				documentedPatterns(t, policies)
+				require.NoError(t, customMapKeys(policies), "block:\n%s", block.text)
+				require.NoError(t, documentedPatterns(policies), "block:\n%s", block.text)
 			})
 		}
 	}

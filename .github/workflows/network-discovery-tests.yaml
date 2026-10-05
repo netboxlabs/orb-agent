@@ -8,12 +8,16 @@ on:
       - "orb-discovery/network-discovery/**"
       - "docs/backends/network_discovery.md"
       - "docs/config_samples.md"
+      - "docs/advanced_config/env_config.md"
+      - "docs/configs/agent_yaml.md"
       - "!orb-discovery/network-discovery/docker/**"
   pull_request:
     paths:
       - "orb-discovery/network-discovery/**"
       - "docs/backends/network_discovery.md"
       - "docs/config_samples.md"
+      - "docs/advanced_config/env_config.md"
+      - "docs/configs/agent_yaml.md"
       - "!orb-discovery/network-discovery/docker/**"
 
 concurrency:

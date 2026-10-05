@@ -146,7 +146,7 @@ func TestAttachLagMembership_ChannelizedLanesKeepTheirOwnMembership(t *testing.T
 
 // The interface that would carry the reference has to be able to. With no
 // ifType in the walk the member is used as-is and its type comes from the
-// policy default, which an operator can set to a virtual one — and NetBox
+// policy default, which an operator can set to a virtual one, and NetBox
 // rejects the whole interface, not just the relationship, when a LAG parent
 // lands on a virtual type. bridge and lag are not LAG members in practice.
 func TestAttachLagMembership_SkipsTargetThatCannotCarryALag(t *testing.T) {
