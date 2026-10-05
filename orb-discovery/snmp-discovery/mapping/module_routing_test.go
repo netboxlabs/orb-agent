@@ -464,3 +464,94 @@ func TestAttachIfaceModules_EmptyMapsAreNoOp(t *testing.T) {
 	AttachIfaceModules(entities, map[string]*diode.Module{}, map[*diode.Interface]int{})
 	assert.Nil(t, iface.Module)
 }
+
+// twoBoardsOIDs is a chassis with a board in each of two slots, a port on
+// each board, a port on neither, an optic in a cage on each board, and a
+// fixed-port optic in a cage on the chassis itself, and a port two
+// containers deep on board 1 holding an optic of its own.
+func twoBoardsOIDs() ObjectIDValueMap {
+	return buildOIDs([]fixtureRow{
+		{"1", "0", "3", "1", "Chassis", "SN0001", "PN-CH-2", "Chassis", ""},
+		{"10", "1", "5", "1", "Slot 1", "", "", "Slot 1", ""},
+		{"100", "10", "9", "1", "Board 1", "SN0100", "PN-BD-24", "Board", ""},
+		{"110", "100", "10", "1", "Port 1/1", "", "", "Port", ""},
+		{"111", "110", "8", "1", "Port 1/1 Sensor", "", "", "Sensor", ""},
+		{"120", "100", "5", "2", "Cage 1/2", "", "", "Cage", ""},
+		{"121", "120", "9", "1", "Optic 1/2", "OPT0121", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+		{"20", "1", "5", "2", "Slot 2", "", "", "Slot 2", ""},
+		{"200", "20", "9", "1", "Board 2", "SN0200", "PN-BD-24", "Board", ""},
+		{"210", "200", "10", "1", "Port 2/1", "", "", "Port", ""},
+		{"220", "200", "5", "2", "Cage 2/2", "", "", "Cage", ""},
+		{"221", "220", "9", "1", "Optic 2/2", "OPT0221", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+		{"30", "1", "10", "3", "Mgmt", "", "", "Port", ""},
+		{"40", "1", "5", "4", "Cage 0/4", "", "", "Cage", ""},
+		{"41", "40", "9", "1", "Optic 0/4", "OPT0041", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+		{"130", "100", "5", "3", "Bay 1/3", "", "", "Container", ""},
+		{"131", "130", "5", "1", "Sub-bay 1/3/1", "", "", "Container", ""},
+		{"132", "131", "10", "1", "Port 1/3/1", "", "", "Port", ""},
+		{"133", "132", "9", "1", "Optic 1/3/1", "OPT0133", "SFP-10G-LR", "SFP-10GBase-LR", ""},
+	})
+}
+
+// emitAllModules stands in for the translator: every module and optic in inv
+// gets a distinct emitted module.
+func emitAllModules(inv ModuleInventory) map[string]*diode.Module {
+	emitted := map[string]*diode.Module{}
+	for _, m := range inv.Modules {
+		emitted[m.EntIndex] = &diode.Module{Serial: strPtr(m.Serial)}
+	}
+	for _, subs := range inv.SubModules {
+		for _, m := range subs {
+			emitted[m.EntIndex] = &diode.Module{Serial: strPtr(m.Serial)}
+		}
+	}
+	return emitted
+}
+
+// Rows in unrelated modules claiming one ifIndex leave it with no module:
+// any pick would be a guess, and the pick used to follow map order, so the
+// interface's module changed from one poll to the next.
+func TestBuildIfaceModuleMap_RowsInDifferentModulesLinkNone(t *testing.T) {
+	inv := extractModuleInventory(twoBoardsOIDs(), slog.Default())
+	emitted := emitAllModules(inv)
+	for name, aliasMap := range map[string]map[string]string{
+		"ports on two boards":            {"110": "4", "210": "4"},
+		"optics on two boards":           {"121": "4", "221": "4"},
+		"optics and ports":               {"121": "4", "221": "4", "110": "4"},
+		"an optic and another board":     {"121": "4", "210": "4"},
+		"a fixed-port optic and a board": {"41": "4", "110": "4"},
+	} {
+		for range 20 {
+			got := buildIfaceModuleMap(inv, aliasMap, emitted)
+			assert.NotContains(t, got, "4", name)
+		}
+	}
+}
+
+// Rows on one containment chain still link, to the most specific module.
+func TestBuildIfaceModuleMap_RowsOnOneChainLink(t *testing.T) {
+	inv := extractModuleInventory(twoBoardsOIDs(), slog.Default())
+	emitted := emitAllModules(inv)
+
+	got := buildIfaceModuleMap(inv, map[string]string{"110": "7", "111": "7"}, emitted)
+	assert.Same(t, emitted["100"], got["7"])
+
+	got = buildIfaceModuleMap(inv, map[string]string{"121": "8", "120": "8"}, emitted)
+	assert.Same(t, emitted["121"], got["8"], "the optic still wins over the board holding its cage")
+
+	got = buildIfaceModuleMap(inv, map[string]string{"110": "5", "30": "5"}, emitted)
+	assert.Same(t, emitted["100"], got["5"], "a row in no module does not contest one that is")
+}
+
+// Rows several containers below their module still link: the climbs are not
+// cut short of real nesting depths.
+func TestBuildIfaceModuleMap_DeepRowsLink(t *testing.T) {
+	inv := extractModuleInventory(twoBoardsOIDs(), slog.Default())
+	emitted := emitAllModules(inv)
+
+	got := buildIfaceModuleMap(inv, map[string]string{"132": "6"}, emitted)
+	assert.Same(t, emitted["100"], got["6"], "a port three levels down links to its board")
+
+	got = buildIfaceModuleMap(inv, map[string]string{"132": "6", "133": "6"}, emitted)
+	assert.Same(t, emitted["133"], got["6"], "and the optic four levels down wins over that board")
+}
