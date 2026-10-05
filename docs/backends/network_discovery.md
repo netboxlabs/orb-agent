@@ -66,12 +66,32 @@ Current supported defaults:
 |:-----:|:----:|:-------------:|
 | vrf | str | VRF name to assign to discovered IP addresses |
 | rd | str | Route Distinguisher (RD) for the VRF (only used when `vrf` is set). Optional — when omitted the VRF is emitted without an RD so NetBox can match an existing VRF whose `rd` is null. |
-| tenant | str | Tenant name to assign to discovered IP addresses |
+| tenant | string \| map | Tenant to assign to discovered IP addresses. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see [Tenant map](#tenant-map) below). Use the map form when the tenant already exists in a tenant group so Diode matches it instead of planning a create. |
 | role | str | Role to assign to discovered IP addresses |
 | comments | str | NetBox Comments information to be added to discovered IP |
 | description | str | NetBox Description data to be added to discovered IP |
 | tags | list | NetBox Tags to be added to discovered IP |
 | network_mask | int | Default network mask to be applied to IPv4 (default: 32) |
+
+##### Tenant map
+The `defaults.tenant` field accepts either a bare string (tenant name) or a map:
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | string | Tenant name (required when using the map form) |
+| group | string | Tenant group name |
+| description | string | Tenant description |
+| comments | string | Tenant comments |
+| tags | list | Tenant tags |
+
+Example — match an existing grouped tenant:
+
+```yaml
+defaults:
+  tenant:
+    name: "Example Tenant GmbH"
+    group: "Example Group"
+```
 
 ### Scope
 The scope defines a list of targets to be scanned.
@@ -109,6 +129,8 @@ orb:
           defaults:
             description: IP discovered by network discovery
             tags: [net-discovery, orb-agent]
+            # tenant: customer-a
+            # tenant: { name: customer-a, group: customers }
         scope:
           targets: 
             - 192.168.7.32

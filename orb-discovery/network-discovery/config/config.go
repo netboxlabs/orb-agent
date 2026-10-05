@@ -1,6 +1,11 @@
 package config
 
-import "time"
+import (
+	"fmt"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
 
 // Hostname represents a hostname associated with a host
 type Hostname struct {
@@ -56,16 +61,53 @@ type Scope struct {
 	SkipHost       *bool    `yaml:"skip_host,omitempty"`
 }
 
-// Defaults represents the supported default values for a policy
-type Defaults struct {
-	Vrf         string   `yaml:"vrf,omitempty"`
-	Rd          string   `yaml:"rd,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Role        string   `yaml:"role,omitempty"`
+// TenantParameters names the tenant applied to discovered IP addresses.
+// Accepts either a plain string (tenant name) or a mapping, mirroring
+// snmp-discovery and device-discovery defaults.tenant.
+type TenantParameters struct {
+	Name        string   `yaml:"name"`
+	Group       string   `yaml:"group,omitempty"`
 	Description string   `yaml:"description,omitempty"`
 	Comments    string   `yaml:"comments,omitempty"`
 	Tags        []string `yaml:"tags,omitempty"`
-	NetworkMask *int     `yaml:"network_mask,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar tenant name or a mapping.
+func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
+	*t = TenantParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		if node.Tag == "!!null" {
+			return nil
+		}
+		t.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		type alias TenantParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		if a.Name == "" {
+			return fmt.Errorf("tenant: mapping requires name")
+		}
+		*t = TenantParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("tenant: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
+// Defaults represents the supported default values for a policy
+type Defaults struct {
+	Vrf         string           `yaml:"vrf,omitempty"`
+	Rd          string           `yaml:"rd,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Role        string           `yaml:"role,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+	NetworkMask *int             `yaml:"network_mask,omitempty"`
 }
 
 // PolicyConfig represents the configuration of a policy
