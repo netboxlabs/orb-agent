@@ -83,8 +83,8 @@ func lagMembershipRows(oids ObjectIDValueMap) [][2]int {
 	return rows
 }
 
-// netboxRefusesLagParent reports whether an interface of this type is left
-// without a LAG parent. NetBox's Interface.clean() raises "Virtual interfaces
+// cannotCarryLag reports whether an interface of this type is left without a
+// LAG parent. NetBox's Interface.clean() raises "Virtual interfaces
 // cannot have a parent LAG interface." for a virtual interface, and a rejected
 // interface fails the whole target's ingestion, not just its own relationship.
 // lag and bridge interfaces are left out too, though NetBox accepts them,
@@ -92,7 +92,7 @@ func lagMembershipRows(oids ObjectIDValueMap) [][2]int {
 // device's ifType (see lagMemberTarget); this is the separate question of
 // whether the interface the walk actually emitted can carry the reference at
 // all, and it is asked of every member however it was resolved.
-func netboxRefusesLagParent(t *string) bool {
+func cannotCarryLag(t *string) bool {
 	if t == nil {
 		return false
 	}
@@ -218,8 +218,8 @@ func AttachLagMembership(
 				"member", strDeref(member.Name), "aggregate", strDeref(agg.Name))
 			continue
 		}
-		if netboxRefusesLagParent(target.Type) {
-			logger.Warn("lag: NetBox refuses a LAG parent on this interface type; skipping member",
+		if cannotCarryLag(target.Type) {
+			logger.Warn("lag: member interface type cannot carry a LAG; skipping member",
 				"member", strDeref(member.Name), "interface", strDeref(target.Name),
 				"interface_type", strDeref(target.Type), "aggregate", strDeref(agg.Name))
 			continue
