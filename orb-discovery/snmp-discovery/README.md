@@ -74,7 +74,7 @@ policies:
         - host: "10.0.0.1"
           port: 162  # Non-standard SNMP port
       authentication:
-        protocol_version: "v2c"
+        protocol_version: "SNMPv2c"
         community: "public"
         # For SNMPv3, use these fields instead:
         # security_level: "authPriv"
@@ -83,6 +83,7 @@ policies:
         # auth_passphrase: "${SNMP_AUTH_PASS}"
         # priv_protocol: "AES"
         # priv_passphrase: "${SNMP_PRIV_PASS}"
+```
 
 **Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
 
@@ -95,7 +96,7 @@ For example:
 
 ```yaml
 authentication:
-  protocol_version: "v3"
+  protocol_version: "SNMPv3"
   security_level: "authPriv"
   username: "${SNMP_USERNAME}"
   auth_protocol: "SHA"
@@ -414,7 +415,7 @@ policies:
       targets:
         - host: "10.0.0.1"
       authentication:
-        protocol_version: "v2c"
+        protocol_version: "SNMPv2c"
         community: "public"
 ```
 
