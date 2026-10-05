@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -133,8 +134,48 @@ func (connection *MQTTConnection) startDispatchWorker() {
 	}()
 }
 
+// enqueueOrDispatch hands job to the dispatch worker, or processes it on the
+// caller's goroutine when the queue is full. A job arriving during shutdown is
+// dropped. dispatchMu is held across the shuttingDown check and the send so
+// stopDispatchWorker cannot close the queue between them.
+func (connection *MQTTConnection) enqueueOrDispatch(job dispatchJob, topic string) {
+	connection.dispatchMu.Lock()
+	if connection.shuttingDown {
+		connection.dispatchMu.Unlock()
+		connection.logger.Debug("ignoring message during shutdown", "topic", topic)
+		return
+	}
+	select {
+	case connection.dispatchQueue <- job:
+		connection.dispatchMu.Unlock()
+	default:
+		connection.dispatchMu.Unlock()
+		connection.logger.Warn("dispatch queue full, processing synchronously", "topic", topic)
+		connection.processJob(job)
+	}
+}
+
+// runTopicHandler runs a topic-specific handler, logging its error or panic.
+func (connection *MQTTConnection) runTopicHandler(handler TopicMessageHandler, topic string, payload []byte) {
+	defer connection.recoverHandlerPanic(topic)
+	if err := handler(topic, payload); err != nil {
+		connection.logger.Error("topic handler failed", "topic", topic, "error", err)
+	}
+}
+
+// recoverHandlerPanic logs a panic raised while handling an MQTT message, so
+// one bad message costs that message rather than the agent process: paho runs
+// these callbacks with no recovery of its own.
+func (connection *MQTTConnection) recoverHandlerPanic(topic string) {
+	if r := recover(); r != nil {
+		connection.logger.Error("panic handling MQTT message",
+			"topic", topic, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+	}
+}
+
 // processJob dispatches a single job to message handlers.
 func (connection *MQTTConnection) processJob(job dispatchJob) {
+	defer connection.recoverHandlerPanic("")
 	err := connection.messaging.DispatchToHandlers(
 		context.Background(),
 		job.payload,
@@ -340,11 +381,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 
 					if hasHandler {
 						// Process in goroutine to avoid blocking message acknowledgment
-						go func() {
-							if err := handler(pr.Packet.Topic, pr.Packet.Payload); err != nil {
-								connection.logger.Error("topic handler failed", "topic", pr.Packet.Topic, "error", err)
-							}
-						}()
+						go connection.runTopicHandler(handler, pr.Packet.Topic, pr.Packet.Payload)
 						return true, nil
 					}
 
@@ -357,18 +394,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 					}
 					orgID := parts[1]
 
-					// Hold dispatchMu while checking shuttingDown and sending on
-					// dispatchQueue so stopDispatchWorker cannot close the queue
-					// between the check and the send.
-					connection.dispatchMu.Lock()
-					if connection.shuttingDown {
-						connection.dispatchMu.Unlock()
-						connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
-						return true, nil
-					}
-
-					select {
-					case connection.dispatchQueue <- dispatchJob{
+					connection.enqueueOrDispatch(dispatchJob{
 						payload: pr.Packet.Payload,
 						orgID:   orgID,
 						agentID: details.AgentID,
@@ -377,27 +403,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 							Publish:     connection.publishToTopic,
 							Unsubscribe: connection.unsubscribeFromTopic,
 						},
-					}:
-						connection.dispatchMu.Unlock()
-					default:
-						connection.dispatchMu.Unlock()
-						// Queue is full - log warning and process synchronously as fallback
-						connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
-						err := connection.messaging.DispatchToHandlers(
-							context.Background(),
-							pr.Packet.Payload,
-							orgID,
-							details.AgentID,
-							TopicActions{
-								Subscribe:   connection.subscribeToTopic,
-								Publish:     connection.publishToTopic,
-								Unsubscribe: connection.unsubscribeFromTopic,
-							},
-						)
-						if err != nil {
-							connection.logger.Error("failed to dispatch to handlers", "error", err)
-						}
-					}
+					}, pr.Packet.Topic)
 
 					return true, nil
 				},

@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -124,6 +125,7 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 
 	// Bound the body before routing, so a handler added later cannot read an
 	// unbounded one. The reader is lazy: a handler that never reads pays nothing.
+	server.router.Use(recoverPanics(logger))
 	server.router.Use(limitBodySize)
 
 	v1 := server.router.Group("/api/v1")
@@ -300,4 +302,18 @@ func (s *Server) Stop(ctx context.Context) {
 	if err := s.manager.Stop(); err != nil {
 		s.logger.Error("stopping policy manager", "error", err)
 	}
+}
+
+// recoverPanics answers a request whose handler panicked with a 500 and logs the
+// panic with its stack, instead of letting net/http drop the connection
+// unanswered. The route is logged as its pattern, not the raw request path.
+func recoverPanics(logger *slog.Logger) gin.HandlerFunc {
+	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, err any) {
+		logger.Error("panic serving request",
+			"method", c.Request.Method,
+			"route", c.FullPath(),
+			"panic", fmt.Sprint(err),
+			"stack", string(debug.Stack()))
+		c.AbortWithStatusJSON(http.StatusInternalServerError, Response{Detail: "internal error"})
+	})
 }
