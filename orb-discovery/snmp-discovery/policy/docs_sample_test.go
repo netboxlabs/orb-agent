@@ -44,6 +44,9 @@ var documentedPages = []documentedPage{
 
 var (
 	envReference = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
+	// secretReference matches a secrets manager reference, which the agent
+	// resolves before the backend sees the policy.
+	secretReference = regexp.MustCompile(`\$\{[a-z][a-z0-9+.-]*://[^}]*\}`)
 	// fenceLine matches a fenced code block delimiter: indentation, the fence
 	// and its info string.
 	fenceLine = regexp.MustCompile("^([ \t]*)(`{3,}|~{3,})(.*)$")
@@ -88,9 +91,10 @@ type yamlBlock struct {
 	text string
 }
 
-// yamlBlocks returns each yaml or yml fenced block of a markdown page. A
-// fence with an info string inside an open block means that block was never
-// closed, which fails rather than swallowing what follows.
+// yamlBlocks returns each yaml or yml fenced block of a markdown page, without
+// the lines that are only "..." (elided content). A fence with an info string
+// inside an open block means that block was never closed, which fails rather
+// than swallowing what follows.
 func yamlBlocks(page string) ([]yamlBlock, error) {
 	var blocks []yamlBlock
 	var cur []string
@@ -106,7 +110,7 @@ func yamlBlocks(page string) ([]yamlBlock, error) {
 		case open != nil && ok && f.within(*open):
 			return nil, fmt.Errorf("line %d: fence inside the block opened at line %d, which is never closed", i+1, open.line)
 		case open != nil:
-			if open.isYAML {
+			if open.isYAML && strings.TrimSpace(line) != "..." {
 				cur = append(cur, line)
 			}
 		case ok:
@@ -451,6 +455,7 @@ func TestYamlBlocks(t *testing.T) {
 	}{
 		{name: "yaml and yml, any case", page: "```yaml\na: 1\n```\n```YML\nb: 2\n```\n~~~yaml\nc: 3\n~~~", want: []string{"a: 1", "b: 2", "c: 3"}},
 		{name: "other languages skipped", page: "```sh\nls\n```\n```yaml\na: 1\n```", want: []string{"a: 1"}},
+		{name: "elisions dropped", page: "```yaml\norb:\n  ...\n  a: 1\n```", want: []string{"orb:\n  a: 1"}},
 		{name: "shorter fence is content", page: "````yaml\nc: |\n  ```\n````", want: []string{"c: |\n  ```"}},
 		{name: "deeply indented fence is content", page: "```yaml\nc: |\n        ```\nd: 2\n```", want: []string{"c: |\n        ```\nd: 2"}},
 		{name: "quoted yaml in markdown", page: "````markdown\n```yaml\na: 1\n```\n````", want: nil},
@@ -531,7 +536,7 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 				for _, ref := range envReference.FindAllStringSubmatch(block.text, -1) {
 					t.Setenv(ref[1], "example")
 				}
-				docs, err := documents(block.text)
+				docs, err := documents(secretReference.ReplaceAllString(block.text, "example"))
 				if err != nil && page.shared && !strings.Contains(block.text, backend) {
 					t.Skip("illustrative snippet for another backend")
 				}
