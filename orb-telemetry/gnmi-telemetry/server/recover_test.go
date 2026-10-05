@@ -24,7 +24,7 @@ func TestHandlerPanicIsAnsweredWith500(t *testing.T) {
 	ctx := context.Background()
 	dialer := &gnmi.FakeDialer{Session: &gnmi.FakeSession{Caps: &gnmi.CapabilitiesResult{}}}
 	srv := server.NewServer("localhost", 0, logger, policy.NewManager(ctx, logger, policy.Options{ProfilesRoot: testProfilesRoot(t), Dialer: dialer}), "1.0.0")
-	srv.Router().Handle("PROBE", "/panic-probe/:id", func(*gin.Context) { panic("probe failure") })
+	srv.Router().Handle("PROBE", "/panic-probe/:id", panicProbe)
 
 	w := httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, httptest.NewRequest("PROBE", "/panic-probe/7", nil))
@@ -32,10 +32,13 @@ func TestHandlerPanicIsAnsweredWith500(t *testing.T) {
 	require.JSONEq(t, `{"detail":"internal error"}`, w.Body.String())
 	require.Contains(t, logs.String(), "panic serving request")
 	require.Contains(t, logs.String(), "probe failure")
-	require.Contains(t, logs.String(), "/panic-probe/:id", "the route pattern, not the request path")
+	require.Regexp(t, `"handler":"[^"]*\.panicProbe"`, logs.String())
 	require.NotContains(t, logs.String(), "PROBE", "nothing the client sent")
+	require.NotContains(t, logs.String(), "/panic-probe/7", "nothing the client sent")
 
 	w = httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))
 	require.Equal(t, http.StatusOK, w.Code, "the server keeps serving")
 }
+
+func panicProbe(*gin.Context) { panic("probe failure") }

@@ -224,13 +224,13 @@ func (s *Server) Stop() {
 
 // recoverPanics answers a request whose handler panicked with a 500 and logs the
 // panic with its stack, instead of letting net/http drop the connection
-// unanswered. Only the route pattern identifies the request, so nothing the
-// client sent reaches the log.
+// unanswered. The handler is named by its function, so nothing the client sent
+// reaches the log.
 func recoverPanics(logger *slog.Logger) gin.HandlerFunc {
 	// A nil writer skips gin's own stack dump; the handler logs the panic.
 	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, err any) {
 		logger.Error("panic serving request",
-			"route", c.FullPath(),
+			"handler", c.HandlerName(),
 			"panic", fmt.Sprint(err),
 			"stack", string(debug.Stack()))
 		c.AbortWithStatusJSON(http.StatusInternalServerError, Response{Detail: "internal error"})
