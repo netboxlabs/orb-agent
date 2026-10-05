@@ -57,7 +57,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
 | rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
 | send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not verify the server. Off by default. See [Credentials and ranges](#credentials-and-ranges). |
-| options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). |
+| options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). `emit_lag_membership` (bool) links each LAG member port to its aggregate (default on; see [LAG membership](#lag-membership)). |
 | defaults | map | no | NetBox defaults applied to discovered entities (see below). |
 
 #### Defaults
@@ -191,6 +191,12 @@ Each interface's NetBox type is resolved per interface, in precedence order:
 1. `interface_exclude_patterns` — a name matching any regex is skipped (no interface emitted).
 2. `interface_patterns` — the first matching regex assigns its `type` (wins over the rest).
 3. OpenConfig `state/type` — the discovered identityref maps to a NetBox type for structural families (LAG → `lag`; loopback/VLAN/tunnel/prop-virtual → `virtual`).
+4. Built-in name rules — media from names such as `GigabitEthernet` or `xe-`, and LAGs (see below); used only when `state/type` gave no structural family.
+5. Port speed — `ethernet/state/port-speed` picks a media type.
+6. The policy's `interface.if_type` default, else `other`.
+
+#### LAG membership
+With `options.emit_lag_membership` on (the default), a port whose OpenConfig `ethernet/state/aggregate-id` names an aggregate gets `Interface.lag` set to it. Nothing is created: the link is made only when the aggregate was discovered in the same cycle and typed `lag`, so an aggregate that is absent or excluded by `interface_exclude_patterns` leaves the member without a LAG and logs a warning. An aggregate is typed `lag` by its OpenConfig `state/type`, by a built-in name rule (`Port-Channel`/`po`, `ae`, `Bundle-Ether`, `Eth-Trunk`, `PortChannel`, `lag`/`lag-`, `bond`) or by `interface_patterns`; add an `interface_patterns` rule for an aggregate name none of these cover. A member typed `virtual` is skipped too, since NetBox refuses a LAG parent on one, and so is a member typed `bridge` or `lag`. device-discovery applies the same membership rules, with a shorter list of built-in LAG names.
 
 ### Sample
 A sample policy exercising the common gNMI discovery parameters.

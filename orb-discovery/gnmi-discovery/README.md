@@ -75,6 +75,7 @@ policies:
       get_interval_ms: 900000      # GET poll interval (default 900000 = 15m)
       options:                     # per-policy behavior toggles (peer to defaults)
         capture_config: false      # capture the CONFIG datastore into Device.config.running (default off)
+        emit_lag_membership: true  # link LAG member ports to their aggregate (default on)
       defaults:
         site: New York NY          # NetBox site (default "undefined")
         role: Router               # NetBox device role (default "undefined")

@@ -80,14 +80,19 @@ var defaultInterfacePatterns = []compiledIfacePattern{
 	{regexp.MustCompile(`^(FastEthernet|Fa)\d+`), "100base-tx"},
 	{regexp.MustCompile(`^xe-\d+/\d+/\d+`), "10gbase-x-sfpp"},
 	{regexp.MustCompile(`^ge-\d+/\d+/\d+`), "1000base-t"},
-	{regexp.MustCompile(`^([Pp]ort-[Cc]hannel|Po)\d+`), "lag"},
+	{regexp.MustCompile(`^([Pp]ort-[Cc]hannel|[Pp]o)\d+`), "lag"},
 	{regexp.MustCompile(`^ae\d+`), "lag"},
 	{regexp.MustCompile(`^Bundle-Ether\d+`), "lag"},
+	// Nokia SR Linux (lag1) and SR OS (lag-1), Linux bonding (bond0): their
+	// aggregates need a lag type for a member's aggregate-id to link to them
+	// when the target reports no OpenConfig LAG type.
+	{regexp.MustCompile(`^lag-?\d+`), "lag"},
+	{regexp.MustCompile(`^bond\d+`), "lag"},
 	// Huawei VRP/CloudEngine media names (10GE/25GE/40GE/100GE, descending so the
 	// longer prefixes win; bare GE is Huawei 1G) plus Eth-Trunk (LAG) and Vlanif
 	// (SVI). These tokens are vendor-unique and do not collide with the rules
 	// above, so they benefit fallback-to-_base discovery too. PortChannel (no
-	// hyphen) covers SONiC/Dell — the `Po\d+` rule above requires a digit right
+	// hyphen) covers SONiC/Dell — the `[Pp]o\d+` rule above requires a digit right
 	// after "Po" so it does not match "PortChannelNN".
 	{regexp.MustCompile(`^100GE\d`), "100gbase-x-qsfp28"},
 	{regexp.MustCompile(`^40GE\d`), "40gbase-x-qsfpp"},
