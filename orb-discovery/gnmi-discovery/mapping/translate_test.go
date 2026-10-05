@@ -771,8 +771,10 @@ func TestTranslateLagNeedsADiscoveredLagAggregate(t *testing.T) {
 	})
 	require.Nil(t, lagOf(t, translateInterfaces(base, notLag, dev, nil, nil, nil), "Ethernet1"), "aggregate not typed lag")
 
-	virtual := &config.Defaults{InterfacePatterns: []config.InterfacePattern{{Match: "^Ethernet1$", Type: "virtual"}}}
-	require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, virtual, nil, nil), "Ethernet1"), "member type NetBox refuses a LAG on")
+	for _, typ := range []string{"virtual", "bridge", "lag"} {
+		member := &config.Defaults{InterfacePatterns: []config.InterfacePattern{{Match: "^Ethernet1$", Type: typ}}}
+		require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, member, nil, nil), "Ethernet1"), "member typed %s", typ)
+	}
 }
 
 // emit_lag_membership turns the links off; it is on unless set false.
