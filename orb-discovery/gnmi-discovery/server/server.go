@@ -118,8 +118,8 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		WriteTimeout:      30 * time.Second,
 	}
 
-	// Add metrics middleware
 	server.router.Use(recoverPanics(logger))
+	// Add metrics middleware
 	server.router.Use(metricsMiddleware())
 
 	v1 := server.router.Group("/api/v1")
@@ -266,7 +266,8 @@ func (s *Server) Stop() {
 // panic with its stack, instead of letting net/http drop the connection
 // unanswered. The route is logged as its pattern, not the raw request path.
 func recoverPanics(logger *slog.Logger) gin.HandlerFunc {
-	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, err any) {
+	// A nil writer skips gin's own stack dump; the handler logs the panic.
+	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, err any) {
 		logger.Error("panic serving request",
 			"method", c.Request.Method,
 			"route", c.FullPath(),

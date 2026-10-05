@@ -69,8 +69,8 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		Addr:    fmt.Sprintf("%s:%d", host, port),
 		Handler: server.router,
 	}
-	// Custom middleware to count API calls and measure latency
 	server.router.Use(recoverPanics(logger))
+	// Custom middleware to count API calls and measure latency
 	server.router.Use(func(c *gin.Context) {
 		// Start timer for latency
 		startTime := time.Now()
@@ -226,7 +226,8 @@ func (s *Server) Stop() {
 // panic with its stack, instead of letting net/http drop the connection
 // unanswered. The route is logged as its pattern, not the raw request path.
 func recoverPanics(logger *slog.Logger) gin.HandlerFunc {
-	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, err any) {
+	// A nil writer skips gin's own stack dump; the handler logs the panic.
+	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, err any) {
 		logger.Error("panic serving request",
 			"method", c.Request.Method,
 			"route", c.FullPath(),

@@ -123,9 +123,9 @@ func NewServer(host string, port int, logger *slog.Logger, manager *policy.Manag
 		IdleTimeout:       idleTimeout,
 	}
 
+	server.router.Use(recoverPanics(logger))
 	// Bound the body before routing, so a handler added later cannot read an
 	// unbounded one. The reader is lazy: a handler that never reads pays nothing.
-	server.router.Use(recoverPanics(logger))
 	server.router.Use(limitBodySize)
 
 	v1 := server.router.Group("/api/v1")
@@ -308,7 +308,8 @@ func (s *Server) Stop(ctx context.Context) {
 // panic with its stack, instead of letting net/http drop the connection
 // unanswered. The route is logged as its pattern, not the raw request path.
 func recoverPanics(logger *slog.Logger) gin.HandlerFunc {
-	return gin.CustomRecoveryWithWriter(io.Discard, func(c *gin.Context, err any) {
+	// A nil writer skips gin's own stack dump; the handler logs the panic.
+	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, err any) {
 		logger.Error("panic serving request",
 			"method", c.Request.Method,
 			"route", c.FullPath(),

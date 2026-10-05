@@ -24,15 +24,15 @@ func TestHandlerPanicIsAnsweredWith500(t *testing.T) {
 	policyManager, err := policy.NewManager(ctx, logger, nil, nil)
 	require.NoError(t, err)
 	srv := server.NewServer("localhost", 0, logger, policyManager, "1.0.0")
-	srv.Router().GET("/panic-probe", func(*gin.Context) { panic("probe failure") })
+	srv.Router().GET("/panic-probe/:id", func(*gin.Context) { panic("probe failure") })
 
 	w := httptest.NewRecorder()
-	srv.Router().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/panic-probe", nil))
+	srv.Router().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/panic-probe/7", nil))
 	require.Equal(t, http.StatusInternalServerError, w.Code)
 	require.JSONEq(t, `{"detail":"internal error"}`, w.Body.String())
 	require.Contains(t, logs.String(), "panic serving request")
 	require.Contains(t, logs.String(), "probe failure")
-	require.Contains(t, logs.String(), "/panic-probe")
+	require.Contains(t, logs.String(), "/panic-probe/:id", "the route pattern, not the request path")
 
 	w = httptest.NewRecorder()
 	srv.Router().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/status", nil))

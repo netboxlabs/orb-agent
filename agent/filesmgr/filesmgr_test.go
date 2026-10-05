@@ -1461,3 +1461,60 @@ func TestManager_EnsurePanicRecordsFailure(t *testing.T) {
 	assert.Equal(t, "1.0.0", pending[0].Version)
 	assert.NotEmpty(t, pending[0].Error)
 }
+
+// TestManager_PublishesAfterReleasingTheName verifies that every event is
+// published once the name's mutex is released, so a subscriber may call back
+// into the manager for the same name.
+func TestManager_PublishesAfterReleasingTheName(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"a.txt": "v1"})
+	v2 := buildTarGz(t, map[string]string{"a.txt": "v2"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v1) })
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v2) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	spec := func(version string, archive []byte) FileSpec {
+		return FileSpec{Name: "pkg", Version: version, URL: srv.URL + "/" + version + ".tar.gz", SHA256: sha256Hex(archive), Extract: true}
+	}
+
+	m, _ := newTestManager(t)
+	fm := m.(*filesmgr)
+	var seen []FileEventType
+	m.Subscribe(func(ev FileEvent) {
+		mu := fm.mutexFor(ev.Entry.Name)
+		require.True(t, mu.TryLock(), "%s published while %s was locked", ev.Type, ev.Entry.Name)
+		mu.Unlock()
+		seen = append(seen, ev.Type)
+	})
+
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, spec("v1", v1))
+	require.NoError(t, err)
+	_, err = m.Ensure(ctx, spec("v2", v2))
+	require.NoError(t, err)
+	require.NoError(t, m.Rollback(ctx, "pkg"))
+	require.NoError(t, m.Rollback(ctx, "pkg"))
+	_, err = m.Ensure(ctx, spec("v1", v1))
+	require.NoError(t, err)
+	require.NoError(t, m.Remove(ctx, "pkg"))
+	assert.Equal(t, []FileEventType{EventInstalled, EventUpgraded, EventRolledBack, EventRemoved, EventInstalled, EventRemoved}, seen)
+}
+
+// TestManager_PublishesNothingWithoutAChange verifies that a call that fails
+// or finds nothing to do publishes no event.
+func TestManager_PublishesNothingWithoutAChange(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	m, _ := newTestManager(t)
+	var seen []FileEvent
+	m.Subscribe(func(ev FileEvent) { seen = append(seen, ev) })
+
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, FileSpec{Name: "pkg", Version: "1.0.0", URL: srv.URL + "/x.tar.gz", SHA256: strings.Repeat("0", 64), Extract: true})
+	require.Error(t, err)
+	require.NoError(t, m.Remove(ctx, "pkg"))
+	require.Error(t, m.Rollback(ctx, "pkg"))
+	assert.Empty(t, seen)
+}

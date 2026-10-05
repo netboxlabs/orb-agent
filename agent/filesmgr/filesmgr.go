@@ -570,7 +570,7 @@ func (m *filesmgr) ensureLocked(ctx context.Context, spec FileSpec) (string, err
 	}
 
 	path, ev, err := m.install(ctx, spec)
-	if ev != nil {
+	if err == nil && ev != nil {
 		// Published after the name's mutex is released so a slow subscriber
 		// does not block other callers for this name.
 		m.bus.publish(*ev)

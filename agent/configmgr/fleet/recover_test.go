@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -101,4 +102,31 @@ func TestTopicHandlerPanicIsRecovered(t *testing.T) {
 	})
 	require.Contains(t, logs.String(), "panic handling MQTT message")
 	require.Contains(t, logs.String(), "orgs/test-org/policies")
+}
+
+// A received message reaches its topic handler through the recovering wrapper.
+func TestReceivedMessageHandlerPanicIsRecovered(t *testing.T) {
+	var logs syncBuffer
+	connection := newRecoverTestConnection(&logs)
+	connection.RegisterTopicHandler("orgs/test-org/policies", func(string, []byte) error { panic("handler failure") })
+
+	connection.onPublishReceived("orgs/test-org/policies", nil, "test-agent")
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "panic handling MQTT message")
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Contains(t, logs.String(), "topic=orgs/test-org/policies")
+}
+
+// A received message with no topic handler is queued with its topic, so a
+// panic while dispatching it can name the topic.
+func TestReceivedMessageIsQueuedWithItsTopic(t *testing.T) {
+	var logs syncBuffer
+	connection := newRecoverTestConnection(&logs)
+
+	connection.onPublishReceived(recoverTestTopic, []byte(`{}`), "test-agent")
+	job := <-connection.dispatchQueue
+	require.Equal(t, recoverTestTopic, job.topic)
+	require.Equal(t, "test-org", job.orgID)
+	require.Equal(t, "test-agent", job.agentID)
+	require.Equal(t, []byte(`{}`), job.payload)
 }

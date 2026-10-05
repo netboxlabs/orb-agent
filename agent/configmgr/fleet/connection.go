@@ -156,6 +156,43 @@ func (connection *MQTTConnection) enqueueOrDispatch(job dispatchJob) {
 	}
 }
 
+// onPublishReceived routes a message from a subscribed topic: to its
+// topic-specific handler when one is registered, otherwise to the dispatch
+// worker.
+func (connection *MQTTConnection) onPublishReceived(topic string, payload []byte, agentID string) {
+	connection.logger.Debug("received MQTT message", "topic", topic)
+
+	connection.mu.Lock()
+	handler, hasHandler := connection.topicHandlers[topic]
+	connection.mu.Unlock()
+
+	if hasHandler {
+		// Process in goroutine to avoid blocking message acknowledgment
+		go connection.runTopicHandler(handler, topic, payload)
+		return
+	}
+
+	// Enqueue the job for sequential processing by the dispatch worker
+	// This preserves message ordering and prevents race conditions
+	parts := strings.Split(topic, "/")
+	if len(parts) < 2 {
+		connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", topic)
+		return
+	}
+
+	connection.enqueueOrDispatch(dispatchJob{
+		topic:   topic,
+		payload: payload,
+		orgID:   parts[1],
+		agentID: agentID,
+		topicActions: TopicActions{
+			Subscribe:   connection.subscribeToTopic,
+			Publish:     connection.publishToTopic,
+			Unsubscribe: connection.unsubscribeFromTopic,
+		},
+	})
+}
+
 // runTopicHandler runs a topic-specific handler, logging its error or panic.
 func (connection *MQTTConnection) runTopicHandler(handler TopicMessageHandler, topic string, payload []byte) {
 	defer connection.recoverHandlerPanic(topic)
@@ -372,41 +409,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 			ClientID: details.ClientID,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(pr paho.PublishReceived) (bool, error) {
-					// Log any published messages to subscribed topics
-					connection.logger.Debug("received MQTT message", "topic", pr.Packet.Topic)
-
-					// Check if there's a topic-specific handler
-					connection.mu.Lock()
-					handler, hasHandler := connection.topicHandlers[pr.Packet.Topic]
-					connection.mu.Unlock()
-
-					if hasHandler {
-						// Process in goroutine to avoid blocking message acknowledgment
-						go connection.runTopicHandler(handler, pr.Packet.Topic, pr.Packet.Payload)
-						return true, nil
-					}
-
-					// Enqueue the job for sequential processing by the dispatch worker
-					// This preserves message ordering and prevents race conditions
-					parts := strings.Split(pr.Packet.Topic, "/")
-					if len(parts) < 2 {
-						connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
-						return true, nil
-					}
-					orgID := parts[1]
-
-					connection.enqueueOrDispatch(dispatchJob{
-						topic:   pr.Packet.Topic,
-						payload: pr.Packet.Payload,
-						orgID:   orgID,
-						agentID: details.AgentID,
-						topicActions: TopicActions{
-							Subscribe:   connection.subscribeToTopic,
-							Publish:     connection.publishToTopic,
-							Unsubscribe: connection.unsubscribeFromTopic,
-						},
-					})
-
+					connection.onPublishReceived(pr.Packet.Topic, pr.Packet.Payload, details.AgentID)
 					return true, nil
 				},
 			},

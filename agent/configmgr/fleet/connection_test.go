@@ -282,9 +282,9 @@ func TestDispatchQueue_HandlesQueueFull(t *testing.T) {
 }
 
 // TestDispatchQueue_NoPanicOnConcurrentShutdown exercises the race window between
-// sending on dispatchQueue and closing it during shutdown. The send path should
-// follow the same locking protocol as production so stopDispatchWorker cannot
-// close the queue between the shutdown check and the send.
+// sending on dispatchQueue and closing it during shutdown, through the
+// production send path, so stopDispatchWorker cannot close the queue between
+// the shutdown check and the send.
 //
 // Run with: go test -race -count=100 -run TestDispatchQueue_NoPanicOnConcurrentShutdown
 func TestDispatchQueue_NoPanicOnConcurrentShutdown(t *testing.T) {
