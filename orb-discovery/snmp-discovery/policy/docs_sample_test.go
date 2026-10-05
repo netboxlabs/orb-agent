@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
@@ -20,6 +21,8 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/policy"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
 )
 
 // documentedPage is a page whose yaml examples operators copy. A shared page
@@ -570,11 +573,23 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 					require.NoError(t, err, "block:\n%s", block.text)
 					// Starting a policy refuses more than parsing does: no
 					// targets, a bad cron, or a timeout not above snmp_timeout.
+					// A scan then skips a host it cannot expand and fails on
+					// credentials the SNMP client does not take.
 					for name, p := range parsed {
 						require.NotEmpty(t, p.Scope.Targets, "%s has no targets", name)
 						r, err := policy.NewRunner(context.Background(), logger, name, p, nil, nil, &config.Mapping{}, nil, nil, nil)
 						require.NoError(t, err, "block:\n%s", block.text)
 						require.NoError(t, r.Stop())
+						for _, target := range p.Scope.Targets {
+							_, err := targets.Expand(target.Host)
+							require.NoError(t, err, "%s: host %q", name, target.Host)
+							auth := target.Authentication
+							if auth == nil {
+								auth = &p.Scope.Authentication
+							}
+							_, err = snmp.NewClient(target.Host, target.Port, 0, time.Second, auth, logger)
+							require.NoError(t, err, "%s: host %q", name, target.Host)
+						}
 					}
 
 					// ParsePolicies drops a key it does not know; the docs must not use one.
