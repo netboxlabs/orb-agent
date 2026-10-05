@@ -343,6 +343,15 @@ Drivers that implement the standard NAPALM `get_network_instances()` getter disc
 
 **Demand-driven** (the platform has a VRF or VRF-like concept; implementation awaits a real-device output capture — open an issue with one if you need it): `brocade_fastiron` (ICX VRF-lite), `alcatel_aos` (OmniSwitch VRF), `aruba_aoscx_ssh` (use the REST `aruba_aoscx` driver meanwhile), `mikrotik_routeros` (RouterOS v7 `/ip/vrf` only — v6 routing marks will not be mapped), `fortinet_fortios_ssh` (only explicit interface VRF ids would be mapped — VDOMs are firewall contexts, never VRFs), `cisco_asa` / `cisco_asa_ssh` / `cisco_ftd_ssh` (multi-context/virtual-router semantics need design), `cisco_apic` (ACI tenant VRFs are fabric-level objects, out of scope for per-device discovery), `ericsson_ipos`, `mellanox_mlnxos`.
 
+## LAG membership
+
+Drivers that implement the optional `get_interfaces_lag()` getter report which physical ports are members of which link aggregation, and each member interface carries a `lag` reference to its aggregate. Emission is gated by the `emit_lag_membership` policy option (defaults to `true`); see the [device discovery README](./README.md#lag-membership) for the rules.
+
+| Driver | Status |
+|--------|--------|
+| `junos` | Supported (Juniper Junos via NETCONF) — `aenet` address families in the terse `get-interface-information` reply, the RPC behind `show interfaces terse`. Operational data only, so the discovery account needs no configuration-read permission, and the reply does not depend on LACP. Membership is reported per logical unit and collapses onto the physical port. Only `ae<N>` bundles are reported; SRX chassis-cluster `reth` and `fab` child links are not LAGs and are left out. Built from a reply captured on an EX4550 running Junos 15.1 (LACP bundles). |
+| other drivers | Not yet supported — open an issue with a real-device output capture if you need it. |
+
 ## Querying supported drivers at runtime
 
 device-discovery exposes its effective driver list via its capabilities endpoint:

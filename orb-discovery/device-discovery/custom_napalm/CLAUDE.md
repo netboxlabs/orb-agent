@@ -272,6 +272,40 @@ def get_interfaces_vlans(self) -> dict[str, dict]:
     return result
 ```
 
+## Optional method: `get_interfaces_lag`
+
+A driver MAY implement `get_interfaces_lag()` to populate NetBox
+`Interface.lag`. The runner calls it via `getattr(...)` (skipped when the
+`emit_lag_membership` policy option is `false`) so drivers without it are
+silently skipped.
+
+**Output shape** — physical member port name → aggregate interface name:
+
+```python
+{"xe-0/0/24": "ae120", "xe-0/0/28": "ae0"}
+```
+
+- **Both names must match `get_interfaces()` naming exactly**: the
+  translator joins on interface name and creates nothing. A member or an
+  aggregate it cannot find is skipped.
+- **Report the physical port, never a logical unit**: NetBox does not allow a
+  LAG parent on a virtual interface. Collapse per-unit membership onto the
+  port in the driver (Junos reports `xe-0/0/24.0 -> ae120.0`).
+- **Drop contradictions rather than pick**: a port whose units name two
+  different aggregates is left out, with a WARNING.
+- **Prefer operational state over configuration**: discovery accounts often
+  lack configuration-read permission (the Junos implementation reads the
+  terse `get-interface-information` reply for this reason).
+- **Best-effort**: return `{}` on an RPC or parse failure rather than raising.
+
+`device_discovery.lag.apply_interface_lags()` applies the map after stack
+translation, so on a Virtual Chassis the reference names the stack member that
+owns the aggregate.
+
+**Tests**: add `mock_data/test_get_interfaces_lag/<scenario>/` fixtures —
+`BaseDriverTest.test_get_interfaces_lag` auto-discovers them, validates the
+shape, and compares against `expected_result.json` when present.
+
 ## Optional method: `get_network_instances`
 
 A driver SHOULD implement the standard NAPALM `get_network_instances()`

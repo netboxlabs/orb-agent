@@ -349,6 +349,7 @@ class PolicyRunner:
                         f"Error getting interface VLANs: {e}. "
                         "Continuing without interface-VLAN data."
                     )
+            self._collect_lag_membership(config, device, data, sanitized_hostname)
             get_chassis_members = getattr(device, "get_chassis_members", None)
             if callable(get_chassis_members):
                 try:
@@ -367,6 +368,33 @@ class PolicyRunner:
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
             return entity_count
+
+    def _collect_lag_membership(
+        self,
+        config: Config,
+        device,
+        data: dict,
+        sanitized_hostname: str,
+    ) -> None:
+        """
+        Call the driver's optional get_interfaces_lag() unless emit_lag_membership is off.
+
+        Drivers without the method are skipped silently. A failure is logged
+        and costs only the lag references, never the device's discovery cycle.
+        """
+        if config.options and config.options.emit_lag_membership is False:
+            return
+        get_interfaces_lag = getattr(device, "get_interfaces_lag", None)
+        if not callable(get_interfaces_lag):
+            return
+        try:
+            data["interfaces_lag"] = get_interfaces_lag()
+        except Exception as e:
+            logger.warning(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                f"Error getting LAG membership: {e}. "
+                "Continuing without LAG membership."
+            )
 
     def _collect_modules(
         self,

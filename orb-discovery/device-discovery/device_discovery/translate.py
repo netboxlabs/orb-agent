@@ -30,6 +30,7 @@ from netboxlabs.diode.sdk.ingester import (
 
 from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
+from device_discovery.lag import apply_interface_lags
 from device_discovery.policy.models import (
     UNDEFINED_PLACEHOLDER,
     Defaults,
@@ -488,6 +489,25 @@ def _apply_interface_vlan_associations(
     )
 
 
+def _apply_lag_membership(
+    data: dict,
+    interface_entities: list[Entity],
+    options: Options,
+) -> None:
+    """
+    Set Interface.lag from ``data["interfaces_lag"]`` unless the option is off.
+
+    Gated here as well as in the runner (which skips the driver call when
+    ``emit_lag_membership`` is False), so a caller handing translate_data a
+    pre-populated payload still honours the opt-out.
+    """
+    if options.emit_lag_membership is False:
+        return
+    applied = apply_interface_lags(interface_entities, data.get("interfaces_lag"))
+    if applied:
+        logger.debug("lag membership: set lag on %d interface(s)", applied)
+
+
 def apply_interface_vlans(
     entities: list[Entity],
     interfaces_vlans: Mapping[str, Any] | object,
@@ -806,13 +826,17 @@ def translate_data(data: dict) -> Iterable[Entity]:
                 iface_vrf_map=iface_vrf_map,
             )
         )
+        stack_interfaces = [e for e in entities if e.HasField("interface")]
         _apply_interface_vlan_associations(
             data,
-            [e for e in entities if e.HasField("interface")],
+            stack_interfaces,
             defaults,
             options,
             new_stubs,
         )
+        # After stack translation, so member and aggregate already carry the
+        # stack member that owns them.
+        _apply_lag_membership(data, stack_interfaces, options)
         entities.extend(Entity(vrf=vrf) for vrf in discovered_vrfs)
         _emit_vlans_and_stubs(entities, data.get("vlan"), defaults, new_stubs)
         return entities
@@ -870,6 +894,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
             options,
             new_stubs,
         )
+        _apply_lag_membership(data, interface_related_entities, options)
         entities.append(Entity(device=device))
         entities.extend(module_entities)
         entities.extend(interface_related_entities)

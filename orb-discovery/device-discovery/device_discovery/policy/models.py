@@ -439,6 +439,15 @@ class Options(WarnUnknownKeys):
             "keep the configured defaults. Default False."
         ),
     )
+    emit_lag_membership: bool = Field(
+        default=True,
+        description=(
+            "Set Interface.lag on each link-aggregation member port to its "
+            "aggregate interface, from the driver's get_interfaces_lag(). "
+            "Set False to leave lag unset and skip the driver call. "
+            "Default True."
+        ),
+    )
     emit_device_name: bool = Field(
         default=True,
         description=(
