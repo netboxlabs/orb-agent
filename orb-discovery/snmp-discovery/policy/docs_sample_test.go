@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -44,9 +45,9 @@ type yamlBlock struct {
 	text string
 }
 
-// yamlBlocks returns each yaml or yml fenced block of a markdown page. A
-// fence with an info string inside an open yaml block means that block was
-// never closed, which fails the test rather than swallowing what follows.
+// yamlBlocks returns each yaml or yml fenced block of a markdown page. A fence
+// opening a block inside an open one means the first was never closed, which
+// fails the test rather than swallowing what follows.
 func yamlBlocks(t *testing.T, path string) []yamlBlock {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -72,17 +73,60 @@ func yamlBlocks(t *testing.T, path string) []yamlBlock {
 		case otherFence != "":
 			if closes(m, otherFence) {
 				otherFence = ""
+				continue
 			}
+			// A shorter fence of the same kind is content, as in a markdown
+			// example quoting a yaml block.
+			nested := m != nil && m[2] != "" && m[1][0] == otherFence[0] && len(m[1]) >= len(otherFence)
+			require.False(t, nested, "%s:%d: fence inside the block opened at line %d, which is never closed", path, i+1, start)
 		case m != nil:
 			if lang := strings.ToLower(m[2]); lang == "yaml" || lang == "yml" {
 				yamlFence, start = m[1], i+1
 			} else {
-				otherFence = m[1]
+				otherFence, start = m[1], i+1
 			}
 		}
 	}
 	require.Empty(t, yamlFence, "%s ends inside the yaml block opened at line %d", path, start)
+	require.Empty(t, otherFence, "%s ends inside the block opened at line %d", path, start)
 	return blocks
+}
+
+// customMaps are the keys whose mapping form a custom UnmarshalYAML decodes,
+// which KnownFields does not reach.
+var customMaps = map[string]reflect.Type{
+	"vrf":      reflect.TypeFor[config.VrfParameters](),
+	"vrf_ipv4": reflect.TypeFor[config.VrfParameters](),
+	"vrf_ipv6": reflect.TypeFor[config.VrfParameters](),
+	"tenant":   reflect.TypeFor[config.TenantParameters](),
+}
+
+// customMapKeys fails on a key in a customMaps mapping that its type does
+// not declare, which the decoder would drop silently.
+func customMapKeys(t *testing.T, v any) {
+	t.Helper()
+	switch v := v.(type) {
+	case map[string]any:
+		for k, child := range v {
+			if typ, ok := customMaps[k]; ok {
+				if m, ok := child.(map[string]any); ok {
+					known := map[string]bool{}
+					for field := range typ.Fields() {
+						name, _, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+						known[name] = true
+					}
+					for key := range m {
+						require.True(t, known[key], "%s has no %q key", k, key)
+					}
+				}
+			}
+			customMapKeys(t, child)
+		}
+	case []any:
+		for _, child := range v {
+			customMapKeys(t, child)
+		}
+	}
 }
 
 // documentedPatterns compiles every interface_patterns match and
@@ -138,7 +182,9 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 					t.Setenv(ref[1], "example")
 				}
 				var doc map[string]any
-				require.NoError(t, yaml.Unmarshal([]byte(block.text), &doc), "block:\n%s", block.text)
+				docs := yaml.NewDecoder(strings.NewReader(block.text))
+				require.NoError(t, docs.Decode(&doc), "block:\n%s", block.text)
+				require.ErrorIs(t, docs.Decode(new(any)), io.EOF, "a second yaml document would go unchecked:\n%s", block.text)
 
 				var policies map[string]any
 				switch {
@@ -194,6 +240,7 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 				dec := yaml.NewDecoder(bytes.NewReader(payload))
 				dec.KnownFields(true)
 				require.NoError(t, dec.Decode(&config.Policies{}), "block:\n%s", block.text)
+				customMapKeys(t, policies)
 				documentedPatterns(t, policies)
 			})
 		}
