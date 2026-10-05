@@ -152,7 +152,7 @@ orb:
        # see docs/backends/worker.md
     snmp_discovery:
       snmp_policy_1:
-       # see docs/backends/snmp.md
+       # see docs/backends/snmp_discovery/README.md
     snmp_telemetry:
       snmp_telemetry_policy_1:
        # see docs/backends/snmp_telemetry.md

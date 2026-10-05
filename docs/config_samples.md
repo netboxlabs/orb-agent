@@ -433,7 +433,7 @@ orb:
               vrf: "management"
             interface:
               description: "Auto-discovered interface"
-              if_type: "ethernet"
+              if_type: "other"
             device:
               description: "SNMP discovered device"
               comments: "Automatically discovered via SNMP"

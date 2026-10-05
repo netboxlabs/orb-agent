@@ -116,7 +116,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ platform   | string  | Override the auto-discovered platform name   |
 | interface    | map  | Interface-specific defaults    |
 | ├─ description | string  | Interface description        |
-| ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
+| ├─ if_type       | string | Interface type (e.g. "1000base-t", "other")  |
 | ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
 | ├─ vrf   | string \| map  | IP address VRF name, or a VRF map (see the [vrf map](#vrf-map) below). Used for both address families unless an AF-specific override is set. |
@@ -302,7 +302,7 @@ config:
       # vrf_ipv6: { name: "ipv6-vrf", rd: "65000:6" }
     interface:
       description: "Auto-discovered interface"
-      if_type: "ethernet"
+      if_type: "other"
     interface_patterns:
       - match: "^(GigabitEthernet|Gi).*"
         type: "1000base-t"

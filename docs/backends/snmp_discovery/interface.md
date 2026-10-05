@@ -54,7 +54,7 @@ Interface types are determined using the following priority order (first match w
 - Maps speeds from 100 Mbps to 800G to appropriate interface types
 
 ### 5. Default Fallback (Lowest Priority)
-- If nothing else matches, uses `defaults.if_type`
+- If nothing else matches, uses `defaults.interface.if_type`
 - Defaults to `other` if not specified
 
 ## Interface Name Selection
@@ -252,9 +252,10 @@ defaults:
 ### Per-Target Override
 
 ```yaml
-defaults:
-  interface_exclude_patterns:
-    - "^tap.*"
+config:
+  defaults:
+    interface_exclude_patterns:
+      - "^tap.*"
 scope:
   targets:
     - host: "192.168.1.1"
@@ -262,6 +263,9 @@ scope:
         interface_exclude_patterns:
           - "^tap.*"
           - "^veth.*"   # this target also excludes veth interfaces
+  authentication:
+    protocol_version: "SNMPv2c"
+    community: "public"
 ```
 
 ### Invalid Patterns
@@ -355,7 +359,8 @@ When SNMP ifType is unknown and no patterns match, the system uses interface spe
 
 ```yaml
 defaults:
-  if_type: other
+  interface:
+    if_type: other
   interface_patterns:
     - match: "^Gi.*"
       type: "10gbase-x-sfpp"  # User override for Gigabit interfaces
@@ -380,7 +385,8 @@ If no `interface_patterns` are configured, the system automatically provides int
 
 ```yaml
 defaults:
-  if_type: other
+  interface:
+    if_type: other
   # No interface_patterns specified
 ```
 
@@ -400,4 +406,4 @@ defaults:
 
 **Speed-Based Fallback:**
 - Generic interfaces with unknown ifType but speed data → Speed-based detection
-- Unknown interfaces without speed → `other` (defaults.if_type)
+- Unknown interfaces without speed → `other` (defaults.interface.if_type)

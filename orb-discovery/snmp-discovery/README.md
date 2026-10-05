@@ -55,7 +55,7 @@ policies:
           vrf: "management"
         interface:
           description: "Auto-discovered interface"
-          if_type: "ethernet"
+          if_type: "other"
         device:
           description: "SNMP discovered device"
           comments: "Automatically discovered via SNMP"
@@ -251,7 +251,7 @@ defaults:
 - **Most specific match wins**: Within each priority tier, the longest matching pattern is used
 - **Case-sensitive**: Patterns are matched case-sensitively
 - **Regex syntax**: Uses Go's RE2 regex engine (see [syntax reference](https://github.com/google/re2/wiki/Syntax))
-- **Invalid patterns**: Will cause the policy to fail at load time with a clear error message
+- **Invalid patterns**: Are not caught when the policy is applied; every scan of every target in the policy then fails with an error naming the pattern
 
 #### Built-in Patterns
 
