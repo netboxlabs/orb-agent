@@ -2,7 +2,7 @@
 """
 Juniper Junos NAPALM driver subclass.
 
-Adds three optional extension methods on top of upstream NAPALM Junos:
+Adds four optional extension methods on top of upstream NAPALM Junos:
 
 - ``get_interfaces_vlans()``: per-interface VLAN classification from the
   ``<get-ethernet-switching-interface-information>`` RPC, tolerating both
@@ -16,8 +16,12 @@ Adds three optional extension methods on top of upstream NAPALM Junos:
   EX/QFX devices (no VC configured) return ``None``.
 - ``get_modules()``: Module / module-bay discovery for Junos modular
   chassis + VC-of-modular.
+- ``get_interfaces_lag()``: aggregated-Ethernet membership from the terse
+  ``<get-interface-information>`` reply — operational data only, so it needs
+  no configuration-read permission.
 
-Both fetch via PyEZ NETCONF RPC and target EX / QFX switching products.
+All fetch via PyEZ NETCONF RPC. The VLAN and Virtual Chassis getters target
+EX / QFX switching products; the LAG getter applies to any Junos platform.
 
 XML parsing notes
 -----------------
@@ -1204,6 +1208,70 @@ def _suppress_virtual(
     return interfaces_ip, dropped
 
 
+_AE_BUNDLE_RE = re.compile(r"^ae\d+$")
+
+
+def _lag_members_from_terse(root) -> dict[str, str]:
+    """
+    Map each aggregated-Ethernet member port to its aggregate, from a terse reply.
+
+    Junos reports membership on the member's logical unit, as an ``aenet``
+    address family naming the matching unit of the bundle::
+
+        <physical-interface><name>xe-0/0/24</name>
+          <logical-interface><name>xe-0/0/24.0</name>
+            <address-family>
+              <address-family-name>aenet</address-family-name>
+              <ae-bundle-name>ae120.0</ae-bundle-name>
+
+    NetBox carries a LAG parent on the physical port and refuses one on a
+    virtual interface, so every unit of a port collapses onto the port and
+    every bundle unit onto its aggregate: ``xe-0/0/24.0 -> ae120.0`` and
+    ``xe-0/0/24.1876 -> ae120.1876`` are one membership, ``xe-0/0/24 ->
+    ae120``. A port whose units name two different aggregates is
+    contradictory and is left out rather than picking one.
+
+    Only ``ae<N>`` bundles are reported. SRX chassis clusters also report
+    ``aenet`` families for redundant-Ethernet (``reth0``) and fabric
+    (``fab0``) child links, which are not link aggregations NetBox models as
+    a LAG; they are left out at DEBUG rather than warned about every cycle.
+
+    The terse form is used because it answers with only ``view``
+    permission; the configuration and ``get-lacp-interface-information``
+    would need more permission or miss bundles that do not run LACP.
+    """
+    seen: dict[str, set[str]] = {}
+    for phys in _iter_localname(root, "physical-interface"):
+        port = _text(_find_child(phys, "name"))
+        for logical in _find_children(phys, "logical-interface"):
+            member = port or _text(_find_child(logical, "name")).split(".", 1)[0]
+            for family in _find_children(logical, "address-family"):
+                if _text(_find_child(family, "address-family-name")) != "aenet":
+                    continue
+                bundle = _text(_find_child(family, "ae-bundle-name")).split(".", 1)[0]
+                if not member or not bundle:
+                    continue
+                if not _AE_BUNDLE_RE.match(bundle):
+                    logger.debug("%s: aenet child of %r, not an ae bundle; not a LAG membership", member, bundle)
+                    continue
+                seen.setdefault(member, set()).add(bundle)
+
+    result: dict[str, str] = {}
+    for member, bundles in seen.items():
+        if len(bundles) > 1:
+            logger.warning(
+                "%s: units name more than one aggregate (%s); leaving it without a lag",
+                member,
+                ", ".join(sorted(bundles)),
+            )
+            continue
+        (bundle,) = bundles
+        if bundle == member:
+            continue
+        result[member] = bundle
+    return result
+
+
 class JunOSDriver(NapalmJunOSDriver):
     """
     Juniper Junos NAPALM driver.
@@ -1216,7 +1284,34 @@ class JunOSDriver(NapalmJunOSDriver):
     - ``get_chassis_members()``: Virtual Chassis topology from the
       ``<get-virtual-chassis-information>`` RPC, returning the vendor-
       neutral payload consumed by ``device_discovery.translate_chassis``.
+    - ``get_interfaces_lag()``: aggregated-Ethernet membership from the
+      terse ``<get-interface-information>`` RPC.
     """
+
+    def get_interfaces_lag(self) -> dict[str, str]:
+        """
+        Return ``{member port: aggregate}`` for aggregated-Ethernet members.
+
+        Best-effort: an RPC error or an unexpected reply shape returns an
+        empty dict, costing only the lag references rather than the device's
+        discovery cycle. Both are logged at WARNING: every Junos release
+        answers this RPC, so a failure is a real fault (most often a
+        permission problem) rather than a platform that lacks it.
+        """
+        try:
+            reply = self.device.rpc.get_interface_information(terse=True)
+        except Exception as e:
+            logger.warning("Junos get-interface-information (terse) failed; no LAG membership this cycle: %s", e)
+            logger.debug("Junos get-interface-information (terse) failure detail", exc_info=True)
+            return {}
+        if reply is None:
+            return {}
+        try:
+            return _lag_members_from_terse(reply)
+        except Exception as e:
+            logger.warning("Junos terse interface reply could not be parsed; no LAG membership this cycle: %s", e)
+            logger.debug("Junos terse interface parse failure detail", exc_info=True)
+            return {}
 
     def get_chassis_members(self) -> dict | None:
         """

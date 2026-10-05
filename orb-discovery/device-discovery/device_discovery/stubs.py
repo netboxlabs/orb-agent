@@ -339,12 +339,23 @@ def _module_match_stub(rich: pb.Module, dev_stub: pb.Device) -> pb.Module:
     return stub
 
 
-def _prune_interface_entity(iface: pb.Interface, dev_stub: pb.Device) -> None:
-    """Replace ``iface.device`` + any nested parent/bridge/lag/module with stubs in place."""
+def _prune_interface_entity(
+    iface: pb.Interface,
+    dev_stub: pb.Device,
+    lag_dev_stub: pb.Device | None = None,
+) -> None:
+    """
+    Replace ``iface.device`` + any nested parent/bridge/lag/module with stubs in place.
+
+    ``lag_dev_stub`` is the stub for the device that owns the nested ``lag``,
+    when it differs from the interface's own: on a Virtual Chassis a member
+    port and its aggregate can sit on different stack members. Without it the
+    lag is stubbed with the interface's own device.
+    """
     iface.device.CopyFrom(dev_stub)
     _replace_iface_field(iface, "parent", dev_stub)
     _replace_iface_field(iface, "bridge", dev_stub)
-    _replace_iface_field(iface, "lag", dev_stub)
+    _replace_iface_field(iface, "lag", lag_dev_stub or dev_stub)
     if iface.HasField("module"):
         iface.module.CopyFrom(_module_match_stub(iface.module, dev_stub))
 
@@ -372,7 +383,22 @@ def _prune_interface_against_index(
             iface.name,
         )
         return
-    _prune_interface_entity(iface, stub_for(rich))
+    lag_dev_stub = None
+    if iface.HasField("lag") and iface.lag.HasField("device"):
+        lag_rich = _resolve_device(iface.lag.device, index)
+        if lag_rich is None:
+            # Falling back to the interface's own device would name an
+            # aggregate that member does not have, which Diode would then
+            # create there or reject. Losing the reference is the lesser harm.
+            logger.warning(
+                "prune_nested_refs: could not resolve the device of lag %r on interface %r — dropping the lag",
+                iface.lag.name,
+                iface.name,
+            )
+            iface.ClearField("lag")
+        else:
+            lag_dev_stub = stub_for(lag_rich)
+    _prune_interface_entity(iface, stub_for(rich), lag_dev_stub)
 
 
 def _prune_ip_address_against_index(
