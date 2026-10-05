@@ -23,7 +23,8 @@ import (
 )
 
 // documentedPage is a page whose yaml examples operators copy. A shared page
-// also documents other backends, so its blocks for them are skipped.
+// also documents other backends, so it is read only for this backend's
+// policies in an agent config or a git policy file.
 type documentedPage struct {
 	label, path string
 	shared      bool
@@ -115,20 +116,21 @@ func yamlBlocks(page string) ([]yamlBlock, error) {
 	return blocks, nil
 }
 
-// extraDocument returns an error when docs holds another non-empty yaml
-// document, which the checks would never see.
-func extraDocument(docs *yaml.Decoder) error {
+// documents decodes every non-empty yaml document in text.
+func documents(text string) ([]map[string]any, error) {
+	dec := yaml.NewDecoder(strings.NewReader(text))
+	var out []map[string]any
 	for {
-		var next any
-		err := docs.Decode(&next)
+		var doc map[string]any
+		err := dec.Decode(&doc)
 		if errors.Is(err, io.EOF) {
-			return nil
+			return out, nil
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if next != nil {
-			return errors.New("a second yaml document would go unchecked")
+		if doc != nil {
+			out = append(out, doc)
 		}
 	}
 }
@@ -240,37 +242,46 @@ type sample struct {
 	lookup   bool
 }
 
-// classify returns what a documented block holds for this backend, or why the
-// block is skipped. A shared page is read only for
-// orb.policies.snmp_discovery, since its other snippets may belong to any
-// backend.
+var (
+	// backendHomes are where the backend key belongs: a git policy file's
+	// root, an agent config's backends and policies, and a backends fragment.
+	backendHomes = map[string]bool{"": true, "orb.backends": true, "orb.policies": true, "backends": true}
+	// backendLevels are where a misspelt backend key is looked for.
+	backendLevels = map[string]bool{"": true, "orb": true, "orb.backends": true, "orb.policies": true, "backends": true}
+)
+
+// classify returns what a documented document holds for this backend, or why
+// it is skipped. A shared page is read only for this backend's policies in an
+// agent config or a git policy file, since its other snippets may belong to
+// any backend.
 func classify(doc map[string]any, shared bool) (s sample, skip string, err error) {
 	if err := backendKeys(doc, ""); err != nil {
 		return sample{}, "", err
 	}
+	orb, _ := doc["orb"].(map[string]any)
+	if err := policyUnderBackends(orb); err != nil {
+		return sample{}, "", err
+	}
+	if err := policyUnderBackends(doc); err != nil {
+		return sample{}, "", err
+	}
+	all, _ := orb["policies"].(map[string]any)
 	switch {
+	case hasKey(doc, backend):
+		return policySet(doc[backend], backend)
+	case hasKey(all, backend):
+		return policySet(all[backend], "orb.policies."+backend)
 	case doc["orb"] != nil:
-		orb, _ := doc["orb"].(map[string]any)
-		all, _ := orb["policies"].(map[string]any)
-		switch {
-		case all[backend] != nil:
-			policies, ok := all[backend].(map[string]any)
-			if !ok {
-				return sample{}, "", fmt.Errorf("orb.policies.%s is not a mapping", backend)
-			}
-			return sample{policies: policies}, "", nil
-		case all == nil || shared:
+		if all == nil || shared {
 			return sample{}, "no " + backend + " policies", nil
 		}
 		return sample{}, "", fmt.Errorf("orb.policies on this backend's page has no %s key", backend)
 	case shared:
 		return sample{}, "example for another backend", nil
+	case doc["backends"] != nil:
+		return sample{}, "backend configuration", nil
 	case doc["policies"] != nil:
-		policies, ok := doc["policies"].(map[string]any)
-		if !ok {
-			return sample{}, "", errors.New("policies is not a mapping")
-		}
-		return sample{policies: policies}, "", nil
+		return policySet(doc["policies"], "policies")
 	case doc["config"] != nil || doc["scope"] != nil:
 		return sample{policies: map[string]any{"doc": doc}}, "", nil
 	case doc["defaults"] != nil:
@@ -287,17 +298,43 @@ func classify(doc map[string]any, shared bool) (s sample, skip string, err error
 	return sample{}, "", errors.New("unrecognised documented block; teach this test its shape")
 }
 
-// backendKeys returns an error for this backend's key anywhere but
-// orb.backends or orb.policies, where it would be ignored, or for a key one
-// edit away from it.
+func hasKey(m map[string]any, k string) bool {
+	_, ok := m[k]
+	return ok
+}
+
+// policySet returns v as a non-empty set of named policies.
+func policySet(v any, at string) (sample, string, error) {
+	policies, _ := v.(map[string]any)
+	if len(policies) == 0 {
+		return sample{}, "", fmt.Errorf("%s holds no policies", at)
+	}
+	return sample{policies: policies}, "", nil
+}
+
+// policyUnderBackends returns an error for a policy written under this
+// backend's backends entry, where the agent ignores it.
+func policyUnderBackends(parent map[string]any) error {
+	backends, _ := parent["backends"].(map[string]any)
+	entry, _ := backends[backend].(map[string]any)
+	for name, v := range entry {
+		if p, ok := v.(map[string]any); ok && (p["config"] != nil || p["scope"] != nil) {
+			return fmt.Errorf("policy %q sits under backends.%s; it belongs under policies", name, backend)
+		}
+	}
+	return nil
+}
+
+// backendKeys returns an error for this backend's key where it would be
+// ignored, or for a key one edit away from it where a backend key can sit.
 func backendKeys(v any, at string) error {
 	switch v := v.(type) {
 	case map[string]any:
 		for k, child := range v {
 			switch {
-			case k == backend && at != "orb.backends" && at != "orb.policies":
+			case k == backend && !backendHomes[at]:
 				return fmt.Errorf("%s sits under %q; it belongs under orb.backends or orb.policies", backend, at)
-			case nearMiss(k, backend):
+			case backendLevels[at] && nearMiss(k, backend):
 				return fmt.Errorf("%q looks like a misspelt %s", k, backend)
 			}
 			if err := backendKeys(child, strings.TrimPrefix(at+"."+k, ".")); err != nil {
@@ -370,6 +407,13 @@ func TestClassify(t *testing.T) {
 		{name: "lookup file", doc: map[string]any{"modules": map[string]any{}}, want: sample{lookup: true}},
 		{name: "outdented policies", doc: map[string]any{"orb": map[string]any{"policies": nil, backend: ours}}, shared: true, err: `sits under "orb"`},
 		{name: "misspelt key", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"snmp_discvoery": ours}}}, shared: true, err: "misspelt"},
+		{name: "git policy file", doc: map[string]any{backend: ours}, shared: true, want: sample{policies: ours}},
+		{name: "backends fragment", doc: map[string]any{"backends": map[string]any{backend: nil}}, skip: true},
+		{name: "null key beside its policies", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{backend: nil, "p": ours["p"]}}}, shared: true, err: "holds no policies"},
+		{name: "list-valued key", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{backend: []any{}}}}, err: "holds no policies"},
+		{name: "key inside a list", doc: map[string]any{"items": []any{map[string]any{backend: ours}}}, shared: true, err: `sits under "items[]"`},
+		{name: "policy under backends", doc: map[string]any{"orb": map[string]any{"backends": map[string]any{backend: ours}}}, shared: true, err: "sits under backends"},
+		{name: "policy named like the backend", doc: map[string]any{"policies": map[string]any{backend + "1": ours["p"]}}, want: sample{policies: map[string]any{backend + "1": ours["p"]}}},
 		{name: "unrecognised", doc: map[string]any{"targets": []any{}}, err: "unrecognised"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -429,19 +473,18 @@ func TestYamlBlocks(t *testing.T) {
 	}
 }
 
-func TestExtraDocument(t *testing.T) {
-	for text, wantErr := range map[string]bool{
-		"a: 1":                 false,
-		"---\na: 1":            false,
-		"a: 1\n---\n":          false,
-		"a: 1\n...\n":          false,
-		"a: 1\n---\nb: 2":      true,
-		"a: 1\n---\n---\nb: 2": true,
+func TestDocuments(t *testing.T) {
+	for text, want := range map[string]int{
+		"a: 1":                 1,
+		"---\na: 1":            1,
+		"a: 1\n---\n":          1,
+		"a: 1\n...\n":          1,
+		"a: 1\n---\nb: 2":      2,
+		"a: 1\n---\n---\nb: 2": 2,
 	} {
-		docs := yaml.NewDecoder(strings.NewReader(text))
-		var first any
-		require.NoError(t, docs.Decode(&first))
-		require.Equal(t, wantErr, extraDocument(docs) != nil, "%q", text)
+		docs, err := documents(text)
+		require.NoError(t, err)
+		require.Len(t, docs, want, "%q", text)
 	}
 }
 
@@ -482,46 +525,52 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 				for _, ref := range envReference.FindAllStringSubmatch(block.text, -1) {
 					t.Setenv(ref[1], "example")
 				}
-				var doc map[string]any
-				docs := yaml.NewDecoder(strings.NewReader(block.text))
-				if err := docs.Decode(&doc); err != nil && page.shared && !strings.Contains(block.text, backend) {
+				docs, err := documents(block.text)
+				if err != nil && page.shared && !strings.Contains(block.text, backend) {
 					t.Skip("illustrative snippet for another backend")
-				} else {
+				}
+				require.NoError(t, err, "block:\n%s", block.text)
+				require.NotEmpty(t, docs, "block holds no yaml document")
+
+				checked := 0
+				for _, doc := range docs {
+					found, skip, err := classify(doc, page.shared)
 					require.NoError(t, err, "block:\n%s", block.text)
-				}
+					if skip != "" {
+						continue
+					}
+					checked++
+					if found.lookup {
+						require.Len(t, docs, 1, "a lookup file holds one yaml document")
+						dir := t.TempDir()
+						require.NoError(t, os.WriteFile(filepath.Join(dir, "doc.yaml"), []byte(block.text), 0o600))
+						lookup, err := data.LoadDeviceLookupExtensions(dir)
+						require.NoError(t, err)
+						files := lookup.UserExtensionFiles()
+						require.Len(t, files, 1)
+						require.NoError(t, files[0].Err)
+						require.NoError(t, files[0].ModulesErr)
+						require.Positive(t, files[0].Entries+files[0].ModuleEntries+files[0].ManufacturerEntries,
+							"the lookup example registers nothing")
+						continue
+					}
+					policies := found.policies
 
-				found, skip, err := classify(doc, page.shared)
-				require.NoError(t, err, "block:\n%s", block.text)
-				if skip != "" {
-					t.Skip(skip)
-				}
-				require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
-				if found.lookup {
-					dir := t.TempDir()
-					require.NoError(t, os.WriteFile(filepath.Join(dir, "doc.yaml"), []byte(block.text), 0o600))
-					lookup, err := data.LoadDeviceLookupExtensions(dir)
+					payload, err := yaml.Marshal(map[string]any{"policies": policies})
 					require.NoError(t, err)
-					files := lookup.UserExtensionFiles()
-					require.Len(t, files, 1)
-					require.NoError(t, files[0].Err)
-					require.NoError(t, files[0].ModulesErr)
-					require.Positive(t, files[0].Entries+files[0].ModuleEntries+files[0].ManufacturerEntries,
-						"the lookup example registers nothing")
-					return
+					_, err = m.ParsePolicies(payload)
+					require.NoError(t, err, "block:\n%s", block.text)
+
+					// ParsePolicies drops a key it does not know; the docs must not use one.
+					dec := yaml.NewDecoder(bytes.NewReader(payload))
+					dec.KnownFields(true)
+					require.NoError(t, dec.Decode(&config.Policies{}), "block:\n%s", block.text)
+					require.NoError(t, customMapKeys(policies), "block:\n%s", block.text)
+					require.NoError(t, documentedPatterns(policies), "block:\n%s", block.text)
 				}
-				policies := found.policies
-
-				payload, err := yaml.Marshal(map[string]any{"policies": policies})
-				require.NoError(t, err)
-				_, err = m.ParsePolicies(payload)
-				require.NoError(t, err, "block:\n%s", block.text)
-
-				// ParsePolicies drops a key it does not know; the docs must not use one.
-				dec := yaml.NewDecoder(bytes.NewReader(payload))
-				dec.KnownFields(true)
-				require.NoError(t, dec.Decode(&config.Policies{}), "block:\n%s", block.text)
-				require.NoError(t, customMapKeys(policies), "block:\n%s", block.text)
-				require.NoError(t, documentedPatterns(policies), "block:\n%s", block.text)
+				if checked == 0 {
+					t.Skip("no " + backend + " policies")
+				}
 			})
 		}
 	}
