@@ -463,11 +463,11 @@ devices:
   .1.3.6.1.4.1.9.1.3233: Catalyst 1300-24P-4G
 ```
 
-Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. If you run the agent in a container, mount this directory into it.
+Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. A file can also carry a `modules:` section naming the module type for an `entPhysicalVendorType` OID, for modules that report no model name of their own. If you run the agent in a container, mount this directory into it.
 
-The startup logs report how many files were read from the directory and the total number of entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
+The startup logs report how many files were read from the directory and the total number of device and module entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
 
-- a file whose `devices:` section cannot be parsed is skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. Indenting with tabs lands here, because YAML rejects them outright
+- a file whose `devices:` or `modules:` section cannot be parsed has that section skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. A wrong value in one section does not drop the other's entries, but a file that is not valid YAML, is not a mapping of sections, or repeats a top-level key such as `devices:` contributes nothing. Indenting with tabs lands here, because YAML rejects them outright
 - a file that parses but registers nothing, which is what a wrong or missing top-level key produces, is warned about individually
 
 A file that loads cleanly is counted in the totals rather than logged by name, so if you need to confirm one specific file's contribution, put it in the directory on its own and compare the entry total.
