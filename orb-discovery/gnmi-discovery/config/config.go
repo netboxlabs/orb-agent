@@ -305,11 +305,21 @@ type Options struct {
 	// config Get is issued). gNMI exposes no startup/candidate datastore, so only
 	// Running is populated.
 	CaptureConfig *bool `yaml:"capture_config,omitempty"`
+
+	// EmitLagMembership sets each member port's Interface.lag from OpenConfig
+	// ethernet/state/aggregate-id. nil → on (default), as in snmp-discovery.
+	EmitLagMembership *bool `yaml:"emit_lag_membership,omitempty"`
 }
 
 // ConfigCaptureEnabled reports the effective capture_config toggle (default off).
 func (o *Options) ConfigCaptureEnabled() bool {
 	return o != nil && o.CaptureConfig != nil && *o.CaptureConfig
+}
+
+// LagMembershipEnabled reports the effective emit_lag_membership toggle
+// (default on).
+func (o *Options) LagMembershipEnabled() bool {
+	return o == nil || o.EmitLagMembership == nil || *o.EmitLagMembership
 }
 
 // PolicyConfig holds policy-wide config (spec §7).

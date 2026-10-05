@@ -294,7 +294,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		maybeCaptureConfig()
 		snap := model.Snapshot()
 		resolveAssetTag(snap)
-		entities := mapping.Translate(profile, snap, defaults, discoveredVendor)
+		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, r.logger)
 		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		dev, _ := entities[0].(*diode.Device) // Translate always emits the Device first
 		// Attach the captured CONFIG datastore (already redacted) to the Device,
