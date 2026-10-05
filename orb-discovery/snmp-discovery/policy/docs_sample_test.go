@@ -34,6 +34,8 @@ var documentedPages = []documentedPage{
 	{"backend-readme", "../../../docs/backends/snmp_discovery/README.md", false},
 	{"interface-doc", "../../../docs/backends/snmp_discovery/interface.md", false},
 	{"config-samples", "../../../docs/config_samples.md", true},
+	{"env-config", "../../../docs/advanced_config/env_config.md", true},
+	{"agent-yaml", "../../../docs/configs/agent_yaml.md", true},
 }
 
 var (
@@ -63,8 +65,10 @@ func parseFence(line string, n int) (fence, bool) {
 	if m[2][0] == '`' && strings.Contains(info, "`") {
 		return fence{}, false
 	}
-	lang, _, _ := strings.Cut(info, " ")
-	lang = strings.ToLower(lang)
+	lang := ""
+	if fields := strings.Fields(info); len(fields) > 0 {
+		lang = strings.ToLower(fields[0])
+	}
 	return fence{indent: len(m[1]), marker: m[2], info: info, line: n, isYAML: lang == "yaml" || lang == "yml"}, true
 }
 
@@ -214,6 +218,182 @@ func documentedPatterns(v any) error {
 	return nil
 }
 
+const backend = "snmp_discovery"
+
+var (
+	docTarget = map[string]any{"host": "192.0.2.1"}
+	docAuth   = map[string]any{"protocol_version": "SNMPv2c", "community": "public"}
+)
+
+// minimalPolicy wraps a config fragment in a policy that validates.
+func minimalPolicy(cfg map[string]any) map[string]any {
+	return map[string]any{"doc": map[string]any{
+		"config": cfg,
+		"scope":  map[string]any{"targets": []any{docTarget}, "authentication": docAuth},
+	}}
+}
+
+// sample is what a documented block holds for this backend: a policy set, or
+// a device lookup file.
+type sample struct {
+	policies map[string]any
+	lookup   bool
+}
+
+// classify returns what a documented block holds for this backend, or why the
+// block is skipped. A shared page is read only for
+// orb.policies.snmp_discovery, since its other snippets may belong to any
+// backend.
+func classify(doc map[string]any, shared bool) (s sample, skip string, err error) {
+	if err := backendKeys(doc, ""); err != nil {
+		return sample{}, "", err
+	}
+	switch {
+	case doc["orb"] != nil:
+		orb, _ := doc["orb"].(map[string]any)
+		all, _ := orb["policies"].(map[string]any)
+		switch {
+		case all[backend] != nil:
+			policies, ok := all[backend].(map[string]any)
+			if !ok {
+				return sample{}, "", fmt.Errorf("orb.policies.%s is not a mapping", backend)
+			}
+			return sample{policies: policies}, "", nil
+		case all == nil || shared:
+			return sample{}, "no " + backend + " policies", nil
+		}
+		return sample{}, "", fmt.Errorf("orb.policies on this backend's page has no %s key", backend)
+	case shared:
+		return sample{}, "example for another backend", nil
+	case doc["policies"] != nil:
+		policies, ok := doc["policies"].(map[string]any)
+		if !ok {
+			return sample{}, "", errors.New("policies is not a mapping")
+		}
+		return sample{policies: policies}, "", nil
+	case doc["config"] != nil || doc["scope"] != nil:
+		return sample{policies: map[string]any{"doc": doc}}, "", nil
+	case doc["defaults"] != nil:
+		return sample{policies: minimalPolicy(doc)}, "", nil
+	case doc["interface_patterns"] != nil:
+		return sample{policies: minimalPolicy(map[string]any{"defaults": doc})}, "", nil
+	case doc["authentication"] != nil:
+		return sample{policies: map[string]any{"doc": map[string]any{
+			"scope": map[string]any{"targets": []any{docTarget}, "authentication": doc["authentication"]},
+		}}}, "", nil
+	case doc["devices"] != nil || doc["modules"] != nil || doc["manufacturers"] != nil:
+		return sample{lookup: true}, "", nil
+	}
+	return sample{}, "", errors.New("unrecognised documented block; teach this test its shape")
+}
+
+// backendKeys returns an error for this backend's key anywhere but
+// orb.backends or orb.policies, where it would be ignored, or for a key one
+// edit away from it.
+func backendKeys(v any, at string) error {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, child := range v {
+			switch {
+			case k == backend && at != "orb.backends" && at != "orb.policies":
+				return fmt.Errorf("%s sits under %q; it belongs under orb.backends or orb.policies", backend, at)
+			case nearMiss(k, backend):
+				return fmt.Errorf("%q looks like a misspelt %s", k, backend)
+			}
+			if err := backendKeys(child, strings.TrimPrefix(at+"."+k, ".")); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if err := backendKeys(child, at+"[]"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// nearMiss reports whether a and b differ by one edit: a character added,
+// dropped or changed, or two neighbours swapped.
+func nearMiss(a, b string) bool {
+	switch len(a) - len(b) {
+	case 0:
+		if a == b {
+			return false
+		}
+		i := 0
+		for a[i] == b[i] {
+			i++
+		}
+		return a[i+1:] == b[i+1:] || (i+1 < len(a) && a[i] == b[i+1] && a[i+1] == b[i] && a[i+2:] == b[i+2:])
+	case 1:
+		return dropsOne(a, b)
+	case -1:
+		return dropsOne(b, a)
+	}
+	return false
+}
+
+// dropsOne reports whether removing one character of long gives short.
+func dropsOne(long, short string) bool {
+	i := 0
+	for i < len(short) && long[i] == short[i] {
+		i++
+	}
+	return long[i+1:] == short[i:]
+}
+
+func TestClassify(t *testing.T) {
+	ours := map[string]any{"p": map[string]any{"scope": map[string]any{}}}
+	for _, tc := range []struct {
+		name   string
+		doc    map[string]any
+		shared bool
+		want   sample
+		skip   bool
+		err    string
+	}{
+		{name: "agent config", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{backend: ours}}}, want: sample{policies: ours}},
+		{name: "agent config on a shared page", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{backend: ours}}}, shared: true, want: sample{policies: ours}},
+		{name: "backends only", doc: map[string]any{"orb": map[string]any{"backends": map[string]any{backend: nil}}}, skip: true},
+		{name: "other backend on a shared page", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"device_discovery": ours}}}, shared: true, skip: true},
+		{name: "other backend on our page", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"device_discovery": ours}}}, err: "has no snmp_discovery key"},
+		{name: "fragment on a shared page", doc: map[string]any{"scope": map[string]any{}}, shared: true, skip: true},
+		{name: "policies root", doc: map[string]any{"policies": ours}, want: sample{policies: ours}},
+		{name: "policy body", doc: map[string]any{"scope": map[string]any{}}, want: sample{policies: map[string]any{"doc": map[string]any{"scope": map[string]any{}}}}},
+		{name: "defaults", doc: map[string]any{"defaults": map[string]any{}}, want: sample{policies: minimalPolicy(map[string]any{"defaults": map[string]any{}})}},
+		{name: "interface patterns", doc: map[string]any{"interface_patterns": []any{}}, want: sample{policies: minimalPolicy(map[string]any{"defaults": map[string]any{"interface_patterns": []any{}}})}},
+		{name: "authentication", doc: map[string]any{"authentication": docAuth}, want: sample{policies: map[string]any{"doc": map[string]any{
+			"scope": map[string]any{"targets": []any{docTarget}, "authentication": docAuth},
+		}}}},
+		{name: "lookup file", doc: map[string]any{"modules": map[string]any{}}, want: sample{lookup: true}},
+		{name: "outdented policies", doc: map[string]any{"orb": map[string]any{"policies": nil, backend: ours}}, shared: true, err: `sits under "orb"`},
+		{name: "misspelt key", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"snmp_discvoery": ours}}}, shared: true, err: "misspelt"},
+		{name: "unrecognised", doc: map[string]any{"targets": []any{}}, err: "unrecognised"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, skip, err := classify(tc.doc, tc.shared)
+			if tc.err != "" {
+				require.ErrorContains(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.skip, skip != "", skip)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestNearMiss(t *testing.T) {
+	for _, k := range []string{"snmp_discvoery", "snmp_discovry", "snmp_discoveryy", "smnp_discovery", "snmp-discovery"} {
+		require.True(t, nearMiss(k, backend), k)
+	}
+	for _, k := range []string{backend, "gnmi_discovery", "device_discovery", "snmp", "snmp_disco"} {
+		require.False(t, nearMiss(k, backend), k)
+	}
+}
+
 func TestYamlBlocks(t *testing.T) {
 	for _, tc := range []struct {
 		name, page string
@@ -226,6 +406,9 @@ func TestYamlBlocks(t *testing.T) {
 		{name: "deeply indented fence is content", page: "```yaml\nc: |\n        ```\nd: 2\n```", want: []string{"c: |\n        ```\nd: 2"}},
 		{name: "quoted yaml in markdown", page: "````markdown\n```yaml\na: 1\n```\n````", want: nil},
 		{name: "inline code is no fence", page: "```yaml``` is the language\n```yaml\na: 1\n```", want: []string{"a: 1"}},
+		{name: "other fence character is content", page: "~~~yaml\na: |\n  ```\n~~~", want: []string{"a: |\n  ```"}},
+		{name: "CRLF and a closer with trailing spaces", page: "```yaml\r\na: 1\r\n```  \r\n", want: []string{"a: 1\r"}},
+		{name: "info after a tab", page: "```yaml\tlinenums\na: 1\n```", want: []string{"a: 1"}},
 		{name: "unclosed yaml block", page: "```yaml\na: 1\n```sh\nls\n```", err: "line 3: fence inside the block opened at line 1"},
 		{name: "unclosed other block", page: "```sh\nls\n```yaml\na: 1\n```", err: "line 3: fence inside the block opened at line 1"},
 		{name: "page ends inside a block", page: "```yaml\na: 1", err: "ends inside the block opened at line 1"},
@@ -288,14 +471,6 @@ func TestDocumentedPatterns(t *testing.T) {
 func TestDocumentedSamplesAreAccepted(t *testing.T) {
 	m, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
 	require.NoError(t, err)
-	target := map[string]any{"host": "192.0.2.1"}
-	auth := map[string]any{"protocol_version": "SNMPv2c", "community": "public"}
-	minimal := func(cfg map[string]any) map[string]any {
-		return map[string]any{"doc": map[string]any{
-			"config": cfg,
-			"scope":  map[string]any{"targets": []any{target}, "authentication": auth},
-		}}
-	}
 
 	for _, page := range documentedPages {
 		raw, err := os.ReadFile(page.path)
@@ -309,41 +484,19 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 				}
 				var doc map[string]any
 				docs := yaml.NewDecoder(strings.NewReader(block.text))
-				if err := docs.Decode(&doc); err != nil && page.shared && !strings.Contains(block.text, "snmp_discovery") {
+				if err := docs.Decode(&doc); err != nil && page.shared && !strings.Contains(block.text, backend) {
 					t.Skip("illustrative snippet for another backend")
 				} else {
 					require.NoError(t, err, "block:\n%s", block.text)
 				}
 
-				var policies map[string]any
-				switch {
-				case doc["policies"] != nil:
-					policies = doc["policies"].(map[string]any)
-				case doc["orb"] != nil:
-					orb, _ := doc["orb"].(map[string]any)
-					all, ok := orb["policies"].(map[string]any)
-					if !ok {
-						t.Skip("agent configuration without policies")
-					}
-					if all["snmp_discovery"] == nil {
-						if page.shared {
-							t.Skip("policies for other backends")
-						}
-						t.Fatalf("orb.policies on this backend's page has no snmp_discovery key:\n%s", block.text)
-					}
-					policies = all["snmp_discovery"].(map[string]any)
-				case doc["config"] != nil || doc["scope"] != nil:
-					policies = map[string]any{"doc": doc}
-				case doc["defaults"] != nil:
-					policies = minimal(doc)
-				case doc["interface_patterns"] != nil:
-					policies = minimal(map[string]any{"defaults": doc})
-				case doc["authentication"] != nil:
-					policies = map[string]any{"doc": map[string]any{
-						"scope": map[string]any{"targets": []any{target}, "authentication": doc["authentication"]},
-					}}
-				case doc["devices"] != nil || doc["modules"] != nil || doc["manufacturers"] != nil:
-					require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
+				found, skip, err := classify(doc, page.shared)
+				require.NoError(t, err, "block:\n%s", block.text)
+				if skip != "" {
+					t.Skip(skip)
+				}
+				require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
+				if found.lookup {
 					dir := t.TempDir()
 					require.NoError(t, os.WriteFile(filepath.Join(dir, "doc.yaml"), []byte(block.text), 0o600))
 					lookup, err := data.LoadDeviceLookupExtensions(dir)
@@ -355,12 +508,8 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 					require.Positive(t, files[0].Entries+files[0].ModuleEntries+files[0].ManufacturerEntries,
 						"the lookup example registers nothing")
 					return
-				case page.shared:
-					t.Skip("example for another backend")
-				default:
-					t.Fatalf("unrecognised documented block; teach this test its shape:\n%s", block.text)
 				}
-				require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
+				policies := found.policies
 
 				payload, err := yaml.Marshal(map[string]any{"policies": policies})
 				require.NoError(t, err)

@@ -59,8 +59,10 @@ func parseFence(line string, n int) (fence, bool) {
 	if m[2][0] == '`' && strings.Contains(info, "`") {
 		return fence{}, false
 	}
-	lang, _, _ := strings.Cut(info, " ")
-	lang = strings.ToLower(lang)
+	lang := ""
+	if fields := strings.Fields(info); len(fields) > 0 {
+		lang = strings.ToLower(fields[0])
+	}
 	return fence{indent: len(m[1]), marker: m[2], info: info, line: n, isYAML: lang == "yaml" || lang == "yml"}, true
 }
 
@@ -166,6 +168,152 @@ func customMapKeys(v any) error {
 	return nil
 }
 
+const backend = "network_discovery"
+
+// classify returns the policies a documented block holds for this backend, or
+// why the block is skipped. A shared page is read only for
+// orb.policies.network_discovery, since its other snippets may belong to any
+// backend.
+func classify(doc map[string]any, shared bool) (policies map[string]any, skip string, err error) {
+	if err := backendKeys(doc, ""); err != nil {
+		return nil, "", err
+	}
+	switch {
+	case doc["orb"] != nil:
+		orb, _ := doc["orb"].(map[string]any)
+		all, _ := orb["policies"].(map[string]any)
+		switch {
+		case all[backend] != nil:
+			policies, ok := all[backend].(map[string]any)
+			if !ok {
+				return nil, "", fmt.Errorf("orb.policies.%s is not a mapping", backend)
+			}
+			return policies, "", nil
+		case all == nil || shared:
+			return nil, "no " + backend + " policies", nil
+		}
+		return nil, "", fmt.Errorf("orb.policies on this backend's page has no %s key", backend)
+	case shared:
+		return nil, "example for another backend", nil
+	case doc["policies"] != nil:
+		policies, ok := doc["policies"].(map[string]any)
+		if !ok {
+			return nil, "", errors.New("policies is not a mapping")
+		}
+		return policies, "", nil
+	case doc["defaults"] != nil:
+		return map[string]any{"doc": map[string]any{
+			"config": doc,
+			"scope":  map[string]any{"targets": []any{"192.0.2.1"}},
+		}}, "", nil
+	}
+	return nil, "", errors.New("unrecognised documented block; teach this test its shape")
+}
+
+// backendKeys returns an error for this backend's key anywhere but
+// orb.backends or orb.policies, where it would be ignored, or for a key one
+// edit away from it.
+func backendKeys(v any, at string) error {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, child := range v {
+			switch {
+			case k == backend && at != "orb.backends" && at != "orb.policies":
+				return fmt.Errorf("%s sits under %q; it belongs under orb.backends or orb.policies", backend, at)
+			case nearMiss(k, backend):
+				return fmt.Errorf("%q looks like a misspelt %s", k, backend)
+			}
+			if err := backendKeys(child, strings.TrimPrefix(at+"."+k, ".")); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if err := backendKeys(child, at+"[]"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// nearMiss reports whether a and b differ by one edit: a character added,
+// dropped or changed, or two neighbours swapped.
+func nearMiss(a, b string) bool {
+	switch len(a) - len(b) {
+	case 0:
+		if a == b {
+			return false
+		}
+		i := 0
+		for a[i] == b[i] {
+			i++
+		}
+		return a[i+1:] == b[i+1:] || (i+1 < len(a) && a[i] == b[i+1] && a[i+1] == b[i] && a[i+2:] == b[i+2:])
+	case 1:
+		return dropsOne(a, b)
+	case -1:
+		return dropsOne(b, a)
+	}
+	return false
+}
+
+// dropsOne reports whether removing one character of long gives short.
+func dropsOne(long, short string) bool {
+	i := 0
+	for i < len(short) && long[i] == short[i] {
+		i++
+	}
+	return long[i+1:] == short[i:]
+}
+
+func TestClassify(t *testing.T) {
+	ours := map[string]any{"p": map[string]any{"scope": map[string]any{}}}
+	for _, tc := range []struct {
+		name   string
+		doc    map[string]any
+		shared bool
+		want   map[string]any
+		skip   bool
+		err    string
+	}{
+		{name: "agent config", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{backend: ours}}}, want: ours},
+		{name: "agent config on a shared page", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{backend: ours}}}, shared: true, want: ours},
+		{name: "backends only", doc: map[string]any{"orb": map[string]any{"backends": map[string]any{backend: nil}}}, skip: true},
+		{name: "other backend on a shared page", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"device_discovery": ours}}}, shared: true, skip: true},
+		{name: "other backend on our page", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"device_discovery": ours}}}, err: "has no network_discovery key"},
+		{name: "fragment on a shared page", doc: map[string]any{"defaults": map[string]any{}}, shared: true, skip: true},
+		{name: "fragment", doc: map[string]any{"defaults": map[string]any{"tenant": "t1"}}, want: map[string]any{"doc": map[string]any{
+			"config": map[string]any{"defaults": map[string]any{"tenant": "t1"}},
+			"scope":  map[string]any{"targets": []any{"192.0.2.1"}},
+		}}},
+		{name: "policies root", doc: map[string]any{"policies": ours}, want: ours},
+		{name: "outdented policies", doc: map[string]any{"orb": map[string]any{"policies": nil, backend: ours}}, shared: true, err: `sits under "orb"`},
+		{name: "misspelt key", doc: map[string]any{"orb": map[string]any{"policies": map[string]any{"network_discvoery": ours}}}, shared: true, err: "misspelt"},
+		{name: "unrecognised", doc: map[string]any{"targets": []any{}}, err: "unrecognised"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, skip, err := classify(tc.doc, tc.shared)
+			if tc.err != "" {
+				require.ErrorContains(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.skip, skip != "", skip)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestNearMiss(t *testing.T) {
+	for _, k := range []string{"network_discvoery", "network_discovry", "network_discoveryy", "netwrok_discovery", "network-discovery"} {
+		require.True(t, nearMiss(k, backend), k)
+	}
+	for _, k := range []string{backend, "device_discovery", "snmp_discovery", "network", "network_disco"} {
+		require.False(t, nearMiss(k, backend), k)
+	}
+}
+
 func TestYamlBlocks(t *testing.T) {
 	for _, tc := range []struct {
 		name, page string
@@ -179,6 +327,9 @@ func TestYamlBlocks(t *testing.T) {
 		{name: "deeply indented fence is content", page: "```yaml\nc: |\n        ```\nd: 2\n```", want: []string{"c: |\n        ```\nd: 2"}},
 		{name: "quoted yaml in markdown", page: "````markdown\n```yaml\na: 1\n```\n````", want: nil},
 		{name: "inline code is no fence", page: "```yaml``` is the language\n```yaml\na: 1\n```", want: []string{"a: 1"}},
+		{name: "other fence character is content", page: "~~~yaml\na: |\n  ```\n~~~", want: []string{"a: |\n  ```"}},
+		{name: "CRLF and a closer with trailing spaces", page: "```yaml\r\na: 1\r\n```  \r\n", want: []string{"a: 1\r"}},
+		{name: "info after a tab", page: "```yaml\tlinenums\na: 1\n```", want: []string{"a: 1"}},
 		{name: "unclosed yaml block", page: "```yaml\na: 1\n```sh\nls\n```", err: "line 3: fence inside the block opened at line 1"},
 		{name: "unclosed other block", page: "```sh\nls\n```yaml\na: 1\n```", err: "line 3: fence inside the block opened at line 1"},
 		{name: "page ends inside a block", page: "```yaml\na: 1", err: "ends inside the block opened at line 1"},
@@ -238,38 +389,16 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/line-%d", page.label, block.line), func(t *testing.T) {
 				var doc map[string]any
 				docs := yaml.NewDecoder(strings.NewReader(block.text))
-				if err := docs.Decode(&doc); err != nil && page.shared && !strings.Contains(block.text, "network_discovery") {
+				if err := docs.Decode(&doc); err != nil && page.shared && !strings.Contains(block.text, backend) {
 					t.Skip("illustrative snippet for another backend")
 				} else {
 					require.NoError(t, err, "block:\n%s", block.text)
 				}
 
-				var policies map[string]any
-				switch {
-				case doc["policies"] != nil:
-					policies = doc["policies"].(map[string]any)
-				case doc["orb"] != nil:
-					orb, _ := doc["orb"].(map[string]any)
-					all, ok := orb["policies"].(map[string]any)
-					if !ok {
-						t.Skip("agent configuration without policies")
-					}
-					if all["network_discovery"] == nil {
-						if page.shared {
-							t.Skip("policies for other backends")
-						}
-						t.Fatalf("orb.policies on this backend's page has no network_discovery key:\n%s", block.text)
-					}
-					policies = all["network_discovery"].(map[string]any)
-				case doc["defaults"] != nil:
-					policies = map[string]any{"doc": map[string]any{
-						"config": doc,
-						"scope":  map[string]any{"targets": []any{"192.0.2.1"}},
-					}}
-				case page.shared:
-					t.Skip("example for another backend")
-				default:
-					t.Fatalf("unrecognised documented block; teach this test its shape:\n%s", block.text)
+				policies, skip, err := classify(doc, page.shared)
+				require.NoError(t, err, "block:\n%s", block.text)
+				if skip != "" {
+					t.Skip(skip)
 				}
 				require.NoError(t, extraDocument(docs), "block:\n%s", block.text)
 
