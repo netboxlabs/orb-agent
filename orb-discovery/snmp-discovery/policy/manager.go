@@ -276,12 +276,6 @@ type pinnedPlacement struct {
 	host      string
 }
 
-// rackPlacement is a target placed at a rackUnit; location is empty when
-// the target has none.
-type rackPlacement struct {
-	host, location string
-}
-
 // validateRackPlacement rejects a position or face NetBox would refuse, or
 // that one target cannot describe. Only an upper bound and multi-U overlaps
 // are left to NetBox, since they depend on rack and device heights.
@@ -290,7 +284,8 @@ func validateRackPlacement(policy config.Policy) error {
 	if defaults.Position != nil || defaults.RackFace() != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	placedAt := map[rackUnit][]rackPlacement{}
+	// Each U maps its locations ("" for none) to the target placed there.
+	placedAt := map[rackUnit]map[string]string{}
 	pinnedAt := map[int]pinnedPlacement{}
 	for _, target := range policy.Scope.Targets {
 		override := target.OverrideDefaults
@@ -391,21 +386,33 @@ func pinDevice(pinnedAt map[int]pinnedPlacement, target config.Target, p deviceP
 // another target took. Diode matches a device by rack, position and face once
 // name and site miss, so a new device sent to a taken U would update the
 // device there.
-func claimUnit(placedAt map[rackUnit][]rackPlacement, target config.Target, p devicePlacement) error {
+func claimUnit(placedAt map[rackUnit]map[string]string, target config.Target, p devicePlacement) error {
 	// A location read from an OID is only known at scan time, so such a
 	// target is left out of the check rather than compared by its OID.
 	if p.oidLocation {
 		return nil
 	}
-	for _, other := range placedAt[p.unit] {
-		// A rack sent without a location binds any rack of that name in
-		// the site.
-		if other.location == p.location || other.location == "" || p.location == "" {
-			return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
-				other.host, target.Host, p.unit.rack, p.unit.position, p.unit.face)
-		}
+	taken := placedAt[p.unit]
+	if taken == nil {
+		taken = map[string]string{}
+		placedAt[p.unit] = taken
 	}
-	placedAt[p.unit] = append(placedAt[p.unit], rackPlacement{target.Host, p.location})
+	// A rack sent without a location binds any rack of that name in the
+	// site, so no location clashes with any.
+	other, clash := taken[p.location]
+	if p.location == "" {
+		for _, host := range taken {
+			other, clash = host, true
+			break
+		}
+	} else if !clash {
+		other, clash = taken[""]
+	}
+	if clash {
+		return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+			other, target.Host, p.unit.rack, p.unit.position, p.unit.face)
+	}
+	taken[p.location] = target.Host
 	return nil
 }
 
