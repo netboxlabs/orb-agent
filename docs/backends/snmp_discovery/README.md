@@ -261,12 +261,17 @@ unless:
   location, since one read from an OID cannot be compared. An `asset_tag` in
   the policy `defaults` reaches every target, so it makes all of them one
   device; a tag read from an OID is only known at scan time and is not
-  compared. Two targets count as one device at a U only when they share their
-  strongest identifier, in the order Diode matches on (`netbox_id`, then
-  `asset_tag`, then the host): two targets with different `netbox_id`s are two
-  devices even when they send the same tag. A `netbox_id` is ignored on any
-  subnet or range syntax, a `/32` or a one-address range included, so it does
-  not tie such a target to the device with that id.
+  compared. A target is matched by its strongest identifier, in the order
+  Diode matches on (`netbox_id`, then `asset_tag`, then the host), so a shared
+  identifier ties two targets only when it is the strongest of at least one:
+  two targets with different `netbox_id`s are two devices even when they send
+  the same tag or reach the same host. Two targets count as one device at a U
+  only when they share the strongest identifier of both. A target without a
+  rack that shares a device with a racked one must send that target's site and
+  location, or no location: NetBox refuses a device whose rack is in another
+  site or location. A `netbox_id` is ignored on any subnet or range syntax, a
+  `/32` or a one-address range included, so it does not tie such a target to
+  the device with that id.
 
 Quote a numeric rack name (`rack: "01"`). The agent passes the policy on
 through YAML, so an unquoted `01` would arrive as the number 1, and `010` as

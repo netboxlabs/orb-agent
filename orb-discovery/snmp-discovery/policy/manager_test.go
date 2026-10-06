@@ -2,6 +2,7 @@ package policy_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -2107,6 +2108,87 @@ func TestManager_ParsePolicies_RackPlacementIdentityPrecedence(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantErr)
 		})
+	}
+}
+
+// A target is matched by its strongest identifier, so a shared one ties two
+// targets only when it is the strongest of at least one.
+func TestManager_ParsePolicies_RackPlacementTiesOnlyByAMatchedIdentifier(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	target := func(host string, netboxID int, tag, rack string) map[string]any {
+		override := map[string]any{"rack": rack}
+		if tag != "" {
+			override["asset_tag"] = tag
+		}
+		out := map[string]any{"host": host, "override_defaults": override}
+		if netboxID != 0 {
+			out["netbox_id"] = netboxID
+		}
+		return out
+	}
+	for name, tc := range map[string]struct {
+		targets []map[string]any
+		wantErr string
+	}{
+		"two netbox_ids on one host":     {[]map[string]any{target("192.0.2.10", 41, "", "R12"), target("192.0.2.10", 42, "", "R13")}, ""},
+		"two tags on one host":           {[]map[string]any{target("192.0.2.10", 0, "A1", "R12"), target("192.0.2.10", 0, "A2", "R13")}, ""},
+		"a netbox_id and the bare host":  {[]map[string]any{target("192.0.2.10", 42, "", "R12"), target("192.0.2.10", 0, "", "R13")}, "place host 192.0.2.10 at different slots"},
+		"a tag-only target, then the id": {[]map[string]any{target("192.0.2.11", 0, "A1", "R13"), target("192.0.2.10", 42, "A1", "R12")}, "place asset_tag A1 at different slots"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, nil, tc.targets...))
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+// A target without a rack still sends a site and any location, and NetBox
+// refuses a device whose rack is in another, so one sharing a racked device
+// must send that target's, or no location.
+func TestManager_ParsePolicies_RackPlacementUnrackedTargets(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	racked := map[string]any{"host": "192.0.2.10", "netbox_id": 42, "override_defaults": map[string]any{"rack": "R12", "location": "Row 1"}}
+	unracked := func(netboxID int, override map[string]any) map[string]any {
+		return map[string]any{"host": "192.0.2.11", "netbox_id": netboxID, "override_defaults": override}
+	}
+	moved := "targets 192.0.2.10 and 192.0.2.11 send netbox_id 42 to different sites or locations, and 192.0.2.10 places it in rack R12"
+	for name, tc := range map[string]struct {
+		other   map[string]any
+		wantErr string
+	}{
+		"another location":       {unracked(42, map[string]any{"location": "Row 2"}), moved},
+		"another site":           {unracked(42, map[string]any{"site": "DC2"}), moved},
+		"a location from an OID": {unracked(42, map[string]any{"location": ".1.3.6.1.2.1.1.6.0"}), "place netbox_id 42 in a location read from an OID"},
+		"no location":            {unracked(42, map[string]any{}), ""},
+		"the same location":      {unracked(42, map[string]any{"location": "Row 1"}), ""},
+		"another device on the host": {func() map[string]any {
+			other := unracked(41, map[string]any{"location": "Row 2"})
+			other["host"] = "192.0.2.10"
+			return other
+		}(), ""},
+	} {
+		for _, rackedFirst := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/racked first %v", name, rackedFirst), func(t *testing.T) {
+				targets := []map[string]any{racked, tc.other}
+				if !rackedFirst {
+					targets = []map[string]any{tc.other, racked}
+				}
+				_, err := manager.ParsePolicies(rackPolicyTargets(t, nil, targets...))
+				if tc.wantErr == "" {
+					require.NoError(t, err)
+					return
+				}
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+			})
+		}
 	}
 }
 
