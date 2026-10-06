@@ -548,3 +548,25 @@ def test_a_padded_site_is_compared_as_sent():
             _pinned("192.0.2.10", site="DC1", position=40, face="front"),
             _pinned("192.0.2.11", site=" DC1 ", position=40, face="front"),
         ])
+
+
+@pytest.mark.parametrize("order", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (2, 0, 1)])
+def test_a_tag_relied_on_by_one_target_ties_every_target_sending_it(order):
+    """The tag-only target is matched by the tag, so it must agree with each target sending it, in any order."""
+    targets = [
+        _identified("192.0.2.10", 1, "A1", rack="R12"),
+        _identified("192.0.2.11", None, "A1", rack="R12"),
+        _identified("192.0.2.12", 2, "A1", rack="R13"),
+    ]
+    with pytest.raises(ValidationError, match="place asset_tag A1 at different slots"):
+        _policy([targets[i] for i in order], site="DC1")
+
+
+def test_an_unracked_target_is_held_to_the_target_relying_on_its_tag():
+    """The tag-only racked target may be the device the unracked one updates."""
+    with pytest.raises(ValidationError, match="send asset_tag A1 to different sites or locations"):
+        _policy([
+            _identified("192.0.2.10", 1, "A1", rack="R12", location="Row 1"),
+            _identified("192.0.2.11", None, "A1", rack="R12", location="Row 1"),
+            _identified("192.0.2.12", 2, "A1", location="Row 2"),
+        ], site="DC1")
