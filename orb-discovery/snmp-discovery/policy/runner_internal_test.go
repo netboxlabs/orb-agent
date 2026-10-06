@@ -1065,6 +1065,31 @@ func TestRunWithMetadata_StackPinnedModel(t *testing.T) {
 		"defaults outrank a lookup entry, so they still pin the whole stack")
 }
 
+// A stack that answers ENTITY-MIB but not sysObjectID still carries the
+// model and manufacturer pinned in defaults, on the master and every member.
+func TestRunWithMetadata_StackPinnedModelWithoutSysObjectID(t *testing.T) {
+	walker := twoMemberStackWalker()
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	runner := queryTargetRunner(factory, chassisEntries())
+	runner.config.Defaults.Device = config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}
+
+	entities, _, err := runner.queryTarget(context.Background(), standaloneTarget)
+	require.NoError(t, err)
+	var devices []*diode.Device
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok {
+			devices = append(devices, d)
+		}
+	}
+	require.Len(t, devices, 2)
+	for _, d := range devices {
+		assert.Equal(t, "Operator Model", d.GetDeviceType().GetModel())
+		assert.Equal(t, "VendorA", d.GetDeviceType().GetManufacturer().GetName())
+	}
+}
+
 var standaloneTarget = config.Target{Host: "192.0.2.1", Port: 161}
 
 // A standalone device is typed after its chassis row's model, the part number

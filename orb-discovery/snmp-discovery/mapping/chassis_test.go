@@ -2538,15 +2538,15 @@ func TestTranslateAsStack_StackPinnedByLookupKeepsMemberModels(t *testing.T) {
 	assert.Equal(t, []string{"PN-48P-A", "PN-24P-B"}, deviceModels(out))
 }
 
-// A stack whose master has no device type has nothing to share, so its
-// members keep their chassis models even under a pinned default.
-func TestTranslateAsStack_StackPinnedWithoutDeviceTypeKeepsMemberModels(t *testing.T) {
+// A model pinned in defaults is a hard override even where the mapper could
+// build no device type for it: the chassis rows never name the stack instead.
+func TestTranslateAsStack_StackPinnedWithoutDeviceTypeTakesNoChassisModel(t *testing.T) {
 	master, entities, oids := twoMemberStack()
 	master.DeviceType = nil
 
 	out := TranslateAsStack(entities, oids, nil, nil, "", ModelPinnedByDefaults, slog.Default())
 
-	assert.Equal(t, []string{"PN-48P-A", "PN-24P-B"}, deviceModels(out))
+	assert.Equal(t, []string{"", ""}, deviceModels(out))
 }
 
 // A standalone device named by a lookup entry keeps it.

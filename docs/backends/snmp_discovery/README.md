@@ -719,7 +719,7 @@ Overrides are layered — a value from `lookup_extensions_dir` wins over a value
 
 When multiple sources can supply a device's `manufacturer`, `model`, or `platform`, the highest-priority non-empty value wins:
 
-1. Per-target `override_defaults.device.{model,manufacturer,platform}`, then the policy's `defaults.device.{model,manufacturer,platform}` (hard overrides). A model set here is carried by a stack's master and every member.
+1. Per-target `override_defaults.device.{model,manufacturer,platform}`, then the policy's `defaults.device.{model,manufacturer,platform}` (hard overrides). A model set here is carried by a stack's master and every member, and chassis rows never replace it. On a device that answers no `sysObjectID`, a model and manufacturer set here together are its device type.
 2. User `lookup_extensions_dir/*.yaml` (`manufacturers:` and `devices:` including dynamic refs). For the model, only an entry that changes or adds one counts, and a stack member's own chassis model (level 3) still wins over it, as it always has.
 3. The chassis row's `entPhysicalModelName` (model only). Every stack member takes any non-empty value. A standalone device of the product lines listed in [Device Model Lookup](#device-model-lookup) takes it unless it is empty, a placeholder, unprintable or over-long, or some chassis rows were refused as ambiguous.
 4. Bundled `lookup_extensions/*.yaml` (`manufacturers:` and `devices:`)

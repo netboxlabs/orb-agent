@@ -1125,9 +1125,10 @@ func TranslateAsStack(
 	// chassis row, which is what makes a mixed-model stack right, and the
 	// master is just the lowest-id chassis row. A model the operator set in
 	// defaults or override_defaults wins instead, for the master and every
-	// member alike, so one stack never splits across two types. It can only
-	// win when the mapper built a device type to carry it.
-	stackPinned := pin == ModelPinnedByDefaults && master.DeviceType != nil
+	// member alike, so one stack never splits across two types. Where the
+	// mapper could build no device type for it, the stack carries none rather
+	// than the chassis rows' models.
+	stackPinned := pin == ModelPinnedByDefaults
 	if lowest.Model != "" && !stackPinned {
 		var mfg *diode.Manufacturer
 		if master.DeviceType != nil {
