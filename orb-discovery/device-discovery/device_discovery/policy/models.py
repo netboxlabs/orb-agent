@@ -646,7 +646,7 @@ def _effective(override: Defaults, defaults: Defaults | None, field: str):
     return getattr(defaults, field) if defaults is not None else None
 
 
-def _check_target_placement(entry: Napalm, rack: str | None) -> str:
+def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -> str:
     """Refuse a target's position and face unless set together, in a rack, for one host."""
     override = entry.override_defaults
     if override.position is None or override.face is None:
@@ -660,6 +660,13 @@ def _check_target_placement(entry: Napalm, rack: str | None) -> str:
         raise ValueError(
             f"{entry.hostname}: position and face need a single host; "
             "a range or subnet would place every device at the same U"
+        )
+    # A netbox_id target sends no placeholder site, so the device keeps its
+    # own; the rack would then go without one and could not be looked up.
+    if entry.netbox_id is not None and site in (None, UNDEFINED_PLACEHOLDER):
+        raise ValueError(
+            f"{entry.hostname}: position and face need a site when netbox_id is set; "
+            "the rack is looked up in it"
         )
     return rack
 
@@ -710,7 +717,9 @@ class Policy(BaseModel):
             override = entry.override_defaults
             if override is None or (override.position is None and override.face is None):
                 continue
-            rack = _check_target_placement(entry, _effective(override, defaults, "rack"))
+            rack = _check_target_placement(
+                entry, _effective(override, defaults, "rack"), _effective(override, defaults, "site")
+            )
             _claim_slot(placed, entry, defaults, rack)
         return self
 

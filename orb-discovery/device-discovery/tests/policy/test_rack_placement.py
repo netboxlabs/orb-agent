@@ -257,3 +257,22 @@ def test_no_site_and_the_undefined_site_are_one_site():
             _scope("192.0.2.10", site="undefined", rack="R12", position=40, face="front"),
             _scope("192.0.2.11", rack="R12", position=40, face="front"),
         ])
+
+
+def _pinned(hostname="192.0.2.10", **override):
+    return Napalm(hostname=hostname, username="admin", password="secret", netbox_id=42,
+                  override_defaults=Defaults(**override))
+
+
+def test_netbox_id_placement_needs_a_site():
+    """With netbox_id and no site, no site is sent, so the rack could not be looked up."""
+    with pytest.raises(ValidationError, match="192.0.2.10: position and face need a site when netbox_id is set"):
+        Policy(config=Config(defaults=Defaults(rack="R12")), scope=[_pinned(position=40, face="front")])
+
+
+@pytest.mark.parametrize("where", ["policy", "target"])
+def test_netbox_id_placement_with_a_site_is_accepted(where):
+    """A configured site is sent, and the rack is looked up in it."""
+    defaults = Defaults(rack="R12", site="DC1") if where == "policy" else Defaults(rack="R12")
+    override = {"site": "DC1"} if where == "target" else {}
+    Policy(config=Config(defaults=defaults), scope=[_pinned(position=40, face="front", **override)])
