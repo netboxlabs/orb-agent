@@ -494,6 +494,68 @@ func TestRackSlotsFollowEndpointDedupe(t *testing.T) {
 	require.Contains(t, err.Error(), "targets 192.0.2.10/32 and 192.0.2.11 are both placed at R12 U40 front")
 }
 
+// The asset tag is the device matcher Diode tries first, so targets sending
+// one literal tag update one device and must send it one placement.
+func TestOneAssetTagPlacement(t *testing.T) {
+	tagged := func(host, tag, rack string) string {
+		return "        - host: " + host + "\n          override_defaults:\n            asset_tag: \"" + tag +
+			"\"\n            rack: " + rack
+	}
+	placedAt := func(host, position string) string {
+		return "        - host: " + host + "\n          override_defaults:\n            position: " + position + "\n            face: front"
+	}
+	differentSlots := "place asset_tag A1 at different slots"
+	for name, tc := range map[string]struct {
+		defaults, targets, wantErr string
+	}{
+		"one tag in two racks": {
+			"        site: DC1",
+			tagged("192.0.2.10", "A1", "R12") + "\n" + tagged("192.0.2.11", "A1", "R13"),
+			"targets 192.0.2.10 and 192.0.2.11 " + differentSlots,
+		},
+		"a padded tag is the same tag": {
+			"        site: DC1",
+			tagged("192.0.2.10", " A1 ", "R12") + "\n" + tagged("192.0.2.11", "A1", "R13"), differentSlots,
+		},
+		"a subnet's devices share its tag": {
+			"        site: DC1",
+			tagged("192.0.2.16/29", "A1", "R12") + "\n" + tagged("192.0.2.10", "A1", "R13"),
+			"targets 192.0.2.16/29 and 192.0.2.10 " + differentSlots,
+		},
+		"a policy tag over two Us": {
+			"        rack: R12\n        asset_tag: A1",
+			placedAt("192.0.2.10", "40") + "\n" + placedAt("192.0.2.11", "41"), differentSlots,
+		},
+		"one tag at one U is one device": {
+			"        rack: R12\n        asset_tag: A1",
+			placedAt("192.0.2.10", "40") + "\n" + placedAt("192.0.2.11", "40"), "",
+		},
+		"different tags": {
+			"        site: DC1",
+			tagged("192.0.2.10", "A1", "R12") + "\n" + tagged("192.0.2.11", "A2", "R13"), "",
+		},
+		"a tag read from a path": {
+			"        site: DC1",
+			tagged("192.0.2.10", "/components/component[name=Chassis]/state/id", "R12") + "\n" +
+				tagged("192.0.2.11", "/components/component[name=Chassis]/state/id", "R13"), "",
+		},
+		"a placeholder is not sent": {
+			"        site: DC1",
+			tagged("192.0.2.10", "N/A", "R12") + "\n" + tagged("192.0.2.11", "N/A", "R13"), "",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := newTestManager(t).ParsePolicies(rackPolicy(tc.defaults, tc.targets))
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
 // A rack without a position is what a netbox_id target sends its device too.
 func TestOneNetboxIDRackOnly(t *testing.T) {
 	rackOnly := func(host, rack string) string {

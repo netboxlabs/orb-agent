@@ -184,7 +184,7 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 }
 
 // checkRackSlots refuses two devices at one U, and two placements for one
-// netbox_id. Targets must have passed validatePlacement. It reads the devices
+// device. Targets must have passed validatePlacement. It reads the devices
 // the runner will discover, after expansion and dedupe: a duplicate endpoint is
 // one device, and a netbox_id written on range syntax is already dropped.
 func checkRackSlots(policy *config.Policy) error {
@@ -195,22 +195,21 @@ func checkRackSlots(policy *config.Policy) error {
 	// Each U (a placement without its location) maps its locations ("" for
 	// none) to the target placed there, so each check is one lookup.
 	placed := map[placementKey]map[string]string{}
-	pinned := map[int]placedTarget{}
+	pinned := map[deviceID]placedTarget{}
 	for _, c := range expanded.candidates {
 		t := c.target
 		t.Host = c.written
-		key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
+		d := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults)
+		key := placementOf(d)
 		if key.rack == "" {
 			continue
 		}
-		if t.NetboxID != nil {
-			seen, err := pinDevice(pinned, key, t)
-			if err != nil {
-				return err
-			}
-			if seen {
-				continue
-			}
+		seen, err := pinDevice(pinned, key, t, deviceIDs(t, d))
+		if err != nil {
+			return err
+		}
+		if seen {
+			continue
 		}
 		// Diode matches a device on rack, position and face after name and
 		// site, so a new device sent to an occupied U lands on the record of
@@ -236,21 +235,45 @@ type placedTarget struct {
 	host string
 }
 
-// pinDevice records what a netbox_id target sends, refusing something
-// different for the same id: the targets update one device, so they must send
-// it the same rack, position and face (a rack without a position counts too).
-// It reports whether an earlier target already sent this placement.
-func pinDevice(pinned map[int]placedTarget, key placementKey, t config.Target) (bool, error) {
-	prior, ok := pinned[*t.NetboxID]
-	if !ok {
-		pinned[*t.NetboxID] = placedTarget{key: key, host: t.Host}
-		return false, nil
+// deviceID is something a device is matched by ahead of its name: a kept
+// netbox_id or a literal asset tag.
+type deviceID struct {
+	kind, value string
+}
+
+// deviceIDs lists what candidate t's device is matched by. A tag read from a
+// path is only known at scan time, and one the mapper would not send is none.
+func deviceIDs(t config.Target, d *config.Defaults) []deviceID {
+	var ids []deviceID
+	if t.NetboxID != nil {
+		ids = append(ids, deviceID{"netbox_id", strconv.Itoa(*t.NetboxID)})
 	}
-	if prior.key != key {
-		return false, fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
-			prior.host, t.Host, *t.NetboxID)
+	if tag, ok := mapping.ResolveAssetTag(d.AssetTag, nil, nil); ok {
+		ids = append(ids, deviceID{"asset_tag", tag})
 	}
-	return true, nil
+	return ids
+}
+
+// pinDevice records what target t sends the device each of ids names,
+// refusing something different for one already named: the targets update one
+// device, so they must send it the same rack, position and face (a rack
+// without a position counts too). It reports whether an earlier target
+// already sent this placement.
+func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Target, ids []deviceID) (bool, error) {
+	seen := false
+	for _, id := range ids {
+		prior, ok := pinned[id]
+		if !ok {
+			pinned[id] = placedTarget{key: key, host: t.Host}
+			continue
+		}
+		if prior.key != key {
+			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
+				prior.host, t.Host, id.kind, id.value)
+		}
+		seen = true
+	}
+	return seen, nil
 }
 
 // claimUnit records the U target t places its device at, refusing one another
@@ -282,9 +305,9 @@ func claimUnit(placed map[placementKey]map[string]string, key placementKey, t co
 }
 
 // placementOf returns what a target that passed validatePlacement sends its
-// device: a rack and, when placed, a U and face (zero otherwise).
-func placementOf(policyDefaults, override *config.Defaults) placementKey {
-	d := config.MergeDefaults(policyDefaults, override)
+// device, from its merged defaults d: a rack and, when placed, a U and face
+// (zero otherwise).
+func placementOf(d *config.Defaults) placementKey {
 	site := d.Site
 	if site == "" {
 		site = defaultSite
