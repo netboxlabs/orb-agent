@@ -276,3 +276,10 @@ def test_netbox_id_placement_with_a_site_is_accepted(where):
     defaults = Defaults(rack="R12", site="DC1") if where == "policy" else Defaults(rack="R12")
     override = {"site": "DC1"} if where == "target" else {}
     Policy(config=Config(defaults=defaults), scope=[_pinned(position=40, face="front", **override)])
+
+
+@pytest.mark.parametrize("site", ["", "   "])
+def test_netbox_id_placement_with_a_blank_site_is_refused(site):
+    """A blank site, such as an empty ${SITE}, is no site to look the rack up in."""
+    with pytest.raises(ValidationError, match="need a site when netbox_id is set"):
+        Policy(config=Config(defaults=Defaults(rack="R12", site=site)), scope=[_pinned(position=40, face="front")])

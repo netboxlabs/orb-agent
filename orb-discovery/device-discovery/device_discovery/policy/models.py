@@ -663,7 +663,7 @@ def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -
         )
     # A netbox_id target sends no placeholder site, so the device keeps its
     # own; the rack would then go without one and could not be looked up.
-    if entry.netbox_id is not None and site in (None, UNDEFINED_PLACEHOLDER):
+    if entry.netbox_id is not None and (site or "").strip() in ("", UNDEFINED_PLACEHOLDER):
         raise ValueError(
             f"{entry.hostname}: position and face need a site when netbox_id is set; "
             "the rack is looked up in it"
@@ -681,7 +681,7 @@ def _claim_slot(placed: list[tuple], entry: Napalm, defaults: Defaults | None, r
     no location clashes with any.
     """
     override = entry.override_defaults
-    site = _effective(override, defaults, "site") or UNDEFINED_PLACEHOLDER
+    site = (_effective(override, defaults, "site") or "").strip() or UNDEFINED_PLACEHOLDER
     location = _effective(override, defaults, "location") or None
     slot = (site, rack, override.position, override.face)
     for other_slot, other_location, other_host in placed:
