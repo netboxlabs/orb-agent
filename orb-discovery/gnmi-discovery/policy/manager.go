@@ -184,18 +184,26 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 }
 
 // checkRackSlots refuses two devices at one U, and two placements for one
-// netbox_id. Targets must have passed validatePlacement.
+// netbox_id. Targets must have passed validatePlacement. It reads the devices
+// the runner will discover, after expansion and dedupe: a duplicate endpoint is
+// one device, and a netbox_id written on range syntax is already dropped.
 func checkRackSlots(policy *config.Policy) error {
+	expanded, err := expandScope(policy.Scope.Targets)
+	if err != nil {
+		return err
+	}
 	// Each U (a placement without its location) maps its locations ("" for
 	// none) to the target placed there, so each check is one lookup.
 	placed := map[placementKey]map[string]string{}
 	pinned := map[int]placedTarget{}
-	for _, t := range policy.Scope.Targets {
+	for _, c := range expanded.candidates {
+		t := c.target
+		t.Host = c.written
 		key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
 		if key.rack == "" {
 			continue
 		}
-		if t.NetboxID != nil && keepsNetboxID(t.Host) {
+		if t.NetboxID != nil {
 			seen, err := pinDevice(pinned, key, t)
 			if err != nil {
 				return err
@@ -226,17 +234,6 @@ type placementKey struct {
 type placedTarget struct {
 	key  placementKey
 	host string
-}
-
-// keepsNetboxID reports whether a target written as host keeps its
-// netbox_id, by the rule expandTargets applies: only one written as a single
-// address does, so a /32 or a one-address range drops it and is its own device.
-func keepsNetboxID(host string) bool {
-	if n, err := targets.Count(host); err == nil && n > 1 {
-		return false // a range is never listed just to say so
-	}
-	addrs, err := targets.Expand(host)
-	return err == nil && len(addrs) == 1 && addrs[0] == host
 }
 
 // pinDevice records what a netbox_id target sends, refusing something

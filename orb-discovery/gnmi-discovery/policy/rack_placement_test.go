@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -466,6 +467,31 @@ func TestNetboxIDOnAnEnvVarHostReadsTheResolvedHost(t *testing.T) {
 		pinned("${RACK_HOST_A}")+"\n"+pinned("${RACK_HOST_B}")))
 	require.Error(t, err, "both /32s drop the netbox_id, so they are two devices at one U")
 	require.Contains(t, err.Error(), "targets 192.0.2.10/32 and 192.0.2.11/32 are both placed at R12 U40 front")
+}
+
+// Targets naming one endpoint collapse to one device, a literal winning, so
+// only the winner's placement is sent and checked.
+func TestRackSlotsFollowEndpointDedupe(t *testing.T) {
+	placedAt := func(host string) string {
+		return "        - host: " + host + "\n          override_defaults:\n            position: 40\n            face: front"
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		placedAt("192.0.2.10")+"\n"+placedAt("192.0.2.10/32")))
+	require.NoError(t, err, "one endpoint written twice is one device")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		"        - host: 192.0.2.10\n"+placedAt("192.0.2.10/32")+"\n"+placedAt("192.0.2.11")))
+	require.NoError(t, err, "the literal wins, so the /32's U is never sent")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		strings.Replace(placedAt("192.0.2.10/32"), "40", "41", 1)+"\n"+placedAt("192.0.2.10")+"\n"+placedAt("192.0.2.11")))
+	require.Error(t, err, "the literal wins written second too, and its U is taken")
+	require.Contains(t, err.Error(), "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		placedAt("192.0.2.10/32")+"\n"+placedAt("192.0.2.11")))
+	require.Error(t, err, "two endpoints are two devices")
+	require.Contains(t, err.Error(), "targets 192.0.2.10/32 and 192.0.2.11 are both placed at R12 U40 front")
 }
 
 // A rack without a position is what a netbox_id target sends its device too.
