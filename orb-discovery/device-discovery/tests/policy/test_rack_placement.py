@@ -283,3 +283,20 @@ def test_netbox_id_placement_with_a_blank_site_is_refused(site):
     """A blank site, such as an empty ${SITE}, is no site to look the rack up in."""
     with pytest.raises(ValidationError, match="need a site when netbox_id is set"):
         Policy(config=Config(defaults=Defaults(rack="R12", site=site)), scope=[_pinned(position=40, face="front")])
+
+
+def test_one_netbox_id_at_two_slots_is_refused():
+    """Both entries update the same device, which would move between the slots every run."""
+    with pytest.raises(ValidationError, match="192.0.2.10 and 192.0.2.11 place netbox_id 42 at different slots"):
+        Policy(config=Config(defaults=Defaults(rack="R12", site="DC1")), scope=[
+            _pinned("192.0.2.10", position=40, face="front"),
+            _pinned("192.0.2.11", position=41, face="front"),
+        ])
+
+
+def test_one_netbox_id_at_one_slot_is_accepted():
+    """Two entries for one device, both placing it at the same U, describe one placement."""
+    Policy(config=Config(defaults=Defaults(rack="R12", site="DC1")), scope=[
+        _pinned("192.0.2.10", position=40, face="front"),
+        _pinned("192.0.2.11", position=40, face="front"),
+    ])

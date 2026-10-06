@@ -678,20 +678,28 @@ def _claim_slot(placed: list[tuple], entry: Napalm, defaults: Defaults | None, r
     Diode matches a device by rack, position and face once name and site miss,
     so a second device at one U would take the first's record. A rack sent
     without a location binds a same-named rack in any location of the site, so
-    no location clashes with any.
+    no location clashes with any. Two entries with one netbox_id update one
+    device, so they must place it at the same slot.
     """
     override = entry.override_defaults
     site = (_effective(override, defaults, "site") or "").strip() or UNDEFINED_PLACEHOLDER
     location = _effective(override, defaults, "location") or None
     slot = (site, rack, override.position, override.face)
-    for other_slot, other_location, other_host in placed:
+    for other_slot, other_location, other_host, other_id in placed:
+        if entry.netbox_id is not None and entry.netbox_id == other_id:
+            if (other_slot, other_location) != (slot, location):
+                raise ValueError(
+                    f"targets {other_host} and {entry.hostname} place netbox_id "
+                    f"{entry.netbox_id} at different slots"
+                )
+            continue
         same_location = None in (location, other_location) or location == other_location
         if other_slot == slot and same_location:
             raise ValueError(
                 f"targets {other_host} and {entry.hostname} are both placed at "
                 f"{rack} U{override.position:g} {override.face}"
             )
-    placed.append((slot, location, entry.hostname))
+    placed.append((slot, location, entry.hostname, entry.netbox_id))
 
 
 class Policy(BaseModel):
