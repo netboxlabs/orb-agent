@@ -3,6 +3,9 @@ package filesmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -199,4 +202,65 @@ func TestFleetRefresh_DoesNotReplaceCurrentPublisher(t *testing.T) {
 	f.requestFreshBundleList()
 	expectRequest(t, newPub)
 	expectNoRequest(t, oldPub)
+}
+
+func engineFailingWith(err error) *mockEngine {
+	eng := &mockEngine{}
+	eng.On("Ensure", mock.Anything, mock.Anything).Return("", err)
+	return eng
+}
+
+func statusErr(code int) error {
+	return &httpStatusError{StatusCode: code, err: fmt.Errorf("bad response code: %d", code)}
+}
+
+// A 401/403 from the server means the delivered URL is no good even when its
+// expiry has not passed (or is unknown), so it triggers a refresh on its own.
+func TestFleetHandlePackages_RejectedURLRequestsFreshList(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			clk := &refreshClock{t: time.Unix(1_800_000_000, 0)}
+			// Wrapped the way the engine returns it; unexpired so the trigger is
+			// the status, not the clock.
+			f, pub := newRefreshFleet(t, engineFailingWith(fmt.Errorf("fetch x: %w", statusErr(code))), clk)
+
+			f.HandlePackages(context.Background(), bundleWithExpiry(clk.now().Unix()+600))
+			expectRequest(t, pub)
+		})
+	}
+}
+
+func TestFleetHandlePackages_RejectedURLWithUnknownExpiryRequests(t *testing.T) {
+	clk := &refreshClock{t: time.Unix(1_800_000_000, 0)}
+	f, pub := newRefreshFleet(t, engineFailingWith(statusErr(http.StatusForbidden)), clk)
+
+	f.HandlePackages(context.Background(), bundleWithExpiry(0))
+	expectRequest(t, pub)
+}
+
+func TestFleetHandlePackages_OtherStatusesDoNotRequest(t *testing.T) {
+	for _, code := range []int{
+		http.StatusBadRequest,
+		http.StatusNotFound,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusServiceUnavailable,
+	} {
+		t.Run(http.StatusText(code), func(t *testing.T) {
+			clk := &refreshClock{t: time.Unix(1_800_000_000, 0)}
+			f, pub := newRefreshFleet(t, engineFailingWith(statusErr(code)), clk)
+
+			f.HandlePackages(context.Background(), bundleWithExpiry(clk.now().Unix()+600))
+			expectNoRequest(t, pub)
+		})
+	}
+}
+
+func TestURLRejected(t *testing.T) {
+	assert.False(t, urlRejected(nil))
+	assert.False(t, urlRejected(errors.New("boom")))
+	assert.False(t, urlRejected(statusErr(http.StatusNotFound)))
+	assert.True(t, urlRejected(statusErr(http.StatusUnauthorized)))
+	assert.True(t, urlRejected(statusErr(http.StatusForbidden)))
+	assert.True(t, urlRejected(fmt.Errorf("outer: %w", statusErr(http.StatusForbidden))))
 }
