@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from device_discovery.policy.manager import PolicyManager
-from device_discovery.policy.models import Config, Defaults, Napalm, Policy
+from device_discovery.policy.models import Config, Defaults, DeviceParameters, Napalm, Policy
 from device_discovery.policy.runner import merge_override_defaults
 
 
@@ -372,3 +372,47 @@ def test_netbox_id_on_single_address_range_syntax_keeps_its_own_rack():
 def test_netbox_id_placement_on_single_address_range_syntax_needs_no_site():
     """netbox_id is dropped there, so the device is sent with the undefined site and the rack with it."""
     Policy(config=Config(defaults=Defaults(rack="R12")), scope=[_pinned("192.0.2.10/32", position=40, face="front")])
+
+
+def _tagged(hostname, tag, **override):
+    return _scope(hostname, device=DeviceParameters(asset_tag=tag), **override)
+
+
+def test_one_asset_tag_in_two_racks_is_refused():
+    """The asset tag is matched first, so both targets update one device, which would move every run."""
+    with pytest.raises(ValidationError, match="192.0.2.10 and 192.0.2.11 place asset_tag A1 at different slots"):
+        _policy([_tagged("192.0.2.10", "A1", rack="R12"), _tagged("192.0.2.11", "A1", rack="R13")])
+
+
+def test_a_policy_asset_tag_shared_by_two_placed_targets_is_refused():
+    """A policy-wide asset tag reaches every target, so their devices are one."""
+    with pytest.raises(ValidationError, match="place asset_tag A1 at different slots"):
+        _policy([
+            _scope("192.0.2.10", position=40, face="front"),
+            _scope("192.0.2.11", position=41, face="front"),
+        ], rack="R12", device=DeviceParameters(asset_tag="A1"))
+
+
+def test_one_asset_tag_at_one_slot_is_one_device():
+    """Two targets naming one device at one U do not clash with each other."""
+    _policy([
+        _tagged("192.0.2.10", "A1", position=40, face="front"),
+        _tagged("192.0.2.11", "A1", position=40, face="front"),
+    ], rack="R12")
+
+
+@pytest.mark.parametrize("tag", ["", "   "])
+def test_a_blank_target_asset_tag_sends_none(tag):
+    """A blank override sends no asset tag, not the policy's, so each target's device is its own."""
+    _policy([
+        _tagged("192.0.2.10", tag, rack="R12"),
+        _tagged("192.0.2.11", tag, rack="R13"),
+    ], device=DeviceParameters(asset_tag="A1"))
+
+
+def test_a_target_asset_tag_replaces_the_policy_one():
+    """Targets with their own tags are different devices, whatever the policy tag."""
+    _policy([
+        _tagged("192.0.2.10", "A1", rack="R12"),
+        _tagged("192.0.2.11", "A2", rack="R13"),
+    ], device=DeviceParameters(asset_tag="A0"))

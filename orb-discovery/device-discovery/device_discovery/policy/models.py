@@ -682,28 +682,51 @@ def _site_and_location(override: Defaults, defaults: Defaults | None) -> tuple:
     return site, _effective(override, defaults, "location") or None
 
 
+def _asset_tag(override: Defaults, defaults: Defaults | None) -> str | None:
+    """The asset tag a target's device is sent with, as translate_device emits it."""
+    for source in (override, defaults):
+        tag = source.device.asset_tag if source is not None and source.device is not None else None
+        if tag is not None:
+            return tag if tag.strip() else None
+    return None
+
+
+def _device_ids(entry: Napalm, override: Defaults, defaults: Defaults | None) -> list[tuple]:
+    """What a target's device is matched by ahead of its name: a kept netbox_id, an asset tag."""
+    ids = []
+    if _keeps_netbox_id(entry):
+        ids.append(("netbox_id", entry.netbox_id))
+    tag = _asset_tag(override, defaults)
+    if tag is not None:
+        ids.append(("asset_tag", tag))
+    return ids
+
+
 def _seen_device(
-    pinned: dict[int, tuple], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+    pinned: dict[tuple, tuple], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
 ) -> bool:
     """
-    Record the placement a netbox_id target sends, refusing a different one for that id.
+    Record the placement a target sends its device, refusing a different one for that device.
 
-    Entries with one netbox_id update one device, so they must send it the same
-    rack, position and face; a rack without a position is a placement too.
-    Returns True when an earlier entry already sent this placement.
+    Entries with one netbox_id or asset tag update one device, so they must send
+    it the same rack, position and face; a rack without a position is a
+    placement too. Returns True when an earlier entry already sent this placement.
     """
     placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
-    prior = pinned.get(entry.netbox_id)
-    if prior is None:
-        pinned[entry.netbox_id] = (placement, entry.hostname)
-        return False
-    prior_placement, prior_host = prior
-    if prior_placement != placement:
-        raise ValueError(
-            f"targets {prior_host} and {entry.hostname} place netbox_id "
-            f"{entry.netbox_id} at different slots"
-        )
-    return True
+    seen = False
+    for device_id in _device_ids(entry, override, defaults):
+        prior = pinned.get(device_id)
+        if prior is None:
+            pinned[device_id] = (placement, entry.hostname)
+            continue
+        prior_placement, prior_host = prior
+        if prior_placement != placement:
+            kind, value = device_id
+            raise ValueError(
+                f"targets {prior_host} and {entry.hostname} place {kind} {value} at different slots"
+            )
+        seen = True
+    return seen
 
 
 def _claim_slot(
@@ -780,14 +803,14 @@ class Policy(BaseModel):
         # Runs after validate_expansion_budget, so an oversized policy is
         # refused before any placement is checked.
         placed: dict[tuple, dict] = {}
-        pinned: dict[int, tuple] = {}
+        pinned: dict[tuple, tuple] = {}
         for entry in self.scope:
             override = entry.override_defaults or Defaults()
             placed_here = override.position is not None or override.face is not None
             rack = _effective(override, defaults, "rack")
             if placed_here:
                 rack = _check_target_placement(entry, rack, _effective(override, defaults, "site"))
-            if rack and _keeps_netbox_id(entry) and _seen_device(pinned, entry, override, defaults, rack):
+            if rack and _seen_device(pinned, entry, override, defaults, rack):
                 continue
             if placed_here:
                 _claim_slot(placed, entry, override, defaults, rack)
