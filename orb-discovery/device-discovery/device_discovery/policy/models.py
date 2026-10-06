@@ -671,7 +671,13 @@ def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -
     return rack
 
 
-def _claim_slot(placed: list[tuple], entry: Napalm, defaults: Defaults | None, rack: str) -> None:
+def _claim_slot(
+    placed: dict[tuple, list[tuple]],
+    pinned: dict[int, tuple],
+    entry: Napalm,
+    defaults: Defaults | None,
+    rack: str,
+) -> None:
     """
     Record the U a target places its device at, refusing one another target took.
 
@@ -685,21 +691,24 @@ def _claim_slot(placed: list[tuple], entry: Napalm, defaults: Defaults | None, r
     site = (_effective(override, defaults, "site") or "").strip() or UNDEFINED_PLACEHOLDER
     location = _effective(override, defaults, "location") or None
     slot = (site, rack, override.position, override.face)
-    for other_slot, other_location, other_host, other_id in placed:
-        if entry.netbox_id is not None and entry.netbox_id == other_id:
-            if (other_slot, other_location) != (slot, location):
+    if entry.netbox_id is not None:
+        prior = pinned.get(entry.netbox_id)
+        if prior is not None:
+            prior_slot, prior_location, prior_host = prior
+            if (prior_slot, prior_location) != (slot, location):
                 raise ValueError(
-                    f"targets {other_host} and {entry.hostname} place netbox_id "
+                    f"targets {prior_host} and {entry.hostname} place netbox_id "
                     f"{entry.netbox_id} at different slots"
                 )
-            continue
-        same_location = None in (location, other_location) or location == other_location
-        if other_slot == slot and same_location:
+            return
+        pinned[entry.netbox_id] = (slot, location, entry.hostname)
+    for other_location, other_host in placed.get(slot, ()):
+        if None in (location, other_location) or location == other_location:
             raise ValueError(
                 f"targets {other_host} and {entry.hostname} are both placed at "
                 f"{rack} U{override.position:g} {override.face}"
             )
-    placed.append((slot, location, entry.hostname, entry.netbox_id))
+    placed.setdefault(slot, []).append((location, entry.hostname))
 
 
 class Policy(BaseModel):
@@ -707,29 +716,6 @@ class Policy(BaseModel):
 
     config: Config | None = Field(default=None, description="Configuration data")
     scope: list[Napalm]
-
-    @model_validator(mode="after")
-    def validate_rack_placement(self):
-        """
-        Allow a rack position and face only per single-host target, together, with a rack.
-
-        One U for every device of a policy, or of a range or subnet, cannot be
-        right; NetBox requires a face for any position; and a position means
-        nothing without a rack, which may come from the policy defaults.
-        """
-        defaults = self.config.defaults if self.config else None
-        if defaults is not None and (defaults.position is not None or defaults.face is not None):
-            raise ValueError("defaults: position and face are set per target, in override_defaults")
-        placed: list[tuple] = []
-        for entry in self.scope:
-            override = entry.override_defaults
-            if override is None or (override.position is None and override.face is None):
-                continue
-            rack = _check_target_placement(
-                entry, _effective(override, defaults, "rack"), _effective(override, defaults, "site")
-            )
-            _claim_slot(placed, entry, defaults, rack)
-        return self
 
     @model_validator(mode="after")
     def validate_expansion_budget(self):
@@ -755,6 +741,32 @@ class Policy(BaseModel):
                 f"policy scopes expand to {total} addresses in total, "
                 f"more than the limit of {MAX_EXPANDED_HOSTS}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_rack_placement(self):
+        """
+        Allow a rack position and face only per single-host target, together, with a rack.
+
+        One U for every device of a policy, or of a range or subnet, cannot be
+        right; NetBox requires a face for any position; and a position means
+        nothing without a rack, which may come from the policy defaults.
+        """
+        defaults = self.config.defaults if self.config else None
+        if defaults is not None and (defaults.position is not None or defaults.face is not None):
+            raise ValueError("defaults: position and face are set per target, in override_defaults")
+        # Runs after validate_expansion_budget, so an oversized policy is
+        # refused before any placement is checked.
+        placed: dict[tuple, list[tuple]] = {}
+        pinned: dict[int, tuple] = {}
+        for entry in self.scope:
+            override = entry.override_defaults
+            if override is None or (override.position is None and override.face is None):
+                continue
+            rack = _check_target_placement(
+                entry, _effective(override, defaults, "rack"), _effective(override, defaults, "site")
+            )
+            _claim_slot(placed, pinned, entry, defaults, rack)
         return self
 
 

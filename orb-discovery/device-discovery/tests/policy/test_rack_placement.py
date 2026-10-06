@@ -300,3 +300,10 @@ def test_one_netbox_id_at_one_slot_is_accepted():
         _pinned("192.0.2.10", position=40, face="front"),
         _pinned("192.0.2.11", position=40, face="front"),
     ])
+
+
+def test_an_oversized_policy_is_refused_before_placement_is_checked():
+    """The expansion budget runs first, so an oversized policy costs no placement work."""
+    with pytest.raises(ValidationError, match="more than the limit") as exc:
+        _policy([_scope("10.0.0.0/8", rack="R12", position=40, face="front")])
+    assert "single host" not in str(exc.value)
