@@ -436,3 +436,39 @@ func TestOneNetboxIDPlacement(t *testing.T) {
 		pinned("192.0.2.10", "40")+"\n"+pinned("192.0.2.11", "40")))
 	require.NoError(t, err, "one device at one slot, named twice")
 }
+
+// netbox_id survives only on a target written as a single address, as the
+// runner applies it: a /32 or a one-address range drops it and is its own device.
+func TestNetboxIDOnRangeSyntaxPinsNothing(t *testing.T) {
+	pinned := func(host, rack, position string) string {
+		return "        - host: " + host + "\n          netbox_id: 42\n          override_defaults:\n            rack: " + rack +
+			"\n            position: " + position + "\n            face: front"
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		pinned("192.0.2.10/32", "R12", "40")+"\n"+pinned("192.0.2.11/32", "R12", "40")))
+	require.Error(t, err, "two devices at one U, though they name one netbox_id")
+	require.Contains(t, err.Error(), "are both placed at R12 U40 front")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		pinned("192.0.2.10/32", "R12", "40")+"\n"+pinned("192.0.2.11", "R13", "41")))
+	require.NoError(t, err, "the /32 pins nothing, so the literal target's placement is its own")
+}
+
+// A rack without a position is what a netbox_id target sends its device too.
+func TestOneNetboxIDRackOnly(t *testing.T) {
+	rackOnly := func(host, rack string) string {
+		return "        - host: " + host + "\n          netbox_id: 42\n          override_defaults:\n            rack: " + rack
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		rackOnly("192.0.2.10", "R12")+"\n"+rackOnly("192.0.2.11", "R13")))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "place netbox_id 42 at different slots")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		rackOnly("192.0.2.10", "R12")+"\n"+rackOnly("192.0.2.11", "R12")))
+	require.NoError(t, err, "one device in one rack, named twice")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		rackOnly("192.0.2.10", "R12")+"\n        - host: 192.0.2.11\n          netbox_id: 42"))
+	require.NoError(t, err, "a target that sends no rack leaves the other's in place")
+}

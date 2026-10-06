@@ -228,7 +228,7 @@ The policy is rejected when:
 - `face` is not `front` or `rear`.
 - `position` is below `1` or not a multiple of `0.5`. There is no upper bound check, since only NetBox knows the rack's height.
 - the target's `host` is a CIDR or range covering more than one address. A range or subnet would place every device at the same U. `rack` alone is allowed on such a target.
-- two targets with the same `netbox_id` place it at different slots: both update one device.
+- two targets with the same `netbox_id` send it different placements: both update one device. A rack without a position counts too. Only a target written as a single address keeps its `netbox_id`; a `/32` or a one-address range drops it, as discovery does.
 - two targets are placed at the same U: the same site, location, rack, position and face. A device sent without a location (none on the target or in the policy `defaults`) counts as any location, since its rack is matched by name across the site. Two half-depth devices may share a U on opposite faces. Overlaps between devices taller than one U are left to NetBox, which knows their heights.
 
 Quote a numeric rack name (`rack: "01"`). The agent passes the policy through YAML, so an unquoted `01` would arrive as the number 1 and `010` as 8; a rack that is not text is refused rather than guessed at.

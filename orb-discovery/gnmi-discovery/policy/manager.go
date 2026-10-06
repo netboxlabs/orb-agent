@@ -157,9 +157,9 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	// Indexed by placement without its location, so each target costs one
-	// lookup; the location wildcard is applied within a slot.
-	placed := map[placementKey][]placedTarget{}
+	// Each U (a placement without its location) maps its locations ("" for
+	// none) to the target placed there, so each check is one lookup.
+	placed := map[placementKey]map[string]string{}
 	pinned := map[int]placedTarget{}
 	for _, t := range policy.Scope.Targets {
 		if t.Host == "" {
@@ -177,14 +177,26 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if err := validatePlacement(policy.Config.Defaults.Rack, t.OverrideDefaults); err != nil {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
-			// Diode matches a device on rack, position and face after name and
-			// site, so a new device sent to an occupied U lands on the record of
-			// the device already there. Multi-U overlaps are NetBox's to refuse.
-			if hasPlacement(t.OverrideDefaults) {
-				key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
-				if err := claimPlacement(placed, pinned, key, t); err != nil {
-					return err
-				}
+		}
+		key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
+		if key.rack == "" {
+			continue
+		}
+		if t.NetboxID != nil && keepsNetboxID(t.Host) {
+			seen, err := pinDevice(pinned, key, t)
+			if err != nil {
+				return err
+			}
+			if seen {
+				continue
+			}
+		}
+		// Diode matches a device on rack, position and face after name and
+		// site, so a new device sent to an occupied U lands on the record of
+		// the device already there. Multi-U overlaps are NetBox's to refuse.
+		if hasPlacement(t.OverrideDefaults) {
+			if err := claimUnit(placed, key, t); err != nil {
+				return err
 			}
 		}
 	}
@@ -203,55 +215,80 @@ type placedTarget struct {
 	host string
 }
 
-// claimPlacement records the U target t places its device at, refusing one
-// another target took. Two targets with one netbox_id update one device, so
-// they must place it at the same slot, and doing so is no clash.
-func claimPlacement(placed map[placementKey][]placedTarget, pinned map[int]placedTarget, key placementKey, t config.Target) error {
-	if t.NetboxID != nil {
-		if prior, ok := pinned[*t.NetboxID]; ok {
-			if prior.key != key {
-				return fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
-					prior.host, t.Host, *t.NetboxID)
-			}
-			return nil
-		}
-		pinned[*t.NetboxID] = placedTarget{key: key, host: t.Host}
+// keepsNetboxID reports whether a target written as host keeps its
+// netbox_id, by the rule expandTargets applies: only one written as a single
+// address does, so a /32 or a one-address range drops it and is its own device.
+func keepsNetboxID(host string) bool {
+	if n, err := targets.Count(host); err == nil && n > 1 {
+		return false // a range is never listed just to say so
 	}
+	addrs, err := targets.Expand(host)
+	return err == nil && len(addrs) == 1 && addrs[0] == host
+}
+
+// pinDevice records what a netbox_id target sends, refusing something
+// different for the same id: the targets update one device, so they must send
+// it the same rack, position and face (a rack without a position counts too).
+// It reports whether an earlier target already sent this placement.
+func pinDevice(pinned map[int]placedTarget, key placementKey, t config.Target) (bool, error) {
+	prior, ok := pinned[*t.NetboxID]
+	if !ok {
+		pinned[*t.NetboxID] = placedTarget{key: key, host: t.Host}
+		return false, nil
+	}
+	if prior.key != key {
+		return false, fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
+			prior.host, t.Host, *t.NetboxID)
+	}
+	return true, nil
+}
+
+// claimUnit records the U target t places its device at, refusing one another
+// target took. A rack sent without a location binds a same-named rack in any
+// location of the site, so no location clashes with any.
+func claimUnit(placed map[placementKey]map[string]string, key placementKey, t config.Target) error {
 	slot := key
 	slot.location = ""
-	for _, p := range placed[slot] {
-		if p.key.clashes(key) {
-			return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
-				p.host, t.Host, key.rack, key.position, key.face)
-		}
+	taken := placed[slot]
+	if taken == nil {
+		taken = map[string]string{}
+		placed[slot] = taken
 	}
-	placed[slot] = append(placed[slot], placedTarget{key: key, host: t.Host})
+	other, clash := taken[key.location]
+	if key.location == "" {
+		for _, host := range taken {
+			other, clash = host, true
+			break
+		}
+	} else if !clash {
+		other, clash = taken[""]
+	}
+	if clash {
+		return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+			other, t.Host, key.rack, key.position, key.face)
+	}
+	taken[key.location] = t.Host
 	return nil
 }
 
-// clashes reports whether two placements name the same U. A rack sent without
-// a location binds a same-named rack in any location of the site, so no
-// location clashes with any.
-func (k placementKey) clashes(o placementKey) bool {
-	sameLocation := k.location == "" || o.location == "" || k.location == o.location
-	return sameLocation && k.site == o.site && k.rack == o.rack && k.face == o.face && k.position == o.position
-}
-
-// placementOf returns the effective placement of a target that passed
-// validatePlacement with a position and face.
+// placementOf returns what a target that passed validatePlacement sends its
+// device: a rack and, when placed, a U and face (zero otherwise).
 func placementOf(policyDefaults, override *config.Defaults) placementKey {
 	d := config.MergeDefaults(policyDefaults, override)
 	site := d.Site
 	if site == "" {
 		site = defaultSite
 	}
-	return placementKey{
+	key := placementKey{
 		site:     site,
 		location: strings.TrimSpace(d.Location),
 		rack:     strings.TrimSpace(string(d.Rack)),
 		face:     strings.ToLower(strings.TrimSpace(d.Face)),
-		position: *d.Position,
 	}
+	if d.Position != nil {
+		key.position = *d.Position
+	}
+	return key
 }
 
 // validateInterfaceRegexes compiles every interface_patterns match and every
