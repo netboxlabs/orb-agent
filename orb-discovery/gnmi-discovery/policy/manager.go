@@ -223,7 +223,7 @@ func placementOf(policyDefaults, override *config.Defaults) placementKey {
 	return placementKey{
 		site:     site,
 		location: strings.TrimSpace(d.Location),
-		rack:     strings.TrimSpace(d.Rack),
+		rack:     strings.TrimSpace(string(d.Rack)),
 		face:     strings.ToLower(strings.TrimSpace(d.Face)),
 		position: *d.Position,
 	}
@@ -257,7 +257,7 @@ func validateInterfaceRegexes(d *config.Defaults) error {
 // validatePlacement checks a target's rack position and face against NetBox's
 // rules: both or neither, in a rack, on the front or rear, from U1 in half
 // units. The upper bound depends on the rack's height, which only NetBox knows.
-func validatePlacement(policyRack string, d *config.Defaults) error {
+func validatePlacement(policyRack config.RackText, d *config.Defaults) error {
 	if !hasPlacement(d) {
 		return nil
 	}
@@ -265,7 +265,7 @@ func validatePlacement(policyRack string, d *config.Defaults) error {
 	if d.Position == nil || face == "" {
 		return errors.New("position and face must be set together; NetBox requires a face for any position")
 	}
-	if strings.TrimSpace(d.Rack) == "" && strings.TrimSpace(policyRack) == "" {
+	if strings.TrimSpace(string(d.Rack)) == "" && strings.TrimSpace(string(policyRack)) == "" {
 		return errors.New("position and face need a rack, in this target's override_defaults or the policy defaults")
 	}
 	switch strings.ToLower(face) {

@@ -404,7 +404,18 @@ func TestRackPlacementYAMLTypes(t *testing.T) {
 			"        - host: 192.0.2.10\n          override_defaults:\n            rack: \"012\"\n            position: 40\n            face: front"))
 		require.NoError(t, err)
 		p := policies["p1"]
-		require.Equal(t, "12", p.Config.Defaults.Rack)
-		require.Equal(t, "012", p.Scope.Targets[0].OverrideDefaults.Rack)
+		require.Equal(t, "12", string(p.Config.Defaults.Rack))
+		require.Equal(t, "012", string(p.Scope.Targets[0].OverrideDefaults.Rack))
 	})
+
+	// An unquoted 01 would arrive as 1 and 010 as 8, so a number is refused
+	// rather than taken as another rack's name.
+	for _, rack := range []string{"12", "012", "0x1A", "1e3", "true"} {
+		t.Run("unquoted "+rack+" is refused", func(t *testing.T) {
+			_, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: "+rack,
+				"        - host: 192.0.2.10\n          override_defaults:\n            position: 40\n            face: front"))
+			require.Error(t, err)
+			require.Contains(t, err.Error(), `quote a numeric rack name, e.g. rack: "01"`)
+		})
+	}
 }

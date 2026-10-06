@@ -270,6 +270,21 @@ type InterfacePattern struct {
 	Type  string `yaml:"type"`  // NetBox interface type assigned on match
 }
 
+// RackText is a rack name that must be YAML text. The agent re-marshals a
+// policy before posting it, so an unquoted 01 arrives as the number 1 and 010
+// as 8: a number is refused rather than taken as another rack's name.
+type RackText string
+
+// UnmarshalYAML refuses a rack name that is not YAML text. A null never
+// reaches it: yaml leaves the field empty.
+func (r *RackText) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.ShortTag() != "!!str" {
+		return errors.New(`rack must be text; quote a numeric rack name, e.g. rack: "01"`)
+	}
+	*r = RackText(node.Value)
+	return nil
+}
+
 // Defaults holds NetBox defaults applied to discovered entities.
 type Defaults struct {
 	Site     string `yaml:"site,omitempty"`
@@ -277,7 +292,7 @@ type Defaults struct {
 	// Rack is a literal NetBox rack name. Position (U, half units allowed) and
 	// Face (front or rear) place the device in it, and are valid only in a
 	// target's override_defaults: one U cannot describe a whole policy.
-	Rack     string   `yaml:"rack,omitempty"`
+	Rack     RackText `yaml:"rack,omitempty"`
 	Position *float64 `yaml:"position,omitempty"`
 	Face     string   `yaml:"face,omitempty"`
 	Role     string   `yaml:"role,omitempty"`
@@ -481,8 +496,8 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.Location != "" {
 		merged.Location = overrideDefaults.Location
 	}
-	if rack := strings.TrimSpace(overrideDefaults.Rack); rack != "" {
-		merged.Rack = rack
+	if rack := strings.TrimSpace(string(overrideDefaults.Rack)); rack != "" {
+		merged.Rack = RackText(rack)
 	}
 	if overrideDefaults.Position != nil {
 		merged.Position = cloneFloat(overrideDefaults.Position)

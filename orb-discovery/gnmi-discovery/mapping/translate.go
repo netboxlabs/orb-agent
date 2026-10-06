@@ -357,7 +357,7 @@ func translateDevice(profile *Profile, snap map[string]any, defaults *config.Def
 		// rack in the device's location when racks elsewhere share its name.
 		// Position and face are set only in a rack (policy validation makes the
 		// override set both or neither).
-		if rack := strings.TrimSpace(defaults.Rack); rack != "" {
+		if rack := strings.TrimSpace(string(defaults.Rack)); rack != "" {
 			dev.Rack = &diode.Rack{Name: strptr(rack), Site: dev.Site, Location: dev.Location}
 			if face := strings.ToLower(strings.TrimSpace(defaults.Face)); defaults.Position != nil && face != "" {
 				pos := *defaults.Position

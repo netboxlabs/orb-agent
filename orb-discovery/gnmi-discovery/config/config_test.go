@@ -386,7 +386,7 @@ override_defaults:
   face: front
 `), &target))
 	require.NotNil(t, target.OverrideDefaults)
-	require.Equal(t, "R12", target.OverrideDefaults.Rack)
+	require.Equal(t, RackText("R12"), target.OverrideDefaults.Rack)
 	require.NotNil(t, target.OverrideDefaults.Position)
 	require.InDelta(t, 40.5, *target.OverrideDefaults.Position, 0)
 	require.Equal(t, "front", target.OverrideDefaults.Face)
@@ -402,21 +402,21 @@ func TestMergeDefaultsRackPlacement(t *testing.T) {
 
 	t.Run("override rack replaces the policy rack", func(t *testing.T) {
 		got := MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: "R12"})
-		require.Equal(t, "R12", got.Rack)
+		require.Equal(t, RackText("R12"), got.Rack)
 	})
 
 	t.Run("an unset or blank override rack keeps the policy rack", func(t *testing.T) {
-		require.Equal(t, "R1", MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{}).Rack)
-		require.Equal(t, "R1", MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: "  "}).Rack)
+		require.Equal(t, RackText("R1"), MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{}).Rack)
+		require.Equal(t, RackText("R1"), MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: "  "}).Rack)
 	})
 
 	t.Run("override rack is trimmed", func(t *testing.T) {
-		require.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: " R12 "}).Rack)
+		require.Equal(t, RackText("R12"), MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: " R12 "}).Rack)
 	})
 
 	t.Run("nil override keeps the policy rack", func(t *testing.T) {
 		got := MergeDefaults(&Defaults{Rack: "R1"}, nil)
-		require.Equal(t, "R1", got.Rack)
+		require.Equal(t, RackText("R1"), got.Rack)
 		require.Nil(t, got.Position)
 		require.Empty(t, got.Face)
 	})
@@ -424,7 +424,7 @@ func TestMergeDefaultsRackPlacement(t *testing.T) {
 	t.Run("position and face come from the override and are not aliased", func(t *testing.T) {
 		override := &Defaults{Position: pos(40.5), Face: "rear"}
 		got := MergeDefaults(&Defaults{Rack: "R1"}, override)
-		require.Equal(t, "R1", got.Rack)
+		require.Equal(t, RackText("R1"), got.Rack)
 		require.NotNil(t, got.Position)
 		require.InDelta(t, 40.5, *got.Position, 0)
 		require.Equal(t, "rear", got.Face)
@@ -442,7 +442,7 @@ func TestMergeDefaultsRackPlacement(t *testing.T) {
 	t.Run("nil policy defaults copy the override without aliasing", func(t *testing.T) {
 		override := &Defaults{Rack: "R12", Position: pos(3), Face: "front"}
 		got := MergeDefaults(nil, override)
-		require.Equal(t, "R12", got.Rack)
+		require.Equal(t, RackText("R12"), got.Rack)
 		require.NotNil(t, got.Position)
 		require.InDelta(t, 3, *got.Position, 0)
 		require.Equal(t, "front", got.Face)
