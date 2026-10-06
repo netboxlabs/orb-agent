@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,4 +145,58 @@ func TestFleetHandlePackages_RefreshIsRateLimited(t *testing.T) {
 	clk.advance(bundleRefreshCooldown + time.Second)
 	f.HandlePackages(context.Background(), expired)
 	expectRequest(t, pub)
+}
+
+// A refresh that captured publisher A must not replace publisher B, which a
+// reconnect registered while the refresh was still publishing.
+func TestFleetRefresh_DoesNotReplaceCurrentPublisher(t *testing.T) {
+	clk := &refreshClock{t: time.Unix(1_800_000_000, 0)}
+	f := newTestFleet(failingEngine())
+	t.Cleanup(f.stopCancel)
+	f.now = clk.now
+
+	oldPub := make(chan []byte, 4)
+	newPub := make(chan []byte, 4)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	var oldCalls atomic.Int32
+
+	oldFn := func(_ context.Context, payload []byte) error {
+		if oldCalls.Add(1) == 1 {
+			return nil // the registration publish
+		}
+		once.Do(func() { close(entered) })
+		<-release
+		oldPub <- payload
+		return nil
+	}
+	newFn := func(_ context.Context, payload []byte) error {
+		newPub <- payload
+		return nil
+	}
+
+	f.SendBundleListRequest(context.Background(), oldFn)
+
+	// Start a refresh; it captures oldFn and blocks inside it.
+	done := make(chan struct{})
+	go func() {
+		f.requestFreshBundleList()
+		close(done)
+	}()
+	<-entered
+
+	// A reconnect registers the new publisher while the refresh is in flight.
+	f.SendBundleListRequest(context.Background(), newFn)
+	<-newPub // drain the registration publish
+
+	close(release)
+	<-done
+	expectRequest(t, oldPub) // the in-flight refresh still completes via oldFn
+
+	// The next refresh must go through the new publisher.
+	clk.advance(bundleRefreshCooldown + time.Second)
+	f.requestFreshBundleList()
+	expectRequest(t, newPub)
+	expectNoRequest(t, oldPub)
 }

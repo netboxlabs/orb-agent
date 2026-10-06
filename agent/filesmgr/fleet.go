@@ -121,10 +121,19 @@ func (f *FleetFilesManager) HandlePackages(_ context.Context, payload messages.P
 // SendBundleListRequest publishes a bundle_list_req (via publishFunc, which
 // targets the agent outbox) asking the control plane to re-deliver the agent's
 // current bundle set. This is the connect/reconnect catch-up.
+// It also registers publishFunc as the current publisher for later
+// self-initiated refreshes (requestFreshBundleList).
 func (f *FleetFilesManager) SendBundleListRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
 	f.mu.Lock()
 	f.publishFunc = publishFunc
 	f.mu.Unlock()
+	f.publishBundleListRequest(ctx, publishFunc)
+}
+
+// publishBundleListRequest sends a bundle_list_req through publishFunc without
+// changing the registered publisher. A refresh that started before a reconnect
+// must not put its (now stale) publisher back in place of the new one.
+func (f *FleetFilesManager) publishBundleListRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
 	body, err := json.Marshal(messages.RPC{
 		SchemaVersion: messages.CurrentRPCSchemaVersion,
 		Func:          messages.BundleListReqRPCFunc,
@@ -159,6 +168,9 @@ func (f *FleetFilesManager) urlExpired(expiresAt int64) bool {
 // an earlier SendBundleListRequest (the connect-time catch-up) and is
 // rate-limited by bundleRefreshCooldown.
 func (f *FleetFilesManager) requestFreshBundleList() {
+	if f.stopCtx.Err() != nil {
+		return // shutting down; nothing to publish with
+	}
 	f.mu.Lock()
 	publish := f.publishFunc
 	now := f.clock()
@@ -172,5 +184,5 @@ func (f *FleetFilesManager) requestFreshBundleList() {
 	f.logger.Info("install failed with an expired download URL; requesting a fresh bundle list")
 	ctx, cancel := context.WithTimeout(f.stopCtx, bundleRefreshTimeout)
 	defer cancel()
-	f.SendBundleListRequest(ctx, publish)
+	f.publishBundleListRequest(ctx, publish)
 }
