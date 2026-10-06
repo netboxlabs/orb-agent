@@ -170,15 +170,18 @@ func (r *statusRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
-// wrap turns err into an *httpStatusError when it was caused by the last
-// response having a non-2xx status. Anything else (transport errors, checksum
-// mismatches, extraction errors) is returned unchanged.
+// wrap turns err into an *httpStatusError when the last response had a 4xx or
+// 5xx status. go-getter stops at the first non-2xx response, so when a download
+// fails after the transport saw such a status, that response is the cause; no
+// inspection of go-getter's error text is needed. A failure after a 2xx
+// (transport error mid-body, checksum mismatch, extraction error) is returned
+// unchanged.
 func (r *statusRecorder) wrap(err error) error {
 	r.mu.Lock()
 	status, retryAfter := r.status, r.retryAfter
 	r.mu.Unlock()
 
-	if status < http.StatusBadRequest || !strings.Contains(err.Error(), "bad response code: "+strconv.Itoa(status)) {
+	if status < http.StatusBadRequest {
 		return err
 	}
 	return &httpStatusError{
