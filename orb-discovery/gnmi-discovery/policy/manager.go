@@ -195,7 +195,7 @@ func checkRackSlots(policy *config.Policy) error {
 	// Each U (a placement without its location) maps its locations ("" for
 	// none) to the target placed there, so each check is one lookup.
 	placed := map[placementKey]map[string]string{}
-	pinned := map[deviceID]placedTarget{}
+	pinned := map[deviceID]*sharers{}
 	for _, c := range expanded.candidates {
 		t := c.target
 		t.Host = c.written
@@ -240,13 +240,31 @@ type placementKey struct {
 	position                   float64
 }
 
-// placedTarget is a target already placed at a U, for the duplicate check.
-// strongest records whether the identifier it is filed under was the
-// strongest that target carried.
+// placedTarget is a target already placed, for the duplicate checks.
 type placedTarget struct {
-	key       placementKey
-	host      string
-	strongest bool
+	key  placementKey
+	host string
+}
+
+// sharers is what the racked targets sending one identifier send its device:
+// each placement, in order, and the first target relying on the identifier.
+type sharers struct {
+	placements []placedTarget
+	sent       map[placementKey]bool
+	reliedOn   *placedTarget
+}
+
+// holders returns the targets one holding the identifier at rank is tied to.
+// A target is matched by its strongest identifier, so that one ties it to
+// every target sending it; a weaker one only to a target relying on it.
+func (s *sharers) holders(rank int) []placedTarget {
+	if rank == 0 {
+		return s.placements
+	}
+	if s.reliedOn == nil {
+		return nil
+	}
+	return []placedTarget{*s.reliedOn}
 }
 
 // deviceID is something a device is matched by ahead of its name: a kept
@@ -269,29 +287,35 @@ func deviceIDs(t config.Target, d *config.Defaults) []deviceID {
 	return ids
 }
 
-// pinDevice records what target t sends the device each of ids names. A
-// target is matched by its strongest identifier, so targets sharing one that
-// is the strongest of either may update one device: they must send it the
-// same rack, position and face (a rack without a position counts too). It
-// reports whether an earlier target is known to be this device, sharing the
-// strongest identifier of both.
-func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Target, ids []deviceID) (bool, error) {
+// pinDevice records what target t sends the device each of ids names. Targets
+// tied by an identifier may update one device, so they must send it the same
+// rack, position and face (a rack without a position counts too). It reports
+// whether an earlier target is known to be this device, relying on the same
+// strongest identifier.
+func pinDevice(pinned map[deviceID]*sharers, key placementKey, t config.Target, ids []deviceID) (bool, error) {
 	seen := false
 	for i, id := range ids {
-		prior, ok := pinned[id]
-		if !ok {
-			pinned[id] = placedTarget{key: key, host: t.Host, strongest: i == 0}
-			continue
+		s := pinned[id]
+		if s == nil {
+			s = &sharers{sent: map[placementKey]bool{}}
+			pinned[id] = s
 		}
-		if i > 0 && !prior.strongest {
-			continue // each is matched by something stronger, so they are apart
+		for _, other := range s.holders(i) {
+			if other.key != key {
+				return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
+					other.host, t.Host, id.kind, id.value)
+			}
 		}
-		if prior.key != key {
-			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
-				prior.host, t.Host, id.kind, id.value)
+		this := placedTarget{key: key, host: t.Host}
+		if i == 0 {
+			seen = s.reliedOn != nil
+			if s.reliedOn == nil {
+				s.reliedOn = &this
+			}
 		}
-		if i == 0 && prior.strongest {
-			seen = true
+		if !s.sent[key] {
+			s.sent[key] = true
+			s.placements = append(s.placements, this)
 		}
 	}
 	return seen, nil
@@ -301,15 +325,17 @@ func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Targ
 // away from its rack: it still sends a site and any location, and NetBox
 // refuses a device whose rack is in another. A location it leaves out, the
 // device keeps.
-func checkUnracked(pinned map[deviceID]placedTarget, key placementKey, t config.Target, ids []deviceID) error {
+func checkUnracked(pinned map[deviceID]*sharers, key placementKey, t config.Target, ids []deviceID) error {
 	for i, id := range ids {
-		racked, ok := pinned[id]
-		if !ok || (i > 0 && !racked.strongest) {
+		s := pinned[id]
+		if s == nil {
 			continue
 		}
-		if key.site != racked.key.site || (key.location != "" && key.location != racked.key.location) {
-			return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
-				racked.host, t.Host, id.kind, id.value, racked.host, racked.key.rack)
+		for _, racked := range s.holders(i) {
+			if key.site != racked.key.site || (key.location != "" && key.location != racked.key.location) {
+				return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
+					racked.host, t.Host, id.kind, id.value, racked.host, racked.key.rack)
+			}
 		}
 	}
 	return nil

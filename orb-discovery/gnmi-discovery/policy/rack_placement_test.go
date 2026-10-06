@@ -667,6 +667,38 @@ func TestAPaddedLocationIsComparedAsSent(t *testing.T) {
 	require.Contains(t, err.Error(), "place netbox_id 42 at different slots")
 }
 
+// A target relying on an identifier is held to every target sending it,
+// whatever order they come in.
+func TestATagReliedOnTiesEveryTargetSendingItInAnyOrder(t *testing.T) {
+	target := func(host, id, rack, location string) string {
+		out := "        - host: " + host + "\n"
+		if id != "" {
+			out += "          netbox_id: " + id + "\n"
+		}
+		out += "          override_defaults:\n            asset_tag: A1\n            location: " + location
+		if rack != "" {
+			out += "\n            rack: " + rack
+		}
+		return out
+	}
+	targets := []string{
+		target("192.0.2.10", "1", "R12", "Row 1"),
+		target("192.0.2.11", "", "R12", "Row 1"),
+		target("192.0.2.12", "2", "R13", "Row 1"),
+	}
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {2, 0, 1}} {
+		_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+			targets[order[0]]+"\n"+targets[order[1]]+"\n"+targets[order[2]]))
+		require.Error(t, err, "order %v", order)
+		require.Contains(t, err.Error(), "place asset_tag A1 at different slots", "order %v", order)
+	}
+
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		targets[0]+"\n"+targets[1]+"\n"+target("192.0.2.12", "2", "", "Row 2")))
+	require.Error(t, err, "the unracked target is held to the target relying on the tag")
+	require.Contains(t, err.Error(), "send asset_tag A1 to different sites or locations")
+}
+
 // A rack without a position is what a netbox_id target sends its device too.
 func TestOneNetboxIDRackOnly(t *testing.T) {
 	rackOnly := func(host, rack string) string {
