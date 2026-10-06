@@ -3,7 +3,9 @@ package filesmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -78,8 +80,9 @@ func (f *FleetFilesManager) HandlePackages(_ context.Context, payload messages.P
 		return
 	}
 	f.logger.Info("installing bundles", "count", len(payload.Bundles))
-	// If an install fails because the delivered URL had already expired, ask the
-	// control plane for a fresh list instead of waiting for the next reconnect.
+	// If an install fails because the delivered URL had already expired, or the
+	// server rejected it (401/403), ask the control plane for a fresh list instead
+	// of waiting for the next reconnect.
 	refresh := false
 	defer func() {
 		if refresh {
@@ -108,7 +111,7 @@ func (f *FleetFilesManager) HandlePackages(_ context.Context, payload messages.P
 		if err != nil {
 			f.logger.Error("failed to install bundle",
 				"name", bundle.Name, "version", bundle.Version, "error", err)
-			if f.urlExpired(bundle.ExpiresAt) {
+			if f.urlExpired(bundle.ExpiresAt) || urlRejected(err) {
 				refresh = true
 			}
 			continue
@@ -163,6 +166,18 @@ func (f *FleetFilesManager) urlExpired(expiresAt int64) bool {
 	return expiresAt > 0 && f.clock().Unix() > expiresAt
 }
 
+// urlRejected reports whether an install failed because the server refused the
+// delivered URL (401 or 403). That is how an expired or revoked URL shows up
+// when the delivered expiry is unknown or the clocks disagree. Other statuses
+// (404, or 5xx after the download retries) do not mean a fresh URL would help.
+func urlRejected(err error) bool {
+	var se *httpStatusError
+	if !errors.As(err, &se) {
+		return false
+	}
+	return se.StatusCode == http.StatusUnauthorized || se.StatusCode == http.StatusForbidden
+}
+
 // requestFreshBundleList asks the control plane to re-deliver the bundle list,
 // which carries freshly minted URLs. It needs the publish function registered by
 // an earlier SendBundleListRequest (the connect-time catch-up) and is
@@ -181,7 +196,7 @@ func (f *FleetFilesManager) requestFreshBundleList() {
 	f.lastRefresh = now
 	f.mu.Unlock()
 
-	f.logger.Info("install failed with an expired download URL; requesting a fresh bundle list")
+	f.logger.Info("install failed with an expired or rejected download URL; requesting a fresh bundle list")
 	ctx, cancel := context.WithTimeout(f.stopCtx, bundleRefreshTimeout)
 	defer cancel()
 	f.publishBundleListRequest(ctx, publish)
