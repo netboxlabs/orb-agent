@@ -77,6 +77,9 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | interface_exclude_patterns | list | Name-regex; matching interfaces are skipped entirely. |
 
 ##### VLAN group
+
+> **Set a site and a group.** A VLAN with no group never matches VLANs already scoped to a group in NetBox, so ingestion duplicates them. This backend always sends a site with the VLAN, so Diode matches it on VID and site rather than on VID alone, and whether the same VID also collides across sites depends on whether anything separates them: a real site does, a real group scope does, and the placeholder site `undefined` does not, being one record estate-wide. `vlan.group` alone is not enough — with no `defaults.site` the group is scoped to the placeholder site `undefined`, which cannot match your group of the same name under a real site, so you get a second group and the same duplicates. Set both. The agent logs a warning the first time it sends VLANs it cannot match. Note a site on the VLAN itself is not a substitute for the group: it leaves the duplication untouched, and NetBox has deprecated assigning a VLAN directly to a site.
+
 `vlan.group` attaches every emitted VLAN to an `ipam.vlangroup`. Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. A bare name scopes the group to the device's site. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
 
 ```yaml

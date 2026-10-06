@@ -247,6 +247,9 @@ Current supported defaults:
 | ├─ tags       | list | VLAN tags                  |
 
 ##### VLAN group
+
+> **Set a site and a group.** Diode matches a VLAN that has no group on its VID alone, so such a VLAN never matches VLANs already scoped to a group in NetBox: ingestion duplicates them, and across several sites the same VID collides on a single record where the last writer's name wins. `vlan.group` alone is not enough — with no `defaults.site` the group is scoped to the placeholder site `undefined`, which cannot match your group of the same name under a real site, so you get a second group and the same duplicates. Set both. The agent logs a warning the first time it sends VLANs it cannot match. Note a site on the VLAN itself is not a substitute for the group: it leaves the duplication untouched, and NetBox has deprecated assigning a VLAN directly to a site.
+
 Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
 
 ```yaml

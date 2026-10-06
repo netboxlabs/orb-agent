@@ -37,7 +37,7 @@ const maxIntervalMs = int64(math.MaxInt64) / int64(time.Millisecond)
 const maxScanWork = 4 * uint64(targets.MaxExpand)
 
 // defaultSite is the site a policy that names none is given.
-const defaultSite = "undefined"
+const defaultSite = config.UndefinedPlaceholder
 
 // Manager owns the set of running policies.
 type Manager struct {
@@ -462,7 +462,7 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		policy.Config.Defaults.Site = defaultSite
 	}
 	if policy.Config.Defaults.Role == "" {
-		policy.Config.Defaults.Role = "undefined"
+		policy.Config.Defaults.Role = config.UndefinedPlaceholder
 	}
 	if policy.Config.Defaults.Interface.Type == "" {
 		policy.Config.Defaults.Interface.Type = "other"

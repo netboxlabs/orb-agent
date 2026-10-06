@@ -34,6 +34,10 @@ const (
 	// is 1s, but a gNMI probe is a TLS handshake plus a gRPC call rather than a
 	// UDP walk, so it needs longer.
 	DefaultProbeTimeoutMs = 3000
+	// UndefinedPlaceholder is the stand-in applyDefaults writes into site and
+	// role when the policy sets neither. It is a real NetBox object name, so an
+	// entity carrying it is scoped in form only.
+	UndefinedPlaceholder = "undefined"
 
 	// MinRescanIntervalMs is the floor for a non-zero rescan_interval_ms.
 	MinRescanIntervalMs = 60000

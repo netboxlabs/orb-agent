@@ -558,6 +558,11 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	return &merged
 }
 
+// UndefinedPlaceholder is the stand-in applyDefaults writes into site and role
+// when the policy sets neither. It is a real NetBox object name, so an entity
+// carrying it is scoped in form only.
+const UndefinedPlaceholder = "undefined"
+
 // DiscoverModules* are the accepted values for options.discover_modules.
 // Off is the default when the field is unset.
 const (

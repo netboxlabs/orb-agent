@@ -1438,3 +1438,83 @@ func (m *VlanMapper) applyClassifications(
 		applyClassification(target, acc.class, ensureVLAN)
 	}
 }
+
+// UnscopedVLANWarning explains what a VLAN Diode cannot match costs. Kept beside
+// CountUnscopedVLANs so the message and the condition stay together.
+//
+// NetBox stores unlimited same-VID VLANs when group is NULL: its (group, vid)
+// constraint does not enforce uniqueness there. The Diode plugin fills that gap
+// with a matcher keyed on VID among rows carrying no group, no site and no
+// Q-in-Q service VLAN. Such a VLAN never matches the group-scoped VLANs an
+// operator curated by hand, so ingestion duplicates them, and across a
+// multi-site estate every device's VLAN 101 resolves to one record, so the rows
+// collide and the last writer's name wins.
+//
+// A group alone is not the whole remedy. With no defaults.site the group is
+// scoped to the "undefined" placeholder, and a group scoped there cannot match
+// the same group scoped to a real site: Diode matches a VLAN group by
+// (scope_type, scope_id, name). Following "set a group" without also setting a
+// site therefore buys a second group under a junk site plus the same duplicate
+// VLANs, and would silence this warning while doing it.
+//
+// A site on the VLAN itself is deliberately NOT treated as a scope, even though
+// Diode will match on (vid, site). It leaves the duplication against the
+// operator's group-scoped VLANs untouched, and NetBox has deprecated assigning
+// a VLAN directly to a site and will remove it in a future release.
+const UnscopedVLANWarning = "discovered VLANs sent with no VLAN group, or with one whose scope " +
+	"rests on the \"" + config.UndefinedPlaceholder + "\" placeholder; Diode cannot match these " +
+	"against VLANs already scoped to a group in NetBox, so ingestion duplicates them, and the " +
+	"same VID discovered on devices at different sites collides on one record; set BOTH " +
+	"defaults.site and defaults.vlan.group in the policy"
+
+// vlanGroupScopeSeparates reports whether a VLAN group's scope tells one estate
+// from another. A scope resting on the "undefined" placeholder does not: every
+// policy without a defaults.site produces the same one. Nor does a group with no
+// scope at all, or a location with no site, which NetBox cannot even resolve.
+//
+// A site group or region is a real scope: both come straight from operator
+// config, with no placeholder substitution anywhere in the builders.
+func vlanGroupScopeSeparates(g *diode.VLANGroup) bool {
+	switch scope := g.Scope.(type) {
+	case nil:
+		return false
+	case *diode.Site:
+		return scope != nil && scope.Name != nil &&
+			*scope.Name != "" && *scope.Name != config.UndefinedPlaceholder
+	case *diode.Location:
+		if scope == nil || scope.Site == nil || scope.Site.Name == nil {
+			return false
+		}
+		return *scope.Site.Name != "" && *scope.Site.Name != config.UndefinedPlaceholder
+	}
+	return true
+}
+
+// CountUnscopedVLANs counts top-level VLAN entities Diode cannot usefully
+// separate: no group, or a group whose scope separates nothing.
+//
+// Only top-level entities are walked: every VLAN referenced from an interface is
+// the same pointer as the top-level entity emitted for that VID, so counting
+// both would report each VLAN many times over.
+func CountUnscopedVLANs(entities []diode.Entity) int {
+	n := 0
+	for _, e := range entities {
+		v, ok := e.(*diode.VLAN)
+		if !ok || v == nil {
+			continue
+		}
+		if v.Group == nil || !vlanGroupScopeSeparates(v.Group) {
+			n++
+		}
+	}
+	return n
+}
+
+// BuildVLANForTest builds one VLAN through the real defaults path, so a test can
+// check what the policy layer and the mapper actually produce together rather
+// than hand-building an entity the production code could never emit.
+func BuildVLANForTest(vid int64, name string, defaults *config.Defaults) *diode.VLAN {
+	v := &diode.VLAN{Vid: int64Ptr(vid), Name: StringPtr(name)}
+	applyVLANDefaults(v, defaults)
+	return v
+}

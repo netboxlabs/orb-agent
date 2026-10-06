@@ -60,6 +60,12 @@ type Runner struct {
 	activeHostJobsMu sync.Mutex
 	assetTagOwners   map[string]string
 	assetTagOwnersMu sync.Mutex
+	// An unscoped VLAN is a config mistake, not an event: the policy either
+	// sets a scope or it does not. Warn once per runner rather than once per
+	// target per cycle, which on a large estate would be thousands of
+	// identical lines an operator learns to filter out. Targets run
+	// concurrently, hence Once rather than a bool.
+	warnedUnscopedVLANs sync.Once
 }
 
 // NewRunner returns a new policy runner
@@ -479,6 +485,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		r.logger,
 	)
 	annotateEntitiesWithRunID(entities, run.ID)
+	r.warnUnscopedVLANs(entities, policyName, target.Host)
 	r.logEntitiesForIngestion(entities)
 
 	// Strip nested Device/Interface refs to matcher-only stubs to shrink
@@ -868,4 +875,18 @@ func (r *Runner) Stop() error {
 		return err
 	}
 	return r.scheduler.Shutdown()
+}
+
+// warnUnscopedVLANs reports VLANs Diode cannot separate, once per runner. A
+// runner is per policy, so a re-applied policy warns again, and the Once keeps
+// concurrently scheduled targets from repeating it. The count test sits outside
+// the Once so a target with nothing to report cannot burn it.
+func (r *Runner) warnUnscopedVLANs(entities []diode.Entity, policyName, host string) {
+	n := mapping.CountUnscopedVLANs(entities)
+	if n == 0 {
+		return
+	}
+	r.warnedUnscopedVLANs.Do(func() {
+		r.logger.Warn(mapping.UnscopedVLANWarning, "policy", policyName, "host", host, "vlans", n)
+	})
 }
