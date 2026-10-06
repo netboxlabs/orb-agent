@@ -702,7 +702,7 @@ def _seen_device(
 
 
 def _claim_slot(
-    placed: dict[tuple, list[tuple]], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+    placed: dict[tuple, dict], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
 ) -> None:
     """
     Record the U a target places its device at, refusing one another target took.
@@ -710,17 +710,22 @@ def _claim_slot(
     Diode matches a device by rack, position and face once name and site miss,
     so a second device at one U would take the first's record. A rack sent
     without a location binds a same-named rack in any location of the site, so
-    no location clashes with any.
+    no location clashes with any. Each slot maps its locations (None for none)
+    to the target placed there, so both checks are one lookup.
     """
     site, location = _site_and_location(override, defaults)
     slot = (site, rack, override.position, override.face)
-    for other_location, other_host in placed.get(slot, ()):
-        if None in (location, other_location) or location == other_location:
-            raise ValueError(
-                f"targets {other_host} and {entry.hostname} are both placed at "
-                f"{rack} U{override.position:g} {override.face}"
-            )
-    placed.setdefault(slot, []).append((location, entry.hostname))
+    taken = placed.setdefault(slot, {})
+    if location is None:
+        other_host = next(iter(taken.values()), None)
+    else:
+        other_host = taken.get(location) or taken.get(None)
+    if other_host is not None:
+        raise ValueError(
+            f"targets {other_host} and {entry.hostname} are both placed at "
+            f"{rack} U{override.position:g} {override.face}"
+        )
+    taken[location] = entry.hostname
 
 
 class Policy(BaseModel):
@@ -769,7 +774,7 @@ class Policy(BaseModel):
             raise ValueError("defaults: position and face are set per target, in override_defaults")
         # Runs after validate_expansion_budget, so an oversized policy is
         # refused before any placement is checked.
-        placed: dict[tuple, list[tuple]] = {}
+        placed: dict[tuple, dict] = {}
         pinned: dict[int, tuple] = {}
         for entry in self.scope:
             override = entry.override_defaults or Defaults()
