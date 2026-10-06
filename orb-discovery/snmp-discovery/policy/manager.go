@@ -261,6 +261,12 @@ type rackUnit struct {
 	face       string
 }
 
+// pinnedPlacement is where the first target naming a netbox_id places it.
+type pinnedPlacement struct {
+	unit           rackUnit
+	location, host string
+}
+
 // rackPlacement is a target placed at a rackUnit; location is empty when
 // the target has none.
 type rackPlacement struct {
@@ -278,6 +284,7 @@ func validateRackPlacement(policy config.Policy) error {
 	// Diode matches a device by rack, position and face once name and site
 	// miss, so a new device sent to a taken U would update the device there.
 	placedAt := map[rackUnit][]rackPlacement{}
+	pinnedAt := map[int]pinnedPlacement{}
 	for _, target := range policy.Scope.Targets {
 		override := target.OverrideDefaults
 		if override == nil {
@@ -312,12 +319,25 @@ func validateRackPlacement(policy config.Policy) error {
 			site = defaultSite // as applyDefaults fills it in
 		}
 		unit := rackUnit{site, merged.RackName(), *merged.Position, merged.RackFace()}
+		location := strings.TrimSpace(merged.Location)
+		// Two targets with one netbox_id update one device, so they must
+		// place it at the same slot, and doing so is not a clash.
+		if target.NetboxID != nil {
+			slot := pinnedPlacement{unit: unit, location: location, host: target.Host}
+			if prev, ok := pinnedAt[*target.NetboxID]; ok {
+				if prev.unit != unit || prev.location != location {
+					return fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
+						prev.host, target.Host, *target.NetboxID)
+				}
+				continue
+			}
+			pinnedAt[*target.NetboxID] = slot
+		}
 		// A location read from an OID is only known at scan time, so such a
 		// target is left out of the check rather than compared by its OID.
 		if data.IsOIDReference(merged.Location) {
 			continue
 		}
-		location := strings.TrimSpace(merged.Location)
 		for _, other := range placedAt[unit] {
 			// A rack sent without a location binds any rack of that name
 			// in the site.

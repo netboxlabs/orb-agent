@@ -1952,6 +1952,27 @@ func TestManager_ParsePolicies_RackPlacementScalarTypes(t *testing.T) {
 	assert.Equal(t, "01", string(policies["rack-policy"].Config.Defaults.Rack), "a quoted numeric rack name is kept as written")
 }
 
+// Two targets with one netbox_id update one device: they must place it at
+// the same slot, and doing so is not a clash.
+func TestManager_ParsePolicies_RackPlacementOneNetboxID(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	pinned := func(host string, position float64) map[string]any {
+		target := placed(host, position, "front", nil)
+		target["netbox_id"] = 42
+		return target
+	}
+
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"rack": "R12"},
+		pinned("192.0.2.10", 40), pinned("192.0.2.11", 41)))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "targets 192.0.2.10 and 192.0.2.11 place netbox_id 42 at different slots")
+
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"rack": "R12"},
+		pinned("192.0.2.10", 40), pinned("192.0.2.11", 40)))
+	require.NoError(t, err, "one device at one slot, named twice")
+}
+
 // A location read from an OID is only known at scan time, so targets using
 // one are left out of the same-U check rather than compared by the OID.
 func TestManager_ParsePolicies_RackPlacementSameUSkipsOIDLocations(t *testing.T) {

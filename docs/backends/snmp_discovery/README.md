@@ -253,7 +253,8 @@ unless:
   that name in any location of the site, because a rack sent without a
   location can bind to any rack of that name in the site. A target whose
   `location` is an OID reference is left out of this check: its location is
-  only known when the device is scanned.
+  only known when the device is scanned. Two targets with the same
+  `netbox_id` update one device, so they must place it at the same slot.
 
 Quote a numeric rack name (`rack: "01"`). The agent passes the policy on
 through YAML, so an unquoted `01` would arrive as the number 1, and `010` as
