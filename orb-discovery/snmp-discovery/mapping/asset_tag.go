@@ -8,6 +8,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 )
 
 // assetTagMaxLen mirrors NetBox's dcim.Device.asset_tag column
@@ -73,4 +75,18 @@ func vetAssetTag(tag string) (reason string, ok bool) {
 		return fmt.Sprintf("exceeds NetBox max length (%d > %d runes)", n, assetTagMaxLen), false
 	}
 	return "", true
+}
+
+// LiteralAssetTag returns the tag a literal defaults.asset_tag puts on its
+// device, as applyDefaults emits it. An OID reference is only known at scan
+// time, so it yields false, as does a blank value or one vetAssetTag refuses.
+func LiteralAssetTag(raw string) (string, bool) {
+	tag, ok := data.ResolveDefault(raw, nil)
+	if !ok {
+		return "", false
+	}
+	if _, ok := vetAssetTag(tag); !ok {
+		return "", false
+	}
+	return tag, true
 }

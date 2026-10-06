@@ -120,6 +120,23 @@ func TestNewDeviceStub_KeepsMatcherAndRequiredFieldsDropsRest(t *testing.T) {
 	assert.Nil(t, stub.Description)
 }
 
+// The rich Device carries the rack placement; a nested stub matches the
+// same device on the higher-precedence matchers it already carries.
+func TestNewDeviceStub_DropsRackPlacement(t *testing.T) {
+	pos := 40.0
+	rich := &diode.Device{
+		Name:     strPtr("sw1"),
+		Site:     &diode.Site{Name: strPtr("DC1")},
+		Rack:     &diode.Rack{Name: strPtr("R12")},
+		Position: &pos,
+		Face:     strPtr("front"),
+	}
+	stub := newDeviceStub(rich)
+	assert.Nil(t, stub.Rack)
+	assert.Nil(t, stub.Position)
+	assert.Nil(t, stub.Face)
+}
+
 func TestNewDeviceStub_NilPrimaryIPs(t *testing.T) {
 	rich := &diode.Device{Name: strPtr("sw1"), Site: &diode.Site{Name: strPtr("dc1")}}
 	stub := newDeviceStub(rich)

@@ -298,6 +298,10 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 //   - VcPosition = member.ID; VirtualChassis = {Name: vcName, Master: masterRef}.
 //   - DeviceType from member.Model when populated, else inherit master's.
 //   - Site / Tenant / Role / Platform / Location inherited from master.
+//     Rack, Position and Face are not: a stack may span racks, so a member
+//     keeps whatever placement NetBox has. With the master in a rack the
+//     Location is not either, since NetBox refuses one that differs from the
+//     location of the member's own rack.
 func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *diode.Device, vcName, nameTemplate string) *diode.Device {
 	name := config.RenderStackMemberName(nameTemplate, vcName, member.ID)
 	pos := int64(member.ID)
@@ -314,6 +318,9 @@ func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *di
 			Name:   &vcName,
 			Master: masterRef,
 		},
+	}
+	if master.Rack != nil {
+		dev.Location = nil
 	}
 	if member.Model != "" {
 		// Always honor per-member entPhysicalModelName when present,

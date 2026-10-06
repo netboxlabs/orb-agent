@@ -98,6 +98,9 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | tags | list | no | List of tags to apply to all discovered entities |
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices. Accepts a literal name or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)) |
+| rack | string | no | NetBox rack for discovered devices, by name. Always a literal, never an OID reference. In a target's `override_defaults` it replaces the policy value. See [Rack placement](#rack-placement) |
+| position | number | no | The U the target's device sits at in its rack, e.g. `40` or `40.5` for a half U. Only in a target's `override_defaults`, together with `face`. See [Rack placement](#rack-placement) |
+| face | string | no | The rack face the target's device is mounted on: `front` or `rear`, in any case. Only in a target's `override_defaults`, together with `position`. See [Rack placement](#rack-placement) |
 | asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
 | stack_member_name_template | string | no | Template for non-master virtual-chassis member device names. Placeholders: `{name}` (the stack name, from `sysName`) and `{id}` (the device-reported member id). Defaults to `{name}-{id}`, which reproduces the naming emitted before this option existed. See [Member naming](#member-naming). |
@@ -195,7 +198,7 @@ Each target in the `targets` list can include:
 | host | string | yes | Target hostname,  IP address, subnets or IP ranges |
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
-| override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
+| override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope. `position` and `face` are set here only (see [Rack placement](#rack-placement)) |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
 
 #### Subnet and range scanning
@@ -223,6 +226,101 @@ range. A conformant agent silently discards a request bearing the wrong
 community, so there is no substitute value the probe could send instead without
 turning every device into a false negative. Use SNMPv3 for range scanning where
 the segment is not trusted, or name targets individually.
+
+#### Rack placement
+
+`rack` places discovered devices in a NetBox rack. It is the rack's name, used
+as written, and can be set in `defaults` or in a target's `override_defaults`.
+The rack is sent with the device's site and, when the device has one, its
+location, so the device goes into the rack of that name in its own location.
+
+`position` and `face` place one target's device at a U of that rack. They are
+accepted only in a target's `override_defaults`, and a policy is refused
+unless:
+
+- `position` and `face` are set together, and the target has a rack, from its
+  own `override_defaults` or from the policy `defaults`.
+- `face` is `front` or `rear`, in any case.
+- `position` is 1 or more, in steps of 0.5 (`40.5` is a half U). Whether it
+  fits the rack's height is left to NetBox.
+- The target's `host` is a single address or hostname. A range or subnet would
+  place every device it finds at the same U. `rack` alone is fine on a range
+  or subnet.
+- No two targets are placed at the same U and face of one rack (the same site,
+  location and rack name). Two half-depth devices can share a U on opposite
+  faces. A device sent without a location (none on the target or in the
+  policy `defaults`) clashes with a target at the same U and face of a rack of
+  that name in any location of the site, because a rack sent without a
+  location can bind to any rack of that name in the site. A target whose
+  `location` is an OID reference is left out of this check: its location is
+  only known when the device is scanned. Two targets reaching the same host
+  (one address or name, written as itself, a `/32` or a one-address range, on
+  the same `port`), or with the same `netbox_id` or literal `asset_tag`,
+  update one device, so when they send a rack they must send the same rack,
+  position and face (a rack without a position counts too), and in a literal
+  location, since one read from an OID cannot be compared. An `asset_tag` in
+  the policy `defaults` reaches every target, so it makes all of them one
+  device; a tag read from an OID is only known at scan time and is not
+  compared. A target is matched by its strongest identifier, in the order
+  Diode matches on (`netbox_id`, then `asset_tag`, then the host), so a shared
+  identifier ties two targets only when it is the strongest of at least one:
+  two targets with different `netbox_id`s are two devices even when they send
+  the same tag or reach the same host. Two targets count as one device at a U
+  only when they share the strongest identifier of both. A target without a
+  rack that shares a device with a racked one must send that target's site and
+  location, or no location: NetBox refuses a device whose rack is in another
+  site or location. A `netbox_id` is ignored on any subnet or range syntax, a
+  `/32` or a one-address range included, so it does not tie such a target to
+  the device with that id.
+
+Quote a numeric rack name (`rack: "01"`). The agent passes the policy on
+through YAML, so an unquoted `01` would arrive as the number 1, and `010` as
+8; a rack that is not text is refused rather than guessed at.
+
+```yaml
+config:
+  defaults:
+    site: "DC1"
+    location: "Hall 1"
+    rack: "R12"
+scope:
+  targets:
+    - host: "192.0.2.10"
+      override_defaults:
+        position: 40
+        face: "front"
+    - host: "192.0.2.11"
+      override_defaults:
+        rack: "R14"
+        position: 12.5
+        face: "rear"
+    - host: "192.0.2.32/28" # every device found goes in R12, at no particular U
+  authentication:
+    protocol_version: "SNMPv2c"
+    community: "public"
+```
+
+How NetBox and Diode handle a placement:
+
+- A rack name that does not exist in the site is created by Diode, like any
+  other referenced object. Use the exact NetBox name, and set `location` when
+  racks in different locations share a name.
+- When NetBox cannot accept a placement (the U is taken, the device does not
+  fit, or the position is beyond the rack's height), NetBox rejects the
+  device's own record that cycle, and its reason appears in the Diode ingestion
+  logs. Its interfaces and addresses are separate records and still go in.
+- A device that is not in NetBox yet, sent to a U another device already
+  occupies, updates that other device, because Diode matches devices by rack,
+  position and face. Make sure the U is free before setting it.
+- The position is applied again on every run, so a device moved in NetBox
+  moves back on the next run unless its override is updated.
+- On a [stack](#switch-stacks--virtual-chassis), only the master device is
+  placed. A stack can span racks, so the other members are sent no rack,
+  position or face: NetBox keeps whatever it has for them, and a new member is
+  created without a rack. When a rack is sent, members get no `location`
+  either, since NetBox refuses a device location that differs from the
+  location of the device's rack. Without a rack, members take the location as
+  before.
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
@@ -331,6 +429,9 @@ scope:
       override_defaults:
         role: "switch"
         tags: ["custom"]
+        rack: "R12"                     # Rack placement (see above)
+        position: 40                    # position and face: override_defaults only
+        face: "front"
         device:
           model: "CCR2004-16G-2S+"     # Hard-override auto-discovered model
           manufacturer: "MikroTik"      # Hard-override auto-discovered manufacturer

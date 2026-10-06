@@ -1007,3 +1007,85 @@ func TestVLANGroupParameters_UnmarshalNullAndReceiverReset(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal([]byte("group: null\n"), &fresh))
 	assert.Equal(t, VLANGroupParameters{}, fresh.Group)
 }
+
+func TestDefaults_RackPlacement_ParsesFromYAML(t *testing.T) {
+	yamlContent := []byte(`
+override_defaults:
+  rack: "R12"
+  position: 40.5
+  face: Front
+`)
+	var parsed struct {
+		Override Defaults `yaml:"override_defaults"`
+	}
+	require.NoError(t, yaml.Unmarshal(yamlContent, &parsed))
+	assert.Equal(t, RackText("R12"), parsed.Override.Rack)
+	require.NotNil(t, parsed.Override.Position)
+	assert.InDelta(t, 40.5, *parsed.Override.Position, 0)
+	assert.Equal(t, "Front", parsed.Override.Face)
+}
+
+func TestDefaults_RackPlacement_Unset(t *testing.T) {
+	var parsed struct {
+		Defaults Defaults `yaml:"defaults"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte("defaults:\n  site: DC1\n"), &parsed))
+	assert.Empty(t, parsed.Defaults.Rack)
+	assert.Nil(t, parsed.Defaults.Position, "an absent position must stay distinguishable from any value")
+	assert.Empty(t, parsed.Defaults.Face)
+}
+
+func TestDefaults_RackName(t *testing.T) {
+	assert.Equal(t, "R12", (&Defaults{Rack: "  R12\t"}).RackName())
+	assert.Empty(t, (&Defaults{Rack: "   "}).RackName(), "a blank rack is unset")
+	assert.Empty(t, (&Defaults{}).RackName())
+}
+
+func TestDefaults_RackFace(t *testing.T) {
+	assert.Equal(t, "front", (&Defaults{Face: "Front"}).RackFace())
+	assert.Equal(t, "rear", (&Defaults{Face: " REAR "}).RackFace())
+	assert.Empty(t, (&Defaults{Face: "  "}).RackFace(), "a blank face is unset")
+	assert.Equal(t, "side", (&Defaults{Face: "Side"}).RackFace(), "values are normalized, not validated")
+}
+
+func TestMergeDefaults_Rack_OverrideReplacesPolicy(t *testing.T) {
+	merged := MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Rack: "R14"})
+	assert.Equal(t, "R14", merged.RackName())
+}
+
+func TestMergeDefaults_Rack_EmptyOrBlankOverrideKeepsPolicy(t *testing.T) {
+	assert.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{}).RackName())
+	assert.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Rack: "  "}).RackName(),
+		"a blank override rack is unset, so the policy rack stays")
+}
+
+func TestMergeDefaults_Rack_NoOverride(t *testing.T) {
+	assert.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R12"}, nil).RackName())
+}
+
+func TestMergeDefaults_PositionAndFaceCopiedFromOverride(t *testing.T) {
+	pos := 40.5
+	override := &Defaults{Position: &pos, Face: "rear"}
+	merged := MergeDefaults(&Defaults{Rack: "R12"}, override)
+
+	assert.Equal(t, "R12", merged.RackName(), "the policy rack applies when the override sets none")
+	require.NotNil(t, merged.Position)
+	assert.InDelta(t, 40.5, *merged.Position, 0)
+	assert.NotSame(t, override.Position, merged.Position, "the merged position must not alias the override")
+	assert.Equal(t, "rear", merged.Face)
+}
+
+func TestMergeDefaults_PositionAndFaceUnsetStayUnset(t *testing.T) {
+	merged := MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Site: "DC1"})
+	assert.Nil(t, merged.Position)
+	assert.Empty(t, merged.Face)
+}
+
+// An empty rack key is no rack, like an absent one.
+func TestRackText_EmptyKeyIsUnset(t *testing.T) {
+	for _, doc := range []string{"rack:\n", "rack: ~\n", "rack: \"\"\n"} {
+		var d Defaults
+		require.NoError(t, yaml.Unmarshal([]byte(doc), &d), doc)
+		assert.Empty(t, d.RackName(), doc)
+	}
+}

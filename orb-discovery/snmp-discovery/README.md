@@ -160,6 +160,8 @@ policies:
 
 SNMP discovery supports per-target default overrides, allowing you to customize site, role, tenant, tags, and other entity defaults for individual targets while maintaining policy-wide defaults as fallbacks. The `tenant` default accepts either a plain string (the tenant name) or a mapping, and overrides merge field-wise — a per-target override can refine one tenant field (e.g. `name`) without restating the rest.
 
+A target's `override_defaults` can also place its device in a rack at a given U: `rack` (also accepted in the policy `defaults`), `position` (a U, `40.5` for a half U) and `face` (`front` or `rear`). `position` and `face` are accepted only per target, must be set together, need a rack and a single-host target, and no two targets may share a U and face of one rack. See [Rack placement](../../docs/backends/snmp_discovery/README.md#rack-placement).
+
 #### Example Configuration
 
 ```yaml
@@ -201,6 +203,13 @@ policies:
               if_type: "1000base-t"
             ip_address:
               role: "loopback"
+
+        # Place this device in rack R12 at U40, on the front face
+        - host: "192.168.1.5"
+          override_defaults:
+            rack: "R12"
+            position: 40
+            face: "front"
 
         # Works with IP ranges - all IPs inherit the override
         - host: "192.168.2.0/24"

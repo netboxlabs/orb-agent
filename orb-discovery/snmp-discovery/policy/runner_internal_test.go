@@ -958,20 +958,13 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	assert.Equal(t, "FOC1234A", *devices[0].Serial)
 }
 
-// TestRunWithMetadata_EmitsFullStackShape asserts the complete emission
-// shape for a 2-member stack end-to-end through the runner pipeline:
-// TranslateAsStack, annotators, and PruneNestedRefs. Checks:
-//   - 1 VirtualChassis with correct Name; VC.Metadata["run_id"] set
-//   - VC.Master.VirtualChassis nil (non-recursion invariant)
-//   - 2 Devices: master (VcPosition nil, source_match present) and
-//     member (VcPosition=2, source_match absent)
-//   - Interface Gi1/0/1 routed to master; Gi2/0/1 routed to member
-func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
-	// Two chassis rows: member 1 (parentRelPos=1) and member 2 (parentRelPos=2).
-	// Two interfaces: Gi1/0/1 (ifIndex=1, routes to member 1) and
-	// Gi2/0/1 (ifIndex=2, routes to member 2 via ParseMemberID).
-	// Integer-typed PDUs must use Go int values; MapPDU does a type-assertion.
-	walker := &staticWalker{
+// twoMemberStackWalker serves a 2-member stack named "3850-stack".
+// Two chassis rows: member 1 (parentRelPos=1) and member 2 (parentRelPos=2).
+// Two interfaces: Gi1/0/1 (ifIndex=1, routes to member 1) and
+// Gi2/0/1 (ifIndex=2, routes to member 2 via ParseMemberID).
+// Integer-typed PDUs must use Go int values; MapPDU does a type-assertion.
+func twoMemberStackWalker() *staticWalker {
+	return &staticWalker{
 		pdus: map[string]map[string]snmp.PDU{
 			"1.3.6.1.2.1.1.5": {
 				"1.3.6.1.2.1.1.5.0": {Value: "3850-stack", Type: gosnmp.OctetString, IdentifierSize: 1},
@@ -1003,6 +996,18 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 			},
 		},
 	}
+}
+
+// TestRunWithMetadata_EmitsFullStackShape asserts the complete emission
+// shape for a 2-member stack end-to-end through the runner pipeline:
+// TranslateAsStack, annotators, and PruneNestedRefs. Checks:
+//   - 1 VirtualChassis with correct Name; VC.Metadata["run_id"] set
+//   - VC.Master.VirtualChassis nil (non-recursion invariant)
+//   - 2 Devices: master (VcPosition nil, source_match present) and
+//     member (VcPosition=2, source_match absent)
+//   - Interface Gi1/0/1 routed to master; Gi2/0/1 routed to member
+func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
+	walker := twoMemberStackWalker()
 	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return walker, nil
 	}
@@ -1099,6 +1104,74 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	require.NotNil(t, gi2.Device)
 	assert.Equal(t, "3850-stack", *gi1.Device.Name, "Gi1/0/1 routes to master")
 	assert.Equal(t, "3850-stack-2", *gi2.Device.Name, "Gi2/0/1 routes to member")
+}
+
+// TestRunWithMetadata_StackRackPlacement drives a policy rack and a
+// target's position and face through the merge and the mappers: the master
+// takes all three, and the member and nested device references none of them.
+// The member takes no location either, so it cannot disagree with the
+// location of the rack NetBox keeps for it.
+func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
+	walker := twoMemberStackWalker()
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	runner := queryTargetRunner(factory, chassisEntries())
+	runner.config.Defaults = config.Defaults{Site: "DC1", Location: "Hall 1", Rack: "R12"}
+
+	position := 40.0
+	target := config.Target{
+		Host:             "192.0.2.1",
+		Port:             161,
+		OverrideDefaults: &config.Defaults{Position: &position, Face: "Front"},
+	}
+	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
+	require.NoError(t, err)
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
+
+	var master, member *diode.Device
+	var ifaces []*diode.Interface
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			if v.VcPosition == nil {
+				master = v
+			} else {
+				member = v
+			}
+		case *diode.Interface:
+			ifaces = append(ifaces, v)
+		}
+	}
+	require.NotNil(t, master)
+	require.NotNil(t, member)
+
+	require.NotNil(t, master.Rack)
+	assert.Equal(t, "R12", *master.Rack.Name)
+	require.NotNil(t, master.Rack.Site)
+	assert.Equal(t, "DC1", *master.Rack.Site.Name)
+	require.NotNil(t, master.Rack.Location)
+	assert.Equal(t, "Hall 1", *master.Rack.Location.Name)
+	require.NotNil(t, master.Position)
+	assert.InDelta(t, 40.0, *master.Position, 0)
+	require.NotNil(t, master.Face)
+	assert.Equal(t, "front", *master.Face)
+
+	assert.Nil(t, member.Rack, "a stack may span racks, so the member keeps the rack NetBox has")
+	assert.Nil(t, member.Position, "the member is not at the master's U")
+	assert.Nil(t, member.Face)
+	assert.Nil(t, member.Location, "the member keeps the location of the rack NetBox has for it")
+
+	require.Len(t, ifaces, 2)
+	for _, iface := range ifaces {
+		require.NotNil(t, iface.Device)
+		assert.Nil(t, iface.Device.Rack, "nested device references carry no placement")
+		assert.Nil(t, iface.Device.Position)
+		assert.Nil(t, iface.Device.Face)
+		if *iface.Device.Name == *member.Name {
+			assert.Nil(t, iface.Device.Location, "the member's reference carries no location")
+		}
+	}
 }
 
 func TestNewRunner_RangeScheduledWithCron(t *testing.T) {

@@ -417,6 +417,20 @@ func TestBuildMasterRef_OmitsUnsetFields(t *testing.T) {
 	assert.Nil(t, ref.Site)
 }
 
+func TestBuildMasterRef_DropsRackPlacement(t *testing.T) {
+	pos := 40.0
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Rack:     &diode.Rack{Name: strPtr("R12")},
+		Position: &pos,
+		Face:     strPtr("front"),
+	}
+	ref := buildMasterRef(master)
+	assert.Nil(t, ref.Rack)
+	assert.Nil(t, ref.Position)
+	assert.Nil(t, ref.Face)
+}
+
 func TestBuildMemberDevice_CarriesVcPositionAndMatcherBlock(t *testing.T) {
 	master := &diode.Device{
 		Name:     strPtr("3850-stack"),
@@ -479,6 +493,49 @@ func TestBuildMemberDevice_InheritsMasterLocation(t *testing.T) {
 	assert.Same(t, loc, dev.Location,
 		"Location is pointer-shared with master (mirrors Site/Tenant/Role/Platform sharing)")
 	assert.Equal(t, "rack-42", *dev.Location.Name)
+}
+
+// A member is its own device, possibly in another rack, so the target's
+// placement stays on the master: a member keeps whatever NetBox has.
+func TestBuildMemberDevice_TakesNoPlacement(t *testing.T) {
+	site := &diode.Site{Name: strPtr("DC1")}
+	rack := &diode.Rack{Name: strPtr("R12"), Site: site}
+	pos := 40.0
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Site:     site,
+		Rack:     rack,
+		Position: &pos,
+		Face:     strPtr("front"),
+	}
+	masterRef := buildMasterRef(master)
+	member := ChassisMember{ID: 2, Serial: "X", Model: "ModelB"}
+
+	dev := buildMemberDevice(master, member, masterRef, "stack", "")
+
+	assert.Nil(t, dev.Rack, "a stack may span racks, so a member keeps the rack NetBox has")
+	assert.Nil(t, dev.Position, "a member's U is not the master's")
+	assert.Nil(t, dev.Face)
+}
+
+// With the master in a rack a member gets no location either: NetBox
+// refuses a location that differs from the location of the member's own rack.
+func TestBuildMemberDevice_RackedMasterLeavesTheMemberLocation(t *testing.T) {
+	site := &diode.Site{Name: strPtr("DC1")}
+	loc := &diode.Location{Name: strPtr("Row 1"), Site: site}
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Site:     site,
+		Location: loc,
+		Rack:     &diode.Rack{Name: strPtr("R12"), Site: site, Location: loc},
+	}
+	masterRef := buildMasterRef(master)
+	member := ChassisMember{ID: 2, Serial: "X", Model: "ModelB"}
+
+	dev := buildMemberDevice(master, member, masterRef, "stack", "")
+
+	assert.Nil(t, dev.Location, "the member keeps the location NetBox has, matching its own rack")
+	assert.Same(t, site, dev.Site)
 }
 
 func TestBuildMemberDevice_FallsBackToMasterDeviceTypeWhenModelEmpty(t *testing.T) {
