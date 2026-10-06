@@ -281,8 +281,9 @@ def _build_member_devices(
         # asset_tag is a high-precedence matcher in Diode — copying the
         # defaults.device.asset_tag onto every member would collide.
         member_dev.ClearField("asset_tag")
-        # A target's position and face describe the master's U; each member
-        # sits in its own, so members keep only the rack.
+        # The target's rack, position and face describe the master. A stack
+        # can span racks, so members are sent none and keep what NetBox has.
+        member_dev.ClearField("rack")
         member_dev.ClearField("position")
         member_dev.ClearField("face")
         member_dev.vc_position = m["id"]

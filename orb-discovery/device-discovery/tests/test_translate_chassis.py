@@ -255,8 +255,8 @@ def test_member_devices_have_no_asset_tag():
         )
 
 
-def test_only_the_stack_master_takes_the_position_and_face():
-    """Each member sits in its own U, which one target's override cannot describe."""
+def test_only_the_stack_master_is_placed():
+    """A stack can span racks, so members keep whatever placement NetBox has."""
     data = _base_data(_two_member_payload())
     data["defaults"] = Defaults(rack="R12", position=40, face="front")
 
@@ -269,7 +269,7 @@ def test_only_the_stack_master_takes_the_position_and_face():
     assert master.position == 40
     assert master.face == "front"
     for md in members:
-        assert md.rack.name == "R12", f"member {md.name} lost the rack"
+        assert not md.HasField("rack"), f"member {md.name} carried rack {md.rack.name}"
         assert not md.HasField("position"), f"member {md.name} carried position {md.position}"
         assert not md.HasField("face"), f"member {md.name} carried face {md.face!r}"
 
