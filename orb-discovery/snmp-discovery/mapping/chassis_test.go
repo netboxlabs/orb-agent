@@ -2434,6 +2434,60 @@ func TestTranslateAsStack_StandalonePaddedSysObjectIDStillMatches(t *testing.T) 
 
 // A lone row that survived only because rows sharing its neighbour's member id
 // were refused is not the whole chassis: it keeps the serial but not the type.
+// A chassis row with no serial is not a stack member, but on a standalone
+// device it still names the part: ENTITY-MIB allows an empty serial.
+func TestTranslateAsStack_StandaloneWithoutSerialTakesChassisModel(t *testing.T) {
+	for name, drop := range map[string]func(ObjectIDValueMap){
+		"empty serial":  func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.47.1.1.1.1.11.1"] = Value{Value: "  "} },
+		"serial absent": func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.47.1.1.1.1.11.1") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			master, entities, oids := standaloneWithModel("PN-48P-A")
+			drop(oids)
+
+			TranslateAsStack(entities, oids, nil, nil, "", ModelNotPinned, slog.Default())
+
+			assert.Equal(t, "PN-48P-A", *master.DeviceType.Model)
+			assert.Nil(t, master.Serial, "no serial is invented")
+		})
+	}
+}
+
+// The serial-less path keeps every rule the standalone path has: one root
+// chassis row, an allow-listed vendor, and no operator-pinned model.
+func TestTranslateAsStack_SerialLessChassisModelKeepsTheStandaloneRules(t *testing.T) {
+	for name, tc := range map[string]struct {
+		edit func(ObjectIDValueMap)
+		pin  ModelPin
+	}{
+		"two chassis rows": {edit: func(o ObjectIDValueMap) {
+			o[".1.3.6.1.2.1.47.1.1.1.1.4.2"] = Value{Value: "0"}
+			o[".1.3.6.1.2.1.47.1.1.1.1.5.2"] = Value{Value: "3"}
+			o[".1.3.6.1.2.1.47.1.1.1.1.13.2"] = Value{Value: "PN-48P-B"}
+		}},
+		"a row inside another entity": {edit: func(o ObjectIDValueMap) {
+			o[".1.3.6.1.2.1.47.1.1.1.1.4.1"] = Value{Value: "7"}
+		}},
+		"a vendor outside the list": {edit: func(o ObjectIDValueMap) {
+			o[oidSysObjectIDScalar] = Value{Value: ".1.3.6.1.4.1.99999.1.1"}
+		}},
+		"a model pinned by defaults": {pin: ModelPinnedByDefaults},
+		"a model pinned by lookup":   {pin: ModelPinnedByLookup},
+	} {
+		t.Run(name, func(t *testing.T) {
+			master, entities, oids := standaloneWithModel("PN-48P-A")
+			oids[".1.3.6.1.2.1.47.1.1.1.1.11.1"] = Value{Value: ""}
+			if tc.edit != nil {
+				tc.edit(oids)
+			}
+
+			TranslateAsStack(entities, oids, nil, nil, "", tc.pin, slog.Default())
+
+			assert.Equal(t, "vendorProductName48", *master.DeviceType.Model)
+		})
+	}
+}
+
 func TestTranslateAsStack_StandaloneAfterRefusedRowsKeepsLookup(t *testing.T) {
 	master, entities, oids := standaloneWithModel("PN-48P-A")
 	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1"] = Value{Value: "1"}

@@ -442,6 +442,26 @@ func standaloneChassisModel(master *diode.Device, model string, oids ObjectIDVal
 	}
 }
 
+// soleChassisModel returns the entPhysicalModelName of the one chassis row
+// extractInventory would consider, when there is exactly one. It reads the row
+// whatever its serial, which the inventory needs and a model does not.
+func soleChassisModel(oids ObjectIDValueMap) (string, bool) {
+	model, rows := "", 0
+	for oid, v := range oids {
+		if !strings.HasPrefix(oid, oidEntPhysicalClass) || strings.TrimSpace(v.Value) != entPhysicalClassChassis {
+			continue
+		}
+		idx := strings.TrimPrefix(oid, oidEntPhysicalClass)
+		contained := trimSNMPString(oids[oidEntPhysicalContainedIn+idx].Value)
+		if contained != "0" && !isStackContainerParent(oids, contained) {
+			continue
+		}
+		rows++
+		model = trimSNMPString(oids[oidEntPhysicalModelName+idx].Value)
+	}
+	return model, rows == 1
+}
+
 func sortByID(members []ChassisMember) []ChassisMember {
 	slices.SortFunc(members, func(a, b ChassisMember) int { return a.ID - b.ID })
 	return members
@@ -1055,6 +1075,14 @@ func TranslateAsStack(
 		// is the last source. Only reached when ENTITY-MIB produced nothing
 		// usable, so the standard column keeps priority wherever it answers.
 		applyVendorSerialFallback(master, oids, logger)
+		// A sole chassis row dropped only for its empty serial still names
+		// a standalone device's part. Refused rows mean several, which
+		// soleChassisModel declines.
+		if pin == ModelNotPinned {
+			if model, ok := soleChassisModel(oids); ok {
+				standaloneChassisModel(master, model, oids)
+			}
+		}
 		return entities
 	}
 
