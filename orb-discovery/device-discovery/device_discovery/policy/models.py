@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
 )
-from device_discovery.policy.portscan import count_hostnames
+from device_discovery.policy.portscan import count_hostnames, expand_hostnames
 from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
@@ -663,12 +663,17 @@ def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -
         )
     # A netbox_id target sends no placeholder site, so the device keeps its
     # own; the rack would then go without one and could not be looked up.
-    if entry.netbox_id is not None and (site or "").strip() in ("", UNDEFINED_PLACEHOLDER):
+    if _keeps_netbox_id(entry) and (site or "").strip() in ("", UNDEFINED_PLACEHOLDER):
         raise ValueError(
             f"{entry.hostname}: position and face need a site when netbox_id is set; "
             "the rack is looked up in it"
         )
     return rack
+
+
+def _keeps_netbox_id(entry: Napalm) -> bool:
+    """Whether the runner applies entry's netbox_id: it drops it on any range or subnet syntax, a /32 included."""
+    return entry.netbox_id is not None and not expand_hostnames(entry.hostname)[1]
 
 
 def _site_and_location(override: Defaults, defaults: Defaults | None) -> tuple:
@@ -782,9 +787,7 @@ class Policy(BaseModel):
             rack = _effective(override, defaults, "rack")
             if placed_here:
                 rack = _check_target_placement(entry, rack, _effective(override, defaults, "site"))
-            # netbox_id is ignored on a range, so only a single host pins a device.
-            pins = entry.netbox_id is not None and rack and count_hostnames(entry.hostname) == 1
-            if pins and _seen_device(pinned, entry, override, defaults, rack):
+            if rack and _keeps_netbox_id(entry) and _seen_device(pinned, entry, override, defaults, rack):
                 continue
             if placed_here:
                 _claim_slot(placed, entry, override, defaults, rack)

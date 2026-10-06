@@ -349,3 +349,26 @@ def test_netbox_id_on_a_range_pins_nothing():
         _pinned("192.0.2.10", rack="R12"),
         _pinned("192.0.2.16/29", rack="R13"),
     ])
+
+
+@pytest.mark.parametrize("syntax", ["{}/32", "{}-{}"])
+def test_netbox_id_on_single_address_range_syntax_pins_nothing(syntax):
+    """A /32 or one-address range is still a range: netbox_id is dropped, so each is its own device."""
+    with pytest.raises(ValidationError, match="are both placed at R12 U40 front"):
+        Policy(config=Config(defaults=Defaults(rack="R12", site="DC1")), scope=[
+            _pinned(syntax.format("192.0.2.10", "10"), position=40, face="front"),
+            _pinned(syntax.format("192.0.2.11", "11"), position=40, face="front"),
+        ])
+
+
+def test_netbox_id_on_single_address_range_syntax_keeps_its_own_rack():
+    """The /32 is not the netbox_id device, so its rack cannot conflict with that device's."""
+    Policy(config=Config(defaults=Defaults(site="DC1")), scope=[
+        _pinned("192.0.2.10", rack="R12"),
+        _pinned("192.0.2.11/32", rack="R13"),
+    ])
+
+
+def test_netbox_id_placement_on_single_address_range_syntax_needs_no_site():
+    """netbox_id is dropped there, so the device is sent with the undefined site and the rack with it."""
+    Policy(config=Config(defaults=Defaults(rack="R12")), scope=[_pinned("192.0.2.10/32", position=40, face="front")])
