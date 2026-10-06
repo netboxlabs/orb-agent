@@ -730,11 +730,11 @@ def _seen_device(
     """
     Record the placement a target sends its device, refusing a different one for that device.
 
-    Entries sharing a host, netbox_id or asset tag may update one device, so
-    they must send it the same rack, position and face; a rack without a
-    position is a placement too. Returns True when an earlier entry is known to
-    be this device, sharing the strongest identifier of both: a weaker one can
-    be outranked, as two netbox_ids sharing a tag are two devices.
+    An entry is matched by its strongest identifier, so entries sharing one
+    that is the strongest of either may update one device: they must send it
+    the same rack, position and face; a rack without a position is a placement
+    too. Returns True when an earlier entry is known to be this device, sharing
+    the strongest identifier of both.
     """
     placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
     seen = False
@@ -744,6 +744,8 @@ def _seen_device(
             pinned[device_id] = (placement, entry.hostname, rank == 0)
             continue
         prior_placement, prior_host, prior_strongest = prior
+        if rank > 0 and not prior_strongest:
+            continue  # each is matched by something stronger, so they are apart
         if prior_placement != placement:
             kind, value = device_id
             raise ValueError(
@@ -779,6 +781,29 @@ def _claim_slot(
             f"{rack} U{override.position:g} {override.face}"
         )
     taken[location] = entry.hostname
+
+
+def _check_unracked(pinned: dict[tuple, tuple], entry: Napalm, override: Defaults, defaults: Defaults | None) -> None:
+    """
+    Refuse an entry without a rack moving a racked device away from its rack.
+
+    It still sends a site and location, and NetBox refuses a device whose rack
+    is in another; what it leaves out, the device keeps.
+    """
+    site, location = _site_and_location(override, defaults)
+    if site == UNDEFINED_PLACEHOLDER and _keeps_netbox_id(entry):
+        site = None  # not sent, as translate_device drops it
+    for rank, device_id in enumerate(_device_ids(entry, override, defaults)):
+        prior = pinned.get(device_id)
+        if prior is None or (rank > 0 and not prior[2]):
+            continue
+        (racked_site, racked_location, rack, *_), racked_host, _ = prior
+        if (site is not None and site != racked_site) or (location is not None and location != racked_location):
+            kind, value = device_id
+            raise ValueError(
+                f"targets {racked_host} and {entry.hostname} send {kind} {value} to different "
+                f"sites or locations, and {racked_host} places it in rack {rack}"
+            )
 
 
 class Policy(BaseModel):
@@ -839,6 +864,11 @@ class Policy(BaseModel):
                 continue
             if placed_here:
                 _claim_slot(placed, entry, override, defaults, rack)
+        # Once every racked device is known, in whatever order entries come.
+        for entry in self.scope:
+            override = entry.override_defaults or Defaults()
+            if not _effective(override, defaults, "rack"):
+                _check_unracked(pinned, entry, override, defaults)
         return self
 
 

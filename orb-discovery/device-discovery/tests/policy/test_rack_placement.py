@@ -463,11 +463,12 @@ def test_two_netbox_ids_sharing_a_tag_are_two_devices():
         ], rack="R12", site="DC1")
 
 
-def test_a_tag_shared_with_a_netbox_id_target_must_agree():
-    """The tag may match the netbox_id device, so the racks must agree."""
+@pytest.mark.parametrize("netbox_id_first", [True, False])
+def test_a_tag_shared_with_a_netbox_id_target_must_agree(netbox_id_first):
+    """The tag may match the netbox_id device, so the racks must agree, in either order."""
+    targets = [_identified("192.0.2.10", 42, "A1", rack="R12"), _identified("192.0.2.11", None, "A1", rack="R13")]
     with pytest.raises(ValidationError, match="place asset_tag A1 at different slots"):
-        _policy([_identified("192.0.2.10", 42, "A1", rack="R12"), _identified("192.0.2.11", None, "A1", rack="R13")],
-                site="DC1")
+        _policy(targets if netbox_id_first else targets[::-1], site="DC1")
 
 
 @pytest.mark.parametrize(("first", "second"), [
@@ -483,3 +484,58 @@ def test_a_weaker_shared_identifier_does_not_share_a_u(first, second):
             _identified(first[0], position=40, face="front", **first[1]),
             _identified(second[0], position=40, face="front", **second[1]),
         ], rack="R12", site="DC1")
+
+
+@pytest.mark.parametrize(("first", "second"), [
+    ({"netbox_id": 41}, {"netbox_id": 42}),
+    ({"tag": "A1"}, {"tag": "A2"}),
+])
+def test_targets_matched_apart_may_share_a_host(first, second):
+    """Each is matched by a stronger identifier of its own, so the shared host ties nothing."""
+    _policy([
+        _identified("192.0.2.10", rack="R12", **first),
+        _identified("192.0.2.10", rack="R13", **second),
+    ], site="DC1")
+
+
+def test_a_host_shared_with_a_netbox_id_target_must_agree():
+    """The host may report the netbox_id device's name, so the racks must agree."""
+    with pytest.raises(ValidationError, match="place host 192.0.2.10 at different slots"):
+        _policy([_identified("192.0.2.10", 42, rack="R12"), _identified("192.0.2.10", rack="R13")], site="DC1")
+
+
+@pytest.mark.parametrize("racked_first", [True, False])
+@pytest.mark.parametrize("unracked", [{"location": "Row 2"}, {"site": "DC2"}])
+def test_an_unracked_target_must_keep_a_racked_device_where_its_rack_is(racked_first, unracked):
+    """A device moved away from its rack's site or location is refused by NetBox."""
+    targets = [
+        _identified("192.0.2.10", 42, rack="R12", location="Row 1"),
+        _identified("192.0.2.11", 42, **unracked),
+    ]
+    with pytest.raises(ValidationError, match=(
+        "targets 192.0.2.10 and 192.0.2.11 send netbox_id 42 to different sites or locations, "
+        "and 192.0.2.10 places it in rack R12"
+    )):
+        _policy(targets if racked_first else targets[::-1], site="DC1")
+
+
+@pytest.mark.parametrize("unracked", [{}, {"location": "Row 1"}, {"site": "DC1", "location": "Row 1"}])
+def test_an_unracked_target_sending_the_same_or_no_location_is_fine(unracked):
+    """What an unracked target leaves out, NetBox keeps; what it sends must match."""
+    _policy([
+        _identified("192.0.2.10", 42, rack="R12", site="DC1", location="Row 1"),
+        _identified("192.0.2.11", 42, **unracked),
+    ])
+
+
+def test_an_unracked_netbox_id_target_without_a_site_sends_none():
+    """With netbox_id and no site, the placeholder is not sent, so the device stays in its site."""
+    _policy([_identified("192.0.2.10", 42, rack="R12", site="DC1"), _identified("192.0.2.11", 42)])
+
+
+def test_an_unracked_target_matched_apart_is_not_checked():
+    """A shared host weaker than both targets' netbox_ids ties nothing."""
+    _policy([
+        _identified("192.0.2.10", 42, rack="R12", location="Row 1"),
+        _identified("192.0.2.10", 41, location="Row 2"),
+    ], site="DC1")
