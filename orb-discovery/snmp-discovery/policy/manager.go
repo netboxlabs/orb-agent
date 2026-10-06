@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -26,6 +27,8 @@ var embeddedMapping embed.FS
 const (
 	// SNMPDefaultPort is the default SNMP port
 	SNMPDefaultPort = 161
+	// defaultSite is the site a policy that names none is given.
+	defaultSite = "undefined"
 )
 
 // Manager represents the policy manager
@@ -122,7 +125,7 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	}
 
 	if policy.Config.Defaults.Site == "" {
-		policy.Config.Defaults.Site = "undefined"
+		policy.Config.Defaults.Site = defaultSite
 	}
 
 	if policy.Config.Options.CreateUnknownVlans == nil {
@@ -299,12 +302,16 @@ func validateRackPlacement(policy config.Policy) error {
 			return fmt.Errorf("target %s: override_defaults position and face need a rack, in defaults or override_defaults",
 				target.Host)
 		}
-		if hosts, err := targets.Expand(target.Host); err == nil && len(hosts) > 1 {
+		if coversSeveralAddresses(target.Host) {
 			return fmt.Errorf("target %s: position and face need a single host; a range or subnet would place every device at the same U",
 				target.Host)
 		}
 		merged := config.MergeDefaults(defaults, override)
-		unit := rackUnit{merged.Site, merged.RackName(), *merged.Position, merged.RackFace()}
+		site := merged.Site
+		if site == "" {
+			site = defaultSite // as applyDefaults fills it in
+		}
+		unit := rackUnit{site, merged.RackName(), *merged.Position, merged.RackFace()}
 		location := strings.TrimSpace(merged.Location)
 		for _, other := range placedAt[unit] {
 			// A rack sent without a location binds any rack of that name
@@ -317,6 +324,17 @@ func validateRackPlacement(policy config.Policy) error {
 		placedAt[unit] = append(placedAt[unit], rackPlacement{target.Host, location})
 	}
 	return nil
+}
+
+// coversSeveralAddresses reports whether host is a subnet or range of more
+// than one address. A CIDR is judged by its prefix length, so a large subnet
+// is never listed just to be counted.
+func coversSeveralAddresses(host string) bool {
+	if p, err := netip.ParsePrefix(host); err == nil {
+		return p.Bits() < p.Addr().BitLen()
+	}
+	hosts, err := targets.Expand(host)
+	return err == nil && len(hosts) > 1
 }
 
 // HasPolicy checks if the policy exists

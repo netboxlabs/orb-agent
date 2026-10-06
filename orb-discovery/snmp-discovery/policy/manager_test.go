@@ -1665,6 +1665,12 @@ func TestManager_ParsePolicies_RackPlacement(t *testing.T) {
 			override: map[string]any{"rack": "R14", "position": 1, "face": "REAR"},
 		},
 		{
+			name:     "a /8 is refused without listing its addresses",
+			host:     "10.0.0.0/8",
+			override: map[string]any{"rack": "R12", "position": 40, "face": "front"},
+			wantErr:  "target 10.0.0.0/8: position and face need a single host",
+		},
+		{
 			name:     "a /32 is a single host",
 			host:     "192.0.2.1/32",
 			override: map[string]any{"rack": "R12", "position": 10, "face": "front"},
@@ -1785,6 +1791,15 @@ func TestManager_ParsePolicies_RackPlacementSameU(t *testing.T) {
 			name: "same U after normalizing the face and rack",
 			targets: []map[string]any{
 				placed("192.0.2.10", 40, "Front", map[string]any{"rack": " R12 "}),
+				placed("192.0.2.11", 40, "front", nil),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name:     "no site is the undefined site",
+			defaults: map[string]any{"rack": "R12", "site": ""},
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", map[string]any{"site": "undefined"}),
 				placed("192.0.2.11", 40, "front", nil),
 			},
 			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
