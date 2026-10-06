@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -14,6 +15,15 @@ var _ Manager = (*FleetFilesManager)(nil)
 
 // bundleInstallTimeout bounds a single bundle's fetch + install.
 const bundleInstallTimeout = 10 * time.Minute
+
+const (
+	// bundleRefreshCooldown is the minimum time between self-initiated bundle list
+	// re-requests, so a persistent failure (or a skewed clock) cannot make the agent
+	// hammer the control plane.
+	bundleRefreshCooldown = time.Minute
+	// bundleRefreshTimeout bounds publishing one re-request.
+	bundleRefreshTimeout = 30 * time.Second
+)
 
 // FleetFilesManager is the fleet-triggered files-manager type. Bundles are
 // delivered to it over MQTT by the fleet config manager (HandlePackages), and
@@ -26,6 +36,11 @@ type FleetFilesManager struct {
 	logger     *slog.Logger
 	stopCtx    context.Context
 	stopCancel context.CancelFunc
+
+	mu          sync.Mutex
+	publishFunc func(ctx context.Context, payload []byte) error // registered by SendBundleListRequest
+	lastRefresh time.Time
+	now         func() time.Time // test hook; nil means time.Now
 }
 
 // newFleetFilesManager builds a fleet files manager over a disk engine rooted at
@@ -63,6 +78,14 @@ func (f *FleetFilesManager) HandlePackages(_ context.Context, payload messages.P
 		return
 	}
 	f.logger.Info("installing bundles", "count", len(payload.Bundles))
+	// If an install fails because the delivered URL had already expired, ask the
+	// control plane for a fresh list instead of waiting for the next reconnect.
+	refresh := false
+	defer func() {
+		if refresh {
+			go f.requestFreshBundleList()
+		}
+	}()
 	for _, bundle := range payload.Bundles {
 		// TODO: check bundle.ExpiresAt before Ensure to avoid downloading with
 		// an already-expired presigned URL.
@@ -85,6 +108,9 @@ func (f *FleetFilesManager) HandlePackages(_ context.Context, payload messages.P
 		if err != nil {
 			f.logger.Error("failed to install bundle",
 				"name", bundle.Name, "version", bundle.Version, "error", err)
+			if f.urlExpired(bundle.ExpiresAt) {
+				refresh = true
+			}
 			continue
 		}
 		f.logger.Info("bundle installed",
@@ -95,7 +121,19 @@ func (f *FleetFilesManager) HandlePackages(_ context.Context, payload messages.P
 // SendBundleListRequest publishes a bundle_list_req (via publishFunc, which
 // targets the agent outbox) asking the control plane to re-deliver the agent's
 // current bundle set. This is the connect/reconnect catch-up.
+// It also registers publishFunc as the current publisher for later
+// self-initiated refreshes (requestFreshBundleList).
 func (f *FleetFilesManager) SendBundleListRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
+	f.mu.Lock()
+	f.publishFunc = publishFunc
+	f.mu.Unlock()
+	f.publishBundleListRequest(ctx, publishFunc)
+}
+
+// publishBundleListRequest sends a bundle_list_req through publishFunc without
+// changing the registered publisher. A refresh that started before a reconnect
+// must not put its (now stale) publisher back in place of the new one.
+func (f *FleetFilesManager) publishBundleListRequest(ctx context.Context, publishFunc func(ctx context.Context, payload []byte) error) {
 	body, err := json.Marshal(messages.RPC{
 		SchemaVersion: messages.CurrentRPCSchemaVersion,
 		Func:          messages.BundleListReqRPCFunc,
@@ -110,4 +148,41 @@ func (f *FleetFilesManager) SendBundleListRequest(ctx context.Context, publishFu
 		return
 	}
 	f.logger.Debug("bundle_list_req sent")
+}
+
+func (f *FleetFilesManager) clock() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
+// urlExpired reports whether a delivered URL's expiry (unix seconds; 0 means
+// unknown) has passed.
+func (f *FleetFilesManager) urlExpired(expiresAt int64) bool {
+	return expiresAt > 0 && f.clock().Unix() > expiresAt
+}
+
+// requestFreshBundleList asks the control plane to re-deliver the bundle list,
+// which carries freshly minted URLs. It needs the publish function registered by
+// an earlier SendBundleListRequest (the connect-time catch-up) and is
+// rate-limited by bundleRefreshCooldown.
+func (f *FleetFilesManager) requestFreshBundleList() {
+	if f.stopCtx.Err() != nil {
+		return // shutting down; nothing to publish with
+	}
+	f.mu.Lock()
+	publish := f.publishFunc
+	now := f.clock()
+	if publish == nil || (!f.lastRefresh.IsZero() && now.Sub(f.lastRefresh) < bundleRefreshCooldown) {
+		f.mu.Unlock()
+		return
+	}
+	f.lastRefresh = now
+	f.mu.Unlock()
+
+	f.logger.Info("install failed with an expired download URL; requesting a fresh bundle list")
+	ctx, cancel := context.WithTimeout(f.stopCtx, bundleRefreshTimeout)
+	defer cancel()
+	f.publishBundleListRequest(ctx, publish)
 }
