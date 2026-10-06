@@ -318,15 +318,15 @@ scope:
       face: front
 ```
 
-- `position` is a U from 1, in steps of 0.5 (`40.5` is a half U). `face` is `front` or `rear`. They are set together, and the target needs a rack, its own or the policy's.
-- A policy is refused when its `defaults` set `position` or `face`, or when a target whose `hostname` is a subnet or range sets them: every device would get the same U.
-- On a switch stack, the master takes the position and face; the other members take the rack only.
-- Without `position`, the device is placed in the rack without a U, and a position set in NetBox is kept.
+- `position` is a U from 1, in steps of 0.5 (`40.5` is a half U). `face` is `front` or `rear`. They are set together, and the target needs a rack, its own or the policy's. A target's `rack: ""` keeps its device out of the policy's rack.
+- A policy is refused when its `defaults` set `position` or `face`, when a target whose `hostname` expands to more than one address (a subnet or range) sets them, or when two targets are placed at the same rack, U and face.
+- On a switch stack, the master, which is the lowest member id (see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis)), takes the position and face; the other members take the rack only.
+- Without `position`, no position is sent, so NetBox keeps whatever it has.
 
 Placement follows Diode's rules:
 
 - A rack name that doesn't exist in the site is created, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
-- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): the device isn't ingested that cycle, and NetBox's reason appears in the Diode ingestion logs.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): NetBox rejects the device's own record that cycle, and its reason appears in the Diode ingestion logs. Its interfaces and addresses are separate records and still go in.
 - A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode also matches devices by rack, position and face. Make sure the U is free before setting it.
 - The position is applied on every run, so a device moved in NetBox moves back unless its `override_defaults` entry changes.
 

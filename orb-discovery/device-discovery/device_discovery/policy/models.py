@@ -245,13 +245,15 @@ class Defaults(BaseModel):
             return None
         return v
 
-    @field_validator("rack")
+    @field_validator("rack", mode="before")
     @classmethod
-    def _strip_rack(cls, v: str | None) -> str | None:
-        """Trim the rack name; a blank one means no rack."""
-        if v is None:
-            return None
-        return v.strip() or None
+    def _strip_rack(cls, v: object) -> object:
+        """Trim the rack name and read a numeric one as text; a blank one means no rack."""
+        if isinstance(v, int) and not isinstance(v, bool):
+            return str(v)
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
     @field_validator("face", mode="before")
     @classmethod
@@ -262,6 +264,14 @@ class Defaults(BaseModel):
         if isinstance(v, str) and v.strip().lower() in RACK_FACES:
             return v.strip().lower()
         raise ValueError("face must be front or rear")
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _refuse_bool_position(cls, v: object) -> object:
+        """YAML's yes/true would otherwise read as U1."""
+        if isinstance(v, bool):
+            raise ValueError("position must be a number")
+        return v
 
     @field_validator("position")
     @classmethod
@@ -642,14 +652,22 @@ class Policy(BaseModel):
         defaults = self.config.defaults if self.config else None
         if defaults is not None and (defaults.position is not None or defaults.face is not None):
             raise ValueError("defaults: position and face are set per target, in override_defaults")
-        policy_rack = defaults.rack if defaults is not None else None
+
+        def effective(override: Defaults, field: str):
+            # As merge_override_defaults: an override field counts when set and not null.
+            if field in override.model_fields_set and getattr(override, field) is not None:
+                return getattr(override, field)
+            return getattr(defaults, field) if defaults is not None else None
+
+        placed: dict[tuple, str] = {}
         for entry in self.scope:
             override = entry.override_defaults
             if override is None or (override.position is None and override.face is None):
                 continue
             if override.position is None or override.face is None:
                 raise ValueError(f"{entry.hostname}: position and face go together; set both")
-            if not (override.rack or policy_rack):
+            rack = effective(override, "rack")
+            if not rack:
                 raise ValueError(
                     f"{entry.hostname}: position and face need a rack, "
                     "in override_defaults or the policy defaults"
@@ -659,6 +677,16 @@ class Policy(BaseModel):
                     f"{entry.hostname}: position and face need a single host; "
                     "a range or subnet would place every device at the same U"
                 )
+            # Diode matches a device by rack, position and face once name and
+            # site miss, so a second device at one U would take the first's record.
+            slot = (effective(override, "site"), effective(override, "location"), rack,
+                    override.position, override.face)
+            if slot in placed:
+                raise ValueError(
+                    f"targets {placed[slot]} and {entry.hostname} are both placed at "
+                    f"{rack} U{override.position:g} {override.face}"
+                )
+            placed[slot] = entry.hostname
         return self
 
     @model_validator(mode="after")

@@ -274,6 +274,18 @@ def test_only_the_stack_master_takes_the_position_and_face():
         assert not md.HasField("face"), f"member {md.name} carried face {md.face!r}"
 
 
+def test_nested_device_refs_carry_no_placement():
+    """Device references match by name and site; rack, position and face stay off them."""
+    from device_discovery.stubs import _device_match_stub
+    from device_discovery.translate_chassis import _master_device_ref
+
+    placed = pb.Device(name="core-sw-1", rack=pb.Rack(name="R12"), position=40, face="front")
+    for ref in (_device_match_stub(placed), _master_device_ref(placed)):
+        assert not ref.HasField("rack")
+        assert not ref.HasField("position")
+        assert not ref.HasField("face")
+
+
 def test_vc_master_ref_carries_master_asset_tag_and_source_match():
     """VC master inline ref must repeat the emitted master's matcher fields (asset_tag + source_match)."""
     data = _base_data(_two_member_payload())

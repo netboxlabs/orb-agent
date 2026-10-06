@@ -250,8 +250,8 @@ def translate_device(
         "rack": Rack(name=defaults.rack, site=site, location=location)
         if defaults.rack
         else None,
-        # Set per single-host target only (policy validation); unset leaves
-        # the device unplaced and keeps any position set in NetBox.
+        # Set per single-host target only (policy validation). Unset, no
+        # position is sent, so NetBox keeps whatever it has.
         "position": defaults.position,
         "face": defaults.face,
         "tenant": translate_tenant(defaults.tenant),

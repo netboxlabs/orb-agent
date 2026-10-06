@@ -5,6 +5,7 @@
 import pytest
 from pydantic import ValidationError
 
+from device_discovery.policy.manager import PolicyManager
 from device_discovery.policy.models import Config, Defaults, Napalm, Policy
 from device_discovery.policy.runner import merge_override_defaults
 
@@ -101,9 +102,9 @@ def test_valid_positions(position):
     assert Defaults(position=position).position == position
 
 
-@pytest.mark.parametrize(("rack", "want"), [(" R12 ", "R12"), ("   ", None), ("", None)])
+@pytest.mark.parametrize(("rack", "want"), [(" R12 ", "R12"), ("   ", ""), ("", ""), (12, "12")])
 def test_rack_name_is_trimmed(rack, want):
-    """A blank rack means no rack, so it cannot satisfy a position either."""
+    """A rack name is trimmed, kept blank when blank, and read as text when numeric."""
     assert Defaults(rack=rack).rack == want
 
 
@@ -111,3 +112,92 @@ def test_blank_rack_does_not_serve_a_position():
     """Whitespace is not a rack."""
     with pytest.raises(ValidationError, match="need a rack"):
         _policy([_scope(rack="  ", position=40, face="front")])
+
+
+def test_blank_target_rack_opts_out_of_the_policy_rack():
+    """A target's empty rack keeps its device out of the policy's rack, as before."""
+    policy = _policy([_scope(rack="")], rack="R12")
+    merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
+    assert not merged.rack
+
+
+def test_blank_target_rack_does_not_serve_a_position():
+    """A target that opted out of the policy rack has no rack to be placed in."""
+    with pytest.raises(ValidationError, match="need a rack"):
+        _policy([_scope(rack="", position=40, face="front")], rack="R12")
+
+
+def test_two_targets_at_the_same_u_are_refused():
+    """Diode would match the second, new device to the first device's record."""
+    with pytest.raises(ValidationError, match="192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front"):
+        _policy([
+            _scope("192.0.2.10", rack="R12", position=40, face="front"),
+            _scope("192.0.2.11", rack="R12", position=40, face="front"),
+        ])
+
+
+def test_two_targets_at_the_same_u_through_the_policy_rack_are_refused():
+    """The rack each target is placed in is the effective one."""
+    with pytest.raises(ValidationError, match="both placed at R12 U40 front"):
+        _policy([
+            _scope("192.0.2.10", position=40, face="front"),
+            _scope("192.0.2.11", position=40, face="front"),
+        ], rack="R12")
+
+
+@pytest.mark.parametrize("other", [
+    {"rack": "R12", "position": 40, "face": "rear"},
+    {"rack": "R13", "position": 40, "face": "front"},
+    {"rack": "R12", "position": 41, "face": "front"},
+    {"rack": "R12", "position": 40, "face": "front", "site": "DC2"},
+    {"rack": "R12", "position": 40, "face": "front", "location": "Hall B"},
+])
+def test_targets_at_different_slots_are_accepted(other):
+    """Another face, rack, U, site or location is another slot."""
+    _policy([_scope("192.0.2.10", rack="R12", position=40, face="front"), _scope("192.0.2.11", **other)])
+
+
+@pytest.mark.parametrize("position", [True, False])
+def test_boolean_position_is_refused(position):
+    """YAML's yes/true would otherwise read as U1."""
+    with pytest.raises(ValidationError, match="position must be a number"):
+        Defaults(position=position)
+
+
+def test_numeric_string_position_is_accepted():
+    """A ${VAR} substitution yields a string."""
+    assert Defaults(position="40.5").position == 40.5
+
+
+def test_face_is_trimmed_and_lowercased():
+    """Surrounding spaces and case are not part of the face."""
+    assert Defaults(face=" Front ").face == "front"
+
+
+def test_policy_yaml_with_position_in_defaults_is_refused():
+    """The API's YAML path applies the same rules."""
+    config_data = b"""
+    policies:
+      p1:
+        config:
+          defaults:
+            site: DC1
+            rack: R12
+            position: 40
+            face: front
+        scope:
+          - hostname: 192.0.2.10
+            username: admin
+            password: secret
+    """
+    with pytest.raises(ValidationError, match="set per target, in override_defaults"):
+        PolicyManager().parse_policy(config_data)
+
+
+def test_a_target_restating_the_policy_site_is_the_same_slot():
+    """A site set on one target and inherited by the other is still one site."""
+    with pytest.raises(ValidationError, match="both placed at R12 U40 front"):
+        _policy([
+            _scope("192.0.2.10", site="DC1", rack="R12", position=40, face="front"),
+            _scope("192.0.2.11", rack="R12", position=40, face="front"),
+        ], site="DC1")
