@@ -220,6 +220,17 @@ func checkRackSlots(policy *config.Policy) error {
 			}
 		}
 	}
+	// Once every racked device is known, in whatever order targets come.
+	for _, c := range expanded.candidates {
+		t := c.target
+		t.Host = c.written
+		d := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults)
+		if key := placementOf(d); key.rack == "" {
+			if err := checkUnracked(pinned, key, t, deviceIDs(t, d)); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -258,12 +269,12 @@ func deviceIDs(t config.Target, d *config.Defaults) []deviceID {
 	return ids
 }
 
-// pinDevice records what target t sends the device each of ids names,
-// refusing something different for one already named: the targets may update
-// one device, so they must send it the same rack, position and face (a rack
-// without a position counts too). It reports whether an earlier target is
-// known to be this device, sharing the strongest identifier of both: a weaker
-// one can be outranked, as two netbox_ids sharing a tag are two devices.
+// pinDevice records what target t sends the device each of ids names. A
+// target is matched by its strongest identifier, so targets sharing one that
+// is the strongest of either may update one device: they must send it the
+// same rack, position and face (a rack without a position counts too). It
+// reports whether an earlier target is known to be this device, sharing the
+// strongest identifier of both.
 func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Target, ids []deviceID) (bool, error) {
 	seen := false
 	for i, id := range ids {
@@ -271,6 +282,9 @@ func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Targ
 		if !ok {
 			pinned[id] = placedTarget{key: key, host: t.Host, strongest: i == 0}
 			continue
+		}
+		if i > 0 && !prior.strongest {
+			continue // each is matched by something stronger, so they are apart
 		}
 		if prior.key != key {
 			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
@@ -281,6 +295,24 @@ func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Targ
 		}
 	}
 	return seen, nil
+}
+
+// checkUnracked refuses target t, which sends no rack, moving a racked device
+// away from its rack: it still sends a site and any location, and NetBox
+// refuses a device whose rack is in another. A location it leaves out, the
+// device keeps.
+func checkUnracked(pinned map[deviceID]placedTarget, key placementKey, t config.Target, ids []deviceID) error {
+	for i, id := range ids {
+		racked, ok := pinned[id]
+		if !ok || (i > 0 && !racked.strongest) {
+			continue
+		}
+		if key.site != racked.key.site || (key.location != "" && key.location != racked.key.location) {
+			return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
+				racked.host, t.Host, id.kind, id.value, racked.host, racked.key.rack)
+		}
+	}
+	return nil
 }
 
 // claimUnit records the U target t places its device at, refusing one another

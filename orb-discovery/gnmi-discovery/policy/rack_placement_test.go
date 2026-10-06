@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -591,6 +592,67 @@ func TestPlacementIdentityPrecedence(t *testing.T) {
 	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
 		target("192.0.2.10", "42", "A1", "R12", "40")+"\n"+target("192.0.2.11", "42", "A1", "R12", "40")))
 	require.NoError(t, err, "one netbox_id at one U is one device")
+}
+
+// A target is matched by its strongest identifier, so a shared one ties two
+// targets only when it is the strongest of at least one.
+func TestPlacementTiesOnlyByAMatchedIdentifier(t *testing.T) {
+	target := func(host, id, rack string) string {
+		out := "        - host: " + host + "\n"
+		if id != "" {
+			out += "          netbox_id: " + id + "\n"
+		}
+		return out + "          override_defaults:\n            asset_tag: A1\n            rack: " + rack
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		target("192.0.2.10", "41", "R12")+"\n"+target("192.0.2.11", "42", "R13")))
+	require.NoError(t, err, "each is matched by its own netbox_id, so the shared tag ties nothing")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		target("192.0.2.11", "", "R13")+"\n"+target("192.0.2.10", "42", "R12")))
+	require.Error(t, err, "the tag-only target is matched by the tag the netbox_id device carries")
+	require.Contains(t, err.Error(), "place asset_tag A1 at different slots")
+}
+
+// A target without a rack still sends a site and any location, and NetBox
+// refuses a device whose rack is in another, so one sharing a racked device
+// must send that target's, or no location.
+func TestUnrackedTargetsKeepARackedDeviceWhereItsRackIs(t *testing.T) {
+	racked := "        - host: 192.0.2.10\n          netbox_id: 42\n          override_defaults:\n            asset_tag: A1\n" +
+		"            rack: R12\n            location: Row 1"
+	unracked := func(id, override string) string {
+		out := "        - host: 192.0.2.11\n          netbox_id: " + id + "\n          override_defaults:\n            asset_tag: A1"
+		if override != "" {
+			out += "\n            " + override
+		}
+		return out
+	}
+	moved := "targets 192.0.2.10 and 192.0.2.11 send netbox_id 42 to different sites or locations, and 192.0.2.10 places it in rack R12"
+	for name, tc := range map[string]struct {
+		other, wantErr string
+	}{
+		"another location":                  {unracked("42", "location: Row 2"), moved},
+		"another site":                      {unracked("42", "site: DC2"), moved},
+		"no location":                       {unracked("42", ""), ""},
+		"the same location":                 {unracked("42", "location: Row 1"), ""},
+		"another netbox_id sharing the tag": {unracked("41", "location: Row 2"), ""},
+	} {
+		for _, rackedFirst := range []bool{true, false} {
+			t.Run(name+"/racked first "+strconv.FormatBool(rackedFirst), func(t *testing.T) {
+				targets := racked + "\n" + tc.other
+				if !rackedFirst {
+					targets = tc.other + "\n" + racked
+				}
+				_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1", targets))
+				if tc.wantErr == "" {
+					require.NoError(t, err)
+					return
+				}
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantErr)
+			})
+		}
+	}
 }
 
 // A rack without a position is what a netbox_id target sends its device too.
