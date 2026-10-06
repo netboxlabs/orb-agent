@@ -1671,6 +1671,12 @@ func TestManager_ParsePolicies_RackPlacement(t *testing.T) {
 			wantErr:  "target 10.0.0.0/8: position and face need a single host",
 		},
 		{
+			name:     "an IPv6 subnet is judged by its prefix",
+			host:     "2001:db8::/64",
+			override: map[string]any{"rack": "R12", "position": 40, "face": "front"},
+			wantErr:  "target 2001:db8::/64: position and face need a single host",
+		},
+		{
 			name:     "a /32 is a single host",
 			host:     "192.0.2.1/32",
 			override: map[string]any{"rack": "R12", "position": 10, "face": "front"},

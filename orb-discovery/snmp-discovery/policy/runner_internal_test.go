@@ -1108,8 +1108,7 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 
 // TestRunWithMetadata_StackRackPlacement drives a policy rack and a
 // target's position and face through the merge and the mappers: the master
-// takes all three, the member the rack only, and nested device references
-// none of them.
+// takes all three, and the member and nested device references none of them.
 func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
 	walker := twoMemberStackWalker()
 	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {

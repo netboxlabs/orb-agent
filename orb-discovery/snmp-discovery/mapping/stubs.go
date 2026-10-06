@@ -92,8 +92,8 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 //     member Devices when emitting a stack, but are intentionally
 //     NOT carried on stubs. Matcher #8 (virtual_chassis plus
 //     vc_position) sits behind higher-precedence matchers — asset_tag,
-//     name+site+tenant, name+site, rack+position+face — that every
-//     member Device already carries via the fields above. Copying the
+//     name+site+tenant, name+site — that every member Device already
+//     carries via the fields above. Copying the
 //     rich VirtualChassis subtree onto every nested stub would just
 //     bloat the wire payload.
 //
