@@ -272,13 +272,31 @@ type devicePlacement struct {
 	oidLocation bool
 }
 
-// pinnedPlacement is what the first target naming a device sends it.
-// strongest records whether the identifier it is filed under was the
-// strongest that target carried.
+// pinnedPlacement is what a target naming a device sends it.
 type pinnedPlacement struct {
 	placement devicePlacement
 	host      string
-	strongest bool
+}
+
+// sharers is what the racked targets sending one identifier send its device:
+// each placement, in order, and the first target relying on the identifier.
+type sharers struct {
+	placements []pinnedPlacement
+	sent       map[devicePlacement]bool
+	reliedOn   *pinnedPlacement
+}
+
+// holders returns the targets one holding the identifier at rank is tied to.
+// A target is matched by its strongest identifier, so that one ties it to
+// every target sending it; a weaker one only to a target relying on it.
+func (s *sharers) holders(rank int) []pinnedPlacement {
+	if rank == 0 {
+		return s.placements
+	}
+	if s.reliedOn == nil {
+		return nil
+	}
+	return []pinnedPlacement{*s.reliedOn}
 }
 
 // deviceID is something a target's device is known by: the one host it
@@ -297,7 +315,7 @@ func validateRackPlacement(policy config.Policy) error {
 	}
 	// Each U maps its locations ("" for none) to the target placed there.
 	placedAt := map[rackUnit]map[string]string{}
-	pinnedAt := map[deviceID]pinnedPlacement{}
+	pinnedAt := map[deviceID]*sharers{}
 	for _, target := range policy.Scope.Targets {
 		override := target.OverrideDefaults
 		placed := override != nil && (override.Position != nil || override.RackFace() != "")
@@ -422,35 +440,41 @@ func endpointOf(target config.Target) (string, bool) {
 	return host, true
 }
 
-// pinDevice records what a target sends the device each of ids names. A
-// target is matched by its strongest identifier, so targets sharing one that
-// is the strongest of either may update one device: they must send it the
-// same rack, position and face (a rack without a position counts too). It
-// reports whether an earlier target is known to be this device, sharing the
-// strongest identifier of both.
-func pinDevice(pinnedAt map[deviceID]pinnedPlacement, target config.Target, p devicePlacement, ids []deviceID) (bool, error) {
+// pinDevice records what a target sends the device each of ids names.
+// Targets tied by an identifier may update one device, so they must send it
+// the same rack, position and face (a rack without a position counts too). It
+// reports whether an earlier target is known to be this device, relying on the
+// same strongest identifier.
+func pinDevice(pinnedAt map[deviceID]*sharers, target config.Target, p devicePlacement, ids []deviceID) (bool, error) {
 	seen := false
 	for i, id := range ids {
-		prior, ok := pinnedAt[id]
-		if !ok {
-			pinnedAt[id] = pinnedPlacement{placement: p, host: target.Host, strongest: i == 0}
-			continue
+		s := pinnedAt[id]
+		if s == nil {
+			s = &sharers{sent: map[devicePlacement]bool{}}
+			pinnedAt[id] = s
 		}
-		if i > 0 && !prior.strongest {
-			continue // each is matched by something stronger, so they are apart
+		for _, other := range s.holders(i) {
+			// A location read from an OID is only known at scan time, so it
+			// cannot be shown to match.
+			if other.placement.oidLocation || p.oidLocation {
+				return false, fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
+					other.host, target.Host, id.kind, id.value)
+			}
+			if other.placement != p {
+				return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
+					other.host, target.Host, id.kind, id.value)
+			}
 		}
-		// A location read from an OID is only known at scan time, so it
-		// cannot be shown to match.
-		if prior.placement.oidLocation || p.oidLocation {
-			return false, fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
-				prior.host, target.Host, id.kind, id.value)
+		this := pinnedPlacement{placement: p, host: target.Host}
+		if i == 0 {
+			seen = s.reliedOn != nil
+			if s.reliedOn == nil {
+				s.reliedOn = &this
+			}
 		}
-		if prior.placement != p {
-			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
-				prior.host, target.Host, id.kind, id.value)
-		}
-		if i == 0 && prior.strongest {
-			seen = true
+		if !s.sent[p] {
+			s.sent[p] = true
+			s.placements = append(s.placements, this)
 		}
 	}
 	return seen, nil
@@ -459,19 +483,21 @@ func pinDevice(pinnedAt map[deviceID]pinnedPlacement, target config.Target, p de
 // checkUnracked refuses a target without a rack moving a racked device away
 // from its rack: it still sends a site and any location, and NetBox refuses a
 // device whose rack is in another. A location it leaves out, the device keeps.
-func checkUnracked(pinnedAt map[deviceID]pinnedPlacement, target config.Target, p devicePlacement, ids []deviceID) error {
+func checkUnracked(pinnedAt map[deviceID]*sharers, target config.Target, p devicePlacement, ids []deviceID) error {
 	for i, id := range ids {
-		racked, ok := pinnedAt[id]
-		if !ok || (i > 0 && !racked.strongest) {
+		s := pinnedAt[id]
+		if s == nil {
 			continue
 		}
-		if p.location != "" && (p.oidLocation || racked.placement.oidLocation) {
-			return fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
-				racked.host, target.Host, id.kind, id.value)
-		}
-		if p.unit.site != racked.placement.unit.site || (p.location != "" && p.location != racked.placement.location) {
-			return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
-				racked.host, target.Host, id.kind, id.value, racked.host, racked.placement.unit.rack)
+		for _, racked := range s.holders(i) {
+			if p.location != "" && (p.oidLocation || racked.placement.oidLocation) {
+				return fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
+					racked.host, target.Host, id.kind, id.value)
+			}
+			if p.unit.site != racked.placement.unit.site || (p.location != "" && p.location != racked.placement.location) {
+				return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
+					racked.host, target.Host, id.kind, id.value, racked.host, racked.placement.unit.rack)
+			}
 		}
 	}
 	return nil

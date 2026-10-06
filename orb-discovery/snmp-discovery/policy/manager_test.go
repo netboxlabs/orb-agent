@@ -2148,6 +2148,38 @@ func TestManager_ParsePolicies_RackPlacementTiesOnlyByAMatchedIdentifier(t *test
 	}
 }
 
+// A target relying on an identifier is held to every target sending it,
+// whatever order they come in.
+func TestManager_ParsePolicies_RackPlacementTiesInAnyOrder(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	target := func(host string, netboxID int, rack, location string) map[string]any {
+		override := map[string]any{"asset_tag": "A1", "location": location}
+		if rack != "" {
+			override["rack"] = rack
+		}
+		out := map[string]any{"host": host, "override_defaults": override}
+		if netboxID != 0 {
+			out["netbox_id"] = netboxID
+		}
+		return out
+	}
+	targets := []map[string]any{
+		target("192.0.2.10", 1, "R12", "Row 1"),
+		target("192.0.2.11", 0, "R12", "Row 1"),
+		target("192.0.2.12", 2, "R13", "Row 1"),
+	}
+	for _, order := range [][3]int{{0, 1, 2}, {0, 2, 1}, {1, 0, 2}, {2, 0, 1}} {
+		_, err := manager.ParsePolicies(rackPolicyTargets(t, nil, targets[order[0]], targets[order[1]], targets[order[2]]))
+		require.Error(t, err, "order %v", order)
+		assert.Contains(t, err.Error(), "place asset_tag A1 at different slots", "order %v", order)
+	}
+
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, nil, targets[0], targets[1], target("192.0.2.12", 2, "", "Row 2")))
+	require.Error(t, err, "the unracked target is held to the target relying on the tag")
+	assert.Contains(t, err.Error(), "send asset_tag A1 to different sites or locations")
+}
+
 // A target without a rack still sends a site and any location, and NetBox
 // refuses a device whose rack is in another, so one sharing a racked device
 // must send that target's, or no location.
