@@ -2058,6 +2058,58 @@ func TestManager_ParsePolicies_RackPlacementOneHost(t *testing.T) {
 	}
 }
 
+// A shared identifier means two targets may update one device, so their
+// placements must agree; only a shared strongest one, in Diode's matching
+// order, says they do, so only that lets two targets share a U.
+func TestManager_ParsePolicies_RackPlacementIdentityPrecedence(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	target := func(host string, netboxID int, tag, rack string, position float64) map[string]any {
+		override := map[string]any{"rack": rack}
+		if tag != "" {
+			override["asset_tag"] = tag
+		}
+		if position != 0 {
+			override["position"] = position
+			override["face"] = "front"
+		}
+		out := map[string]any{"host": host, "override_defaults": override}
+		if netboxID != 0 {
+			out["netbox_id"] = netboxID
+		}
+		return out
+	}
+	sameU := "are both placed at R12 U40 front"
+	for name, tc := range map[string]struct {
+		targets []map[string]any
+		wantErr string
+	}{
+		"two netbox_ids sharing a tag": {
+			[]map[string]any{target("192.0.2.10", 41, "A1", "R12", 40), target("192.0.2.11", 42, "A1", "R12", 40)},
+			"targets 192.0.2.10 and 192.0.2.11 " + sameU,
+		},
+		"a tag shared with a netbox_id target": {
+			[]map[string]any{target("192.0.2.10", 42, "A1", "R12", 0), target("192.0.2.11", 0, "A1", "R13", 0)},
+			"place asset_tag A1 at different slots",
+		},
+		"netbox_id first, then tag only": {[]map[string]any{target("192.0.2.10", 42, "A1", "R12", 40), target("192.0.2.11", 0, "A1", "R12", 40)}, sameU},
+		"tag only, then netbox_id":       {[]map[string]any{target("192.0.2.10", 0, "A1", "R12", 40), target("192.0.2.11", 42, "A1", "R12", 40)}, sameU},
+		"one host with two tags":         {[]map[string]any{target("192.0.2.10", 0, "A1", "R12", 40), target("192.0.2.10", 0, "A2", "R12", 40)}, sameU},
+		"one host, a tag on one":         {[]map[string]any{target("192.0.2.10", 0, "A1", "R12", 40), target("192.0.2.10", 0, "", "R12", 40)}, sameU},
+		"one netbox_id at one U":         {[]map[string]any{target("192.0.2.10", 42, "A1", "R12", 40), target("192.0.2.11", 42, "A1", "R12", 40)}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, nil, tc.targets...))
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
 // The asset tag is the device matcher Diode tries first, so targets sending
 // one literal tag update one device and must send it one placement.
 func TestManager_ParsePolicies_RackPlacementOneAssetTag(t *testing.T) {

@@ -273,9 +273,12 @@ type devicePlacement struct {
 }
 
 // pinnedPlacement is what the first target naming a device sends it.
+// strongest records whether the identifier it is filed under was the
+// strongest that target carried.
 type pinnedPlacement struct {
 	placement devicePlacement
 	host      string
+	strongest bool
 }
 
 // deviceID is something a target's device is known by: the one host it
@@ -370,17 +373,19 @@ func placementOf(merged *config.Defaults, placed bool) devicePlacement {
 	return p
 }
 
-// deviceIDs lists what a target's device is known by.
+// deviceIDs lists what a target's device is known by, strongest first as
+// Diode matches: a kept netbox_id, a literal asset tag, then the host, which
+// stands for the name and site that host reports.
 func deviceIDs(target config.Target, merged *config.Defaults) []deviceID {
 	var ids []deviceID
-	if host, ok := endpointOf(target); ok {
-		ids = append(ids, deviceID{"host", host})
-	}
 	if target.NetboxID != nil && keepsNetboxID(target.Host) {
 		ids = append(ids, deviceID{"netbox_id", strconv.Itoa(*target.NetboxID)})
 	}
 	if tag, ok := mapping.LiteralAssetTag(merged.AssetTag); ok {
 		ids = append(ids, deviceID{"asset_tag", tag})
+	}
+	if host, ok := endpointOf(target); ok {
+		ids = append(ids, deviceID{"host", host})
 	}
 	return ids
 }
@@ -407,16 +412,17 @@ func endpointOf(target config.Target) (string, bool) {
 }
 
 // pinDevice records what a target sends the device each of ids names,
-// refusing something different for one already named: the targets update one
-// device, so they must send it the same rack, position and face (a rack
-// without a position counts too). It reports whether an earlier target already
-// sent this placement.
+// refusing something different for one already named: the targets may update
+// one device, so they must send it the same rack, position and face (a rack
+// without a position counts too). It reports whether an earlier target is
+// known to be this device, sharing the strongest identifier of both: a weaker
+// one can be outranked, as two netbox_ids sharing a tag are two devices.
 func pinDevice(pinnedAt map[deviceID]pinnedPlacement, target config.Target, p devicePlacement, ids []deviceID) (bool, error) {
 	seen := false
-	for _, id := range ids {
+	for i, id := range ids {
 		prior, ok := pinnedAt[id]
 		if !ok {
-			pinnedAt[id] = pinnedPlacement{placement: p, host: target.Host}
+			pinnedAt[id] = pinnedPlacement{placement: p, host: target.Host, strongest: i == 0}
 			continue
 		}
 		// A location read from an OID is only known at scan time, so it
@@ -429,7 +435,9 @@ func pinDevice(pinnedAt map[deviceID]pinnedPlacement, target config.Target, p de
 			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
 				prior.host, target.Host, id.kind, id.value)
 		}
-		seen = true
+		if i == 0 && prior.strongest {
+			seen = true
+		}
 	}
 	return seen, nil
 }
