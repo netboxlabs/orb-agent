@@ -228,7 +228,9 @@ The policy is rejected when:
 - `face` is not `front` or `rear`.
 - `position` is below `1` or not a multiple of `0.5`. There is no upper bound check, since only NetBox knows the rack's height.
 - the target's `host` is a CIDR or range covering more than one address. A range or subnet would place every device at the same U. `rack` alone is allowed on such a target.
-- two targets are placed at the same U: the same site, location, rack, position and face. Two half-depth devices may share a U on opposite faces. Overlaps between devices taller than one U are left to NetBox, which knows their heights.
+- two targets are placed at the same U: the same site, location, rack, position and face. A device sent without a location (none on the target or in the policy `defaults`) counts as any location, since its rack is matched by name across the site. Two half-depth devices may share a U on opposite faces. Overlaps between devices taller than one U are left to NetBox, which knows their heights.
+
+Quote a numeric rack name (`rack: "01"`). The agent passes the policy through YAML, so an unquoted `01` arrives as the number 1 and `010` as 8.
 
 How the placement behaves:
 - A rack name that doesn't exist in the site is created by Diode, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.

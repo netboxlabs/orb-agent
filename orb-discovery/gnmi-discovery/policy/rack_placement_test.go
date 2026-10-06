@@ -308,6 +308,20 @@ func TestTwoTargetsAtTheSameUAreRejected(t *testing.T) {
 			want:     "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
 		},
 		{
+			name:     "a target without a location clashes with one in a location",
+			defaults: "        site: DC1\n        rack: R12",
+			first:    "            position: 40\n            face: front",
+			second:   "            location: Hall 1\n            position: 40\n            face: front",
+			want:     "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name:     "a target in a location clashes with one without",
+			defaults: "        site: DC1\n        rack: R12",
+			first:    "            location: Hall 1\n            position: 40\n            face: front",
+			second:   "            position: 40\n            face: front",
+			want:     "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
 			name:     "an unset site is the default site",
 			defaults: "        rack: R12",
 			first:    "            position: 40\n            face: front",
@@ -383,9 +397,11 @@ func TestRackPlacementYAMLTypes(t *testing.T) {
 		require.Contains(t, err.Error(), "cannot unmarshal !!bool")
 	})
 
-	t.Run("a numeric rack name is read as written", func(t *testing.T) {
-		policies, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: 12",
-			"        - host: 192.0.2.10\n          override_defaults:\n            rack: 012\n            position: 40\n            face: front"))
+	// The agent re-marshals a policy before posting it, so only a quoted
+	// numeric rack name reaches the backend as written (the docs say so).
+	t.Run("a quoted numeric rack name is kept as written", func(t *testing.T) {
+		policies, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: \"12\"",
+			"        - host: 192.0.2.10\n          override_defaults:\n            rack: \"012\"\n            position: 40\n            face: front"))
 		require.NoError(t, err)
 		p := policies["p1"]
 		require.Equal(t, "12", p.Config.Defaults.Rack)

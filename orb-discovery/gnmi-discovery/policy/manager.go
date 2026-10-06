@@ -157,7 +157,7 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	placed := map[placementKey]string{}
+	var placed []placedTarget
 	for _, t := range policy.Scope.Targets {
 		if t.Host == "" {
 			return errors.New("target with empty host")
@@ -179,11 +179,13 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			// the device already there. Multi-U overlaps are NetBox's to refuse.
 			if hasPlacement(t.OverrideDefaults) {
 				key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
-				if first, dup := placed[key]; dup {
-					return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
-						first, t.Host, key.rack, key.position, key.face)
+				for _, p := range placed {
+					if p.key.clashes(key) {
+						return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+							p.host, t.Host, key.rack, key.position, key.face)
+					}
 				}
-				placed[key] = t.Host
+				placed = append(placed, placedTarget{key: key, host: t.Host})
 			}
 		}
 	}
@@ -196,6 +198,20 @@ type placementKey struct {
 	position                   float64
 }
 
+// placedTarget is a target already placed at a U, for the duplicate check.
+type placedTarget struct {
+	key  placementKey
+	host string
+}
+
+// clashes reports whether two placements name the same U. A rack sent without
+// a location binds a same-named rack in any location of the site, so no
+// location clashes with any.
+func (k placementKey) clashes(o placementKey) bool {
+	sameLocation := k.location == "" || o.location == "" || k.location == o.location
+	return sameLocation && k.site == o.site && k.rack == o.rack && k.face == o.face && k.position == o.position
+}
+
 // placementOf returns the effective placement of a target that passed
 // validatePlacement with a position and face.
 func placementOf(policyDefaults, override *config.Defaults) placementKey {
@@ -206,7 +222,7 @@ func placementOf(policyDefaults, override *config.Defaults) placementKey {
 	}
 	return placementKey{
 		site:     site,
-		location: d.Location,
+		location: strings.TrimSpace(d.Location),
 		rack:     strings.TrimSpace(d.Rack),
 		face:     strings.ToLower(strings.TrimSpace(d.Face)),
 		position: *d.Position,
