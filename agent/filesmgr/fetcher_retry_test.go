@@ -263,3 +263,24 @@ func TestParseRetryAfter(t *testing.T) {
 		assert.Equal(t, want, parseRetryAfter(in, now), "Retry-After %q", in)
 	}
 }
+
+// The status comes from the transport, not from go-getter's error text, so a
+// go-getter upgrade that rewords its error cannot break status detection.
+func TestStatusRecorder_WrapUsesRecordedStatusNotErrorText(t *testing.T) {
+	rec := newStatusRecorder()
+
+	rec.mu.Lock()
+	rec.status, rec.retryAfter = http.StatusForbidden, ""
+	rec.mu.Unlock()
+	err := rec.wrap(errors.New("some unrelated wording"))
+	var se *httpStatusError
+	require.True(t, errors.As(err, &se))
+	assert.Equal(t, http.StatusForbidden, se.StatusCode)
+	assert.Equal(t, "some unrelated wording", err.Error(), "message is passed through unchanged")
+
+	rec.mu.Lock()
+	rec.status = http.StatusOK
+	rec.mu.Unlock()
+	plain := errors.New("checksum did not match")
+	assert.Same(t, plain, rec.wrap(plain), "a failure after a 2xx is not a status failure")
+}
