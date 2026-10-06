@@ -353,7 +353,7 @@ func placementOf(d *config.Defaults) placementKey {
 	}
 	key := placementKey{
 		site:     site,
-		location: strings.TrimSpace(d.Location),
+		location: d.Location, // as translate sends it
 		rack:     strings.TrimSpace(string(d.Rack)),
 		face:     strings.ToLower(strings.TrimSpace(d.Face)),
 	}

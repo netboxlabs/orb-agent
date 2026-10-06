@@ -655,6 +655,18 @@ func TestUnrackedTargetsKeepARackedDeviceWhereItsRackIs(t *testing.T) {
 	}
 }
 
+// The location is sent as written, so a padded one is another reference.
+func TestAPaddedLocationIsComparedAsSent(t *testing.T) {
+	pinned := func(host, location string) string {
+		return "        - host: " + host + "\n          netbox_id: 42\n          override_defaults:\n            location: \"" +
+			location + "\"\n            position: 40\n            face: front"
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		pinned("192.0.2.10", "Row 1")+"\n"+pinned("192.0.2.11", " Row 1 ")))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "place netbox_id 42 at different slots")
+}
+
 // A rack without a position is what a netbox_id target sends its device too.
 func TestOneNetboxIDRackOnly(t *testing.T) {
 	rackOnly := func(host, rack string) string {
