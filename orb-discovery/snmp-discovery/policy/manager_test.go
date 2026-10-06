@@ -1931,8 +1931,42 @@ func TestManager_ParsePolicies_RackPlacementScalarTypes(t *testing.T) {
 		map[string]any{"position": true, "face": "front"}))
 	require.Error(t, err, "a bool position is refused")
 
-	policies, err := manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{"rack": 12},
+	// The agent re-marshals a policy, so an unquoted 01 arrives as 1 and 010
+	// as 8: a number is refused rather than taken as another rack's name.
+	for _, rack := range []any{12, 8, 26.0, true} {
+		_, err = manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{"rack": rack},
+			map[string]any{"position": 40, "face": "front"}))
+		require.Error(t, err, "rack %v", rack)
+		assert.Contains(t, err.Error(), `quote a numeric rack name, e.g. rack: "01"`)
+	}
+
+	policies, err := manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{"rack": "01"},
 		map[string]any{"position": 40, "face": "front"}))
 	require.NoError(t, err)
-	assert.Equal(t, "12", policies["rack-policy"].Config.Defaults.Rack, "a numeric rack name is the name as written")
+	assert.Equal(t, "01", string(policies["rack-policy"].Config.Defaults.Rack), "a quoted numeric rack name is kept as written")
+}
+
+// A location read from an OID is only known at scan time, so targets using
+// one are left out of the same-U check rather than compared by the OID.
+func TestManager_ParsePolicies_RackPlacementSameUSkipsOIDLocations(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	sysLocation := ".1.3.6.1.2.1.1.6.0"
+
+	for name, defaults := range map[string]map[string]any{
+		"both read the location from an OID": {"rack": "A01", "location": sysLocation},
+		"one reads it from an OID":           {"rack": "A01"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			second := map[string]any{"location": sysLocation}
+			if _, ok := defaults["location"]; ok {
+				second = nil
+			}
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, defaults,
+				placed("192.0.2.10", 42, "front", nil),
+				placed("192.0.2.11", 42, "front", second),
+			))
+			require.NoError(t, err)
+		})
+	}
 }

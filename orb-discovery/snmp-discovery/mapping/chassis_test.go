@@ -495,9 +495,9 @@ func TestBuildMemberDevice_InheritsMasterLocation(t *testing.T) {
 	assert.Equal(t, "rack-42", *dev.Location.Name)
 }
 
-// A member is its own device in its own U, which the target's one
-// position and face cannot describe, so it takes the master's rack only.
-func TestBuildMemberDevice_InheritsMasterRackOnly(t *testing.T) {
+// A member is its own device, possibly in another rack, so the target's
+// placement stays on the master: a member keeps whatever NetBox has.
+func TestBuildMemberDevice_TakesNoPlacement(t *testing.T) {
 	site := &diode.Site{Name: strPtr("DC1")}
 	rack := &diode.Rack{Name: strPtr("R12"), Site: site}
 	pos := 40.0
@@ -513,7 +513,7 @@ func TestBuildMemberDevice_InheritsMasterRackOnly(t *testing.T) {
 
 	dev := buildMemberDevice(master, member, masterRef, "stack", "")
 
-	assert.Same(t, rack, dev.Rack, "members are in the master's rack")
+	assert.Nil(t, dev.Rack, "a stack may span racks, so a member keeps the rack NetBox has")
 	assert.Nil(t, dev.Position, "a member's U is not the master's")
 	assert.Nil(t, dev.Face)
 }

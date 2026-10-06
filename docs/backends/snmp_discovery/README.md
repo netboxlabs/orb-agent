@@ -248,12 +248,16 @@ unless:
   or subnet.
 - No two targets are placed at the same U and face of one rack (the same site,
   location and rack name). Two half-depth devices can share a U on opposite
-  faces. A target with no location clashes with a target at the same U and
-  face of a rack of that name in any location of the site, because a rack sent
-  without a location can bind to any rack of that name in the site.
+  faces. A device sent without a location (none on the target or in the
+  policy `defaults`) clashes with a target at the same U and face of a rack of
+  that name in any location of the site, because a rack sent without a
+  location can bind to any rack of that name in the site. A target whose
+  `location` is an OID reference is left out of this check: its location is
+  only known when the device is scanned.
 
 Quote a numeric rack name (`rack: "01"`). The agent passes the policy on
-through YAML, so an unquoted `01` arrives as the number 1, and `010` as 8.
+through YAML, so an unquoted `01` would arrive as the number 1, and `010` as
+8; a rack that is not text is refused rather than guessed at.
 
 ```yaml
 config:
@@ -284,15 +288,18 @@ How NetBox and Diode handle a placement:
   other referenced object. Use the exact NetBox name, and set `location` when
   racks in different locations share a name.
 - When NetBox cannot accept a placement (the U is taken, the device does not
-  fit, or the position is beyond the rack's height), the device is not ingested
-  that cycle, and NetBox's reason appears in the Diode ingestion logs.
+  fit, or the position is beyond the rack's height), NetBox rejects the
+  device's own record that cycle, and its reason appears in the Diode ingestion
+  logs. Its interfaces and addresses are separate records and still go in.
 - A device that is not in NetBox yet, sent to a U another device already
   occupies, updates that other device, because Diode matches devices by rack,
   position and face. Make sure the U is free before setting it.
 - The position is applied again on every run, so a device moved in NetBox
   moves back on the next run unless its override is updated.
-- On a [stack](#switch-stacks--virtual-chassis), the master device takes the
-  position and face. The other members take the rack only.
+- On a [stack](#switch-stacks--virtual-chassis), only the master device is
+  placed. A stack can span racks, so the other members are sent no rack,
+  position or face: NetBox keeps whatever it has for them, and a new member is
+  created without a rack.
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |

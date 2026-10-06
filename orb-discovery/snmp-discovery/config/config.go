@@ -345,9 +345,24 @@ type Defaults struct {
 	// Rack is a literal NetBox rack name. Position (a U, possibly a
 	// half U) and Face are accepted only in a target's override_defaults;
 	// policy validation enforces that and NetBox's rules for them.
-	Rack     string   `yaml:"rack,omitempty"`
+	Rack     RackText `yaml:"rack,omitempty"`
 	Position *float64 `yaml:"position,omitempty"`
 	Face     string   `yaml:"face,omitempty"`
+}
+
+// RackText is a rack name that must be YAML text. The agent re-marshals a
+// policy before posting it, so an unquoted 01 arrives as the number 1 and 010
+// as 8: a number is refused rather than taken as another rack's name.
+type RackText string
+
+// UnmarshalYAML refuses a rack name that is not YAML text. A null never
+// reaches it: yaml leaves the field empty.
+func (r *RackText) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.ShortTag() != "!!str" {
+		return errors.New(`rack must be text; quote a numeric rack name, e.g. rack: "01"`)
+	}
+	*r = RackText(node.Value)
+	return nil
 }
 
 // Rack faces accepted in override_defaults.face.
@@ -359,7 +374,7 @@ const (
 // RackName returns the rack name without surrounding whitespace; empty
 // means unset.
 func (d *Defaults) RackName() string {
-	return strings.TrimSpace(d.Rack)
+	return strings.TrimSpace(string(d.Rack))
 }
 
 // RackFace returns the face trimmed and lowercased; empty means unset.

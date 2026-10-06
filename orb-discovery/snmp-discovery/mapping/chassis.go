@@ -297,9 +297,9 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 //     would collapse them onto one NetBox row.
 //   - VcPosition = member.ID; VirtualChassis = {Name: vcName, Master: masterRef}.
 //   - DeviceType from member.Model when populated, else inherit master's.
-//   - Site / Tenant / Role / Platform / Location / Rack inherited from
-//     master. Position and Face are not: each member sits in its own U,
-//     which the target's one override cannot describe.
+//   - Site / Tenant / Role / Platform / Location inherited from master.
+//     Rack, Position and Face are not: a stack may span racks, so a member
+//     keeps whatever placement NetBox has.
 func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *diode.Device, vcName, nameTemplate string) *diode.Device {
 	name := config.RenderStackMemberName(nameTemplate, vcName, member.ID)
 	pos := int64(member.ID)
@@ -311,7 +311,6 @@ func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *di
 		Role:       master.Role,
 		Platform:   master.Platform,
 		Location:   master.Location,
-		Rack:       master.Rack,
 		VcPosition: &pos,
 		VirtualChassis: &diode.VirtualChassis{
 			Name:   &vcName,

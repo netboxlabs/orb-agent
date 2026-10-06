@@ -607,6 +607,12 @@ func loadYAMLFile(data []byte, devicesByVendor map[string]deviceRef) error {
 // be a backward-compat break.
 var defaultOIDPattern = regexp.MustCompile(`^\.1\.3\.6\.1\.(\d+\.)+\d+$`)
 
+// IsOIDReference reports whether raw is a default ResolveDefault reads from
+// the walk rather than a literal.
+func IsOIDReference(raw string) bool {
+	return defaultOIDPattern.MatchString(raw)
+}
+
 // ResolveDefault classifies raw as either a literal value or an SNMP OID
 // reference and resolves it against the walked map.
 //
@@ -630,7 +636,7 @@ var defaultOIDPattern = regexp.MustCompile(`^\.1\.3\.6\.1\.(\d+\.)+\d+$`)
 // OID-reference syntax. This is stricter than the lookup_extensions
 // oidPattern used by GetDeviceModel.
 func ResolveDefault(raw string, walked map[string]string) (string, bool) {
-	if defaultOIDPattern.MatchString(raw) {
+	if IsOIDReference(raw) {
 		if walked == nil {
 			return "", false
 		}

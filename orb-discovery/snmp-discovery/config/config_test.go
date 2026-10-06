@@ -1019,7 +1019,7 @@ override_defaults:
 		Override Defaults `yaml:"override_defaults"`
 	}
 	require.NoError(t, yaml.Unmarshal(yamlContent, &parsed))
-	assert.Equal(t, "R12", parsed.Override.Rack)
+	assert.Equal(t, RackText("R12"), parsed.Override.Rack)
 	require.NotNil(t, parsed.Override.Position)
 	assert.InDelta(t, 40.5, *parsed.Override.Position, 0)
 	assert.Equal(t, "Front", parsed.Override.Face)
@@ -1079,4 +1079,13 @@ func TestMergeDefaults_PositionAndFaceUnsetStayUnset(t *testing.T) {
 	merged := MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Site: "DC1"})
 	assert.Nil(t, merged.Position)
 	assert.Empty(t, merged.Face)
+}
+
+// An empty rack key is no rack, like an absent one.
+func TestRackText_EmptyKeyIsUnset(t *testing.T) {
+	for _, doc := range []string{"rack:\n", "rack: ~\n", "rack: \"\"\n"} {
+		var d Defaults
+		require.NoError(t, yaml.Unmarshal([]byte(doc), &d), doc)
+		assert.Empty(t, d.RackName(), doc)
+	}
 }

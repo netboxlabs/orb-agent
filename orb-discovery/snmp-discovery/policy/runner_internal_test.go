@@ -1156,7 +1156,7 @@ func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
 	require.NotNil(t, master.Face)
 	assert.Equal(t, "front", *master.Face)
 
-	assert.Same(t, master.Rack, member.Rack, "the member is in the master's rack")
+	assert.Nil(t, member.Rack, "a stack may span racks, so the member keeps the rack NetBox has")
 	assert.Nil(t, member.Position, "the member is not at the master's U")
 	assert.Nil(t, member.Face)
 

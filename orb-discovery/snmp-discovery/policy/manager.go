@@ -312,6 +312,11 @@ func validateRackPlacement(policy config.Policy) error {
 			site = defaultSite // as applyDefaults fills it in
 		}
 		unit := rackUnit{site, merged.RackName(), *merged.Position, merged.RackFace()}
+		// A location read from an OID is only known at scan time, so such a
+		// target is left out of the check rather than compared by its OID.
+		if data.IsOIDReference(merged.Location) {
+			continue
+		}
 		location := strings.TrimSpace(merged.Location)
 		for _, other := range placedAt[unit] {
 			// A rack sent without a location binds any rack of that name
