@@ -1109,6 +1109,8 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 // TestRunWithMetadata_StackRackPlacement drives a policy rack and a
 // target's position and face through the merge and the mappers: the master
 // takes all three, and the member and nested device references none of them.
+// The member takes no location either, so it cannot disagree with the
+// location of the rack NetBox keeps for it.
 func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
 	walker := twoMemberStackWalker()
 	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
@@ -1158,6 +1160,7 @@ func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
 	assert.Nil(t, member.Rack, "a stack may span racks, so the member keeps the rack NetBox has")
 	assert.Nil(t, member.Position, "the member is not at the master's U")
 	assert.Nil(t, member.Face)
+	assert.Nil(t, member.Location, "the member keeps the location of the rack NetBox has for it")
 
 	require.Len(t, ifaces, 2)
 	for _, iface := range ifaces {
@@ -1165,6 +1168,9 @@ func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
 		assert.Nil(t, iface.Device.Rack, "nested device references carry no placement")
 		assert.Nil(t, iface.Device.Position)
 		assert.Nil(t, iface.Device.Face)
+		if *iface.Device.Name == *member.Name {
+			assert.Nil(t, iface.Device.Location, "the member's reference carries no location")
+		}
 	}
 }
 

@@ -305,7 +305,10 @@ How NetBox and Diode handle a placement:
 - On a [stack](#switch-stacks--virtual-chassis), only the master device is
   placed. A stack can span racks, so the other members are sent no rack,
   position or face: NetBox keeps whatever it has for them, and a new member is
-  created without a rack.
+  created without a rack. When a rack is sent, members get no `location`
+  either, since NetBox refuses a device location that differs from the
+  location of the device's rack. Without a rack, members take the location as
+  before.
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |

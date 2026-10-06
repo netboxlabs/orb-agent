@@ -518,6 +518,26 @@ func TestBuildMemberDevice_TakesNoPlacement(t *testing.T) {
 	assert.Nil(t, dev.Face)
 }
 
+// With the master in a rack a member gets no location either: NetBox
+// refuses a location that differs from the location of the member's own rack.
+func TestBuildMemberDevice_RackedMasterLeavesTheMemberLocation(t *testing.T) {
+	site := &diode.Site{Name: strPtr("DC1")}
+	loc := &diode.Location{Name: strPtr("Row 1"), Site: site}
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Site:     site,
+		Location: loc,
+		Rack:     &diode.Rack{Name: strPtr("R12"), Site: site, Location: loc},
+	}
+	masterRef := buildMasterRef(master)
+	member := ChassisMember{ID: 2, Serial: "X", Model: "ModelB"}
+
+	dev := buildMemberDevice(master, member, masterRef, "stack", "")
+
+	assert.Nil(t, dev.Location, "the member keeps the location NetBox has, matching its own rack")
+	assert.Same(t, site, dev.Site)
+}
+
 func TestBuildMemberDevice_FallsBackToMasterDeviceTypeWhenModelEmpty(t *testing.T) {
 	master := &diode.Device{
 		Name: strPtr("stack"),
