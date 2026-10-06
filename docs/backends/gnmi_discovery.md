@@ -66,6 +66,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | site | str | NetBox site (default `undefined`) |
 | role | str | NetBox device role (default `undefined`) |
 | location | str | NetBox location (optional) |
+| rack | str | NetBox rack name (optional). Sent with the device's site and location. See [Rack placement](#rack-placement) |
 | tags | list | NetBox tags applied to all entities |
 | device | map | Device overrides: `manufacturer`, `model`, `platform`, `comments`, `tags` |
 | interface | map | Interface defaults: `if_type` (fallback type, default `other`), `description`, `tags` |
@@ -129,7 +130,7 @@ in a range whose contents are not known in advance.
 | profile | str | no | Pin a gNMI profile (auto-detected when omitted). |
 | origin | str | no | gNMI path origin (default `openconfig`); set `""` for origin-less paths. |
 | netbox_id | int | no | Pin discovery to an existing NetBox device ID. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
-| override_defaults | map | no | Per-target overrides of the policy `defaults`. |
+| override_defaults | map | no | Per-target overrides of the policy `defaults`. Also takes `position` and `face`, which are valid only here (see [Rack placement](#rack-placement)). |
 
 #### Ranges and subnets
 A `host` covering more than one address is expanded, and each address is probed
@@ -198,6 +199,46 @@ Each interface's NetBox type is resolved per interface, in precedence order:
 #### LAG membership
 With `options.emit_lag_membership` on (the default), a port whose OpenConfig `ethernet/state/aggregate-id` names an aggregate gets `Interface.lag` set to it. Nothing is created: the link is made only when the aggregate was discovered in the same cycle and typed `lag`, so an aggregate that is absent or excluded by `interface_exclude_patterns` leaves the member without a LAG and logs a warning. An aggregate is typed `lag` by its OpenConfig `state/type`, by a built-in name rule (`Port-Channel`/`po`, `ae`, `Bundle-Ether`, `Eth-Trunk`, `PortChannel`, `lag`/`lag-`, `bond`) or by `interface_patterns`; add an `interface_patterns` rule for an aggregate name none of these cover. A member typed `virtual` is skipped too, since NetBox refuses a LAG parent on one, and so is a member typed `bridge` or `lag`. device-discovery applies the same membership rules, with a shorter list of built-in LAG names.
 
+#### Rack placement
+`rack` places discovered devices in a NetBox rack. It is a literal rack name, set
+in the policy `defaults` or in a target's `override_defaults`, where it replaces
+the policy value. The rack is sent with the device's site and, when `location` is
+set, its location.
+
+A target's `override_defaults` can also place its device at a U in that rack:
+
+```yaml
+targets:
+  - host: 192.0.2.10
+    override_defaults:
+      rack: R12
+      position: 40.5
+      face: front
+```
+
+| Key | Type | Description |
+|:---:|:----:|:-----------:|
+| position | number | Rack unit the device sits at: at least `1`, in steps of `0.5` (`40.5` is a half U). |
+| face | str | `front` or `rear`, in any case. |
+
+The policy is rejected when:
+- `position` or `face` is set in the policy `defaults`. They describe one device, so they are set per target.
+- only one of `position` and `face` is set. NetBox requires a face for any position.
+- `position` and `face` are set but neither the target nor the policy sets a `rack`.
+- `face` is not `front` or `rear`.
+- `position` is below `1` or not a multiple of `0.5`. There is no upper bound check, since only NetBox knows the rack's height.
+- the target's `host` is a CIDR or range covering more than one address. A range or subnet would place every device at the same U. `rack` alone is allowed on such a target.
+- two targets with the same `netbox_id`, or the same literal `asset_tag`, send that device different placements: both update one device. A rack without a position counts too. Only a target written as a single address keeps its `netbox_id`; a `/32` or a one-address range drops it, as discovery does. An `asset_tag` in the policy `defaults` reaches every target, and every device of a subnet, so it makes all of them one device; a tag read from a path is only known at discovery time and is not compared. A target is matched by its strongest identifier, in the order Diode matches on (`netbox_id`, then `asset_tag`), so a shared identifier ties two targets only when it is the strongest of at least one: two targets with different `netbox_id`s are two devices even when they send the same tag. Two targets count as one device at a U only when they share the strongest identifier of both. A target without a rack that shares a device with a racked one must send that target's site and location, or no location: NetBox refuses a device whose rack is in another site or location.
+- two targets are placed at the same U: the same site, location, rack, position and face. A device sent without a location (none on the target or in the policy `defaults`) counts as any location, since its rack is matched by name across the site. Two half-depth devices may share a U on opposite faces. Overlaps between devices taller than one U are left to NetBox, which knows their heights. Targets naming one address count once, as discovery runs it once: a target written as that single address wins over a `/32`, range or subnet covering it.
+
+Quote a numeric rack name (`rack: "01"`). The agent passes the policy through YAML, so an unquoted `01` would arrive as the number 1 and `010` as 8; a rack that is not text is refused rather than guessed at.
+
+How the placement behaves:
+- A rack name that doesn't exist in the site is created by Diode, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): NetBox rejects the device's own record that cycle, and its reason appears in the Diode ingestion logs. Its interfaces and addresses are separate records and still go in.
+- A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode matches devices by rack, position and face. Make sure the U is free before setting it.
+- The position is re-applied every run, so a device moved in NetBox moves back on the next run unless its override is updated.
+
 ### Sample
 A sample policy exercising the common gNMI discovery parameters.
 ```yaml
@@ -230,6 +271,10 @@ orb:
             - host: 10.1.0.0-50
             - host: 10.0.0.11            # a named host is subscribed without probing
               profile: arista_eos
+              override_defaults:         # place this device at U40, front, in rack R12
+                rack: R12
+                position: 40
+                face: front
             - host: 10.0.0.21            # Nokia SR-OS
               port: 57400
               username: admin

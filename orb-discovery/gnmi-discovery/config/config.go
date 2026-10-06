@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -269,10 +270,32 @@ type InterfacePattern struct {
 	Type  string `yaml:"type"`  // NetBox interface type assigned on match
 }
 
+// RackText is a rack name that must be YAML text. The agent re-marshals a
+// policy before posting it, so an unquoted 01 arrives as the number 1 and 010
+// as 8: a number is refused rather than taken as another rack's name.
+type RackText string
+
+// UnmarshalYAML refuses a rack name that is not YAML text. A null never
+// reaches it: yaml leaves the field empty.
+func (r *RackText) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.ShortTag() != "!!str" {
+		return fmt.Errorf(`line %d: rack %s must be text; quote a numeric rack name, e.g. rack: "01"`,
+			node.Line, node.Value)
+	}
+	*r = RackText(node.Value)
+	return nil
+}
+
 // Defaults holds NetBox defaults applied to discovered entities.
 type Defaults struct {
-	Site     string   `yaml:"site,omitempty"`
-	Location string   `yaml:"location,omitempty"`
+	Site     string `yaml:"site,omitempty"`
+	Location string `yaml:"location,omitempty"`
+	// Rack is a literal NetBox rack name. Position (U, half units allowed) and
+	// Face (front or rear) place the device in it, and are valid only in a
+	// target's override_defaults: one U cannot describe a whole policy.
+	Rack     RackText `yaml:"rack,omitempty"`
+	Position *float64 `yaml:"position,omitempty"`
+	Face     string   `yaml:"face,omitempty"`
 	Role     string   `yaml:"role,omitempty"`
 	Tags     []string `yaml:"tags,omitempty"`
 	// AssetTag is the device asset tag: either a literal string, or a gNMI path
@@ -398,6 +421,15 @@ func cloneStrings(src []string) []string {
 	return append([]string(nil), src...)
 }
 
+// cloneFloat returns a copy of *src, or nil when src is nil.
+func cloneFloat(src *float64) *float64 {
+	if src == nil {
+		return nil
+	}
+	v := *src
+	return &v
+}
+
 // clonePatterns returns a new slice with the same elements as src, sharing no
 // backing array with the original. A nil src returns nil.
 func clonePatterns(src []InterfacePattern) []InterfacePattern {
@@ -424,6 +456,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 		cp.Vrf.Tags = cloneStrings(overrideDefaults.Vrf.Tags)
 		cp.InterfacePatterns = clonePatterns(overrideDefaults.InterfacePatterns)
 		cp.InterfaceExcludePatterns = cloneStrings(overrideDefaults.InterfaceExcludePatterns)
+		cp.Position = cloneFloat(overrideDefaults.Position)
 		return &cp
 	}
 	if overrideDefaults == nil {
@@ -439,6 +472,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 		cp.Vrf.Tags = cloneStrings(policyDefaults.Vrf.Tags)
 		cp.InterfacePatterns = clonePatterns(policyDefaults.InterfacePatterns)
 		cp.InterfaceExcludePatterns = cloneStrings(policyDefaults.InterfaceExcludePatterns)
+		cp.Position = cloneFloat(policyDefaults.Position)
 		return &cp
 	}
 	merged := *policyDefaults
@@ -452,6 +486,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	merged.Vrf.Tags = cloneStrings(policyDefaults.Vrf.Tags)
 	merged.InterfacePatterns = clonePatterns(policyDefaults.InterfacePatterns)
 	merged.InterfaceExcludePatterns = cloneStrings(policyDefaults.InterfaceExcludePatterns)
+	merged.Position = cloneFloat(policyDefaults.Position)
 
 	if overrideDefaults.Site != "" {
 		merged.Site = overrideDefaults.Site
@@ -461,6 +496,15 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.Location != "" {
 		merged.Location = overrideDefaults.Location
+	}
+	if rack := strings.TrimSpace(string(overrideDefaults.Rack)); rack != "" {
+		merged.Rack = RackText(rack)
+	}
+	if overrideDefaults.Position != nil {
+		merged.Position = cloneFloat(overrideDefaults.Position)
+	}
+	if overrideDefaults.Face != "" {
+		merged.Face = overrideDefaults.Face
 	}
 	if len(overrideDefaults.Tags) > 0 {
 		merged.Tags = cloneStrings(overrideDefaults.Tags)

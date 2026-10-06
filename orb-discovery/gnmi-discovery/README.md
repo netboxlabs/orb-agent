@@ -80,6 +80,7 @@ policies:
         site: New York NY          # NetBox site (default "undefined")
         role: Router               # NetBox device role (default "undefined")
         location: ""               # NetBox location (optional)
+        rack: ""                   # NetBox rack name (optional); position and face are per target
         tags: []                   # NetBox tags applied to all entities
         asset_tag: ""              # literal, or a "/"-prefixed gNMI path reference (see below)
         device:
@@ -134,6 +135,9 @@ policies:
           netbox_id: 42              # kept for a bare address, ignored for a range
           override_defaults:         # per-target defaults override
             site: Chicago IL
+            rack: R12                # replaces the policy rack
+            position: 40.5           # U, from 1 in steps of 0.5; per target, single host only
+            face: front              # front or rear; required with position
 
         # An explicitly empty credential blocks the scope's; an omitted one
         # inherits it. Use this for a device that takes no auth inside a
