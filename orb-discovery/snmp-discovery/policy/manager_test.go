@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
@@ -1582,4 +1585,339 @@ func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
 		_, err = manager.ParsePolicies([]byte("policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"))
 	})
 	assert.ErrorContains(t, err, "unhashable")
+}
+
+// rackPolicy is a policy request with one target, its defaults and the
+// target's override_defaults given as maps (nil leaves the block out).
+func rackPolicy(t *testing.T, host string, defaults, override map[string]any) []byte {
+	t.Helper()
+	target := map[string]any{"host": host}
+	if override != nil {
+		target["override_defaults"] = override
+	}
+	return rackPolicyTargets(t, defaults, target)
+}
+
+// rackPolicyTargets is a policy request with the given defaults (site DC1
+// unless they name one) and targets.
+func rackPolicyTargets(t *testing.T, defaults map[string]any, targets ...map[string]any) []byte {
+	t.Helper()
+	if defaults == nil {
+		defaults = map[string]any{}
+	}
+	if _, ok := defaults["site"]; !ok {
+		defaults["site"] = "DC1"
+	}
+	scopeTargets := make([]any, 0, len(targets))
+	for _, target := range targets {
+		scopeTargets = append(scopeTargets, target)
+	}
+	out, err := yaml.Marshal(map[string]any{"policies": map[string]any{"rack-policy": map[string]any{
+		"config": map[string]any{"defaults": defaults},
+		"scope": map[string]any{
+			"targets":        scopeTargets,
+			"authentication": map[string]any{"protocol_version": "SNMPv2c", "community": "public"},
+		},
+	}}})
+	require.NoError(t, err)
+	return out
+}
+
+// placed is a target at a U of the policy rack, with extra override keys.
+func placed(host string, position any, face string, extra map[string]any) map[string]any {
+	override := map[string]any{"position": position, "face": face}
+	for k, v := range extra {
+		override[k] = v
+	}
+	return map[string]any{"host": host, "override_defaults": override}
+}
+
+func TestManager_ParsePolicies_RackPlacement(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		host     string
+		defaults map[string]any
+		override map[string]any
+		wantErr  string
+	}{
+		{
+			name:     "rack in policy defaults",
+			host:     "192.0.2.1",
+			defaults: map[string]any{"rack": "R12"},
+		},
+		{
+			name:     "rack alone on a subnet target",
+			host:     "192.0.2.0/24",
+			override: map[string]any{"rack": "R12"},
+		},
+		{
+			name:     "half U and a case-insensitive face, rack from the policy defaults",
+			host:     "192.0.2.1",
+			defaults: map[string]any{"rack": "R12"},
+			override: map[string]any{"position": 40.5, "face": "Front"},
+		},
+		{
+			name:     "lowest U, rack from override_defaults",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R14", "position": 1, "face": "REAR"},
+		},
+		{
+			name:     "a /32 is a single host",
+			host:     "192.0.2.1/32",
+			override: map[string]any{"rack": "R12", "position": 10, "face": "front"},
+		},
+		{
+			name:     "a hostname is a single host",
+			host:     "switch-1.example.net",
+			override: map[string]any{"rack": "R12", "position": 10, "face": "front"},
+		},
+		{
+			name:     "position in policy defaults",
+			host:     "192.0.2.1",
+			defaults: map[string]any{"rack": "R12", "position": 10},
+			wantErr:  "defaults: position and face are set per target, in override_defaults",
+		},
+		{
+			name:     "face in policy defaults",
+			host:     "192.0.2.1",
+			defaults: map[string]any{"rack": "R12", "face": "front"},
+			wantErr:  "defaults: position and face are set per target, in override_defaults",
+		},
+		{
+			name:     "position without face",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R12", "position": 10},
+			wantErr:  "target 192.0.2.1: override_defaults position needs a face (front or rear)",
+		},
+		{
+			name:     "face without position",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R12", "face": "front"},
+			wantErr:  "target 192.0.2.1: override_defaults face needs a position",
+		},
+		{
+			name:     "position and face without a rack",
+			host:     "192.0.2.1",
+			override: map[string]any{"position": 10, "face": "front"},
+			wantErr:  "target 192.0.2.1: override_defaults position and face need a rack, in defaults or override_defaults",
+		},
+		{
+			name:     "a blank rack is no rack",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "  ", "position": 10, "face": "front"},
+			wantErr:  "target 192.0.2.1: override_defaults position and face need a rack",
+		},
+		{
+			name:     "face not front or rear",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R12", "position": 10, "face": "side"},
+			wantErr:  `target 192.0.2.1: override_defaults face "side" must be front or rear`,
+		},
+		{
+			name:     "position below 1",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R12", "position": 0.5, "face": "front"},
+			wantErr:  "target 192.0.2.1: override_defaults position 0.5 must be 1 or more, in steps of 0.5",
+		},
+		{
+			name:     "position not a multiple of 0.5",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R12", "position": 40.25, "face": "front"},
+			wantErr:  "target 192.0.2.1: override_defaults position 40.25 must be 1 or more, in steps of 0.5",
+		},
+		{
+			name:     "position not finite",
+			host:     "192.0.2.1",
+			override: map[string]any{"rack": "R12", "position": math.Inf(1), "face": "front"},
+			wantErr:  "target 192.0.2.1: override_defaults position +Inf must be 1 or more, in steps of 0.5",
+		},
+		{
+			name:     "position and face on a range",
+			host:     "192.0.2.2-10",
+			override: map[string]any{"rack": "R12", "position": 10, "face": "front"},
+			wantErr:  "target 192.0.2.2-10: position and face need a single host; a range or subnet would place every device at the same U",
+		},
+		{
+			name:     "position and face on a subnet",
+			host:     "192.0.2.0/30",
+			override: map[string]any{"rack": "R12", "position": 10, "face": "front"},
+			wantErr:  "target 192.0.2.0/30: position and face need a single host; a range or subnet would place every device at the same U",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicy(t, tt.host, tt.defaults, tt.override))
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "rack-policy : invalid policy : "+tt.wantErr)
+		})
+	}
+}
+
+func TestManager_ParsePolicies_RackPlacementSameU(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	policyRack := map[string]any{"rack": "R12", "location": "Hall 1"}
+
+	tests := []struct {
+		name     string
+		defaults map[string]any // policyRack when nil
+		targets  []map[string]any
+		wantErr  string
+	}{
+		{
+			name:    "same U and face",
+			targets: []map[string]any{placed("192.0.2.10", 40, "front", nil), placed("192.0.2.11", 40, "front", nil)},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name:    "same U at a half U",
+			targets: []map[string]any{placed("192.0.2.10", 40.5, "rear", nil), placed("192.0.2.11", 40.5, "rear", nil)},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40.5 rear",
+		},
+		{
+			name: "same U after normalizing the face and rack",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "Front", map[string]any{"rack": " R12 "}),
+				placed("192.0.2.11", 40, "front", nil),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name: "same U once the policy defaults are merged in",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", map[string]any{"rack": "R12", "site": "DC1", "location": "Hall 1"}),
+				placed("192.0.2.11", 40, "front", nil),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name: "the duplicate names the first target placed there",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 41, "front", nil),
+				placed("192.0.2.12", 40, "front", nil),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.12 are both placed at R12 U40 front",
+		},
+		{
+			name:    "opposite faces of one U",
+			targets: []map[string]any{placed("192.0.2.10", 40, "front", nil), placed("192.0.2.11", 40, "rear", nil)},
+		},
+		{
+			name:    "different U",
+			targets: []map[string]any{placed("192.0.2.10", 40, "front", nil), placed("192.0.2.11", 40.5, "front", nil)},
+		},
+		{
+			name: "different racks",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 40, "front", map[string]any{"rack": "R14"}),
+			},
+		},
+		{
+			name: "racks of one name in different locations",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 40, "front", map[string]any{"location": "Hall 2"}),
+			},
+		},
+		{
+			name:     "no location clashes with a location placed first",
+			defaults: map[string]any{"rack": "R12"},
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", map[string]any{"location": "Hall 1"}),
+				placed("192.0.2.11", 40, "front", nil),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name:     "no location placed first clashes with a location",
+			defaults: map[string]any{"rack": "R12"},
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 40, "front", map[string]any{"location": "Hall 2"}),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name: "a blank location is no location",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", map[string]any{"location": "  "}),
+				placed("192.0.2.11", 40, "front", map[string]any{"location": "Hall 2"}),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front",
+		},
+		{
+			name: "a clash is found past a placement in another location",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 40, "front", map[string]any{"location": "Hall 2"}),
+				placed("192.0.2.12", 40, "front", map[string]any{"location": "Hall 1"}),
+			},
+			wantErr: "targets 192.0.2.10 and 192.0.2.12 are both placed at R12 U40 front",
+		},
+		{
+			name:     "no location clashes only at the same U and face",
+			defaults: map[string]any{"rack": "R12"},
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 40, "rear", map[string]any{"location": "Hall 1"}),
+				placed("192.0.2.12", 41, "front", map[string]any{"location": "Hall 1"}),
+				placed("192.0.2.13", 40, "front", map[string]any{"location": "Hall 1", "rack": "R14"}),
+				placed("192.0.2.14", 40, "front", map[string]any{"location": "Hall 1", "site": "DC2"}),
+			},
+		},
+		{
+			name: "racks of one name in different sites",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				placed("192.0.2.11", 40, "front", map[string]any{"site": "DC2"}),
+			},
+		},
+		{
+			name: "a target with the rack only takes no U",
+			targets: []map[string]any{
+				placed("192.0.2.10", 40, "front", nil),
+				{"host": "192.0.2.11", "override_defaults": map[string]any{"rack": "R12"}},
+				{"host": "192.0.2.12"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defaults := tt.defaults
+			if defaults == nil {
+				defaults = maps.Clone(policyRack)
+			}
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, defaults, tt.targets...))
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "rack-policy : invalid policy : "+tt.wantErr)
+		})
+	}
+}
+
+// yaml.v3 refuses a bool for a number, and reads a scalar rack as its text.
+func TestManager_ParsePolicies_RackPlacementScalarTypes(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+
+	_, err = manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{"rack": "R12"},
+		map[string]any{"position": true, "face": "front"}))
+	require.Error(t, err, "a bool position is refused")
+
+	policies, err := manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{"rack": 12},
+		map[string]any{"position": 40, "face": "front"}))
+	require.NoError(t, err)
+	assert.Equal(t, "12", policies["rack-policy"].Config.Defaults.Rack, "a numeric rack name is the name as written")
 }

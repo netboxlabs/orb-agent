@@ -97,7 +97,14 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 //     rich VirtualChassis subtree onto every nested stub would just
 //     bloat the wire payload.
 //
-//   - OobIp, Rack, Position, and Face remain not-populated.
+//   - Rack, Position and Face ARE populated on the rich Device when the
+//     policy places it in a rack, but are intentionally NOT carried on
+//     stubs. The placement rides on the top-level Device only, and the
+//     rack+position+face matcher sits behind the asset_tag,
+//     name+site+tenant and name+site matchers, whose fields every stub
+//     carries just as the rich Device does.
+//
+//   - OobIp remains not-populated.
 //
 // If a new mapper starts setting other matcher fields, or if NetBox
 // adds new required fields for dcim.device, this stub must grow to

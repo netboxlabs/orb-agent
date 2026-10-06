@@ -1265,6 +1265,18 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 		}
 	}
 
+	// The rack name is a literal, never resolved from a walked OID. The
+	// rack takes the device's own site and location, so it binds to the
+	// rack in the same location as the device.
+	if rack := defaults.RackName(); rack != "" {
+		entity.Rack = &diode.Rack{Name: &rack, Site: entity.Site, Location: entity.Location}
+		if face := defaults.RackFace(); defaults.Position != nil && face != "" {
+			position := *defaults.Position
+			entity.Position = &position
+			entity.Face = &face
+		}
+	}
+
 	if defaults.AssetTag != "" {
 		if resolved, ok := data.ResolveDefault(defaults.AssetTag, walked); ok {
 			if reason, ok := vetAssetTag(resolved); !ok {

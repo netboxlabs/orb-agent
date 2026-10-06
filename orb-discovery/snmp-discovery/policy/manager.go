@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/env"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
 )
 
 //go:embed mapping.yaml
@@ -245,6 +247,75 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 	}
 
+	return validateRackPlacement(policy)
+}
+
+// rackUnit is a U and face of a rack, named within a site. The location is
+// kept apart, since a target without one may land in any location.
+type rackUnit struct {
+	site, rack string
+	position   float64
+	face       string
+}
+
+// rackPlacement is a target placed at a rackUnit; location is empty when
+// the target has none.
+type rackPlacement struct {
+	host, location string
+}
+
+// validateRackPlacement rejects a position or face NetBox would refuse, or
+// that one target cannot describe. Only an upper bound and multi-U overlaps
+// are left to NetBox, since they depend on rack and device heights.
+func validateRackPlacement(policy config.Policy) error {
+	defaults := &policy.Config.Defaults
+	if defaults.Position != nil || defaults.RackFace() != "" {
+		return errors.New("defaults: position and face are set per target, in override_defaults")
+	}
+	// Diode matches a device by rack, position and face once name and site
+	// miss, so a new device sent to a taken U would update the device there.
+	placedAt := map[rackUnit][]rackPlacement{}
+	for _, target := range policy.Scope.Targets {
+		override := target.OverrideDefaults
+		if override == nil {
+			continue
+		}
+		face := override.RackFace()
+		if override.Position == nil && face == "" {
+			continue
+		}
+		switch {
+		case face == "":
+			return fmt.Errorf("target %s: override_defaults position needs a face (front or rear)", target.Host)
+		case override.Position == nil:
+			return fmt.Errorf("target %s: override_defaults face needs a position", target.Host)
+		case face != config.RackFaceFront && face != config.RackFaceRear:
+			return fmt.Errorf("target %s: override_defaults face %q must be front or rear", target.Host, override.Face)
+		// math.Mod is NaN for an infinite or NaN position, so those fail too.
+		case *override.Position < 1 || math.Mod(*override.Position, 0.5) != 0:
+			return fmt.Errorf("target %s: override_defaults position %v must be 1 or more, in steps of 0.5",
+				target.Host, *override.Position)
+		case override.RackName() == "" && defaults.RackName() == "":
+			return fmt.Errorf("target %s: override_defaults position and face need a rack, in defaults or override_defaults",
+				target.Host)
+		}
+		if hosts, err := targets.Expand(target.Host); err == nil && len(hosts) > 1 {
+			return fmt.Errorf("target %s: position and face need a single host; a range or subnet would place every device at the same U",
+				target.Host)
+		}
+		merged := config.MergeDefaults(defaults, override)
+		unit := rackUnit{merged.Site, merged.RackName(), *merged.Position, merged.RackFace()}
+		location := strings.TrimSpace(merged.Location)
+		for _, other := range placedAt[unit] {
+			// A rack sent without a location binds any rack of that name
+			// in the site.
+			if other.location == location || other.location == "" || location == "" {
+				return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+					other.host, target.Host, unit.rack, unit.position, unit.face)
+			}
+		}
+		placedAt[unit] = append(placedAt[unit], rackPlacement{target.Host, location})
+	}
 	return nil
 }
 

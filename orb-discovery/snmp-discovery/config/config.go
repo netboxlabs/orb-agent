@@ -342,6 +342,29 @@ type Defaults struct {
 	// StackMemberNameTemplate names non-master virtual-chassis members.
 	// Empty means DefaultStackMemberTemplate; see stack_naming.go.
 	StackMemberNameTemplate string `yaml:"stack_member_name_template,omitempty"`
+	// Rack is a literal NetBox rack name. Position (a U, possibly a
+	// half U) and Face are accepted only in a target's override_defaults;
+	// policy validation enforces that and NetBox's rules for them.
+	Rack     string   `yaml:"rack,omitempty"`
+	Position *float64 `yaml:"position,omitempty"`
+	Face     string   `yaml:"face,omitempty"`
+}
+
+// Rack faces accepted in override_defaults.face.
+const (
+	RackFaceFront = "front"
+	RackFaceRear  = "rear"
+)
+
+// RackName returns the rack name without surrounding whitespace; empty
+// means unset.
+func (d *Defaults) RackName() string {
+	return strings.TrimSpace(d.Rack)
+}
+
+// RackFace returns the face trimmed and lowercased; empty means unset.
+func (d *Defaults) RackFace() string {
+	return strings.ToLower(strings.TrimSpace(d.Face))
 }
 
 // mergeVrfParameters overlays non-zero override fields onto dst in place.
@@ -388,6 +411,18 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.StackMemberNameTemplate != "" {
 		merged.StackMemberNameTemplate = overrideDefaults.StackMemberNameTemplate
+	}
+	if overrideDefaults.RackName() != "" {
+		merged.Rack = overrideDefaults.Rack
+	}
+	// Policy defaults never carry a position or face (validation rejects
+	// them there), so these come only from the override.
+	if overrideDefaults.Position != nil {
+		position := *overrideDefaults.Position
+		merged.Position = &position
+	}
+	if overrideDefaults.Face != "" {
+		merged.Face = overrideDefaults.Face
 	}
 	mergeTenantParameters(&merged.Tenant, &overrideDefaults.Tenant)
 	if len(overrideDefaults.Tags) > 0 {

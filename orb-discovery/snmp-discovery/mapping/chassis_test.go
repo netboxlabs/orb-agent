@@ -417,6 +417,20 @@ func TestBuildMasterRef_OmitsUnsetFields(t *testing.T) {
 	assert.Nil(t, ref.Site)
 }
 
+func TestBuildMasterRef_DropsRackPlacement(t *testing.T) {
+	pos := 40.0
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Rack:     &diode.Rack{Name: strPtr("R12")},
+		Position: &pos,
+		Face:     strPtr("front"),
+	}
+	ref := buildMasterRef(master)
+	assert.Nil(t, ref.Rack)
+	assert.Nil(t, ref.Position)
+	assert.Nil(t, ref.Face)
+}
+
 func TestBuildMemberDevice_CarriesVcPositionAndMatcherBlock(t *testing.T) {
 	master := &diode.Device{
 		Name:     strPtr("3850-stack"),
@@ -479,6 +493,29 @@ func TestBuildMemberDevice_InheritsMasterLocation(t *testing.T) {
 	assert.Same(t, loc, dev.Location,
 		"Location is pointer-shared with master (mirrors Site/Tenant/Role/Platform sharing)")
 	assert.Equal(t, "rack-42", *dev.Location.Name)
+}
+
+// A member is its own device in its own U, which the target's one
+// position and face cannot describe, so it takes the master's rack only.
+func TestBuildMemberDevice_InheritsMasterRackOnly(t *testing.T) {
+	site := &diode.Site{Name: strPtr("DC1")}
+	rack := &diode.Rack{Name: strPtr("R12"), Site: site}
+	pos := 40.0
+	master := &diode.Device{
+		Name:     strPtr("stack"),
+		Site:     site,
+		Rack:     rack,
+		Position: &pos,
+		Face:     strPtr("front"),
+	}
+	masterRef := buildMasterRef(master)
+	member := ChassisMember{ID: 2, Serial: "X", Model: "ModelB"}
+
+	dev := buildMemberDevice(master, member, masterRef, "stack", "")
+
+	assert.Same(t, rack, dev.Rack, "members are in the master's rack")
+	assert.Nil(t, dev.Position, "a member's U is not the master's")
+	assert.Nil(t, dev.Face)
 }
 
 func TestBuildMemberDevice_FallsBackToMasterDeviceTypeWhenModelEmpty(t *testing.T) {
