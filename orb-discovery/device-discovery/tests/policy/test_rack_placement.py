@@ -446,3 +446,40 @@ def test_one_address_on_two_ports_is_two_devices():
 def test_a_range_is_not_one_device():
     """A range reaches several devices, so it names none of them."""
     _policy([_scope("192.0.2.16/29", rack="R12"), _scope("192.0.2.17", rack="R13")])
+
+
+def _identified(hostname, netbox_id=None, tag=None, **override):
+    device = DeviceParameters(asset_tag=tag) if tag else None
+    return Napalm(hostname=hostname, username="admin", password="secret", netbox_id=netbox_id,
+                  override_defaults=Defaults(device=device, **override))
+
+
+def test_two_netbox_ids_sharing_a_tag_are_two_devices():
+    """Diode matches the netbox_id before the tag, so these cannot share a U."""
+    with pytest.raises(ValidationError, match="192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front"):
+        _policy([
+            _identified("192.0.2.10", 41, "A1", position=40, face="front"),
+            _identified("192.0.2.11", 42, "A1", position=40, face="front"),
+        ], rack="R12", site="DC1")
+
+
+def test_a_tag_shared_with_a_netbox_id_target_must_agree():
+    """The tag may match the netbox_id device, so the racks must agree."""
+    with pytest.raises(ValidationError, match="place asset_tag A1 at different slots"):
+        _policy([_identified("192.0.2.10", 42, "A1", rack="R12"), _identified("192.0.2.11", None, "A1", rack="R13")],
+                site="DC1")
+
+
+@pytest.mark.parametrize(("first", "second"), [
+    (("192.0.2.10", {"netbox_id": 42, "tag": "A1"}), ("192.0.2.11", {"tag": "A1"})),
+    (("192.0.2.10", {"tag": "A1"}), ("192.0.2.11", {"netbox_id": 42, "tag": "A1"})),
+    (("192.0.2.10", {"tag": "A1"}), ("192.0.2.10", {"tag": "A2"})),
+    (("192.0.2.10", {"tag": "A1"}), ("192.0.2.10", {})),
+])
+def test_a_weaker_shared_identifier_does_not_share_a_u(first, second):
+    """Only the strongest identifier both carry shows two targets are one device."""
+    with pytest.raises(ValidationError, match="are both placed at R12 U40 front"):
+        _policy([
+            _identified(first[0], position=40, face="front", **first[1]),
+            _identified(second[0], position=40, face="front", **second[1]),
+        ], rack="R12", site="DC1")

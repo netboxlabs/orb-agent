@@ -706,16 +706,21 @@ def _endpoint(entry: Napalm) -> str | None:
 
 
 def _device_ids(entry: Napalm, override: Defaults, defaults: Defaults | None) -> list[tuple]:
-    """What a target's device is known by: the host it reaches, a kept netbox_id, an asset tag."""
+    """
+    What a target's device is known by, strongest first as Diode matches.
+
+    A kept netbox_id, then an asset tag, then the host it reaches, which
+    stands for the name and site that host reports.
+    """
     ids = []
-    endpoint = _endpoint(entry)
-    if endpoint is not None:
-        ids.append(("host", endpoint))
     if _keeps_netbox_id(entry):
         ids.append(("netbox_id", entry.netbox_id))
     tag = _asset_tag(override, defaults)
     if tag is not None:
         ids.append(("asset_tag", tag))
+    endpoint = _endpoint(entry)
+    if endpoint is not None:
+        ids.append(("host", endpoint))
     return ids
 
 
@@ -725,25 +730,27 @@ def _seen_device(
     """
     Record the placement a target sends its device, refusing a different one for that device.
 
-    Entries reaching one host, or with one netbox_id or asset tag, update one
-    device, so they must send it the same rack, position and face; a rack
-    without a position is a placement too. Returns True when an earlier entry
-    already sent this placement.
+    Entries sharing a host, netbox_id or asset tag may update one device, so
+    they must send it the same rack, position and face; a rack without a
+    position is a placement too. Returns True when an earlier entry is known to
+    be this device, sharing the strongest identifier of both: a weaker one can
+    be outranked, as two netbox_ids sharing a tag are two devices.
     """
     placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
     seen = False
-    for device_id in _device_ids(entry, override, defaults):
+    for rank, device_id in enumerate(_device_ids(entry, override, defaults)):
         prior = pinned.get(device_id)
         if prior is None:
-            pinned[device_id] = (placement, entry.hostname)
+            pinned[device_id] = (placement, entry.hostname, rank == 0)
             continue
-        prior_placement, prior_host = prior
+        prior_placement, prior_host, prior_strongest = prior
         if prior_placement != placement:
             kind, value = device_id
             raise ValueError(
                 f"targets {prior_host} and {entry.hostname} place {kind} {value} at different slots"
             )
-        seen = True
+        if rank == 0 and prior_strongest:
+            seen = True
     return seen
 
 
