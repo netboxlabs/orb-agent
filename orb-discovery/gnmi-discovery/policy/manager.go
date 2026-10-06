@@ -36,6 +36,9 @@ const maxIntervalMs = int64(math.MaxInt64) / int64(time.Millisecond)
 // the degenerate case.
 const maxScanWork = 4 * uint64(targets.MaxExpand)
 
+// defaultSite is the site a policy that names none is given.
+const defaultSite = "undefined"
+
 // Manager owns the set of running policies.
 type Manager struct {
 	// mu guards the policies map — the HTTP server calls StartPolicy /
@@ -151,6 +154,10 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if err := validateInterfaceRegexes(&policy.Config.Defaults); err != nil {
 		return err
 	}
+	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
+		return errors.New("defaults: position and face are set per target, in override_defaults")
+	}
+	placed := map[placementKey]string{}
 	for _, t := range policy.Scope.Targets {
 		if t.Host == "" {
 			return errors.New("target with empty host")
@@ -164,9 +171,46 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if err := validateInterfaceRegexes(t.OverrideDefaults); err != nil {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
+			if err := validatePlacement(policy.Config.Defaults.Rack, t.OverrideDefaults); err != nil {
+				return fmt.Errorf("target %s: %w", t.Host, err)
+			}
+			// Diode matches a device on rack, position and face after name and
+			// site, so a new device sent to an occupied U lands on the record of
+			// the device already there. Multi-U overlaps are NetBox's to refuse.
+			if hasPlacement(t.OverrideDefaults) {
+				key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
+				if first, dup := placed[key]; dup {
+					return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+						first, t.Host, key.rack, key.position, key.face)
+				}
+				placed[key] = t.Host
+			}
 		}
 	}
 	return nil
+}
+
+// placementKey is the U a target places its device at, as emitted.
+type placementKey struct {
+	site, location, rack, face string
+	position                   float64
+}
+
+// placementOf returns the effective placement of a target that passed
+// validatePlacement with a position and face.
+func placementOf(policyDefaults, override *config.Defaults) placementKey {
+	d := config.MergeDefaults(policyDefaults, override)
+	site := d.Site
+	if site == "" {
+		site = defaultSite
+	}
+	return placementKey{
+		site:     site,
+		location: d.Location,
+		rack:     strings.TrimSpace(d.Rack),
+		face:     strings.ToLower(strings.TrimSpace(d.Face)),
+		position: *d.Position,
+	}
 }
 
 // validateInterfaceRegexes compiles every interface_patterns match and every
@@ -194,6 +238,37 @@ func validateInterfaceRegexes(d *config.Defaults) error {
 	return nil
 }
 
+// validatePlacement checks a target's rack position and face against NetBox's
+// rules: both or neither, in a rack, on the front or rear, from U1 in half
+// units. The upper bound depends on the rack's height, which only NetBox knows.
+func validatePlacement(policyRack string, d *config.Defaults) error {
+	if !hasPlacement(d) {
+		return nil
+	}
+	face := strings.TrimSpace(d.Face)
+	if d.Position == nil || face == "" {
+		return errors.New("position and face must be set together; NetBox requires a face for any position")
+	}
+	if strings.TrimSpace(d.Rack) == "" && strings.TrimSpace(policyRack) == "" {
+		return errors.New("position and face need a rack, in this target's override_defaults or the policy defaults")
+	}
+	switch strings.ToLower(face) {
+	case "front", "rear":
+	default:
+		return fmt.Errorf("face %q must be front or rear", d.Face)
+	}
+	// !(p >= 1) also refuses NaN, which every comparison reports false for.
+	if p := *d.Position; !(p >= 1) || math.IsInf(p, 0) || p*2 != math.Trunc(p*2) {
+		return fmt.Errorf("position %v must be at least 1, in increments of 0.5", p)
+	}
+	return nil
+}
+
+// hasPlacement reports whether d sets a rack position or face.
+func hasPlacement(d *config.Defaults) bool {
+	return d != nil && (d.Position != nil || strings.TrimSpace(d.Face) != "")
+}
+
 func (m *Manager) applyDefaults(policy *config.Policy) {
 	if policy.Config.Mode == "" {
 		policy.Config.Mode = config.ModeAuto
@@ -208,7 +283,7 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		policy.Config.GetIntervalMs = config.DefaultGetInterval
 	}
 	if policy.Config.Defaults.Site == "" {
-		policy.Config.Defaults.Site = "undefined"
+		policy.Config.Defaults.Site = defaultSite
 	}
 	if policy.Config.Defaults.Role == "" {
 		policy.Config.Defaults.Role = "undefined"
@@ -326,6 +401,12 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 			return fmt.Errorf(
 				"target %q expands to %d addresses, more than the %d supported",
 				t.Host, count, targets.MaxExpand,
+			)
+		}
+		if count > 1 && hasPlacement(t.OverrideDefaults) {
+			return fmt.Errorf(
+				"target %q: position and face need a single host; a range or subnet would place every device at the same U",
+				t.Host,
 			)
 		}
 

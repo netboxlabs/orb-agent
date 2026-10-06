@@ -353,6 +353,18 @@ func translateDevice(profile *Profile, snap map[string]any, defaults *config.Def
 			// Location is scoped to the device's Site (NetBox requires a site).
 			dev.Location = &diode.Location{Name: strptr(defaults.Location), Site: dev.Site}
 		}
+		// The rack carries the device's site and location, so it binds to the
+		// rack in the device's location when racks elsewhere share its name.
+		// Position and face are set only in a rack (policy validation makes the
+		// override set both or neither).
+		if rack := strings.TrimSpace(defaults.Rack); rack != "" {
+			dev.Rack = &diode.Rack{Name: strptr(rack), Site: dev.Site, Location: dev.Location}
+			if face := strings.ToLower(strings.TrimSpace(defaults.Face)); defaults.Position != nil && face != "" {
+				pos := *defaults.Position
+				dev.Position = &pos
+				dev.Face = strptr(face)
+			}
+		}
 		if defaults.Device.Comments != "" {
 			dev.Comments = strptr(defaults.Device.Comments)
 		}
