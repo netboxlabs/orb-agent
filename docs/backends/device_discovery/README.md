@@ -183,7 +183,9 @@ Current supported defaults:
 | interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 | location | str | Device location |
-| rack  | str | Rack name to associate the device with |
+| rack  | str | Rack name to place the device in. See [Rack placement](#rack-placement) |
+| position | number | Rack U position, a whole or half U from 1. Per device only, in a target's `override_defaults`, with `face` and a rack. See [Rack placement](#rack-placement) |
+| face | str | Rack face, `front` or `rear`. Per device only, in a target's `override_defaults`, with `position` |
 | stack_member_name_template | str | Template for stack / Virtual Chassis member device names. Placeholders: `{name}` (the stack name) and `{id}` (the device-reported member id). Defaults to `{name}-{id}`, which reproduces the legacy naming. See [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis). |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
@@ -300,6 +302,35 @@ policy scopes expand to 1048544 addresses in total, more than the limit of 65536
 A single entry over the limit is also refused at expansion time as a backstop:
 it is skipped, named in an error, and recorded as a failed run, leaving the rest
 of the policy unaffected.
+
+#### Rack placement
+
+`rack` places the device in a NetBox rack, policy-wide in `defaults` or per device in `override_defaults`. The rack is sent with the device's site and, when `location` is set, its location. A device can also be given a U position and a face, but only per device, in a target's `override_defaults`:
+
+```yaml
+scope:
+  - hostname: 192.0.2.10
+    username: admin
+    password: ${PASS}
+    override_defaults:
+      rack: R12
+      position: 40
+      face: front
+```
+
+- `position` is a U from 1, in steps of 0.5 (`40.5` is a half U). `face` is `front` or `rear`. They are set together, and the target needs a rack, its own or the policy's. A target's `rack: ""` keeps its device out of the policy's rack.
+- Quote a numeric rack name (`rack: "01"`). YAML reads an unquoted `01` as the number 1 and `010` as 8, so a number is refused rather than guessed at.
+- A target with `netbox_id` needs a `site` (its own or the policy's) to set `position` and `face`: without one no site is sent, and the rack could not be looked up. Two targets reaching the same host (one address or name, written as itself, a `/32` or a one-address range, on the same `optional_args.port`), or with the same `netbox_id` or `device.asset_tag`, update one device, so when they send a rack they must send the same rack, position and face (a rack without a position counts too). An asset tag in the policy `defaults` reaches every target, so it makes all of them one device. A target is matched by its strongest identifier, in the order Diode matches on (`netbox_id`, then `device.asset_tag`, then the host), so a shared identifier ties two targets only when it is the strongest of at least one: two targets with different `netbox_id`s are two devices even when they send the same tag or reach the same host. Two targets count as one device at a U only when they share the strongest identifier of both. A target without a rack that shares a device with a racked one must send that target's site and location, or none: NetBox refuses a device whose rack is in another site or location. A `netbox_id` is ignored on any subnet or range syntax, a `/32` or a one-address range included, so it does not tie such a target to the device with that id.
+- A policy is refused when its `defaults` set `position` or `face`, when a target whose `hostname` expands to more than one address (a subnet or range) sets them, or when two targets are placed at the same rack, U and face in one site. A device sent without a location (none on the target or in the policy `defaults`) counts as any location, since its rack is matched by name across the site.
+- On a switch stack, only the master, which is the lowest member id (see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis)), is placed. A stack can span racks, so the other members are sent no rack, position or face: NetBox keeps whatever it has for them, and a new member is created without a rack. When a rack is sent, members get no `location` either, since NetBox refuses a device location that differs from the location of the device's rack. This also applies to a rack set in the policy `defaults`.
+- Without `position`, no position is sent, so NetBox keeps whatever it has.
+
+Placement follows Diode's rules:
+
+- A rack name that doesn't exist in the site is created, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): NetBox rejects the device's own record that cycle, and its reason appears in the Diode ingestion logs. Its interfaces and addresses are separate records and still go in.
+- A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode also matches devices by rack, position and face. Make sure the U is free before setting it.
+- The position is applied on every run, so a device moved in NetBox moves back unless its `override_defaults` entry changes.
 
 ### SSH Configuration and Jumphost Support
 
@@ -540,6 +571,8 @@ The tables below show which fields are populated automatically from the device v
 | Site | **Not collected** | Must be set via `defaults.site` |
 | Role | **Not collected** | Must be set via `defaults.role` |
 | Location | **Not collected** | Must be set via `defaults.location` |
+| Rack | **Not collected** | Set via `defaults.rack` or a target's `override_defaults.rack` |
+| Position, face | **Not collected** | Set per device via a target's `override_defaults.position` and `override_defaults.face` |
 | Tenant | **Not collected** | Must be set via `defaults.tenant` |
 | Description | **Not collected** | Must be set via `defaults.device.description` |
 | Comments | **Not collected** | Must be set via `defaults.device.comments` |

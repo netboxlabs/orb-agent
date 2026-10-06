@@ -2,10 +2,12 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Models."""
 
+import ipaddress
 import logging
 import re
 import time
 import uuid
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
@@ -15,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
 )
-from device_discovery.policy.portscan import count_hostnames
+from device_discovery.policy.portscan import count_hostnames, expand_hostnames
 from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
@@ -197,6 +199,10 @@ UNDEFINED_PLACEHOLDER = "undefined"
 MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
 
 
+#: NetBox's rack faces.
+RACK_FACES = ("front", "rear")
+
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
@@ -217,6 +223,13 @@ class Defaults(BaseModel):
     )
     location: str | None = Field(default=None, description="Location name, optional")
     rack: str | None = Field(default=None, description="Rack name, optional")
+    position: float | None = Field(
+        default=None,
+        description="Rack U position, set per target in override_defaults, with face",
+    )
+    face: str | None = Field(
+        default=None, description="Rack face (front or rear), set per target with position"
+    )
     stack_member_name_template: str = Field(
         default=DEFAULT_STACK_MEMBER_TEMPLATE,
         description=(
@@ -232,6 +245,47 @@ class Defaults(BaseModel):
         """Treat an empty list as None so override_defaults does not clear the global list."""
         if isinstance(v, list) and len(v) == 0:
             return None
+        return v
+
+    @field_validator("rack", mode="before")
+    @classmethod
+    def _strip_rack(cls, v: object) -> object:
+        """
+        Trim the rack name; a blank one means no rack.
+
+        A number is refused rather than read as text: YAML reads an unquoted 01
+        as 1 and 010 as 8, so the name that was meant is already lost.
+        """
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError('rack must be text; quote a numeric rack name, e.g. rack: "01"')
+        return v.strip()
+
+    @field_validator("face", mode="before")
+    @classmethod
+    def _normalize_face(cls, v: object) -> object:
+        """Accept front or rear in any case; NetBox stores them lowercase."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str) and v.strip().lower() in RACK_FACES:
+            return v.strip().lower()
+        raise ValueError("face must be front or rear")
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _refuse_bool_position(cls, v: object) -> object:
+        """YAML's yes/true would otherwise read as U1."""
+        if isinstance(v, bool):
+            raise ValueError("position must be a number")
+        return v
+
+    @field_validator("position")
+    @classmethod
+    def _check_position(cls, v: float | None) -> float | None:
+        """NetBox positions start at U1 and move in half-U steps."""
+        if v is not None and (v < 1 or (v * 2) % 1 != 0):
+            raise ValueError("position must be at least 1, in steps of 0.5")
         return v
 
     @field_validator("stack_member_name_template", mode="before")
@@ -587,6 +641,185 @@ class Napalm(BaseModel):
     )
 
 
+def _effective(override: Defaults, defaults: Defaults | None, field: str):
+    """A target's value for field, as merge_override_defaults resolves it."""
+    if field in override.model_fields_set and getattr(override, field) is not None:
+        return getattr(override, field)
+    return getattr(defaults, field) if defaults is not None else None
+
+
+def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -> str:
+    """Refuse a target's position and face unless set together, in a rack, for one host."""
+    override = entry.override_defaults
+    if override.position is None or override.face is None:
+        raise ValueError(f"{entry.hostname}: position and face go together; set both")
+    if not rack:
+        raise ValueError(
+            f"{entry.hostname}: position and face need a rack, "
+            "in override_defaults or the policy defaults"
+        )
+    if count_hostnames(entry.hostname) > 1:
+        raise ValueError(
+            f"{entry.hostname}: position and face need a single host; "
+            "a range or subnet would place every device at the same U"
+        )
+    # A netbox_id target sends no placeholder site, so the device keeps its
+    # own; the rack would then go without one and could not be looked up.
+    if _keeps_netbox_id(entry) and (site or "").strip() in ("", UNDEFINED_PLACEHOLDER):
+        raise ValueError(
+            f"{entry.hostname}: position and face need a site when netbox_id is set; "
+            "the rack is looked up in it"
+        )
+    return rack
+
+
+def _keeps_netbox_id(entry: Napalm) -> bool:
+    """Whether the runner applies entry's netbox_id: it drops it on any range or subnet syntax, a /32 included."""
+    return entry.netbox_id is not None and not expand_hostnames(entry.hostname)[1]
+
+
+def _site_and_location(override: Defaults, defaults: Defaults | None) -> tuple:
+    """The site and location a target's rack is sent in, as sent; no site is the undefined one."""
+    site = _effective(override, defaults, "site") or UNDEFINED_PLACEHOLDER
+    return site, _effective(override, defaults, "location") or None
+
+
+def _asset_tag(override: Defaults, defaults: Defaults | None) -> str | None:
+    """The asset tag a target's device is sent with, as translate_device emits it."""
+    for source in (override, defaults):
+        tag = source.device.asset_tag if source is not None and source.device is not None else None
+        if tag is not None:
+            return tag if tag.strip() else None
+    return None
+
+
+def _endpoint(entry: Napalm) -> str | None:
+    """The one device a target reaches, as its normalised address or name and any port; None for a range."""
+    if count_hostnames(entry.hostname) != 1:
+        return None
+    host = expand_hostnames(entry.hostname)[0][0]
+    try:
+        host = str(ipaddress.ip_address(host))
+    except ValueError:
+        host = host.lower()
+    port = (entry.optional_args or {}).get("port")
+    return host if port is None else f"{host} port {port}"
+
+
+def _device_ids(entry: Napalm, override: Defaults, defaults: Defaults | None) -> list[tuple]:
+    """
+    What a target's device is known by, strongest first as Diode matches.
+
+    A kept netbox_id, then an asset tag, then the host it reaches, which
+    stands for the name and site that host reports.
+    """
+    ids = []
+    if _keeps_netbox_id(entry):
+        ids.append(("netbox_id", entry.netbox_id))
+    tag = _asset_tag(override, defaults)
+    if tag is not None:
+        ids.append(("asset_tag", tag))
+    endpoint = _endpoint(entry)
+    if endpoint is not None:
+        ids.append(("host", endpoint))
+    return ids
+
+
+@dataclass
+class _Sharers:
+    """The racked entries sending one identifier: each placement they send, and one relying on it."""
+
+    placements: dict[tuple, str] = field(default_factory=dict)
+    relied_on: tuple[tuple, str] | None = None
+
+    def holders(self, rank: int) -> list:
+        """
+        The (placement, hostname) pairs an entry with this identifier at rank is tied to.
+
+        An entry is matched by its strongest identifier, so that one ties it to
+        every entry sending it; a weaker one only to an entry relying on it.
+        """
+        if rank == 0:
+            return list(self.placements.items())
+        return [self.relied_on] if self.relied_on else []
+
+
+def _seen_device(
+    pinned: dict[tuple, _Sharers], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+) -> bool:
+    """
+    Record the placement a target sends its device, refusing a different one for that device.
+
+    Entries tied by an identifier may update one device, so they must send it
+    the same rack, position and face; a rack without a position is a placement
+    too. Returns True when an earlier entry is known to be this device, relying
+    on the same strongest identifier.
+    """
+    placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
+    seen = False
+    for rank, device_id in enumerate(_device_ids(entry, override, defaults)):
+        sharers = pinned.setdefault(device_id, _Sharers())
+        other_host = next((host for other, host in sharers.holders(rank) if other != placement), None)
+        if other_host is not None:
+            kind, value = device_id
+            raise ValueError(
+                f"targets {other_host} and {entry.hostname} place {kind} {value} at different slots"
+            )
+        if rank == 0:
+            seen = sharers.relied_on is not None
+            sharers.relied_on = sharers.relied_on or (placement, entry.hostname)
+        sharers.placements.setdefault(placement, entry.hostname)
+    return seen
+
+
+def _claim_slot(
+    placed: dict[tuple, dict], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+) -> None:
+    """
+    Record the U a target places its device at, refusing one another target took.
+
+    Diode matches a device by rack, position and face once name and site miss,
+    so a second device at one U would take the first's record. A rack sent
+    without a location binds a same-named rack in any location of the site, so
+    no location clashes with any. Each slot maps its locations (None for none)
+    to the target placed there, so both checks are one lookup.
+    """
+    site, location = _site_and_location(override, defaults)
+    slot = (site, rack, override.position, override.face)
+    taken = placed.setdefault(slot, {})
+    if location is None:
+        other_host = next(iter(taken.values()), None)
+    else:
+        other_host = taken.get(location) or taken.get(None)
+    if other_host is not None:
+        raise ValueError(
+            f"targets {other_host} and {entry.hostname} are both placed at "
+            f"{rack} U{override.position:g} {override.face}"
+        )
+    taken[location] = entry.hostname
+
+
+def _check_unracked(pinned: dict[tuple, _Sharers], entry: Napalm, override: Defaults, defaults: Defaults | None) -> None:
+    """
+    Refuse an entry without a rack moving a racked device away from its rack.
+
+    It still sends a site and location, and NetBox refuses a device whose rack
+    is in another; what it leaves out, the device keeps.
+    """
+    site, location = _site_and_location(override, defaults)
+    if site == UNDEFINED_PLACEHOLDER and _keeps_netbox_id(entry):
+        site = None  # not sent, as translate_device drops it
+    for rank, device_id in enumerate(_device_ids(entry, override, defaults)):
+        sharers = pinned.get(device_id)
+        for (racked_site, racked_location, rack, *_), racked_host in sharers.holders(rank) if sharers else []:
+            if (site is not None and site != racked_site) or (location is not None and location != racked_location):
+                kind, value = device_id
+                raise ValueError(
+                    f"targets {racked_host} and {entry.hostname} send {kind} {value} to different "
+                    f"sites or locations, and {racked_host} places it in rack {rack}"
+                )
+
+
 class Policy(BaseModel):
     """Model for a policy configuration."""
 
@@ -617,6 +850,39 @@ class Policy(BaseModel):
                 f"policy scopes expand to {total} addresses in total, "
                 f"more than the limit of {MAX_EXPANDED_HOSTS}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_rack_placement(self):
+        """
+        Allow a rack position and face only per single-host target, together, with a rack.
+
+        One U for every device of a policy, or of a range or subnet, cannot be
+        right; NetBox requires a face for any position; and a position means
+        nothing without a rack, which may come from the policy defaults.
+        """
+        defaults = self.config.defaults if self.config else None
+        if defaults is not None and (defaults.position is not None or defaults.face is not None):
+            raise ValueError("defaults: position and face are set per target, in override_defaults")
+        # Runs after validate_expansion_budget, so an oversized policy is
+        # refused before any placement is checked.
+        placed: dict[tuple, dict] = {}
+        pinned: dict[tuple, _Sharers] = {}
+        for entry in self.scope:
+            override = entry.override_defaults or Defaults()
+            placed_here = override.position is not None or override.face is not None
+            rack = _effective(override, defaults, "rack")
+            if placed_here:
+                rack = _check_target_placement(entry, rack, _effective(override, defaults, "site"))
+            if rack and _seen_device(pinned, entry, override, defaults, rack):
+                continue
+            if placed_here:
+                _claim_slot(placed, entry, override, defaults, rack)
+        # Once every racked device is known, in whatever order entries come.
+        for entry in self.scope:
+            override = entry.override_defaults or Defaults()
+            if not _effective(override, defaults, "rack"):
+                _check_unracked(pinned, entry, override, defaults)
         return self
 
 
