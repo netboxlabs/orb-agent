@@ -283,6 +283,10 @@ def _build_member_devices(
         member_dev.ClearField("asset_tag")
         # The target's rack, position and face describe the master. A stack
         # can span racks, so members are sent none and keep what NetBox has.
+        # Their location stays too: NetBox refuses one that differs from the
+        # location of a member's own rack.
+        if member_dev.HasField("rack"):
+            member_dev.ClearField("location")
         member_dev.ClearField("rack")
         member_dev.ClearField("position")
         member_dev.ClearField("face")

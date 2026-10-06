@@ -274,6 +274,34 @@ def test_only_the_stack_master_is_placed():
         assert not md.HasField("face"), f"member {md.name} carried face {md.face!r}"
 
 
+def test_stack_members_keep_their_location_when_the_master_is_racked():
+    """NetBox refuses a location that differs from a member's own rack's, so members are sent none."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(site="DC1", location="Row 1", rack="R12")
+
+    devices = [e.device for e in translate_data(data) if e.HasField("device")]
+    master = next(d for d in devices if not d.HasField("virtual_chassis"))
+    members = [d for d in devices if d.HasField("virtual_chassis")]
+    assert members, "expected at least one member Device"
+    assert master.location.name == "Row 1"
+    assert master.rack.location.name == "Row 1"
+    for md in members:
+        assert not md.HasField("location"), f"member {md.name} carried location {md.location.name}"
+        assert md.site.name == "DC1"
+
+
+def test_stack_members_take_the_location_without_a_rack():
+    """Without a rack nothing changes: every member is sent the policy location."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(site="DC1", location="Row 1")
+
+    devices = [e.device for e in translate_data(data) if e.HasField("device")]
+    members = [d for d in devices if d.HasField("virtual_chassis")]
+    assert members, "expected at least one member Device"
+    for md in members:
+        assert md.location.name == "Row 1"
+
+
 def test_nested_device_refs_carry_no_placement():
     """Device references match by name and site; rack, position and face stay off them."""
     from device_discovery.stubs import _device_match_stub
