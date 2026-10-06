@@ -14,6 +14,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/configmgr/fleet/messages"
 	"github.com/netboxlabs/orb-agent/agent/filesmgr"
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
@@ -194,26 +195,42 @@ func (connection *MQTTConnection) onPublishReceived(topic string, payload []byte
 }
 
 // runTopicHandler runs a topic-specific handler, logging its error or panic.
+// These handlers answer requests and hold no agent state a panic could leave
+// half applied.
 func (connection *MQTTConnection) runTopicHandler(handler TopicMessageHandler, topic string, payload []byte) {
-	defer connection.recoverHandlerPanic(topic)
+	defer func() {
+		if r := recover(); r != nil {
+			connection.logHandlerPanic(topic, r)
+		}
+	}()
 	if err := handler(topic, payload); err != nil {
 		connection.logger.Error("topic handler failed", "topic", topic, "error", err)
 	}
 }
 
-// recoverHandlerPanic logs a panic raised while handling an MQTT message, so
-// one bad message costs that message rather than the agent process: paho runs
+// logHandlerPanic logs a panic recovered while handling an MQTT message, so one
+// bad message costs that message rather than the agent process: paho runs
 // these callbacks with no recovery of its own.
-func (connection *MQTTConnection) recoverHandlerPanic(topic string) {
-	if r := recover(); r != nil {
-		connection.logger.Error("panic handling MQTT message",
-			"topic", topic, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
-	}
+func (connection *MQTTConnection) logHandlerPanic(topic string, r any) {
+	connection.logger.Error("panic handling MQTT message",
+		"topic", topic, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
 }
 
-// processJob dispatches a single job to message handlers.
+// processJob dispatches a single job to message handlers. A panic can leave
+// policies or bundles half applied, so after logging it the agent runs a full
+// reset: every backend restarts with the policies the agent recorded, and the
+// reconnect that follows has the control plane resend the policy and bundle
+// lists, as a process restart would.
 func (connection *MQTTConnection) processJob(job dispatchJob) {
-	defer connection.recoverHandlerPanic(job.topic)
+	defer func() {
+		if r := recover(); r != nil {
+			connection.logHandlerPanic(job.topic, r)
+			connection.messaging.handleAgentReset(context.Background(), messages.AgentResetRPCPayload{
+				FullReset: true,
+				Reason:    "recovered a panic handling an MQTT message",
+			})
+		}
+	}()
 	err := connection.messaging.DispatchToHandlers(
 		context.Background(),
 		job.payload,

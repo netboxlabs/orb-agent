@@ -1518,3 +1518,126 @@ func TestManager_PublishesNothingWithoutAChange(t *testing.T) {
 	require.Error(t, m.Rollback(ctx, "pkg"))
 	assert.Empty(t, seen)
 }
+
+// twoVersions serves v1 and v2 archives and returns a spec for each.
+func twoVersions(t *testing.T) (spec func(version string) FileSpec) {
+	t.Helper()
+	archives := map[string][]byte{
+		"v1": buildTarGz(t, map[string]string{"a.txt": "v1"}),
+		"v2": buildTarGz(t, map[string]string{"a.txt": "v2"}),
+	}
+	mux := http.NewServeMux()
+	for v, a := range archives {
+		mux.HandleFunc("/"+v+".tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(a) })
+	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return func(version string) FileSpec {
+		return FileSpec{Name: "pkg", Version: version, URL: srv.URL + "/" + version + ".tar.gz", SHA256: sha256Hex(archives[version]), Extract: true}
+	}
+}
+
+func currentTarget(t *testing.T, root string) string {
+	t.Helper()
+	target, err := os.Readlink(filepath.Join(root, "pkg", "current"))
+	require.NoError(t, err)
+	return target
+}
+
+// TestManager_EnsurePanicBeforeSwapKeepsStateOnTheLiveVersion verifies that a
+// panic between the state write and the symlink swap restores the recorded
+// state, so state and the current symlink still agree without the restart
+// whose crash recovery would otherwise repair them.
+func TestManager_EnsurePanicBeforeSwapKeepsStateOnTheLiveVersion(t *testing.T) {
+	spec := twoVersions(t)
+	m, root := newTestManager(t)
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, spec("v1"))
+	require.NoError(t, err)
+
+	swapCurrent = func(string, string) error { panic("swap failure") }
+	t.Cleanup(func() { swapCurrent = swapSymlink })
+	require.Panics(t, func() { _, _ = m.Ensure(ctx, spec("v2")) })
+	swapCurrent = swapSymlink
+
+	entry, ok := m.Get("pkg")
+	require.True(t, ok)
+	assert.Equal(t, "v1", entry.Version, "state follows the live version")
+	assert.Equal(t, "v1", currentTarget(t, root))
+	assert.NoDirExists(t, filepath.Join(root, "pkg", "v2"))
+
+	_, err = m.Ensure(ctx, spec("v2"))
+	require.NoError(t, err)
+	assert.Equal(t, "v2", currentTarget(t, root))
+}
+
+// TestManager_RollbackPanicAfterSwapRestoresTheSymlink verifies that a panic
+// after Rollback swapped the symlink but before it recorded the change puts the
+// symlink back, so it still agrees with state.
+func TestManager_RollbackPanicAfterSwapRestoresTheSymlink(t *testing.T) {
+	spec := twoVersions(t)
+	m, root := newTestManager(t)
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, spec("v1"))
+	require.NoError(t, err)
+	_, err = m.Ensure(ctx, spec("v2"))
+	require.NoError(t, err)
+
+	swapCurrent = func(target, link string) error {
+		require.NoError(t, swapSymlink(target, link))
+		panic("persist failure")
+	}
+	t.Cleanup(func() { swapCurrent = swapSymlink })
+	require.Panics(t, func() { _ = m.Rollback(ctx, "pkg") })
+	swapCurrent = swapSymlink
+
+	entry, ok := m.Get("pkg")
+	require.True(t, ok)
+	assert.Equal(t, "v2", entry.Version)
+	assert.Equal(t, "v2", currentTarget(t, root), "the symlink follows state")
+}
+
+// TestManager_EnsureRepairsACurrentSymlinkThatDisagreesWithState verifies that
+// Ensure does not trust a recorded version the current symlink does not point
+// at: it installs the version again and publishes the change.
+func TestManager_EnsureRepairsACurrentSymlinkThatDisagreesWithState(t *testing.T) {
+	spec := twoVersions(t)
+	m, root := newTestManager(t)
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, spec("v1"))
+	require.NoError(t, err)
+	_, err = m.Ensure(ctx, spec("v2"))
+	require.NoError(t, err)
+	require.NoError(t, swapSymlink("v1", filepath.Join(root, "pkg", "current")))
+
+	var seen []FileEventType
+	m.Subscribe(func(ev FileEvent) { seen = append(seen, ev.Type) })
+	_, err = m.Ensure(ctx, spec("v2"))
+	require.NoError(t, err)
+	assert.Equal(t, "v2", currentTarget(t, root))
+	assert.Equal(t, []FileEventType{EventUpgraded}, seen, "consumers learn the live version changed")
+}
+
+// TestManager_FailedRefetchKeepsTheLiveVersion verifies that when the re-fetch
+// of a tampered live version cannot swap its symlink, the rollback keeps that
+// version's directory: it is the one the symlink points at.
+func TestManager_FailedRefetchKeepsTheLiveVersion(t *testing.T) {
+	blob := []byte("original-content")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(blob) }))
+	defer srv.Close()
+	m, root := newTestManager(t)
+	spec := FileSpec{Name: "tool", Version: "1.0.0", URL: srv.URL + "/tool", SHA256: sha256Hex(blob)}
+	_, err := m.Ensure(context.Background(), spec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "tool", "1.0.0", "tool"), []byte("tampered"), 0o644))
+
+	swapCurrent = func(string, string) error { return os.ErrPermission }
+	t.Cleanup(func() { swapCurrent = swapSymlink })
+	_, err = m.Ensure(context.Background(), spec)
+	require.Error(t, err)
+
+	assert.DirExists(t, filepath.Join(root, "tool", "1.0.0"))
+	entry, ok := m.Get("tool")
+	require.True(t, ok)
+	assert.Equal(t, "1.0.0", entry.Version)
+}

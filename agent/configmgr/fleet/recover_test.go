@@ -54,10 +54,14 @@ func newRecoverTestConnection(logs *syncBuffer) *MQTTConnection {
 }
 
 // A message whose handling panics costs that message, not the agent: the
-// dispatch worker logs it and goes on to the next job.
+// dispatch worker logs it and goes on to the next job. The panic may have left
+// policies or bundles half applied, so the agent runs a full reset, which
+// restarts every backend and resyncs both lists from the control plane.
 func TestDispatchWorkerSurvivesAHandlerPanic(t *testing.T) {
 	var logs syncBuffer
 	connection := newRecoverTestConnection(&logs)
+	resetter := &stubResetter{}
+	connection.SetResetter(resetter)
 	connection.startDispatchWorker()
 	defer connection.stopDispatchWorker()
 
@@ -73,6 +77,9 @@ func TestDispatchWorkerSurvivesAHandlerPanic(t *testing.T) {
 	require.Contains(t, logs.String(), "panic handling MQTT message")
 	require.Contains(t, logs.String(), "handler failure")
 	require.Contains(t, logs.String(), "topic="+recoverTestTopic)
+	require.Eventually(t, func() bool { return len(resetter.reasons()) == 1 }, 5*time.Second, 10*time.Millisecond,
+		"a recovered dispatch panic runs one full reset")
+	require.Contains(t, resetter.reasons()[0], "panic")
 }
 
 // With the queue full the message is handled on the callback's own goroutine,
@@ -80,6 +87,8 @@ func TestDispatchWorkerSurvivesAHandlerPanic(t *testing.T) {
 func TestFullQueueFallbackSurvivesAHandlerPanic(t *testing.T) {
 	var logs syncBuffer
 	connection := newRecoverTestConnection(&logs)
+	resetter := &stubResetter{}
+	connection.SetResetter(resetter)
 	for range cap(connection.dispatchQueue) {
 		connection.dispatchQueue <- dispatchJob{}
 	}
@@ -89,6 +98,7 @@ func TestFullQueueFallbackSurvivesAHandlerPanic(t *testing.T) {
 	})
 	require.Contains(t, logs.String(), "panic handling MQTT message")
 	require.Contains(t, logs.String(), "topic="+recoverTestTopic)
+	require.Eventually(t, func() bool { return len(resetter.reasons()) == 1 }, 5*time.Second, 10*time.Millisecond)
 }
 
 // A topic-specific handler runs on its own goroutine; a panic there is
@@ -96,12 +106,16 @@ func TestFullQueueFallbackSurvivesAHandlerPanic(t *testing.T) {
 func TestTopicHandlerPanicIsRecovered(t *testing.T) {
 	var logs syncBuffer
 	connection := newRecoverTestConnection(&logs)
+	resetter := &stubResetter{}
+	connection.SetResetter(resetter)
 
 	require.NotPanics(t, func() {
 		connection.runTopicHandler(func(string, []byte) error { panic("handler failure") }, "orgs/test-org/policies", nil)
 	})
 	require.Contains(t, logs.String(), "panic handling MQTT message")
 	require.Contains(t, logs.String(), "orgs/test-org/policies")
+	time.Sleep(100 * time.Millisecond)
+	require.Empty(t, resetter.reasons(), "a topic handler holds no agent state to resync")
 }
 
 // A received message reaches its topic handler through the recovering wrapper.
