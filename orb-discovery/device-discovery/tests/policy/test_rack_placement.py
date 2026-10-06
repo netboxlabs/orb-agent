@@ -416,3 +416,33 @@ def test_a_target_asset_tag_replaces_the_policy_one():
         _tagged("192.0.2.10", "A1", rack="R12"),
         _tagged("192.0.2.11", "A2", rack="R13"),
     ], device=DeviceParameters(asset_tag="A0"))
+
+
+@pytest.mark.parametrize(("first", "second"), [
+    ("192.0.2.10", "192.0.2.10"),
+    ("192.0.2.10", "192.0.2.10/32"),
+    ("2001:db8::1", "2001:DB8:0:0::1"),
+    ("SW1.example.com", "sw1.example.com "),
+])
+def test_one_host_in_two_racks_is_refused(first, second):
+    """Both entries discover the device at that address, which would move between the racks every run."""
+    with pytest.raises(ValidationError, match=f"targets {first} and {second} place host .* at different slots"):
+        _policy([_scope(first, rack="R12"), _scope(second, rack="R13")])
+
+
+def test_one_host_at_one_u_is_one_device():
+    """The same host twice at one U describes one placement."""
+    _policy([_scope(position=40, face="front"), _scope(position=40, face="front")], rack="R12")
+
+
+def test_one_address_on_two_ports_is_two_devices():
+    """Two ports on one address can reach two devices, such as behind a NAT."""
+    def on_port(port, rack):
+        return Napalm(hostname="192.0.2.10", username="admin", password="secret",
+                      optional_args={"port": port}, override_defaults=Defaults(rack=rack))
+    _policy([on_port(2201, "R12"), on_port(2202, "R13")])
+
+
+def test_a_range_is_not_one_device():
+    """A range reaches several devices, so it names none of them."""
+    _policy([_scope("192.0.2.16/29", rack="R12"), _scope("192.0.2.17", rack="R13")])

@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Models."""
 
+import ipaddress
 import logging
 import re
 import time
@@ -691,9 +692,25 @@ def _asset_tag(override: Defaults, defaults: Defaults | None) -> str | None:
     return None
 
 
+def _endpoint(entry: Napalm) -> str | None:
+    """The one device a target reaches, as its normalised address or name and any port; None for a range."""
+    if count_hostnames(entry.hostname) != 1:
+        return None
+    host = expand_hostnames(entry.hostname)[0][0]
+    try:
+        host = str(ipaddress.ip_address(host))
+    except ValueError:
+        host = host.lower()
+    port = (entry.optional_args or {}).get("port")
+    return host if port is None else f"{host} port {port}"
+
+
 def _device_ids(entry: Napalm, override: Defaults, defaults: Defaults | None) -> list[tuple]:
-    """What a target's device is matched by ahead of its name: a kept netbox_id, an asset tag."""
+    """What a target's device is known by: the host it reaches, a kept netbox_id, an asset tag."""
     ids = []
+    endpoint = _endpoint(entry)
+    if endpoint is not None:
+        ids.append(("host", endpoint))
     if _keeps_netbox_id(entry):
         ids.append(("netbox_id", entry.netbox_id))
     tag = _asset_tag(override, defaults)
@@ -708,9 +725,10 @@ def _seen_device(
     """
     Record the placement a target sends its device, refusing a different one for that device.
 
-    Entries with one netbox_id or asset tag update one device, so they must send
-    it the same rack, position and face; a rack without a position is a
-    placement too. Returns True when an earlier entry already sent this placement.
+    Entries reaching one host, or with one netbox_id or asset tag, update one
+    device, so they must send it the same rack, position and face; a rack
+    without a position is a placement too. Returns True when an earlier entry
+    already sent this placement.
     """
     placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
     seen = False
