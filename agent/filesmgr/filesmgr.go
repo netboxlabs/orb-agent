@@ -34,10 +34,6 @@ func swapSymlink(target, linkPath string) error {
 	return nil
 }
 
-// swapCurrent points a name's current symlink at a version; tests replace it to
-// fail or panic between the state write and the swap.
-var swapCurrent = swapSymlink
-
 // filesmgr is the default Manager implementation.
 type filesmgr struct {
 	logger *slog.Logger
@@ -595,7 +591,7 @@ func (m *filesmgr) install(ctx context.Context, spec FileSpec) (string, *FileEve
 	// Previous with the failed version.
 	preTracked, hadExisting := m.store.getTracked(spec.Name)
 	existing := preTracked.Current
-	if hadExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version && m.isCurrent(spec) {
+	if hadExisting && existing.SHA256 == spec.SHA256 && existing.Version == spec.Version {
 		if info, err := os.Stat(existing.Path); err == nil {
 			if !info.IsDir() {
 				// Verify the on-disk SHA256 still matches the recorded one before
@@ -659,23 +655,31 @@ func (m *filesmgr) install(ctx context.Context, spec FileSpec) (string, *FileEve
 		return "", nil, err
 	}
 
-	// Step 3: swap "current" symlink (only for versioned placements). Until it
-	// lands, any way out, a failed swap or a panic, restores the state recorded
-	// before Step 2, so state and the symlink keep agreeing: Start() repairs
-	// that window only after a restart, and a recovered panic does not restart.
-	swapped := false
-	defer func() {
-		if !swapped {
-			m.undoPut(spec, preTracked, hadExisting, versionedDir)
-		}
-	}()
+	// Step 3: swap "current" symlink (only for versioned placements).
 	if spec.Version != "" {
 		linkPath := filepath.Join(m.root, spec.Name, "current")
-		if err := swapCurrent(spec.Version, linkPath); err != nil {
+		if err := swapSymlink(spec.Version, linkPath); err != nil {
+			// Roll back: restore exact prior state to avoid poisoning Previous.
+			// putTracked writes the trackedEntry verbatim — no promote logic.
+			// Both rollback paths are non-recoverable here (we're already in the
+			// swap-failed error path); log failures so operators can notice and
+			// reconcile manually — the next agent restart will recover via the
+			// crash-recovery path in Start().
+			if hadExisting {
+				if rollbackErr := m.store.putTracked(spec.Name, preTracked); rollbackErr != nil {
+					m.logger.Error("filesmgr: failed to restore pre-state after symlink swap failure",
+						"name", spec.Name, "error", rollbackErr)
+				}
+			} else {
+				if rollbackErr := m.store.delete(spec.Name); rollbackErr != nil {
+					m.logger.Error("filesmgr: failed to delete entry after symlink swap failure",
+						"name", spec.Name, "error", rollbackErr)
+				}
+			}
+			_ = os.RemoveAll(versionedDir)
 			return "", nil, fmt.Errorf("swap current symlink: %w", err)
 		}
 	}
-	swapped = true
 
 	var ev FileEvent
 	if hadExisting {
@@ -685,36 +689,6 @@ func (m *filesmgr) install(ctx context.Context, spec FileSpec) (string, *FileEve
 		ev = FileEvent{Type: EventInstalled, Entry: entry}
 	}
 	return entryPath, &ev, nil
-}
-
-// isCurrent reports whether spec's current symlink points at its version. An
-// unversioned placement has no symlink.
-func (m *filesmgr) isCurrent(spec FileSpec) bool {
-	if spec.Version == "" {
-		return true
-	}
-	target, err := os.Readlink(filepath.Join(m.root, spec.Name, "current"))
-	return err == nil && target == spec.Version
-}
-
-// undoPut restores the tracked entry install recorded before its symlink swap
-// and removes the version it fetched, unless that version is the one the
-// symlink already pointed at. putTracked writes the entry verbatim, so the
-// failed version never becomes Previous. A failure here is logged; the next
-// agent restart reconciles through Start().
-func (m *filesmgr) undoPut(spec FileSpec, preTracked trackedEntry, hadExisting bool, versionedDir string) {
-	if hadExisting {
-		if err := m.store.putTracked(spec.Name, preTracked); err != nil {
-			m.logger.Error("filesmgr: failed to restore pre-state after an incomplete symlink swap",
-				"name", spec.Name, "error", err)
-		}
-	} else if err := m.store.delete(spec.Name); err != nil {
-		m.logger.Error("filesmgr: failed to delete entry after an incomplete symlink swap",
-			"name", spec.Name, "error", err)
-	}
-	if !hadExisting || preTracked.Current.Version != spec.Version {
-		_ = os.RemoveAll(versionedDir)
-	}
 }
 
 func (m *filesmgr) Remove(_ context.Context, name string) error {
@@ -838,23 +812,19 @@ func (m *filesmgr) rollbackTracked(name string) (FileEvent, error) {
 	// if the state write fails after the swap.
 	oldTarget, _ := os.Readlink(linkPath) // empty string if missing/not-symlink
 
-	// Until the store records the rollback, any way out, a failed write or a
-	// panic, swaps the symlink back so it keeps agreeing with state.
-	recorded := false
-	defer func() {
-		if !recorded && oldTarget != "" {
-			_ = swapSymlink(oldTarget, linkPath)
-		}
-	}()
-	if err := swapCurrent(versionBase, linkPath); err != nil {
+	if err := swapSymlink(versionBase, linkPath); err != nil {
 		return FileEvent{}, fmt.Errorf("filesmgr: swap symlink: %w", err)
 	}
 
 	// Update store: previous becomes current, previous is cleared.
 	if err := m.store.putWithoutPrevious(prev); err != nil {
+		// The symlink already points to the old version but state is still the
+		// new version. Best-effort: swap back so filesystem matches state.
+		if oldTarget != "" {
+			_ = swapSymlink(oldTarget, linkPath)
+		}
 		return FileEvent{}, fmt.Errorf("filesmgr: persist rollback: %w", err)
 	}
-	recorded = true
 
 	rolledBackFrom := tracked.Current
 	return FileEvent{
