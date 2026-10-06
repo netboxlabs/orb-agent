@@ -539,3 +539,12 @@ def test_an_unracked_target_matched_apart_is_not_checked():
         _identified("192.0.2.10", 42, rack="R12", location="Row 1"),
         _identified("192.0.2.10", 41, location="Row 2"),
     ], site="DC1")
+
+
+def test_a_padded_site_is_compared_as_sent():
+    """translate_device sends the site as written, so a padded one is another site reference."""
+    with pytest.raises(ValidationError, match="place netbox_id 42 at different slots"):
+        Policy(config=Config(defaults=Defaults(rack="R12")), scope=[
+            _pinned("192.0.2.10", site="DC1", position=40, face="front"),
+            _pinned("192.0.2.11", site=" DC1 ", position=40, face="front"),
+        ])

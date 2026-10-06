@@ -678,8 +678,8 @@ def _keeps_netbox_id(entry: Napalm) -> bool:
 
 
 def _site_and_location(override: Defaults, defaults: Defaults | None) -> tuple:
-    """The site and location a target's rack is sent in; no site is the undefined one."""
-    site = (_effective(override, defaults, "site") or "").strip() or UNDEFINED_PLACEHOLDER
+    """The site and location a target's rack is sent in, as sent; no site is the undefined one."""
+    site = _effective(override, defaults, "site") or UNDEFINED_PLACEHOLDER
     return site, _effective(override, defaults, "location") or None
 
 
