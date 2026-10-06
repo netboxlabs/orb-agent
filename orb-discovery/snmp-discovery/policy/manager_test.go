@@ -2006,6 +2006,58 @@ func TestManager_ParsePolicies_RackPlacementOneNetboxID(t *testing.T) {
 	}
 }
 
+// Targets reaching one host each discover the same device, so they must send
+// it one placement.
+func TestManager_ParsePolicies_RackPlacementOneHost(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	racked := func(host string, port int, rack string) map[string]any {
+		target := map[string]any{"host": host, "override_defaults": map[string]any{"rack": rack}}
+		if port != 0 {
+			target["port"] = port
+		}
+		return target
+	}
+	for name, tc := range map[string]struct {
+		targets []map[string]any
+		wantErr string
+	}{
+		"one address twice": {
+			[]map[string]any{racked("192.0.2.10", 0, "R12"), racked("192.0.2.10", 0, "R13")},
+			"targets 192.0.2.10 and 192.0.2.10 place host 192.0.2.10 at different slots",
+		},
+		"an address and its /32": {
+			[]map[string]any{racked("192.0.2.10", 0, "R12"), racked("192.0.2.10/32", 0, "R13")},
+			"place host 192.0.2.10 at different slots",
+		},
+		"IPv6 spelled two ways": {
+			[]map[string]any{racked("2001:db8::1", 0, "R12"), racked("2001:DB8:0:0::1", 0, "R13")},
+			"place host 2001:db8::1 at different slots",
+		},
+		"a name in two cases": {
+			[]map[string]any{racked("SW1.example.com", 0, "R12"), racked("sw1.example.com", 0, "R13")},
+			"place host sw1.example.com at different slots",
+		},
+		"the default port written out": {
+			[]map[string]any{racked("192.0.2.10", 0, "R12"), racked("192.0.2.10", 161, "R13")},
+			"place host 192.0.2.10 at different slots",
+		},
+		"one address on two ports":   {[]map[string]any{racked("192.0.2.10", 1161, "R12"), racked("192.0.2.10", 1162, "R13")}, ""},
+		"a range beside an address":  {[]map[string]any{racked("192.0.2.16/29", 0, "R12"), racked("192.0.2.17", 0, "R13")}, ""},
+		"one address twice at one U": {[]map[string]any{placed("192.0.2.10", 40, "front", nil), placed("192.0.2.10", 40, "front", nil)}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"rack": "R12"}, tc.targets...))
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
 // The asset tag is the device matcher Diode tries first, so targets sending
 // one literal tag update one device and must send it one placement.
 func TestManager_ParsePolicies_RackPlacementOneAssetTag(t *testing.T) {

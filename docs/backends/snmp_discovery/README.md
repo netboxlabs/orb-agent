@@ -253,8 +253,10 @@ unless:
   that name in any location of the site, because a rack sent without a
   location can bind to any rack of that name in the site. A target whose
   `location` is an OID reference is left out of this check: its location is
-  only known when the device is scanned. Two targets with the same
-  `netbox_id`, or the same literal `asset_tag`, update one device, so when
+  only known when the device is scanned. Two targets reaching the same host
+  (one address or name, written as itself, a `/32` or a one-address range, on
+  the same `port`), or with the same `netbox_id` or literal `asset_tag`,
+  update one device, so when
   they send a rack they must send the same rack, position and face (a rack
   without a position counts too), and in a literal location, since one read
   from an OID cannot be compared. An `asset_tag` in the policy `defaults`

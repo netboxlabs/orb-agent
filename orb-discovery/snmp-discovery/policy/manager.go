@@ -278,8 +278,8 @@ type pinnedPlacement struct {
 	host      string
 }
 
-// deviceID is something a device is matched by ahead of its name: a kept
-// netbox_id or a literal asset tag.
+// deviceID is something a target's device is known by: the one host it
+// reaches, a kept netbox_id or a literal asset tag.
 type deviceID struct {
 	kind, value string
 }
@@ -370,9 +370,12 @@ func placementOf(merged *config.Defaults, placed bool) devicePlacement {
 	return p
 }
 
-// deviceIDs lists what a target's device is matched by ahead of its name.
+// deviceIDs lists what a target's device is known by.
 func deviceIDs(target config.Target, merged *config.Defaults) []deviceID {
 	var ids []deviceID
+	if host, ok := endpointOf(target); ok {
+		ids = append(ids, deviceID{"host", host})
+	}
 	if target.NetboxID != nil && keepsNetboxID(target.Host) {
 		ids = append(ids, deviceID{"netbox_id", strconv.Itoa(*target.NetboxID)})
 	}
@@ -380,6 +383,27 @@ func deviceIDs(target config.Target, merged *config.Defaults) []deviceID {
 		ids = append(ids, deviceID{"asset_tag", tag})
 	}
 	return ids
+}
+
+// endpointOf returns the one device a target reaches, as its normalised
+// address or name and any port other than the default. A range reaches
+// several and names none.
+func endpointOf(target config.Target) (string, bool) {
+	if coversSeveralAddresses(target.Host) {
+		return "", false
+	}
+	hosts, err := targets.Expand(target.Host)
+	if err != nil || len(hosts) != 1 {
+		return "", false
+	}
+	host := strings.ToLower(hosts[0])
+	if addr, err := netip.ParseAddr(hosts[0]); err == nil {
+		host = addr.String()
+	}
+	if target.Port != 0 && target.Port != SNMPDefaultPort {
+		host += " port " + strconv.Itoa(int(target.Port))
+	}
+	return host, true
 }
 
 // pinDevice records what a target sends the device each of ids names,
