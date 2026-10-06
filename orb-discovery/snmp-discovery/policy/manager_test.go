@@ -2006,6 +2006,48 @@ func TestManager_ParsePolicies_RackPlacementOneNetboxID(t *testing.T) {
 	}
 }
 
+// The asset tag is the device matcher Diode tries first, so targets sending
+// one literal tag update one device and must send it one placement.
+func TestManager_ParsePolicies_RackPlacementOneAssetTag(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	tagged := func(host, tag, rack string) map[string]any {
+		return map[string]any{"host": host, "override_defaults": map[string]any{"asset_tag": tag, "rack": rack}}
+	}
+	differentSlots := "place asset_tag A1 at different slots"
+	for name, tc := range map[string]struct {
+		defaults map[string]any
+		targets  []map[string]any
+		wantErr  string
+	}{
+		"one tag in two racks":         {nil, []map[string]any{tagged("192.0.2.10", "A1", "R12"), tagged("192.0.2.11", "A1", "R13")}, "targets 192.0.2.10 and 192.0.2.11 " + differentSlots},
+		"a padded tag is the same tag": {nil, []map[string]any{tagged("192.0.2.10", " A1 ", "R12"), tagged("192.0.2.11", "A1", "R13")}, differentSlots},
+		"a policy tag over two Us": {
+			map[string]any{"rack": "R12", "asset_tag": "A1"},
+			[]map[string]any{placed("192.0.2.10", 40, "front", nil), placed("192.0.2.11", 41, "front", nil)},
+			differentSlots,
+		},
+		"one tag at one U is one device": {
+			map[string]any{"rack": "R12", "asset_tag": "A1"},
+			[]map[string]any{placed("192.0.2.10", 40, "front", nil), placed("192.0.2.11", 40, "front", nil)},
+			"",
+		},
+		"different tags":            {nil, []map[string]any{tagged("192.0.2.10", "A1", "R12"), tagged("192.0.2.11", "A2", "R13")}, ""},
+		"a tag read from an OID":    {nil, []map[string]any{tagged("192.0.2.10", ".1.3.6.1.2.1.1.5.0", "R12"), tagged("192.0.2.11", ".1.3.6.1.2.1.1.5.0", "R13")}, ""},
+		"a placeholder is not sent": {nil, []map[string]any{tagged("192.0.2.10", "N/A", "R12"), tagged("192.0.2.11", "N/A", "R13")}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, tc.defaults, tc.targets...))
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
 // Targets sharing a netbox_id must send it one location; one read from an
 // OID is only known at scan time, so it cannot be shown to agree.
 func TestManager_ParsePolicies_RackPlacementOneNetboxIDRefusesOIDLocations(t *testing.T) {
@@ -2054,7 +2096,8 @@ func TestManager_ParsePolicies_RackPlacementSameUSkipsOIDLocations(t *testing.T)
 			if _, ok := defaults["location"]; ok {
 				second = nil
 			}
-			_, err := manager.ParsePolicies(rackPolicyTargets(t, defaults,
+			_, err := manager.ParsePolicies(rackPolicyTargets(
+				t, defaults,
 				placed("192.0.2.10", 42, "front", nil),
 				placed("192.0.2.11", 42, "front", second),
 			))

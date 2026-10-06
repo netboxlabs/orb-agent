@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/env"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
 )
@@ -270,10 +272,16 @@ type devicePlacement struct {
 	oidLocation bool
 }
 
-// pinnedPlacement is what the first target naming a netbox_id sends it.
+// pinnedPlacement is what the first target naming a device sends it.
 type pinnedPlacement struct {
 	placement devicePlacement
 	host      string
+}
+
+// deviceID is something a device is matched by ahead of its name: a kept
+// netbox_id or a literal asset tag.
+type deviceID struct {
+	kind, value string
 }
 
 // validateRackPlacement rejects a position or face NetBox would refuse, or
@@ -286,7 +294,7 @@ func validateRackPlacement(policy config.Policy) error {
 	}
 	// Each U maps its locations ("" for none) to the target placed there.
 	placedAt := map[rackUnit]map[string]string{}
-	pinnedAt := map[int]pinnedPlacement{}
+	pinnedAt := map[deviceID]pinnedPlacement{}
 	for _, target := range policy.Scope.Targets {
 		override := target.OverrideDefaults
 		placed := override != nil && (override.Position != nil || override.RackFace() != "")
@@ -295,18 +303,17 @@ func validateRackPlacement(policy config.Policy) error {
 				return err
 			}
 		}
-		p := placementOf(defaults, override, placed)
+		merged := config.MergeDefaults(defaults, override)
+		p := placementOf(merged, placed)
 		if p.unit.rack == "" {
 			continue
 		}
-		if target.NetboxID != nil && keepsNetboxID(target.Host) {
-			seen, err := pinDevice(pinnedAt, target, p)
-			if err != nil {
-				return err
-			}
-			if seen {
-				continue
-			}
+		seen, err := pinDevice(pinnedAt, target, p, deviceIDs(target, merged))
+		if err != nil {
+			return err
+		}
+		if seen {
+			continue
 		}
 		if placed {
 			if err := claimUnit(placedAt, target, p); err != nil {
@@ -344,10 +351,9 @@ func checkTargetPlacement(target config.Target, defaults *config.Defaults) error
 	return nil
 }
 
-// placementOf returns what a target sends its device once the policy
-// defaults are merged in.
-func placementOf(defaults, override *config.Defaults, placed bool) devicePlacement {
-	merged := config.MergeDefaults(defaults, override)
+// placementOf returns what a target sends its device, from its merged
+// defaults.
+func placementOf(merged *config.Defaults, placed bool) devicePlacement {
 	site := merged.Site
 	if site == "" {
 		site = defaultSite // as applyDefaults fills it in
@@ -364,27 +370,44 @@ func placementOf(defaults, override *config.Defaults, placed bool) devicePlaceme
 	return p
 }
 
-// pinDevice records what a netbox_id target sends, refusing something
-// different for the same id: the targets update one device, so they must send
-// it the same rack, position and face (a rack without a position counts too).
-// It reports whether an earlier target already sent this placement.
-func pinDevice(pinnedAt map[int]pinnedPlacement, target config.Target, p devicePlacement) (bool, error) {
-	prior, ok := pinnedAt[*target.NetboxID]
-	if !ok {
-		pinnedAt[*target.NetboxID] = pinnedPlacement{placement: p, host: target.Host}
-		return false, nil
+// deviceIDs lists what a target's device is matched by ahead of its name.
+func deviceIDs(target config.Target, merged *config.Defaults) []deviceID {
+	var ids []deviceID
+	if target.NetboxID != nil && keepsNetboxID(target.Host) {
+		ids = append(ids, deviceID{"netbox_id", strconv.Itoa(*target.NetboxID)})
 	}
-	// A location read from an OID is only known at scan time, so it cannot
-	// be shown to match.
-	if prior.placement.oidLocation || p.oidLocation {
-		return false, fmt.Errorf("targets %s and %s place netbox_id %d in a location read from an OID; set a literal location",
-			prior.host, target.Host, *target.NetboxID)
+	if tag, ok := mapping.LiteralAssetTag(merged.AssetTag); ok {
+		ids = append(ids, deviceID{"asset_tag", tag})
 	}
-	if prior.placement != p {
-		return false, fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
-			prior.host, target.Host, *target.NetboxID)
+	return ids
+}
+
+// pinDevice records what a target sends the device each of ids names,
+// refusing something different for one already named: the targets update one
+// device, so they must send it the same rack, position and face (a rack
+// without a position counts too). It reports whether an earlier target already
+// sent this placement.
+func pinDevice(pinnedAt map[deviceID]pinnedPlacement, target config.Target, p devicePlacement, ids []deviceID) (bool, error) {
+	seen := false
+	for _, id := range ids {
+		prior, ok := pinnedAt[id]
+		if !ok {
+			pinnedAt[id] = pinnedPlacement{placement: p, host: target.Host}
+			continue
+		}
+		// A location read from an OID is only known at scan time, so it
+		// cannot be shown to match.
+		if prior.placement.oidLocation || p.oidLocation {
+			return false, fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
+				prior.host, target.Host, id.kind, id.value)
+		}
+		if prior.placement != p {
+			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
+				prior.host, target.Host, id.kind, id.value)
+		}
+		seen = true
 	}
-	return true, nil
+	return seen, nil
 }
 
 // claimUnit records the U a target places its device at, refusing one

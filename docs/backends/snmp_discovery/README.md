@@ -254,9 +254,12 @@ unless:
   location can bind to any rack of that name in the site. A target whose
   `location` is an OID reference is left out of this check: its location is
   only known when the device is scanned. Two targets with the same
-  `netbox_id` update one device, so when they send a rack they must send the
-  same rack, position and face (a rack without a position counts too), and
-  in a literal location, since one read from an OID cannot be compared. A
+  `netbox_id`, or the same literal `asset_tag`, update one device, so when
+  they send a rack they must send the same rack, position and face (a rack
+  without a position counts too), and in a literal location, since one read
+  from an OID cannot be compared. An `asset_tag` in the policy `defaults`
+  reaches every target, so it makes all of them one device; a tag read from
+  an OID is only known at scan time and is not compared. A
   `netbox_id` is ignored on any subnet or range syntax, a `/32` or a
   one-address range included, so such a target is its own device for these
   rules.
