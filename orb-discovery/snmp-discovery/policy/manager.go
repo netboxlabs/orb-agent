@@ -261,10 +261,19 @@ type rackUnit struct {
 	face       string
 }
 
-// pinnedPlacement is where the first target naming a netbox_id places it.
+// devicePlacement is what a target sends its device: a rack and, when it
+// places the device, a U and face (zero otherwise). location is empty when the
+// target has none; oidLocation marks one read from an OID at scan time.
+type devicePlacement struct {
+	unit        rackUnit
+	location    string
+	oidLocation bool
+}
+
+// pinnedPlacement is what the first target naming a netbox_id sends it.
 type pinnedPlacement struct {
-	unit           rackUnit
-	location, host string
+	placement devicePlacement
+	host      string
 }
 
 // rackPlacement is a target placed at a rackUnit; location is empty when
@@ -281,73 +290,122 @@ func validateRackPlacement(policy config.Policy) error {
 	if defaults.Position != nil || defaults.RackFace() != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	// Diode matches a device by rack, position and face once name and site
-	// miss, so a new device sent to a taken U would update the device there.
 	placedAt := map[rackUnit][]rackPlacement{}
 	pinnedAt := map[int]pinnedPlacement{}
 	for _, target := range policy.Scope.Targets {
 		override := target.OverrideDefaults
-		if override == nil {
+		placed := override != nil && (override.Position != nil || override.RackFace() != "")
+		if placed {
+			if err := checkTargetPlacement(target, defaults); err != nil {
+				return err
+			}
+		}
+		p := placementOf(defaults, override, placed)
+		if p.unit.rack == "" {
 			continue
 		}
-		face := override.RackFace()
-		if override.Position == nil && face == "" {
-			continue
-		}
-		switch {
-		case face == "":
-			return fmt.Errorf("target %s: override_defaults position needs a face (front or rear)", target.Host)
-		case override.Position == nil:
-			return fmt.Errorf("target %s: override_defaults face needs a position", target.Host)
-		case face != config.RackFaceFront && face != config.RackFaceRear:
-			return fmt.Errorf("target %s: override_defaults face %q must be front or rear", target.Host, override.Face)
-		// math.Mod is NaN for an infinite or NaN position, so those fail too.
-		case *override.Position < 1 || math.Mod(*override.Position, 0.5) != 0:
-			return fmt.Errorf("target %s: override_defaults position %v must be 1 or more, in steps of 0.5",
-				target.Host, *override.Position)
-		case override.RackName() == "" && defaults.RackName() == "":
-			return fmt.Errorf("target %s: override_defaults position and face need a rack, in defaults or override_defaults",
-				target.Host)
-		}
-		if coversSeveralAddresses(target.Host) {
-			return fmt.Errorf("target %s: position and face need a single host; a range or subnet would place every device at the same U",
-				target.Host)
-		}
-		merged := config.MergeDefaults(defaults, override)
-		site := merged.Site
-		if site == "" {
-			site = defaultSite // as applyDefaults fills it in
-		}
-		unit := rackUnit{site, merged.RackName(), *merged.Position, merged.RackFace()}
-		location := strings.TrimSpace(merged.Location)
-		// Two targets with one netbox_id update one device, so they must
-		// place it at the same slot, and doing so is not a clash.
-		if target.NetboxID != nil {
-			slot := pinnedPlacement{unit: unit, location: location, host: target.Host}
-			if prev, ok := pinnedAt[*target.NetboxID]; ok {
-				if prev.unit != unit || prev.location != location {
-					return fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
-						prev.host, target.Host, *target.NetboxID)
-				}
+		// netbox_id is ignored on a range, so only a single host pins a device.
+		if target.NetboxID != nil && !coversSeveralAddresses(target.Host) {
+			seen, err := pinDevice(pinnedAt, target, p)
+			if err != nil {
+				return err
+			}
+			if seen {
 				continue
 			}
-			pinnedAt[*target.NetboxID] = slot
 		}
-		// A location read from an OID is only known at scan time, so such a
-		// target is left out of the check rather than compared by its OID.
-		if data.IsOIDReference(merged.Location) {
-			continue
-		}
-		for _, other := range placedAt[unit] {
-			// A rack sent without a location binds any rack of that name
-			// in the site.
-			if other.location == location || other.location == "" || location == "" {
-				return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
-					other.host, target.Host, unit.rack, unit.position, unit.face)
+		if placed {
+			if err := claimUnit(placedAt, target, p); err != nil {
+				return err
 			}
 		}
-		placedAt[unit] = append(placedAt[unit], rackPlacement{target.Host, location})
 	}
+	return nil
+}
+
+// checkTargetPlacement refuses a target's position and face unless set
+// together, valid, in a rack, for a single host.
+func checkTargetPlacement(target config.Target, defaults *config.Defaults) error {
+	override := target.OverrideDefaults
+	face := override.RackFace()
+	switch {
+	case face == "":
+		return fmt.Errorf("target %s: override_defaults position needs a face (front or rear)", target.Host)
+	case override.Position == nil:
+		return fmt.Errorf("target %s: override_defaults face needs a position", target.Host)
+	case face != config.RackFaceFront && face != config.RackFaceRear:
+		return fmt.Errorf("target %s: override_defaults face %q must be front or rear", target.Host, override.Face)
+	// math.Mod is NaN for an infinite or NaN position, so those fail too.
+	case *override.Position < 1 || math.Mod(*override.Position, 0.5) != 0:
+		return fmt.Errorf("target %s: override_defaults position %v must be 1 or more, in steps of 0.5",
+			target.Host, *override.Position)
+	case override.RackName() == "" && defaults.RackName() == "":
+		return fmt.Errorf("target %s: override_defaults position and face need a rack, in defaults or override_defaults",
+			target.Host)
+	}
+	if coversSeveralAddresses(target.Host) {
+		return fmt.Errorf("target %s: position and face need a single host; a range or subnet would place every device at the same U",
+			target.Host)
+	}
+	return nil
+}
+
+// placementOf returns what a target sends its device once the policy
+// defaults are merged in.
+func placementOf(defaults, override *config.Defaults, placed bool) devicePlacement {
+	merged := config.MergeDefaults(defaults, override)
+	site := merged.Site
+	if site == "" {
+		site = defaultSite // as applyDefaults fills it in
+	}
+	p := devicePlacement{
+		unit:        rackUnit{site: site, rack: merged.RackName()},
+		location:    strings.TrimSpace(merged.Location),
+		oidLocation: data.IsOIDReference(merged.Location),
+	}
+	if placed {
+		p.unit.position = *merged.Position
+		p.unit.face = merged.RackFace()
+	}
+	return p
+}
+
+// pinDevice records what a netbox_id target sends, refusing something
+// different for the same id: the targets update one device, so they must send
+// it the same rack, position and face (a rack without a position counts too).
+// It reports whether an earlier target already sent this placement.
+func pinDevice(pinnedAt map[int]pinnedPlacement, target config.Target, p devicePlacement) (bool, error) {
+	prior, ok := pinnedAt[*target.NetboxID]
+	if !ok {
+		pinnedAt[*target.NetboxID] = pinnedPlacement{placement: p, host: target.Host}
+		return false, nil
+	}
+	if prior.placement != p {
+		return false, fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
+			prior.host, target.Host, *target.NetboxID)
+	}
+	return true, nil
+}
+
+// claimUnit records the U a target places its device at, refusing one
+// another target took. Diode matches a device by rack, position and face once
+// name and site miss, so a new device sent to a taken U would update the
+// device there.
+func claimUnit(placedAt map[rackUnit][]rackPlacement, target config.Target, p devicePlacement) error {
+	// A location read from an OID is only known at scan time, so such a
+	// target is left out of the check rather than compared by its OID.
+	if p.oidLocation {
+		return nil
+	}
+	for _, other := range placedAt[p.unit] {
+		// A rack sent without a location binds any rack of that name in
+		// the site.
+		if other.location == p.location || other.location == "" || p.location == "" {
+			return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+				other.host, target.Host, p.unit.rack, p.unit.position, p.unit.face)
+		}
+	}
+	placedAt[p.unit] = append(placedAt[p.unit], rackPlacement{target.Host, p.location})
 	return nil
 }
 

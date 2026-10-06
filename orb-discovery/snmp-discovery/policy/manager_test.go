@@ -1971,6 +1971,33 @@ func TestManager_ParsePolicies_RackPlacementOneNetboxID(t *testing.T) {
 	_, err = manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"rack": "R12"},
 		pinned("192.0.2.10", 40), pinned("192.0.2.11", 40)))
 	require.NoError(t, err, "one device at one slot, named twice")
+
+	rackOnly := func(host string, override map[string]any) map[string]any {
+		return map[string]any{"host": host, "netbox_id": 42, "override_defaults": override}
+	}
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"site": "DC1"},
+		rackOnly("192.0.2.10", map[string]any{"rack": "R12"}),
+		map[string]any{"host": "192.0.2.11", "netbox_id": 42}))
+	require.NoError(t, err, "a target that sends no rack leaves the other's in place")
+	for name, tc := range map[string]struct {
+		targets []map[string]any
+		wantErr bool
+	}{
+		"two racks":                     {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R12"}), rackOnly("192.0.2.11", map[string]any{"rack": "R13"})}, true},
+		"a U and the same rack without": {[]map[string]any{pinned("192.0.2.10", 40), rackOnly("192.0.2.11", map[string]any{"rack": "R12"})}, true},
+		"one rack twice":                {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.11", map[string]any{"rack": "R13"})}, false},
+		"a range pins nothing":          {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.16/29", map[string]any{"rack": "R14"})}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"rack": "R12"}, tc.targets...))
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "place netbox_id 42 at different slots")
+		})
+	}
 }
 
 // A location read from an OID is only known at scan time, so targets using
