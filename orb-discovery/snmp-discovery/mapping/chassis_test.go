@@ -2488,6 +2488,28 @@ func TestTranslateAsStack_SerialLessChassisModelKeepsTheStandaloneRules(t *testi
 	}
 }
 
+// A row surviving beside a serial-less one may be one member of a stack seen
+// in part, so it does not name the device either.
+func TestTranslateAsStack_SerialLessSecondRowKeepsLookup(t *testing.T) {
+	for name, serial := range map[string]*string{"empty serial": strPtr(""), "serial absent": nil} {
+		t.Run(name, func(t *testing.T) {
+			master, entities, oids := standaloneWithModel("PN-48P-A")
+			oids[".1.3.6.1.2.1.47.1.1.1.1.4.2"] = Value{Value: "0"}
+			oids[".1.3.6.1.2.1.47.1.1.1.1.5.2"] = Value{Value: "3"}
+			oids[".1.3.6.1.2.1.47.1.1.1.1.13.2"] = Value{Value: "PN-24P-B"}
+			if serial != nil {
+				oids[".1.3.6.1.2.1.47.1.1.1.1.11.2"] = Value{Value: *serial}
+			}
+
+			TranslateAsStack(entities, oids, nil, nil, "", ModelNotPinned, slog.Default())
+
+			assert.Equal(t, "vendorProductName48", *master.DeviceType.Model)
+			require.NotNil(t, master.Serial, "the surviving row still gives the serial")
+			assert.Equal(t, "SN0001", *master.Serial)
+		})
+	}
+}
+
 func TestTranslateAsStack_StandaloneAfterRefusedRowsKeepsLookup(t *testing.T) {
 	master, entities, oids := standaloneWithModel("PN-48P-A")
 	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1"] = Value{Value: "1"}

@@ -442,6 +442,19 @@ func standaloneChassisModel(master *diode.Device, model string, oids ObjectIDVal
 	}
 }
 
+// typeByChassis types a standalone device after its chassis row, when the
+// model is not pinned and the device has exactly one chassis row. A row
+// beside others, refused or without a serial, may be one member of a stack
+// seen in part, so its serial is kept but it does not name the type.
+func typeByChassis(master *diode.Device, oids ObjectIDValueMap, pin ModelPin) {
+	if pin != ModelNotPinned {
+		return
+	}
+	if model, sole := soleChassisModel(oids); sole {
+		standaloneChassisModel(master, model, oids)
+	}
+}
+
 // soleChassisModel returns the entPhysicalModelName of the one chassis row
 // extractInventory would consider, when there is exactly one. It reads the row
 // whatever its serial, which the inventory needs and a model does not.
@@ -1002,8 +1015,8 @@ func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
 //     jnxBoxSerialNo or mtxrSerialNumber (see applyVendorSerialFallback);
 //     otherwise no Serial assignment is possible.
 //   - 1 chassis row -> set master.Serial on the existing Device and, when
-//     the model is not pinned and no chassis row was refused, the device
-//     type model from the row's entPhysicalModelName for the vendors
+//     the model is not pinned and no other chassis row is reported, the
+//     device type model from the row's entPhysicalModelName for the vendors
 //     standaloneChassisModel trusts; return entities unchanged in shape
 //     (standalone case).
 //   - >= 2 chassis rows -> emit master + top-level VirtualChassis +
@@ -1076,13 +1089,8 @@ func TranslateAsStack(
 		// usable, so the standard column keeps priority wherever it answers.
 		applyVendorSerialFallback(master, oids, logger)
 		// A sole chassis row dropped only for its empty serial still names
-		// a standalone device's part. Refused rows mean several, which
-		// soleChassisModel declines.
-		if pin == ModelNotPinned {
-			if model, ok := soleChassisModel(oids); ok {
-				standaloneChassisModel(master, model, oids)
-			}
-		}
+		// a standalone device's part.
+		typeByChassis(master, oids, pin)
 		return entities
 	}
 
@@ -1101,11 +1109,7 @@ func TranslateAsStack(
 	if !inv.IsStack() {
 		s := inv.Members[0].Serial
 		master.Serial = &s
-		// A row surviving only because others were refused is not the whole
-		// chassis: its serial is kept as before, but it does not name the type.
-		if pin == ModelNotPinned && len(inv.DroppedIDs) == 0 {
-			standaloneChassisModel(master, inv.Members[0].Model, oids)
-		}
+		typeByChassis(master, oids, pin)
 		if tag, ok := assetTags[inv.Members[0].ID]; ok && master.AssetTag == nil && claim(tag) {
 			master.AssetTag = StringPtr(tag)
 		}
