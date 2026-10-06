@@ -307,3 +307,45 @@ def test_an_oversized_policy_is_refused_before_placement_is_checked():
     with pytest.raises(ValidationError, match="more than the limit") as exc:
         _policy([_scope("10.0.0.0/8", rack="R12", position=40, face="front")])
     assert "single host" not in str(exc.value)
+
+
+@pytest.mark.parametrize("second", [{"rack": "R13"}, {"rack": "R12"}])
+def test_one_netbox_id_in_two_placements_is_refused(second):
+    """A rack sent without a position is a placement too: one device cannot have two."""
+    with pytest.raises(ValidationError, match="place netbox_id 42 at different slots"):
+        Policy(config=Config(defaults=Defaults(site="DC1")), scope=[
+            _pinned("192.0.2.10", rack="R12", position=40, face="front"),
+            _pinned("192.0.2.11", **second),
+        ])
+
+
+def test_one_netbox_id_in_two_racks_is_refused():
+    """Rack-only entries for one device must agree on the rack."""
+    with pytest.raises(ValidationError, match="place netbox_id 42 at different slots"):
+        Policy(config=Config(defaults=Defaults(site="DC1")), scope=[
+            _pinned("192.0.2.10", rack="R12"),
+            _pinned("192.0.2.11", rack="R13"),
+        ])
+
+
+def test_one_netbox_id_in_one_rack_is_accepted():
+    """Two rack-only entries for one device in the same rack agree."""
+    Policy(config=Config(defaults=Defaults(site="DC1", rack="R12")), scope=[
+        _pinned("192.0.2.10"), _pinned("192.0.2.11"),
+    ])
+
+
+def test_a_netbox_id_entry_that_sends_no_rack_does_not_conflict():
+    """An entry opting out of the rack sends none, so NetBox keeps the other's."""
+    Policy(config=Config(defaults=Defaults(site="DC1")), scope=[
+        _pinned("192.0.2.10", rack="R12"),
+        _pinned("192.0.2.11", rack=""),
+    ])
+
+
+def test_netbox_id_on_a_range_pins_nothing():
+    """netbox_id is ignored on a range, so it cannot conflict with a single host."""
+    Policy(config=Config(defaults=Defaults(site="DC1")), scope=[
+        _pinned("192.0.2.10", rack="R12"),
+        _pinned("192.0.2.16/29", rack="R13"),
+    ])

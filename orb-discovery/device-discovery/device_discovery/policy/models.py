@@ -671,12 +671,38 @@ def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -
     return rack
 
 
+def _site_and_location(override: Defaults, defaults: Defaults | None) -> tuple:
+    """The site and location a target's rack is sent in; no site is the undefined one."""
+    site = (_effective(override, defaults, "site") or "").strip() or UNDEFINED_PLACEHOLDER
+    return site, _effective(override, defaults, "location") or None
+
+
+def _seen_device(
+    pinned: dict[int, tuple], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+) -> bool:
+    """
+    Record the placement a netbox_id target sends, refusing a different one for that id.
+
+    Entries with one netbox_id update one device, so they must send it the same
+    rack, position and face; a rack without a position is a placement too.
+    Returns True when an earlier entry already sent this placement.
+    """
+    placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
+    prior = pinned.get(entry.netbox_id)
+    if prior is None:
+        pinned[entry.netbox_id] = (placement, entry.hostname)
+        return False
+    prior_placement, prior_host = prior
+    if prior_placement != placement:
+        raise ValueError(
+            f"targets {prior_host} and {entry.hostname} place netbox_id "
+            f"{entry.netbox_id} at different slots"
+        )
+    return True
+
+
 def _claim_slot(
-    placed: dict[tuple, list[tuple]],
-    pinned: dict[int, tuple],
-    entry: Napalm,
-    defaults: Defaults | None,
-    rack: str,
+    placed: dict[tuple, list[tuple]], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
 ) -> None:
     """
     Record the U a target places its device at, refusing one another target took.
@@ -684,24 +710,10 @@ def _claim_slot(
     Diode matches a device by rack, position and face once name and site miss,
     so a second device at one U would take the first's record. A rack sent
     without a location binds a same-named rack in any location of the site, so
-    no location clashes with any. Two entries with one netbox_id update one
-    device, so they must place it at the same slot.
+    no location clashes with any.
     """
-    override = entry.override_defaults
-    site = (_effective(override, defaults, "site") or "").strip() or UNDEFINED_PLACEHOLDER
-    location = _effective(override, defaults, "location") or None
+    site, location = _site_and_location(override, defaults)
     slot = (site, rack, override.position, override.face)
-    if entry.netbox_id is not None:
-        prior = pinned.get(entry.netbox_id)
-        if prior is not None:
-            prior_slot, prior_location, prior_host = prior
-            if (prior_slot, prior_location) != (slot, location):
-                raise ValueError(
-                    f"targets {prior_host} and {entry.hostname} place netbox_id "
-                    f"{entry.netbox_id} at different slots"
-                )
-            return
-        pinned[entry.netbox_id] = (slot, location, entry.hostname)
     for other_location, other_host in placed.get(slot, ()):
         if None in (location, other_location) or location == other_location:
             raise ValueError(
@@ -760,13 +772,17 @@ class Policy(BaseModel):
         placed: dict[tuple, list[tuple]] = {}
         pinned: dict[int, tuple] = {}
         for entry in self.scope:
-            override = entry.override_defaults
-            if override is None or (override.position is None and override.face is None):
+            override = entry.override_defaults or Defaults()
+            placed_here = override.position is not None or override.face is not None
+            rack = _effective(override, defaults, "rack")
+            if placed_here:
+                rack = _check_target_placement(entry, rack, _effective(override, defaults, "site"))
+            # netbox_id is ignored on a range, so only a single host pins a device.
+            pins = entry.netbox_id is not None and rack and count_hostnames(entry.hostname) == 1
+            if pins and _seen_device(pinned, entry, override, defaults, rack):
                 continue
-            rack = _check_target_placement(
-                entry, _effective(override, defaults, "rack"), _effective(override, defaults, "site")
-            )
-            _claim_slot(placed, pinned, entry, defaults, rack)
+            if placed_here:
+                _claim_slot(placed, entry, override, defaults, rack)
         return self
 
 
