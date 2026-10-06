@@ -39,7 +39,7 @@ policies:
     config:
       schedule: "0 */6 * * *" # Cron expression - every 6 hours
       timeout: 300 # Timeout for policy in seconds (default 2 minutes)
-      snmp_timeout: 300 # Timeout for SNMP operations in seconds (default 5 seconds)
+      snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds); must be below timeout
       snmp_probe_timeout: 1 # Timeout for SNMP probe operations in seconds (default 1 second)
       retries: 3 # Number of retries
       defaults:
@@ -55,7 +55,7 @@ policies:
           vrf: "management"
         interface:
           description: "Auto-discovered interface"
-          if_type: "ethernet"
+          if_type: "other"
         device:
           description: "SNMP discovered device"
           comments: "Automatically discovered via SNMP"
@@ -74,7 +74,7 @@ policies:
         - host: "10.0.0.1"
           port: 162  # Non-standard SNMP port
       authentication:
-        protocol_version: "v2c"
+        protocol_version: "SNMPv2c"
         community: "public"
         # For SNMPv3, use these fields instead:
         # security_level: "authPriv"
@@ -83,6 +83,7 @@ policies:
         # auth_passphrase: "${SNMP_AUTH_PASS}"
         # priv_protocol: "AES"
         # priv_passphrase: "${SNMP_PRIV_PASS}"
+```
 
 **Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
 
@@ -95,7 +96,7 @@ For example:
 
 ```yaml
 authentication:
-  protocol_version: "v3"
+  protocol_version: "SNMPv3"
   security_level: "authPriv"
   username: "${SNMP_USERNAME}"
   auth_protocol: "SHA"
@@ -250,7 +251,7 @@ defaults:
 - **Most specific match wins**: Within each priority tier, the longest matching pattern is used
 - **Case-sensitive**: Patterns are matched case-sensitively
 - **Regex syntax**: Uses Go's RE2 regex engine (see [syntax reference](https://github.com/google/re2/wiki/Syntax))
-- **Invalid patterns**: Will cause the policy to fail at load time with a clear error message
+- **Invalid patterns**: Are not caught when the policy is applied; every scan of a target that uses the pattern then fails with an error naming it
 
 #### Built-in Patterns
 
@@ -414,7 +415,7 @@ policies:
       targets:
         - host: "10.0.0.1"
       authentication:
-        protocol_version: "v2c"
+        protocol_version: "SNMPv2c"
         community: "public"
 ```
 

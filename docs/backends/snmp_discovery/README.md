@@ -116,7 +116,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ platform   | string  | Override the auto-discovered platform name   |
 | interface    | map  | Interface-specific defaults    |
 | ├─ description | string  | Interface description        |
-| ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
+| ├─ if_type       | string | Interface type (e.g. "1000base-t", "other")  |
 | ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
 | ├─ vrf   | string \| map  | IP address VRF name, or a VRF map (see the [vrf map](#vrf-map) below). Used for both address families unless an AF-specific override is set. |
@@ -302,7 +302,7 @@ config:
       # vrf_ipv6: { name: "ipv6-vrf", rd: "65000:6" }
     interface:
       description: "Auto-discovered interface"
-      if_type: "ethernet"
+      if_type: "other"
     interface_patterns:
       - match: "^(GigabitEthernet|Gi).*"
         type: "1000base-t"
@@ -400,7 +400,7 @@ Link-aggregation membership is read from the standard `IEEE8023-LAG-MIB::dot3adA
 
 **Junos logical units.** On Junos the aggregation port the MIB names is the logical unit (`xe-0/0/0.0`), not the physical port. NetBox does not allow a LAG parent on a virtual interface, so a member that is itself a subinterface is normalised to its physical parent by name — the same derivation used for `Interface.parent` — and the relationship is emitted once on the physical port: `xe-0/0/24.0 → ae120` and `xe-0/0/24.1876 → ae120` both become `xe-0/0/24 → ae120`. Platforms whose members are the physical ports themselves (Cisco, Arista, and most others) are used as-is.
 
-Whether a member is a logical interface is decided on the `ifType` the device reported for it, not on the interface type emitted to NetBox — that type is resolved from the name first, so any name parsing as a child is typed virtual before `ifType` is read. A channelized lane (`1/1/11:1`, `et-0/0/0:0`) is a member in its own right and keeps its own membership; a member the walk carries no `ifType` for is left alone for the same reason. The reference is emitted only on an interface NetBox accepts one on: a target typed `virtual`, `bridge` or `lag` is skipped with a warning, since NetBox refuses the interface outright and that would fail the target's whole ingestion.
+Whether a member is a logical interface is decided on the `ifType` the device reported for it, not on the interface type emitted to NetBox — that type is resolved from the name first, so any name parsing as a child is typed virtual before `ifType` is read. A channelized lane (`1/1/11:1`, `et-0/0/0:0`) is a member in its own right and keeps its own membership; a member the walk carries no `ifType` for is left alone for the same reason. The reference is emitted only on an interface that can carry one. A target typed `virtual` is skipped with a warning, since NetBox refuses the interface outright and that would fail the target's whole ingestion; so is a target typed `bridge` or `lag`, which is not a LAG member in practice.
 
 **What is refused, with a warning.** A member or aggregate `ifIndex` that is not in the interface walk; an aggregate the mapper did not type as `lag`; a virtual member whose physical parent is not in the walk, or whose parent name matches more than one interface on the device (a stack repeating a management-port name per member); a member that resolves to its own aggregate; and a physical port whose units name two different aggregates — that is contradictory, so the port is left without a `lag` rather than picking one. Runs after stack translation, so on a Virtual Chassis both member and aggregate references already name the owning stack member.
 

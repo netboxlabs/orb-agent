@@ -113,8 +113,8 @@ def test_aggregate_not_typed_lag_is_refused(caplog):
     assert "not lag" in caplog.text
 
 
-def test_member_of_a_type_netbox_refuses_a_lag_on_is_skipped(caplog):
-    """A virtual, bridge or lag member would fail the interface outright, so it is skipped."""
+def test_member_typed_virtual_bridge_or_lag_is_skipped(caplog):
+    """NetBox refuses a LAG on a virtual member, failing the interface outright; bridge and lag are not LAG members in practice."""
     for member_type in ("virtual", "bridge", "lag"):
         entities = [_iface("m1", member_type), _iface("ae1", "lag")]
         caplog.clear()
