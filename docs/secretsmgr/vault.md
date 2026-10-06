@@ -88,7 +88,7 @@ auth_args:
 
 ## Usage
 
-The Orb Agent supports three reference grammars; pick whichever fits your Vault layout. They are checked in priority order — fully qualified, short form, then legacy.
+The Orb Agent supports three reference grammars; pick whichever fits your Vault layout. They are checked in priority order — fully qualified, short form, then legacy. In any of these forms, `${secret://…}` may be used instead of `${vault://…}` — see [Provider-agnostic secret references](./secret_references.md).
 
 ### Fully qualified (recommended for multi-segment mounts)
 

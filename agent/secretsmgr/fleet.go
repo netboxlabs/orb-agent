@@ -21,7 +21,11 @@ import (
 var _ Manager = (*FleetSecretsManager)(nil)
 
 // fleetRefRegex matches fleet secret references in the format ${fleet://path}
-var fleetRefRegex = regexp.MustCompile(`\${fleet://([^}]+)}`)
+// or the provider-agnostic ${secret://path} form. The body uses * (zero or
+// more) so an empty body like "${secret://}" still matches and is rejected
+// with a clear error instead of leaking the literal placeholder to the
+// backend — mirroring the shared resolver.
+var fleetRefRegex = regexp.MustCompile(`\${(?:fleet|` + genericScheme + `)://([^}]*)}`)
 
 const defaultSecretRequestTimeout = 30 * time.Second
 
@@ -345,7 +349,9 @@ func collectFleetPaths(v any, set map[string]struct{}) {
 		// Align with processString: only the first ${fleet://...} is resolved; the rest
 		// of the string is discarded when substituting (legacy single-token behavior).
 		idx := fleetRefRegex.FindStringSubmatchIndex(val)
-		if len(idx) >= 4 {
+		if len(idx) >= 4 && idx[2] != idx[3] {
+			// empty bodies are skipped here; processString rejects them with
+			// a clear error rather than requesting an empty path
 			set[val[idx[2]:idx[3]]] = struct{}{}
 		}
 	case map[string]any:
@@ -447,6 +453,9 @@ func (f *FleetSecretsManager) processString(s string, id string) (string, error)
 	}
 
 	fleetPath := s[match[2]:match[3]]
+	if fleetPath == "" {
+		return "", fmt.Errorf("invalid fleet secret reference: empty body in %s", s)
+	}
 
 	// Check if secret exists in cache and update policy tracking
 	f.mu.Lock()
@@ -527,7 +536,7 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 
 	f.logger.Info("requesting secrets", "paths", paths, "policy_ids", policyIDs)
 	if f.publisher == nil {
-		return nil, fmt.Errorf("MQTT publisher not bound")
+		return nil, fmt.Errorf("MQTT publisher not bound: the fleet secrets manager has no active MQTT session; note that secret references inside the agent configuration are resolved at startup, before the session is established, and always fail here — use them in policies instead")
 	}
 
 	requestID := uuid.New().String()
