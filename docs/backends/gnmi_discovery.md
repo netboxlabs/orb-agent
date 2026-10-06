@@ -232,7 +232,7 @@ The policy is rejected when:
 
 How the placement behaves:
 - A rack name that doesn't exist in the site is created by Diode, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
-- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height) means the device isn't ingested that cycle, and NetBox's reason appears in the Diode ingestion logs.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): NetBox rejects the device's own record that cycle, and its reason appears in the Diode ingestion logs. Its interfaces and addresses are separate records and still go in.
 - A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode matches devices by rack, position and face. Make sure the U is free before setting it.
 - The position is re-applied every run, so a device moved in NetBox moves back on the next run unless its override is updated.
 
