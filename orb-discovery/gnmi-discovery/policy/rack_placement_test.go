@@ -454,6 +454,20 @@ func TestNetboxIDOnRangeSyntaxPinsNothing(t *testing.T) {
 	require.NoError(t, err, "the /32 pins nothing, so the literal target's placement is its own")
 }
 
+// The netbox_id rule reads the resolved host: ${VAR} hosts are opaque
+// strings until then, and would otherwise pass as single addresses.
+func TestNetboxIDOnAnEnvVarHostReadsTheResolvedHost(t *testing.T) {
+	t.Setenv("RACK_HOST_A", "192.0.2.10/32")
+	t.Setenv("RACK_HOST_B", "192.0.2.11/32")
+	pinned := func(host string) string {
+		return "        - host: " + host + "\n          netbox_id: 42\n          override_defaults:\n            position: 40\n            face: front"
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		pinned("${RACK_HOST_A}")+"\n"+pinned("${RACK_HOST_B}")))
+	require.Error(t, err, "both /32s drop the netbox_id, so they are two devices at one U")
+	require.Contains(t, err.Error(), "targets 192.0.2.10/32 and 192.0.2.11/32 are both placed at R12 U40 front")
+}
+
 // A rack without a position is what a netbox_id target sends its device too.
 func TestOneNetboxIDRackOnly(t *testing.T) {
 	rackOnly := func(host, rack string) string {

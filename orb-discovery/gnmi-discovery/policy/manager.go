@@ -111,6 +111,11 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		if err := validateTargetHosts(&policy, m.logger); err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
+		// Also after resolution: whether a target keeps its netbox_id depends
+		// on how its host is written.
+		if err := checkRackSlots(&policy); err != nil {
+			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
+		}
 		m.applyDefaults(&policy)
 		payload.Policies[name] = policy
 	}
@@ -157,10 +162,6 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	// Each U (a placement without its location) maps its locations ("" for
-	// none) to the target placed there, so each check is one lookup.
-	placed := map[placementKey]map[string]string{}
-	pinned := map[int]placedTarget{}
 	for _, t := range policy.Scope.Targets {
 		if t.Host == "" {
 			return errors.New("target with empty host")
@@ -178,6 +179,18 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
 		}
+	}
+	return nil
+}
+
+// checkRackSlots refuses two devices at one U, and two placements for one
+// netbox_id. Targets must have passed validatePlacement.
+func checkRackSlots(policy *config.Policy) error {
+	// Each U (a placement without its location) maps its locations ("" for
+	// none) to the target placed there, so each check is one lookup.
+	placed := map[placementKey]map[string]string{}
+	pinned := map[int]placedTarget{}
+	for _, t := range policy.Scope.Targets {
 		key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
 		if key.rack == "" {
 			continue
