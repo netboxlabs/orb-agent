@@ -556,6 +556,43 @@ func TestOneAssetTagPlacement(t *testing.T) {
 	}
 }
 
+// A shared identifier means two targets may update one device, so their
+// placements must agree; only a shared strongest one, in Diode's matching
+// order, says they do, so only that lets two targets share a U.
+func TestPlacementIdentityPrecedence(t *testing.T) {
+	target := func(host, id, tag, rack, position string) string {
+		out := "        - host: " + host + "\n"
+		if id != "" {
+			out += "          netbox_id: " + id + "\n"
+		}
+		out += "          override_defaults:\n            asset_tag: " + tag + "\n            rack: " + rack
+		if position != "" {
+			out += "\n            position: " + position + "\n            face: front"
+		}
+		return out
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		target("192.0.2.10", "41", "A1", "R12", "40")+"\n"+target("192.0.2.11", "42", "A1", "R12", "40")))
+	require.Error(t, err, "two netbox_ids are two devices, whatever tag they share")
+	require.Contains(t, err.Error(), "targets 192.0.2.10 and 192.0.2.11 are both placed at R12 U40 front")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		target("192.0.2.10", "42", "A1", "R12", "")+"\n"+target("192.0.2.11", "", "A1", "R13", "")))
+	require.Error(t, err, "the tag may match the netbox_id device, so the racks must agree")
+	require.Contains(t, err.Error(), "place asset_tag A1 at different slots")
+
+	for _, order := range [][2]string{{"42", ""}, {"", "42"}} {
+		_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+			target("192.0.2.10", order[0], "A1", "R12", "40")+"\n"+target("192.0.2.11", order[1], "A1", "R12", "40")))
+		require.Error(t, err, "a tag alongside a netbox_id does not show the tag-only target is that device")
+		require.Contains(t, err.Error(), "are both placed at R12 U40 front")
+	}
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        site: DC1",
+		target("192.0.2.10", "42", "A1", "R12", "40")+"\n"+target("192.0.2.11", "42", "A1", "R12", "40")))
+	require.NoError(t, err, "one netbox_id at one U is one device")
+}
+
 // A rack without a position is what a netbox_id target sends its device too.
 func TestOneNetboxIDRackOnly(t *testing.T) {
 	rackOnly := func(host, rack string) string {

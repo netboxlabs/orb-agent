@@ -230,9 +230,12 @@ type placementKey struct {
 }
 
 // placedTarget is a target already placed at a U, for the duplicate check.
+// strongest records whether the identifier it is filed under was the
+// strongest that target carried.
 type placedTarget struct {
-	key  placementKey
-	host string
+	key       placementKey
+	host      string
+	strongest bool
 }
 
 // deviceID is something a device is matched by ahead of its name: a kept
@@ -241,8 +244,9 @@ type deviceID struct {
 	kind, value string
 }
 
-// deviceIDs lists what candidate t's device is matched by. A tag read from a
-// path is only known at scan time, and one the mapper would not send is none.
+// deviceIDs lists what candidate t's device is matched by, strongest first as
+// Diode tries them. A tag read from a path is only known at scan time, and one
+// the mapper would not send is none.
 func deviceIDs(t config.Target, d *config.Defaults) []deviceID {
 	var ids []deviceID
 	if t.NetboxID != nil {
@@ -255,23 +259,26 @@ func deviceIDs(t config.Target, d *config.Defaults) []deviceID {
 }
 
 // pinDevice records what target t sends the device each of ids names,
-// refusing something different for one already named: the targets update one
-// device, so they must send it the same rack, position and face (a rack
-// without a position counts too). It reports whether an earlier target
-// already sent this placement.
+// refusing something different for one already named: the targets may update
+// one device, so they must send it the same rack, position and face (a rack
+// without a position counts too). It reports whether an earlier target is
+// known to be this device, sharing the strongest identifier of both: a weaker
+// one can be outranked, as two netbox_ids sharing a tag are two devices.
 func pinDevice(pinned map[deviceID]placedTarget, key placementKey, t config.Target, ids []deviceID) (bool, error) {
 	seen := false
-	for _, id := range ids {
+	for i, id := range ids {
 		prior, ok := pinned[id]
 		if !ok {
-			pinned[id] = placedTarget{key: key, host: t.Host}
+			pinned[id] = placedTarget{key: key, host: t.Host, strongest: i == 0}
 			continue
 		}
 		if prior.key != key {
 			return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
 				prior.host, t.Host, id.kind, id.value)
 		}
-		seen = true
+		if i == 0 && prior.strongest {
+			seen = true
+		}
 	}
 	return seen, nil
 }
