@@ -248,18 +248,23 @@ class Defaults(BaseModel):
     @field_validator("rack", mode="before")
     @classmethod
     def _strip_rack(cls, v: object) -> object:
-        """Trim the rack name and read a numeric one as text; a blank one means no rack."""
-        if isinstance(v, int) and not isinstance(v, bool):
-            return str(v)
-        if isinstance(v, str):
-            return v.strip()
-        return v
+        """
+        Trim the rack name; a blank one means no rack.
+
+        A number is refused rather than read as text: YAML reads an unquoted 01
+        as 1 and 010 as 8, so the name that was meant is already lost.
+        """
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError('rack must be text; quote a numeric rack name, e.g. rack: "01"')
+        return v.strip()
 
     @field_validator("face", mode="before")
     @classmethod
     def _normalize_face(cls, v: object) -> object:
         """Accept front or rear in any case; NetBox stores them lowercase."""
-        if v is None:
+        if v is None or (isinstance(v, str) and not v.strip()):
             return None
         if isinstance(v, str) and v.strip().lower() in RACK_FACES:
             return v.strip().lower()
@@ -634,6 +639,54 @@ class Napalm(BaseModel):
     )
 
 
+def _effective(override: Defaults, defaults: Defaults | None, field: str):
+    """A target's value for field, as merge_override_defaults resolves it."""
+    if field in override.model_fields_set and getattr(override, field) is not None:
+        return getattr(override, field)
+    return getattr(defaults, field) if defaults is not None else None
+
+
+def _check_target_placement(entry: Napalm, rack: str | None) -> str:
+    """Refuse a target's position and face unless set together, in a rack, for one host."""
+    override = entry.override_defaults
+    if override.position is None or override.face is None:
+        raise ValueError(f"{entry.hostname}: position and face go together; set both")
+    if not rack:
+        raise ValueError(
+            f"{entry.hostname}: position and face need a rack, "
+            "in override_defaults or the policy defaults"
+        )
+    if count_hostnames(entry.hostname) > 1:
+        raise ValueError(
+            f"{entry.hostname}: position and face need a single host; "
+            "a range or subnet would place every device at the same U"
+        )
+    return rack
+
+
+def _claim_slot(placed: list[tuple], entry: Napalm, defaults: Defaults | None, rack: str) -> None:
+    """
+    Record the U a target places its device at, refusing one another target took.
+
+    Diode matches a device by rack, position and face once name and site miss,
+    so a second device at one U would take the first's record. A rack sent
+    without a location binds a same-named rack in any location of the site, so
+    no location clashes with any.
+    """
+    override = entry.override_defaults
+    site = _effective(override, defaults, "site") or UNDEFINED_PLACEHOLDER
+    location = _effective(override, defaults, "location") or None
+    slot = (site, rack, override.position, override.face)
+    for other_slot, other_location, other_host in placed:
+        same_location = None in (location, other_location) or location == other_location
+        if other_slot == slot and same_location:
+            raise ValueError(
+                f"targets {other_host} and {entry.hostname} are both placed at "
+                f"{rack} U{override.position:g} {override.face}"
+            )
+    placed.append((slot, location, entry.hostname))
+
+
 class Policy(BaseModel):
     """Model for a policy configuration."""
 
@@ -652,41 +705,13 @@ class Policy(BaseModel):
         defaults = self.config.defaults if self.config else None
         if defaults is not None and (defaults.position is not None or defaults.face is not None):
             raise ValueError("defaults: position and face are set per target, in override_defaults")
-
-        def effective(override: Defaults, field: str):
-            # As merge_override_defaults: an override field counts when set and not null.
-            if field in override.model_fields_set and getattr(override, field) is not None:
-                return getattr(override, field)
-            return getattr(defaults, field) if defaults is not None else None
-
-        placed: dict[tuple, str] = {}
+        placed: list[tuple] = []
         for entry in self.scope:
             override = entry.override_defaults
             if override is None or (override.position is None and override.face is None):
                 continue
-            if override.position is None or override.face is None:
-                raise ValueError(f"{entry.hostname}: position and face go together; set both")
-            rack = effective(override, "rack")
-            if not rack:
-                raise ValueError(
-                    f"{entry.hostname}: position and face need a rack, "
-                    "in override_defaults or the policy defaults"
-                )
-            if count_hostnames(entry.hostname) > 1:
-                raise ValueError(
-                    f"{entry.hostname}: position and face need a single host; "
-                    "a range or subnet would place every device at the same U"
-                )
-            # Diode matches a device by rack, position and face once name and
-            # site miss, so a second device at one U would take the first's record.
-            slot = (effective(override, "site"), effective(override, "location"), rack,
-                    override.position, override.face)
-            if slot in placed:
-                raise ValueError(
-                    f"targets {placed[slot]} and {entry.hostname} are both placed at "
-                    f"{rack} U{override.position:g} {override.face}"
-                )
-            placed[slot] = entry.hostname
+            rack = _check_target_placement(entry, _effective(override, defaults, "rack"))
+            _claim_slot(placed, entry, defaults, rack)
         return self
 
     @model_validator(mode="after")

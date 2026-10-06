@@ -319,7 +319,8 @@ scope:
 ```
 
 - `position` is a U from 1, in steps of 0.5 (`40.5` is a half U). `face` is `front` or `rear`. They are set together, and the target needs a rack, its own or the policy's. A target's `rack: ""` keeps its device out of the policy's rack.
-- A policy is refused when its `defaults` set `position` or `face`, when a target whose `hostname` expands to more than one address (a subnet or range) sets them, or when two targets are placed at the same rack, U and face.
+- Quote a numeric rack name (`rack: "01"`). YAML reads an unquoted `01` as the number 1 and `010` as 8, so a number is refused rather than guessed at.
+- A policy is refused when its `defaults` set `position` or `face`, when a target whose `hostname` expands to more than one address (a subnet or range) sets them, or when two targets are placed at the same rack, U and face in one site. A target without a `location` counts as any location, since its rack is matched by name across the site.
 - On a switch stack, the master, which is the lowest member id (see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis)), takes the position and face; the other members take the rack only.
 - Without `position`, no position is sent, so NetBox keeps whatever it has.
 

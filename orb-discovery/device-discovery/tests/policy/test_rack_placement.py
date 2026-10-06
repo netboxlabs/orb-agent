@@ -82,7 +82,7 @@ def test_rack_alone_is_fine_on_a_range(hostname):
     assert policy.scope[0].override_defaults.rack == "R12"
 
 
-@pytest.mark.parametrize("face", ["side", "", "front-ish"])
+@pytest.mark.parametrize("face", ["side", "front-ish"])
 def test_face_must_be_front_or_rear(face):
     """NetBox's rack faces are front and rear."""
     with pytest.raises(ValidationError, match="face must be front or rear"):
@@ -102,10 +102,17 @@ def test_valid_positions(position):
     assert Defaults(position=position).position == position
 
 
-@pytest.mark.parametrize(("rack", "want"), [(" R12 ", "R12"), ("   ", ""), ("", ""), (12, "12")])
+@pytest.mark.parametrize(("rack", "want"), [(" R12 ", "R12"), ("   ", ""), ("", "")])
 def test_rack_name_is_trimmed(rack, want):
-    """A rack name is trimmed, kept blank when blank, and read as text when numeric."""
+    """A rack name is trimmed, and kept blank when blank."""
     assert Defaults(rack=rack).rack == want
+
+
+@pytest.mark.parametrize("rack", [1, 8, 12.0, True])
+def test_numeric_rack_name_must_be_quoted(rack):
+    """YAML reads an unquoted 01 as 1 and 010 as 8, so the name it meant is lost."""
+    with pytest.raises(ValidationError, match='quote a numeric rack name'):
+        Defaults(rack=rack)
 
 
 def test_blank_rack_does_not_serve_a_position():
@@ -150,11 +157,45 @@ def test_two_targets_at_the_same_u_through_the_policy_rack_are_refused():
     {"rack": "R13", "position": 40, "face": "front"},
     {"rack": "R12", "position": 41, "face": "front"},
     {"rack": "R12", "position": 40, "face": "front", "site": "DC2"},
-    {"rack": "R12", "position": 40, "face": "front", "location": "Hall B"},
 ])
 def test_targets_at_different_slots_are_accepted(other):
-    """Another face, rack, U, site or location is another slot."""
+    """Another face, rack, U or site is another slot."""
     _policy([_scope("192.0.2.10", rack="R12", position=40, face="front"), _scope("192.0.2.11", **other)])
+
+
+def test_targets_in_different_locations_are_accepted():
+    """Same-named racks in two locations are two racks."""
+    _policy([
+        _scope("192.0.2.10", location="Hall A", rack="R12", position=40, face="front"),
+        _scope("192.0.2.11", location="Hall B", rack="R12", position=40, face="front"),
+    ])
+
+
+@pytest.mark.parametrize("unlocated", [{}, {"location": ""}])
+def test_a_target_without_a_location_clashes_with_any_location(unlocated):
+    """A rack sent without a location binds a same-named rack in any location of the site."""
+    for first, second in ((unlocated, {"location": "Hall B"}), ({"location": "Hall B"}, unlocated)):
+        with pytest.raises(ValidationError, match="both placed at R12 U40 front"):
+            _policy([
+                _scope("192.0.2.10", rack="R12", position=40, face="front", **first),
+                _scope("192.0.2.11", rack="R12", position=40, face="front", **second),
+            ])
+
+
+def test_a_target_restating_the_policy_rack_is_the_same_slot():
+    """A rack set on one target and inherited by the other is still one rack."""
+    with pytest.raises(ValidationError, match="both placed at R12 U40 front"):
+        _policy([
+            _scope("192.0.2.10", rack="R12", position=40, face="front"),
+            _scope("192.0.2.11", position=40, face="front"),
+        ], rack="R12")
+
+
+def test_a_null_target_rack_falls_back_to_the_policy_rack():
+    """A null override is no override, as in the merge."""
+    policy = _policy([_scope(rack=None, position=40, face="front")], rack="R12")
+    merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
+    assert merged.rack == "R12"
 
 
 @pytest.mark.parametrize("position", [True, False])
@@ -172,6 +213,12 @@ def test_numeric_string_position_is_accepted():
 def test_face_is_trimmed_and_lowercased():
     """Surrounding spaces and case are not part of the face."""
     assert Defaults(face=" Front ").face == "front"
+
+
+@pytest.mark.parametrize("face", ["", "  "])
+def test_blank_face_means_no_face(face):
+    """As in the other backends, a blank face is unset."""
+    assert Defaults(face=face).face is None
 
 
 def test_policy_yaml_with_position_in_defaults_is_refused():
@@ -201,3 +248,12 @@ def test_a_target_restating_the_policy_site_is_the_same_slot():
             _scope("192.0.2.10", site="DC1", rack="R12", position=40, face="front"),
             _scope("192.0.2.11", rack="R12", position=40, face="front"),
         ], site="DC1")
+
+
+def test_no_site_and_the_undefined_site_are_one_site():
+    """A device without a site lands in the "undefined" site, so the two clash."""
+    with pytest.raises(ValidationError, match="both placed at R12 U40 front"):
+        Policy(scope=[
+            _scope("192.0.2.10", site="undefined", rack="R12", position=40, face="front"),
+            _scope("192.0.2.11", rack="R12", position=40, face="front"),
+        ])
