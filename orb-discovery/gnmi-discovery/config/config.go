@@ -279,7 +279,8 @@ type RackText string
 // reaches it: yaml leaves the field empty.
 func (r *RackText) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind != yaml.ScalarNode || node.ShortTag() != "!!str" {
-		return errors.New(`rack must be text; quote a numeric rack name, e.g. rack: "01"`)
+		return fmt.Errorf(`line %d: rack %s must be text; quote a numeric rack name, e.g. rack: "01"`,
+			node.Line, node.Value)
 	}
 	*r = RackText(node.Value)
 	return nil

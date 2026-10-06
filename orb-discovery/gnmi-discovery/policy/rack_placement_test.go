@@ -419,3 +419,20 @@ func TestRackPlacementYAMLTypes(t *testing.T) {
 		})
 	}
 }
+
+// Two targets with one netbox_id update one device: they must place it at
+// the same slot, and doing so is not a clash.
+func TestOneNetboxIDPlacement(t *testing.T) {
+	pinned := func(host string, position string) string {
+		return "        - host: " + host + "\n          netbox_id: 42\n          override_defaults:\n            position: " +
+			position + "\n            face: front"
+	}
+	_, err := newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		pinned("192.0.2.10", "40")+"\n"+pinned("192.0.2.11", "41")))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "targets 192.0.2.10 and 192.0.2.11 place netbox_id 42 at different slots")
+
+	_, err = newTestManager(t).ParsePolicies(rackPolicy("        rack: R12",
+		pinned("192.0.2.10", "40")+"\n"+pinned("192.0.2.11", "40")))
+	require.NoError(t, err, "one device at one slot, named twice")
+}

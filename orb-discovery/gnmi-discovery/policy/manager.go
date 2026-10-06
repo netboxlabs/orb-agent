@@ -180,12 +180,21 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if hasPlacement(t.OverrideDefaults) {
 				key := placementOf(&policy.Config.Defaults, t.OverrideDefaults)
 				for _, p := range placed {
+					// Two targets with one netbox_id update one device, so
+					// they must place it at the same slot; that is no clash.
+					if t.NetboxID != nil && p.netboxID != nil && *p.netboxID == *t.NetboxID {
+						if p.key != key {
+							return fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
+								p.host, t.Host, *t.NetboxID)
+						}
+						continue
+					}
 					if p.key.clashes(key) {
 						return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
 							p.host, t.Host, key.rack, key.position, key.face)
 					}
 				}
-				placed = append(placed, placedTarget{key: key, host: t.Host})
+				placed = append(placed, placedTarget{key: key, host: t.Host, netboxID: t.NetboxID})
 			}
 		}
 	}
@@ -200,8 +209,9 @@ type placementKey struct {
 
 // placedTarget is a target already placed at a U, for the duplicate check.
 type placedTarget struct {
-	key  placementKey
-	host string
+	key      placementKey
+	host     string
+	netboxID *int
 }
 
 // clashes reports whether two placements name the same U. A rack sent without
