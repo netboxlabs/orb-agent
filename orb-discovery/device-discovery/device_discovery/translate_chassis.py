@@ -281,6 +281,10 @@ def _build_member_devices(
         # asset_tag is a high-precedence matcher in Diode — copying the
         # defaults.device.asset_tag onto every member would collide.
         member_dev.ClearField("asset_tag")
+        # A target's position and face describe the master's U; each member
+        # sits in its own, so members keep only the rack.
+        member_dev.ClearField("position")
+        member_dev.ClearField("face")
         member_dev.vc_position = m["id"]
         member_devices[m["id"]] = member_dev
     return member_devices

@@ -197,6 +197,10 @@ UNDEFINED_PLACEHOLDER = "undefined"
 MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
 
 
+#: NetBox's rack faces.
+RACK_FACES = ("front", "rear")
+
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
@@ -217,6 +221,13 @@ class Defaults(BaseModel):
     )
     location: str | None = Field(default=None, description="Location name, optional")
     rack: str | None = Field(default=None, description="Rack name, optional")
+    position: float | None = Field(
+        default=None,
+        description="Rack U position, set per target in override_defaults, with face",
+    )
+    face: str | None = Field(
+        default=None, description="Rack face (front or rear), set per target with position"
+    )
     stack_member_name_template: str = Field(
         default=DEFAULT_STACK_MEMBER_TEMPLATE,
         description=(
@@ -232,6 +243,32 @@ class Defaults(BaseModel):
         """Treat an empty list as None so override_defaults does not clear the global list."""
         if isinstance(v, list) and len(v) == 0:
             return None
+        return v
+
+    @field_validator("rack")
+    @classmethod
+    def _strip_rack(cls, v: str | None) -> str | None:
+        """Trim the rack name; a blank one means no rack."""
+        if v is None:
+            return None
+        return v.strip() or None
+
+    @field_validator("face", mode="before")
+    @classmethod
+    def _normalize_face(cls, v: object) -> object:
+        """Accept front or rear in any case; NetBox stores them lowercase."""
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip().lower() in RACK_FACES:
+            return v.strip().lower()
+        raise ValueError("face must be front or rear")
+
+    @field_validator("position")
+    @classmethod
+    def _check_position(cls, v: float | None) -> float | None:
+        """NetBox positions start at U1 and move in half-U steps."""
+        if v is not None and (v < 1 or (v * 2) % 1 != 0):
+            raise ValueError("position must be at least 1, in steps of 0.5")
         return v
 
     @field_validator("stack_member_name_template", mode="before")
@@ -592,6 +629,37 @@ class Policy(BaseModel):
 
     config: Config | None = Field(default=None, description="Configuration data")
     scope: list[Napalm]
+
+    @model_validator(mode="after")
+    def validate_rack_placement(self):
+        """
+        Allow a rack position and face only per single-host target, together, with a rack.
+
+        One U for every device of a policy, or of a range or subnet, cannot be
+        right; NetBox requires a face for any position; and a position means
+        nothing without a rack, which may come from the policy defaults.
+        """
+        defaults = self.config.defaults if self.config else None
+        if defaults is not None and (defaults.position is not None or defaults.face is not None):
+            raise ValueError("defaults: position and face are set per target, in override_defaults")
+        policy_rack = defaults.rack if defaults is not None else None
+        for entry in self.scope:
+            override = entry.override_defaults
+            if override is None or (override.position is None and override.face is None):
+                continue
+            if override.position is None or override.face is None:
+                raise ValueError(f"{entry.hostname}: position and face go together; set both")
+            if not (override.rack or policy_rack):
+                raise ValueError(
+                    f"{entry.hostname}: position and face need a rack, "
+                    "in override_defaults or the policy defaults"
+                )
+            if count_hostnames(entry.hostname) > 1:
+                raise ValueError(
+                    f"{entry.hostname}: position and face need a single host; "
+                    "a range or subnet would place every device at the same U"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_expansion_budget(self):

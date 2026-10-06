@@ -183,7 +183,9 @@ Current supported defaults:
 | interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 | location | str | Device location |
-| rack  | str | Rack name to associate the device with |
+| rack  | str | Rack name to place the device in. See [Rack placement](#rack-placement) |
+| position | number | Rack U position, a whole or half U from 1. Per device only, in a target's `override_defaults`, with `face` and a rack. See [Rack placement](#rack-placement) |
+| face | str | Rack face, `front` or `rear`. Per device only, in a target's `override_defaults`, with `position` |
 | stack_member_name_template | str | Template for stack / Virtual Chassis member device names. Placeholders: `{name}` (the stack name) and `{id}` (the device-reported member id). Defaults to `{name}-{id}`, which reproduces the legacy naming. See [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis). |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
@@ -300,6 +302,33 @@ policy scopes expand to 1048544 addresses in total, more than the limit of 65536
 A single entry over the limit is also refused at expansion time as a backstop:
 it is skipped, named in an error, and recorded as a failed run, leaving the rest
 of the policy unaffected.
+
+#### Rack placement
+
+`rack` places the device in a NetBox rack, policy-wide in `defaults` or per device in `override_defaults`. The rack is sent with the device's site and, when `location` is set, its location. A device can also be given a U position and a face, but only per device, in a target's `override_defaults`:
+
+```yaml
+scope:
+  - hostname: 192.0.2.10
+    username: admin
+    password: ${PASS}
+    override_defaults:
+      rack: R12
+      position: 40
+      face: front
+```
+
+- `position` is a U from 1, in steps of 0.5 (`40.5` is a half U). `face` is `front` or `rear`. They are set together, and the target needs a rack, its own or the policy's.
+- A policy is refused when its `defaults` set `position` or `face`, or when a target whose `hostname` is a subnet or range sets them: every device would get the same U.
+- On a switch stack, the master takes the position and face; the other members take the rack only.
+- Without `position`, the device is placed in the rack without a U, and a position set in NetBox is kept.
+
+Placement follows Diode's rules:
+
+- A rack name that doesn't exist in the site is created, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): the device isn't ingested that cycle, and NetBox's reason appears in the Diode ingestion logs.
+- A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode also matches devices by rack, position and face. Make sure the U is free before setting it.
+- The position is applied on every run, so a device moved in NetBox moves back unless its `override_defaults` entry changes.
 
 ### SSH Configuration and Jumphost Support
 
@@ -540,6 +569,8 @@ The tables below show which fields are populated automatically from the device v
 | Site | **Not collected** | Must be set via `defaults.site` |
 | Role | **Not collected** | Must be set via `defaults.role` |
 | Location | **Not collected** | Must be set via `defaults.location` |
+| Rack | **Not collected** | Set via `defaults.rack` or a target's `override_defaults.rack` |
+| Position, face | **Not collected** | Set per device via a target's `override_defaults.position` and `override_defaults.face` |
 | Tenant | **Not collected** | Must be set via `defaults.tenant` |
 | Description | **Not collected** | Must be set via `defaults.device.description` |
 | Comments | **Not collected** | Must be set via `defaults.device.comments` |

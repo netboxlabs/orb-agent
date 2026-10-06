@@ -255,6 +255,25 @@ def test_member_devices_have_no_asset_tag():
         )
 
 
+def test_only_the_stack_master_takes_the_position_and_face():
+    """Each member sits in its own U, which one target's override cannot describe."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(rack="R12", position=40, face="front")
+
+    entities = list(translate_data(data))
+    devices = [e.device for e in entities if e.HasField("device")]
+    master = next(d for d in devices if not d.HasField("virtual_chassis"))
+    members = [d for d in devices if d.HasField("virtual_chassis")]
+    assert members, "expected at least one member Device"
+    assert master.rack.name == "R12"
+    assert master.position == 40
+    assert master.face == "front"
+    for md in members:
+        assert md.rack.name == "R12", f"member {md.name} lost the rack"
+        assert not md.HasField("position"), f"member {md.name} carried position {md.position}"
+        assert not md.HasField("face"), f"member {md.name} carried face {md.face!r}"
+
+
 def test_vc_master_ref_carries_master_asset_tag_and_source_match():
     """VC master inline ref must repeat the emitted master's matcher fields (asset_tag + source_match)."""
     data = _base_data(_two_member_payload())

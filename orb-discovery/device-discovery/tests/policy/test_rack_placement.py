@@ -1,0 +1,113 @@
+#!/usr/bin/env python
+# Copyright 2026 NetBox Labs Inc
+"""Rack placement in policy defaults and per-target override_defaults."""
+
+import pytest
+from pydantic import ValidationError
+
+from device_discovery.policy.models import Config, Defaults, Napalm, Policy
+from device_discovery.policy.runner import merge_override_defaults
+
+
+def _scope(hostname="192.0.2.10", **override):
+    return Napalm(
+        hostname=hostname,
+        username="admin",
+        password="secret",
+        override_defaults=Defaults(**override) if override else None,
+    )
+
+
+def _policy(scope, **defaults):
+    return Policy(config=Config(defaults=Defaults(**defaults)), scope=scope)
+
+
+def test_position_and_face_per_target_are_accepted():
+    """A single-host target places its device at a U and face of a rack."""
+    policy = _policy([_scope(rack="R12", position=40, face="front")])
+    merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
+    assert merged.rack == "R12"
+    assert merged.position == 40
+    assert merged.face == "front"
+
+
+def test_rack_from_the_policy_defaults_serves_a_target_position():
+    """The rack may come from the policy defaults; the position and face from the target."""
+    policy = _policy([_scope(position=40.5, face="REAR")], rack="R12")
+    merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
+    assert merged.rack == "R12"
+    assert merged.position == 40.5
+    assert merged.face == "rear"
+
+
+def test_target_rack_replaces_the_policy_rack():
+    """A target's rack replaces the policy's."""
+    policy = _policy([_scope(rack="R13")], rack="R12")
+    merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
+    assert merged.rack == "R13"
+
+
+@pytest.mark.parametrize("field", [{"position": 40, "face": "front"}, {"position": 40}, {"face": "front"}])
+def test_position_and_face_in_policy_defaults_are_refused(field):
+    """One U for every device in the policy cannot be right."""
+    with pytest.raises(ValidationError, match="set per target, in override_defaults"):
+        _policy([_scope()], rack="R12", **field)
+
+
+@pytest.mark.parametrize("field", [{"position": 40}, {"face": "front"}])
+def test_position_and_face_go_together(field):
+    """NetBox requires a face for any position, and a face means nothing without one."""
+    with pytest.raises(ValidationError, match="192.0.2.10: position and face go together"):
+        _policy([_scope(rack="R12", **field)])
+
+
+def test_position_needs_a_rack():
+    """A position without a rack anywhere cannot be placed."""
+    with pytest.raises(ValidationError, match="192.0.2.10: position and face need a rack"):
+        _policy([_scope(position=40, face="front")])
+
+
+@pytest.mark.parametrize("hostname", ["192.0.2.0/30", "192.0.2.1-3"])
+def test_position_needs_a_single_host(hostname):
+    """A range or subnet would put every device at the same U."""
+    with pytest.raises(ValidationError, match="need a single host"):
+        _policy([_scope(hostname, rack="R12", position=40, face="front")])
+
+
+@pytest.mark.parametrize("hostname", ["192.0.2.0/30", "192.0.2.1-3"])
+def test_rack_alone_is_fine_on_a_range(hostname):
+    """Every device of a range may share a rack."""
+    policy = _policy([_scope(hostname, rack="R12")])
+    assert policy.scope[0].override_defaults.rack == "R12"
+
+
+@pytest.mark.parametrize("face", ["side", "", "front-ish"])
+def test_face_must_be_front_or_rear(face):
+    """NetBox's rack faces are front and rear."""
+    with pytest.raises(ValidationError, match="face must be front or rear"):
+        Defaults(face=face)
+
+
+@pytest.mark.parametrize("position", [0, 0.5, -1, 40.25, 40.3])
+def test_position_is_a_u_from_one_in_half_steps(position):
+    """NetBox positions start at U1 and move in half-U steps."""
+    with pytest.raises(ValidationError, match="position must be at least 1, in steps of 0.5"):
+        Defaults(position=position)
+
+
+@pytest.mark.parametrize("position", [1, 40, 40.5, 99.5])
+def test_valid_positions(position):
+    """Whole and half Us from U1 up are accepted; the rack's height is NetBox's to check."""
+    assert Defaults(position=position).position == position
+
+
+@pytest.mark.parametrize(("rack", "want"), [(" R12 ", "R12"), ("   ", None), ("", None)])
+def test_rack_name_is_trimmed(rack, want):
+    """A blank rack means no rack, so it cannot satisfy a position either."""
+    assert Defaults(rack=rack).rack == want
+
+
+def test_blank_rack_does_not_serve_a_position():
+    """Whitespace is not a rack."""
+    with pytest.raises(ValidationError, match="need a rack"):
+        _policy([_scope(rack="  ", position=40, face="front")])

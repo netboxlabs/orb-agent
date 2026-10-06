@@ -190,6 +190,25 @@ def test_translate_device_with_rack(sample_device_info, sample_defaults):
     assert device.rack.location.site.name == "New York"
 
 
+def test_translate_device_with_position_and_face(sample_device_info, sample_defaults):
+    """A target's position and face place the device in its rack."""
+    sample_defaults.rack = "Rack-01"
+    sample_defaults.position = 40.5
+    sample_defaults.face = "rear"
+    device = translate_device(sample_device_info, sample_defaults)
+    assert device.rack.name == "Rack-01"
+    assert device.position == 40.5
+    assert device.face == "rear"
+
+
+def test_translate_device_without_position_sends_none(sample_device_info, sample_defaults):
+    """With a rack alone, the device is left unplaced: no position or face is sent."""
+    sample_defaults.rack = "Rack-01"
+    device = translate_device(sample_device_info, sample_defaults)
+    assert not device.HasField("position")
+    assert not device.HasField("face")
+
+
 def test_translate_device_rack_without_location(sample_device_info, sample_defaults):
     """Rack carries no location when no location default is set (site+name only)."""
     sample_defaults.rack = "Rack-01"
