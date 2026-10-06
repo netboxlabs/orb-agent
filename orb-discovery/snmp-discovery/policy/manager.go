@@ -299,8 +299,7 @@ func validateRackPlacement(policy config.Policy) error {
 		if p.unit.rack == "" {
 			continue
 		}
-		// netbox_id is ignored on a range, so only a single host pins a device.
-		if target.NetboxID != nil && !coversSeveralAddresses(target.Host) {
+		if target.NetboxID != nil && keepsNetboxID(target.Host) {
 			seen, err := pinDevice(pinnedAt, target, p)
 			if err != nil {
 				return err
@@ -375,6 +374,12 @@ func pinDevice(pinnedAt map[int]pinnedPlacement, target config.Target, p deviceP
 		pinnedAt[*target.NetboxID] = pinnedPlacement{placement: p, host: target.Host}
 		return false, nil
 	}
+	// A location read from an OID is only known at scan time, so it cannot
+	// be shown to match.
+	if prior.placement.oidLocation || p.oidLocation {
+		return false, fmt.Errorf("targets %s and %s place netbox_id %d in a location read from an OID; set a literal location",
+			prior.host, target.Host, *target.NetboxID)
+	}
 	if prior.placement != p {
 		return false, fmt.Errorf("targets %s and %s place netbox_id %d at different slots",
 			prior.host, target.Host, *target.NetboxID)
@@ -425,6 +430,17 @@ func coversSeveralAddresses(host string) bool {
 	}
 	hosts, err := targets.Expand(host)
 	return err == nil && len(hosts) > 1
+}
+
+// keepsNetboxID reports whether the runner applies a target's netbox_id: only
+// when the host is written as the single address or name it expands to, so a
+// /32 or a one-address range drops it.
+func keepsNetboxID(host string) bool {
+	if _, err := netip.ParsePrefix(host); err == nil {
+		return false
+	}
+	hosts, err := targets.Expand(host)
+	return err == nil && len(hosts) == 1 && hosts[0] == host
 }
 
 // HasPolicy checks if the policy exists

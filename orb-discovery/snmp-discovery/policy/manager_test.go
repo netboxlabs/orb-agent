@@ -1979,25 +1979,63 @@ func TestManager_ParsePolicies_RackPlacementOneNetboxID(t *testing.T) {
 		rackOnly("192.0.2.10", map[string]any{"rack": "R12"}),
 		map[string]any{"host": "192.0.2.11", "netbox_id": 42}))
 	require.NoError(t, err, "a target that sends no rack leaves the other's in place")
+	// netbox_id is dropped on any range or subnet syntax, a /32 included.
+	differentSlots := "place netbox_id 42 at different slots"
+	sameU := "are both placed at R12 U40 front"
 	for name, tc := range map[string]struct {
 		targets []map[string]any
-		wantErr bool
+		wantErr string
 	}{
-		"two racks":                     {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R12"}), rackOnly("192.0.2.11", map[string]any{"rack": "R13"})}, true},
-		"a U and the same rack without": {[]map[string]any{pinned("192.0.2.10", 40), rackOnly("192.0.2.11", map[string]any{"rack": "R12"})}, true},
-		"one rack twice":                {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.11", map[string]any{"rack": "R13"})}, false},
-		"a range pins nothing":          {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.16/29", map[string]any{"rack": "R14"})}, false},
+		"two racks":                       {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R12"}), rackOnly("192.0.2.11", map[string]any{"rack": "R13"})}, differentSlots},
+		"a U and the same rack without":   {[]map[string]any{pinned("192.0.2.10", 40), rackOnly("192.0.2.11", map[string]any{"rack": "R12"})}, differentSlots},
+		"one rack twice":                  {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.11", map[string]any{"rack": "R13"})}, ""},
+		"a range pins nothing":            {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.16/29", map[string]any{"rack": "R14"})}, ""},
+		"a /32 pins nothing":              {[]map[string]any{rackOnly("192.0.2.10", map[string]any{"rack": "R13"}), rackOnly("192.0.2.11/32", map[string]any{"rack": "R14"})}, ""},
+		"two /32s are two devices":        {[]map[string]any{pinned("192.0.2.10/32", 40), pinned("192.0.2.11/32", 40)}, sameU},
+		"two one-address ranges likewise": {[]map[string]any{pinned("192.0.2.10-192.0.2.10", 40), pinned("192.0.2.11-192.0.2.11", 40)}, sameU},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"rack": "R12"}, tc.targets...))
-			if !tc.wantErr {
+			if tc.wantErr == "" {
 				require.NoError(t, err)
 				return
 			}
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "place netbox_id 42 at different slots")
+			assert.Contains(t, err.Error(), tc.wantErr)
 		})
 	}
+}
+
+// Targets sharing a netbox_id must send it one location; one read from an
+// OID is only known at scan time, so it cannot be shown to agree.
+func TestManager_ParsePolicies_RackPlacementOneNetboxIDRefusesOIDLocations(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	sysLocation := ".1.3.6.1.2.1.1.6.0"
+	pinned := func(host, location string) map[string]any {
+		override := map[string]any{"rack": "R12"}
+		if location != "" {
+			override["location"] = location
+		}
+		return map[string]any{"host": host, "netbox_id": 42, "override_defaults": override}
+	}
+
+	for name, locations := range map[string][2]string{
+		"both from the OID":  {sysLocation, sysLocation},
+		"the first from it":  {sysLocation, "Row 1"},
+		"the second from it": {"Row 1", sysLocation},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicyTargets(t, nil,
+				pinned("192.0.2.10", locations[0]), pinned("192.0.2.11", locations[1])))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(),
+				"targets 192.0.2.10 and 192.0.2.11 place netbox_id 42 in a location read from an OID")
+		})
+	}
+
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, nil, pinned("192.0.2.10", sysLocation)))
+	require.NoError(t, err, "one target alone has nothing to agree with")
 }
 
 // A location read from an OID is only known at scan time, so targets using

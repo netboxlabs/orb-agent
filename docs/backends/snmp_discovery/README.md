@@ -255,7 +255,11 @@ unless:
   `location` is an OID reference is left out of this check: its location is
   only known when the device is scanned. Two targets with the same
   `netbox_id` update one device, so when they send a rack they must send the
-  same rack, position and face (a rack without a position counts too).
+  same rack, position and face (a rack without a position counts too), and
+  in a literal location, since one read from an OID cannot be compared. A
+  `netbox_id` is ignored on any subnet or range syntax, a `/32` or a
+  one-address range included, so such a target is its own device for these
+  rules.
 
 Quote a numeric rack name (`rack: "01"`). The agent passes the policy on
 through YAML, so an unquoted `01` would arrive as the number 1, and `010` as
