@@ -21,7 +21,7 @@ from device_discovery.policy.models import (
     check_vrf_tenants,
 )
 from device_discovery.policy.runner import merge_override_defaults
-from device_discovery.policy.tenants import slug
+from device_discovery.policy.tenants import slug, written_differently
 from device_discovery.stubs import (
     _ip_match_stub,
     _same_primary_ip,
@@ -187,7 +187,6 @@ DIFFERS = "write it differently"
             TenantParameters(name="中国", description="y"),
             id="names without a slug",
         ),
-        pytest.param(TenantParameters(name=" ", group="customers"), TenantParameters(name=" "), id="blank names"),
         pytest.param(None, ACME, id="no ip tenant"),
     ],
 )
@@ -498,3 +497,40 @@ def test_override_vrf_tenant_blank_name_in_another_group_is_another_vrf():
         Defaults.model_validate({"ipaddress": {"vrf": {"name": "vrf-a", "tenant": {"name": "", "group": "partners"}}}}),
     )
     assert merged.ipaddress.vrf == VrfParameters(name="vrf-a", tenant=TenantParameters(name="acme", group="partners"))
+
+
+@pytest.mark.parametrize("tenant", ["", "  ", {"name": "", "group": "customers"}, {"name": " "}])
+def test_policy_refuses_a_blank_vrf_tenant_name(tenant):
+    """Diode cannot match or create a tenant without a name, so every address in the VRF would fail."""
+    with pytest.raises(ValidationError, match=r"defaults\.ipaddress\.vrf\.tenant has no name"):
+        Policy(
+            config=Config(defaults=Defaults.model_validate({"ipaddress": {"vrf": {"name": "example-vrf", "tenant": tenant}}})),
+            scope=[_scope()],
+        )
+
+
+def test_policy_accepts_a_blank_override_tenant_name():
+    """In an override a blank name means no change, so the merged tenant keeps the policy's."""
+    Policy(
+        config=Config(defaults=Defaults(ipaddress=IpamParameters(vrf=VrfParameters(name="example-vrf", tenant=ACME)))),
+        scope=[_scope(ipaddress=IpamParameters(vrf=VrfParameters(name="example-vrf", tenant="")))],
+    )
+
+
+def test_blank_names_are_never_one_tenant():
+    """A blank name names no tenant, so two blank-named copies are not compared."""
+    assert written_differently(TenantParameters(name=" ", group="customers"), TenantParameters(name=" ")) is None
+
+
+def test_policy_accepts_a_blank_vrf_tenant_every_target_names():
+    """A nameless policy VRF tenant is a template; only the merged defaults are sent."""
+    template = Defaults.model_validate({"ipaddress": {"vrf": {"name": "example-vrf", "tenant": {"name": "", "group": "customers"}}}})
+    policy = Policy(
+        config=Config(defaults=template),
+        scope=[
+            _scope("192.0.2.10", ipaddress=IpamParameters(vrf=VrfParameters(name="example-vrf", tenant="acme"))),
+            _scope("192.0.2.11", ipaddress=IpamParameters(vrf=VrfParameters(name="example-vrf", tenant="globex"))),
+        ],
+    )
+    merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
+    assert merged.ipaddress.vrf.tenant == TenantParameters(name="acme", group="customers")

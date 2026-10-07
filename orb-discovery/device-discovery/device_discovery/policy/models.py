@@ -399,9 +399,15 @@ def check_vrf_tenants(defaults: Defaults) -> None:
     through its primary address, its VRF's. Diode merges the copies that
     resolve to one tenant within an entity and refuses the entity when they
     disagree, and across entities rewrites the tenant on every run. Pairs
-    without a VRF tenant are left as they were before VRF tenants existed.
+    without a VRF tenant are left as they were before VRF tenants existed. A
+    VRF tenant without a name is refused too: Diode can neither match nor
+    create it, so every address in the VRF would fail.
     """
     copies = _tenant_copies(defaults)
+    for at, tenant, is_vrf in copies:
+        name = tenant if isinstance(tenant, str) else tenant.name
+        if is_vrf and not name.strip():
+            raise ValueError(f"{at} has no name; a tenant is matched by its name")
     for i, (first_at, first, first_vrf) in enumerate(copies):
         for second_at, second, second_vrf in copies[i + 1 :]:
             if not (first_vrf or second_vrf):
@@ -494,15 +500,19 @@ def _merge_named(base: object, override: object, merged: object, other) -> objec
     An override that ``other`` says names something else replaces the base
     whole, so it takes no rd, tenant, group or other field from it, keeping
     only the base's name when it gives none. One naming the same thing refines
-    it, and a bare name equal to the base's, or a blank one, leaves it as is.
+    it, a bare name equal to the base's, or a blank one, leaves it as is, and
+    a bare name completes a base map that has none.
     """
     if other(base, override):
         if isinstance(override, dict) and not _named(override) and _named(base):
             return {**override, "name": _named(base)}
         return override
     if isinstance(override, str):
-        if base is not None and (isinstance(base, dict) or not _named(override)):
-            return base
+        name = _named(override)
+        if not name or name == _named(base):
+            return base if base is not None else merged
+        if isinstance(base, dict):
+            return {**base, "name": override}
         return merged
     if isinstance(merged, dict) and not _named(override) and _named(base):
         return {**merged, "name": _named(base)}
@@ -1093,12 +1103,14 @@ class Policy(BaseModel):
         """
         Refuse a VRF tenant written differently from another tenant default.
 
-        Checked on the policy defaults and on each target's merged defaults,
-        never on an override alone: a partial override is judged with what it
-        inherits.
+        Checked on the defaults each target ends up with, the policy's or
+        merged with its override, never on an override alone: a partial
+        override is judged with what it inherits, and a blank name in it means
+        no change.
         """
         defaults = (self.config.defaults if self.config else None) or Defaults()
-        check_vrf_tenants(defaults)
+        if not self.scope or any(entry.override_defaults is None for entry in self.scope):
+            check_vrf_tenants(defaults)
         for entry in self.scope:
             if entry.override_defaults is None:
                 continue
