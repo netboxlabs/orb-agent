@@ -53,9 +53,11 @@ func tenantConflict(a, b TenantParameters) string {
 	nameA, nameB := trim(a.Name), trim(b.Name)
 	groupA, groupB := trim(a.Group), trim(b.Group)
 	switch {
+	case nameA == "" || nameB == "":
+		return ""
 	case groupA != groupB && sameName(groupA, groupB):
 		return "group"
-	case nameA == "" || nameB == "" || !sameName(nameA, nameB):
+	case !sameName(nameA, nameB):
 		return ""
 	case nameA != nameB || groupA != groupB,
 		differ(a.Description, b.Description), differ(a.Comments, b.Comments),

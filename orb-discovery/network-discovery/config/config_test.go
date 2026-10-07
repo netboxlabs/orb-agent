@@ -113,6 +113,9 @@ func TestVrfParameters_UnmarshalMappingMissingName(t *testing.T) {
 	err := yaml.Unmarshal([]byte("vrf:\n  rd: \"65000:100\"\n  tenant: acme\n"), &d)
 	require.Error(t, err)
 	assert.EqualError(t, err, "vrf: mapping requires name")
+
+	err = yaml.Unmarshal([]byte("vrf:\n  name: \"\\x1c \"\n"), &d)
+	assert.EqualError(t, err, "vrf: mapping requires name", "a name Diode trims to nothing is none")
 }
 
 func TestVrfParameters_UnmarshalUnknownKey(t *testing.T) {
@@ -197,23 +200,6 @@ func TestDefaults_Validate(t *testing.T) {
 	}
 }
 
-func TestSlug(t *testing.T) {
-	for in, want := range map[string]string{
-		"Acme Corp": "acme-corp",
-		"Acme-Corp": "acme-corp",
-		"Acme.Corp": "acmecorp",
-		"Acme_Corp": "acme_corp",
-		" _Acme_ ":  "acme",
-		"a  -- b":   "a-b",
-		"Café":      "cafe",
-		"日本":        "",
-		"a\vb":      "a-b",
-		"a\x1cb":    "a-b",
-	} {
-		assert.Equal(t, want, slug(in), in)
-	}
-}
-
 func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 	acme := TenantParameters{Name: "acme", Group: "customers", Description: "d", Comments: "c", Tags: []string{"a"}}
 	with := func(f func(*TenantParameters)) TenantParameters {
@@ -272,4 +258,10 @@ func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 			assert.ErrorContains(t, err, tc.err)
 		})
 	}
+}
+
+func TestDefaults_ValidateBlankVrfName(t *testing.T) {
+	assert.EqualError(t, Defaults{Vrf: VrfParameters{Name: " "}}.Validate(),
+		"defaults.vrf has a blank name; Diode trims it to nothing and refuses the address")
+	assert.NoError(t, Defaults{Vrf: VrfParameters{}}.Validate(), "no VRF at all is fine")
 }

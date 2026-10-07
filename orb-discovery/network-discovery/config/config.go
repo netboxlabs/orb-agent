@@ -147,7 +147,7 @@ func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
 		if err := node.Decode(&a); err != nil {
 			return err
 		}
-		if a.Name == "" {
+		if trim(a.Name) == "" {
 			return errors.New("vrf: mapping requires name")
 		}
 		*v = VrfParameters(a)
@@ -209,6 +209,9 @@ type Defaults struct {
 // or the address's and the VRF's copies of one tenant written two ways, since
 // Diode then refuses every address or rewrites the tenant on every run.
 func (d Defaults) Validate() error {
+	if d.Vrf.Name != "" && trim(d.Vrf.Name) == "" {
+		return errors.New("defaults.vrf has a blank name; Diode trims it to nothing and refuses the address")
+	}
 	rd, vrfRd := trim(d.Rd), trim(d.Vrf.Rd)
 	if rd != "" && vrfRd != "" && rd != vrfRd {
 		return fmt.Errorf("defaults.rd %q conflicts with defaults.vrf.rd %q; set the rd in one place", d.Rd, d.Vrf.Rd)
