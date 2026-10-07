@@ -204,7 +204,7 @@ Current supported defaults:
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
 | ├─ asset_tag | str  | Device asset tag                      |
-| tenant | map | Tenant-specific defaults              |
+| tenant | map | Tenant-specific defaults. In a target's `override_defaults`, a different tenant replaces the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
 | ├─ name | str | Tenant name                          |
 | ├─ group | str | Tenant group                        |
 | ├─ description | str  | Tenant description           |
@@ -235,9 +235,10 @@ Current supported defaults:
 | vrf | map | VRF-specific defaults (used within ipaddress and prefix) |
 | ├─ name | str | VRF name |
 | ├─ rd | str | Route distinguisher (e.g. `65000:100`) |
-| ├─ description | str | VRF description |
-| ├─ comments | str | VRF comments |
-| ├─ tags | list | VRF tags |
+| ├─ tenant | str/map | Tenant the VRF belongs to: a name, or a map with `name` and optional `group` / `description` / `comments` / `tags`. Never taken from the address or prefix tenant (see [VRF tenant](#vrf-tenant)) |
+| ├─ description | str | VRF description, written to the VRF on every run |
+| ├─ comments | str | VRF comments, written to the VRF on every run |
+| ├─ tags | list | VRF tags, added to the VRF's existing tags |
 | vlan       | map  | VLAN-specific defaults        |
 | ├─ group   | str/map  | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see [VLAN group](#vlan-group) below). In a per-device `override_defaults`, the group replaces the policy value as a whole |
 | ├─ tenant   | str  | VLAN tenant                  |
@@ -245,6 +246,37 @@ Current supported defaults:
 | ├─ description | str  | VLAN description          |
 | ├─ comments   | str  | VLAN comments              |
 | ├─ tags       | list | VLAN tags                  |
+
+##### VRF tenant
+A VRF map accepts only the keys above, and its tenant map only `name`, `group`, `description`, `comments` and `tags`. Any other key is refused, so a misspelt key such as `rd`, `tenant` or `group` is not silently dropped.
+
+The address and prefix `tenant` defaults do not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
+
+When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
+
+Every tenant default reaches Diode in full on each run, a device carrying its own and, through its primary address, that address's and its VRF's. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (`tenant`, `ipaddress.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too; copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
+
+In a per-target `override_defaults`, a tenant or VRF that differs from the policy's replaces it as a whole, keeping only the policy's name when it gives none:
+- a tenant differs when its name differs, or when it gives a group other than the policy's, including one the policy lacks;
+- a VRF differs when its name differs, when it gives an `rd` other than the policy's (including one the policy lacks), when both give a tenant and the tenants differ, or, with no `rd` on either side, when it gives a tenant the policy lacks. Diode finds a VRF with an RD by the RD alone and one without by its name and tenant, so each of these is another VRF.
+
+Otherwise the override refines the policy's field by field, for example a tenant added to a VRF that has an `rd`, and a bare name equal to the policy's, or a blank one, leaves it as it is. This applies to every tenant default, not only VRF tenants. A tenant named in another group is only a separate tenant once it exists in NetBox; until then Diode can match the existing one by its slug and move it between groups.
+
+If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
+
+VRFs discovered with `discover_vrfs` carry no tenant, so this applies only to the configured `vrf`, `vrf_ipv4` and `vrf_ipv6` defaults.
+
+```yaml
+defaults:
+  ipaddress:
+    vrf: &example-vrf
+      name: "Example VRF"
+      tenant:
+        name: "Example Tenant GmbH"
+        group: "Example Group"
+  prefix:
+    vrf: *example-vrf
+```
 
 ##### VLAN group
 
@@ -281,7 +313,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | password | string | yes  | Device username's password |
 | driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
-| override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
+| override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope. Fields merge with the policy's, except that a VLAN group the override sets, and a tenant or VRF it names differently, replace the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
 
 #### Subnet and range expansion

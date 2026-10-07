@@ -84,6 +84,7 @@ def translate_vrf(
             # supplying rd="" would otherwise make the rich VRF and its stub resolve
             # via different matchers.
             rd=blank_to_none(vrf.rd),
+            tenant=translate_tenant(vrf.tenant),
             comments=vrf.comments,
             description=vrf.description,
             tags=vrf.tags,

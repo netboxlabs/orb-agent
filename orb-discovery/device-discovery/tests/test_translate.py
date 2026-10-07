@@ -278,6 +278,66 @@ def test_translate_interface_ips_with_vrf_string(
     assert ip_entities[1].ip_address.vrf.name == "plain-vrf"
 
 
+def test_translate_interface_ips_vrf_carries_its_own_tenant(
+    sample_device_info,
+    sample_interface_info,
+    sample_interfaces_ip,
+    sample_defaults,
+):
+    """The VRF tenant reaches the VRF; the address and prefix keep their own tenant."""
+    owner = TenantParameters(name="acme", group="customers")
+    sample_defaults.ipaddress = IpamParameters(
+        tenant="ip-tenant", vrf=VrfParameters(name="example-vrf", tenant=owner)
+    )
+    sample_defaults.prefix = PrefixParameters(
+        tenant="prefix-tenant", vrf=VrfParameters(name="example-vrf", tenant=owner)
+    )
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device,
+        "GigabitEthernet0/0/1",
+        sample_interface_info["GigabitEthernet0/0/1"],
+        sample_defaults,
+    )
+    prefix, ip = (
+        e for e in translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
+    )
+
+    assert prefix.prefix.vrf.tenant.name == "acme"
+    assert prefix.prefix.vrf.tenant.group.name == "customers"
+    assert prefix.prefix.tenant.name == "prefix-tenant"
+    assert ip.ip_address.vrf.tenant.name == "acme"
+    assert ip.ip_address.vrf.tenant.group.name == "customers"
+    assert ip.ip_address.tenant.name == "ip-tenant"
+
+
+def test_translate_interface_ips_vrf_does_not_inherit_tenant(
+    sample_device_info,
+    sample_interface_info,
+    sample_interfaces_ip,
+    sample_defaults,
+):
+    """A VRF without its own tenant stays tenant-less, so existing policies match as before."""
+    sample_defaults.ipaddress = IpamParameters(tenant="ip-tenant", vrf="plain-vrf")
+    sample_defaults.prefix = PrefixParameters(
+        tenant="prefix-tenant", vrf=VrfParameters(name="plain-prefix-vrf")
+    )
+    device = translate_device(sample_device_info, sample_defaults)
+    interface = translate_interface(
+        device,
+        "GigabitEthernet0/0/1",
+        sample_interface_info["GigabitEthernet0/0/1"],
+        sample_defaults,
+    )
+    prefix, ip = (
+        e for e in translate_interface_ips(interface, sample_interfaces_ip, sample_defaults)
+    )
+
+    assert not prefix.prefix.vrf.HasField("tenant")
+    assert not ip.ip_address.vrf.HasField("tenant")
+    assert ip.ip_address.tenant.name == "ip-tenant"
+
+
 # --- per-address-family VRF (orb-agent#392) ---------------------------------
 
 
