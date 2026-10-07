@@ -206,3 +206,58 @@ func TestManager_ParsePolicies_Tenant(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, config.TenantParameters{}, got)
 }
+
+func TestManager_ParsePolicies_Vrf(t *testing.T) {
+	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	parse := func(defaults string) (config.Defaults, error) {
+		policies, err := m.ParsePolicies([]byte("policies:\n  p1:\n    config:\n      defaults:\n" +
+			defaults + "    scope:\n      targets: [192.0.2.1]\n"))
+		if err != nil {
+			return config.Defaults{}, err
+		}
+		return policies["p1"].Config.Defaults, nil
+	}
+
+	got, err := parse("        vrf: example-vrf\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.VrfParameters{Name: "example-vrf"}, got.Vrf)
+
+	got, err = parse("        vrf:\n          name: example-vrf\n          tenant:\n            name: example-tenant\n            group: example-group\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.VrfParameters{
+		Name:   "example-vrf",
+		Tenant: config.TenantParameters{Name: "example-tenant", Group: "example-group"},
+	}, got.Vrf)
+
+	got, err = parse("        vrf: null\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.VrfParameters{}, got.Vrf)
+
+	_, err = parse("        vrf:\n          tenant: example-tenant\n")
+	assert.ErrorContains(t, err, "vrf: mapping requires name")
+
+	_, err = parse("        vrf:\n          name: example-vrf\n          tenant: \" \"\n")
+	assert.ErrorContains(t, err, "p1 : defaults.vrf.tenant has no name")
+
+	_, err = parse("        vrf:\n          name: example-vrf\n          tennant: example-tenant\n")
+	assert.ErrorContains(t, err, `vrf has no "tennant" key`)
+
+	_, err = parse("        rd: \"65000:2\"\n        vrf:\n          name: example-vrf\n          rd: \"65000:1\"\n")
+	assert.ErrorContains(t, err, `p1 : defaults.rd "65000:2" conflicts with defaults.vrf.rd "65000:1"`)
+
+	_, err = parse("        tenant:\n          name: example-tenant\n          description: a\n" +
+		"        vrf:\n          name: example-vrf\n          tenant:\n            name: example-tenant\n            description: b\n")
+	assert.ErrorContains(t, err, `p1 : defaults.tenant and defaults.vrf.tenant name the same NetBox tenant but write it differently`)
+}
+
+func TestManager_ParsePolicies_ReportsFirstInvalidPolicyByName(t *testing.T) {
+	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	invalid := func(name string) string {
+		return "  " + name + ":\n    config:\n      defaults:\n        rd: \"65000:2\"\n" +
+			"        vrf:\n          name: example-vrf\n          rd: \"65000:1\"\n    scope:\n      targets: [192.0.2.1]\n"
+	}
+	for range 10 {
+		_, err := m.ParsePolicies([]byte("policies:\n" + invalid("zeta") + invalid("alpha")))
+		require.ErrorContains(t, err, "alpha : ")
+	}
+}

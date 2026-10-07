@@ -1,7 +1,11 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"maps"
+	"reflect"
+	"slices"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -89,7 +93,7 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 			return err
 		}
 		if a.Name == "" {
-			return fmt.Errorf("tenant: mapping requires name")
+			return errors.New("tenant: mapping requires name")
 		}
 		*t = TenantParameters(a)
 		return nil
@@ -98,9 +102,99 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
+// VrfParameters names the VRF applied to discovered IP addresses. Accepts
+// either a plain string (VRF name) or a mapping, the shape snmp-discovery and
+// device-discovery use for defaults.vrf plus the VRF's own tenant, so a VRF
+// owned by a tenant in NetBox is matched instead of created again.
+type VrfParameters struct {
+	Name        string           `yaml:"name"`
+	Rd          string           `yaml:"rd,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+}
+
+// The keys a vrf mapping, and the tenant inside it, accept.
+var (
+	vrfKeys    = yamlFieldNames(reflect.TypeFor[VrfParameters]())
+	tenantKeys = yamlFieldNames(reflect.TypeFor[TenantParameters]())
+)
+
+// UnmarshalYAML accepts a scalar VRF name or a mapping. An unknown key in the
+// mapping or in its tenant is refused: a misspelt tenant or group would
+// otherwise leave the VRF matching no tenant, and Diode would create the
+// duplicate the tenant is there to prevent. Errors name the path rather than
+// a line, since the agent re-marshals a policy before sending it.
+func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
+	*v = VrfParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		v.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		fields, err := mappingFields(node, "vrf", vrfKeys)
+		if err != nil {
+			return err
+		}
+		if tenant, ok := fields["tenant"]; ok {
+			if err := checkVrfTenant(tenant); err != nil {
+				return err
+			}
+		}
+		type alias VrfParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		if trim(a.Name) == "" {
+			return errors.New("vrf: mapping requires name")
+		}
+		*v = VrfParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("vrf: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
+// mappingFields decodes a mapping once merge keys and aliases resolve, and
+// refuses a key outside known.
+func mappingFields(node *yaml.Node, path string, known map[string]bool) (map[string]yaml.Node, error) {
+	var fields map[string]yaml.Node
+	if err := node.Decode(&fields); err != nil {
+		return nil, err
+	}
+	for _, key := range slices.Sorted(maps.Keys(fields)) {
+		if !known[key] {
+			return nil, fmt.Errorf("%s has no %q key", path, key)
+		}
+	}
+	return fields, nil
+}
+
+// checkVrfTenant refuses a vrf.tenant mapping with an unknown key or no name,
+// naming the path: the tenant's own error reads the same as defaults.tenant's.
+func checkVrfTenant(node yaml.Node) error {
+	for node.Kind == yaml.AliasNode {
+		node = *node.Alias
+	}
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	fields, err := mappingFields(&node, "vrf.tenant", tenantKeys)
+	if err != nil {
+		return err
+	}
+	var name string
+	if n, ok := fields["name"]; !ok || n.Decode(&name) != nil || trim(name) == "" {
+		return errors.New("vrf.tenant: mapping requires name")
+	}
+	return nil
+}
+
 // Defaults represents the supported default values for a policy
 type Defaults struct {
-	Vrf         string           `yaml:"vrf,omitempty"`
+	Vrf         VrfParameters    `yaml:"vrf,omitempty"`
 	Rd          string           `yaml:"rd,omitempty"`
 	Tenant      TenantParameters `yaml:"tenant,omitempty"`
 	Role        string           `yaml:"role,omitempty"`
@@ -108,6 +202,42 @@ type Defaults struct {
 	Comments    string           `yaml:"comments,omitempty"`
 	Tags        []string         `yaml:"tags,omitempty"`
 	NetworkMask *int             `yaml:"network_mask,omitempty"`
+}
+
+// Validate rejects defaults Diode would apply wrongly or refuse: two different
+// route distinguishers for the VRF, since either could match the wrong VRF,
+// or the address's and the VRF's copies of one tenant written two ways, since
+// Diode then refuses every address or rewrites the tenant on every run.
+func (d Defaults) Validate() error {
+	if d.Vrf.Name != "" && trim(d.Vrf.Name) == "" {
+		return errors.New("defaults.vrf has a blank name; Diode trims it to nothing and refuses the address")
+	}
+	rd, vrfRd := trim(d.Rd), trim(d.Vrf.Rd)
+	if rd != "" && vrfRd != "" && rd != vrfRd {
+		return fmt.Errorf("defaults.rd %q conflicts with defaults.vrf.rd %q; set the rd in one place", d.Rd, d.Vrf.Rd)
+	}
+	if t := d.Vrf.Tenant; trim(t.Name) == "" && (t.Name != "" || t.Group != "" || t.Description != "" || t.Comments != "" || len(t.Tags) > 0) {
+		return errors.New("defaults.vrf.tenant has no name; Diode trims it to nothing and refuses the address")
+	}
+	switch tenantConflict(d.Tenant, d.Vrf.Tenant) {
+	case "group":
+		return errors.New("defaults.tenant and defaults.vrf.tenant name the same NetBox tenant group in two ways; " +
+			"write it the same way in both places")
+	case "tenant":
+		return errors.New("defaults.tenant and defaults.vrf.tenant name the same NetBox tenant but write it differently; " +
+			"give it the same name, group, description, comments and tags, in the same order, in both places, " +
+			"for example with a YAML anchor")
+	}
+	return nil
+}
+
+// VrfRd returns the rd the VRF is sent with: vrf.rd, else defaults.rd,
+// trimmed as Diode trims it.
+func (d Defaults) VrfRd() string {
+	if rd := trim(d.Vrf.Rd); rd != "" {
+		return rd
+	}
+	return trim(d.Rd)
 }
 
 // PolicyConfig represents the configuration of a policy
