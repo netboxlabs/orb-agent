@@ -386,11 +386,29 @@ var chassisModelPlaceholders = map[string]struct{}{
 // chassisModelVendors are the sysObjectID arcs, below 1.3.6.1.4.1, whose
 // chassis rows report the orderable part number in entPhysicalModelName, as
 // seen across the recorded walks: Cisco (9), HP ProCurve and ArubaOS-Switch
-// (11.2.3.7), Palo Alto Networks (25461), Arista (30065) and Aruba CX
-// (47196). Other vendors, and other HP product lines, report FRU numbers,
-// OS versions, chip or class names there, or were never recorded, which
-// would make a worse type name than the lookup's.
-var chassisModelVendors = []string{"9", "11.2.3.7", "25461", "30065", "47196"}
+// (11.2.3.7), Palo Alto Networks (25461), Arista (30065), Aruba CX (47196),
+// FortiGate (12356.101.1, rewritten by fortinetModel) and the D-Link switch
+// families recorded (171.10.x). Other vendors, and other product lines of
+// these, report FRU numbers, OS versions, chip or class names there, or were
+// never recorded, which would make a worse type name than the lookup's.
+var chassisModelVendors = []string{
+	"9", "11.2.3.7", "25461", "30065", "47196",
+	"12356.101.1",
+	"171.10.70", "171.10.118", "171.10.119", "171.10.133", "171.10.137", "171.10.141",
+}
+
+// chassisModelExcluded are arcs inside chassisModelVendors whose one
+// sysObjectID stands for every size of a chassis system (FortiGate 6000F,
+// 7000E and 7000F), so a row naming the family would put each size on one type.
+var chassisModelExcluded = []string{"12356.101.1.60001", "12356.101.1.70001", "12356.101.1.71201"}
+
+// fortinetArc is Fortinet's enterprise arc, whose models fortinetModel rewrites.
+const fortinetArc = "12356"
+
+// fortinetPlatform matches a virtual FortiGate's platform name (FGT_VM64,
+// FGT_ARM64_AWS), which names no hardware; the lookup's name keeps the
+// licence tier instead.
+var fortinetPlatform = regexp.MustCompile(`^F[A-Z]+_(VM|ARM)64`)
 
 // sysObjectID is the walked sysObjectID, trimmed, or "" when it was not walked.
 func sysObjectID(oids ObjectIDValueMap) string {
@@ -402,20 +420,39 @@ func sysObjectID(oids ObjectIDValueMap) string {
 }
 
 // chassisModelVendor reports whether the walked sysObjectID is under an arc
-// in chassisModelVendors, matched on whole arcs.
+// in chassisModelVendors and none in chassisModelExcluded.
 func chassisModelVendor(oids ObjectIDValueMap) bool {
+	return underArc(oids, chassisModelVendors...) && !underArc(oids, chassisModelExcluded...)
+}
+
+// underArc reports whether the walked sysObjectID is under one of arcs,
+// below 1.3.6.1.4.1, matched on whole arcs.
+func underArc(oids ObjectIDValueMap, arcs ...string) bool {
 	const enterprises = "1.3.6.1.4.1."
 	oid := strings.TrimPrefix(sysObjectID(oids), ".")
 	if !strings.HasPrefix(oid, enterprises) {
 		return false
 	}
 	oid = strings.TrimPrefix(oid, enterprises) + "."
-	for _, arc := range chassisModelVendors {
+	for _, arc := range arcs {
 		if strings.HasPrefix(oid, arc+".") {
 			return true
 		}
 	}
 	return false
+}
+
+// fortinetModel rewrites a Fortinet chassis row's model into the orderable
+// form catalogs record, FGT_60F to FG-60F and FGR_60F_3G4G to FGR-60F-3G4G.
+// It reports false for a virtual platform's name.
+func fortinetModel(model string) (string, bool) {
+	if fortinetPlatform.MatchString(model) {
+		return "", false
+	}
+	if rest, ok := strings.CutPrefix(model, "FGT_"); ok {
+		model = "FG-" + rest
+	}
+	return strings.ReplaceAll(model, "_", "-"), true
 }
 
 // standaloneChassisModel names a standalone device's type after the model
@@ -435,6 +472,12 @@ func standaloneChassisModel(master *diode.Device, model string, oids ObjectIDVal
 	}
 	if utf8.RuneCountInString(model) > chassisModelMaxLen {
 		return
+	}
+	if underArc(oids, fortinetArc) {
+		var ok bool
+		if model, ok = fortinetModel(model); !ok {
+			return
+		}
 	}
 	master.DeviceType = &diode.DeviceType{
 		Model:        StringPtr(model),

@@ -2410,8 +2410,11 @@ func TestTranslateAsStack_StandaloneOtherVendorsKeepLookup(t *testing.T) {
 }
 
 func TestTranslateAsStack_EveryChassisModelVendorTakesChassisModel(t *testing.T) {
-	assert.ElementsMatch(t, []string{"9", "11.2.3.7", "25461", "30065", "47196"}, chassisModelVendors,
-		"widening the list needs recorded walks showing part numbers in the chassis row")
+	assert.ElementsMatch(t, []string{
+		"9", "11.2.3.7", "25461", "30065", "47196",
+		"12356.101.1",
+		"171.10.70", "171.10.118", "171.10.119", "171.10.133", "171.10.137", "171.10.141",
+	}, chassisModelVendors, "widening the list needs recorded walks showing part numbers in the chassis row")
 	for _, arc := range chassisModelVendors {
 		master, entities, oids := standaloneWithModel("PN-48P-A")
 		oids[oidSysObjectIDScalar] = Value{Value: "1.3.6.1.4.1." + arc + ".1"}
@@ -2419,6 +2422,93 @@ func TestTranslateAsStack_EveryChassisModelVendorTakesChassisModel(t *testing.T)
 		TranslateAsStack(entities, oids, nil, nil, "", ModelNotPinned, slog.Default())
 
 		assert.Equal(t, "PN-48P-A", *master.DeviceType.Model, "arc %s", arc)
+	}
+}
+
+// standaloneUnder runs one standalone chassis row reporting model under
+// sysObjectID oid and returns the device's model.
+func standaloneUnder(oid, model string) string {
+	master, entities, oids := standaloneWithModel(model)
+	oids[oidSysObjectIDScalar] = Value{Value: oid}
+	TranslateAsStack(entities, oids, nil, nil, "", ModelNotPinned, slog.Default())
+	return *master.DeviceType.Model
+}
+
+// FortiGate chassis rows spell the model with underscores; Fortinet's
+// orderable form, which catalogs record, uses FG- and hyphens. The values are
+// the recorded ones, by FortiGate, FortiGate Rugged and FortiWiFi.
+func TestTranslateAsStack_FortiGateModelTakesTheOrderableForm(t *testing.T) {
+	for raw, want := range map[string]string{
+		"FGT_100E":     "FG-100E",
+		"FGT_1500D":    "FG-1500D",
+		"FGT_60F":      "FG-60F",
+		"FGR_60F_3G4G": "FGR-60F-3G4G",
+		"FWF_60D":      "FWF-60D",
+		"FG-101E":      "FG-101E",
+	} {
+		assert.Equal(t, want, standaloneUnder(".1.3.6.1.4.1.12356.101.1.644", raw), raw)
+	}
+}
+
+// A virtual FortiGate reports its platform, not hardware, and the lookup's
+// name carries its licence tier, so the lookup keeps it.
+func TestTranslateAsStack_FortiGateVirtualPlatformKeepsLookup(t *testing.T) {
+	for _, raw := range []string{"FGT_VM64", "FGT_VM64_KVM", "FGT_ARM64_AWS", "FFW_VM64"} {
+		assert.Equal(t, "vendorProductName48", standaloneUnder(".1.3.6.1.4.1.12356.101.1.80001", raw), raw)
+	}
+}
+
+// One sysObjectID stands for every size of a FortiGate chassis system, so a
+// row naming the family could put each size on one type.
+func TestTranslateAsStack_FortiGateChassisFamiliesKeepLookup(t *testing.T) {
+	for oid, raw := range map[string]string{
+		".1.3.6.1.4.1.12356.101.1.60001": "FGT_6000F",
+		".1.3.6.1.4.1.12356.101.1.70001": "FGT_7000E",
+		".1.3.6.1.4.1.12356.101.1.71201": "FGT_7000F",
+	} {
+		assert.Equal(t, "vendorProductName48", standaloneUnder(oid, raw), oid)
+	}
+	assert.Equal(t, "FG-6001F", standaloneUnder(".1.3.6.1.4.1.12356.101.1.600010", "FGT_6001F"),
+		"only the family arcs themselves are left out")
+}
+
+// The rewrite is Fortinet's spelling; other vendors' values are taken as reported.
+func TestTranslateAsStack_OnlyFortinetModelsAreRewritten(t *testing.T) {
+	assert.Equal(t, "PN_48P_A", standaloneUnder(chassisModelSysObjectID, "PN_48P_A"))
+	assert.Equal(t, "FGT_48P_A", standaloneUnder(".1.3.6.1.4.1.171.10.137.2.1", "FGT_48P_A"))
+}
+
+// D-Link switch families whose walks report the orderable model; others under
+// 171.10, such as the DES-7200, a Ruijie OEM, keep the lookup.
+func TestTranslateAsStack_DLinkRecordedFamiliesOnly(t *testing.T) {
+	for oid, raw := range map[string]string{
+		".1.3.6.1.4.1.171.10.137.2.1":  "DGS-1510-28",
+		".1.3.6.1.4.1.171.10.141.4.1":  "DGS-1510-28X/ME",
+		".1.3.6.1.4.1.171.10.133.10.2": "DGS-3000-28X",
+		".1.3.6.1.4.1.171.10.119.1":    "DGS-3420-28TC",
+		".1.3.6.1.4.1.171.10.118.2":    "DGS-3620-28SC",
+		".1.3.6.1.4.1.171.10.70.8":     "DGS-3627G",
+	} {
+		assert.Equal(t, raw, standaloneUnder(oid, raw), oid)
+	}
+	assert.Equal(t, "vendorProductName48", standaloneUnder(".1.3.6.1.4.1.171.10.97.1", "DES-7210"))
+	assert.Equal(t, "vendorProductName48", standaloneUnder(".1.3.6.1.4.1.171.10.153.1", "WS6-DGS-1210-52/F1"))
+}
+
+// Product lines left out pending real captures keep the lookup, even when the
+// chassis row names the part. These walks are synthetic: Juniper reports no
+// usable chassis row on recorded walks, Dell OS10 has one recording, and
+// Extreme, Force10 and Huawei recordings show truncated, internal or empty values.
+func TestTranslateAsStack_LeftOutProductLinesKeepLookup(t *testing.T) {
+	for oid, raw := range map[string]string{
+		".1.3.6.1.4.1.2636.1.1.1.2.63":           "EX4300-48T",
+		".1.3.6.1.4.1.674.11000.5000.100.2.1.21": "S5248F-ON",
+		".1.3.6.1.4.1.1916.2.343":                "X435-24P-4S",
+		".1.3.6.1.4.1.6027.1.3.14":               "S4810",
+		".1.3.6.1.4.1.2011.2.23.707":             "S5735-L24T4S-A",
+		".1.3.6.1.4.1.35265.1.43":                "MES2124",
+	} {
+		assert.Equal(t, "vendorProductName48", standaloneUnder(oid, raw), oid)
 	}
 }
 
@@ -2432,8 +2522,6 @@ func TestTranslateAsStack_StandalonePaddedSysObjectIDStillMatches(t *testing.T) 
 	assert.Equal(t, chassisModelSysObjectID, sysObjectID(oids))
 }
 
-// A lone row that survived only because rows sharing its neighbour's member id
-// were refused is not the whole chassis: it keeps the serial but not the type.
 // A chassis row with no serial is not a stack member, but on a standalone
 // device it still names the part: ENTITY-MIB allows an empty serial.
 func TestTranslateAsStack_StandaloneWithoutSerialTakesChassisModel(t *testing.T) {
@@ -2510,6 +2598,8 @@ func TestTranslateAsStack_SerialLessSecondRowKeepsLookup(t *testing.T) {
 	}
 }
 
+// A lone row that survived only because rows sharing its neighbour's member id
+// were refused is not the whole chassis: it keeps the serial but not the type.
 func TestTranslateAsStack_StandaloneAfterRefusedRowsKeepsLookup(t *testing.T) {
 	master, entities, oids := standaloneWithModel("PN-48P-A")
 	oids[".1.3.6.1.2.1.47.1.1.1.1.6.1"] = Value{Value: "1"}
