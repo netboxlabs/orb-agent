@@ -102,7 +102,7 @@ func TestMergeDefaults(t *testing.T) {
 		policyDefaults := &Defaults{
 			IPAddress: IPAddressDefaults{
 				Role:        "anycast",
-				Tenant:      "default-tenant",
+				Tenant:      TenantParameters{Name: "default-tenant"},
 				Vrf:         VrfParameters{Name: "default-vrf"},
 				Description: "Policy IP",
 				Tags:        []string{"policy"},
@@ -113,14 +113,14 @@ func TestMergeDefaults(t *testing.T) {
 		overrideDefaults := &Defaults{
 			IPAddress: IPAddressDefaults{
 				Role:   "loopback",
-				Tenant: "override-tenant",
+				Tenant: TenantParameters{Name: "override-tenant"},
 				Tags:   []string{"override"},
 			},
 		}
 
 		result := MergeDefaults(policyDefaults, overrideDefaults)
 		assert.Equal(t, "loopback", result.IPAddress.Role)
-		assert.Equal(t, "override-tenant", result.IPAddress.Tenant)
+		assert.Equal(t, "override-tenant", result.IPAddress.Tenant.Name)
 		assert.Equal(t, []string{"override"}, result.IPAddress.Tags)
 		assert.Equal(t, "default-vrf", result.IPAddress.Vrf.Name)     // Not overridden
 		assert.Equal(t, "Policy IP", result.IPAddress.Description)    // Not overridden
@@ -157,16 +157,27 @@ func TestMergeDefaults(t *testing.T) {
 			assert.Equal(t, []string{"policy"}, result.IPAddress.Vrf.Tags)
 		})
 
-		t.Run("override only Name", func(t *testing.T) {
+		t.Run("override naming another VRF inherits nothing", func(t *testing.T) {
+			// The policy VRF's rd would make Diode match, and rename, that
+			// VRF instead of the one the override names.
 			overrideDefaults := &Defaults{
 				IPAddress: IPAddressDefaults{
 					Vrf: VrfParameters{Name: "edge-vrf"},
 				},
 			}
 			result := MergeDefaults(policyDefaults, overrideDefaults)
-			assert.Equal(t, "edge-vrf", result.IPAddress.Vrf.Name) // override won
-			assert.Equal(t, "65000:100", result.IPAddress.Vrf.Rd)  // inherited
-			assert.Equal(t, "Prod VRF", result.IPAddress.Vrf.Description)
+			assert.Equal(t, VrfParameters{Name: "edge-vrf"}, result.IPAddress.Vrf)
+		})
+
+		t.Run("override naming the same VRF refines it", func(t *testing.T) {
+			overrideDefaults := &Defaults{
+				IPAddress: IPAddressDefaults{
+					Vrf: VrfParameters{Name: "prod", Description: "Edge copy"},
+				},
+			}
+			result := MergeDefaults(policyDefaults, overrideDefaults)
+			assert.Equal(t, "65000:100", result.IPAddress.Vrf.Rd)
+			assert.Equal(t, "Edge copy", result.IPAddress.Vrf.Description)
 		})
 
 		t.Run("override all VRF fields", func(t *testing.T) {
@@ -238,7 +249,7 @@ func TestMergeDefaults(t *testing.T) {
 			},
 			IPAddress: IPAddressDefaults{
 				Role:   "anycast",
-				Tenant: "default-tenant",
+				Tenant: TenantParameters{Name: "default-tenant"},
 			},
 			InterfacePatterns: []InterfacePattern{
 				{Match: "^Eth", Type: "1000base-t"},
@@ -252,7 +263,7 @@ func TestMergeDefaults(t *testing.T) {
 				Description: "Override Device",
 			},
 			IPAddress: IPAddressDefaults{
-				Tenant: "override-tenant",
+				Tenant: TenantParameters{Name: "override-tenant"},
 			},
 		}
 
@@ -262,7 +273,7 @@ func TestMergeDefaults(t *testing.T) {
 		assert.Equal(t, "Override Site", result.Site)
 		assert.Equal(t, "router", result.Role)
 		assert.Equal(t, "Override Device", result.Device.Description)
-		assert.Equal(t, "override-tenant", result.IPAddress.Tenant)
+		assert.Equal(t, "override-tenant", result.IPAddress.Tenant.Name)
 
 		// Check non-overridden fields retain policy defaults
 		assert.Equal(t, "Default Location", result.Location)
@@ -633,7 +644,7 @@ func TestMergeDefaults_PrefixBlock(t *testing.T) {
 		Vrf:         VrfParameters{Name: "policy-vrf", Rd: "65000:1"},
 	}}
 	override := &Defaults{Prefix: PrefixDefaults{
-		Tenant:        "override-tenant",
+		Tenant:        TenantParameters{Name: "override-tenant"},
 		ScopeLocation: "override-loc",
 		Comments:      "override-comments",
 		Tags:          []string{"o"},
@@ -644,7 +655,7 @@ func TestMergeDefaults_PrefixBlock(t *testing.T) {
 	assert.Equal(t, "policy-desc", merged.Prefix.Description)
 	assert.Equal(t, "policy-role", merged.Prefix.Role)
 	assert.Equal(t, "policy-site", merged.Prefix.ScopeSite)
-	assert.Equal(t, "override-tenant", merged.Prefix.Tenant)
+	assert.Equal(t, "override-tenant", merged.Prefix.Tenant.Name)
 	assert.Equal(t, "override-loc", merged.Prefix.ScopeLocation)
 	assert.Equal(t, "override-comments", merged.Prefix.Comments)
 	assert.Equal(t, []string{"o"}, merged.Prefix.Tags)

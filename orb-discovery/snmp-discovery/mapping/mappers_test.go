@@ -287,7 +287,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 			defaults: &config.Defaults{
 				IPAddress: config.IPAddressDefaults{
 					Description: "IP Address specific description",
-					Tenant:      "ip-address-tenant",
+					Tenant:      config.TenantParameters{Name: "ip-address-tenant"},
 					Role:        "ip-address-role",
 					Vrf:         config.VrfParameters{Name: "ip-address-vrf"},
 				},

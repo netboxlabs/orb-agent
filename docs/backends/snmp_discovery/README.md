@@ -122,6 +122,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ if_type       | string | Interface type (e.g. "1000base-t", "other")  |
 | ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
+| ├─ tenant   | string \| map  | IP address tenant, in the same form as the top-level `tenant` (see the [tenant map](#tenant-map) below) |
+| ├─ description | string  | IP address description      |
 | ├─ vrf   | string \| map  | IP address VRF name, or a VRF map (see the [vrf map](#vrf-map) below). Used for both address families unless an AF-specific override is set. |
 | ├─ vrf_ipv4   | string \| map  | IPv4-specific VRF override (same shape as `vrf`). When set, IPv4 addresses use this VRF; IPv6 still uses `vrf`. The override replaces `vrf` wholesale for its family — it does not inherit `vrf.name`. |
 | ├─ vrf_ipv6   | string \| map  | IPv6-specific VRF override (same shape as `vrf`). When set, IPv6 addresses use this VRF; IPv4 still uses `vrf`. |
@@ -130,7 +132,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ comments | string  | Prefix comments |
 | ├─ tags | list  | Prefix tags |
 | ├─ role | string  | Prefix role |
-| ├─ tenant | string  | Prefix tenant |
+| ├─ tenant | string \| map  | Prefix tenant, in the same form as the top-level `tenant` |
 | ├─ vrf   | string \| map  | Prefix VRF (same `vrf` map shape; independent of `ip_address.vrf`) |
 | ├─ vrf_ipv4   | string \| map  | IPv4-specific prefix VRF override |
 | ├─ vrf_ipv6   | string \| map  | IPv6-specific prefix VRF override |
@@ -139,11 +141,10 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | vrf | map | VRF-specific defaults (used within `ip_address` and `prefix`, incl. the `vrf_ipv4` / `vrf_ipv6` overrides) |
 | ├─ name | string  | VRF name |
 | ├─ rd | string  | Route distinguisher (e.g. `65000:100`) |
-| ├─ description | string  | VRF description |
-| ├─ comments | string  | VRF comments |
-| ├─ tags | list  | VRF tags |
-| ├─ tenant   | string  | IP address tenant              |
-| ├─ description | string  | IP address description      |
+| ├─ tenant | string \| map  | Tenant the VRF belongs to, in the same form as the top-level `tenant`. Never taken from another tenant default (see the [vrf map](#vrf-map) below) |
+| ├─ description | string  | VRF description, written to the VRF on every run |
+| ├─ comments | string  | VRF comments, written to the VRF on every run |
+| ├─ tags | list  | VRF tags, added to the VRF's existing tags |
 | vlan    | map  | VLAN-specific defaults  |
 | ├─ description | string  | VLAN description |
 | ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ip_address` defaults pattern. |
@@ -161,6 +162,35 @@ The top-level `tenant` default accepts either a bare string (tenant name) or a m
 | description | string  | Tenant description |
 | comments | string  | Tenant comments |
 | tags | list  | Tenant tags |
+
+##### VRF Map
+`vrf`, `vrf_ipv4` and `vrf_ipv6` accept either a bare string (VRF name) or a map with the keys in the `vrf` rows above. Any other key in the map, or in its tenant map, is refused, so a misspelt key such as `rd`, `tenant` or `group` is not silently dropped.
+
+In a per-target `override_defaults`, a VRF map that names a different VRF replaces the policy's as a whole, taking no `rd`, `tenant` or other field from it; one that names the same VRF, or none, refines it field by field. A VRF tenant that names a different tenant likewise replaces the policy's VRF tenant as a whole.
+
+The `ip_address`, `prefix` and top-level `tenant` defaults do not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
+
+When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
+
+Every tenant default reaches Diode in full on each run. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (the top-level `tenant`, `ip_address.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too.
+
+If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
+
+VRFs discovered with `discover_vrfs` carry no tenant, so this applies only to the configured `vrf`, `vrf_ipv4` and `vrf_ipv6` defaults.
+
+```yaml
+defaults:
+  tenant: &owner
+    name: "Example Tenant GmbH"
+    group: "Example Group"
+  ip_address:
+    tenant: *owner
+    vrf: &example-vrf
+      name: "Example VRF"
+      tenant: *owner
+  prefix:
+    vrf: *example-vrf
+```
 
 ##### VLAN Group Map
 

@@ -252,7 +252,27 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 	}
 
+	if err := validateVrfTenants(policy); err != nil {
+		return err
+	}
 	return validateRackPlacement(policy)
+}
+
+// validateVrfTenants checks the policy defaults and each target's merged
+// defaults, since an override can clash with a policy-level tenant.
+func validateVrfTenants(policy config.Policy) error {
+	if err := policy.Config.Defaults.ValidateVrfTenants(); err != nil {
+		return err
+	}
+	for _, target := range policy.Scope.Targets {
+		if target.OverrideDefaults == nil {
+			continue
+		}
+		if err := config.MergeDefaults(&policy.Config.Defaults, target.OverrideDefaults).ValidateVrfTenants(); err != nil {
+			return fmt.Errorf("target %s: %w", target.Host, err)
+		}
+	}
+	return nil
 }
 
 // rackUnit is a U and face of a rack, named within a site. The location is
