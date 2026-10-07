@@ -467,6 +467,7 @@ def _resolve_prefix_vlan_candidate(
         logger.debug("%s: device withholds its VLAN ID; no prefix VLAN", interface_name)
         return None
     vid = iface_vlan_ids.get(interface_name)
+    from_device = vid is not None
     if vid is None:
         vid = svi_vlan_id(interface_name)
     elif svi_vlan_id(interface_name) not in (None, vid):
@@ -480,6 +481,15 @@ def _resolve_prefix_vlan_candidate(
         return None
     vlan = (vlan_cache or {}).get(vid)
     if vlan is None or not vlan.name:
+        if from_device:
+            # Typically a routed subinterface whose tag has no VLAN on the
+            # device: there is no named VLAN to link to, and none is created.
+            logger.debug(
+                "%s: device reports VLAN ID %d, but the device lists no named VLAN %d; no prefix VLAN",
+                interface_name,
+                vid,
+                vid,
+            )
         return None
     return vlan
 
