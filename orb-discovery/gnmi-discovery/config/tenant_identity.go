@@ -10,10 +10,11 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Diode trims names and finds a tenant by the slug of its name, whatever its
-// group. Two copies of a tenant in one entity whose names slugify alike
-// therefore resolve to one NetBox tenant, and written differently the entity
-// is refused or the tenant is rewritten on every run.
+// Diode trims names and, when a tenant's name and group match no tenant,
+// falls back to the slug of its name whatever its group. Two copies of a
+// tenant whose names slugify alike can therefore resolve to one NetBox tenant,
+// and written differently the entity is refused, the tenant is rewritten on
+// every run, or a second tenant of that name is created.
 
 // Python's \s also matches \v and \x1c-\x1f, which RE2's does not.
 var (
@@ -33,6 +34,12 @@ func slug(s string) string {
 	return strings.Trim(slugCollapse.ReplaceAllString(s, "-"), "-_")
 }
 
+// trim strips what Python's str.strip does, which Diode applies to text: Go's
+// whitespace set leaves out \x1c-\x1f.
+func trim(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r >= 0x1c && r <= 0x1f })
+}
+
 // sameName reports whether two trimmed names resolve alike: equal, or the
 // same non-empty slug.
 func sameName(a, b string) bool {
@@ -44,12 +51,14 @@ func sameName(a, b string) bool {
 // names resolve to one tenant but the name, group, description, comments or
 // tags differ, or "" when Diode can merge them.
 func tenantConflict(a, b TenantParameters) string {
-	nameA, nameB := strings.TrimSpace(a.Name), strings.TrimSpace(b.Name)
-	groupA, groupB := strings.TrimSpace(a.Group), strings.TrimSpace(b.Group)
+	nameA, nameB := trim(a.Name), trim(b.Name)
+	groupA, groupB := trim(a.Group), trim(b.Group)
 	switch {
+	case nameA == "" || nameB == "":
+		return ""
 	case groupA != groupB && sameName(groupA, groupB):
 		return "group"
-	case nameA == "" || nameB == "" || !sameName(nameA, nameB):
+	case !sameName(nameA, nameB):
 		return ""
 	case nameA != nameB || groupA != groupB,
 		differ(a.Description, b.Description), differ(a.Comments, b.Comments),
@@ -62,41 +71,54 @@ func tenantConflict(a, b TenantParameters) string {
 // differ reports whether two optional values are both set and disagree once
 // trimmed. A blank value is set: Diode trims it to empty, which still clashes.
 func differ(a, b string) bool {
-	return a != "" && b != "" && strings.TrimSpace(a) != strings.TrimSpace(b)
+	return a != "" && b != "" && trim(a) != trim(b)
 }
 
 func trimmed(values []string) []string {
 	out := make([]string, len(values))
 	for i, v := range values {
-		out[i] = strings.TrimSpace(v)
+		out[i] = trim(v)
 	}
 	return out
 }
 
-// ValidateVrfTenants refuses the VRF tenant written differently from another
-// tenant default. Every discovered VRF carries it, so an address carries its
-// own tenant and its VRF's, a prefix likewise, and VLANs their own. Diode
-// merges the copies that resolve to one tenant within an entity and refuses
-// the entity when they disagree, and across entities rewrites the tenant on
-// every run. Pairs without the VRF tenant are left as they were.
-func (d *Defaults) ValidateVrfTenants() error {
-	others := []struct {
+// ValidateTenants refuses tenant defaults Diode cannot apply as written: one
+// with fields but no name, which goes out empty, and two that name one NetBox
+// tenant but write it differently. An address carries its own tenant and its
+// VRF's, a prefix likewise, an interface its VRF's and its VLAN's, and the
+// copies Diode resolves to one tenant are refused within an entity when they
+// disagree, or rewrite each other on every run across entities. Pairs of bare
+// names are left as they were before tenants took the map form. Run it on the
+// defaults a target actually uses.
+func (d *Defaults) ValidateTenants() error {
+	copies := []struct {
 		path   string
 		tenant TenantParameters
 	}{
+		{"defaults.vrf.tenant", d.Vrf.Tenant},
 		{"defaults.ip_address.tenant", d.IPAddress.Tenant},
 		{"defaults.prefix.tenant", d.Prefix.Tenant},
-		{"defaults.vlan.tenant", TenantParameters{Name: d.Vlan.Tenant}},
+		{"defaults.vlan.tenant", d.Vlan.Tenant},
 	}
-	for _, other := range others {
-		switch tenantConflict(d.Vrf.Tenant, other.tenant) {
-		case "group":
-			return fmt.Errorf("defaults.vrf.tenant and %s name the same NetBox tenant group in two ways; "+
-				"write it the same way in both places", other.path)
-		case "tenant":
-			return fmt.Errorf("defaults.vrf.tenant and %s name the same NetBox tenant but write it differently; "+
-				"give it the same name, group, description, comments and tags, in the same order, in both places, "+
-				"for example with a YAML anchor", other.path)
+	for _, c := range copies {
+		if !c.tenant.isZero() && trim(c.tenant.Name) == "" {
+			return fmt.Errorf("%s has no name; a tenant is matched by its name", c.path)
+		}
+	}
+	for i, first := range copies {
+		for _, second := range copies[i+1:] {
+			if !first.tenant.rich() && !second.tenant.rich() {
+				continue
+			}
+			switch tenantConflict(first.tenant, second.tenant) {
+			case "group":
+				return fmt.Errorf("%s and %s name the same NetBox tenant group in two ways; "+
+					"write it the same way in both places", first.path, second.path)
+			case "tenant":
+				return fmt.Errorf("%s and %s name the same NetBox tenant but write it differently; "+
+					"give it the same name, group, description, comments and tags, in the same order, in both places, "+
+					"for example with a YAML anchor", first.path, second.path)
+			}
 		}
 	}
 	return nil

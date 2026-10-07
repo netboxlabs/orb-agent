@@ -162,7 +162,7 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	if err := policy.Config.Defaults.ValidateVrfTenants(); err != nil {
+	if err := policy.Config.Defaults.ValidateTenants(); err != nil {
 		return err
 	}
 	for _, t := range policy.Scope.Targets {
@@ -182,7 +182,7 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
 			// Judged merged, not alone: an override inherits the policy's tenants.
-			if err := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults).ValidateVrfTenants(); err != nil {
+			if err := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults).ValidateTenants(); err != nil {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
 		}

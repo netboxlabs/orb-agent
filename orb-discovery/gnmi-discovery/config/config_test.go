@@ -233,17 +233,17 @@ func TestMergeDefaults(t *testing.T) {
 }
 
 func TestMergeDefaultsVlan(t *testing.T) {
-	policy := &Defaults{Site: "NYC", Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, Tenant: "t1", Role: "r1", Tags: []string{"a"}, Description: "d1"}}
+	policy := &Defaults{Site: "NYC", Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, Tenant: TenantParameters{Name: "t1"}, Role: "r1", Tags: []string{"a"}, Description: "d1"}}
 	// nil override -> clone preserves vlan
 	got := MergeDefaults(policy, nil)
 	require.Equal(t, VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, got.Vlan.Group)
-	require.Equal(t, "t1", got.Vlan.Tenant)
+	require.Equal(t, "t1", got.Vlan.Tenant.Name)
 	// override wins on non-empty fields, preserves the rest
 	override := &Defaults{Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g2"}, Role: "r2"}}
 	got = MergeDefaults(policy, override)
 	require.Equal(t, VlanGroupParameters{Name: "g2"}, got.Vlan.Group) // replaced whole: no policy scope leaks in
 	require.Equal(t, "r2", got.Vlan.Role)                             // overridden
-	require.Equal(t, "t1", got.Vlan.Tenant)                           // preserved
+	require.Equal(t, "t1", got.Vlan.Tenant.Name)                      // preserved
 	require.Equal(t, "d1", got.Vlan.Description)                      // preserved
 
 	// no-alias contract: mutating the merged Vlan.Tags must not touch the source

@@ -162,9 +162,7 @@ func newVlanBuilder(dev *diode.Device, defaults *config.Defaults, defs map[int64
 			setVlanGroupScope(g, v.Group, b.site)
 			b.group = g
 		}
-		if v.Tenant != "" {
-			b.tenant = &diode.Tenant{Name: strptr(v.Tenant)}
-		}
+		b.tenant = diodeTenant(v.Tenant)
 		if v.Role != "" {
 			b.role = &diode.Role{Name: strptr(v.Role)}
 		}

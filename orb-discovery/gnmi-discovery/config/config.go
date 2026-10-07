@@ -242,7 +242,7 @@ func (g *VlanGroupParameters) UnmarshalYAML(node *yaml.Node) error {
 // VlanDefaults holds NetBox defaults applied to discovered VLANs.
 type VlanDefaults struct {
 	Group       VlanGroupParameters `yaml:"group,omitempty"`
-	Tenant      string              `yaml:"tenant,omitempty"`
+	Tenant      TenantParameters    `yaml:"tenant,omitempty"`
 	Role        string              `yaml:"role,omitempty"`
 	Tags        []string            `yaml:"tags,omitempty"`
 	Description string              `yaml:"description,omitempty"`
@@ -320,11 +320,18 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 }
 
 // refineTenant overlays an override tenant onto dst field by field, or
-// replaces dst whole when the override names another tenant, which must not
-// take this one's group or description.
+// replaces dst whole when the override names another tenant, by another name
+// or another group where both give one: another tenant must not take this
+// one's group or description. A replacement given no name keeps dst's. Tags
+// are copied, so the result never aliases either side.
 func refineTenant(dst, override *TenantParameters) {
-	if dst.Name != "" && override.Name != "" && strings.TrimSpace(override.Name) != strings.TrimSpace(dst.Name) {
+	if differ(dst.Name, override.Name) || differ(dst.Group, override.Group) {
+		name := dst.Name
 		*dst = *override
+		if trim(dst.Name) == "" {
+			dst.Name = name
+		}
+		dst.Tags = cloneStrings(override.Tags)
 		return
 	}
 	if override.Name != "" {
@@ -340,7 +347,25 @@ func refineTenant(dst, override *TenantParameters) {
 		dst.Comments = override.Comments
 	}
 	if len(override.Tags) > 0 {
-		dst.Tags = override.Tags
+		dst.Tags = cloneStrings(override.Tags)
+	}
+}
+
+// isZero reports whether no field of the tenant is set.
+func (t TenantParameters) isZero() bool {
+	return t.Name == "" && !t.rich()
+}
+
+// rich reports whether the tenant is written as more than a bare name, a
+// form only the map allows.
+func (t TenantParameters) rich() bool {
+	return t.Group != "" || t.Description != "" || t.Comments != "" || len(t.Tags) > 0
+}
+
+// cloneTenantTags gives every tenant default its own tags slice.
+func cloneTenantTags(d *Defaults) {
+	for _, t := range []*TenantParameters{&d.Vrf.Tenant, &d.IPAddress.Tenant, &d.Prefix.Tenant, &d.Vlan.Tenant} {
+		t.Tags = cloneStrings(t.Tags)
 	}
 }
 
@@ -531,6 +556,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 		cp.InterfacePatterns = clonePatterns(overrideDefaults.InterfacePatterns)
 		cp.InterfaceExcludePatterns = cloneStrings(overrideDefaults.InterfaceExcludePatterns)
 		cp.Position = cloneFloat(overrideDefaults.Position)
+		cloneTenantTags(&cp)
 		return &cp
 	}
 	if overrideDefaults == nil {
@@ -547,6 +573,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 		cp.InterfacePatterns = clonePatterns(policyDefaults.InterfacePatterns)
 		cp.InterfaceExcludePatterns = cloneStrings(policyDefaults.InterfaceExcludePatterns)
 		cp.Position = cloneFloat(policyDefaults.Position)
+		cloneTenantTags(&cp)
 		return &cp
 	}
 	merged := *policyDefaults
@@ -560,6 +587,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	merged.Vrf.Tags = cloneStrings(policyDefaults.Vrf.Tags)
 	merged.InterfacePatterns = clonePatterns(policyDefaults.InterfacePatterns)
 	merged.InterfaceExcludePatterns = cloneStrings(policyDefaults.InterfaceExcludePatterns)
+	cloneTenantTags(&merged)
 	merged.Position = cloneFloat(policyDefaults.Position)
 
 	if overrideDefaults.Site != "" {
@@ -616,9 +644,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.Vlan.Group.Name != "" {
 		merged.Vlan.Group = overrideDefaults.Vlan.Group
 	}
-	if overrideDefaults.Vlan.Tenant != "" {
-		merged.Vlan.Tenant = overrideDefaults.Vlan.Tenant
-	}
+	refineTenant(&merged.Vlan.Tenant, &overrideDefaults.Vlan.Tenant)
 	if overrideDefaults.Vlan.Role != "" {
 		merged.Vlan.Role = overrideDefaults.Vlan.Role
 	}
