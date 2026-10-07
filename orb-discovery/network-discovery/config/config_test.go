@@ -179,6 +179,7 @@ func TestDefaults_Validate(t *testing.T) {
 		{name: "defaults rd only", defaultRd: "65000:1"},
 		{name: "equal", vrfRd: "65000:1", defaultRd: "65000:1"},
 		{name: "equal once trimmed", vrfRd: "65000:1 ", defaultRd: " 65000:1"},
+		{name: "equal once a separator control is trimmed", vrfRd: "65000:1\x1e", defaultRd: "65000:1"},
 		{name: "blank vrf rd", vrfRd: " ", defaultRd: "65000:1"},
 		{
 			name: "conflict", vrfRd: "65000:1", defaultRd: "65000:2",
@@ -237,6 +238,8 @@ func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 		{name: "tag padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Tags = []string{" a"} })},
 		{name: "name padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Name = "acme " })},
 		{name: "group padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Group = " customers" })},
+		{name: "name padded with a separator control", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Name = "acme\x1c" })},
+		{name: "description padded with a separator control", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Description = "d\x1f" })},
 		{name: "other tenant", ip: acme, vrf: TenantParameters{Name: "globex", Group: "partners", Description: "x"}},
 		{name: "names without a slug", ip: TenantParameters{Name: "日本", Description: "x"}, vrf: TenantParameters{Name: "中国", Description: "y"}},
 		{name: "no vrf tenant", ip: acme},

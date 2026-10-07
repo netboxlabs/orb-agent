@@ -6,7 +6,6 @@ import (
 	"maps"
 	"reflect"
 	"slices"
-	"strings"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -210,7 +209,7 @@ type Defaults struct {
 // or the address's and the VRF's copies of one tenant written two ways, since
 // Diode then refuses every address or rewrites the tenant on every run.
 func (d Defaults) Validate() error {
-	rd, vrfRd := strings.TrimSpace(d.Rd), strings.TrimSpace(d.Vrf.Rd)
+	rd, vrfRd := trim(d.Rd), trim(d.Vrf.Rd)
 	if rd != "" && vrfRd != "" && rd != vrfRd {
 		return fmt.Errorf("defaults.rd %q conflicts with defaults.vrf.rd %q; set the rd in one place", d.Rd, d.Vrf.Rd)
 	}

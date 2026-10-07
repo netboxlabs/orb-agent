@@ -9,10 +9,11 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Diode trims names and finds a tenant by the slug of its name, whatever its
-// group. Two copies of a tenant in one entity whose names slugify alike
-// therefore resolve to one NetBox tenant, and written differently the entity
-// is refused or the tenant is rewritten on every run.
+// Diode trims names and, when a tenant's name and group match no tenant,
+// falls back to the slug of its name whatever its group. Two copies of a
+// tenant whose names slugify alike can therefore resolve to one NetBox tenant,
+// and written differently the entity is refused, the tenant is rewritten on
+// every run, or a second tenant of that name is created.
 
 // Python's \s also matches \v and \x1c-\x1f, which RE2's does not.
 var (
@@ -32,6 +33,12 @@ func slug(s string) string {
 	return strings.Trim(slugCollapse.ReplaceAllString(s, "-"), "-_")
 }
 
+// trim strips what Python's str.strip does, which Diode applies to text: Go's
+// whitespace set leaves out \x1c-\x1f.
+func trim(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r >= 0x1c && r <= 0x1f })
+}
+
 // sameName reports whether two trimmed names resolve alike: equal, or the
 // same non-empty slug.
 func sameName(a, b string) bool {
@@ -43,8 +50,8 @@ func sameName(a, b string) bool {
 // names resolve to one tenant but the name, group, description, comments or
 // tags differ, or "" when Diode can merge them.
 func tenantConflict(a, b TenantParameters) string {
-	nameA, nameB := strings.TrimSpace(a.Name), strings.TrimSpace(b.Name)
-	groupA, groupB := strings.TrimSpace(a.Group), strings.TrimSpace(b.Group)
+	nameA, nameB := trim(a.Name), trim(b.Name)
+	groupA, groupB := trim(a.Group), trim(b.Group)
 	switch {
 	case groupA != groupB && sameName(groupA, groupB):
 		return "group"
@@ -61,13 +68,13 @@ func tenantConflict(a, b TenantParameters) string {
 // differ reports whether two optional values are both set and disagree once
 // trimmed. A blank value is set: Diode trims it to empty, which still clashes.
 func differ(a, b string) bool {
-	return a != "" && b != "" && strings.TrimSpace(a) != strings.TrimSpace(b)
+	return a != "" && b != "" && trim(a) != trim(b)
 }
 
 func trimmed(values []string) []string {
 	out := make([]string, len(values))
 	for i, v := range values {
-		out[i] = strings.TrimSpace(v)
+		out[i] = trim(v)
 	}
 	return out
 }
