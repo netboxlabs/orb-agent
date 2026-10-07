@@ -64,8 +64,8 @@ Current supported defaults:
 
 |  Key  | Type | Description  |
 |:-----:|:----:|:-------------:|
-| vrf | str | VRF name to assign to discovered IP addresses |
-| rd | str | Route Distinguisher (RD) for the VRF (only used when `vrf` is set). Optional — when omitted the VRF is emitted without an RD so NetBox can match an existing VRF whose `rd` is null. |
+| vrf | string \| map | VRF to assign to discovered IP addresses. Accepts a bare VRF name or a map with `name` + optional `rd` / `tenant` / `description` / `comments` / `tags` (see [VRF map](#vrf-map) below). Use the map form with `tenant` when the VRF belongs to a tenant in NetBox, so Diode matches it instead of creating a second VRF. |
+| rd | str | Route Distinguisher (RD) for the VRF (only used when `vrf` is set). Optional; when omitted the VRF is emitted without an RD so NetBox can match an existing VRF whose `rd` is null. Equivalent to `vrf.rd`; a policy that sets both to different values is refused. |
 | tenant | string \| map | Tenant to assign to discovered IP addresses. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see [Tenant map](#tenant-map) below). Use the map form when the tenant already exists in a tenant group so Diode matches it instead of planning a create. |
 | role | str | Role to assign to discovered IP addresses |
 | comments | str | NetBox Comments information to be added to discovered IP |
@@ -91,6 +91,43 @@ defaults:
   tenant:
     name: "Example Tenant GmbH"
     group: "Example Group"
+```
+
+##### VRF map
+The `defaults.vrf` field accepts either a bare string (VRF name) or a map:
+
+| Parameter | Type | Description |
+|---------|----|-----------|
+| name | string | VRF name (required when using the map form) |
+| rd | string | Route Distinguisher, equivalent to `defaults.rd` |
+| tenant | string \| map | Tenant the VRF belongs to, in the same form as `defaults.tenant` (see [Tenant map](#tenant-map)) |
+| description | string | VRF description |
+| comments | string | VRF comments |
+| tags | list | VRF tags |
+
+`defaults.tenant` applies to the discovered IP addresses only and does not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
+
+Example: match an existing VRF that belongs to a grouped tenant:
+
+```yaml
+defaults:
+  vrf:
+    name: "Example VRF"
+    tenant:
+      name: "Example Tenant GmbH"
+      group: "Example Group"
+```
+
+When the IP addresses and the VRF share a tenant, a YAML anchor avoids repeating it:
+
+```yaml
+defaults:
+  tenant: &owner
+    name: "Example Tenant GmbH"
+    group: "Example Group"
+  vrf:
+    name: "Example VRF"
+    tenant: *owner
 ```
 
 ### Scope
@@ -131,6 +168,7 @@ orb:
             tags: [net-discovery, orb-agent]
             # tenant: customer-a
             # tenant: { name: customer-a, group: customers }
+            # vrf: { name: example-vrf, tenant: customer-a }
         scope:
           targets: 
             - 192.168.7.32

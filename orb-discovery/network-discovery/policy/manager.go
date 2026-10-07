@@ -58,6 +58,9 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}
+	if err := policy.Config.Defaults.Validate(); err != nil {
+		return fmt.Errorf("%s : %w", name, err)
+	}
 
 	if !m.HasPolicy(name) {
 		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, m.runStore)

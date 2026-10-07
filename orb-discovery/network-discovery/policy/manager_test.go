@@ -206,3 +206,16 @@ func TestManager_ParsePolicies_Tenant(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, config.TenantParameters{}, got)
 }
+
+func TestManager_StartPolicy_RejectsConflictingRd(t *testing.T) {
+	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	err := m.StartPolicy("p1", config.Policy{
+		Config: config.PolicyConfig{Defaults: config.Defaults{
+			Vrf: config.VrfParameters{Name: "MyVRF", Rd: "65000:1"},
+			Rd:  "65000:2",
+		}},
+		Scope: config.Scope{Targets: []string{"192.0.2.1"}},
+	})
+	assert.ErrorContains(t, err, `p1 : defaults.rd "65000:2" conflicts with defaults.vrf.rd "65000:1"`)
+	assert.False(t, m.HasPolicy("p1"))
+}

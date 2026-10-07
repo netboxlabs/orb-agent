@@ -90,7 +90,7 @@ func TestRunnerRun(t *testing.T) {
 					Defaults: config.Defaults{
 						Description: "Test",
 						Comments:    "This is a test",
-						Vrf:         "test-vrf",
+						Vrf:         config.VrfParameters{Name: "test-vrf"},
 						Tenant:      config.TenantParameters{Name: "test-tenant"},
 						Role:        "test-role",
 						Tags:        []string{"test", "ip"},
@@ -512,7 +512,7 @@ func TestRunnerEmitsVrf(t *testing.T) {
 				Config: config.PolicyConfig{
 					Schedule: nil,
 					Defaults: config.Defaults{
-						Vrf: tt.vrfDefault,
+						Vrf: config.VrfParameters{Name: tt.vrfDefault},
 						Rd:  tt.rdDefault,
 					},
 				},

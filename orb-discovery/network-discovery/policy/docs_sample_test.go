@@ -134,6 +134,7 @@ func documents(text string) ([]map[string]any, error) {
 // which KnownFields does not reach.
 var customMaps = map[string]reflect.Type{
 	"tenant": reflect.TypeFor[config.TenantParameters](),
+	"vrf":    reflect.TypeFor[config.VrfParameters](),
 }
 
 // customMapKeys returns an error for a key in a customMaps mapping that its
@@ -416,6 +417,9 @@ func TestCustomMapKeys(t *testing.T) {
 	require.NoError(t, customMapKeys(map[string]any{"tenant": map[string]any{"name": "t1", "group": "g1"}}))
 	require.ErrorContains(t, customMapKeys(map[string]any{"tenant": map[string]any{"name": "t1", "grup": "g1"}}), `tenant has no "grup" key`)
 	require.Error(t, customMapKeys(map[string]any{"p": []any{map[string]any{"tenant": map[string]any{"nme": "t1"}}}}), "inside a list")
+	require.NoError(t, customMapKeys(map[string]any{"vrf": map[string]any{"name": "v1", "rd": "65000:1", "tenant": "t1"}}))
+	require.ErrorContains(t, customMapKeys(map[string]any{"vrf": map[string]any{"name": "v1", "tennant": "t1"}}), `vrf has no "tennant" key`)
+	require.ErrorContains(t, customMapKeys(map[string]any{"vrf": map[string]any{"name": "v1", "tenant": map[string]any{"name": "t1", "grup": "g1"}}}), `tenant has no "grup" key`)
 }
 
 // Every documented policy example must be one this backend accepts: a policy
@@ -454,9 +458,10 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 					parsed, err := m.ParsePolicies(payload)
 					require.NoError(t, err, "block:\n%s", block.text)
 					// Starting a policy refuses more than parsing does: no
-					// targets, or a bad cron.
+					// targets, conflicting route distinguishers, or a bad cron.
 					for name, p := range parsed {
 						require.NotEmpty(t, p.Scope.Targets, "%s has no targets", name)
+						require.NoError(t, p.Config.Defaults.Validate(), "block:\n%s", block.text)
 						r, err := policy.NewRunner(context.Background(), logger, name, p, nil, nil)
 						require.NoError(t, err, "block:\n%s", block.text)
 						require.NoError(t, r.Stop())

@@ -98,9 +98,45 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
+// VrfParameters names the VRF applied to discovered IP addresses. Accepts
+// either a plain string (VRF name) or a mapping, mirroring snmp-discovery and
+// device-discovery defaults.vrf. Tenant is the VRF's own tenant, so a VRF
+// owned by a tenant in NetBox is matched instead of created again.
+type VrfParameters struct {
+	Name        string           `yaml:"name"`
+	Rd          string           `yaml:"rd,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+}
+
+// UnmarshalYAML accepts a scalar VRF name or a mapping.
+func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
+	*v = VrfParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		v.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		type alias VrfParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		if a.Name == "" {
+			return fmt.Errorf("vrf: mapping requires name")
+		}
+		*v = VrfParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("vrf: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
 // Defaults represents the supported default values for a policy
 type Defaults struct {
-	Vrf         string           `yaml:"vrf,omitempty"`
+	Vrf         VrfParameters    `yaml:"vrf,omitempty"`
 	Rd          string           `yaml:"rd,omitempty"`
 	Tenant      TenantParameters `yaml:"tenant,omitempty"`
 	Role        string           `yaml:"role,omitempty"`
@@ -108,6 +144,15 @@ type Defaults struct {
 	Comments    string           `yaml:"comments,omitempty"`
 	Tags        []string         `yaml:"tags,omitempty"`
 	NetworkMask *int             `yaml:"network_mask,omitempty"`
+}
+
+// Validate rejects defaults that name two different route distinguishers for
+// the VRF, since either choice could match the wrong VRF.
+func (d Defaults) Validate() error {
+	if d.Rd != "" && d.Vrf.Rd != "" && d.Rd != d.Vrf.Rd {
+		return fmt.Errorf("defaults.rd %q conflicts with defaults.vrf.rd %q; set the rd in one place", d.Rd, d.Vrf.Rd)
+	}
+	return nil
 }
 
 // PolicyConfig represents the configuration of a policy
