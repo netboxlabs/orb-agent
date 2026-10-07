@@ -95,10 +95,8 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 	if entity.Comments == nil && entityDefaults.Comments != "" {
 		entity.Comments = &entityDefaults.Comments
 	}
-	if entity.Tenant == nil && entityDefaults.Tenant != "" {
-		entity.Tenant = &diode.Tenant{
-			Name: &entityDefaults.Tenant,
-		}
+	if entity.Tenant == nil {
+		entity.Tenant = diodeTenant(entityDefaults.Tenant)
 	}
 	if entity.Role == nil && entityDefaults.Role != "" {
 		entity.Role = &entityDefaults.Role
@@ -116,27 +114,8 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 		vrfDefaults, vrfKnob := entityDefaults.VrfForFamily(family)
 		switch {
 		case vrfDefaults.Name != "":
-			vrf := &diode.VRF{Name: &vrfDefaults.Name}
-			if vrfDefaults.Rd != "" {
-				vrf.Rd = &vrfDefaults.Rd
-			}
-			if vrfDefaults.Description != "" {
-				vrf.Description = &vrfDefaults.Description
-			}
-			if vrfDefaults.Comments != "" {
-				vrf.Comments = &vrfDefaults.Comments
-			}
-			if len(vrfDefaults.Tags) > 0 {
-				tags := make([]*diode.Tag, 0, len(vrfDefaults.Tags))
-				for _, t := range vrfDefaults.Tags {
-					tagName := t
-					tags = append(tags, &diode.Tag{Name: &tagName})
-				}
-				vrf.Tags = tags
-			}
-			entity.Vrf = vrf
-		case vrfDefaults.Rd != "", vrfDefaults.Description != "",
-			vrfDefaults.Comments != "", len(vrfDefaults.Tags) > 0:
+			entity.Vrf = diodeVrf(vrfDefaults)
+		case !vrfDefaults.IsZero():
 			// One or more VRF sub-fields were configured but Name is empty,
 			// either via a policy default like `vrf: {rd: "65000:100"}` with
 			// no name OR a per-target override that refines fields without
@@ -164,6 +143,7 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 					"description", vrfDefaults.Description,
 					"comments", vrfDefaults.Comments,
 					"tags", vrfDefaults.Tags,
+					"tenant", vrfDefaults.Tenant.Name,
 				)
 			})
 		}
@@ -1239,21 +1219,8 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 		}
 	}
 
-	if entity.Tenant == nil && defaults.Tenant.Name != "" {
-		tenant := &diode.Tenant{Name: &defaults.Tenant.Name}
-		if defaults.Tenant.Group != "" {
-			tenant.Group = &diode.TenantGroup{Name: &defaults.Tenant.Group}
-		}
-		if defaults.Tenant.Description != "" {
-			tenant.Description = &defaults.Tenant.Description
-		}
-		if defaults.Tenant.Comments != "" {
-			tenant.Comments = &defaults.Tenant.Comments
-		}
-		for i := range defaults.Tenant.Tags {
-			tenant.Tags = append(tenant.Tags, &diode.Tag{Name: &defaults.Tenant.Tags[i]})
-		}
-		entity.Tenant = tenant
+	if entity.Tenant == nil {
+		entity.Tenant = diodeTenant(defaults.Tenant)
 	}
 
 	if defaults.Location != "" {

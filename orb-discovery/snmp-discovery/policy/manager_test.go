@@ -1276,7 +1276,7 @@ func TestManagerParsePoliciesWithOverrideDefaults(t *testing.T) {
 		assert.Equal(t, "1000base-t", overrides.Interface.Type)
 		assert.Equal(t, []string{"override-interface"}, overrides.Interface.Tags)
 		assert.Equal(t, "loopback", overrides.IPAddress.Role)
-		assert.Equal(t, "override-tenant", overrides.IPAddress.Tenant)
+		assert.Equal(t, "override-tenant", overrides.IPAddress.Tenant.Name)
 	})
 
 	t.Run("Mixed Configuration - Some Targets with Overrides", func(t *testing.T) {
@@ -2322,4 +2322,45 @@ func TestManager_ParsePolicies_RackPlacementSameUSkipsOIDLocations(t *testing.T)
 			require.NoError(t, err)
 		})
 	}
+}
+
+func TestManager_ParsePolicies_VrfTenantWrittenTwice(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	owner := map[string]any{"name": "acme", "group": "customers", "description": "d"}
+	clash := map[string]any{"name": "acme", "group": "customers", "description": "x"}
+
+	_, err = manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{
+		"ip_address": map[string]any{"tenant": owner, "vrf": map[string]any{"name": "example-vrf", "tenant": owner}},
+	}, nil))
+	require.NoError(t, err)
+
+	_, err = manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{
+		"ip_address": map[string]any{"tenant": owner, "vrf": map[string]any{"name": "example-vrf", "tenant": clash}},
+	}, nil))
+	assert.ErrorContains(t, err, "defaults.ip_address.tenant and defaults.ip_address.vrf.tenant name the same NetBox tenant")
+
+	_, err = manager.ParsePolicies(rackPolicy(t, "192.0.2.1", map[string]any{
+		"ip_address": map[string]any{"tenant": owner},
+	}, map[string]any{
+		"ip_address": map[string]any{"vrf": map[string]any{"name": "example-vrf", "tenant": clash}},
+	}))
+	assert.ErrorContains(t, err, "target 192.0.2.1, with its override_defaults: defaults.ip_address.tenant and defaults.ip_address.vrf.tenant")
+}
+
+func TestManager_ParsePolicies_VrfTenantTemplateCompletedPerTarget(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+	template := map[string]any{"ip_address": map[string]any{"vrf": map[string]any{"tenant": "acme"}}}
+	named := func(host string) map[string]any {
+		return map[string]any{"host": host, "override_defaults": map[string]any{
+			"ip_address": map[string]any{"vrf": map[string]any{"name": "example-vrf"}},
+		}}
+	}
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, template, named("192.0.2.1"), named("192.0.2.2")))
+	require.NoError(t, err, "a nameless policy VRF every target names is fine")
+
+	_, err = manager.ParsePolicies(rackPolicyTargets(t, map[string]any{"ip_address": map[string]any{"vrf": map[string]any{"tenant": "acme"}}},
+		named("192.0.2.1"), map[string]any{"host": "192.0.2.2"}))
+	assert.ErrorContains(t, err, "defaults.ip_address.vrf sets a tenant but no VRF name")
 }

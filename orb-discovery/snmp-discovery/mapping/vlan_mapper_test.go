@@ -319,7 +319,7 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 		VLAN: config.VLANDefaults{
 			Description: "auto-discovered",
 			Tags:        []string{"vlan-tag"},
-			Tenant:      "NetOps",
+			Tenant:      config.TenantParameters{Name: "NetOps", Group: "Operations"},
 			Group:       config.VLANGroupParameters{Name: "campus-vlans"},
 		},
 	}
@@ -339,6 +339,9 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 	}
 	if got.Description == nil || *got.Description != "auto-discovered" {
 		t.Errorf("Description: got %v, want \"auto-discovered\"", got.Description)
+	}
+	if got.Tenant == nil || got.Tenant.Group == nil || got.Tenant.Group.GetName() != "Operations" {
+		t.Errorf("Tenant group: got %v, want Operations", got.Tenant)
 	}
 	// Both defaults.VLAN.Tags and defaults.Tags must appear (entity-specific first,
 	// then top-level — matches the sibling mapper pattern in mappers.go).
