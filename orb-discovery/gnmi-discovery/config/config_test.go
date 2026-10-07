@@ -257,14 +257,14 @@ func TestMergeDefaultsVlan(t *testing.T) {
 }
 
 func TestMergeDefaultsPrefix(t *testing.T) {
-	policy := &Defaults{Site: "NYC", Prefix: PrefixDefaults{Role: "r1", Tenant: "t1", Tags: []string{"a"}, Description: "d1"}}
+	policy := &Defaults{Site: "NYC", Prefix: PrefixDefaults{Role: "r1", Tenant: TenantParameters{Name: "t1"}, Tags: []string{"a"}, Description: "d1"}}
 	got := MergeDefaults(policy, nil)
 	require.Equal(t, "r1", got.Prefix.Role)
-	require.Equal(t, "t1", got.Prefix.Tenant)
+	require.Equal(t, "t1", got.Prefix.Tenant.Name)
 	override := &Defaults{Prefix: PrefixDefaults{Role: "r2"}}
 	got = MergeDefaults(policy, override)
 	require.Equal(t, "r2", got.Prefix.Role)        // overridden
-	require.Equal(t, "t1", got.Prefix.Tenant)      // preserved
+	require.Equal(t, "t1", got.Prefix.Tenant.Name) // preserved
 	require.Equal(t, "d1", got.Prefix.Description) // preserved
 
 	// no-alias: mutating merged Prefix.Tags must not touch the source

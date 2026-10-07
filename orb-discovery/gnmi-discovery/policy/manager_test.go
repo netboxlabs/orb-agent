@@ -353,3 +353,24 @@ func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "unhashable")
 }
+
+func TestParsePolicies_VrfTenantWrittenTwice(t *testing.T) {
+	policy := func(defaults, override string) []byte {
+		return []byte("policies:\n  p1:\n    config:\n      defaults:\n" + defaults +
+			"    scope:\n      targets:\n        - host: 192.0.2.1\n" + override)
+	}
+	const owner = "            name: acme\n            group: customers\n            description: d\n"
+	consistent := "        vrf:\n          tenant: &owner\n" + owner + "        ip_address:\n          tenant: *owner\n"
+
+	m := newTestManager(t)
+	parsed, err := m.ParsePolicies(policy(consistent, ""))
+	require.NoError(t, err)
+	require.Equal(t, "customers", parsed["p1"].Config.Defaults.IPAddress.Tenant.Group, "the anchor reached both tenants")
+
+	_, err = m.ParsePolicies(policy(consistent+"        prefix:\n          tenant: Acme\n", ""))
+	require.ErrorContains(t, err, "defaults.vrf.tenant and defaults.prefix.tenant name the same NetBox tenant")
+
+	_, err = m.ParsePolicies(policy(consistent,
+		"          override_defaults:\n            ip_address:\n              tenant:\n                name: acme\n                description: x\n"))
+	require.ErrorContains(t, err, "target 192.0.2.1: defaults.vrf.tenant and defaults.ip_address.tenant")
+}

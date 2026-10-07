@@ -71,10 +71,28 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | device | map | Device overrides: `manufacturer`, `model`, `platform`, `comments`, `tags` |
 | interface | map | Interface defaults: `if_type` (fallback type, default `other`), `description`, `tags` |
 | ip_address | map | IP address defaults: `role`, `tenant`, `description`, `comments`, `tags` |
-| vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery) |
+| prefix | map | Prefix defaults: `role`, `tenant`, `description`, `tags` |
+| vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery). See [VRF tenant](#vrf-tenant) |
 | vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant`, `role`, `description`, `tags` |
 | interface_patterns | list | Name-regex → NetBox type, highest precedence (first match wins). |
 | interface_exclude_patterns | list | Name-regex; matching interfaces are skipped entirely. |
+
+`ip_address.tenant`, `prefix.tenant` and `vrf.tenant` accept a bare tenant name or a map with `name` and optional `group` / `description` / `comments` / `tags`. Use the map form when the tenant sits in a tenant group, so Diode matches it instead of creating it again. Any other key in the map is refused, so a misspelt key such as `group` is not silently dropped. In a per-target `override_defaults`, a tenant map that names a different tenant replaces the policy's as a whole; one that names the same tenant, or none, refines it field by field.
+
+##### VRF tenant
+`vrf.tenant` is applied to every VRF discovered on the device. Diode matches a VRF without an RD by its name and tenant, so when your VRFs belong to a tenant in NetBox, name that tenant here; otherwise Diode creates a second VRF with the same name and no tenant.
+
+An address carries its own tenant and its VRF's, and a prefix likewise. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When `vrf.tenant` and `ip_address.tenant`, `prefix.tenant` or `vlan.tenant` name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too; copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
+
+```yaml
+defaults:
+  vrf:
+    tenant: &owner
+      name: "Example Tenant GmbH"
+      group: "Example Group"
+  ip_address:
+    tenant: *owner
+```
 
 ##### VLAN group
 

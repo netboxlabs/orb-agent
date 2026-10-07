@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -173,10 +175,10 @@ type InterfaceDefaults struct {
 
 // PrefixDefaults holds NetBox defaults applied to discovered IP prefixes.
 type PrefixDefaults struct {
-	Role        string   `yaml:"role,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Description string   `yaml:"description,omitempty"`
+	Role        string           `yaml:"role,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+	Description string           `yaml:"description,omitempty"`
 }
 
 // VlanGroupParameters names the VLAN group discovered VLANs are attached
@@ -250,20 +252,20 @@ type VlanDefaults struct {
 // Field names mirror snmp-discovery's IPAddressDefaults so policy YAML is
 // portable between the two backends.
 type IPAddressDefaults struct {
-	Role        string   `yaml:"role,omitempty"`
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Description string   `yaml:"description,omitempty"`
-	Comments    string   `yaml:"comments,omitempty"`
+	Role        string           `yaml:"role,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
 }
 
 // VRFDefaults holds NetBox defaults applied to discovered VRFs (the Name and Rd
 // come from discovery; these are operator-supplied attributes).
 type VRFDefaults struct {
-	Tenant      string   `yaml:"tenant,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
-	Description string   `yaml:"description,omitempty"`
-	Comments    string   `yaml:"comments,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
 }
 
 // InterfacePattern maps an interface-name regex to a NetBox interface type.
@@ -272,6 +274,74 @@ type VRFDefaults struct {
 type InterfacePattern struct {
 	Match string `yaml:"match"` // regex matched against the interface name
 	Type  string `yaml:"type"`  // NetBox interface type assigned on match
+}
+
+// TenantParameters names a tenant. Accepts a plain string (tenant name) or a
+// mapping, mirroring snmp-discovery and device-discovery, so a tenant that
+// sits in a tenant group can name it. Unknown keys in the mapping are refused:
+// a misspelt group would match another tenant, which then stays in NetBox.
+type TenantParameters struct {
+	Name        string   `yaml:"name"`
+	Group       string   `yaml:"group,omitempty"`
+	Description string   `yaml:"description,omitempty"`
+	Comments    string   `yaml:"comments,omitempty"`
+	Tags        []string `yaml:"tags,omitempty"`
+}
+
+var tenantKeys = yamlFieldNames(reflect.TypeFor[TenantParameters]())
+
+// UnmarshalYAML accepts a scalar tenant name or a mapping.
+func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
+	*t = TenantParameters{}
+	switch node.Kind {
+	case yaml.ScalarNode:
+		t.Name = node.Value
+		return nil
+	case yaml.MappingNode:
+		var fields map[string]yaml.Node
+		if err := node.Decode(&fields); err != nil {
+			return err
+		}
+		for _, key := range slices.Sorted(maps.Keys(fields)) {
+			if !tenantKeys[key] {
+				return fmt.Errorf("tenant has no %q key", key)
+			}
+		}
+		type alias TenantParameters
+		var a alias
+		if err := node.Decode(&a); err != nil {
+			return err
+		}
+		*t = TenantParameters(a)
+		return nil
+	default:
+		return fmt.Errorf("tenant: expected string or mapping, got node kind %d", node.Kind)
+	}
+}
+
+// refineTenant overlays an override tenant onto dst field by field, or
+// replaces dst whole when the override names another tenant, which must not
+// take this one's group or description.
+func refineTenant(dst, override *TenantParameters) {
+	if dst.Name != "" && override.Name != "" && strings.TrimSpace(override.Name) != strings.TrimSpace(dst.Name) {
+		*dst = *override
+		return
+	}
+	if override.Name != "" {
+		dst.Name = override.Name
+	}
+	if override.Group != "" {
+		dst.Group = override.Group
+	}
+	if override.Description != "" {
+		dst.Description = override.Description
+	}
+	if override.Comments != "" {
+		dst.Comments = override.Comments
+	}
+	if len(override.Tags) > 0 {
+		dst.Tags = override.Tags
+	}
 }
 
 // RackText is a rack name that must be YAML text. The agent re-marshals a
@@ -561,9 +631,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.Prefix.Role != "" {
 		merged.Prefix.Role = overrideDefaults.Prefix.Role
 	}
-	if overrideDefaults.Prefix.Tenant != "" {
-		merged.Prefix.Tenant = overrideDefaults.Prefix.Tenant
-	}
+	refineTenant(&merged.Prefix.Tenant, &overrideDefaults.Prefix.Tenant)
 	if overrideDefaults.Prefix.Description != "" {
 		merged.Prefix.Description = overrideDefaults.Prefix.Description
 	}
@@ -576,9 +644,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.IPAddress.Role != "" {
 		merged.IPAddress.Role = overrideDefaults.IPAddress.Role
 	}
-	if overrideDefaults.IPAddress.Tenant != "" {
-		merged.IPAddress.Tenant = overrideDefaults.IPAddress.Tenant
-	}
+	refineTenant(&merged.IPAddress.Tenant, &overrideDefaults.IPAddress.Tenant)
 	if overrideDefaults.IPAddress.Description != "" {
 		merged.IPAddress.Description = overrideDefaults.IPAddress.Description
 	}
@@ -588,9 +654,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if len(overrideDefaults.IPAddress.Tags) > 0 {
 		merged.IPAddress.Tags = cloneStrings(overrideDefaults.IPAddress.Tags)
 	}
-	if overrideDefaults.Vrf.Tenant != "" {
-		merged.Vrf.Tenant = overrideDefaults.Vrf.Tenant
-	}
+	refineTenant(&merged.Vrf.Tenant, &overrideDefaults.Vrf.Tenant)
 	if overrideDefaults.Vrf.Description != "" {
 		merged.Vrf.Description = overrideDefaults.Vrf.Description
 	}
