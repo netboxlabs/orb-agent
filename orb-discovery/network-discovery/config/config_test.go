@@ -51,7 +51,7 @@ func TestTenantParameters_UnmarshalMappingMissingName(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("tenant:\n  group: customers\n  tags: [a]\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "line 2: tenant: mapping requires name")
+	assert.EqualError(t, err, "tenant: mapping requires name")
 }
 
 func TestVrfParameters_UnmarshalScalar(t *testing.T) {
@@ -112,14 +112,41 @@ func TestVrfParameters_UnmarshalMappingMissingName(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("vrf:\n  rd: \"65000:100\"\n  tenant: acme\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "line 2: vrf: mapping requires name")
+	assert.EqualError(t, err, "vrf: mapping requires name")
 }
 
 func TestVrfParameters_UnmarshalUnknownKey(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("vrf:\n  name: production\n  tennant: acme\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `line 3: vrf has no "tennant" key`)
+	assert.EqualError(t, err, `vrf has no "tennant" key`)
+}
+
+func TestVrfParameters_UnmarshalUnknownKeyThroughMergeOrAlias(t *testing.T) {
+	for _, tc := range []struct{ name, doc, err string }{
+		{name: "merged", doc: "base: &b\n  name: v\n  tennant: acme\nvrf:\n  <<: *b\n", err: `vrf has no "tennant" key`},
+		{name: "merged list", doc: "a: &a {name: v}\nb: &b {tennant: acme}\nvrf:\n  <<: [*a, *b]\n", err: `vrf has no "tennant" key`},
+		{name: "merged into tenant", doc: "t: &t {name: acme, grup: g}\nvrf:\n  name: v\n  tenant:\n    <<: *t\n", err: `vrf.tenant has no "grup" key`},
+		{name: "aliased tenant", doc: "t: &t {name: acme, grup: g}\nvrf:\n  name: v\n  tenant: *t\n", err: `vrf.tenant has no "grup" key`},
+		{name: "aliased key", doc: "k: &k tenant\nvrf:\n  name: v\n  *k : acme\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var d Defaults
+			err := yaml.Unmarshal([]byte(tc.doc), &d)
+			if tc.err == "" {
+				require.NoError(t, err)
+				assert.Equal(t, TenantParameters{Name: "acme"}, d.Vrf.Tenant)
+				return
+			}
+			assert.EqualError(t, err, tc.err)
+		})
+	}
+}
+
+func TestVrfParameters_UnmarshalTenantUnknownKey(t *testing.T) {
+	var d Defaults
+	err := yaml.Unmarshal([]byte("vrf:\n  name: production\n  tenant:\n    name: acme\n    grup: customers\n"), &d)
+	assert.EqualError(t, err, `vrf.tenant has no "grup" key`)
 }
 
 func TestVrfParameters_UnmarshalMergeKey(t *testing.T) {
@@ -133,7 +160,12 @@ func TestVrfParameters_UnmarshalTenantMissingName(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("vrf:\n  name: production\n  tenant:\n    group: customers\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "line 4: tenant: mapping requires name")
+	assert.EqualError(t, err, "vrf.tenant: mapping requires name")
+
+	for _, name := range []string{`""`, "~"} {
+		err = yaml.Unmarshal([]byte("vrf:\n  name: production\n  tenant:\n    name: "+name+"\n"), &d)
+		assert.EqualError(t, err, "vrf.tenant: mapping requires name", name)
+	}
 }
 
 func TestDefaults_Validate(t *testing.T) {
@@ -164,6 +196,21 @@ func TestDefaults_Validate(t *testing.T) {
 	}
 }
 
+func TestSlug(t *testing.T) {
+	for in, want := range map[string]string{
+		"Acme Corp": "acme-corp",
+		"Acme-Corp": "acme-corp",
+		"Acme.Corp": "acmecorp",
+		"Acme_Corp": "acme_corp",
+		" _Acme_ ":  "acme",
+		"a  -- b":   "a-b",
+		"Café":      "cafe",
+		"日本":        "",
+	} {
+		assert.Equal(t, want, slug(in), in)
+	}
+}
+
 func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 	acme := TenantParameters{Name: "acme", Group: "customers", Description: "d", Comments: "c", Tags: []string{"a"}}
 	with := func(f func(*TenantParameters)) TenantParameters {
@@ -172,31 +219,50 @@ func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 		f(&tp)
 		return tp
 	}
+	const (
+		tenantErr = `defaults.tenant and defaults.vrf.tenant name the same NetBox tenant but write it differently`
+		groupErr  = `defaults.tenant and defaults.vrf.tenant name the same NetBox tenant group in two ways`
+	)
 	for _, tc := range []struct {
-		name string
-		vrf  TenantParameters
-		err  bool
+		name    string
+		ip, vrf TenantParameters
+		err     string
 	}{
-		{name: "identical", vrf: acme},
-		{name: "name only", vrf: TenantParameters{Name: "acme", Group: "customers"}},
-		{name: "other group", vrf: with(func(tp *TenantParameters) { tp.Group = "partners"; tp.Description = "x" })},
-		{name: "other tenant", vrf: with(func(tp *TenantParameters) { tp.Name = "globex"; tp.Description = "x" })},
-		{name: "no vrf tenant"},
-		{name: "description differs", vrf: with(func(tp *TenantParameters) { tp.Description = "x" }), err: true},
-		{name: "comments differ", vrf: with(func(tp *TenantParameters) { tp.Comments = "x" }), err: true},
-		{name: "tags differ", vrf: with(func(tp *TenantParameters) { tp.Tags = []string{"b"} }), err: true},
+		{name: "identical", ip: acme, vrf: acme},
+		{name: "fields on one side", ip: acme, vrf: TenantParameters{Name: "acme", Group: "customers"}},
+		{name: "fields on the vrf side", ip: TenantParameters{Name: "acme", Group: "customers"}, vrf: acme},
+		{name: "description padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Description = "d " })},
+		{name: "tag padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Tags = []string{" a"} })},
+		{name: "name padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Name = "acme " })},
+		{name: "group padded", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Group = " customers" })},
+		{name: "other tenant", ip: acme, vrf: TenantParameters{Name: "globex", Group: "partners", Description: "x"}},
+		{name: "names without a slug", ip: TenantParameters{Name: "日本", Description: "x"}, vrf: TenantParameters{Name: "中国", Description: "y"}},
+		{name: "no vrf tenant", ip: acme},
+		{name: "no ip tenant", vrf: acme},
+		{name: "description", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Description = "x" }), err: tenantErr},
+		{name: "comments", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Comments = "x" }), err: tenantErr},
+		{name: "tags", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Tags = []string{"b"} }), err: tenantErr},
+		{
+			name: "tags reordered",
+			ip:   with(func(tp *TenantParameters) { tp.Tags = []string{"a", "b"} }),
+			vrf:  with(func(tp *TenantParameters) { tp.Tags = []string{"b", "a"} }),
+			err:  tenantErr,
+		},
+		{name: "blank description", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Description = "  " }), err: tenantErr},
+		{name: "case", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Name = "Acme" }), err: tenantErr},
+		{name: "slug alike", ip: TenantParameters{Name: "Acme Corp"}, vrf: TenantParameters{Name: "Acme-Corp"}, err: tenantErr},
+		{name: "accent", ip: TenantParameters{Name: "Café"}, vrf: TenantParameters{Name: "Cafe"}, err: tenantErr},
+		{name: "other group", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Group = "partners" }), err: tenantErr},
+		{name: "ungrouped", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Group = "" }), err: tenantErr},
+		{name: "group case", ip: acme, vrf: TenantParameters{Name: "globex", Group: "Customers"}, err: groupErr},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := Defaults{Tenant: acme, Vrf: VrfParameters{Name: "MyVRF", Tenant: tc.vrf}}.Validate()
-			if !tc.err {
+			err := Defaults{Tenant: tc.ip, Vrf: VrfParameters{Name: "MyVRF", Tenant: tc.vrf}}.Validate()
+			if tc.err == "" {
 				assert.NoError(t, err)
 				return
 			}
-			assert.ErrorContains(t, err, `defaults.tenant and defaults.vrf.tenant both name tenant "acme"`)
+			assert.ErrorContains(t, err, tc.err)
 		})
 	}
-
-	nameOnly := TenantParameters{Name: "acme", Group: "customers"}
-	assert.NoError(t, Defaults{Tenant: nameOnly, Vrf: VrfParameters{Name: "MyVRF", Tenant: acme}}.Validate(),
-		"fields set on the VRF's copy only")
 }

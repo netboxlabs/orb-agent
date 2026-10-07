@@ -244,5 +244,17 @@ func TestManager_ParsePolicies_Vrf(t *testing.T) {
 
 	_, err = parse("        tenant:\n          name: example-tenant\n          description: a\n" +
 		"        vrf:\n          name: example-vrf\n          tenant:\n            name: example-tenant\n            description: b\n")
-	assert.ErrorContains(t, err, `p1 : defaults.tenant and defaults.vrf.tenant both name tenant "example-tenant"`)
+	assert.ErrorContains(t, err, `p1 : defaults.tenant and defaults.vrf.tenant name the same NetBox tenant but write it differently`)
+}
+
+func TestManager_ParsePolicies_ReportsFirstInvalidPolicyByName(t *testing.T) {
+	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	invalid := func(name string) string {
+		return "  " + name + ":\n    config:\n      defaults:\n        rd: \"65000:2\"\n" +
+			"        vrf:\n          name: example-vrf\n          rd: \"65000:1\"\n    scope:\n      targets: [192.0.2.1]\n"
+	}
+	for range 10 {
+		_, err := m.ParsePolicies([]byte("policies:\n" + invalid("zeta") + invalid("alpha")))
+		require.ErrorContains(t, err, "alpha : ")
+	}
 }
