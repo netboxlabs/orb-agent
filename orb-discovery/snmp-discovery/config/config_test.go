@@ -519,7 +519,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 			Description: "policy desc",
 			Tags:        []string{"policy-tag"},
 			Group:       VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"},
-			Tenant:      "policy-tenant",
+			Tenant:      TenantParameters{Name: "policy-tenant"},
 			Status:      "active",
 		},
 	}
@@ -527,7 +527,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 		VLAN: VLANDefaults{
 			Description: "override desc",
 			Tags:        []string{"override-tag"},
-			Tenant:      "override-tenant",
+			Tenant:      TenantParameters{Name: "override-tenant"},
 		},
 	}
 	merged := MergeDefaults(policy, override)
@@ -535,7 +535,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 	assert.Equal(t, "override desc", merged.VLAN.Description)
 	assert.Equal(t, []string{"override-tag"}, merged.VLAN.Tags)
 	assert.Equal(t, VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"}, merged.VLAN.Group, "Group should be preserved from policy")
-	assert.Equal(t, "override-tenant", merged.VLAN.Tenant)
+	assert.Equal(t, "override-tenant", merged.VLAN.Tenant.Name)
 	assert.Equal(t, "active", merged.VLAN.Status, "Status should be preserved from policy")
 }
 
@@ -897,11 +897,14 @@ func TestMergeDefaults_TenantFieldWise(t *testing.T) {
 	assert.Equal(t, "acme", merged.Tenant.Name, "empty override keeps policy tenant")
 	assert.Equal(t, "customers", merged.Tenant.Group)
 
-	// Field-wise like mergeVrfParameters: a name-only override must KEEP
-	// the policy group (device-discovery deep-merges overrides the same way).
+	// An override naming another tenant replaces the policy's whole: taking
+	// the policy group would put that tenant, or match it, in the wrong group.
 	merged = MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Name: "other"}})
-	assert.Equal(t, "other", merged.Tenant.Name)
-	assert.Equal(t, "customers", merged.Tenant.Group)
+	assert.Equal(t, TenantParameters{Name: "other"}, merged.Tenant)
+
+	// The same tenant, trimmed as Diode compares names, is refined.
+	merged = MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Name: "acme ", Description: "d"}})
+	assert.Equal(t, TenantParameters{Name: "acme ", Group: "customers", Description: "d"}, merged.Tenant)
 
 	// Group-only override refines group while keeping the policy name.
 	merged = MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Group: "internal"}})

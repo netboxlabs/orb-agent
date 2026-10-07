@@ -305,8 +305,8 @@ func applyVLANDefaults(v *diode.VLAN, defaults *config.Defaults) {
 		v.Tags = tags
 	}
 
-	if vd.Tenant != "" {
-		v.Tenant = &diode.Tenant{Name: StringPtr(vd.Tenant)}
+	if tenant := diodeTenant(vd.Tenant); tenant != nil {
+		v.Tenant = tenant
 	}
 	if vd.Group.Name != "" {
 		name := vd.Group.Name

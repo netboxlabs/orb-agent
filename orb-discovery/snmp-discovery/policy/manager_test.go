@@ -2345,5 +2345,5 @@ func TestManager_ParsePolicies_VrfTenantWrittenTwice(t *testing.T) {
 	}, map[string]any{
 		"ip_address": map[string]any{"vrf": map[string]any{"name": "example-vrf", "tenant": clash}},
 	}))
-	assert.ErrorContains(t, err, "target 192.0.2.1: defaults.ip_address.tenant and defaults.ip_address.vrf.tenant")
+	assert.ErrorContains(t, err, "target 192.0.2.1, with its override_defaults: defaults.ip_address.tenant and defaults.ip_address.vrf.tenant")
 }

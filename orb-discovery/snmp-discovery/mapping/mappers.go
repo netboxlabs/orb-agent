@@ -143,6 +143,7 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 					"description", vrfDefaults.Description,
 					"comments", vrfDefaults.Comments,
 					"tags", vrfDefaults.Tags,
+					"tenant", vrfDefaults.Tenant.Name,
 				)
 			})
 		}

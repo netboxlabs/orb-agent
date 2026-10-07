@@ -258,18 +258,19 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	return validateRackPlacement(policy)
 }
 
-// validateVrfTenants checks the policy defaults and each target's merged
-// defaults, since an override can clash with a policy-level tenant.
+// validateVrfTenants checks the defaults each target uses: the policy's, or
+// merged with its override, which can clash with a policy-level tenant or
+// supply a VRF name the policy leaves out.
 func validateVrfTenants(policy config.Policy) error {
-	if err := policy.Config.Defaults.ValidateVrfTenants(); err != nil {
-		return err
-	}
 	for _, target := range policy.Scope.Targets {
 		if target.OverrideDefaults == nil {
+			if err := policy.Config.Defaults.ValidateVrfTenants(); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := config.MergeDefaults(&policy.Config.Defaults, target.OverrideDefaults).ValidateVrfTenants(); err != nil {
-			return fmt.Errorf("target %s: %w", target.Host, err)
+			return fmt.Errorf("target %s, with its override_defaults: %w", target.Host, err)
 		}
 	}
 	return nil

@@ -60,6 +60,35 @@ func TestMergeDefaults_VrfTenantFieldWise(t *testing.T) {
 	assert.Equal(t, TenantParameters{Name: "acme", Group: "customers"}, policy.IPAddress.Vrf.Tenant, "policy untouched")
 }
 
+func TestMergeDefaults_RenamedTenantEverywhere(t *testing.T) {
+	acme := TenantParameters{Name: "acme", Group: "customers", Description: "d"}
+	globex := TenantParameters{Name: "globex"}
+	policy := &Defaults{
+		Tenant:    acme,
+		IPAddress: IPAddressDefaults{Tenant: acme, Vrf: VrfParameters{Name: "v", Tenant: acme}},
+		Prefix:    PrefixDefaults{Tenant: acme},
+		VLAN:      VLANDefaults{Tenant: acme},
+	}
+	merged := MergeDefaults(policy, &Defaults{
+		Tenant:    globex,
+		IPAddress: IPAddressDefaults{Tenant: globex, Vrf: VrfParameters{Tenant: globex}},
+		Prefix:    PrefixDefaults{Tenant: globex},
+		VLAN:      VLANDefaults{Tenant: globex},
+	})
+	for _, tenant := range []TenantParameters{
+		merged.Tenant, merged.IPAddress.Tenant, merged.IPAddress.Vrf.Tenant, merged.Prefix.Tenant, merged.VLAN.Tenant,
+	} {
+		assert.Equal(t, globex, tenant)
+	}
+	assert.NoError(t, merged.ValidateVrfTenants(), "an override renaming the tenant everywhere is consistent")
+}
+
+func TestMergeDefaults_VrfRenameComparesTrimmed(t *testing.T) {
+	policy := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Rd: "65000:1"}}}
+	merged := MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v "}}})
+	assert.Equal(t, "65000:1", merged.IPAddress.Vrf.Rd, "a padded name is the same VRF")
+}
+
 func TestMergeDefaults_VrfTenantRenamed(t *testing.T) {
 	policy := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{
 		Name: "example-vrf", Rd: "65000:1",
@@ -87,11 +116,13 @@ func TestMergeDefaults_VrfTenantRenamed(t *testing.T) {
 		"a nameless policy VRF tenant is refined, not replaced")
 }
 
-func TestIPAddressAndPrefixTenant_MappingForm(t *testing.T) {
-	d, err := parseDefaults(t, "  ip_address:\n    tenant:\n      name: acme\n      group: customers\n  prefix:\n    tenant: globex\n")
+func TestIPAddressPrefixAndVlanTenant_MappingForm(t *testing.T) {
+	d, err := parseDefaults(t, "  ip_address:\n    tenant:\n      name: acme\n      group: customers\n  prefix:\n    tenant: globex\n"+
+		"  vlan:\n    tenant:\n      name: acme\n      group: customers\n")
 	require.NoError(t, err)
 	assert.Equal(t, TenantParameters{Name: "acme", Group: "customers"}, d.IPAddress.Tenant)
 	assert.Equal(t, TenantParameters{Name: "globex"}, d.Prefix.Tenant)
+	assert.Equal(t, TenantParameters{Name: "acme", Group: "customers"}, d.VLAN.Tenant)
 
 	merged := MergeDefaults(&d, &Defaults{
 		IPAddress: IPAddressDefaults{Tenant: TenantParameters{Group: "partners"}},
@@ -154,10 +185,19 @@ func TestDefaults_ValidateVrfTenants(t *testing.T) {
 			Prefix:    PrefixDefaults{Vrf: VrfParameters{Name: "v", Tenant: other}},
 		}, err: "defaults.ip_address.vrf.tenant and defaults.prefix.vrf.tenant name the same NetBox tenant but write it differently"},
 		{name: "vlan tenant", d: Defaults{
-			VLAN:      VLANDefaults{Tenant: "Acme"},
+			VLAN:      VLANDefaults{Tenant: TenantParameters{Name: "Acme"}},
 			IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Tenant: acme}},
 		}, err: "defaults.ip_address.vrf.tenant and defaults.vlan.tenant name the same NetBox tenant but write it differently"},
 		{name: "pairs without a vrf tenant", d: Defaults{Tenant: acme, IPAddress: IPAddressDefaults{Tenant: other}}},
+		{
+			name: "vrf tenant without a name", d: Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Tenant: TenantParameters{Group: "customers"}}}},
+			err: "defaults.ip_address.vrf.tenant has no name",
+		},
+		{
+			name: "vrf knob with a tenant and no name", d: Defaults{Prefix: PrefixDefaults{VrfIpv4: VrfParameters{Tenant: acme}}},
+			err: "defaults.prefix.vrf_ipv4 sets a tenant but no VRF name",
+		},
+		{name: "grouped vlan tenant", d: Defaults{VLAN: VLANDefaults{Tenant: acme}, IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Tenant: acme}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.d.ValidateVrfTenants()

@@ -104,7 +104,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
 | stack_member_name_template | string | no | Template for non-master virtual-chassis member device names. Placeholders: `{name}` (the stack name, from `sysName`) and `{id}` (the device-reported member id). Defaults to `{name}-{id}`, which reproduces the naming emitted before this option existed. See [Member naming](#member-naming). |
-| tenant | string \| map | no | Default tenant for discovered devices. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see the [tenant map](#tenant-map) below). Applies to Device entities only — IP address, prefix, and VLAN tenants keep their own per-entity defaults (`ip_address.tenant`, `prefix.tenant`, `vlan.tenant`). Virtual-chassis members inherit the master's tenant. In a per-target `override_defaults`, tenant merges field-wise: overriding `name` keeps an inherited `group` |
+| tenant | string \| map | no | Default tenant for discovered devices. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see the [tenant map](#tenant-map) below). Applies to Device entities only; IP address, prefix, and VLAN tenants keep their own per-entity defaults (`ip_address.tenant`, `prefix.tenant`, `vlan.tenant`). Virtual-chassis members inherit the master's tenant. In a per-target `override_defaults`, a tenant that names a different tenant replaces the policy's as a whole, so give its `group` there too; one that names the same tenant, or none, refines it field by field |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 
@@ -149,7 +149,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ description | string  | VLAN description |
 | ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ip_address` defaults pattern. |
 | ├─ group | string \| map | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see the [VLAN group map](#vlan-group-map) below). In a per-target `override_defaults`, the group replaces the policy value as a whole |
-| ├─ tenant | string | VLAN tenant |
+| ├─ tenant | string \| map | VLAN tenant, in the same form as the top-level `tenant` |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
 
 ##### Tenant Map
@@ -166,13 +166,15 @@ The top-level `tenant` default accepts either a bare string (tenant name) or a m
 ##### VRF Map
 `vrf`, `vrf_ipv4` and `vrf_ipv6` accept either a bare string (VRF name) or a map with the keys in the `vrf` rows above. Any other key in the map, or in its tenant map, is refused, so a misspelt key such as `rd`, `tenant` or `group` is not silently dropped.
 
-In a per-target `override_defaults`, a VRF map that names a different VRF replaces the policy's as a whole, taking no `rd`, `tenant` or other field from it; one that names the same VRF, or none, refines it field by field. A VRF tenant that names a different tenant likewise replaces the policy's VRF tenant as a whole.
+In a per-target `override_defaults`, a VRF map that names a different VRF replaces the policy's as a whole, taking no `rd`, `tenant` or other field from it; one that names the same VRF, or none, refines it field by field. Every tenant default follows the same rule: one that names a different tenant replaces the policy's as a whole.
+
+A VRF tenant needs a name, and a VRF map that sets a tenant needs a VRF name in the defaults a target ends up with; otherwise the policy is refused rather than the VRF being sent without its tenant, or dropped.
 
 The `ip_address`, `prefix` and top-level `tenant` defaults do not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
 
 When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
 
-Every tenant default reaches Diode in full on each run. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (the top-level `tenant`, `ip_address.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too.
+Every tenant default reaches Diode in full on each run. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (the top-level `tenant`, `ip_address.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both, rewrites the tenant on every run or creates a second tenant of that name, depending on what NetBox already holds, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too; copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
 
 If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
 
@@ -423,7 +425,7 @@ config:
       tenant: "network-ops"
       # vrf accepts either a bare name (rd left empty) ...
       # vrf: "management"
-      # ... or a map with name + optional rd / description / comments / tags:
+      # ... or a map with name + optional rd / tenant / description / comments / tags:
       vrf:
         name: "management"
         rd: "65000:100"

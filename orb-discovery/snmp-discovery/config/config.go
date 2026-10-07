@@ -109,13 +109,10 @@ func mappingFields(node *yaml.Node, path string, known map[string]bool) (map[str
 	return fields, nil
 }
 
-// TenantParameters names the tenant applied to discovered devices. Accepts
-// either a plain string (tenant name) or a mapping, mirroring
-// device-discovery's defaults.tenant. Merged field-wise at override time
-// (see mergeTenantParameters), with the same accepted divergence as
-// VrfParameters: a scalar override sets Name only and cannot clear other
-// inherited fields, because post-unmarshal the scalar and mapping forms
-// are indistinguishable.
+// TenantParameters names a tenant: the device's, an address's, a prefix's,
+// a VLAN's or a VRF's. Accepts either a plain string (tenant name) or a
+// mapping, mirroring device-discovery. At override time it is refined or
+// replaced by refineTenant.
 type TenantParameters struct {
 	Name        string   `yaml:"name"`
 	Group       string   `yaml:"group,omitempty"`
@@ -149,10 +146,15 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-// mergeTenantParameters overlays non-zero override fields onto dst in
-// place, mirroring mergeVrfParameters so a per-target override can refine
-// a single knob without restating the rest.
-func mergeTenantParameters(dst, override *TenantParameters) {
+// refineTenant overlays non-zero override fields onto dst in place, or
+// replaces dst whole when the override names another tenant (names compare
+// trimmed, as Diode compares them): another tenant must not take this one's
+// group or description, which would put it, or match it, in the wrong group.
+func refineTenant(dst, override *TenantParameters) {
+	if dst.Name != "" && override.Name != "" && trim(override.Name) != trim(dst.Name) {
+		*dst = *override
+		return
+	}
 	if override.Name != "" {
 		dst.Name = override.Name
 	}
@@ -369,7 +371,7 @@ type VLANDefaults struct {
 	Description string              `yaml:"description,omitempty"`
 	Tags        []string            `yaml:"tags,omitempty"`
 	Group       VLANGroupParameters `yaml:"group,omitempty"`
-	Tenant      string              `yaml:"tenant,omitempty"`
+	Tenant      TenantParameters    `yaml:"tenant,omitempty"`
 	Status      string              `yaml:"status,omitempty"`
 }
 
@@ -437,7 +439,7 @@ func mergeVrfParameters(dst, override *VrfParameters) {
 	// A VRF is known by its rd, or its name and tenant, so an override that
 	// names another VRF takes none of them from the policy's: Diode would
 	// match, and rewrite, the policy's VRF instead.
-	if dst.Name != "" && override.Name != "" && override.Name != dst.Name {
+	if dst.Name != "" && override.Name != "" && trim(override.Name) != trim(dst.Name) {
 		*dst = *override
 		return
 	}
@@ -447,7 +449,7 @@ func mergeVrfParameters(dst, override *VrfParameters) {
 	if override.Rd != "" {
 		dst.Rd = override.Rd
 	}
-	mergeVrfTenant(&dst.Tenant, &override.Tenant)
+	refineTenant(&dst.Tenant, &override.Tenant)
 	if override.Description != "" {
 		dst.Description = override.Description
 	}
@@ -457,17 +459,6 @@ func mergeVrfParameters(dst, override *VrfParameters) {
 	if len(override.Tags) > 0 {
 		dst.Tags = override.Tags
 	}
-}
-
-// mergeVrfTenant refines a VRF's tenant, or replaces it whole when the
-// override names another tenant, which must not take this one's group or
-// description.
-func mergeVrfTenant(dst, override *TenantParameters) {
-	if dst.Name != "" && override.Name != "" && override.Name != dst.Name {
-		*dst = *override
-		return
-	}
-	mergeTenantParameters(dst, override)
 }
 
 // MergeDefaults merges target-level override defaults with policy-level defaults
@@ -508,7 +499,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.Face != "" {
 		merged.Face = overrideDefaults.Face
 	}
-	mergeTenantParameters(&merged.Tenant, &overrideDefaults.Tenant)
+	refineTenant(&merged.Tenant, &overrideDefaults.Tenant)
 	if len(overrideDefaults.Tags) > 0 {
 		merged.Tags = overrideDefaults.Tags
 	}
@@ -526,7 +517,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.IPAddress.Role != "" {
 		merged.IPAddress.Role = overrideDefaults.IPAddress.Role
 	}
-	mergeTenantParameters(&merged.IPAddress.Tenant, &overrideDefaults.IPAddress.Tenant)
+	refineTenant(&merged.IPAddress.Tenant, &overrideDefaults.IPAddress.Tenant)
 	// Merge VRF defaults field-by-field so a per-target override can refine
 	// a single VrfParameters knob (e.g. rd) without having to restate every
 	// other field already set at the policy level. Matches the
@@ -550,7 +541,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.Prefix.Role != "" {
 		merged.Prefix.Role = overrideDefaults.Prefix.Role
 	}
-	mergeTenantParameters(&merged.Prefix.Tenant, &overrideDefaults.Prefix.Tenant)
+	refineTenant(&merged.Prefix.Tenant, &overrideDefaults.Prefix.Tenant)
 	if overrideDefaults.Prefix.ScopeSite != "" {
 		merged.Prefix.ScopeSite = overrideDefaults.Prefix.ScopeSite
 	}
@@ -602,9 +593,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.VLAN.Group.Name != "" {
 		merged.VLAN.Group = overrideDefaults.VLAN.Group
 	}
-	if overrideDefaults.VLAN.Tenant != "" {
-		merged.VLAN.Tenant = overrideDefaults.VLAN.Tenant
-	}
+	refineTenant(&merged.VLAN.Tenant, &overrideDefaults.VLAN.Tenant)
 	if overrideDefaults.VLAN.Status != "" {
 		merged.VLAN.Status = overrideDefaults.VLAN.Status
 	}

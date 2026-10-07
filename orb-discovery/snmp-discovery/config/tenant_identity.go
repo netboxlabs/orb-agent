@@ -10,10 +10,11 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Diode trims names and finds a tenant by the slug of its name, whatever its
-// group. Two copies of a tenant in one entity whose names slugify alike
-// therefore resolve to one NetBox tenant, and written differently the entity
-// is refused or the tenant is rewritten on every run.
+// Diode trims names and, when a tenant's name and group match no tenant,
+// falls back to the slug of its name whatever its group. Two copies of a
+// tenant whose names slugify alike can therefore resolve to one NetBox tenant,
+// and written differently the entity is refused, the tenant is rewritten on
+// every run, or a second tenant of that name is created.
 
 // Python's \s also matches \v and \x1c-\x1f, which RE2's does not.
 var (
@@ -33,6 +34,12 @@ func slug(s string) string {
 	return strings.Trim(slugCollapse.ReplaceAllString(s, "-"), "-_")
 }
 
+// trim strips what Python's str.strip does, which Diode applies to text: Go's
+// whitespace set leaves out \x1c-\x1f.
+func trim(s string) string {
+	return strings.TrimFunc(s, func(r rune) bool { return unicode.IsSpace(r) || r >= 0x1c && r <= 0x1f })
+}
+
 // sameName reports whether two trimmed names resolve alike: equal, or the
 // same non-empty slug.
 func sameName(a, b string) bool {
@@ -44,8 +51,8 @@ func sameName(a, b string) bool {
 // names resolve to one tenant but the name, group, description, comments or
 // tags differ, or "" when Diode can merge them.
 func tenantConflict(a, b TenantParameters) string {
-	nameA, nameB := strings.TrimSpace(a.Name), strings.TrimSpace(b.Name)
-	groupA, groupB := strings.TrimSpace(a.Group), strings.TrimSpace(b.Group)
+	nameA, nameB := trim(a.Name), trim(b.Name)
+	groupA, groupB := trim(a.Group), trim(b.Group)
 	switch {
 	case groupA != groupB && sameName(groupA, groupB):
 		return "group"
@@ -62,44 +69,58 @@ func tenantConflict(a, b TenantParameters) string {
 // differ reports whether two optional values are both set and disagree once
 // trimmed. A blank value is set: Diode trims it to empty, which still clashes.
 func differ(a, b string) bool {
-	return a != "" && b != "" && strings.TrimSpace(a) != strings.TrimSpace(b)
+	return a != "" && b != "" && trim(a) != trim(b)
 }
 
 func trimmed(values []string) []string {
 	out := make([]string, len(values))
 	for i, v := range values {
-		out[i] = strings.TrimSpace(v)
+		out[i] = trim(v)
 	}
 	return out
 }
 
-// ValidateVrfTenants refuses a VRF tenant written differently from another
-// tenant default. One run sends every tenant default in full; Diode merges
-// the copies that resolve to one tenant within an entity and refuses the
-// entity when they disagree, and across entities rewrites the tenant on every
-// run. Pairs without a VRF tenant are left as they were before VRF tenants
-// existed.
+// ValidateVrfTenants refuses a VRF tenant Diode cannot match: one with no
+// name, which goes out empty and leaves the VRF tenant-less, one on a VRF knob
+// with no VRF name, which drops the VRF, and one written differently from
+// another tenant default. One run sends every tenant default in full; Diode
+// merges the copies that resolve to one tenant within an entity and refuses
+// the entity when they disagree, and across entities rewrites the tenant on
+// every run. Pairs without a VRF tenant are left as they were before VRF
+// tenants existed. Run it on the defaults a target actually uses.
 func (d *Defaults) ValidateVrfTenants() error {
 	type tenantAt struct {
 		path   string
 		tenant TenantParameters
-		vrf    bool
+		vrf    *VrfParameters
 	}
 	copies := []tenantAt{
-		{"defaults.tenant", d.Tenant, false},
-		{"defaults.ip_address.tenant", d.IPAddress.Tenant, false},
-		{"defaults.ip_address.vrf.tenant", d.IPAddress.Vrf.Tenant, true},
-		{"defaults.ip_address.vrf_ipv4.tenant", d.IPAddress.VrfIpv4.Tenant, true},
-		{"defaults.ip_address.vrf_ipv6.tenant", d.IPAddress.VrfIpv6.Tenant, true},
-		{"defaults.prefix.tenant", d.Prefix.Tenant, false},
-		{"defaults.prefix.vrf.tenant", d.Prefix.Vrf.Tenant, true},
-		{"defaults.prefix.vrf_ipv4.tenant", d.Prefix.VrfIpv4.Tenant, true},
-		{"defaults.prefix.vrf_ipv6.tenant", d.Prefix.VrfIpv6.Tenant, true},
-		{"defaults.vlan.tenant", TenantParameters{Name: d.VLAN.Tenant}, false},
+		{"defaults.tenant", d.Tenant, nil},
+		{"defaults.ip_address.tenant", d.IPAddress.Tenant, nil},
+		{"defaults.ip_address.vrf.tenant", d.IPAddress.Vrf.Tenant, &d.IPAddress.Vrf},
+		{"defaults.ip_address.vrf_ipv4.tenant", d.IPAddress.VrfIpv4.Tenant, &d.IPAddress.VrfIpv4},
+		{"defaults.ip_address.vrf_ipv6.tenant", d.IPAddress.VrfIpv6.Tenant, &d.IPAddress.VrfIpv6},
+		{"defaults.prefix.tenant", d.Prefix.Tenant, nil},
+		{"defaults.prefix.vrf.tenant", d.Prefix.Vrf.Tenant, &d.Prefix.Vrf},
+		{"defaults.prefix.vrf_ipv4.tenant", d.Prefix.VrfIpv4.Tenant, &d.Prefix.VrfIpv4},
+		{"defaults.prefix.vrf_ipv6.tenant", d.Prefix.VrfIpv6.Tenant, &d.Prefix.VrfIpv6},
+		{"defaults.vlan.tenant", d.VLAN.Tenant, nil},
+	}
+	for _, c := range copies {
+		if c.vrf == nil || c.tenant.isZero() {
+			continue
+		}
+		if trim(c.tenant.Name) == "" {
+			return fmt.Errorf("%s has no name; a tenant is matched by its name", c.path)
+		}
+		if trim(c.vrf.Name) == "" {
+			return fmt.Errorf("%s sets a tenant but no VRF name, so the VRF would be dropped",
+				strings.TrimSuffix(c.path, ".tenant"))
+		}
 	}
 	for i, first := range copies {
 		for _, second := range copies[i+1:] {
-			if !first.vrf && !second.vrf {
+			if first.vrf == nil && second.vrf == nil {
 				continue
 			}
 			switch tenantConflict(first.tenant, second.tenant) {
