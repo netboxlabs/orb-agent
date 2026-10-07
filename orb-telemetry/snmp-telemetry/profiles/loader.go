@@ -16,8 +16,18 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 )
 
+// embeddedProfiles is the verbatim kentik/snmp-profiles mirror. See
+// PROVENANCE.md beside this file.
+//
 //go:embed all:snmp-profiles
 var embeddedProfiles embed.FS
+
+// embeddedOrbProfiles is the tree maintained in this repository: profiles
+// converted by hand from other libraries, and stubs that add sysObjectIDs to
+// bundled Kentik profiles. See orb-profiles/PROVENANCE.md.
+//
+//go:embed all:orb-profiles
+var embeddedOrbProfiles embed.FS
 
 // Loader reads ktranslate-format SNMP profile YAML files from a directory tree
 // and resolves the `extends` inheritance chain.
@@ -64,6 +74,9 @@ func LoadProfiles(overrideDir string, logger *slog.Logger) (*Loader, error) {
 	l := newEmptyLoader("", logger)
 	if err := l.readFS(embeddedProfiles, "snmp-profiles"); err != nil {
 		return nil, fmt.Errorf("reading embedded profiles: %w", err)
+	}
+	if err := l.readFS(embeddedOrbProfiles, "orb-profiles"); err != nil {
+		return nil, fmt.Errorf("reading embedded orb profiles: %w", err)
 	}
 	if overrideDir != "" {
 		bundled := make(map[string]bool, len(l.byFile))
@@ -115,7 +128,8 @@ func (l *Loader) reviewOverrides(bundled map[string]bool) {
 
 // readFS loads every profile under root in fsys. An override read afterwards
 // replaces an entry with the same relative path, which is what makes the
-// override an overlay rather than a separate set.
+// override an overlay rather than a separate set; a second embedded tree may
+// not, because nothing would report the file it hid.
 func (l *Loader) readFS(fsys fs.FS, root string) error {
 	return fs.WalkDir(fsys, root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -138,6 +152,9 @@ func (l *Loader) readFS(fsys fs.FS, root string) error {
 			return nil
 		}
 		rel := strings.TrimPrefix(path, root+"/")
+		if _, exists := l.byFile[rel]; exists {
+			return fmt.Errorf("embedded profile %s under %s is already bundled from another tree", rel, root)
+		}
 		base := filepath.Base(path)
 		p.FileName = base
 		p.RelPath = rel
