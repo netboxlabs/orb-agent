@@ -63,6 +63,9 @@ jobs:
           version: ${{ matrix.version }}
           working-directory: ${{ matrix.dir }}
           args: --config ${{ matrix.config }}
+          # A restored analysis cache made staticcheck report SA5011 on code
+          # that lints clean from scratch, so every run starts cold.
+          skip-cache: true
 
   py-lint:
     name: py-lint (${{ matrix.dir }})
