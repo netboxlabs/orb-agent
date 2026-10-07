@@ -311,3 +311,40 @@ func TestDeviceMapper_applyDefaults_PositionNeedsRackAndFace(t *testing.T) {
 	assert.Nil(t, noFace.Position, "NetBox refuses a position without a face")
 	assert.Nil(t, noFace.Face)
 }
+
+// Without a sysObjectID the mapper looks nothing up, so a model and
+// manufacturer pinned in defaults are the device type. Either alone is not:
+// NetBox needs both.
+func TestDeviceMapper_applyDefaults_DeviceTypeFromDefaults(t *testing.T) {
+	m := newTestDeviceMapper()
+	for name, tc := range map[string]struct {
+		device    config.DeviceDefaults
+		wantModel string
+	}{
+		"model and manufacturer": {config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}, "Operator Model"},
+		"model only":             {config.DeviceDefaults{Model: "Operator Model"}, ""},
+		"manufacturer only":      {config.DeviceDefaults{Manufacturer: "VendorA"}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			entity := &diode.Device{}
+			m.applyDefaults(entity, &config.Defaults{Device: tc.device}, nil)
+			if tc.wantModel == "" {
+				assert.Nil(t, entity.DeviceType)
+				return
+			}
+			require.NotNil(t, entity.DeviceType)
+			assert.Equal(t, tc.wantModel, entity.DeviceType.GetModel())
+			assert.Equal(t, "VendorA", entity.DeviceType.GetManufacturer().GetName())
+		})
+	}
+}
+
+// A device type the sysObjectID lookup built, with the defaults already
+// applied, is left as it is.
+func TestDeviceMapper_applyDefaults_KeepsALookedUpDeviceType(t *testing.T) {
+	m := newTestDeviceMapper()
+	looked := &diode.DeviceType{Model: strPtr("vendorProductName48"), Manufacturer: &diode.Manufacturer{Name: strPtr("VendorB")}}
+	entity := &diode.Device{DeviceType: looked}
+	m.applyDefaults(entity, &config.Defaults{Device: config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}}, nil)
+	assert.Same(t, looked, entity.DeviceType)
+}

@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
@@ -339,6 +340,182 @@ func buildMemberDevice(master *diode.Device, member ChassisMember, masterRef *di
 		dev.DeviceType = master.DeviceType
 	}
 	return dev
+}
+
+// ModelPin says whether, and how, the operator named a target's device model.
+type ModelPin int
+
+const (
+	// ModelNotPinned leaves the chassis row free to name the model.
+	ModelNotPinned ModelPin = iota
+	// ModelPinnedByLookup means a lookup_extensions_dir entry names it. A
+	// standalone device keeps it; stack members keep their own chassis
+	// models, as they always have.
+	ModelPinnedByLookup
+	// ModelPinnedByDefaults means defaults or override_defaults set it, a hard
+	// override for the master and every stack member.
+	ModelPinnedByDefaults
+)
+
+// chassisModelMaxLen is NetBox's DeviceType.model column length.
+const chassisModelMaxLen = 100
+
+// chassisModelPlaceholders are values a chassis row reports when it names
+// no model: the asset-tag placeholders that can stand for a model, plus
+// firmware defaults and generic class names. Matched exactly,
+// case-insensitively, after trimming.
+var chassisModelPlaceholders = map[string]struct{}{
+	"unknown":                {},
+	"n/a":                    {},
+	"na":                     {},
+	"none":                   {},
+	"null":                   {},
+	"nil":                    {},
+	"-":                      {},
+	"default":                {},
+	"unspecified":            {},
+	"not specified":          {},
+	"not available":          {},
+	"default string":         {},
+	"to be filled by o.e.m.": {},
+	"system product name":    {},
+	"chassis":                {},
+	"system":                 {},
+}
+
+// chassisModelVendors are the sysObjectID arcs, below 1.3.6.1.4.1, whose
+// chassis rows report the orderable part number in entPhysicalModelName, as
+// seen across the recorded walks: Cisco (9), HP ProCurve and ArubaOS-Switch
+// (11.2.3.7), Palo Alto Networks (25461), Arista (30065), Aruba CX (47196),
+// FortiGate (12356.101.1, rewritten by fortinetModel) and the D-Link switch
+// families recorded (171.10.x). Other vendors, and other product lines of
+// these, report FRU numbers, OS versions, chip or class names there, or were
+// never recorded, which would make a worse type name than the lookup's.
+var chassisModelVendors = []string{
+	"9", "11.2.3.7", "25461", "30065", "47196",
+	"12356.101.1",
+	"171.10.70", "171.10.118", "171.10.119", "171.10.133", "171.10.137", "171.10.141",
+}
+
+// chassisModelExcluded are arcs inside chassisModelVendors whose one
+// sysObjectID stands for every size of a chassis system (FortiGate 6000F,
+// 7000E and 7000F), so a row naming the family would put each size on one type.
+var chassisModelExcluded = []string{"12356.101.1.60001", "12356.101.1.70001", "12356.101.1.71201"}
+
+// fortinetArc is Fortinet's enterprise arc, whose models fortinetModel rewrites.
+const fortinetArc = "12356"
+
+// fortinetPlatform matches a virtual FortiGate's platform name (FGT_VM64,
+// FGT_ARM64_AWS), which names no hardware; the lookup's name keeps the
+// licence tier instead.
+var fortinetPlatform = regexp.MustCompile(`^F[A-Z]+_(VM|ARM)64`)
+
+// sysObjectID is the walked sysObjectID, trimmed, or "" when it was not walked.
+func sysObjectID(oids ObjectIDValueMap) string {
+	v, ok := oids[oidSysObjectIDScalar]
+	if !ok {
+		return ""
+	}
+	return trimSNMPString(v.Value)
+}
+
+// chassisModelVendor reports whether the walked sysObjectID is under an arc
+// in chassisModelVendors and none in chassisModelExcluded.
+func chassisModelVendor(oids ObjectIDValueMap) bool {
+	return underArc(oids, chassisModelVendors...) && !underArc(oids, chassisModelExcluded...)
+}
+
+// underArc reports whether the walked sysObjectID is under one of arcs,
+// below 1.3.6.1.4.1, matched on whole arcs.
+func underArc(oids ObjectIDValueMap, arcs ...string) bool {
+	const enterprises = "1.3.6.1.4.1."
+	oid := strings.TrimPrefix(sysObjectID(oids), ".")
+	if !strings.HasPrefix(oid, enterprises) {
+		return false
+	}
+	oid = strings.TrimPrefix(oid, enterprises) + "."
+	for _, arc := range arcs {
+		if strings.HasPrefix(oid, arc+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// fortinetModel rewrites a Fortinet chassis row's model into the orderable
+// form catalogs record, FGT_60F to FG-60F and FGR_60F_3G4G to FGR-60F-3G4G.
+// It reports false for a virtual platform's name.
+func fortinetModel(model string) (string, bool) {
+	if fortinetPlatform.MatchString(model) {
+		return "", false
+	}
+	if rest, ok := strings.CutPrefix(model, "FGT_"); ok {
+		model = "FG-" + rest
+	}
+	return strings.ReplaceAll(model, "_", "-"), true
+}
+
+// standaloneChassisModel names a standalone device's type after the model
+// its chassis row reports, as buildMemberDevice does for every stack member,
+// for the vendors in chassisModelVendors. Their sysObjectID lookup yields a
+// MIB product name, while the chassis row carries the part number a curated
+// device type records, so one model of switch gets one type whether stacked
+// or not. The looked-up manufacturer is kept. A master with no device type
+// is left alone: there is no manufacturer to give a new one. An empty,
+// placeholder, unprintable or over-long value keeps the looked-up model.
+func standaloneChassisModel(master *diode.Device, model string, oids ObjectIDValueMap) {
+	if master.DeviceType == nil || model == "" || !validAssetTagText(model) || !chassisModelVendor(oids) {
+		return
+	}
+	if _, placeholder := chassisModelPlaceholders[strings.ToLower(model)]; placeholder {
+		return
+	}
+	if utf8.RuneCountInString(model) > chassisModelMaxLen {
+		return
+	}
+	if underArc(oids, fortinetArc) {
+		var ok bool
+		if model, ok = fortinetModel(model); !ok {
+			return
+		}
+	}
+	master.DeviceType = &diode.DeviceType{
+		Model:        StringPtr(model),
+		Manufacturer: master.DeviceType.Manufacturer,
+	}
+}
+
+// typeByChassis types a standalone device after its chassis row, when the
+// model is not pinned and the device has exactly one chassis row. A row
+// beside others, refused or without a serial, may be one member of a stack
+// seen in part, so its serial is kept but it does not name the type.
+func typeByChassis(master *diode.Device, oids ObjectIDValueMap, pin ModelPin) {
+	if pin != ModelNotPinned {
+		return
+	}
+	if model, sole := soleChassisModel(oids); sole {
+		standaloneChassisModel(master, model, oids)
+	}
+}
+
+// soleChassisModel returns the entPhysicalModelName of the one chassis row
+// extractInventory would consider, when there is exactly one. It reads the row
+// whatever its serial, which the inventory needs and a model does not.
+func soleChassisModel(oids ObjectIDValueMap) (string, bool) {
+	model, rows := "", 0
+	for oid, v := range oids {
+		if !strings.HasPrefix(oid, oidEntPhysicalClass) || strings.TrimSpace(v.Value) != entPhysicalClassChassis {
+			continue
+		}
+		idx := strings.TrimPrefix(oid, oidEntPhysicalClass)
+		contained := trimSNMPString(oids[oidEntPhysicalContainedIn+idx].Value)
+		if contained != "0" && !isStackContainerParent(oids, contained) {
+			continue
+		}
+		rows++
+		model = trimSNMPString(oids[oidEntPhysicalModelName+idx].Value)
+	}
+	return model, rows == 1
 }
 
 func sortByID(members []ChassisMember) []ChassisMember {
@@ -880,8 +1057,11 @@ func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
 //     when the walk carries a vendor chassis-serial scalar such as
 //     jnxBoxSerialNo or mtxrSerialNumber (see applyVendorSerialFallback);
 //     otherwise no Serial assignment is possible.
-//   - 1 chassis row -> set master.Serial on the existing Device,
-//     return entities unchanged otherwise (standalone case).
+//   - 1 chassis row -> set master.Serial on the existing Device and, when
+//     the model is not pinned and no other chassis row is reported, the
+//     device type model from the row's entPhysicalModelName for the vendors
+//     standaloneChassisModel trusts; return entities unchanged in shape
+//     (standalone case).
 //   - >= 2 chassis rows -> emit master + top-level VirtualChassis +
 //     member Devices, re-point each Interface's Device ref to its
 //     owning member, skip interfaces whose parsed member id was
@@ -899,6 +1079,8 @@ func refusedMasterSerial(inv ChassisInventory, oids ObjectIDValueMap) string {
 // the highest-precedence Diode matcher, so cross-target duplicates
 // would merge two devices onto one record). nil means always allow.
 //
+// pin says whether and how the operator named the device model; see ModelPin.
+//
 // Must be called from the runner AFTER mapper.MapObjectIDsToEntity
 // returns and BEFORE annotate*/Ingest. See runner.go.
 func TranslateAsStack(
@@ -907,6 +1089,7 @@ func TranslateAsStack(
 	ifIndexByIface map[*diode.Interface]int,
 	claimAssetTag func(tag string) bool,
 	memberNameTemplate string,
+	pin ModelPin,
 	logger *slog.Logger,
 ) []diode.Entity {
 	master := CurrentDeviceFrom(entities)
@@ -948,6 +1131,9 @@ func TranslateAsStack(
 		// is the last source. Only reached when ENTITY-MIB produced nothing
 		// usable, so the standard column keeps priority wherever it answers.
 		applyVendorSerialFallback(master, oids, logger)
+		// A sole chassis row dropped only for its empty serial still names
+		// a standalone device's part.
+		typeByChassis(master, oids, pin)
 		return entities
 	}
 
@@ -966,6 +1152,7 @@ func TranslateAsStack(
 	if !inv.IsStack() {
 		s := inv.Members[0].Serial
 		master.Serial = &s
+		typeByChassis(master, oids, pin)
 		if tag, ok := assetTags[inv.Members[0].ID]; ok && master.AssetTag == nil && claim(tag) {
 			master.AssetTag = StringPtr(tag)
 		}
@@ -983,12 +1170,13 @@ func TranslateAsStack(
 	//
 	// Matches buildMemberDevice: every member's device_type comes from its own
 	// chassis row, which is what makes a mixed-model stack right, and the
-	// master is just the lowest-id chassis row. This does override
-	// override_defaults.device.model, which the backend documents as
-	// highest-priority — a real contract bug, but it applies equally to the
-	// member Devices and cannot be fixed here (no access to config.Defaults),
-	// and guarding only the master would split one stack across two types.
-	if lowest.Model != "" {
+	// master is just the lowest-id chassis row. A model the operator set in
+	// defaults or override_defaults wins instead, for the master and every
+	// member alike, so one stack never splits across two types. Where the
+	// mapper could build no device type for it, the stack carries none rather
+	// than the chassis rows' models.
+	stackPinned := pin == ModelPinnedByDefaults
+	if lowest.Model != "" && !stackPinned {
 		var mfg *diode.Manufacturer
 		if master.DeviceType != nil {
 			mfg = master.DeviceType.Manufacturer
@@ -1019,6 +1207,9 @@ func TranslateAsStack(
 	memberByID := map[int]*diode.Device{lowest.ID: master}
 	memberDevices := make([]*diode.Device, 0, len(inv.Members)-1)
 	for _, m := range inv.Members[1:] {
+		if stackPinned {
+			m.Model = "" // inherit the master's pinned device type
+		}
 		dev := buildMemberDevice(master, m, masterRef, vcName, memberNameTemplate)
 		if tag, ok := assetTags[m.ID]; ok && claim(tag) {
 			dev.AssetTag = StringPtr(tag)

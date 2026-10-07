@@ -1194,6 +1194,13 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 	}
 	entityDefaults := defaults.Device
 
+	// Without a sysObjectID nothing was looked up, so a model and
+	// manufacturer pinned in defaults are the device type. NetBox needs both.
+	if entity.DeviceType == nil && entityDefaults.Model != "" && entityDefaults.Manufacturer != "" {
+		model, manufacturer := entityDefaults.Model, entityDefaults.Manufacturer
+		entity.DeviceType = &diode.DeviceType{Model: &model, Manufacturer: &diode.Manufacturer{Name: &manufacturer}}
+	}
+
 	// Collect tags from both entity-specific and global defaults
 	var tags []*diode.Tag
 	if len(entityDefaults.Tags) > 0 {
