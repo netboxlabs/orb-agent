@@ -455,12 +455,9 @@ func TestRunnerWithNetworkMask(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestRunnerEmitsVrf locks in the behaviour change introduced when
-// defaults.rd was promoted to a first-class field: when defaults.vrf is set,
-// Vrf.Name is always populated; Vrf.Rd is set ONLY when defaults.rd is also
-// provided. Previously Rd was hardcoded to mirror Name, which forced NetBox
-// to create a fresh VRF for every name instead of matching an existing one
-// with a different (or empty) RD.
+// TestRunnerEmitsVrf pins the plain-name form: when defaults.vrf is set,
+// Vrf.Name is always populated, and Vrf.Rd comes only from defaults.rd or
+// defaults.vrf.rd, never from the name.
 func TestRunnerEmitsVrf(t *testing.T) {
 	tests := []struct {
 		name        string

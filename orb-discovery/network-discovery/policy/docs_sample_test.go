@@ -458,10 +458,9 @@ func TestDocumentedSamplesAreAccepted(t *testing.T) {
 					parsed, err := m.ParsePolicies(payload)
 					require.NoError(t, err, "block:\n%s", block.text)
 					// Starting a policy refuses more than parsing does: no
-					// targets, conflicting route distinguishers, or a bad cron.
+					// targets, or a bad cron.
 					for name, p := range parsed {
 						require.NotEmpty(t, p.Scope.Targets, "%s has no targets", name)
-						require.NoError(t, p.Config.Defaults.Validate(), "block:\n%s", block.text)
 						r, err := policy.NewRunner(context.Background(), logger, name, p, nil, nil)
 						require.NoError(t, err, "block:\n%s", block.text)
 						require.NoError(t, r.Stop())

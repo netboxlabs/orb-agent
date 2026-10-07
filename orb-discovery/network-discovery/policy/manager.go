@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"go.yaml.in/yaml/v3"
@@ -43,6 +45,11 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	if len(payload.Policies) == 0 {
 		return nil, errors.New("no policies found in the request")
 	}
+	for _, name := range slices.Sorted(maps.Keys(payload.Policies)) {
+		if err := payload.Policies[name].Config.Defaults.Validate(); err != nil {
+			return nil, fmt.Errorf("%s : %w", name, err)
+		}
+	}
 
 	return payload.Policies, nil
 }
@@ -57,9 +64,6 @@ func (m *Manager) HasPolicy(name string) bool {
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
-	}
-	if err := policy.Config.Defaults.Validate(); err != nil {
-		return fmt.Errorf("%s : %w", name, err)
 	}
 
 	if !m.HasPolicy(name) {

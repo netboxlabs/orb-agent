@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"strings"
+
 	"github.com/netboxlabs/diode-sdk-go/diode"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
@@ -17,9 +19,9 @@ func diodeVrf(d config.Defaults) *diode.VRF {
 		Name:   diode.String(d.Vrf.Name),
 		Tenant: diodeTenant(d.Vrf.Tenant),
 	}
-	rd := d.Vrf.Rd
+	rd := strings.TrimSpace(d.Vrf.Rd)
 	if rd == "" {
-		rd = d.Rd
+		rd = strings.TrimSpace(d.Rd)
 	}
 	if rd != "" {
 		vrf.Rd = diode.String(rd)

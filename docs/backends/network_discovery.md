@@ -101,11 +101,19 @@ The `defaults.vrf` field accepts either a bare string (VRF name) or a map:
 | name | string | VRF name (required when using the map form) |
 | rd | string | Route Distinguisher, equivalent to `defaults.rd` |
 | tenant | string \| map | Tenant the VRF belongs to, in the same form as `defaults.tenant` (see [Tenant map](#tenant-map)) |
-| description | string | VRF description |
-| comments | string | VRF comments |
-| tags | list | VRF tags |
+| description | string | VRF description, written to the VRF on every run |
+| comments | string | VRF comments, written to the VRF on every run |
+| tags | list | VRF tags, added to the VRF's existing tags |
+
+Any other key in the map is refused, so a misspelt `tenant` cannot leave the VRF without one.
 
 `defaults.tenant` applies to the discovered IP addresses only and does not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
+
+When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
+
+When `defaults.tenant` and `vrf.tenant` name the same tenant, write them identically, for example with the anchor below. Diode refuses an address whose two copies of one tenant disagree on `description`, `comments` or `tags`, so such a policy is refused up front. A tenant named with a group in one place and without it in the other can also become two tenants in NetBox.
+
+If an earlier run already created the extra tenant-less VRF, discovered addresses are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the addresses left in the extra VRF, then delete that VRF.
 
 Example: match an existing VRF that belongs to a grouped tenant:
 

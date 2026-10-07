@@ -207,15 +207,42 @@ func TestManager_ParsePolicies_Tenant(t *testing.T) {
 	assert.Equal(t, config.TenantParameters{}, got)
 }
 
-func TestManager_StartPolicy_RejectsConflictingRd(t *testing.T) {
+func TestManager_ParsePolicies_Vrf(t *testing.T) {
 	m := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
-	err := m.StartPolicy("p1", config.Policy{
-		Config: config.PolicyConfig{Defaults: config.Defaults{
-			Vrf: config.VrfParameters{Name: "MyVRF", Rd: "65000:1"},
-			Rd:  "65000:2",
-		}},
-		Scope: config.Scope{Targets: []string{"192.0.2.1"}},
-	})
+	parse := func(defaults string) (config.Defaults, error) {
+		policies, err := m.ParsePolicies([]byte("policies:\n  p1:\n    config:\n      defaults:\n" +
+			defaults + "    scope:\n      targets: [192.0.2.1]\n"))
+		if err != nil {
+			return config.Defaults{}, err
+		}
+		return policies["p1"].Config.Defaults, nil
+	}
+
+	got, err := parse("        vrf: example-vrf\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.VrfParameters{Name: "example-vrf"}, got.Vrf)
+
+	got, err = parse("        vrf:\n          name: example-vrf\n          tenant:\n            name: example-tenant\n            group: example-group\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.VrfParameters{
+		Name:   "example-vrf",
+		Tenant: config.TenantParameters{Name: "example-tenant", Group: "example-group"},
+	}, got.Vrf)
+
+	got, err = parse("        vrf: null\n")
+	require.NoError(t, err)
+	assert.Equal(t, config.VrfParameters{}, got.Vrf)
+
+	_, err = parse("        vrf:\n          tenant: example-tenant\n")
+	assert.ErrorContains(t, err, "vrf: mapping requires name")
+
+	_, err = parse("        vrf:\n          name: example-vrf\n          tennant: example-tenant\n")
+	assert.ErrorContains(t, err, `vrf has no "tennant" key`)
+
+	_, err = parse("        rd: \"65000:2\"\n        vrf:\n          name: example-vrf\n          rd: \"65000:1\"\n")
 	assert.ErrorContains(t, err, `p1 : defaults.rd "65000:2" conflicts with defaults.vrf.rd "65000:1"`)
-	assert.False(t, m.HasPolicy("p1"))
+
+	_, err = parse("        tenant:\n          name: example-tenant\n          description: a\n" +
+		"        vrf:\n          name: example-vrf\n          tenant:\n            name: example-tenant\n            description: b\n")
+	assert.ErrorContains(t, err, `p1 : defaults.tenant and defaults.vrf.tenant both name tenant "example-tenant"`)
 }

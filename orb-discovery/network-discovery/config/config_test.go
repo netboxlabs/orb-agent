@@ -51,7 +51,7 @@ func TestTenantParameters_UnmarshalMappingMissingName(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("tenant:\n  group: customers\n  tags: [a]\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tenant: mapping requires name")
+	assert.Contains(t, err.Error(), "line 2: tenant: mapping requires name")
 }
 
 func TestVrfParameters_UnmarshalScalar(t *testing.T) {
@@ -95,6 +95,7 @@ func TestVrfParameters_UnmarshalNullAndReceiverReset(t *testing.T) {
 	require.NoError(t, yaml.Unmarshal([]byte("plainname"), &v))
 	assert.Equal(t, VrfParameters{Name: "plainname"}, v, "scalar re-decode must reset the other fields")
 
+	// yaml.v3 never calls UnmarshalYAML for a null node; this pins that.
 	var d Defaults
 	require.NoError(t, yaml.Unmarshal([]byte("vrf: null\n"), &d))
 	assert.Equal(t, VrfParameters{}, d.Vrf)
@@ -111,14 +112,28 @@ func TestVrfParameters_UnmarshalMappingMissingName(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("vrf:\n  rd: \"65000:100\"\n  tenant: acme\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "vrf: mapping requires name")
+	assert.Contains(t, err.Error(), "line 2: vrf: mapping requires name")
+}
+
+func TestVrfParameters_UnmarshalUnknownKey(t *testing.T) {
+	var d Defaults
+	err := yaml.Unmarshal([]byte("vrf:\n  name: production\n  tennant: acme\n"), &d)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `line 3: vrf has no "tennant" key`)
+}
+
+func TestVrfParameters_UnmarshalMergeKey(t *testing.T) {
+	var d Defaults
+	require.NoError(t, yaml.Unmarshal([]byte(
+		"base: &base\n  name: production\n  rd: \"65000:100\"\nvrf:\n  <<: *base\n  tenant: acme\n"), &d))
+	assert.Equal(t, VrfParameters{Name: "production", Rd: "65000:100", Tenant: TenantParameters{Name: "acme"}}, d.Vrf)
 }
 
 func TestVrfParameters_UnmarshalTenantMissingName(t *testing.T) {
 	var d Defaults
 	err := yaml.Unmarshal([]byte("vrf:\n  name: production\n  tenant:\n    group: customers\n"), &d)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "tenant: mapping requires name")
+	assert.Contains(t, err.Error(), "line 4: tenant: mapping requires name")
 }
 
 func TestDefaults_Validate(t *testing.T) {
@@ -131,6 +146,8 @@ func TestDefaults_Validate(t *testing.T) {
 		{name: "vrf rd only", vrfRd: "65000:1"},
 		{name: "defaults rd only", defaultRd: "65000:1"},
 		{name: "equal", vrfRd: "65000:1", defaultRd: "65000:1"},
+		{name: "equal once trimmed", vrfRd: "65000:1 ", defaultRd: " 65000:1"},
+		{name: "blank vrf rd", vrfRd: " ", defaultRd: "65000:1"},
 		{
 			name: "conflict", vrfRd: "65000:1", defaultRd: "65000:2",
 			err: `defaults.rd "65000:2" conflicts with defaults.vrf.rd "65000:1"`,
@@ -145,4 +162,41 @@ func TestDefaults_Validate(t *testing.T) {
 			assert.ErrorContains(t, err, tc.err)
 		})
 	}
+}
+
+func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
+	acme := TenantParameters{Name: "acme", Group: "customers", Description: "d", Comments: "c", Tags: []string{"a"}}
+	with := func(f func(*TenantParameters)) TenantParameters {
+		tp := acme
+		tp.Tags = append([]string(nil), acme.Tags...)
+		f(&tp)
+		return tp
+	}
+	for _, tc := range []struct {
+		name string
+		vrf  TenantParameters
+		err  bool
+	}{
+		{name: "identical", vrf: acme},
+		{name: "name only", vrf: TenantParameters{Name: "acme", Group: "customers"}},
+		{name: "other group", vrf: with(func(tp *TenantParameters) { tp.Group = "partners"; tp.Description = "x" })},
+		{name: "other tenant", vrf: with(func(tp *TenantParameters) { tp.Name = "globex"; tp.Description = "x" })},
+		{name: "no vrf tenant"},
+		{name: "description differs", vrf: with(func(tp *TenantParameters) { tp.Description = "x" }), err: true},
+		{name: "comments differ", vrf: with(func(tp *TenantParameters) { tp.Comments = "x" }), err: true},
+		{name: "tags differ", vrf: with(func(tp *TenantParameters) { tp.Tags = []string{"b"} }), err: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := Defaults{Tenant: acme, Vrf: VrfParameters{Name: "MyVRF", Tenant: tc.vrf}}.Validate()
+			if !tc.err {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, `defaults.tenant and defaults.vrf.tenant both name tenant "acme"`)
+		})
+	}
+
+	nameOnly := TenantParameters{Name: "acme", Group: "customers"}
+	assert.NoError(t, Defaults{Tenant: nameOnly, Vrf: VrfParameters{Name: "MyVRF", Tenant: acme}}.Validate(),
+		"fields set on the VRF's copy only")
 }
