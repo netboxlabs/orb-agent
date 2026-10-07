@@ -274,7 +274,7 @@ def test_policy_refuses_a_clash_in_its_defaults():
 
 def test_policy_refuses_an_override_that_clashes_once_merged():
     """The error names the target whose override_defaults clashes."""
-    with pytest.raises(ValidationError, match=rf"192\.0\.2\.11: .*{DIFFERS}"):
+    with pytest.raises(ValidationError, match=rf"192\.0\.2\.11, with its override_defaults: .*{DIFFERS}"):
         Policy(
             config=Config(defaults=Defaults(ipaddress=IpamParameters(tenant=ACME))),
             scope=[
@@ -321,7 +321,7 @@ def test_override_naming_another_vrf_inherits_nothing():
 
 
 def test_override_refining_the_policy_vrf_keeps_the_rest():
-    """Without a name, or with the same one, an override refines field by field."""
+    """An override naming the same VRF refines it field by field."""
     assert _merged_vrf(VrfParameters.model_validate({"name": "vrf-a", "rd": "65000:2"})) == POLICY_VRF.model_copy(
         update={"rd": "65000:2"}
     )
@@ -343,3 +343,72 @@ def test_vrf_tenant_with_mixed_key_types_is_refused_cleanly():
     """A non-string key is reported as a validation error, not a crash."""
     with pytest.raises(ValidationError, match="tenant has no"):
         VrfParameters.model_validate({"name": "example-vrf", "tenant": {"name": "acme", 1: "x", "grup": "y"}})
+
+
+def test_override_string_naming_the_policy_vrf_keeps_it():
+    """vrf: "vrf-a" adds nothing to the policy's vrf-a, so it must not drop its rd or tenant."""
+    assert _merged_vrf("vrf-a") == POLICY_VRF
+    assert _merged_vrf("vrf-a ") == POLICY_VRF, "names compare trimmed, as Diode does"
+    assert _merged_vrf("vrf-b") == "vrf-b"
+    assert _merged_vrf(VrfParameters(name="vrf-a ", description="x")) == POLICY_VRF.model_copy(
+        update={"name": "vrf-a ", "description": "x"}
+    ), "a padded map name refines too"
+
+
+def test_override_with_an_empty_tenant_keeps_the_policy_tenant():
+    """An empty name names nothing, so it neither replaces nor clears the policy's tenant."""
+    assert merge_override_defaults(Defaults(tenant=ACME), Defaults(tenant="")).tenant == ACME
+
+
+def test_override_naming_another_tenant_replaces_every_tenant_default():
+    """An override naming an ungrouped tenant everywhere is consistent once merged."""
+    globex = TenantParameters(name="globex")
+    base = Defaults(
+        tenant=ACME,
+        ipaddress=IpamParameters(tenant=ACME, vrf=VrfParameters(name="vrf-a", tenant=ACME)),
+        prefix=PrefixParameters(tenant=ACME),
+        vlan=VlanParameters(tenant=ACME),
+    )
+    override = Defaults(
+        tenant=globex,
+        ipaddress=IpamParameters(tenant=globex, vrf=VrfParameters(name="vrf-b", tenant=globex)),
+        prefix=PrefixParameters(tenant=globex),
+        vlan=VlanParameters(tenant=globex),
+    )
+    merged = merge_override_defaults(base, override)
+    for tenant in (
+        merged.tenant,
+        merged.ipaddress.tenant,
+        merged.ipaddress.vrf.tenant,
+        merged.prefix.tenant,
+        merged.vlan.tenant,
+    ):
+        assert tenant == globex
+    check_vrf_tenants(merged)
+
+
+def test_override_naming_the_same_tenant_refines_it():
+    """The same tenant, by map or by bare name, keeps what the policy gave it."""
+    base = Defaults(tenant=ACME, ipaddress=IpamParameters(tenant=ACME))
+    refined = merge_override_defaults(
+        base, Defaults.model_validate({"tenant": {"name": "acme", "description": "x"}, "ipaddress": {"tenant": "acme"}})
+    )
+    assert refined.tenant == ACME.model_copy(update={"description": "x"})
+    assert refined.ipaddress.tenant == ACME
+
+
+def test_override_merges_per_family_and_prefix_vrfs_alike():
+    """vrf_ipv4, vrf_ipv6 and the prefix block follow the same rule as ipaddress.vrf."""
+    base = Defaults(
+        ipaddress=IpamParameters(vrf_ipv4=POLICY_VRF),
+        prefix=PrefixParameters(vrf_ipv6=POLICY_VRF),
+    )
+    merged = merge_override_defaults(
+        base,
+        Defaults(
+            ipaddress=IpamParameters(vrf_ipv4=VrfParameters(name="vrf-b")),
+            prefix=PrefixParameters(vrf_ipv6=VrfParameters(name="vrf-a", tenant=TenantParameters(name="globex"))),
+        ),
+    )
+    assert merged.ipaddress.vrf_ipv4 == VrfParameters(name="vrf-b")
+    assert merged.prefix.vrf_ipv6 == POLICY_VRF.model_copy(update={"tenant": TenantParameters(name="globex")})

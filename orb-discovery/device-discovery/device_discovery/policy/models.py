@@ -435,19 +435,29 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return merged
 
 
-def _named(value: object) -> str | None:
-    """Return the name a VRF or tenant default carries, in either form."""
+def _named(value: object) -> str:
+    """Return the trimmed name a VRF or tenant default carries, in either form."""
     if isinstance(value, str):
-        return value
+        return value.strip()
     if isinstance(value, dict):
-        return value.get("name")
-    return None
+        return (value.get("name") or "").strip()
+    return ""
 
 
-def _renames(base: object, override: object) -> bool:
-    """Report whether override names a different object than base."""
-    base_name, override_name = _named(base), _named(override)
-    return bool(override_name) and base_name != override_name
+def _merge_named(base: object, override: object, merged: object) -> object:
+    """
+    Resolve one named default, a VRF or a tenant, after the deep merge.
+
+    An override naming something else replaces the base whole, so it takes no
+    rd, tenant or group from it. One naming the same thing refines it, and a
+    bare name equal to the base's adds nothing to it.
+    """
+    override_name = _named(override)
+    if override_name and override_name != _named(base):
+        return override
+    if isinstance(override, str) and isinstance(base, dict):
+        return base
+    return merged
 
 
 def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
@@ -456,9 +466,9 @@ def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
 
     Fields merge recursively, except where an override names something else:
     ``vlan.group`` is replaced as a whole so a scope set on the policy cannot
-    leak into a group the override named without one, and a VRF or VRF tenant
-    the override names differently is replaced as a whole so it takes no rd,
-    tenant or group from the policy's. Naming the same VRF, or none, refines it.
+    leak into a group the override named without one, and a tenant or VRF the
+    override names differently is replaced as a whole so it takes no group, rd
+    or tenant from the policy's. Naming the same tenant or VRF refines it.
     """
     base_dump = base.model_dump()
     override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
@@ -466,16 +476,27 @@ def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
     override_group = override_dump.get("vlan", {}).get("group")
     if override_group is not None:
         merged["vlan"]["group"] = override_group
-    for block in ("ipaddress", "prefix"):
-        for knob in _VRF_KNOBS:
-            override_vrf = (override_dump.get(block) or {}).get(knob)
-            if not isinstance(override_vrf, dict):
+    if "tenant" in override_dump:
+        merged["tenant"] = _merge_named(base_dump["tenant"], override_dump["tenant"], merged["tenant"])
+    for block in ("ipaddress", "prefix", "vlan"):
+        override_block = override_dump.get(block) or {}
+        base_block = base_dump.get(block) or {}
+        if "tenant" in override_block:
+            merged[block]["tenant"] = _merge_named(
+                base_block.get("tenant"), override_block["tenant"], merged[block]["tenant"]
+            )
+        for knob in _VRF_KNOBS if block != "vlan" else ():
+            if knob not in override_block:
                 continue
-            base_vrf = (base_dump.get(block) or {}).get(knob)
-            if _renames(base_vrf, override_vrf):
-                merged[block][knob] = override_vrf
-            elif isinstance(base_vrf, dict) and _renames(base_vrf.get("tenant"), override_vrf.get("tenant")):
-                merged[block][knob]["tenant"] = override_vrf["tenant"]
+            base_vrf, override_vrf = base_block.get(knob), override_block[knob]
+            vrf = _merge_named(base_vrf, override_vrf, merged[block][knob])
+            if vrf is merged[block][knob] and isinstance(vrf, dict) and isinstance(override_vrf, dict) and "tenant" in override_vrf:
+                vrf["tenant"] = _merge_named(
+                    (base_vrf or {}).get("tenant") if isinstance(base_vrf, dict) else None,
+                    override_vrf["tenant"],
+                    vrf["tenant"],
+                )
+            merged[block][knob] = vrf
     return Defaults.model_validate(merged)
 
 
@@ -1033,7 +1054,7 @@ class Policy(BaseModel):
             try:
                 check_vrf_tenants(merge_override_defaults(defaults, entry.override_defaults))
             except ValueError as error:
-                raise ValueError(f"{entry.hostname}: {error}") from None
+                raise ValueError(f"{entry.hostname}, with its override_defaults: {error}") from None
         return self
 
 
