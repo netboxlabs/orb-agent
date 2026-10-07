@@ -553,7 +553,7 @@ Always use SSH keys (not passwords) for jumphost authentication:
 
 **Cause:** the agent runs as a UID that has no entry in the container's `/etc/passwd`. The SSH config parser looks up the user name, and the OpenSSH client that runs the `ProxyJump` hop refuses to start without one (`No user exists for uid`). Setting `USER` satisfies the first but not the second.
 
-**Solution:** give the UID a passwd entry and a writable home directory, for example by mounting the host's `/etc/passwd` and `/etc/group` read-only and setting `HOME`. See [Running as a Non-Root User](../../advanced_config/non_root_user.md#ssh-configuration-files-need-a-passwd-entry).
+**Solution:** give the UID a passwd entry, for example by mounting the host's `/etc/passwd` and `/etc/group` read-only, and set `UserKnownHostsFile` in the SSH config to a writable path, since OpenSSH keeps `known_hosts` in the passwd entry's home directory. See [Running as a Non-Root User](../../advanced_config/non_root_user.md#ssh-configuration-files-need-a-passwd-entry).
 
 ### No Such File or Directory (SSH Config)
 

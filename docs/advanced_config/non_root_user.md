@@ -9,7 +9,7 @@ A few features depend on the UID having a name, a writable home directory, or ro
 Everything the agent reads must be readable by that UID, and everything it writes must be writable by it:
 
 - the agent configuration and any file a policy points to, such as an SSH config or private key
-- the directory mounted at `/opt/orb`, where the agent keeps files delivered by Fleet (`/opt/orb/files` unless `files_manager.root` says otherwise) and pip's cache; everything under `/opt/orb` in the image itself is owned by root
+- the directory mounted at `/opt/orb`, where the agent keeps files delivered by Fleet (`/opt/orb/files` unless `files_manager.root` says otherwise); everything under `/opt/orb` in the image itself is owned by root
 - the dry-run output directory, when `dry_run` is enabled
 - the home directory, when one is needed (see below)
 
@@ -47,7 +47,7 @@ services:
 
 Make `./orb` and `./orb/home` on the host writable by that UID before starting the container. A derived image that adds the user with `adduser` works just as well.
 
-OpenSSH takes its home directory from the passwd entry, not from `HOME`, and keeps `known_hosts` there. With the host's passwd mounted, that is the user's home on the host, which usually does not exist in the container, so set `UserKnownHostsFile` in the SSH config to a writable path, for example `/opt/orb/home/known_hosts`. `HOME` is still needed by device discovery and pip.
+OpenSSH takes its home directory from the passwd entry, not from `HOME`, and keeps `known_hosts` there. With the host's passwd mounted, that is the user's home on the host, which usually does not exist in the container, so set `UserKnownHostsFile` in the SSH config to a writable path, for example `/opt/orb/home/known_hosts`. `HOME` is still what pip uses when it installs packages at startup (see below).
 
 Give private keys to the UID the agent runs as, with mode `600` or `400`. See [SSH Key Permissions](../backends/device_discovery/ssh.md#ssh-key-permissions).
 
@@ -57,6 +57,6 @@ Give private keys to the UID the agent runs as, with mode `600` or `400`. See [S
 
 ## Features that need root or extra privileges
 
-- **Network discovery.** With no `scan_types` set, nmap runs a TCP connect scan and works unchanged as a non-root user. SYN and other raw scan types, and `os_detection`, need raw sockets and fail. See [Rootless Podman Deployment](../backends/network_discovery.md#rootless-podman-deployment) for the scan options that work without privileges.
+- **Network discovery.** With no `scan_types` set, nmap runs a TCP connect scan and works unchanged as a non-root user. SYN and other raw scan types, and `os_detection`, need raw sockets and fail. Rootless Podman, where nmap runs as root but without raw sockets, is a different case with its own settings; see [Rootless Podman Deployment](../backends/network_discovery.md#rootless-podman-deployment).
 - **pktvisor.** Packet capture needs privileges that a non-root user does not have. Run the agent as root when pktvisor is configured.
 - **SNMP traps on a port below 1024.** In Docker's default bridge network, a non-root process can bind any port inside the container. With `--net=host`, binding a port below 1024, such as the conventional trap port 162, depends on the host's `net.ipv4.ip_unprivileged_port_start`. Listen on a higher port, or keep root, if the host does not allow it.
