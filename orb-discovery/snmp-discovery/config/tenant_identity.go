@@ -126,6 +126,9 @@ func (d *Defaults) ValidateVrfTenants() error {
 	}
 	copies = kept
 	for _, c := range copies {
+		if c.mapped && !c.tenant.isZero() && trim(c.tenant.Name) == "" {
+			return fmt.Errorf("%s has no name; a tenant is matched by its name", c.path)
+		}
 		if c.vrf == nil || c.tenant.isZero() {
 			continue
 		}

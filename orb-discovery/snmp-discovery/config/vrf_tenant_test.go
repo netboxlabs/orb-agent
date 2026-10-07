@@ -160,7 +160,11 @@ func TestDefaults_ValidateVrfTenants(t *testing.T) {
 		{name: "group written two ways", d: Defaults{IPAddress: IPAddressDefaults{
 			Tenant: TenantParameters{Name: "globex", Group: "Customers"}, Vrf: VrfParameters{Name: "v", Tenant: acme},
 		}}, err: "defaults.ip_address.tenant and defaults.ip_address.vrf.tenant name the same NetBox tenant group in two ways"},
-		{name: "blank tenant name", d: Defaults{IPAddress: IPAddressDefaults{Tenant: TenantParameters{Name: " ", Group: "customers"}}}},
+		{
+			name: "blank tenant name",
+			d:    Defaults{IPAddress: IPAddressDefaults{Tenant: TenantParameters{Name: " ", Group: "customers"}}},
+			err:  "defaults.ip_address.tenant has no name",
+		},
 		{
 			name: "prefix vrf against device tenant", d: Defaults{Tenant: acme, Prefix: PrefixDefaults{Vrf: VrfParameters{Name: "v", Tenant: other}}},
 			err: "defaults.tenant and defaults.prefix.vrf.tenant name the same NetBox tenant but write it differently",
@@ -264,4 +268,38 @@ func TestDefaults_ValidateVrfTenants_TenantMaps(t *testing.T) {
 			assert.ErrorContains(t, err, tc.err)
 		})
 	}
+}
+
+func TestMergeDefaults_GroupOnlyVrfTenantIsAnotherVrf(t *testing.T) {
+	policy := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Description: "d", Tenant: TenantParameters{Name: "acme"}}}}
+	merged := MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Tenant: TenantParameters{Group: "partners"}}}})
+	assert.Equal(t, VrfParameters{Name: "v", Tenant: TenantParameters{Name: "acme", Group: "partners"}}, merged.IPAddress.Vrf)
+}
+
+func TestMergeDefaults_BlankNamesNameNothing(t *testing.T) {
+	policy := &Defaults{
+		Tenant:    TenantParameters{Name: "acme", Group: "customers"},
+		IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Rd: "65000:1", Description: "d"}},
+	}
+	merged := MergeDefaults(policy, &Defaults{
+		Tenant:    TenantParameters{Name: " ", Comments: "c"},
+		IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: " ", Comments: "c"}},
+	})
+	assert.Equal(t, TenantParameters{Name: "acme", Group: "customers", Comments: "c"}, merged.Tenant)
+	assert.Equal(t, VrfParameters{Name: "v", Rd: "65000:1", Description: "d", Comments: "c"}, merged.IPAddress.Vrf)
+}
+
+func TestMergeDefaults_NamelessVrfTemplateIsRefined(t *testing.T) {
+	template := &Defaults{Prefix: PrefixDefaults{Vrf: VrfParameters{Description: "d", Tenant: TenantParameters{Name: "acme", Group: "customers"}}}}
+	merged := MergeDefaults(template, &Defaults{Prefix: PrefixDefaults{Vrf: VrfParameters{Name: "v", Rd: "65000:1"}}})
+	assert.Equal(t, VrfParameters{Name: "v", Rd: "65000:1", Description: "d", Tenant: TenantParameters{Name: "acme", Group: "customers"}}, merged.Prefix.Vrf,
+		"a policy VRF with neither name nor rd has no identity to protect")
+}
+
+func TestDefaults_ValidateVrfTenants_NamelessTenantMap(t *testing.T) {
+	d := Defaults{Prefix: PrefixDefaults{Tenant: TenantParameters{Group: "customers"}}}
+	assert.ErrorContains(t, d.ValidateVrfTenants(), "defaults.prefix.tenant has no name")
+	top := Defaults{Tenant: TenantParameters{Group: "customers"}}
+	assert.NoError(t, top.ValidateVrfTenants(),
+		"the top-level tenant was a map before and stays as it was")
 }

@@ -152,7 +152,14 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 // Values compare trimmed, as Diode compares them.
 func otherTenant(a, b TenantParameters) bool {
 	group := trim(b.Group)
-	return differ(a.Name, b.Name) || group != "" && group != trim(a.Group)
+	return otherName(a.Name, b.Name) || group != "" && group != trim(a.Group)
+}
+
+// otherName reports whether two names are both given, once trimmed, and
+// differ: a blank name names nothing.
+func otherName(a, b string) bool {
+	a, b = trim(a), trim(b)
+	return a != "" && b != "" && a != b
 }
 
 // otherVrf reports whether b names another VRF than a. Diode finds a VRF with
@@ -160,17 +167,21 @@ func otherTenant(a, b TenantParameters) bool {
 // name only when the payload has no rd: another name, an rd other than a's
 // (including one a lacks), another tenant where both give one, or, with no rd
 // on either side, a tenant a lacks. A tenant added to a VRF with an rd refines
-// it, since the rd still identifies it.
+// it, since the rd still identifies it, and a VRF with neither name nor rd is
+// a template every override refines.
 func otherVrf(a, b VrfParameters) bool {
 	rdA, rdB := trim(a.Rd), trim(b.Rd)
-	if differ(a.Name, b.Name) || rdB != "" && rdB != rdA {
+	if trim(a.Name) == "" && rdA == "" {
+		return false
+	}
+	if otherName(a.Name, b.Name) || rdB != "" && rdB != rdA {
 		return true
 	}
-	tenantA, tenantB := trim(a.Tenant.Name), trim(b.Tenant.Name)
-	if tenantA != "" && tenantB != "" {
+	tenantA := trim(a.Tenant.Name)
+	if tenantA != "" && !b.Tenant.isZero() {
 		return otherTenant(a.Tenant, b.Tenant)
 	}
-	return rdA == "" && rdB == "" && tenantB != "" && tenantA == ""
+	return rdA == "" && rdB == "" && trim(b.Tenant.Name) != "" && tenantA == ""
 }
 
 // refineTenant overlays non-zero override fields onto dst in place, or
@@ -186,7 +197,7 @@ func refineTenant(dst, override *TenantParameters) {
 		}
 		return
 	}
-	if override.Name != "" {
+	if trim(override.Name) != "" {
 		dst.Name = override.Name
 	}
 	if override.Group != "" {
@@ -489,7 +500,7 @@ func mergeVrfParameters(dst, override *VrfParameters) {
 		}
 		return
 	}
-	if override.Name != "" {
+	if trim(override.Name) != "" {
 		dst.Name = override.Name
 	}
 	if override.Rd != "" {
