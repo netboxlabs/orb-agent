@@ -54,23 +54,23 @@ func sviVlanID(name string) (int, bool) {
 	return vid, true
 }
 
-// eltexMesArc is the sysObjectID arc of Eltex MES switches.
-const eltexMesArc = ".1.3.6.1.4.1.35265.1."
+// eltexArc is the sysObjectID arc of Eltex products.
+const eltexArc = ".1.3.6.1.4.1.35265.1."
 
-// eltexSviIfIndexBase is the ifIndex of an Eltex MES switch's VLAN 1 interface;
+// eltexSviIfIndexBase is the ifIndex of an Eltex switch's VLAN 1 interface;
 // VLAN n's is eltexSviIfIndexBase + n - 1.
 const eltexSviIfIndexBase = 100000
 
-// eltexSviVlanID reads the VLAN of an Eltex MES VLAN interface, which the
-// switch names with the bare VLAN ID. A bare number is no SVI name anywhere
-// else, so it is read only on Eltex, and only where every recorded MES walk
-// agrees: ifIndex eltexSviIfIndexBase + VID - 1, ifName and ifDescr both
-// exactly the VID, and ifType propVirtual(53).
+// eltexSviVlanID reads the VLAN of an Eltex VLAN interface, which the switch
+// names with the bare VLAN ID. A bare number is no SVI name in general, so it
+// is read only on Eltex, and only where every recorded Eltex walk agrees:
+// ifIndex eltexSviIfIndexBase + VID - 1, ifName and ifDescr both exactly the
+// VID, and ifType propVirtual(53).
 func eltexSviVlanID(oids ObjectIDValueMap, idx int, eltex bool) (int, bool) {
-	if !eltex {
+	vid := idx - eltexSviIfIndexBase + 1
+	if !eltex || vid < 1 || vid > 4094 {
 		return 0, false
 	}
-	vid := idx - eltexSviIfIndexBase + 1
 	id, want := strconv.Itoa(idx), strconv.Itoa(vid)
 	for _, col := range []string{oidIfName, oidIfDescr} {
 		if v, ok := oids[col+id]; !ok || trimSNMPString(v.Value) != want {
@@ -88,14 +88,14 @@ const ifTypePropVirtual = "53"
 
 // ResolveSviVlans maps ifIndex to the VLAN an SVI-style interface belongs to.
 //
-// Only VLANs the DEVICE configures are eligible: a VID with a row in its VLAN
-// name columns, named or not. Eligibility is decided by re-reading those
-// columns rather than by inspecting the entity, because ensureVLAN stubs a VID
-// known only from a row status or an interface reference under the same
-// "VLAN<vid>" placeholder emitVLANs gives a configured VLAN the device left
-// unnamed, so the entity alone cannot tell them apart. A configured unnamed
-// VLAN qualifies: the prefix refers to the entity already emitted for it, so
-// the association sends no name the run was not sending anyway.
+// Only VLANs the DEVICE configures are eligible: a VID its own VLAN tables
+// report (deviceVlanVids), named or not. Eligibility is decided by re-reading
+// those tables rather than by inspecting the entity, because ensureVLAN stubs
+// a VID only an interface's membership references under the same "VLAN<vid>"
+// placeholder emitVLANs gives a configured VLAN the device left unnamed, so
+// the entity alone cannot tell them apart. A configured unnamed VLAN
+// qualifies: the prefix refers to the entity already emitted for it, so the
+// association sends no name the run was not sending anyway.
 //
 // vlanNamesByVid is a pure, side-effect-free read of the same rows emission
 // consumes — it never stubs — so recomputing it here keeps the association
@@ -113,7 +113,7 @@ func ResolveSviVlans(
 	entities []diode.Entity,
 	logger *slog.Logger,
 ) map[int]*diode.VLAN {
-	deviceNames := vlanNamesByVid(oids)
+	configured := deviceVlanVids(oids)
 	nameConflicts := vlanNameConflicts(oids)
 	named := map[int]*diode.VLAN{}
 	for _, e := range entities {
@@ -122,7 +122,7 @@ func ResolveSviVlans(
 			continue
 		}
 		vid := int(*v.Vid)
-		if _, configured := deviceNames[vid]; !configured {
+		if _, ok := configured[vid]; !ok {
 			continue
 		}
 		if nameConflicts[vid] {
@@ -153,7 +153,7 @@ func ResolveSviVlans(
 	}
 	collect(oidIfName)
 	collect(oidIfDescr)
-	eltex := sysObjectIDUnder(oids, eltexMesArc)
+	eltex := sysObjectIDUnder(oids, eltexArc)
 
 	out := map[int]*diode.VLAN{}
 	for idx, names := range namesByIfIndex {

@@ -131,9 +131,9 @@ func TestResolveSviVlans_OnlyAVlanTheDeviceConfigures(t *testing.T) {
 		assert.Same(t, placeholder, got[1])
 	})
 
-	t.Run("a vid known only from a status row is not named", func(t *testing.T) {
-		// No name column at all — the VID exists only because the device
-		// reported a row status for it.
+	t.Run("a vid with only a row status resolves", func(t *testing.T) {
+		// No name column at all, but the static table has the VLAN's row,
+		// and emitVLANs sends it under the placeholder all the same.
 		placeholder := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
 		oids := ObjectIDValueMap{
 			ifName1:        {Value: "Vlan1"},
@@ -141,6 +141,27 @@ func TestResolveSviVlans_OnlyAVlanTheDeviceConfigures(t *testing.T) {
 		}
 
 		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
+		assert.Same(t, placeholder, got[1])
+	})
+
+	t.Run("a vid only a vendor catalog lists resolves", func(t *testing.T) {
+		placeholder := &diode.VLAN{Vid: int64Ptr(7), Name: strPtr("VLAN7")}
+		oids := ObjectIDValueMap{
+			".1.3.6.1.2.1.31.1.1.1.1.7":       {Value: "Vlanif7"},
+			".1.3.6.1.4.1.2011.5.6.1.1.1.1.7": {Value: "7"},
+		}
+
+		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
+		assert.Same(t, placeholder, got[7])
+	})
+
+	t.Run("a vid only an interface references does not resolve", func(t *testing.T) {
+		// The shape ensureVLAN stubs for a VID seen in a port's membership:
+		// nothing in the device's VLAN tables says it exists.
+		stub := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
+		oids := ObjectIDValueMap{ifName1: {Value: "Vlan1"}}
+
+		got := ResolveSviVlans(oids, []diode.Entity{stub}, slog.Default())
 		assert.Empty(t, got)
 	})
 
@@ -285,18 +306,6 @@ func TestResolveSviVlans_EltexNumericSvi(t *testing.T) {
 		}
 		assert.Empty(t, ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default()))
 	})
-
-	t.Run("an index below the vlan range", func(t *testing.T) {
-		oids := ObjectIDValueMap{
-			".1.3.6.1.2.1.1.2.0":            {Value: ".1.3.6.1.4.1.35265.1.192"},
-			".1.3.6.1.2.1.17.7.1.4.3.1.1.1": {Value: ""},
-			".1.3.6.1.2.1.31.1.1.1.1.99999": {Value: "0"},
-			".1.3.6.1.2.1.2.2.1.2.99999":    {Value: "0"},
-			".1.3.6.1.2.1.2.2.1.3.99999":    {Value: "53"},
-		}
-		vlan := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
-		assert.Empty(t, ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default()))
-	})
 }
 
 // The reporter's shape end to end: two point-to-point SVIs on unnamed VLANs,
@@ -326,4 +335,39 @@ func TestDerivePrefixes_EltexNumericSvis(t *testing.T) {
 	}
 	assert.Same(t, vlan158, byPrefix["192.0.2.56/30"])
 	assert.Same(t, vlan159, byPrefix["192.0.2.60/30"])
+}
+
+// The layout maps an ifIndex outside 100000..104093 to a VID NetBox does not
+// accept, so it names no VLAN however it is named.
+func TestEltexSviVlanID_StaysInTheVlanRange(t *testing.T) {
+	for idx, name := range map[int]string{99999: "0", 104094: "4095"} {
+		id := strconv.Itoa(idx)
+		oids := ObjectIDValueMap{
+			".1.3.6.1.2.1.31.1.1.1.1." + id: {Value: name},
+			".1.3.6.1.2.1.2.2.1.2." + id:    {Value: name},
+			".1.3.6.1.2.1.2.2.1.3." + id:    {Value: "53"},
+		}
+		_, ok := eltexSviVlanID(oids, idx, true)
+		assert.False(t, ok, "ifIndex %d", idx)
+	}
+}
+
+// deviceVlanVids must name exactly the VLANs emitVLANs emits from the
+// device's tables, or the association would refuse a VLAN that is sent, or
+// attach one that is not.
+func TestDeviceVlanVids_MatchesEmitVLANs(t *testing.T) {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10":    {Value: "office"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.11":    {Value: ""},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.12":    {Value: "1"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.1.13":  {Value: "13"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.2.14":  {Value: ""},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.13.15": {Value: "1"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.16":    {Value: "bogus"},
+	}
+	emitted := map[int]struct{}{}
+	for _, e := range NewVlanMapper(slog.Default(), config.Options{}).emitVLANs(oids, nil) {
+		emitted[int(*e.(*diode.VLAN).Vid)] = struct{}{}
+	}
+	assert.Equal(t, emitted, deviceVlanVids(oids))
 }

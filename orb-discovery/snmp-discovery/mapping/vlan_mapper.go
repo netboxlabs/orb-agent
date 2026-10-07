@@ -837,8 +837,7 @@ type vlanNameRow struct {
 //
 // A VID present with an empty name had a name row whose value was empty
 // (or NUL padding). Callers that require a device-supplied name must treat
-// that as no name at all; emitVLANs is the one caller that instead applies
-// its VLAN<vid> default.
+// that as no name at all; emitVLANs instead applies its VLAN<vid> default.
 func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 	var rows []vlanNameRow
 	for oid, v := range all {
@@ -1066,6 +1065,33 @@ func preferVtpRow(heldName, heldOID, name, oid string) bool {
 // whose dot1qVlanStaticName row is absent (or empty) are skipped here
 // — only VLANs with a real name from the device are emitted. The same
 // gate also suppresses stub creation in ensureVLAN (see below).
+// deviceVlanVids returns every VID the device's own VLAN tables report: a
+// name row, named or not, a dot1qVlanStaticTable row status, or a vendor
+// catalog row. These are the VIDs emitVLANs emits when create_unknown_vlans
+// is on; a VID only an interface's membership references is not among them.
+func deviceVlanVids(all ObjectIDValueMap) map[int]struct{} {
+	vids := map[int]struct{}{}
+	for vid := range vlanNamesByVid(all) {
+		vids[vid] = struct{}{}
+	}
+	for vid := range vendorVlanCatalog(all).Vids { // every catalog row registers its VID
+		vids[vid] = struct{}{}
+	}
+	for oid, v := range all {
+		if !strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus) {
+			continue
+		}
+		vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
+		if !ok {
+			continue
+		}
+		if _, ok := atoi(v.Value); ok {
+			vids[vid] = struct{}{}
+		}
+	}
+	return vids
+}
+
 func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) []diode.Entity {
 	type pending struct {
 		name      string

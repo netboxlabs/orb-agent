@@ -814,7 +814,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 	// Resolve SVI VLANs before prefix derivation: VLAN entities are already
 	// appended to entitiesForTarget by this point, and the resolver only
-	// references VLANs the device itself named. Gated on the option so a
+	// references VLANs the device's own VLAN tables report. Gated on the option so a
 	// target pays nothing (no ifName/ifDescr rescan) when it's off.
 	var sviVlanByIfIndex map[int]*diode.VLAN
 	if r.config.Options.PrefixVlanMode() != "off" {
