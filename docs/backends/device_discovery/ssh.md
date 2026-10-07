@@ -81,14 +81,14 @@ docker run -v /local/orb:/opt/orb netboxlabs/orb-agent:latest
 
 ### SSH Key Permissions
 
-OpenSSH, which runs the jumphost hop, refuses a private key that belongs to the user running it and is readable by group or others. Set mode `600`, or `400` for read-only, before mounting:
+OpenSSH, which runs the jumphost hop, refuses a private key that belongs to the user running it and is accessible by group or others. Set mode `600`, or `400` for read-only, before mounting:
 
 ```bash
 chmod 600 /local/orb/keys/jumphost_rsa
 chmod 600 /local/orb/keys/device_rsa
 ```
 
-The agent runs as root by default and can read the keys whatever their owner. When it runs as a non-root user, the keys must also be owned by that user's UID, since a `600` or `400` key owned by anyone else cannot be read. See [Running as a Non-Root User](../../advanced_config/non_root_user.md).
+The agent runs as root by default and can read the keys whatever their owner. When it runs as a non-root user, give the keys to that user's UID: a `600` or `400` key owned by anyone else cannot be read. See [Running as a Non-Root User](../../advanced_config/non_root_user.md).
 
 **Windows Consideration:** Windows filesystems don't enforce Unix permissions. When mounting from Windows, you may encounter "permissions are too open" errors. Solutions:
 
@@ -429,14 +429,14 @@ The `ControlPath` directory must be writable inside the container. Options:
 
 ### SSH Key Permissions
 
-Private keys must have restrictive permissions, and be owned by the user the agent runs as:
+Private keys must have restrictive permissions:
 
 ```bash
 chmod 600 /local/orb/keys/private_key  # Owner read/write only
 chmod 400 /local/orb/keys/private_key  # Owner read-only (more restrictive)
 ```
 
-SSH will refuse to use a key that belongs to the user running it and is readable by group or others (e.g., 640, 644, 777).
+SSH will refuse to use a key that belongs to the user running it and is accessible by group or others (e.g., 640, 644, 777). When the agent runs as a non-root user, the key must also be readable by that user, so give it to that user's UID.
 
 ### StrictHostKeyChecking
 
@@ -549,7 +549,7 @@ Always use SSH keys (not passwords) for jumphost authentication:
 
 ### No Username Set in the Environment
 
-**Symptoms:** a device using `ssh_config_file` fails with `No username set in the environment` and a traceback ending in `KeyError: 'getpwuid(): uid not found'`, or, when `USER` is set, with `Cannot connect to <host>`
+**Symptoms:** a device using `ssh_config_file` fails with `No username set in the environment` and a traceback ending in `KeyError: 'getpwuid(): uid not found: <uid>'`, or, when `USER` is set, with `Cannot connect to <host>`
 
 **Cause:** the agent runs as a UID that has no entry in the container's `/etc/passwd`. The SSH config parser looks up the user name, and the OpenSSH client that runs the `ProxyJump` hop refuses to start without one (`No user exists for uid`). Setting `USER` satisfies the first but not the second.
 
