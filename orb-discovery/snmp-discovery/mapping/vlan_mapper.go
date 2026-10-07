@@ -836,9 +836,7 @@ type vlanNameRow struct {
 // a name.
 //
 // A VID present with an empty name had a name row whose value was empty
-// (or NUL padding). Callers that require a device-supplied name must treat
-// that as no name at all; emitVLANs is the one caller that instead applies
-// its VLAN<vid> default.
+// (or NUL padding); emitVLANs gives it its VLAN<vid> default.
 func vlanNamesByVid(all ObjectIDValueMap) map[int]string {
 	var rows []vlanNameRow
 	for oid, v := range all {
@@ -1044,6 +1042,38 @@ func preferVtpRow(heldName, heldOID, name, oid string) bool {
 	return oid < heldOID
 }
 
+// deviceVlanVids returns every VID in 1..4094 the device's own VLAN tables
+// report: a name row, named or not, a dot1qVlanStaticTable row status, or a
+// vendor catalog row. It is the set emitVLANs emits from; a VID only an
+// interface's membership references is not among them.
+func deviceVlanVids(all ObjectIDValueMap) map[int]struct{} {
+	vids := map[int]struct{}{}
+	add := func(vid int) {
+		if vid >= 1 && vid <= 4094 {
+			vids[vid] = struct{}{}
+		}
+	}
+	for vid := range vlanNamesByVid(all) {
+		add(vid)
+	}
+	for vid := range vendorVlanCatalog(all).Vids { // every catalog row registers its VID
+		add(vid)
+	}
+	for oid, v := range all {
+		if !strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus) {
+			continue
+		}
+		vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus))
+		if !ok {
+			continue
+		}
+		if _, ok := atoi(v.Value); ok {
+			add(vid)
+		}
+	}
+	return vids
+}
+
 // emitVLANs scans dot1qVlanStaticName / RowStatus and constructs one
 // *diode.VLAN per discovered VID. Names default to "VLAN<vid>" when the
 // SNMP value is empty (matches device-discovery behavior). Status comes
@@ -1071,30 +1101,28 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 		name      string
 		rowStatus int
 	}
+	// The VIDs come from deviceVlanVids alone, so the association that reads
+	// it can never disagree with what is emitted; names and statuses are
+	// attributes of those VIDs. A VID the catalog lists is emitted even when
+	// it carries no name and no status: the index row alone is what says the
+	// VLAN exists.
 	byVid := map[int]*pending{}
-	for vid, name := range vlanNamesByVid(all) {
-		byVid[vid] = &pending{name: name}
+	for vid := range deviceVlanVids(all) {
+		byVid[vid] = &pending{}
 	}
-	ensure := func(vid int) *pending {
-		p, exists := byVid[vid]
-		if !exists {
-			p = &pending{}
-			byVid[vid] = p
+	for vid, name := range vlanNamesByVid(all) {
+		if p, ok := byVid[vid]; ok {
+			p.name = name
 		}
-		return p
 	}
 	// Vendor catalog first, dot1qVlanStaticTable second, so the standard
 	// column's RowStatus overwrites the private table's for any VID both
 	// report — the same precedence names get, and applied by ordering the
 	// two passes rather than by whichever row a map iteration yields last.
-	// A VID the catalog lists is registered even when it carries no name
-	// and no status: the index row alone is what says the VLAN exists.
-	catalog := vendorVlanCatalog(all)
-	for vid := range catalog.Vids {
-		ensure(vid)
-	}
-	for vid, st := range catalog.RowStatus {
-		ensure(vid).rowStatus = st
+	for vid, st := range vendorVlanCatalog(all).RowStatus {
+		if p, ok := byVid[vid]; ok {
+			p.rowStatus = st
+		}
 	}
 	for oid, v := range all {
 		if !strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus) {
@@ -1105,16 +1133,12 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 			continue
 		}
 		st, ok2 := atoi(v.Value)
-		if !ok2 {
-			continue
+		if p, known := byVid[vid]; ok2 && known {
+			p.rowStatus = st
 		}
-		ensure(vid).rowStatus = st
 	}
 	out := make([]diode.Entity, 0, len(byVid))
 	for vid, p := range byVid {
-		if vid < 1 || vid > 4094 {
-			continue
-		}
 		// When create_unknown_vlans is false, skip VIDs that have no
 		// dot1qVlanStaticName row (name == ""). A status-only row with
 		// no name is treated as "unknown" and suppressed.

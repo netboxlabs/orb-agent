@@ -54,21 +54,51 @@ func sviVlanID(name string) (int, bool) {
 	return vid, true
 }
 
+// eltexArc is the sysObjectID arc of Eltex products.
+const eltexArc = ".1.3.6.1.4.1.35265.1."
+
+// eltexSviIfIndexBase is the ifIndex of an Eltex switch's VLAN 1 interface;
+// VLAN n's is eltexSviIfIndexBase + n - 1.
+const eltexSviIfIndexBase = 100000
+
+// ifTypePropVirtual is IANAifType propVirtual(53).
+const ifTypePropVirtual = "53"
+
+// eltexSviVlanID reads the VLAN of an Eltex VLAN interface, which the switch
+// names with the bare VLAN ID. A bare number is no SVI name in general, so it
+// is read only on Eltex, and only where every recorded Eltex walk agrees:
+// ifIndex eltexSviIfIndexBase + VID - 1, ifName and ifDescr both exactly the
+// VID, and ifType propVirtual(53).
+func eltexSviVlanID(oids ObjectIDValueMap, idx int, eltex bool) (int, bool) {
+	vid := idx - eltexSviIfIndexBase + 1
+	if !eltex || vid < 1 || vid > 4094 {
+		return 0, false
+	}
+	id, want := strconv.Itoa(idx), strconv.Itoa(vid)
+	for _, col := range []string{oidIfName, oidIfDescr} {
+		if v, ok := oids[col+id]; !ok || trimSNMPString(v.Value) != want {
+			return 0, false
+		}
+	}
+	if v, ok := oids[oidIfType+id]; !ok || trimSNMPString(v.Value) != ifTypePropVirtual {
+		return 0, false
+	}
+	return vid, true
+}
+
 // ResolveSviVlans maps ifIndex to the VLAN an SVI-style interface belongs to.
 //
-// Only VLANs the DEVICE named are eligible, and eligibility is decided by
-// re-reading the walked VLAN name columns rather than by inspecting the
-// entity: emitVLANs defaults a nameless VID to "VLAN<vid>" and ensureVLAN
-// stubs unknown VIDs under the same placeholder, so every emitted VLAN
-// carries a Name and the name alone cannot tell an operator's VLAN from one
-// the agent synthesised. That matters beyond tidiness — a reference that
-// matches an existing NetBox VLAN is applied as an update carrying the whole
-// payload, so referencing a placeholder named "VLAN1" against a VLAN the
-// operator calls "default" renames it.
+// Only VLANs the DEVICE configures are eligible: a VID its own VLAN tables
+// report (deviceVlanVids), named or not. Eligibility is decided by re-reading
+// those tables rather than by inspecting the entity, because ensureVLAN stubs
+// a VID only an interface's membership references under the same "VLAN<vid>"
+// placeholder emitVLANs gives a configured VLAN the device left unnamed, so
+// the entity alone cannot tell them apart. A configured unnamed VLAN
+// qualifies: the prefix refers to the entity already emitted for it, so the
+// association sends no name the run was not sending anyway.
 //
-// vlanNamesByVid is a pure, side-effect-free read of the same rows emission
-// consumes — it never stubs — so recomputing it here keeps the association
-// decoupled from the emission path.
+// deviceVlanVids is a pure, side-effect-free read of the same rows emission
+// consumes, and the set emitVLANs emits from; it never stubs.
 //
 // Both ifName and ifDescr are consulted because the interface-name resolver
 // prefers ifDescr, and several platforms put a generic string there and the
@@ -82,16 +112,16 @@ func ResolveSviVlans(
 	entities []diode.Entity,
 	logger *slog.Logger,
 ) map[int]*diode.VLAN {
-	deviceNames := vlanNamesByVid(oids)
+	configured := deviceVlanVids(oids)
 	nameConflicts := vlanNameConflicts(oids)
-	named := map[int]*diode.VLAN{}
+	eligible := map[int]*diode.VLAN{}
 	for _, e := range entities {
 		v, ok := e.(*diode.VLAN)
 		if !ok || v == nil || v.Vid == nil {
 			continue
 		}
 		vid := int(*v.Vid)
-		if deviceNames[vid] == "" {
+		if _, ok := configured[vid]; !ok {
 			continue
 		}
 		if nameConflicts[vid] {
@@ -99,9 +129,9 @@ func ResolveSviVlans(
 				"vid", vid)
 			continue
 		}
-		named[vid] = v
+		eligible[vid] = v
 	}
-	if len(named) == 0 {
+	if len(eligible) == 0 {
 		return nil
 	}
 
@@ -122,6 +152,7 @@ func ResolveSviVlans(
 	}
 	collect(oidIfName)
 	collect(oidIfDescr)
+	eltex := sysObjectIDUnder(oids, eltexArc)
 
 	out := map[int]*diode.VLAN{}
 	for idx, names := range namesByIfIndex {
@@ -137,13 +168,16 @@ func ResolveSviVlans(
 				vids[vid] = struct{}{}
 			}
 		}
+		if vid, ok := eltexSviVlanID(oids, idx, eltex); ok {
+			vids[vid] = struct{}{}
+		}
 		if len(vids) > 1 {
 			logger.Warn("svi vlan: interface names disagree on the vlan id; not associating",
 				"ifIndex", idx, "interfaces", names)
 			continue
 		}
 		for vid := range vids {
-			vlan, known := named[vid]
+			vlan, known := eligible[vid]
 			if !known {
 				logger.Debug("svi vlan: parsed vid absent from the device VLAN database; not associating",
 					"ifIndex", idx, "interfaces", names, "vid", vid)

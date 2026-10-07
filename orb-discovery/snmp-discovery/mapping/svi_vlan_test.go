@@ -2,10 +2,13 @@ package mapping
 
 import (
 	"log/slog"
+	"strconv"
 	"testing"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 )
 
 // The accept table is the SVI naming this resolver recognizes, drawn from a
@@ -100,23 +103,24 @@ func TestResolveSviVlans(t *testing.T) {
 	assert.Len(t, got, 2)
 }
 
-// The eligibility signal is whether the DEVICE named the VID, not whether
-// the entity carries a name: every producer of a *diode.VLAN with a
-// non-nil Vid sets Name, defaulting a nameless VID to the "VLAN<vid>"
-// placeholder, so the entity's own name cannot tell an operator's name
-// from one the agent synthesised.
-func TestResolveSviVlans_SkipsAVlanTheDeviceDidNotName(t *testing.T) {
+// The eligibility signal is whether the DEVICE configures the VID, read from
+// its VLAN name columns, not whether the entity carries a name: every producer
+// of a *diode.VLAN with a non-nil Vid sets Name, defaulting a nameless VID to
+// the "VLAN<vid>" placeholder, so the entity cannot tell a configured VLAN from
+// one stubbed for a VID seen only in a row status.
+func TestResolveSviVlans_OnlyAVlanTheDeviceConfigures(t *testing.T) {
 	const (
 		ifName1        = ".1.3.6.1.2.1.31.1.1.1.1.1"
 		dot1qName1     = ".1.3.6.1.2.1.17.7.1.4.3.1.1.1"
 		dot1qRowStatus = ".1.3.6.1.2.1.17.7.1.4.3.1.5.1"
 	)
 
-	t.Run("a placeholder name is not a device name", func(t *testing.T) {
-		// Exactly the shape emitVLANs produces for a VID whose name row is
-		// NUL padding, and the shape ensureVLAN stubs. Referencing it would
-		// rename the operator's VLAN, because a matched reference is applied
-		// as an update carrying the whole payload.
+	t.Run("a configured vid with an empty name resolves", func(t *testing.T) {
+		// The shape emitVLANs produces for a VID whose name row is NUL
+		// padding: the device configures the VLAN but names it nothing. The
+		// VLAN entity already goes out under the placeholder, and the prefix
+		// refers to that same entity, so attaching it sends no name the run
+		// was not sending anyway.
 		placeholder := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
 		oids := ObjectIDValueMap{
 			ifName1:    {Value: "Vlan1"},
@@ -124,12 +128,12 @@ func TestResolveSviVlans_SkipsAVlanTheDeviceDidNotName(t *testing.T) {
 		}
 
 		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
-		assert.Empty(t, got, "the agent invented that name; it must not be attached")
+		assert.Same(t, placeholder, got[1])
 	})
 
-	t.Run("a vid known only from a status row is not named", func(t *testing.T) {
-		// No name column at all — the VID exists only because the device
-		// reported a row status for it.
+	t.Run("a vid with only a row status resolves", func(t *testing.T) {
+		// No name column at all, but the static table has the VLAN's row,
+		// and emitVLANs sends it under the placeholder all the same.
 		placeholder := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
 		oids := ObjectIDValueMap{
 			ifName1:        {Value: "Vlan1"},
@@ -137,6 +141,27 @@ func TestResolveSviVlans_SkipsAVlanTheDeviceDidNotName(t *testing.T) {
 		}
 
 		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
+		assert.Same(t, placeholder, got[1])
+	})
+
+	t.Run("a vid only a vendor catalog lists resolves", func(t *testing.T) {
+		placeholder := &diode.VLAN{Vid: int64Ptr(7), Name: strPtr("VLAN7")}
+		oids := ObjectIDValueMap{
+			".1.3.6.1.2.1.31.1.1.1.1.7":       {Value: "Vlanif7"},
+			".1.3.6.1.4.1.2011.5.6.1.1.1.1.7": {Value: "7"},
+		}
+
+		got := ResolveSviVlans(oids, []diode.Entity{placeholder}, slog.Default())
+		assert.Same(t, placeholder, got[7])
+	})
+
+	t.Run("a vid only an interface references does not resolve", func(t *testing.T) {
+		// The shape ensureVLAN stubs for a VID seen in a port's membership:
+		// nothing in the device's VLAN tables says it exists.
+		stub := &diode.VLAN{Vid: int64Ptr(1), Name: strPtr("VLAN1")}
+		oids := ObjectIDValueMap{ifName1: {Value: "Vlan1"}}
+
+		got := ResolveSviVlans(oids, []diode.Entity{stub}, slog.Default())
 		assert.Empty(t, got)
 	})
 
@@ -226,4 +251,130 @@ func TestResolveSviVlans_RefusesAVidNamedDifferentlyAcrossVtpDomains(t *testing.
 	assert.NotContains(t, got, 1, "a vid named differently across domains must not resolve")
 	assert.Same(t, vlan30, got[2], "domains agreeing on the name still resolve")
 	assert.Len(t, got, 1)
+}
+
+// eltexSvi is an Eltex MES walk carrying the VLAN interface of vid at its
+// usual place, ifIndex 100000 + vid - 1, named with the bare VID in ifName and
+// ifDescr and typed propVirtual(53), with vid configured but unnamed.
+func eltexSvi(vid int) (ObjectIDValueMap, int, *diode.VLAN) {
+	idx := 100000 + vid - 1
+	id, name := strconv.Itoa(idx), strconv.Itoa(vid)
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.1.2.0":                  {Value: ".1.3.6.1.4.1.35265.1.192"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1." + name: {Value: ""},
+		".1.3.6.1.2.1.31.1.1.1.1." + id:       {Value: name},
+		".1.3.6.1.2.1.2.2.1.2." + id:          {Value: name},
+		".1.3.6.1.2.1.2.2.1.3." + id:          {Value: "53"},
+	}
+	return oids, idx, &diode.VLAN{Vid: int64Ptr(int64(vid)), Name: strPtr("VLAN" + name)}
+}
+
+// Eltex MES switches name each VLAN's interface with the bare VLAN ID. A bare
+// number is no SVI name anywhere else, so it is read only where the whole
+// recorded layout holds.
+func TestResolveSviVlans_EltexNumericSvi(t *testing.T) {
+	oids, idx, vlan := eltexSvi(158)
+	got := ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default())
+	assert.Same(t, vlan, got[idx])
+
+	for name, edit := range map[string]func(ObjectIDValueMap){
+		"another vendor":         func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.1.2.0"] = Value{Value: ".1.3.6.1.4.1.9.1.1"} },
+		"no sysObjectID":         func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.1.2.0") },
+		"another interface type": func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.2.2.1.3.100157"] = Value{Value: "6"} },
+		"no interface type":      func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.2.2.1.3.100157") },
+		"ifName absent":          func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.31.1.1.1.1.100157") },
+		"ifDescr absent":         func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.2.2.1.2.100157") },
+		"ifDescr says otherwise": func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.2.2.1.2.100157"] = Value{Value: "uplink"} },
+		"a leading zero":         func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.31.1.1.1.1.100157"] = Value{Value: "0158"} },
+		"the vlan is not on the device": func(o ObjectIDValueMap) {
+			delete(o, ".1.3.6.1.2.1.17.7.1.4.3.1.1.158")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			oids, _, vlan := eltexSvi(158)
+			edit(oids)
+			assert.Empty(t, ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default()))
+		})
+	}
+
+	t.Run("a number at another index", func(t *testing.T) {
+		// The name says 158, but the index belongs to VLAN 200.
+		oids, _, vlan := eltexSvi(158)
+		for _, col := range []string{".1.3.6.1.2.1.31.1.1.1.1.", ".1.3.6.1.2.1.2.2.1.2.", ".1.3.6.1.2.1.2.2.1.3."} {
+			oids[col+"100199"] = oids[col+"100157"]
+			delete(oids, col+"100157")
+		}
+		assert.Empty(t, ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default()))
+	})
+}
+
+// The reporter's shape end to end: two point-to-point SVIs on unnamed VLANs,
+// each prefix taking its own VLAN.
+func TestDerivePrefixes_EltexNumericSvis(t *testing.T) {
+	sviName := "svi-name"
+	oids158, idx158, vlan158 := eltexSvi(158)
+	oids159, idx159, vlan159 := eltexSvi(159)
+	for k, v := range oids159 {
+		oids158[k] = v
+	}
+	svis := ResolveSviVlans(oids158, []diode.Entity{vlan158, vlan159}, slog.Default())
+
+	if158, if159 := &diode.Interface{Name: strPtr("158")}, &diode.Interface{Name: strPtr("159")}
+	addr := func(a string, iface *diode.Interface) *diode.IPAddress {
+		return &diode.IPAddress{Address: &a, AssignedObject: iface}
+	}
+	out := DerivePrefixes(
+		[]diode.Entity{addr("192.0.2.58/30", if158), addr("192.0.2.62/30", if159)},
+		nil, svis, map[*diode.Interface]int{if158: idx158, if159: idx159},
+		nil, &config.Options{EmitPrefixVlan: &sviName}, slog.Default(),
+	)
+	byPrefix := map[string]*diode.VLAN{}
+	for _, e := range out {
+		p := e.(*diode.Prefix)
+		byPrefix[p.GetPrefix()] = p.Vlan
+	}
+	assert.Same(t, vlan158, byPrefix["192.0.2.56/30"])
+	assert.Same(t, vlan159, byPrefix["192.0.2.60/30"])
+}
+
+// The layout maps an ifIndex outside 100000..104093 to a VID NetBox does not
+// accept, so it names no VLAN however it is named.
+func TestEltexSviVlanID_StaysInTheVlanRange(t *testing.T) {
+	for idx, name := range map[int]string{99999: "0", 104094: "4095"} {
+		id := strconv.Itoa(idx)
+		oids := ObjectIDValueMap{
+			".1.3.6.1.2.1.31.1.1.1.1." + id: {Value: name},
+			".1.3.6.1.2.1.2.2.1.2." + id:    {Value: name},
+			".1.3.6.1.2.1.2.2.1.3." + id:    {Value: "53"},
+		}
+		_, ok := eltexSviVlanID(oids, idx, true)
+		assert.False(t, ok, "ifIndex %d", idx)
+	}
+}
+
+// deviceVlanVids must name exactly the VLANs emitVLANs emits from the
+// device's tables, or the association would refuse a VLAN that is sent, or
+// attach one that is not.
+func TestDeviceVlanVids_MatchesEmitVLANs(t *testing.T) {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10":    {Value: "office"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.11":    {Value: ""},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.12":    {Value: "1"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.1.13":  {Value: "13"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.2.14":  {Value: ""},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.13.15": {Value: "1"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.16":    {Value: "bogus"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.1.0":   {Value: "0"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.13.0":  {Value: "1"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.4095":  {Value: "reserved"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.4095":  {Value: "1"},
+	}
+	emitted := map[int]struct{}{}
+	for _, e := range NewVlanMapper(slog.Default(), config.Options{}).emitVLANs(oids, nil) {
+		emitted[int(*e.(*diode.VLAN).Vid)] = struct{}{}
+	}
+	vids := deviceVlanVids(oids)
+	assert.Equal(t, emitted, vids)
+	assert.Equal(t, map[int]struct{}{10: {}, 11: {}, 12: {}, 13: {}, 14: {}, 15: {}}, vids,
+		"VIDs outside 1..4094 are not VLANs NetBox accepts")
 }
