@@ -371,6 +371,38 @@ def _invert_fastiron_vlan_config(raw: str) -> dict[str, dict]:
     return per_port
 
 
+def _fastiron_ve_vlan_ids(raw: str) -> dict[str, int | None]:
+    """
+    Map each VE to the VLAN that names it as ``router-interface ve <N>``.
+
+    The VE number is chosen by the operator and need not equal the VLAN ID
+    (``vlan 40`` can route through ``ve 400``), so this binding is the only
+    reliable source. A VE bound by more than one VLAN maps to ``None``: the
+    device data contradicts itself and neither VLAN is picked.
+    """
+    vids_by_ve: dict[str, set[int]] = {}
+    current_vid: int | None = None
+    for line in raw.splitlines():
+        m_hdr = _VLAN_HDR_RE.match(line)
+        if m_hdr:
+            current_vid = coerce_vid(m_hdr.group("id"))
+            continue
+        if current_vid is None:
+            continue
+        m_ri = _ROUTER_INTF_RE.match(line)
+        if m_ri:
+            vids_by_ve.setdefault(f"ve{m_ri.group('ve')}", set()).add(current_vid)
+
+    result: dict[str, int | None] = {}
+    for ve, vids in vids_by_ve.items():
+        if len(vids) == 1:
+            result[ve] = next(iter(vids))
+        else:
+            logger.debug("brocade_fastiron: %s is the router-interface of VLANs %s; not linking it", ve, sorted(vids))
+            result[ve] = None
+    return result
+
+
 def _fastiron_aggregate_to_switchport(per_port: dict) -> SwitchportInfo:
     """
     Map a per-port aggregate ``{untagged: int|None, tagged: list[int]}`` to a SwitchportInfo.
@@ -967,3 +999,19 @@ class FastIronDriver(_napalm_base.NetworkDriver):
             info = _fastiron_aggregate_to_switchport(data)
             result[port] = classify_switchport(info)
         return result
+
+    def get_interfaces_vlan_id(self) -> dict[str, int | None]:
+        """
+        Return the VLAN ID each routed VE serves, from ``show running-config vlan``.
+
+        Read from the ``router-interface ve <N>`` line inside each VLAN block,
+        never from the VE number. Returns an empty dict when the command fails.
+        """
+        try:
+            raw = self.device.send_command("show running-config vlan")
+        except Exception:
+            logger.debug("FastIron show running-config vlan failed", exc_info=True)
+            return {}
+        if not raw:
+            return {}
+        return _fastiron_ve_vlan_ids(raw)

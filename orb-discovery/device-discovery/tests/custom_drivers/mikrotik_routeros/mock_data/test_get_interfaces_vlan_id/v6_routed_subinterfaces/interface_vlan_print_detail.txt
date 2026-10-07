@@ -1,0 +1,11 @@
+Flags: X - disabled, R - running 
+ 0 R  ;;; UPLINK_A
+      name="sfpplus1.156" mtu=1500 l2mtu=1580 mac-address=02:00:5E:10:00:01 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off 
+      loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=156 interface=sfpplus1 use-service-tag=no 
+
+ 1 R  ;;; UPLINK_B
+      name="sfpplus1.810" mtu=1500 l2mtu=1580 mac-address=02:00:5E:10:00:01 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off 
+      loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=810 interface=sfpplus1 use-service-tag=no 
+
+ 2 X  name="sfpplus1.20" mtu=1500 l2mtu=1580 mac-address=02:00:5E:10:00:01 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off 
+      loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=20 interface=sfpplus1 use-service-tag=no 

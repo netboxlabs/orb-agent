@@ -331,6 +331,7 @@ class PolicyRunner:
                         "Continuing without interface-VLAN data."
                     )
             self._collect_lag_membership(config, device, data, sanitized_hostname)
+            self._collect_interfaces_vlan_id(config, device, data, sanitized_hostname)
             get_chassis_members = getattr(device, "get_chassis_members", None)
             if callable(get_chassis_members):
                 try:
@@ -353,6 +354,35 @@ class PolicyRunner:
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
             return entity_count
+
+    def _collect_interfaces_vlan_id(
+        self,
+        config: Config,
+        device,
+        data: dict,
+        sanitized_hostname: str,
+    ) -> None:
+        """
+        Call the driver's optional get_interfaces_vlan_id() when prefix VLANs are on.
+
+        The map is only consumed by ``emit_prefix_vlan: svi-name``, so with the
+        option off no device command is issued. Drivers without the method are
+        skipped silently; a failure costs only the device-reported VLAN IDs, and
+        the SVI-name fallback still applies.
+        """
+        if not (config.options and config.options.emit_prefix_vlan == "svi-name"):
+            return
+        get_interfaces_vlan_id = getattr(device, "get_interfaces_vlan_id", None)
+        if not callable(get_interfaces_vlan_id):
+            return
+        try:
+            data["interfaces_vlan_id"] = get_interfaces_vlan_id()
+        except Exception as e:
+            logger.warning(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                f"Error getting interface VLAN IDs: {e}. "
+                "Continuing with SVI-name VLANs only."
+            )
 
     def _collect_lag_membership(
         self,

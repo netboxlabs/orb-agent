@@ -1,0 +1,18 @@
+vlan 1 name DEFAULT-VLAN by port
+!
+vlan 40 name USERS by port
+ tagged ethe 1/1/1
+ router-interface ve 400
+!
+vlan 120 name VOICE by port
+ tagged ethe 1/1/1
+ router-interface ve 12
+!
+vlan 200 name LAB-A by port
+ tagged ethe 1/1/2
+ router-interface ve 20
+!
+vlan 201 name LAB-B by port
+ tagged ethe 1/1/3
+ router-interface ve 20
+!

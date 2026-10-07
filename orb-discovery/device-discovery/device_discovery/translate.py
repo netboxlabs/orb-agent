@@ -355,6 +355,39 @@ def _build_vlan_cache(
     return cache
 
 
+def _interfaces_vlan_ids(raw: object) -> dict[str, int | None]:
+    """
+    Validate a driver's ``get_interfaces_vlan_id()`` payload into name -> VID.
+
+    The payload is the VLAN ID the device itself reports for each routed
+    interface, or ``None`` for an interface whose tag the device reports but
+    that must not be linked (the SVI-name fallback is then skipped too).
+    Anything that is not a non-empty interface name mapped to ``None`` or an
+    integer VID in 1..4094 is dropped rather than trusted; a payload that is not
+    a mapping at all yields nothing, so a driver bug costs the prefix VLANs and
+    never the device.
+    """
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning(
+            "interfaces_vlan_id payload is not a dict (got %s); ignoring it",
+            type(raw).__name__,
+        )
+        return {}
+    out: dict[str, int | None] = {}
+    for name, vid in raw.items():
+        if (
+            isinstance(name, str)
+            and name
+            and (vid is None or (isinstance(vid, int) and not isinstance(vid, bool) and 1 <= vid <= 4094))
+        ):
+            out[name] = vid
+        else:
+            logger.warning("interfaces_vlan_id: skipping malformed entry %r -> %r", name, vid)
+    return out
+
+
 def _ensure_vlan(
     vid: int,
     cache: dict[int, pb.VLAN],
@@ -887,6 +920,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
             options=options,
             iface_vrf_map=iface_vrf_map,
             vlan_cache=vlan_cache,
+            iface_vlan_ids=_interfaces_vlan_ids(data.get("interfaces_vlan_id")),
         )
         # assign_primary_ip must run before the Device is wrapped into Entity
         # because Entity(device=...) copies the message; subsequent mutations
