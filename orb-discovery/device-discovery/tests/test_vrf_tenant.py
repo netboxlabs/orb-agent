@@ -2,16 +2,23 @@
 # Copyright 2026 NetBox Labs Inc
 """A configured VRF carries its own tenant, and the matcher stubs keep it."""
 
+import re
+
 import pytest
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from pydantic import ValidationError
 
 from device_discovery.policy.models import (
+    Config,
     Defaults,
     IpamParameters,
+    Napalm,
+    Policy,
     PrefixParameters,
     TenantParameters,
+    VlanParameters,
     VrfParameters,
+    check_vrf_tenants,
 )
 from device_discovery.policy.runner import merge_override_defaults
 from device_discovery.policy.tenants import slug
@@ -160,6 +167,7 @@ def _defaults(ip_tenant=None, vrf_tenant=None, tenant=None):
 
 
 ACME = TenantParameters(name="acme", group="customers", description="d", comments="c", tags=["a"])
+DIFFERS = "write it differently"
 
 
 @pytest.mark.parametrize(
@@ -168,84 +176,170 @@ ACME = TenantParameters(name="acme", group="customers", description="d", comment
         pytest.param(ACME, ACME, id="identical"),
         pytest.param(ACME, TenantParameters(name="acme", group="customers"), id="fields on one side"),
         pytest.param(TenantParameters(name="acme", group="customers"), ACME, id="fields on the vrf side"),
-        pytest.param("acme ", "acme", id="string padded"),
         pytest.param(ACME, ACME.model_copy(update={"description": "d "}), id="description padded"),
         pytest.param(ACME, ACME.model_copy(update={"tags": ["a "]}), id="tag padded"),
         pytest.param(ACME, ACME.model_copy(update={"name": "acme "}), id="name padded"),
+        pytest.param(ACME, ACME.model_copy(update={"group": "customers "}), id="group padded"),
+        pytest.param("acme ", "acme", id="string padded"),
         pytest.param(ACME, TenantParameters(name="globex", group="partners", description="x"), id="other tenant"),
         pytest.param(
             TenantParameters(name="日本", description="x"),
             TenantParameters(name="中国", description="y"),
             id="names without a slug",
         ),
-        pytest.param("acme", "acme", id="same string"),
+        pytest.param(TenantParameters(name=" ", group="customers"), TenantParameters(name=" "), id="blank names"),
         pytest.param(None, ACME, id="no ip tenant"),
     ],
 )
 def test_vrf_tenant_written_consistently_is_accepted(ip_tenant, vrf_tenant):
     """Copies Diode merges cleanly, or never merges, are accepted."""
-    _defaults(ip_tenant, vrf_tenant)
+    check_vrf_tenants(_defaults(ip_tenant, vrf_tenant))
 
 
 @pytest.mark.parametrize(
     ("ip_tenant", "vrf_tenant", "message"),
     [
-        pytest.param(ACME, ACME.model_copy(update={"description": "x"}), "write it differently", id="description"),
-        pytest.param(ACME, ACME.model_copy(update={"comments": "x"}), "write it differently", id="comments"),
-        pytest.param(ACME, ACME.model_copy(update={"tags": ["b"]}), "write it differently", id="tags"),
+        pytest.param(ACME, ACME.model_copy(update={"description": "x"}), DIFFERS, id="description"),
+        pytest.param(ACME, ACME.model_copy(update={"comments": "x"}), DIFFERS, id="comments"),
+        pytest.param(ACME, ACME.model_copy(update={"tags": ["b"]}), DIFFERS, id="tags"),
         pytest.param(
             ACME.model_copy(update={"tags": ["a", "b"]}),
             ACME.model_copy(update={"tags": ["b", "a"]}),
-            "write it differently",
+            DIFFERS,
             id="tags reordered",
         ),
-        pytest.param(ACME, ACME.model_copy(update={"description": "  "}), "write it differently", id="blank description"),
-        pytest.param(ACME, ACME.model_copy(update={"description": ""}), "write it differently", id="empty description"),
-        pytest.param(ACME, ACME.model_copy(update={"name": "Acme"}), "write it differently", id="case"),
-        pytest.param("Acme Corp", "Acme-Corp", "write it differently", id="slug alike"),
-        pytest.param("Café", "Cafe", "write it differently", id="accent"),
-        pytest.param(ACME, ACME.model_copy(update={"group": "partners"}), "write it differently", id="other group"),
-        pytest.param(ACME, ACME.model_copy(update={"group": None}), "write it differently", id="ungrouped"),
+        pytest.param(ACME, ACME.model_copy(update={"description": "  "}), DIFFERS, id="blank description"),
+        pytest.param(ACME, ACME.model_copy(update={"description": ""}), DIFFERS, id="empty description"),
+        pytest.param(ACME, ACME.model_copy(update={"name": "Acme"}), DIFFERS, id="case"),
+        pytest.param("Acme Corp", "Acme-Corp", DIFFERS, id="slug alike"),
+        pytest.param("Café", "Cafe", DIFFERS, id="accent"),
+        pytest.param(ACME, ACME.model_copy(update={"group": "partners"}), DIFFERS, id="other group"),
+        pytest.param(ACME, ACME.model_copy(update={"group": None}), DIFFERS, id="ungrouped"),
         pytest.param(ACME, TenantParameters(name="globex", group="Customers"), "tenant group in two ways", id="group case"),
     ],
 )
 def test_vrf_tenant_written_two_ways_is_refused(ip_tenant, vrf_tenant, message):
     """Copies Diode would merge and then refuse, or rewrite every run, are refused."""
-    with pytest.raises(ValidationError, match=message):
-        _defaults(ip_tenant, vrf_tenant)
+    with pytest.raises(ValueError, match=message):
+        check_vrf_tenants(_defaults(ip_tenant, vrf_tenant))
 
 
-def test_vrf_tenant_against_device_tenant_compares_name_and_group_only():
-    """The address's nested device keeps only its tenant's name and group."""
-    _defaults(tenant=ACME, vrf_tenant=ACME.model_copy(update={"description": "x", "tags": ["b"]}))
-    with pytest.raises(ValidationError, match="write it differently"):
-        _defaults(tenant=ACME, vrf_tenant=ACME.model_copy(update={"name": "Acme"}))
-    with pytest.raises(ValidationError, match="write it differently"):
-        _defaults(tenant="acme", vrf_tenant=ACME)
+def test_vrf_tenant_is_compared_with_every_tenant_default():
+    """The device, prefix, VLAN and other VRF copies all reach Diode in full in one run."""
+    clash = ACME.model_copy(update={"description": "x"})
+    cases = {
+        "defaults.tenant and defaults.ipaddress.vrf.tenant": Defaults(
+            tenant=ACME, ipaddress=IpamParameters(vrf=VrfParameters(name="v", tenant=clash))
+        ),
+        "defaults.prefix.tenant and defaults.prefix.vrf_ipv6.tenant": Defaults(
+            prefix=PrefixParameters(tenant=ACME, vrf_ipv6=VrfParameters(name="v", tenant=clash))
+        ),
+        "defaults.ipaddress.vrf_ipv4.tenant and defaults.vlan.tenant": Defaults(
+            vlan=VlanParameters(tenant=ACME), ipaddress=IpamParameters(vrf_ipv4=VrfParameters(name="v", tenant=clash))
+        ),
+        "defaults.ipaddress.vrf.tenant and defaults.prefix.vrf.tenant": Defaults(
+            ipaddress=IpamParameters(vrf=VrfParameters(name="v", tenant=ACME)),
+            prefix=PrefixParameters(vrf=VrfParameters(name="v", tenant=clash)),
+        ),
+    }
+    for paths, defaults in cases.items():
+        with pytest.raises(ValueError, match=rf"{re.escape(paths)} name the same NetBox tenant"):
+            check_vrf_tenants(defaults)
 
 
-def test_prefix_vrf_tenant_is_checked_against_the_prefix_tenant_only():
-    """A prefix carries its own tenant and its VRF's, but no device."""
-    conflicting = ACME.model_copy(update={"description": "x"})
-    with pytest.raises(ValidationError, match=r"prefix\.tenant and prefix\.vrf_ipv6\.tenant"):
+def test_pairs_without_a_vrf_tenant_are_left_alone():
+    """Tenant defaults that clashed before VRF tenants existed still load."""
+    check_vrf_tenants(
         Defaults(
-            prefix=PrefixParameters(
-                tenant=ACME, vrf_ipv6=VrfParameters(name="example-vrf", tenant=conflicting)
+            tenant=ACME,
+            ipaddress=IpamParameters(tenant=ACME.model_copy(update={"description": "x"}), vrf="example-vrf"),
+        )
+    )
+
+
+def _scope(hostname="192.0.2.10", **override):
+    return Napalm(
+        hostname=hostname,
+        username="admin",
+        password="secret",
+        override_defaults=Defaults(**override) if override else None,
+    )
+
+
+def test_policy_refuses_a_clash_in_its_defaults():
+    """A clash in the policy defaults is refused when the policy is parsed."""
+    with pytest.raises(ValidationError, match=DIFFERS):
+        Policy(config=Config(defaults=_defaults(ACME, ACME.model_copy(update={"description": "x"}))), scope=[_scope()])
+
+
+def test_policy_refuses_an_override_that_clashes_once_merged():
+    """The error names the target whose override_defaults clashes."""
+    with pytest.raises(ValidationError, match=rf"192\.0\.2\.11: .*{DIFFERS}"):
+        Policy(
+            config=Config(defaults=Defaults(ipaddress=IpamParameters(tenant=ACME))),
+            scope=[
+                _scope("192.0.2.10"),
+                _scope(
+                    "192.0.2.11",
+                    ipaddress=IpamParameters(
+                        vrf=VrfParameters(name="example-vrf", tenant=ACME.model_copy(update={"description": "x"}))
+                    ),
+                ),
+            ],
+        )
+
+
+def test_policy_accepts_an_override_consistent_once_merged():
+    """An override is judged merged, not alone: a partial tenant there is fine."""
+    Policy(
+        config=Config(defaults=Defaults(ipaddress=IpamParameters(tenant=TenantParameters(name="acme", group="customers")))),
+        scope=[
+            _scope(
+                ipaddress=IpamParameters(
+                    tenant=TenantParameters(name="acme"),
+                    vrf=VrfParameters(name="example-vrf", tenant=TenantParameters(name="acme", group="customers")),
+                )
             )
-        )
-    Defaults(
-        tenant="Acme",
-        prefix=PrefixParameters(vrf=VrfParameters(name="example-vrf", tenant="acme")),
+        ],
     )
 
 
-def test_vrf_tenant_conflict_after_override_merge_is_refused():
-    """A target override that clashes with the policy defaults is refused when merged."""
-    base = Defaults(ipaddress=IpamParameters(tenant=ACME))
-    override = Defaults(
-        ipaddress=IpamParameters(
-            vrf=VrfParameters(name="example-vrf", tenant=ACME.model_copy(update={"description": "x"}))
-        )
+POLICY_VRF = VrfParameters(name="vrf-a", rd="65000:1", description="d", tenant=ACME)
+
+
+def _merged_vrf(override_vrf):
+    merged = merge_override_defaults(
+        Defaults(ipaddress=IpamParameters(vrf=POLICY_VRF)),
+        Defaults(ipaddress=IpamParameters(vrf=override_vrf)),
     )
-    with pytest.raises(ValidationError, match="write it differently"):
-        merge_override_defaults(base, override)
+    return merged.ipaddress.vrf
+
+
+def test_override_naming_another_vrf_inherits_nothing():
+    """A different VRF must not take the policy VRF's rd or tenant."""
+    assert _merged_vrf(VrfParameters(name="vrf-b")) == VrfParameters(name="vrf-b")
+
+
+def test_override_refining_the_policy_vrf_keeps_the_rest():
+    """Without a name, or with the same one, an override refines field by field."""
+    assert _merged_vrf(VrfParameters.model_validate({"name": "vrf-a", "rd": "65000:2"})) == POLICY_VRF.model_copy(
+        update={"rd": "65000:2"}
+    )
+    refined = merge_override_defaults(
+        Defaults(ipaddress=IpamParameters(vrf=POLICY_VRF)),
+        Defaults.model_validate({"ipaddress": {"vrf": {"name": "vrf-a", "tenant": {"name": "acme", "description": "x"}}}}),
+    )
+    assert refined.ipaddress.vrf.tenant == ACME.model_copy(update={"description": "x"})
+
+
+def test_override_naming_another_vrf_tenant_inherits_nothing_from_it():
+    """A different tenant must not take the policy VRF tenant's group or description."""
+    merged = _merged_vrf(VrfParameters(name="vrf-a", tenant=TenantParameters(name="globex")))
+    assert merged.tenant == TenantParameters(name="globex")
+    assert merged.rd == "65000:1"
+
+
+def test_vrf_tenant_with_mixed_key_types_is_refused_cleanly():
+    """A non-string key is reported as a validation error, not a crash."""
+    with pytest.raises(ValidationError, match="tenant has no"):
+        VrfParameters.model_validate({"name": "example-vrf", "tenant": {"name": "acme", 1: "x", "grup": "y"}})

@@ -46,24 +46,24 @@ def _parts(tenant: Any) -> tuple[str, str, Any]:
     return tenant.name.strip(), (tenant.group or "").strip(), tenant
 
 
-def written_differently(first: Any, second: Any, *, compare_fields: bool) -> str | None:
+def written_differently(first: Any, second: Any) -> str | None:
     """
     Return what makes two copies of one tenant disagree, or None.
 
     "group" when their groups are one NetBox group written two ways, "tenant"
-    when their names resolve to one tenant but the name, group or (with
-    compare_fields) description, comments or tags differ. Either value may be a
-    tenant name or a TenantParameters.
+    when their names resolve to one tenant but the name, group, description,
+    comments or tags differ. Either value may be a tenant name or a
+    TenantParameters.
     """
     name_a, group_a, a = _parts(first)
     name_b, group_b, b = _parts(second)
     if group_a != group_b and _same(group_a, group_b):
         return "group"
-    if not _same(name_a, name_b):
+    if not name_a or not name_b or not _same(name_a, name_b):
         return None
     if name_a != name_b or group_a != group_b:
         return "tenant"
-    if compare_fields and a is not None and b is not None and (
+    if a is not None and b is not None and (
         _differ(a.description, b.description)
         or _differ(a.comments, b.comments)
         or _tags_differ(a.tags, b.tags)

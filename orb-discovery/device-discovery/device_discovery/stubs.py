@@ -72,8 +72,8 @@ def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
     """
     Return True when ``ip`` is the exact IP object the device's primary references.
 
-    Match on full identity — address WITH prefix, VRF (name, rd and tenant, matching how
-    _vrf_match_stub keys VRF identity), and the assigned interface — not just the
+    Match on full identity: address WITH prefix, VRF (name, rd and tenant, matching how
+    _vrf_match_stub keys VRF identity) and the assigned interface, not just the
     host portion. Two IP entities can share a host address yet be different objects:
     a differing prefix length (a /32 loopback vs a /24 SVI), a differing VRF (the
     same address in two routing tables, or the same VRF name under a different rd),

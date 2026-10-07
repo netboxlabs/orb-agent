@@ -125,7 +125,7 @@ class VrfParameters(ObjectParameters):
     def _refuse_unknown_tenant_keys(cls, v: object) -> object:
         """Reject an unknown key in the tenant map too: a misspelt group would match another tenant."""
         if isinstance(v, dict):
-            unknown = sorted(set(v) - set(TenantParameters.model_fields))
+            unknown = sorted(map(str, set(v) - set(TenantParameters.model_fields)))
             if unknown:
                 raise ValueError(f"tenant has no {unknown[0]!r} key")
         return v
@@ -225,24 +225,6 @@ MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
 
 #: NetBox's rack faces.
 RACK_FACES = ("front", "rear")
-
-
-def _refuse_tenant_written_differently(
-    first_at: str, first: str | TenantParameters, second_at: str, second: str | TenantParameters, compare_fields: bool
-) -> None:
-    """Raise when two copies of one tenant in an entity are written differently."""
-    found = written_differently(first, second, compare_fields=compare_fields)
-    if found == "group":
-        raise ValueError(
-            f"{first_at} and {second_at} name the same NetBox tenant group in two ways; "
-            "write it the same way in both places"
-        )
-    if found == "tenant":
-        fields = "name, group, description, comments and tags" if compare_fields else "name and group"
-        raise ValueError(
-            f"{first_at} and {second_at} name the same NetBox tenant but write it differently; "
-            f"give it the same {fields} in both places, for example with a YAML anchor"
-        )
 
 
 class Defaults(BaseModel):
@@ -390,34 +372,111 @@ class Defaults(BaseModel):
             return v.model_dump()
         return v
 
-    @model_validator(mode="after")
-    def validate_vrf_tenants(self):
-        """
-        Refuse a VRF tenant written differently from another copy of one tenant.
 
-        An address carries its own tenant, its VRF's and its device's (name
-        and group only); a prefix carries its own and its VRF's. Diode merges
-        the copies that resolve to one tenant and refuses the entity, or
-        rewrites the tenant on every run, when they disagree.
-        """
-        for block in ("ipaddress", "prefix"):
-            params = getattr(self, block)
-            if params is None:
+_VRF_KNOBS = ("vrf", "vrf_ipv4", "vrf_ipv6")
+
+
+def _tenant_copies(defaults: Defaults) -> list[tuple[str, Any, bool]]:
+    """Return (path, tenant, is a VRF's) for every tenant default a run sends."""
+    copies = [("defaults.tenant", defaults.tenant, False)]
+    for block in ("ipaddress", "prefix", "vlan"):
+        params = getattr(defaults, block)
+        if params is None:
+            continue
+        copies.append((f"defaults.{block}.tenant", params.tenant, False))
+        for knob in _VRF_KNOBS if block != "vlan" else ():
+            vrf = getattr(params, knob)
+            if isinstance(vrf, VrfParameters):
+                copies.append((f"defaults.{block}.{knob}.tenant", vrf.tenant, True))
+    return [copy for copy in copies if copy[1] is not None]
+
+
+def check_vrf_tenants(defaults: Defaults) -> None:
+    """
+    Refuse a VRF tenant written differently from another tenant default.
+
+    One run sends every tenant default in full, a device carrying its own and,
+    through its primary address, its VRF's. Diode merges the copies that
+    resolve to one tenant within an entity and refuses the entity when they
+    disagree, and across entities rewrites the tenant on every run. Pairs
+    without a VRF tenant are left as they were before VRF tenants existed.
+    """
+    copies = _tenant_copies(defaults)
+    for i, (first_at, first, first_vrf) in enumerate(copies):
+        for second_at, second, second_vrf in copies[i + 1 :]:
+            if not (first_vrf or second_vrf):
                 continue
-            for vrf_field in ("vrf", "vrf_ipv4", "vrf_ipv6"):
-                vrf = getattr(params, vrf_field)
-                if not isinstance(vrf, VrfParameters) or vrf.tenant is None:
-                    continue
-                others = [(f"{block}.tenant", params.tenant, True)]
-                if block == "ipaddress":
-                    others.append(("tenant", self.tenant, False))
-                for where, other, compare_fields in others:
-                    if other is None:
-                        continue
-                    _refuse_tenant_written_differently(
-                        where, other, f"{block}.{vrf_field}.tenant", vrf.tenant, compare_fields
-                    )
-        return self
+            found = written_differently(first, second)
+            if found == "group":
+                raise ValueError(
+                    f"{first_at} and {second_at} name the same NetBox tenant group in two ways; "
+                    "write it the same way in both places"
+                )
+            if found == "tenant":
+                raise ValueError(
+                    f"{first_at} and {second_at} name the same NetBox tenant but write it differently; "
+                    "give it the same name, group, description, comments and tags, in the same order, "
+                    "in both places, for example with a YAML anchor"
+                )
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge ``override`` into ``base``; override wins on non-dict conflicts."""
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _named(value: object) -> str | None:
+    """Return the name a VRF or tenant default carries, in either form."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return value.get("name")
+    return None
+
+
+def _renames(base: object, override: object) -> bool:
+    """Report whether override names a different object than base."""
+    base_name, override_name = _named(base), _named(override)
+    return bool(override_name) and base_name != override_name
+
+
+def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
+    """
+    Overlay a target's ``override_defaults`` onto the policy defaults.
+
+    Fields merge recursively, except where an override names something else:
+    ``vlan.group`` is replaced as a whole so a scope set on the policy cannot
+    leak into a group the override named without one, and a VRF or VRF tenant
+    the override names differently is replaced as a whole so it takes no rd,
+    tenant or group from the policy's. Naming the same VRF, or none, refines it.
+    """
+    base_dump = base.model_dump()
+    override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
+    merged = _deep_merge(base_dump, override_dump)
+    override_group = override_dump.get("vlan", {}).get("group")
+    if override_group is not None:
+        merged["vlan"]["group"] = override_group
+    for block in ("ipaddress", "prefix"):
+        for knob in _VRF_KNOBS:
+            override_vrf = (override_dump.get(block) or {}).get(knob)
+            if not isinstance(override_vrf, dict):
+                continue
+            base_vrf = (base_dump.get(block) or {}).get(knob)
+            if _renames(base_vrf, override_vrf):
+                merged[block][knob] = override_vrf
+            elif isinstance(base_vrf, dict) and _renames(base_vrf.get("tenant"), override_vrf.get("tenant")):
+                merged[block][knob]["tenant"] = override_vrf["tenant"]
+    return Defaults.model_validate(merged)
 
 
 class Options(WarnUnknownKeys):
@@ -954,6 +1013,27 @@ class Policy(BaseModel):
             override = entry.override_defaults or Defaults()
             if not _effective(override, defaults, "rack"):
                 _check_unracked(pinned, entry, override, defaults)
+        return self
+
+
+    @model_validator(mode="after")
+    def validate_vrf_tenants(self):
+        """
+        Refuse a VRF tenant written differently from another tenant default.
+
+        Checked on the policy defaults and on each target's merged defaults,
+        never on an override alone: a partial override is judged with what it
+        inherits.
+        """
+        defaults = (self.config.defaults if self.config else None) or Defaults()
+        check_vrf_tenants(defaults)
+        for entry in self.scope:
+            if entry.override_defaults is None:
+                continue
+            try:
+                check_vrf_tenants(merge_override_defaults(defaults, entry.override_defaults))
+            except ValueError as error:
+                raise ValueError(f"{entry.hostname}: {error}") from None
         return self
 
 

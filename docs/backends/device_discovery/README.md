@@ -248,13 +248,15 @@ Current supported defaults:
 | ├─ tags       | list | VLAN tags                  |
 
 ##### VRF tenant
-A VRF map accepts only the keys above, and its tenant map only `name`, `group`, `description`, `comments` and `tags`. Any other key is refused, so a misspelt `rd`, `tenant` or `group` cannot match a different VRF or tenant.
+A VRF map accepts only the keys above, and its tenant map only `name`, `group`, `description`, `comments` and `tags`. Any other key is refused, so a misspelt key such as `rd`, `tenant` or `group` is not silently dropped.
 
 The address and prefix `tenant` defaults do not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
 
 When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
 
-An address carries its own tenant, its VRF's and its device's (`defaults.tenant`, of which only the name and group are sent); a prefix carries its own and its VRF's. Diode trims names and finds a tenant by its slug whatever its group, so names that differ only in case, spacing or punctuation are one tenant to it. When the VRF's tenant and another of these name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments` or `tags`, Diode refuses every such object or rewrites the tenant on every run, so the policy is refused, as is one that writes a tenant group two ways.
+Every tenant default reaches Diode in full on each run, a device carrying its own and, through its primary address, its VRF's. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (`tenant`, `ipaddress.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too.
+
+In a per-target `override_defaults`, a VRF map that names a different VRF replaces the policy's as a whole, taking no `rd` or `tenant` from it; one that names the same VRF refines it field by field. A VRF tenant that names a different tenant likewise replaces the policy's VRF tenant as a whole.
 
 If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
 
@@ -263,11 +265,13 @@ VRFs discovered with `discover_vrfs` carry no tenant, so this applies only to th
 ```yaml
 defaults:
   ipaddress:
-    vrf:
+    vrf: &example-vrf
       name: "Example VRF"
       tenant:
         name: "Example Tenant GmbH"
         group: "Example Group"
+  prefix:
+    vrf: *example-vrf
 ```
 
 ##### VLAN group

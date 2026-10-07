@@ -21,7 +21,14 @@ from device_discovery.client import Client
 from device_discovery.discovery import discover_device_driver, supported_drivers
 from device_discovery.log_config import configure_default_logging, flatten_message
 from device_discovery.metrics import get_metric
-from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
+from device_discovery.policy.models import (
+    Config,
+    Defaults,
+    Napalm,
+    Options,
+    Status,
+    merge_override_defaults,
+)
 from device_discovery.policy.portscan import (
     expand_hostnames,
     find_reachable_hosts,
@@ -68,37 +75,6 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     traceback.
     """
     return isinstance(error, _EXPECTED_TARGET_FAILURES)
-
-
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge ``override`` into ``base``; override wins on non-dict conflicts."""
-    merged = dict(base)
-    for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
-    """
-    Overlay a target's ``override_defaults`` onto the policy defaults.
-
-    Fields merge recursively, except ``vlan.group``: an override group replaces
-    the policy group as a whole so a scope set on the policy cannot leak into
-    a group the override named without one.
-    """
-    override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
-    merged = _deep_merge(base.model_dump(), override_dump)
-    override_group = override_dump.get("vlan", {}).get("group")
-    if override_group is not None:
-        merged["vlan"]["group"] = override_group
-    return Defaults.model_validate(merged)
 
 
 class PolicyRunner:
