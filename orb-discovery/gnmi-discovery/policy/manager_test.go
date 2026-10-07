@@ -385,5 +385,5 @@ func TestParsePolicies_TenantTemplateCompletedPerTarget(t *testing.T) {
 
 	_, err = m.ParsePolicies([]byte("policies:\n  p1:\n    config:\n      defaults:\n        vrf:\n          tenant:\n            group: customers\n" +
 		"    scope:\n      targets:\n        - host: 192.0.2.1\n"))
-	require.ErrorContains(t, err, "defaults.vrf.tenant has no name")
+	require.ErrorContains(t, err, "invalid policy : defaults.vrf.tenant has no name", "no target prefix without an override")
 }

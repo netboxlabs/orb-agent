@@ -186,7 +186,6 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if err := validatePlacement(policy.Config.Defaults.Rack, t.OverrideDefaults); err != nil {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
-
 		}
 	}
 	return nil

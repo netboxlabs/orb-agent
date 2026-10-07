@@ -191,3 +191,9 @@ func TestMergeDefaults_AddedGroupIsAnotherTenant(t *testing.T) {
 	assert.Equal(t, TenantParameters{Name: "acme", Group: "partners"}, merged.Vrf.Tenant,
 		"NetBox can hold an ungrouped and a grouped acme; neither takes the other's fields")
 }
+
+func TestMergeDefaults_BlankOverrideNameNamesNothing(t *testing.T) {
+	policy := &Defaults{Vrf: VRFDefaults{Tenant: TenantParameters{Name: "acme", Group: "customers", Description: "d"}}}
+	merged := MergeDefaults(policy, &Defaults{Vrf: VRFDefaults{Tenant: TenantParameters{Name: " ", Comments: "c"}}})
+	assert.Equal(t, TenantParameters{Name: "acme", Group: "customers", Description: "d", Comments: "c"}, merged.Vrf.Tenant)
+}

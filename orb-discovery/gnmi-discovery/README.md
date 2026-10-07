@@ -100,7 +100,7 @@ policies:
           comments: ""
           tags: []
         vrf:                       # NetBox defaults applied to discovered VRFs (name/RD come from discovery)
-          tenant: ""
+          tenant: ""               # a name, or a map: {name, group, description, comments, tags}
           description: ""
           comments: ""
           tags: []
