@@ -81,12 +81,14 @@ docker run -v /local/orb:/opt/orb netboxlabs/orb-agent:latest
 
 ### SSH Key Permissions
 
-SSH requires private keys to have restrictive permissions. Set permissions before mounting:
+OpenSSH, which runs the jumphost hop, refuses a private key that belongs to the user running it and is accessible by group or others. Set mode `600`, or `400` for read-only, before mounting:
 
 ```bash
 chmod 600 /local/orb/keys/jumphost_rsa
 chmod 600 /local/orb/keys/device_rsa
 ```
+
+The agent runs as root by default and can read the keys whatever their owner. When it runs as a non-root user, give the keys to that user's UID: a `600` or `400` key owned by anyone else cannot be read. See [Running as a Non-Root User](../../advanced_config/non_root_user.md).
 
 **Windows Consideration:** Windows filesystems don't enforce Unix permissions. When mounting from Windows, you may encounter "permissions are too open" errors. Solutions:
 
@@ -434,7 +436,7 @@ chmod 600 /local/orb/keys/private_key  # Owner read/write only
 chmod 400 /local/orb/keys/private_key  # Owner read-only (more restrictive)
 ```
 
-SSH will refuse to use keys with overly permissive settings (e.g., 644, 777).
+SSH will refuse to use a key that belongs to the user running it and is accessible by group or others (e.g., 640, 644, 777). When the agent runs as a non-root user, the key must also be readable by that user, so give it to that user's UID.
 
 ### StrictHostKeyChecking
 
@@ -524,6 +526,7 @@ Always use SSH keys (not passwords) for jumphost authentication:
 
 **Possible Causes:**
 - Incorrect key file permissions
+- Key owned by another user, when the agent runs as a non-root user
 - Wrong username in SSH config
 - Key not authorized on jumphost
 - Key file not mounted correctly
@@ -543,6 +546,14 @@ Always use SSH keys (not passwords) for jumphost authentication:
 3. Verify public key is in jumphost's `~/.ssh/authorized_keys`
 
 4. Check SSH config username matches actual jumphost username
+
+### No Username Set in the Environment
+
+**Symptoms:** a device using `ssh_config_file` fails with `No username set in the environment` and a traceback ending in `KeyError: 'getpwuid(): uid not found: <uid>'`, or, when `USER` is set, with `Cannot connect to <host>`
+
+**Cause:** the agent runs as a UID that has no entry in the container's `/etc/passwd`. The SSH config parser looks up the user name, and the OpenSSH client that runs the `ProxyJump` hop refuses to start without one (`No user exists for uid`). Setting `USER` satisfies the first but not the second.
+
+**Solution:** give the UID a passwd entry, for example by mounting the host's `/etc/passwd` and `/etc/group` read-only, and set `UserKnownHostsFile` in the SSH config to a writable path, since OpenSSH keeps `known_hosts` in the passwd entry's home directory. See [Running as a Non-Root User](../../advanced_config/non_root_user.md#ssh-configuration-files-need-a-passwd-entry).
 
 ### No Such File or Directory (SSH Config)
 
