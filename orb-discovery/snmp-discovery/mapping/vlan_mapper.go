@@ -45,9 +45,12 @@ const (
 	oidCiscoVMVlan        = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
 	oidCiscoVMVoiceVlanID = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
 	// CISCOSB overlay (Cisco small-business: Catalyst 1200/1300, CBS/SG).
-	// Both are indexed by ifIndex, not by bridge port.
+	// All are indexed by ifIndex, not by bridge port.
+	oidCiscoSBPortMode        = ".1.3.6.1.4.1.9.6.1.101.48.22.1.1."
 	oidCiscoSBTrunkNativeVlan = ".1.3.6.1.4.1.9.6.1.101.48.61.1.1."
-	oidCiscoSBAccessVlan      = ".1.3.6.1.4.1.9.6.1.101.48.62.1.1."
+	// vlanTrunkModeList1to1024 through 3073to4094 are columns 2 to 5.
+	oidCiscoSBTrunkLists = ".1.3.6.1.4.1.9.6.1.101.48.61.1."
+	oidCiscoSBAccessVlan = ".1.3.6.1.4.1.9.6.1.101.48.62.1.1."
 )
 
 // ifTypeNumericToString maps a small subset of IANAifType numeric values
@@ -778,9 +781,18 @@ func (m *VlanMapper) buildCiscoSBRows(all ObjectIDValueMap) qbridge.CiscoSBRows 
 	rows := qbridge.CiscoSBRows{
 		AccessVlan: map[int]int{},
 		NativeVlan: map[int]int{},
+		PortMode:   map[int]int{},
+		TrunkLists: map[int]map[int][]byte{},
+		Vlans:      deviceVlanVids(all),
 	}
 	for oid, v := range all {
 		switch {
+		case strings.HasPrefix(oid, oidCiscoSBPortMode):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoSBPortMode))
+			mode, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.PortMode[ifx] = mode
+			}
 		case strings.HasPrefix(oid, oidCiscoSBAccessVlan):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoSBAccessVlan))
 			vid, ok2 := atoi(v.Value)
@@ -792,6 +804,16 @@ func (m *VlanMapper) buildCiscoSBRows(all ObjectIDValueMap) qbridge.CiscoSBRows 
 			vid, ok2 := atoi(v.Value)
 			if ok1 && ok2 {
 				rows.NativeVlan[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoSBTrunkLists):
+			column, idx, _ := strings.Cut(strings.TrimPrefix(oid, oidCiscoSBTrunkLists), ".")
+			col, ok1 := atoi(column)
+			ifx, ok2 := atoi(idx)
+			if ok1 && ok2 {
+				if rows.TrunkLists[ifx] == nil {
+					rows.TrunkLists[ifx] = map[int][]byte{}
+				}
+				rows.TrunkLists[ifx][col-2] = []byte(v.Value)
 			}
 		}
 	}
