@@ -225,6 +225,15 @@ func (d Defaults) Validate() error {
 	return nil
 }
 
+// VrfRd returns the rd the VRF is sent with: vrf.rd, else defaults.rd,
+// trimmed as Diode trims it.
+func (d Defaults) VrfRd() string {
+	if rd := trim(d.Vrf.Rd); rd != "" {
+		return rd
+	}
+	return trim(d.Rd)
+}
+
 // PolicyConfig represents the configuration of a policy
 type PolicyConfig struct {
 	Schedule *string  `yaml:"schedule,omitempty"`

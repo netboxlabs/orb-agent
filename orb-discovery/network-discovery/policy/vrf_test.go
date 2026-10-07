@@ -67,6 +67,8 @@ func TestIPAddressEntity_VrfRd(t *testing.T) {
 		{name: "padded defaults rd", defaultRd: " 65000:7", want: "65000:7"},
 		{name: "blank vrf rd", vrfRd: "  ", defaultRd: "65000:8", want: "65000:8"},
 		{name: "blank rds", vrfRd: " ", defaultRd: "  "},
+		{name: "vrf rd of separator controls", vrfRd: "\x1c\x1f", defaultRd: "65000:9", want: "65000:9"},
+		{name: "vrf rd padded with a separator control", vrfRd: "65000:10\x1e", want: "65000:10"},
 		{name: "neither"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
