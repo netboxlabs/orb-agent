@@ -488,3 +488,13 @@ def test_override_with_a_blank_name_in_another_group_keeps_the_name():
     """A blank name names nothing, so the policy's tenant name carries over to the other group."""
     merged = merge_override_defaults(Defaults(tenant=ACME), Defaults.model_validate({"tenant": {"name": "", "group": "partners"}}))
     assert merged.tenant == TenantParameters(name="acme", group="partners")
+
+
+def test_override_vrf_tenant_blank_name_in_another_group_is_another_vrf():
+    """A blank tenant name takes the policy's, so another group still names another tenant, and VRF."""
+    no_rd = POLICY_VRF.model_copy(update={"rd": None})
+    merged = merge_override_defaults(
+        Defaults(ipaddress=IpamParameters(vrf=no_rd)),
+        Defaults.model_validate({"ipaddress": {"vrf": {"name": "vrf-a", "tenant": {"name": "", "group": "partners"}}}}),
+    )
+    assert merged.ipaddress.vrf == VrfParameters(name="vrf-a", tenant=TenantParameters(name="acme", group="partners"))

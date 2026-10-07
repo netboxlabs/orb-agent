@@ -482,7 +482,7 @@ def _other_vrf(base: object, override: object) -> bool:
     base_rd, override_rd = _field(base, "rd"), _field(override, "rd")
     if _differ(_named(base), _named(override)) or (override_rd and override_rd != base_rd):
         return True
-    if _named(base_tenant) and _named(override_tenant):
+    if _named(base_tenant) and override_tenant is not None:
         return _other_tenant(base_tenant, override_tenant)
     return not base_rd and not override_rd and bool(_named(override_tenant)) and not _named(base_tenant)
 
