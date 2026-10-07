@@ -635,11 +635,9 @@ func TestMergeDefaults_PerAfVrf_FieldLevelNoBleed(t *testing.T) {
 	}}
 	merged := MergeDefaults(policy, override)
 
-	// Field-level refinement: override rd lands without clearing the
-	// policy-level name/description of the SAME knob.
-	assert.Equal(t, "four", merged.IPAddress.VrfIpv4.Name)
-	assert.Equal(t, "65000:44", merged.IPAddress.VrfIpv4.Rd)
-	assert.Equal(t, "v4 desc", merged.IPAddress.VrfIpv4.Description)
+	// An rd the policy VRF lacks names another VRF (Diode matches by name only
+	// without an rd): it keeps the knob's name and takes nothing else.
+	assert.Equal(t, VrfParameters{Name: "four", Rd: "65000:44"}, merged.IPAddress.VrfIpv4)
 	// New knob introduced by override only.
 	assert.Equal(t, "six", merged.IPAddress.VrfIpv6.Name)
 	// No bleed between knobs: the AF-agnostic vrf is untouched.

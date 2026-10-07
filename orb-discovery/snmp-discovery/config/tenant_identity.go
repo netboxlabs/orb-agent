@@ -113,6 +113,18 @@ func (d *Defaults) ValidateVrfTenants() error {
 		{"defaults.prefix.vrf_ipv6.tenant", d.Prefix.VrfIpv6.Tenant, &d.Prefix.VrfIpv6, false},
 		{"defaults.vlan.tenant", d.VLAN.Tenant, nil, true},
 	}
+	// The AF-agnostic vrf is never used when both per-family knobs are set.
+	shadowed := map[*VrfParameters]bool{
+		&d.IPAddress.Vrf: !d.IPAddress.VrfIpv4.IsZero() && !d.IPAddress.VrfIpv6.IsZero(),
+		&d.Prefix.Vrf:    !d.Prefix.VrfIpv4.IsZero() && !d.Prefix.VrfIpv6.IsZero(),
+	}
+	kept := copies[:0]
+	for _, c := range copies {
+		if c.vrf == nil || !shadowed[c.vrf] {
+			kept = append(kept, c)
+		}
+	}
+	copies = kept
 	for _, c := range copies {
 		if c.vrf == nil || c.tenant.isZero() {
 			continue

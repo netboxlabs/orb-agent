@@ -201,17 +201,39 @@ func TestMergeDefaults_SameTenantInAnotherGroup(t *testing.T) {
 	assert.Equal(t, TenantParameters{Name: "acme", Group: "partners"}, merged.Tenant, "another group is another tenant")
 }
 
-func TestMergeDefaults_VrfRefinedByAnAddedRdOrTenantGroup(t *testing.T) {
-	policy := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{
-		Name: "v", Description: "d", Tenant: TenantParameters{Name: "acme", Description: "t"},
-	}}}
-	merged := MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{
-		Rd: "65000:1", Tenant: TenantParameters{Group: "customers"},
-	}}})
-	assert.Equal(t, VrfParameters{
-		Name: "v", Rd: "65000:1", Description: "d",
-		Tenant: TenantParameters{Name: "acme", Group: "customers", Description: "t"},
-	}, merged.IPAddress.Vrf, "fields the policy left unset refine it")
+func TestMergeDefaults_AddedRdTenantOrGroup(t *testing.T) {
+	policy := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Description: "d"}}}
+
+	merged := MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Rd: "65000:1"}}})
+	assert.Equal(t, VrfParameters{Name: "v", Rd: "65000:1"}, merged.IPAddress.Vrf, "an rd the policy lacks is another VRF")
+
+	merged = MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Tenant: TenantParameters{Name: "acme"}}}})
+	assert.Equal(t, VrfParameters{Name: "v", Tenant: TenantParameters{Name: "acme"}}, merged.IPAddress.Vrf,
+		"with no rd anywhere, a tenant the policy lacks is another VRF")
+
+	withRd := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Rd: "65000:1", Description: "d"}}}
+	merged = MergeDefaults(withRd, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Tenant: TenantParameters{Name: "acme"}}}})
+	assert.Equal(t, VrfParameters{Name: "v", Rd: "65000:1", Description: "d", Tenant: TenantParameters{Name: "acme"}}, merged.IPAddress.Vrf,
+		"a tenant added to a VRF with an rd refines it: the rd identifies it")
+
+	ungrouped := &Defaults{Tenant: TenantParameters{Name: "acme", Description: "d"}}
+	merged = MergeDefaults(ungrouped, &Defaults{Tenant: TenantParameters{Group: "partners"}})
+	assert.Equal(t, TenantParameters{Name: "acme", Group: "partners"}, merged.Tenant, "a group the policy lacks is another tenant")
+}
+
+func TestMergeDefaults_RenamedVrfDropsTheTenant(t *testing.T) {
+	policy := &Defaults{Prefix: PrefixDefaults{Vrf: VrfParameters{Name: "v", Tenant: TenantParameters{Name: "acme"}}}}
+	merged := MergeDefaults(policy, &Defaults{Prefix: PrefixDefaults{Vrf: VrfParameters{Name: "w"}}})
+	assert.Equal(t, VrfParameters{Name: "w"}, merged.Prefix.Vrf)
+}
+
+func TestDefaults_ValidateVrfTenants_SkipsTheShadowedVrfKnob(t *testing.T) {
+	d := Defaults{IPAddress: IPAddressDefaults{
+		Vrf:     VrfParameters{Tenant: TenantParameters{Name: "acme"}},
+		VrfIpv4: VrfParameters{Name: "v4"},
+		VrfIpv6: VrfParameters{Name: "v6"},
+	}}
+	assert.NoError(t, d.ValidateVrfTenants(), "vrf is never used when both per-family knobs are set")
 }
 
 func TestDefaults_ValidateVrfTenants_TenantMaps(t *testing.T) {

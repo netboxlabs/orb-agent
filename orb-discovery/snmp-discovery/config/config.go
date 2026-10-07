@@ -146,10 +146,31 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-// otherTenant reports whether b names another tenant than a: another name or
-// another group, where both give one, compared trimmed as Diode compares them.
+// otherTenant reports whether b names another tenant than a: another name
+// where both give one, or a group other than a's, including one a lacks, since
+// NetBox can hold an ungrouped tenant and a grouped one of the same name.
+// Values compare trimmed, as Diode compares them.
 func otherTenant(a, b TenantParameters) bool {
-	return differ(a.Name, b.Name) || differ(a.Group, b.Group)
+	group := trim(b.Group)
+	return differ(a.Name, b.Name) || group != "" && group != trim(a.Group)
+}
+
+// otherVrf reports whether b names another VRF than a. Diode finds a VRF with
+// an rd by the rd alone and one without by its name and tenant, matching by
+// name only when the payload has no rd: another name, an rd other than a's
+// (including one a lacks), another tenant where both give one, or, with no rd
+// on either side, a tenant a lacks. A tenant added to a VRF with an rd refines
+// it, since the rd still identifies it.
+func otherVrf(a, b VrfParameters) bool {
+	rdA, rdB := trim(a.Rd), trim(b.Rd)
+	if differ(a.Name, b.Name) || rdB != "" && rdB != rdA {
+		return true
+	}
+	tenantA, tenantB := trim(a.Tenant.Name), trim(b.Tenant.Name)
+	if tenantA != "" && tenantB != "" {
+		return otherTenant(a.Tenant, b.Tenant)
+	}
+	return rdA == "" && rdB == "" && tenantB != "" && tenantA == ""
 }
 
 // refineTenant overlays non-zero override fields onto dst in place, or
@@ -451,12 +472,11 @@ func (d *Defaults) RackFace() string {
 
 // mergeVrfParameters overlays non-zero override fields onto dst in place.
 func mergeVrfParameters(dst, override *VrfParameters) {
-	// Diode finds a VRF with an rd by the rd alone and one without by its
-	// name and tenant, so an override with another name, rd or tenant (where
-	// both give one) is another VRF and takes nothing from the policy's but
-	// its name when it gives none: inheriting the rest would match, and
-	// rewrite, the policy's VRF. Its tenant is refined from the policy's.
-	if differ(dst.Name, override.Name) || differ(dst.Rd, override.Rd) || otherTenant(dst.Tenant, override.Tenant) {
+	// An override naming another VRF (see otherVrf) takes nothing from the
+	// policy's but its name when it gives none: inheriting the rest would
+	// match, and rewrite, the policy's VRF. Its tenant is refined from the
+	// policy's.
+	if otherVrf(*dst, *override) {
 		tenant := dst.Tenant
 		refineTenant(&tenant, &override.Tenant)
 		name := dst.Name
