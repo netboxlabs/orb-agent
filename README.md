@@ -259,6 +259,9 @@ docker stop orb-agent && docker rm orb-agent
 
 The same approach works through Docker Compose (`restart: unless-stopped` with `stop_grace_period: 60s`) or a systemd unit wrapping the container, if either fits your environment better.
 
+### Running as a non-root user
+The image runs the agent as root by default, and it can run as another UID with `user:` in Docker Compose or `--user` on `docker run`. See [Running as a Non-Root User](./docs/advanced_config/non_root_user.md) for what runs unchanged, the passwd entry that SSH config files need, and the features that still need root.
+
 ### Outbound proxy
 If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/advanced_config/outbound_proxy.md) guide for the supported proxy environment variables and examples.
 
