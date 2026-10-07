@@ -204,7 +204,7 @@ Current supported defaults:
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
 | ├─ asset_tag | str  | Device asset tag                      |
-| tenant | map | Tenant-specific defaults              |
+| tenant | map | Tenant-specific defaults. In a target's `override_defaults`, a different tenant replaces the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
 | ├─ name | str | Tenant name                          |
 | ├─ group | str | Tenant group                        |
 | ├─ description | str  | Tenant description           |
@@ -256,7 +256,7 @@ When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its 
 
 Every tenant default reaches Diode in full on each run, a device carrying its own and, through its primary address, that address's and its VRF's. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (`tenant`, `ipaddress.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too; copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
 
-In a per-target `override_defaults`, a tenant or VRF that names a different one than the policy's replaces it as a whole, taking no `group`, `rd`, `tenant` or other field from it. One that names the same tenant or VRF refines it field by field, and a bare name equal to the policy's leaves it as it is. This applies to every tenant default, not only VRF tenants.
+In a per-target `override_defaults`, a tenant or VRF that differs from the policy's replaces it as a whole, taking no `group`, `rd`, `tenant` or other field from it. A tenant differs when its name, or its group where both set one, differs; a VRF differs when its name, or its `rd` or tenant where both set one, differs, since Diode finds a VRF with an RD by the RD alone and one without by its name and tenant. Otherwise the override refines the policy's field by field, and a bare name equal to the policy's, or a blank one, leaves it as it is. This applies to every tenant default, not only VRF tenants.
 
 If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
 

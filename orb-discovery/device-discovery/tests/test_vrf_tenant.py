@@ -321,9 +321,10 @@ def test_override_naming_another_vrf_inherits_nothing():
 
 
 def test_override_refining_the_policy_vrf_keeps_the_rest():
-    """An override naming the same VRF refines it field by field."""
-    assert _merged_vrf(VrfParameters.model_validate({"name": "vrf-a", "rd": "65000:2"})) == POLICY_VRF.model_copy(
-        update={"rd": "65000:2"}
+    """An override naming the same VRF, with its rd and tenant, refines it field by field."""
+    assert _merged_vrf(VrfParameters(name="vrf-a", description="x")) == POLICY_VRF.model_copy(update={"description": "x"})
+    assert _merged_vrf(VrfParameters(name="vrf-a", rd="65000:1", comments="c")) == POLICY_VRF.model_copy(
+        update={"comments": "c"}
     )
     refined = merge_override_defaults(
         Defaults(ipaddress=IpamParameters(vrf=POLICY_VRF)),
@@ -332,11 +333,18 @@ def test_override_refining_the_policy_vrf_keeps_the_rest():
     assert refined.ipaddress.vrf.tenant == ACME.model_copy(update={"description": "x"})
 
 
-def test_override_naming_another_vrf_tenant_inherits_nothing_from_it():
-    """A different tenant must not take the policy VRF tenant's group or description."""
-    merged = _merged_vrf(VrfParameters(name="vrf-a", tenant=TenantParameters(name="globex")))
-    assert merged.tenant == TenantParameters(name="globex")
-    assert merged.rd == "65000:1"
+def test_override_changing_the_vrf_identity_inherits_nothing():
+    """
+    With the same name but another rd or tenant, the override is another VRF.
+
+    Diode finds a VRF with an rd by its rd alone, and one without by its name
+    and tenant, so inheriting either would match, and rewrite, the policy's VRF.
+    """
+    globex = TenantParameters(name="globex")
+    assert _merged_vrf(VrfParameters(name="vrf-a", tenant=globex)) == VrfParameters(name="vrf-a", tenant=globex)
+    assert _merged_vrf(VrfParameters(name="vrf-a", rd="65000:2")) == VrfParameters(name="vrf-a", rd="65000:2")
+    partners = ACME.model_copy(update={"group": "partners", "description": None, "comments": None, "tags": None})
+    assert _merged_vrf(VrfParameters(name="vrf-a", tenant=partners)) == VrfParameters(name="vrf-a", tenant=partners)
 
 
 def test_vrf_tenant_with_mixed_key_types_is_refused_cleanly():
@@ -355,9 +363,18 @@ def test_override_string_naming_the_policy_vrf_keeps_it():
     ), "a padded map name refines too"
 
 
-def test_override_with_an_empty_tenant_keeps_the_policy_tenant():
+def test_override_with_an_empty_name_keeps_the_policy_tenant():
     """An empty name names nothing, so it neither replaces nor clears the policy's tenant."""
     assert merge_override_defaults(Defaults(tenant=ACME), Defaults(tenant="")).tenant == ACME
+    assert merge_override_defaults(Defaults(tenant="acme"), Defaults(tenant="")).tenant == "acme"
+    refined = merge_override_defaults(Defaults(tenant=ACME), Defaults.model_validate({"tenant": {"name": "", "description": "x"}}))
+    assert refined.tenant == ACME.model_copy(update={"description": "x"})
+
+
+def test_override_naming_the_same_tenant_in_another_group_inherits_nothing():
+    """NetBox can hold acme in two groups; one must not take the other's description."""
+    merged = merge_override_defaults(Defaults(tenant=ACME), Defaults(tenant=TenantParameters(name="acme", group="partners")))
+    assert merged.tenant == TenantParameters(name="acme", group="partners")
 
 
 def test_override_naming_another_tenant_replaces_every_tenant_default():
@@ -411,4 +428,31 @@ def test_override_merges_per_family_and_prefix_vrfs_alike():
         ),
     )
     assert merged.ipaddress.vrf_ipv4 == VrfParameters(name="vrf-b")
-    assert merged.prefix.vrf_ipv6 == POLICY_VRF.model_copy(update={"tenant": TenantParameters(name="globex")})
+    assert merged.prefix.vrf_ipv6 == VrfParameters(name="vrf-a", tenant=TenantParameters(name="globex"))
+
+
+def test_override_adding_an_rd_or_group_refines():
+    """A field the policy left unset is a refinement, not another VRF or tenant."""
+    no_rd = POLICY_VRF.model_copy(update={"rd": None})
+    merged = merge_override_defaults(
+        Defaults(ipaddress=IpamParameters(vrf=no_rd)),
+        Defaults(ipaddress=IpamParameters(vrf=VrfParameters(name="vrf-a", rd="65000:9"))),
+    )
+    assert merged.ipaddress.vrf == no_rd.model_copy(update={"rd": "65000:9"})
+
+    ungrouped = ACME.model_copy(update={"group": None})
+    merged = merge_override_defaults(Defaults(tenant=ungrouped), Defaults(tenant=TenantParameters(name="acme", group="partners")))
+    assert merged.tenant == ungrouped.model_copy(update={"group": "partners"})
+
+
+def test_override_with_a_padded_rd_is_the_same_vrf():
+    """Route distinguishers compare trimmed, as Diode compares them."""
+    merged = _merged_vrf(VrfParameters(name="vrf-a", rd="65000:1 ", comments="c"))
+    assert merged.tenant == ACME
+    assert merged.comments == "c"
+
+
+def test_override_with_a_blank_name_in_another_group_keeps_the_name():
+    """A blank name names nothing, so the policy's tenant name carries over to the other group."""
+    merged = merge_override_defaults(Defaults(tenant=ACME), Defaults.model_validate({"tenant": {"name": "", "group": "partners"}}))
+    assert merged.tenant == TenantParameters(name="acme", group="partners")

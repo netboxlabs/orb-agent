@@ -444,19 +444,56 @@ def _named(value: object) -> str:
     return ""
 
 
-def _merge_named(base: object, override: object, merged: object) -> object:
+def _field(value: object, key: str) -> str:
+    """Return a trimmed text field of a default in map form, or an empty one."""
+    return (value.get(key) or "").strip() if isinstance(value, dict) else ""
+
+
+def _differ(a: str, b: str) -> bool:
+    """Report whether two trimmed values are both set and differ."""
+    return bool(a) and bool(b) and a != b
+
+
+def _other_tenant(base: object, override: object) -> bool:
+    """Report whether override names another tenant: another name, or another group."""
+    return _differ(_named(base), _named(override)) or _differ(_field(base, "group"), _field(override, "group"))
+
+
+def _other_vrf(base: object, override: object) -> bool:
+    """
+    Report whether override names another VRF.
+
+    Diode finds a VRF with an rd by the rd alone and one without by its name
+    and tenant, so another name, rd or tenant is another VRF.
+    """
+    base_tenant = base.get("tenant") if isinstance(base, dict) else None
+    override_tenant = override.get("tenant") if isinstance(override, dict) else None
+    return (
+        _differ(_named(base), _named(override))
+        or _differ(_field(base, "rd"), _field(override, "rd"))
+        or _other_tenant(base_tenant, override_tenant)
+    )
+
+
+def _merge_named(base: object, override: object, merged: object, other) -> object:
     """
     Resolve one named default, a VRF or a tenant, after the deep merge.
 
-    An override naming something else replaces the base whole, so it takes no
-    rd, tenant or group from it. One naming the same thing refines it, and a
-    bare name equal to the base's adds nothing to it.
+    An override that ``other`` says names something else replaces the base
+    whole, so it takes no rd, tenant, group or other field from it, keeping
+    only the base's name when it gives none. One naming the same thing refines
+    it, and a bare name equal to the base's, or a blank one, leaves it as is.
     """
-    override_name = _named(override)
-    if override_name and override_name != _named(base):
+    if other(base, override):
+        if isinstance(override, dict) and not _named(override) and _named(base):
+            return {**override, "name": _named(base)}
         return override
-    if isinstance(override, str) and isinstance(base, dict):
-        return base
+    if isinstance(override, str):
+        if base is not None and (isinstance(base, dict) or not _named(override)):
+            return base
+        return merged
+    if isinstance(merged, dict) and not _named(override) and _named(base):
+        return {**merged, "name": _named(base)}
     return merged
 
 
@@ -468,7 +505,8 @@ def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
     ``vlan.group`` is replaced as a whole so a scope set on the policy cannot
     leak into a group the override named without one, and a tenant or VRF the
     override names differently is replaced as a whole so it takes no group, rd
-    or tenant from the policy's. Naming the same tenant or VRF refines it.
+    or tenant from the policy's: another name or group is another tenant, and
+    another name, rd or tenant another VRF. Naming the same one refines it.
     """
     base_dump = base.model_dump()
     override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
@@ -477,24 +515,25 @@ def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
     if override_group is not None:
         merged["vlan"]["group"] = override_group
     if "tenant" in override_dump:
-        merged["tenant"] = _merge_named(base_dump["tenant"], override_dump["tenant"], merged["tenant"])
+        merged["tenant"] = _merge_named(base_dump["tenant"], override_dump["tenant"], merged["tenant"], _other_tenant)
     for block in ("ipaddress", "prefix", "vlan"):
         override_block = override_dump.get(block) or {}
         base_block = base_dump.get(block) or {}
         if "tenant" in override_block:
             merged[block]["tenant"] = _merge_named(
-                base_block.get("tenant"), override_block["tenant"], merged[block]["tenant"]
+                base_block.get("tenant"), override_block["tenant"], merged[block]["tenant"], _other_tenant
             )
         for knob in _VRF_KNOBS if block != "vlan" else ():
             if knob not in override_block:
                 continue
             base_vrf, override_vrf = base_block.get(knob), override_block[knob]
-            vrf = _merge_named(base_vrf, override_vrf, merged[block][knob])
+            vrf = _merge_named(base_vrf, override_vrf, merged[block][knob], _other_vrf)
             if vrf is merged[block][knob] and isinstance(vrf, dict) and isinstance(override_vrf, dict) and "tenant" in override_vrf:
                 vrf["tenant"] = _merge_named(
                     (base_vrf or {}).get("tenant") if isinstance(base_vrf, dict) else None,
                     override_vrf["tenant"],
                     vrf["tenant"],
+                    _other_tenant,
                 )
             merged[block][knob] = vrf
     return Defaults.model_validate(merged)
