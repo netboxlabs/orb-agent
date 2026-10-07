@@ -534,3 +534,13 @@ def test_policy_accepts_a_blank_vrf_tenant_every_target_names():
     )
     merged = merge_override_defaults(policy.config.defaults, policy.scope[0].override_defaults)
     assert merged.ipaddress.vrf.tenant == TenantParameters(name="acme", group="customers")
+
+
+def test_a_fallback_vrf_both_families_override_is_not_checked():
+    """With vrf_ipv4 and vrf_ipv6 both set, vrf is never sent, so its tenant cannot clash."""
+    clash = VrfParameters(name="unused", tenant=ACME.model_copy(update={"description": "x"}))
+    check_vrf_tenants(
+        Defaults(ipaddress=IpamParameters(tenant=ACME, vrf=clash, vrf_ipv4="four", vrf_ipv6="six"))
+    )
+    with pytest.raises(ValueError, match="write it differently"):
+        check_vrf_tenants(Defaults(ipaddress=IpamParameters(tenant=ACME, vrf=clash, vrf_ipv4="four")))

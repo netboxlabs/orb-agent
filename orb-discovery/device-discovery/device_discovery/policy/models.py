@@ -384,9 +384,11 @@ def _tenant_copies(defaults: Defaults) -> list[tuple[str, Any, bool]]:
         if params is None:
             continue
         copies.append((f"defaults.{block}.tenant", params.tenant, False))
+        # vrf is only a fallback: with both per-family knobs set it is never sent.
+        shadowed = block != "vlan" and params.vrf_ipv4 is not None and params.vrf_ipv6 is not None
         for knob in _VRF_KNOBS if block != "vlan" else ():
             vrf = getattr(params, knob)
-            if isinstance(vrf, VrfParameters):
+            if isinstance(vrf, VrfParameters) and not (knob == "vrf" and shadowed):
                 copies.append((f"defaults.{block}.{knob}.tenant", vrf.tenant, True))
     return [copy for copy in copies if copy[1] is not None]
 
