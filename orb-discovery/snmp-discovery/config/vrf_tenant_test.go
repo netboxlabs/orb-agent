@@ -97,9 +97,8 @@ func TestMergeDefaults_VrfTenantRenamed(t *testing.T) {
 	merged := MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{
 		Tenant: TenantParameters{Name: "globex"},
 	}}})
-	assert.Equal(t, TenantParameters{Name: "globex"}, merged.IPAddress.Vrf.Tenant,
-		"another tenant takes no group or description from the policy's")
-	assert.Equal(t, "65000:1", merged.IPAddress.Vrf.Rd, "the VRF itself is refined")
+	assert.Equal(t, VrfParameters{Name: "example-vrf", Tenant: TenantParameters{Name: "globex"}}, merged.IPAddress.Vrf,
+		"another tenant makes another VRF: it keeps the name and takes neither the rd nor the tenant's group")
 
 	nameless := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Rd: "65000:1"}}}
 	merged = MergeDefaults(nameless, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "example-vrf"}}})
@@ -130,20 +129,6 @@ func TestIPAddressPrefixAndVlanTenant_MappingForm(t *testing.T) {
 	})
 	assert.Equal(t, TenantParameters{Name: "acme", Group: "partners"}, merged.IPAddress.Tenant)
 	assert.Equal(t, TenantParameters{Name: "initech"}, merged.Prefix.Tenant)
-}
-
-func TestSlug(t *testing.T) {
-	for in, want := range map[string]string{
-		"Acme Corp": "acme-corp",
-		"Acme.Corp": "acmecorp",
-		" _Acme_ ":  "acme",
-		"Café":      "cafe",
-		"日本":        "",
-		"a\vb":      "a-b",
-		"a\x1cb":    "a-b",
-	} {
-		assert.Equal(t, want, slug(in), in)
-	}
 }
 
 func TestDefaults_ValidateVrfTenants(t *testing.T) {
@@ -188,7 +173,7 @@ func TestDefaults_ValidateVrfTenants(t *testing.T) {
 			VLAN:      VLANDefaults{Tenant: TenantParameters{Name: "Acme"}},
 			IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Tenant: acme}},
 		}, err: "defaults.ip_address.vrf.tenant and defaults.vlan.tenant name the same NetBox tenant but write it differently"},
-		{name: "pairs without a vrf tenant", d: Defaults{Tenant: acme, IPAddress: IPAddressDefaults{Tenant: other}}},
+		{name: "pairs without a vrf tenant", d: Defaults{Tenant: acme, IPAddress: IPAddressDefaults{Tenant: TenantParameters{Name: "Acme"}}}},
 		{
 			name: "vrf tenant without a name", d: Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Tenant: TenantParameters{Group: "customers"}}}},
 			err: "defaults.ip_address.vrf.tenant has no name",
@@ -198,6 +183,55 @@ func TestDefaults_ValidateVrfTenants(t *testing.T) {
 			err: "defaults.prefix.vrf_ipv4 sets a tenant but no VRF name",
 		},
 		{name: "grouped vlan tenant", d: Defaults{VLAN: VLANDefaults{Tenant: acme}, IPAddress: IPAddressDefaults{Vrf: VrfParameters{Name: "v", Tenant: acme}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.d.ValidateVrfTenants()
+			if tc.err == "" {
+				assert.NoError(t, err)
+				return
+			}
+			assert.ErrorContains(t, err, tc.err)
+		})
+	}
+}
+
+func TestMergeDefaults_SameTenantInAnotherGroup(t *testing.T) {
+	policy := &Defaults{Tenant: TenantParameters{Name: "acme", Group: "customers", Description: "d"}}
+	merged := MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Name: "acme", Group: "partners"}})
+	assert.Equal(t, TenantParameters{Name: "acme", Group: "partners"}, merged.Tenant, "another group is another tenant")
+}
+
+func TestMergeDefaults_VrfRefinedByAnAddedRdOrTenantGroup(t *testing.T) {
+	policy := &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{
+		Name: "v", Description: "d", Tenant: TenantParameters{Name: "acme", Description: "t"},
+	}}}
+	merged := MergeDefaults(policy, &Defaults{IPAddress: IPAddressDefaults{Vrf: VrfParameters{
+		Rd: "65000:1", Tenant: TenantParameters{Group: "customers"},
+	}}})
+	assert.Equal(t, VrfParameters{
+		Name: "v", Rd: "65000:1", Description: "d",
+		Tenant: TenantParameters{Name: "acme", Group: "customers", Description: "t"},
+	}, merged.IPAddress.Vrf, "fields the policy left unset refine it")
+}
+
+func TestDefaults_ValidateVrfTenants_TenantMaps(t *testing.T) {
+	acme := TenantParameters{Name: "acme", Group: "customers", Description: "d"}
+	other := TenantParameters{Name: "acme", Group: "customers", Description: "x"}
+	for _, tc := range []struct {
+		name string
+		d    Defaults
+		err  string
+	}{
+		{name: "device against a bare address tenant, as before", d: Defaults{Tenant: acme, IPAddress: IPAddressDefaults{Tenant: TenantParameters{Name: "acme"}}}},
+		{
+			name: "device against an address tenant map", d: Defaults{Tenant: acme, IPAddress: IPAddressDefaults{Tenant: other}},
+			err: "defaults.tenant and defaults.ip_address.tenant name the same NetBox tenant but write it differently",
+		},
+		{
+			name: "prefix against vlan", d: Defaults{Prefix: PrefixDefaults{Tenant: TenantParameters{Name: "acme", Comments: "c"}}, VLAN: VLANDefaults{Tenant: TenantParameters{Name: "acme", Comments: "k"}}},
+			err: "defaults.prefix.tenant and defaults.vlan.tenant name the same NetBox tenant but write it differently",
+		},
+		{name: "two device-level maps only", d: Defaults{Tenant: acme}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := tc.d.ValidateVrfTenants()

@@ -54,9 +54,11 @@ func tenantConflict(a, b TenantParameters) string {
 	nameA, nameB := trim(a.Name), trim(b.Name)
 	groupA, groupB := trim(a.Group), trim(b.Group)
 	switch {
+	case nameA == "" || nameB == "":
+		return ""
 	case groupA != groupB && sameName(groupA, groupB):
 		return "group"
-	case nameA == "" || nameB == "" || !sameName(nameA, nameB):
+	case !sameName(nameA, nameB):
 		return ""
 	case nameA != nameB || groupA != groupB,
 		differ(a.Description, b.Description), differ(a.Comments, b.Comments),
@@ -87,24 +89,29 @@ func trimmed(values []string) []string {
 // merges the copies that resolve to one tenant within an entity and refuses
 // the entity when they disagree, and across entities rewrites the tenant on
 // every run. Pairs without a VRF tenant are left as they were before VRF
-// tenants existed. Run it on the defaults a target actually uses.
+// tenants existed, unless an address, prefix or VLAN tenant is written as more
+// than a bare name, which only their new map form allows. Run it on the
+// defaults a target actually uses.
 func (d *Defaults) ValidateVrfTenants() error {
 	type tenantAt struct {
 		path   string
 		tenant TenantParameters
 		vrf    *VrfParameters
+		// mapped marks a default that took the map form with VRF tenants;
+		// written as more than a bare name it can disagree with others.
+		mapped bool
 	}
 	copies := []tenantAt{
-		{"defaults.tenant", d.Tenant, nil},
-		{"defaults.ip_address.tenant", d.IPAddress.Tenant, nil},
-		{"defaults.ip_address.vrf.tenant", d.IPAddress.Vrf.Tenant, &d.IPAddress.Vrf},
-		{"defaults.ip_address.vrf_ipv4.tenant", d.IPAddress.VrfIpv4.Tenant, &d.IPAddress.VrfIpv4},
-		{"defaults.ip_address.vrf_ipv6.tenant", d.IPAddress.VrfIpv6.Tenant, &d.IPAddress.VrfIpv6},
-		{"defaults.prefix.tenant", d.Prefix.Tenant, nil},
-		{"defaults.prefix.vrf.tenant", d.Prefix.Vrf.Tenant, &d.Prefix.Vrf},
-		{"defaults.prefix.vrf_ipv4.tenant", d.Prefix.VrfIpv4.Tenant, &d.Prefix.VrfIpv4},
-		{"defaults.prefix.vrf_ipv6.tenant", d.Prefix.VrfIpv6.Tenant, &d.Prefix.VrfIpv6},
-		{"defaults.vlan.tenant", d.VLAN.Tenant, nil},
+		{"defaults.tenant", d.Tenant, nil, false},
+		{"defaults.ip_address.tenant", d.IPAddress.Tenant, nil, true},
+		{"defaults.ip_address.vrf.tenant", d.IPAddress.Vrf.Tenant, &d.IPAddress.Vrf, false},
+		{"defaults.ip_address.vrf_ipv4.tenant", d.IPAddress.VrfIpv4.Tenant, &d.IPAddress.VrfIpv4, false},
+		{"defaults.ip_address.vrf_ipv6.tenant", d.IPAddress.VrfIpv6.Tenant, &d.IPAddress.VrfIpv6, false},
+		{"defaults.prefix.tenant", d.Prefix.Tenant, nil, true},
+		{"defaults.prefix.vrf.tenant", d.Prefix.Vrf.Tenant, &d.Prefix.Vrf, false},
+		{"defaults.prefix.vrf_ipv4.tenant", d.Prefix.VrfIpv4.Tenant, &d.Prefix.VrfIpv4, false},
+		{"defaults.prefix.vrf_ipv6.tenant", d.Prefix.VrfIpv6.Tenant, &d.Prefix.VrfIpv6, false},
+		{"defaults.vlan.tenant", d.VLAN.Tenant, nil, true},
 	}
 	for _, c := range copies {
 		if c.vrf == nil || c.tenant.isZero() {
@@ -120,7 +127,8 @@ func (d *Defaults) ValidateVrfTenants() error {
 	}
 	for i, first := range copies {
 		for _, second := range copies[i+1:] {
-			if first.vrf == nil && second.vrf == nil {
+			compared := func(c tenantAt) bool { return c.vrf != nil || c.mapped && c.tenant.rich() }
+			if !compared(first) && !compared(second) {
 				continue
 			}
 			switch tenantConflict(first.tenant, second.tenant) {

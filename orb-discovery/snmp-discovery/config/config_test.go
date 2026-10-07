@@ -144,16 +144,27 @@ func TestMergeDefaults(t *testing.T) {
 		}
 
 		t.Run("override only Rd", func(t *testing.T) {
+			// Diode finds a VRF with an rd by the rd alone, so another rd is
+			// another VRF: it keeps the policy's name and takes nothing else,
+			// which would otherwise be written onto that VRF.
 			overrideDefaults := &Defaults{
 				IPAddress: IPAddressDefaults{
 					Vrf: VrfParameters{Rd: "65000:200"},
 				},
 			}
 			result := MergeDefaults(policyDefaults, overrideDefaults)
-			assert.Equal(t, "prod", result.IPAddress.Vrf.Name)
-			assert.Equal(t, "65000:200", result.IPAddress.Vrf.Rd) // override won
+			assert.Equal(t, VrfParameters{Name: "prod", Rd: "65000:200"}, result.IPAddress.Vrf)
+		})
+
+		t.Run("override refining the same VRF", func(t *testing.T) {
+			overrideDefaults := &Defaults{
+				IPAddress: IPAddressDefaults{
+					Vrf: VrfParameters{Rd: "65000:100 ", Comments: "override comments"},
+				},
+			}
+			result := MergeDefaults(policyDefaults, overrideDefaults)
 			assert.Equal(t, "Prod VRF", result.IPAddress.Vrf.Description)
-			assert.Equal(t, "policy comments", result.IPAddress.Vrf.Comments)
+			assert.Equal(t, "override comments", result.IPAddress.Vrf.Comments)
 			assert.Equal(t, []string{"policy"}, result.IPAddress.Vrf.Tags)
 		})
 

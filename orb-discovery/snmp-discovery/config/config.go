@@ -146,13 +146,23 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
+// otherTenant reports whether b names another tenant than a: another name or
+// another group, where both give one, compared trimmed as Diode compares them.
+func otherTenant(a, b TenantParameters) bool {
+	return differ(a.Name, b.Name) || differ(a.Group, b.Group)
+}
+
 // refineTenant overlays non-zero override fields onto dst in place, or
-// replaces dst whole when the override names another tenant (names compare
-// trimmed, as Diode compares them): another tenant must not take this one's
-// group or description, which would put it, or match it, in the wrong group.
+// replaces dst whole, keeping its name when the override gives none, when the
+// override names another tenant: that tenant must not take this one's group
+// or description, which would put it, or match it, in the wrong group.
 func refineTenant(dst, override *TenantParameters) {
-	if dst.Name != "" && override.Name != "" && trim(override.Name) != trim(dst.Name) {
+	if otherTenant(*dst, *override) {
+		name := dst.Name
 		*dst = *override
+		if trim(dst.Name) == "" {
+			dst.Name = name
+		}
 		return
 	}
 	if override.Name != "" {
@@ -234,7 +244,12 @@ func (v VrfParameters) IsZero() bool {
 
 // isZero reports whether no TenantParameters field is set.
 func (t TenantParameters) isZero() bool {
-	return t.Name == "" && t.Group == "" && t.Description == "" && t.Comments == "" && len(t.Tags) == 0
+	return t.Name == "" && !t.rich()
+}
+
+// rich reports whether the tenant is written as more than a bare name.
+func (t TenantParameters) rich() bool {
+	return t.Group != "" || t.Description != "" || t.Comments != "" || len(t.Tags) > 0
 }
 
 // resolveVrfForFamily implements the shared per-AF selection rule: the
@@ -436,11 +451,22 @@ func (d *Defaults) RackFace() string {
 
 // mergeVrfParameters overlays non-zero override fields onto dst in place.
 func mergeVrfParameters(dst, override *VrfParameters) {
-	// A VRF is known by its rd, or its name and tenant, so an override that
-	// names another VRF takes none of them from the policy's: Diode would
-	// match, and rewrite, the policy's VRF instead.
-	if dst.Name != "" && override.Name != "" && trim(override.Name) != trim(dst.Name) {
+	// Diode finds a VRF with an rd by the rd alone and one without by its
+	// name and tenant, so an override with another name, rd or tenant (where
+	// both give one) is another VRF and takes nothing from the policy's but
+	// its name when it gives none: inheriting the rest would match, and
+	// rewrite, the policy's VRF. Its tenant is refined from the policy's.
+	if differ(dst.Name, override.Name) || differ(dst.Rd, override.Rd) || otherTenant(dst.Tenant, override.Tenant) {
+		tenant := dst.Tenant
+		refineTenant(&tenant, &override.Tenant)
+		name := dst.Name
 		*dst = *override
+		if trim(dst.Name) == "" {
+			dst.Name = name
+		}
+		if !override.Tenant.isZero() {
+			dst.Tenant = tenant
+		}
 		return
 	}
 	if override.Name != "" {
