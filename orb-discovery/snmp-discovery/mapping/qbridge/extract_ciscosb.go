@@ -19,9 +19,10 @@ import "sort"
 //	vlanTrunkModeList1to1024 ...   the trunk member VLANs, four bitmaps
 //
 // The MIB leaves vlanPortModeState an undocumented INTEGER. The two values
-// are read from switches whose dot1qVlanCurrentTable agrees with them port by
-// port. Each port keeps both its access and its trunk settings whichever mode
-// it is in, so the mode decides which of them describes it.
+// are the ones the switches report; on one whose dot1qVlanCurrentTable was
+// walked, every forwarding port agrees with them. Each port keeps both its
+// access and its trunk settings whichever mode it is in, so the mode decides
+// which of them describes it.
 
 // CISCOSB vlanPortModeState values.
 const (
@@ -53,6 +54,23 @@ func (r CiscoSBRows) HasData() bool {
 	return len(r.AccessVlan) > 0 || len(r.NativeVlan) > 0 || len(r.PortMode) > 0 || len(r.TrunkLists) > 0
 }
 
+// OtherModes returns the mode values other than access and trunk that ports
+// report, ascending.
+func (r CiscoSBRows) OtherModes() []int {
+	seen := map[int]struct{}{}
+	for _, mode := range r.PortMode {
+		if mode != ciscoSBModeAccess && mode != ciscoSBModeTrunk {
+			seen[mode] = struct{}{}
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for mode := range seen {
+		out = append(out, mode)
+	}
+	sort.Ints(out)
+	return out
+}
+
 // IfIndexes returns every ifIndex the rows mention, ascending, so callers
 // visit ports deterministically.
 func (r CiscoSBRows) IfIndexes() []int {
@@ -80,20 +98,25 @@ func (r CiscoSBRows) IfIndexes() []int {
 // a stale row cannot conjure a port out of nothing.
 //
 // A port the device calls access or trunk is described by that mode's columns
-// alone, replacing what the standard tables gave. Any other port gets only its
-// untagged VLAN corrected.
+// alone, replacing what the standard tables gave. A port in another mode, or on
+// a switch that does not answer the mode column, gets only its untagged VLAN
+// corrected.
 func ApplyCiscoSB(infos map[int]*SwitchportInfo, rows CiscoSBRows) {
 	for _, ifIndex := range rows.IfIndexes() {
 		info, ok := infos[ifIndex]
 		if !ok {
 			continue
 		}
-		switch rows.PortMode[ifIndex] {
-		case ciscoSBModeAccess:
+		mode, stated := rows.PortMode[ifIndex]
+		switch {
+		case mode == ciscoSBModeAccess:
 			// CoerceVid rejects the 0 the column defaults to.
 			applyCiscoSBAccess(info, CoerceVid(rows.AccessVlan[ifIndex]))
-		case ciscoSBModeTrunk:
+		case mode == ciscoSBModeTrunk:
 			applyCiscoSBTrunk(info, rows, ifIndex)
+		case !stated && len(rows.PortMode) > 0:
+			// The switch answers the mode column but this port's row is missing.
+			leaveOut(info)
 		default:
 			correctCiscoSBUntaggedVlan(info, rows, ifIndex)
 		}
@@ -117,16 +140,19 @@ func applyCiscoSBAccess(info *SwitchportInfo, vid *int) {
 // tagged VLANs are the members the device has. Lists naming all of 1-4094 are
 // "allowed vlan all", which makes the port tagged-all.
 func applyCiscoSBTrunk(info *SwitchportInfo, rows CiscoSBRows, ifIndex int) {
+	// A column that was not walked leaves its VLANs unknown, not excluded. A
+	// native row reading 0, the column's default, is a trunk with no native VLAN.
 	lists := rows.TrunkLists[ifIndex]
-	for n := 0; n < 4; n++ {
-		// A VLAN in a list that was not walked is unknown, not excluded.
-		if _, ok := lists[n]; !ok {
-			leaveOut(info)
-			return
-		}
+	nativeRow, complete := rows.NativeVlan[ifIndex]
+	for n := 0; n < 4 && complete; n++ {
+		_, complete = lists[n]
+	}
+	if !complete {
+		leaveOut(info)
+		return
 	}
 	var native *int
-	if vid := CoerceVid(rows.NativeVlan[ifIndex]); vid != nil && listsName(lists, *vid) {
+	if vid := CoerceVid(nativeRow); vid != nil && listsName(lists, *vid) {
 		native = vid
 	}
 	var tagged []int
@@ -162,8 +188,9 @@ func leaveOut(info *SwitchportInfo) {
 	info.OperMode = OperUnknown
 }
 
-// correctCiscoSBUntaggedVlan corrects the untagged VLAN of a port whose mode is
-// not known, from the access column and failing that the native column.
+// correctCiscoSBUntaggedVlan corrects the untagged VLAN of a port in a mode
+// other than access or trunk, or on a switch that does not answer the mode
+// column, from the access column and failing that the native column.
 //
 // The tagged VLAN set is left untouched, and so is the mode of any port that
 // already has one: without the mode these columns say only which VLAN a port
@@ -208,7 +235,7 @@ func correctCiscoSBUntaggedVlan(info *SwitchportInfo, rows CiscoSBRows, ifIndex 
 	info.AccessVlan = native
 	info.NativeVlan = native
 
-	// Without a mode row the access column is the best evidence there is,
+	// Without a usable mode the access column is the best evidence there is,
 	// so it can supply the mode where nothing else could — which is
 	// every one of these switches whose generic rows give no membership
 	// masks and no VLAN catalog, leaving the default PVID refused upstream.

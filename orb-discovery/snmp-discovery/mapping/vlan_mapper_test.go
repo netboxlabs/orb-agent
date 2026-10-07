@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"os"
@@ -736,6 +737,29 @@ func buildCiscoSBModeFixture() ObjectIDValueMap {
 		put(".1.3.6.1.2.1.17.7.1.4.3.1.4."+vid, string(make([]byte, 126)), OctetString)
 	}
 	return out
+}
+
+// A port in a mode other than access or trunk is logged once per target, so
+// the first such switch shows up.
+func TestVlanMapper_PostMap_CiscoSB_LogsOtherModes(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 2, "gi2")
+	rows := buildCiscoSBFixture(2, 30)
+	rows[".1.3.6.1.4.1.9.6.1.101.48.22.1.1.2"] = Value{Value: "10", Type: Integer}
+	var buf bytes.Buffer
+	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{})
+	assert.Contains(t, buf.String(), "modes=[10]")
+
+	buf.Reset()
+	rows[".1.3.6.1.4.1.9.6.1.101.48.22.1.1.2"] = Value{Value: "11", Type: Integer}
+	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{})
+	assert.NotContains(t, buf.String(), "modes=")
+}
+
+func TestHasVLANSignal_CountsTheCiscoSBModeAndLists(t *testing.T) {
+	assert.True(t, hasVLANSignal(ObjectIDValueMap{oidCiscoSBPortMode + "1": {Value: "12"}}))
+	assert.True(t, hasVLANSignal(ObjectIDValueMap{oidCiscoSBTrunkLists + "2.1": {Value: "\x80"}}))
 }
 
 func vids(vlans []*diode.VLAN) []int64 {

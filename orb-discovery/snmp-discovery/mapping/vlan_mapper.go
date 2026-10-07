@@ -161,6 +161,11 @@ func (m *VlanMapper) PostMap(
 	// The two overlays never both answer in practice, since a device populates
 	// either the IOS vmMembership table or the CISCOSB one.
 	if ciscosb := m.buildCiscoSBRows(allObjectIDs); ciscosb.HasData() {
+		ciscosb.Vlans = deviceVlanVids(allObjectIDs)
+		if modes := ciscosb.OtherModes(); len(modes) > 0 {
+			m.logger.Info("vlan: CISCOSB ports in a mode other than access or trunk get only their untagged VLAN corrected",
+				"modes", modes)
+		}
 		qbridge.ApplyCiscoSB(infos, ciscosb)
 	}
 
@@ -783,7 +788,6 @@ func (m *VlanMapper) buildCiscoSBRows(all ObjectIDValueMap) qbridge.CiscoSBRows 
 		NativeVlan: map[int]int{},
 		PortMode:   map[int]int{},
 		TrunkLists: map[int]map[int][]byte{},
-		Vlans:      deviceVlanVids(all),
 	}
 	for oid, v := range all {
 		switch {
@@ -1225,8 +1229,9 @@ func hasVLANSignal(all ObjectIDValueMap) bool {
 		oidDot1qPvid,
 		oidCiscoVMVlan,
 		oidCiscoVMVoiceVlanID,
+		oidCiscoSBPortMode,
 		oidCiscoSBAccessVlan,
-		oidCiscoSBTrunkNativeVlan,
+		oidCiscoSBTrunkLists, // the whole trunk table, native column included
 	}
 	for oid := range all {
 		for _, p := range prefixes {

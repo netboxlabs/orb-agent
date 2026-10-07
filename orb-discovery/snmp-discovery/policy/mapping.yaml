@@ -377,7 +377,7 @@ entries:
         entity: "interface_vlan"
         field: "ciscoSBPortModeState"
 
-  # The four member lists are 128-octet VLAN bitmaps per port.
+  # The four member lists are VLAN bitmaps of up to 128 octets per port.
   - oid: ".1.3.6.1.4.1.9.6.1.101.48.61.1"
     entity: "interface_vlan"
     field: "_id"

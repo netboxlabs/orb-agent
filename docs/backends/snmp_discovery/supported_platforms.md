@@ -132,12 +132,14 @@ When a switchport has both Q-BRIDGE membership and the Cisco overlay rows, the o
 
 The CISCOSB overlay is different in kind from the Cisco one: on those switches the generic sources are not merely absent but actively wrong. `dot1qPvid` answers 1 for every port whatever the port is configured for, and the per-VLAN egress/untagged masks come back empty, so Q-BRIDGE alone reports the whole switch as access VLAN 1. Where these private columns are present they therefore take precedence.
 
-The overlay reads each port's mode from `vlanPortModeState`: 11 for an access port, 12 for a trunk. The MIB leaves the values undocumented; these are the ones the switches report, and their `dot1qVlanCurrentTable` agrees with them port by port. A port keeps both its access and its trunk settings whichever mode it is in, so the mode decides which of them describes it:
+The overlay reads each port's mode from `vlanPortModeState`: 11 for an access port, 12 for a trunk. The MIB leaves the values undocumented. These are the values the switches report, and on one whose `dot1qVlanCurrentTable` was walked, every forwarding port agrees with them. A port keeps both its access and its trunk settings whichever mode it is in, so the mode decides which of them describes it:
 
 - An access port carries its access VLAN untagged.
 - A trunk carries its member VLANs tagged and its native VLAN untagged, the native VLAN only when it is one of the members. Only VLANs the device reports in its VLAN table are tagged, since the member lists can name VLANs that were never created. A trunk allowing all of 1-4094 (`allowed vlan all`) is reported as `tagged-all`.
-- An access port or trunk whose columns for that mode were not returned is left out, so NetBox keeps what it holds rather than receiving what the standard tables say.
-- A port with no mode row, or with another mode value, only has its untagged VLAN corrected, from the access VLAN or failing that the trunk native VLAN, and gets access mode if it had none.
+- An access port or trunk whose rows for that mode were not returned is left out, so NetBox keeps what it holds rather than receiving what the standard tables say. So is a port with no mode row on a switch that answers the mode column for its other ports.
+- A port with another mode value, or on a switch that does not answer the mode column at all, only has its untagged VLAN corrected, from the access VLAN or failing that the trunk native VLAN, and gets access mode if it had none. The agent logs the other values it sees once per poll.
+
+Diode applies partial updates and cannot clear a field. A trunk with no untagged VLAN therefore keeps any untagged VLAN NetBox already holds, such as one an earlier version wrote when it read the port as access, and a trunk with no tagged VLAN keeps any tagged VLANs it had. Remove those by hand.
 
 **Where the two tables disagree, the configured one wins.** `dot1qVlanCurrentTable` reports what is forwarding now; `dot1qVlanStaticTable` and `dot1qPvid` are configuration, which is what NetBox is meant to hold. So a port missing from a current-table untagged mask does not lose the VLAN its PVID names, and a port named by one does not move off it. That second rule needs a PVID worth trusting. No PVID is, where the device configures the VLAN it names and leaves this port out of it. The MIB's default of 1 has to clear a second bar as well: some other port on the device must report a VLAN that was set, so the column is known to be maintained at all. Failing either, the mask stands instead.
 

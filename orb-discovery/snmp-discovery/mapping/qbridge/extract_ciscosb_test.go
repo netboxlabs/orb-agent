@@ -397,6 +397,7 @@ func TestApplyCiscoSB_EveryVlanIsJudgedOverOneTo4094(t *testing.T) {
 			infos := map[int]*SwitchportInfo{1: genericAccess(1)}
 			ApplyCiscoSB(infos, CiscoSBRows{
 				PortMode:   map[int]int{1: 12},
+				NativeVlan: map[int]int{1: 0},
 				TrunkLists: map[int]map[int][]byte{1: tc.lists},
 				Vlans:      catalog(10),
 			})
@@ -414,6 +415,7 @@ func TestApplyCiscoSB_ReadsEachMemberListAtItsOwnOffset(t *testing.T) {
 	infos := map[int]*SwitchportInfo{1: genericAccess(1)}
 	ApplyCiscoSB(infos, CiscoSBRows{
 		PortMode:   map[int]int{1: 12},
+		NativeVlan: map[int]int{1: 0},
 		TrunkLists: map[int]map[int][]byte{1: trunkLists(vids...)},
 		Vlans:      catalog(vids...),
 	})
@@ -429,6 +431,7 @@ func TestApplyCiscoSB_ShortMemberListEndsWhereItEnds(t *testing.T) {
 	infos := map[int]*SwitchportInfo{1: genericAccess(1)}
 	ApplyCiscoSB(infos, CiscoSBRows{
 		PortMode:   map[int]int{1: 12},
+		NativeVlan: map[int]int{1: 0},
 		TrunkLists: map[int]map[int][]byte{1: lists},
 		Vlans:      catalog(10, 900),
 	})
@@ -509,6 +512,11 @@ func TestApplyCiscoSB_StatedModeWithoutItsColumnsIsLeftOut(t *testing.T) {
 		}})
 	}
 	for _, tc := range append(cases, []tcase{
+		{"trunk without a native VLAN row", CiscoSBRows{
+			PortMode:   map[int]int{1: 12},
+			TrunkLists: map[int]map[int][]byte{1: trunkLists(10, 20)},
+			Vlans:      catalog(10, 20),
+		}},
 		{"access without an access VLAN", CiscoSBRows{
 			PortMode:   map[int]int{1: 11},
 			NativeVlan: map[int]int{1: 20},
@@ -542,6 +550,7 @@ func TestApplyCiscoSB_StatedModeOverridesTheRoutedInference(t *testing.T) {
 		{"access", CiscoSBRows{PortMode: map[int]int{7: 11}, AccessVlan: map[int]int{7: 42}}, ModeAccess},
 		{"trunk", CiscoSBRows{
 			PortMode:   map[int]int{7: 12},
+			NativeVlan: map[int]int{7: 0},
 			TrunkLists: map[int]map[int][]byte{7: trunkLists(42)},
 			Vlans:      catalog(42),
 		}, ModeTrunk},
@@ -605,5 +614,65 @@ func TestApplyCiscoSB_StatedModeIgnoresUnknownIfIndex(t *testing.T) {
 	})
 	if len(infos) != 1 {
 		t.Fatalf("got %d infos want 1", len(infos))
+	}
+	if !reflect.DeepEqual(infos[1], genericAccess(1)) {
+		t.Fatalf("port 1 changed: %+v", infos[1])
+	}
+}
+
+// A native row reading 0, the column's default, says the trunk has no native
+// VLAN; that is not a missing row.
+func TestApplyCiscoSB_TrunkWithNativeZeroHasNoUntaggedVlan(t *testing.T) {
+	infos := map[int]*SwitchportInfo{1: genericAccess(1)}
+	ApplyCiscoSB(infos, CiscoSBRows{
+		PortMode:   map[int]int{1: 12},
+		NativeVlan: map[int]int{1: 0},
+		TrunkLists: map[int]map[int][]byte{1: trunkLists(10, 20)},
+		Vlans:      catalog(10, 20),
+	})
+	got := Classify(*infos[1])
+	if got.Mode != ModeTrunk || got.Untagged != nil || !reflect.DeepEqual(got.Tagged, []int{10, 20}) {
+		t.Fatalf("got %+v want trunk, no untagged, tagged [10 20]", got)
+	}
+}
+
+// Without a VLAN catalog no member can be confirmed, so the trunk carries its
+// native VLAN and no tagged VLANs.
+func TestApplyCiscoSB_TrunkWithoutACatalogTagsNothing(t *testing.T) {
+	infos := map[int]*SwitchportInfo{1: genericAccess(1)}
+	ApplyCiscoSB(infos, CiscoSBRows{
+		PortMode:   map[int]int{1: 12},
+		NativeVlan: map[int]int{1: 20},
+		TrunkLists: map[int]map[int][]byte{1: trunkLists(10, 20)},
+	})
+	got := Classify(*infos[1])
+	if got.Mode != ModeTrunk || got.Untagged == nil || *got.Untagged != 20 || len(got.Tagged) != 0 {
+		t.Fatalf("got %+v want trunk, untagged 20, nothing tagged", got)
+	}
+}
+
+// A switch that answers the mode column for its other ports has lost this
+// port's row, so the port is left out rather than guessed at.
+func TestApplyCiscoSB_PortMissingFromAnsweredModeColumnIsLeftOut(t *testing.T) {
+	infos := map[int]*SwitchportInfo{1: genericAccess(1), 2: genericAccess(1)}
+	ApplyCiscoSB(infos, CiscoSBRows{
+		PortMode:   map[int]int{2: 11},
+		AccessVlan: map[int]int{1: 30, 2: 40},
+	})
+	if got := Classify(*infos[1]); got.Mode != ModeUnknown {
+		t.Fatalf("port 1: got mode=%v want unknown", got.Mode)
+	}
+	if got := Classify(*infos[2]); got.Mode != ModeAccess || got.Untagged == nil || *got.Untagged != 40 {
+		t.Fatalf("port 2: got mode=%v untagged=%v want access/40", got.Mode, deref(got.Untagged))
+	}
+}
+
+func TestCiscoSBRows_OtherModes(t *testing.T) {
+	rows := CiscoSBRows{PortMode: map[int]int{1: 11, 2: 12, 3: 10, 4: 10, 5: 15, 6: 1, 7: 20, 8: 13}}
+	if got := rows.OtherModes(); !reflect.DeepEqual(got, []int{1, 10, 13, 15, 20}) {
+		t.Fatalf("got %v want [1 10 13 15 20]", got)
+	}
+	if got := (CiscoSBRows{PortMode: map[int]int{1: 11, 2: 12}}).OtherModes(); len(got) != 0 {
+		t.Fatalf("got %v want none", got)
 	}
 }
