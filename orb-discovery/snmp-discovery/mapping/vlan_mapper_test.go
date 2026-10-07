@@ -235,7 +235,9 @@ func TestVlanMapper_PostMap_AutoStubsForUnnamedAccessVlan(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, stub, "expected a *diode.VLAN stub for VID 525 in emitted entities, got none")
+	if stub == nil {
+		t.Fatal("expected a *diode.VLAN stub for VID 525 in emitted entities, got none")
+	}
 	if stub.Name == nil || *stub.Name != "VLAN525" {
 		t.Errorf("stub Name: got %v, want \"VLAN525\"", stub.Name)
 	}
@@ -332,7 +334,9 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, got, "expected VLAN entity for VID 10, got none")
+	if got == nil {
+		t.Fatal("expected VLAN entity for VID 10, got none")
+	}
 	if got.Description == nil || *got.Description != "auto-discovered" {
 		t.Errorf("Description: got %v, want \"auto-discovered\"", got.Description)
 	}
@@ -388,7 +392,9 @@ func TestVlanMapper_PostMap_DeviceTenantDoesNotCascade(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, got, "expected VLAN entity for VID 10, got none")
+	if got == nil {
+		t.Fatal("expected VLAN entity for VID 10, got none")
+	}
 	if got.Tenant != nil {
 		t.Errorf("Tenant: got %+v, want nil (top-level defaults.tenant must not cascade to VLANs)", got.Tenant)
 	}
