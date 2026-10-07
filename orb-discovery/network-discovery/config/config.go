@@ -186,7 +186,7 @@ func checkVrfTenant(node yaml.Node) error {
 		return err
 	}
 	var name string
-	if n, ok := fields["name"]; !ok || n.Decode(&name) != nil || name == "" {
+	if n, ok := fields["name"]; !ok || n.Decode(&name) != nil || trim(name) == "" {
 		return errors.New("vrf.tenant: mapping requires name")
 	}
 	return nil
@@ -212,6 +212,9 @@ func (d Defaults) Validate() error {
 	rd, vrfRd := trim(d.Rd), trim(d.Vrf.Rd)
 	if rd != "" && vrfRd != "" && rd != vrfRd {
 		return fmt.Errorf("defaults.rd %q conflicts with defaults.vrf.rd %q; set the rd in one place", d.Rd, d.Vrf.Rd)
+	}
+	if t := d.Vrf.Tenant; trim(t.Name) == "" && (t.Name != "" || t.Group != "" || t.Description != "" || t.Comments != "" || len(t.Tags) > 0) {
+		return errors.New("defaults.vrf.tenant has no name; Diode trims it to nothing and refuses the address")
 	}
 	switch tenantConflict(d.Tenant, d.Vrf.Tenant) {
 	case "group":

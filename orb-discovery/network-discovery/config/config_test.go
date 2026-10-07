@@ -162,7 +162,7 @@ func TestVrfParameters_UnmarshalTenantMissingName(t *testing.T) {
 	require.Error(t, err)
 	assert.EqualError(t, err, "vrf.tenant: mapping requires name")
 
-	for _, name := range []string{`""`, "~"} {
+	for _, name := range []string{`""`, "~", `" "`, `"\x1c"`} {
 		err = yaml.Unmarshal([]byte("vrf:\n  name: production\n  tenant:\n    name: "+name+"\n"), &d)
 		assert.EqualError(t, err, "vrf.tenant: mapping requires name", name)
 	}
@@ -245,7 +245,7 @@ func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 		{name: "no vrf tenant", ip: acme},
 		{name: "no ip tenant", vrf: acme},
 		{name: "blank ip tenant name", ip: TenantParameters{Name: " ", Group: "customers"}},
-		{name: "blank vrf tenant name", vrf: TenantParameters{Name: " ", Group: "customers"}},
+		{name: "blank vrf tenant name", vrf: TenantParameters{Name: " ", Group: "customers"}, err: "defaults.vrf.tenant has no name"},
 		{name: "description", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Description = "x" }), err: tenantErr},
 		{name: "comments", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Comments = "x" }), err: tenantErr},
 		{name: "tags", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Tags = []string{"b"} }), err: tenantErr},

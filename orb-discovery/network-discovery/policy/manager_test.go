@@ -236,6 +236,9 @@ func TestManager_ParsePolicies_Vrf(t *testing.T) {
 	_, err = parse("        vrf:\n          tenant: example-tenant\n")
 	assert.ErrorContains(t, err, "vrf: mapping requires name")
 
+	_, err = parse("        vrf:\n          name: example-vrf\n          tenant: \" \"\n")
+	assert.ErrorContains(t, err, "p1 : defaults.vrf.tenant has no name")
+
 	_, err = parse("        vrf:\n          name: example-vrf\n          tennant: example-tenant\n")
 	assert.ErrorContains(t, err, `vrf has no "tennant" key`)
 
