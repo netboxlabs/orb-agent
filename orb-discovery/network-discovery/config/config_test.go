@@ -206,6 +206,8 @@ func TestSlug(t *testing.T) {
 		"a  -- b":   "a-b",
 		"Café":      "cafe",
 		"日本":        "",
+		"a\vb":      "a-b",
+		"a\x1cb":    "a-b",
 	} {
 		assert.Equal(t, want, slug(in), in)
 	}
@@ -239,6 +241,8 @@ func TestDefaults_ValidateTenantWrittenTwice(t *testing.T) {
 		{name: "names without a slug", ip: TenantParameters{Name: "日本", Description: "x"}, vrf: TenantParameters{Name: "中国", Description: "y"}},
 		{name: "no vrf tenant", ip: acme},
 		{name: "no ip tenant", vrf: acme},
+		{name: "blank ip tenant name", ip: TenantParameters{Name: " ", Group: "customers"}},
+		{name: "blank vrf tenant name", vrf: TenantParameters{Name: " ", Group: "customers"}},
 		{name: "description", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Description = "x" }), err: tenantErr},
 		{name: "comments", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Comments = "x" }), err: tenantErr},
 		{name: "tags", ip: acme, vrf: with(func(tp *TenantParameters) { tp.Tags = []string{"b"} }), err: tenantErr},

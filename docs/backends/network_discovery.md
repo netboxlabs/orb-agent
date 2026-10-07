@@ -105,13 +105,13 @@ The `defaults.vrf` field accepts either a bare string (VRF name) or a map:
 | comments | string | VRF comments, written to the VRF on every run |
 | tags | list | VRF tags, added to the VRF's existing tags |
 
-Any other key in the map, or in its tenant map, is refused, so a misspelt `tenant` or `group` cannot leave the VRF without its tenant.
+Any other key in the map, or in its tenant map, is refused, so a misspelt key such as `tenant` or `group` is not silently dropped.
 
 `defaults.tenant` applies to the discovered IP addresses only and does not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
 
 When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
 
-When `defaults.tenant` and `vrf.tenant` name the same tenant, write them identically, for example with the anchor below. Diode trims names and finds a tenant by its slug whatever its group, so names that differ only in case, spacing or punctuation are one tenant to it. If the two copies of that tenant disagree on its name, group, `description`, `comments` or `tags`, Diode refuses every address or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways.
+When `defaults.tenant` and `vrf.tenant` name the same tenant, write them identically, for example with the anchor below. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. If the two copies of that tenant disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses every address or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways.
 
 If an earlier run already created the extra tenant-less VRF, discovered addresses are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the addresses left in the extra VRF, then delete that VRF.
 

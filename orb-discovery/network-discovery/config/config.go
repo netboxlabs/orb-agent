@@ -220,7 +220,8 @@ func (d Defaults) Validate() error {
 			"write it the same way in both places")
 	case "tenant":
 		return errors.New("defaults.tenant and defaults.vrf.tenant name the same NetBox tenant but write it differently; " +
-			"give it the same name, group, description, comments and tags in both places, for example with a YAML anchor")
+			"give it the same name, group, description, comments and tags, in the same order, in both places, " +
+			"for example with a YAML anchor")
 	}
 	return nil
 }

@@ -14,9 +14,10 @@ import (
 // therefore resolve to one NetBox tenant, and written differently the entity
 // is refused or the tenant is rewritten on every run.
 
+// Python's \s also matches \v and \x1c-\x1f, which RE2's does not.
 var (
-	slugDrop     = regexp.MustCompile(`[^\w\s-]`)
-	slugCollapse = regexp.MustCompile(`[-\s]+`)
+	slugDrop     = regexp.MustCompile(`[^\w\t\n\v\f\r\x1c-\x1f -]`)
+	slugCollapse = regexp.MustCompile(`[-\t\n\v\f\r\x1c-\x1f ]+`)
 )
 
 // slug returns Django's slugify of s, which Diode matches tenants by.
@@ -47,7 +48,7 @@ func tenantConflict(a, b TenantParameters) string {
 	switch {
 	case groupA != groupB && sameName(groupA, groupB):
 		return "group"
-	case !sameName(nameA, nameB):
+	case nameA == "" || nameB == "" || !sameName(nameA, nameB):
 		return ""
 	case nameA != nameB || groupA != groupB,
 		differ(a.Description, b.Description), differ(a.Comments, b.Comments),
