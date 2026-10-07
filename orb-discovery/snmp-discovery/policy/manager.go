@@ -30,7 +30,7 @@ const (
 	// SNMPDefaultPort is the default SNMP port
 	SNMPDefaultPort = 161
 	// defaultSite is the site a policy that names none is given.
-	defaultSite = "undefined"
+	defaultSite = config.UndefinedPlaceholder
 )
 
 // Manager represents the policy manager
@@ -123,7 +123,7 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	}
 
 	if policy.Config.Defaults.Role == "" {
-		policy.Config.Defaults.Role = "undefined"
+		policy.Config.Defaults.Role = config.UndefinedPlaceholder
 	}
 
 	if policy.Config.Defaults.Site == "" {

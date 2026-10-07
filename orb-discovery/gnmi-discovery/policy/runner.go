@@ -234,6 +234,12 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	// connection, like the warning above, so a steady target stays quiet.
 	loggedFirstFlush := false
 
+	// An unscoped VLAN is a config mistake, not an event: the policy either sets a
+	// scope or it does not. Logged once per connection so a flush-driven backend
+	// does not repeat it on every update. A fresh runOnce on reconnect re-arms it,
+	// which is why this is a local and not a Runner field.
+	var unscopedVLANs unscopedVLANWarner
+
 	// Config capture (options.capture_config): fetch the CONFIG datastore once per
 	// connection — on the first flush, which fires right after the initial sync —
 	// redact it, and cache it for subsequent flushes. A fresh runOnce on reconnect
@@ -332,6 +338,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			}
 			return
 		}
+		unscopedVLANs.warn(r.logger, entities, r.name, t.Host)
 		// Per-flush run: create it, stamp run_id on every entity, ingest with the
 		// run_id/policy in Diode metadata, then close the run completed/failed.
 		run := r.runStore.CreateRun(r.name, t.Host)
@@ -770,4 +777,27 @@ func (r *Runner) TargetStatuses() []TargetStatus {
 		})
 	}
 	return out
+}
+
+// unscopedVLANWarner reports VLANs Diode cannot separate, once per connection.
+// A type rather than an inline bool so the gate is reachable from a test: a
+// review proved the inline form could be deleted with the suites still green.
+type unscopedVLANWarner struct {
+	logged bool
+}
+
+// warn logs at most once per connection. The flag is only ever set when the
+// count is non-zero, so a flush with nothing to report cannot consume the one
+// warning; counting is skipped once logged because the count is pure and its
+// result would be discarded.
+func (w *unscopedVLANWarner) warn(logger *slog.Logger, entities []diode.Entity, policy, host string) {
+	if w.logged {
+		return
+	}
+	n := mapping.CountUnscopedVLANs(entities)
+	if n == 0 {
+		return
+	}
+	w.logged = true
+	logger.Warn(mapping.UnscopedVLANWarning, "policy", policy, "host", host, "vlans", n)
 }

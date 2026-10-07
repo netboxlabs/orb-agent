@@ -107,6 +107,11 @@ class PolicyRunner:
     def __init__(self):
         """Initialize the PolicyRunner."""
         self.name = ""
+        # Identifies this runner, not the policy it serves. A deleted policy
+        # can have a job still in flight (stop() shuts the scheduler down with
+        # wait=False), so per-run state keyed on the policy name would let that
+        # late job write state the policy's replacement then reads.
+        self.instance_id = uuid.uuid4().hex
         self.scopes = dict[str, Napalm]()
         self.config = None
         self.status = Status.NEW
@@ -362,7 +367,11 @@ class PolicyRunner:
                     )
             self._collect_modules(config, device, data, sanitized_hostname)
             self._collect_network_instances(config, device, data, sanitized_hostname)
-            metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
+            metadata = {
+                "policy_name": self.name,
+                "policy_instance": self.instance_id,
+                "hostname": sanitized_hostname,
+            }
             entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")
             if discovery_success:
