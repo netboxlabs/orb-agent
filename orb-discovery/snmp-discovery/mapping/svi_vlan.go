@@ -61,6 +61,9 @@ const eltexArc = ".1.3.6.1.4.1.35265.1."
 // VLAN n's is eltexSviIfIndexBase + n - 1.
 const eltexSviIfIndexBase = 100000
 
+// ifTypePropVirtual is IANAifType propVirtual(53).
+const ifTypePropVirtual = "53"
+
 // eltexSviVlanID reads the VLAN of an Eltex VLAN interface, which the switch
 // names with the bare VLAN ID. A bare number is no SVI name in general, so it
 // is read only on Eltex, and only where every recorded Eltex walk agrees:
@@ -83,9 +86,6 @@ func eltexSviVlanID(oids ObjectIDValueMap, idx int, eltex bool) (int, bool) {
 	return vid, true
 }
 
-// ifTypePropVirtual is IANAifType propVirtual(53).
-const ifTypePropVirtual = "53"
-
 // ResolveSviVlans maps ifIndex to the VLAN an SVI-style interface belongs to.
 //
 // Only VLANs the DEVICE configures are eligible: a VID its own VLAN tables
@@ -97,9 +97,8 @@ const ifTypePropVirtual = "53"
 // qualifies: the prefix refers to the entity already emitted for it, so the
 // association sends no name the run was not sending anyway.
 //
-// vlanNamesByVid is a pure, side-effect-free read of the same rows emission
-// consumes — it never stubs — so recomputing it here keeps the association
-// decoupled from the emission path.
+// deviceVlanVids is a pure, side-effect-free read of the same rows emission
+// consumes, and the set emitVLANs emits from; it never stubs.
 //
 // Both ifName and ifDescr are consulted because the interface-name resolver
 // prefers ifDescr, and several platforms put a generic string there and the
@@ -115,7 +114,7 @@ func ResolveSviVlans(
 ) map[int]*diode.VLAN {
 	configured := deviceVlanVids(oids)
 	nameConflicts := vlanNameConflicts(oids)
-	named := map[int]*diode.VLAN{}
+	eligible := map[int]*diode.VLAN{}
 	for _, e := range entities {
 		v, ok := e.(*diode.VLAN)
 		if !ok || v == nil || v.Vid == nil {
@@ -130,9 +129,9 @@ func ResolveSviVlans(
 				"vid", vid)
 			continue
 		}
-		named[vid] = v
+		eligible[vid] = v
 	}
-	if len(named) == 0 {
+	if len(eligible) == 0 {
 		return nil
 	}
 
@@ -178,7 +177,7 @@ func ResolveSviVlans(
 			continue
 		}
 		for vid := range vids {
-			vlan, known := named[vid]
+			vlan, known := eligible[vid]
 			if !known {
 				logger.Debug("svi vlan: parsed vid absent from the device VLAN database; not associating",
 					"ifIndex", idx, "interfaces", names, "vid", vid)

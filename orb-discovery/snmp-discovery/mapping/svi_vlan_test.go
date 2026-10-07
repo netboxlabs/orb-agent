@@ -364,10 +364,17 @@ func TestDeviceVlanVids_MatchesEmitVLANs(t *testing.T) {
 		".1.3.6.1.4.1.2011.5.6.1.1.1.2.14":  {Value: ""},
 		".1.3.6.1.4.1.2011.5.6.1.1.1.13.15": {Value: "1"},
 		".1.3.6.1.2.1.17.7.1.4.3.1.5.16":    {Value: "bogus"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.1.0":   {Value: "0"},
+		".1.3.6.1.4.1.2011.5.6.1.1.1.13.0":  {Value: "1"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.4095":  {Value: "reserved"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.4095":  {Value: "1"},
 	}
 	emitted := map[int]struct{}{}
 	for _, e := range NewVlanMapper(slog.Default(), config.Options{}).emitVLANs(oids, nil) {
 		emitted[int(*e.(*diode.VLAN).Vid)] = struct{}{}
 	}
-	assert.Equal(t, emitted, deviceVlanVids(oids))
+	vids := deviceVlanVids(oids)
+	assert.Equal(t, emitted, vids)
+	assert.Equal(t, map[int]struct{}{10: {}, 11: {}, 12: {}, 13: {}, 14: {}, 15: {}}, vids,
+		"VIDs outside 1..4094 are not VLANs NetBox accepts")
 }
