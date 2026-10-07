@@ -18,6 +18,7 @@ from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
 )
 from device_discovery.policy.portscan import count_hostnames, expand_hostnames
+from device_discovery.policy.tenants import written_differently
 from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
@@ -101,10 +102,33 @@ class TenantParameters(ObjectParameters):
 
 
 class VrfParameters(ObjectParameters):
-    """Model for VRF parameters."""
+    """
+    Model for VRF parameters.
+
+    ``tenant`` is the VRF's own tenant, never taken from the address or prefix
+    tenant: Diode matches a VRF without an rd by its name and tenant, so a VRF
+    owned by a tenant in NetBox is created again unless the policy names it.
+    Unknown keys are rejected: a misspelt rd or tenant would otherwise match a
+    different VRF, which then persists in NetBox.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     rd: str | None = Field(default=None, description="Route distinguisher, optional")
+    tenant: str | TenantParameters | None = Field(
+        default=None, description="VRF tenant, optional"
+    )
+
+    @field_validator("tenant", mode="before")
+    @classmethod
+    def _refuse_unknown_tenant_keys(cls, v: object) -> object:
+        """Reject an unknown key in the tenant map too: a misspelt group would match another tenant."""
+        if isinstance(v, dict):
+            unknown = sorted(set(v) - set(TenantParameters.model_fields))
+            if unknown:
+                raise ValueError(f"tenant has no {unknown[0]!r} key")
+        return v
 
 
 class VlanGroupParameters(BaseModel):
@@ -201,6 +225,24 @@ MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
 
 #: NetBox's rack faces.
 RACK_FACES = ("front", "rear")
+
+
+def _refuse_tenant_written_differently(
+    first_at: str, first: str | TenantParameters, second_at: str, second: str | TenantParameters, compare_fields: bool
+) -> None:
+    """Raise when two copies of one tenant in an entity are written differently."""
+    found = written_differently(first, second, compare_fields=compare_fields)
+    if found == "group":
+        raise ValueError(
+            f"{first_at} and {second_at} name the same NetBox tenant group in two ways; "
+            "write it the same way in both places"
+        )
+    if found == "tenant":
+        fields = "name, group, description, comments and tags" if compare_fields else "name and group"
+        raise ValueError(
+            f"{first_at} and {second_at} name the same NetBox tenant but write it differently; "
+            f"give it the same {fields} in both places, for example with a YAML anchor"
+        )
 
 
 class Defaults(BaseModel):
@@ -347,6 +389,35 @@ class Defaults(BaseModel):
         if isinstance(v, IpamParameters) and not isinstance(v, PrefixParameters):
             return v.model_dump()
         return v
+
+    @model_validator(mode="after")
+    def validate_vrf_tenants(self):
+        """
+        Refuse a VRF tenant written differently from another copy of one tenant.
+
+        An address carries its own tenant, its VRF's and its device's (name
+        and group only); a prefix carries its own and its VRF's. Diode merges
+        the copies that resolve to one tenant and refuses the entity, or
+        rewrites the tenant on every run, when they disagree.
+        """
+        for block in ("ipaddress", "prefix"):
+            params = getattr(self, block)
+            if params is None:
+                continue
+            for vrf_field in ("vrf", "vrf_ipv4", "vrf_ipv6"):
+                vrf = getattr(params, vrf_field)
+                if not isinstance(vrf, VrfParameters) or vrf.tenant is None:
+                    continue
+                others = [(f"{block}.tenant", params.tenant, True)]
+                if block == "ipaddress":
+                    others.append(("tenant", self.tenant, False))
+                for where, other, compare_fields in others:
+                    if other is None:
+                        continue
+                    _refuse_tenant_written_differently(
+                        where, other, f"{block}.{vrf_field}.tenant", vrf.tenant, compare_fields
+                    )
+        return self
 
 
 class Options(WarnUnknownKeys):

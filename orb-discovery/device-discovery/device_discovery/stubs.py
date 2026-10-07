@@ -38,33 +38,41 @@ def vrf_match_key(vrf: pb.VRF) -> tuple[str, ...]:
     two VRFs with one rd and different names are the same record, and keying on
     the pair would treat them as two.
 
-    A VRF tenant would join the no-rd branch, but VrfParameters exposes only
-    name and rd, so nothing can set one today. Add it here if that changes.
+    Without an rd the tenant joins the name. Its group is part of it too: a
+    grouped and an ungrouped tenant of one name can be two NetBox tenants.
     """
     if vrf.rd:
         return ("rd", vrf.rd)
-    return ("name", vrf.name)
+    return ("name", vrf.name, vrf.tenant.name, vrf.tenant.group.name)
 
 
 def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
     """
-    Return a VRF carrying only matcher identifiers (name, rd).
+    Return a VRF carrying only matcher identifiers (name, rd, tenant name and group).
 
-    The ipam.vrf matchers key on `name` and (when set) `rd`; tags/comments/description on
-    the rich VRF would just bloat the wire and could leak into create-time attributes if
-    the plugin's match-then-create fallback fires.
+    The ipam.vrf matchers key on `name`, `tenant` and (when set) `rd`; a stub without
+    the tenant would resolve to a different VRF than the rich one. Tags/comments/description
+    on the rich VRF and its tenant would just bloat the wire and could leak into create-time
+    attributes if the plugin's match-then-create fallback fires.
     """
     stub = pb.VRF(name=vrf.name)
     if vrf.rd:
         stub.rd = vrf.rd
+    if vrf.HasField("tenant"):
+        stub.tenant.CopyFrom(_tenant_match_stub(vrf.tenant))
     return stub
+
+
+def _vrf_identity(vrf: pb.VRF) -> tuple[str, str, str, str]:
+    """Return the fields _vrf_match_stub keeps, for comparing two VRF references."""
+    return (vrf.name, vrf.rd, vrf.tenant.name, vrf.tenant.group.name)
 
 
 def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
     """
     Return True when ``ip`` is the exact IP object the device's primary references.
 
-    Match on full identity — address WITH prefix, VRF (name + rd, matching how
+    Match on full identity — address WITH prefix, VRF (name, rd and tenant, matching how
     _vrf_match_stub keys VRF identity), and the assigned interface — not just the
     host portion. Two IP entities can share a host address yet be different objects:
     a differing prefix length (a /32 loopback vs a /24 SVI), a differing VRF (the
@@ -77,8 +85,8 @@ def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
     """
     if primary.address != ip.address:
         return False
-    primary_vrf = (primary.vrf.name, primary.vrf.rd) if primary.HasField("vrf") else None
-    ip_vrf = (ip.vrf.name, ip.vrf.rd) if ip.HasField("vrf") else None
+    primary_vrf = _vrf_identity(primary.vrf) if primary.HasField("vrf") else None
+    ip_vrf = _vrf_identity(ip.vrf) if ip.HasField("vrf") else None
     if primary_vrf != ip_vrf:
         return False
     primary_iface = primary.assigned_object_interface.name if primary.HasField("assigned_object_interface") else ""
