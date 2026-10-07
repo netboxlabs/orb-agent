@@ -748,13 +748,13 @@ func TestVlanMapper_PostMap_CiscoSB_LogsOtherModes(t *testing.T) {
 	var buf bytes.Buffer
 	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
 		PostMap(rows, registry, &config.Defaults{})
-	assert.Contains(t, buf.String(), "modes=[10]")
+	assert.Contains(t, buf.String(), "ifindex_modes=map[2:10]")
 
 	buf.Reset()
 	rows[".1.3.6.1.4.1.9.6.1.101.48.22.1.1.2"] = Value{Value: "11", Type: Integer}
 	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
 		PostMap(rows, registry, &config.Defaults{})
-	assert.NotContains(t, buf.String(), "modes=")
+	assert.NotContains(t, buf.String(), "ifindex_modes=")
 }
 
 func TestHasVLANSignal_CountsTheCiscoSBModeAndLists(t *testing.T) {

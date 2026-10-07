@@ -164,7 +164,7 @@ func (m *VlanMapper) PostMap(
 		ciscosb.Vlans = deviceVlanVids(allObjectIDs)
 		if modes := ciscosb.OtherModes(); len(modes) > 0 {
 			m.logger.Info("vlan: CISCOSB ports in a mode other than access or trunk get only their untagged VLAN corrected",
-				"modes", modes)
+				"ifindex_modes", modes)
 		}
 		qbridge.ApplyCiscoSB(infos, ciscosb)
 	}

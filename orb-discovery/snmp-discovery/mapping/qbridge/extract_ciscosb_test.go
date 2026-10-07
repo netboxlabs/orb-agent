@@ -568,7 +568,8 @@ func TestApplyCiscoSB_StatedModeOverridesTheRoutedInference(t *testing.T) {
 }
 
 // A mode value other than access or trunk keeps the untagged-VLAN correction
-// a port with no mode row gets: the access column, then the native column.
+// a switch without the mode column gets: the access column, then the native
+// column.
 func TestApplyCiscoSB_OtherModeKeepsTheUntaggedCorrection(t *testing.T) {
 	infos := map[int]*SwitchportInfo{3: genericAccess(1)}
 	ApplyCiscoSB(infos, CiscoSBRows{
@@ -668,9 +669,9 @@ func TestApplyCiscoSB_PortMissingFromAnsweredModeColumnIsLeftOut(t *testing.T) {
 }
 
 func TestCiscoSBRows_OtherModes(t *testing.T) {
-	rows := CiscoSBRows{PortMode: map[int]int{1: 11, 2: 12, 3: 10, 4: 10, 5: 15, 6: 1, 7: 20, 8: 13}}
-	if got := rows.OtherModes(); !reflect.DeepEqual(got, []int{1, 10, 13, 15, 20}) {
-		t.Fatalf("got %v want [1 10 13 15 20]", got)
+	rows := CiscoSBRows{PortMode: map[int]int{1: 11, 2: 12, 3: 10, 4: 10, 5: 15}}
+	if got := rows.OtherModes(); !reflect.DeepEqual(got, map[int]int{3: 10, 4: 10, 5: 15}) {
+		t.Fatalf("got %v want map[3:10 4:10 5:15]", got)
 	}
 	if got := (CiscoSBRows{PortMode: map[int]int{1: 11, 2: 12}}).OtherModes(); len(got) != 0 {
 		t.Fatalf("got %v want none", got)

@@ -54,20 +54,15 @@ func (r CiscoSBRows) HasData() bool {
 	return len(r.AccessVlan) > 0 || len(r.NativeVlan) > 0 || len(r.PortMode) > 0 || len(r.TrunkLists) > 0
 }
 
-// OtherModes returns the mode values other than access and trunk that ports
-// report, ascending.
-func (r CiscoSBRows) OtherModes() []int {
-	seen := map[int]struct{}{}
-	for _, mode := range r.PortMode {
+// OtherModes returns the ports reporting a mode other than access or trunk,
+// ifIndex to mode.
+func (r CiscoSBRows) OtherModes() map[int]int {
+	out := map[int]int{}
+	for ifIndex, mode := range r.PortMode {
 		if mode != ciscoSBModeAccess && mode != ciscoSBModeTrunk {
-			seen[mode] = struct{}{}
+			out[ifIndex] = mode
 		}
 	}
-	out := make([]int, 0, len(seen))
-	for mode := range seen {
-		out = append(out, mode)
-	}
-	sort.Ints(out)
 	return out
 }
 
@@ -180,9 +175,9 @@ func listsName(lists map[int][]byte, vid int) bool {
 }
 
 // leaveOut withdraws a port's classification, so nothing is written for it.
-// It is for a port whose mode the device states but whose columns for that
-// mode are missing: the standard tables are what this platform gets wrong, and
-// NetBox keeps what it holds.
+// It is for a port a partial walk lost a row of, its mode or a column that mode
+// needs: the standard tables are what this platform gets wrong, and NetBox
+// keeps what it holds.
 func leaveOut(info *SwitchportInfo) {
 	info.AdminMode = AdminUnknown
 	info.OperMode = OperUnknown

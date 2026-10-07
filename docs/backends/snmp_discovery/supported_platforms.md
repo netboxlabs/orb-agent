@@ -136,8 +136,8 @@ The overlay reads each port's mode from `vlanPortModeState`: 11 for an access po
 
 - An access port carries its access VLAN untagged.
 - A trunk carries its member VLANs tagged and its native VLAN untagged, the native VLAN only when it is one of the members. Only VLANs the device reports in its VLAN table are tagged, since the member lists can name VLANs that were never created. A trunk allowing all of 1-4094 (`allowed vlan all`) is reported as `tagged-all`.
-- An access port or trunk whose rows for that mode were not returned is left out, so NetBox keeps what it holds rather than receiving what the standard tables say. So is a port with no mode row on a switch that answers the mode column for its other ports.
-- A port with another mode value, or on a switch that does not answer the mode column at all, only has its untagged VLAN corrected, from the access VLAN or failing that the trunk native VLAN, and gets access mode if it had none. The agent logs the other values it sees once per poll.
+- An access port or trunk whose rows for that mode were not returned is left out, so NetBox keeps what it holds rather than receiving what the standard tables say. So is a port the switch's other CISCOSB columns name but its mode column, answered for other ports, does not.
+- A port with another mode value, or on a switch that does not answer the mode column at all, only has its untagged VLAN corrected, from the access VLAN or failing that the trunk native VLAN, and gets access mode if it had none. The agent logs those ports, with their mode values, once per poll of the switch.
 
 Diode applies partial updates and cannot clear a field. A trunk with no untagged VLAN therefore keeps any untagged VLAN NetBox already holds, such as one an earlier version wrote when it read the port as access, and a trunk with no tagged VLAN keeps any tagged VLANs it had. Remove those by hand.
 
