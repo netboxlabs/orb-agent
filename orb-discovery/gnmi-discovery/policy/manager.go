@@ -162,12 +162,17 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
 		return errors.New("defaults: position and face are set per target, in override_defaults")
 	}
-	if err := policy.Config.Defaults.ValidateTenants(); err != nil {
-		return err
-	}
 	for _, t := range policy.Scope.Targets {
 		if t.Host == "" {
 			return errors.New("target with empty host")
+		}
+		// Judged on the defaults the target uses: the policy's, or merged
+		// with its override, which can complete or clash with them.
+		if err := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults).ValidateTenants(); err != nil {
+			if t.OverrideDefaults == nil {
+				return err
+			}
+			return fmt.Errorf("target %s, with its override_defaults: %w", t.Host, err)
 		}
 		switch t.Mode {
 		case "", config.ModeAuto, config.ModeOnChange, config.ModeSample, config.ModeGet:
@@ -181,10 +186,7 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if err := validatePlacement(policy.Config.Defaults.Rack, t.OverrideDefaults); err != nil {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
-			// Judged merged, not alone: an override inherits the policy's tenants.
-			if err := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults).ValidateTenants(); err != nil {
-				return fmt.Errorf("target %s: %w", t.Host, err)
-			}
+
 		}
 	}
 	return nil

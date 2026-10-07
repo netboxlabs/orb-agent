@@ -65,7 +65,7 @@ func TestMergeDefaults_TenantRefinedOrReplaced(t *testing.T) {
 	assert.Equal(t, "customers", merged.Vrf.Tenant.Group, "names compare trimmed, as Diode does")
 }
 
-func TestDefaults_ValidateVrfTenants(t *testing.T) {
+func TestDefaults_ValidateTenants(t *testing.T) {
 	acme := TenantParameters{Name: "acme", Group: "customers", Description: "d"}
 	other := TenantParameters{Name: "acme", Group: "customers", Description: "x"}
 	for _, tc := range []struct {
@@ -131,7 +131,7 @@ func TestMergeDefaults_TenantTagsDoNotAlias(t *testing.T) {
 	assert.Equal(t, []string{"o"}, override.IPAddress.Tenant.Tags)
 }
 
-func TestDefaults_ValidateVrfTenantsRules(t *testing.T) {
+func TestDefaults_ValidateTenantsRules(t *testing.T) {
 	rich := TenantParameters{Name: "acme", Group: "customers", Description: "d"}
 	for _, tc := range []struct {
 		name string
@@ -144,6 +144,15 @@ func TestDefaults_ValidateVrfTenantsRules(t *testing.T) {
 			err: "defaults.ip_address.tenant and defaults.prefix.tenant name the same NetBox tenant but write it differently",
 		},
 		{name: "grouped vlan tenant", d: Defaults{Vrf: VRFDefaults{Tenant: rich}, Vlan: VlanDefaults{Tenant: rich}}},
+		{
+			name: "address against vlan", d: Defaults{IPAddress: IPAddressDefaults{Tenant: rich}, Vlan: VlanDefaults{Tenant: TenantParameters{Name: "acme", Group: "customers", Description: "x"}}},
+			err: "defaults.ip_address.tenant and defaults.vlan.tenant name the same NetBox tenant but write it differently",
+		},
+		{
+			name: "prefix against vlan",
+			d:    Defaults{Prefix: PrefixDefaults{Tenant: rich}, Vlan: VlanDefaults{Tenant: TenantParameters{Name: "acme", Group: "customers", Description: "y"}}},
+			err:  "defaults.prefix.tenant and defaults.vlan.tenant name the same NetBox tenant but write it differently",
+		},
 		{
 			name: "described but ungrouped", d: Defaults{IPAddress: IPAddressDefaults{Tenant: TenantParameters{Name: "acme", Description: "d"}}, Prefix: PrefixDefaults{Tenant: TenantParameters{Name: "acme", Description: "x"}}},
 			err: "defaults.ip_address.tenant and defaults.prefix.tenant name the same NetBox tenant but write it differently",
@@ -166,4 +175,19 @@ func TestDefaults_ValidateVrfTenantsRules(t *testing.T) {
 			assert.ErrorContains(t, err, tc.err)
 		})
 	}
+}
+
+func TestMergeDefaults_RefinedTenantTagsDoNotAlias(t *testing.T) {
+	policy := &Defaults{Prefix: PrefixDefaults{Tenant: TenantParameters{Name: "acme"}}}
+	override := &Defaults{Prefix: PrefixDefaults{Tenant: TenantParameters{Name: "acme", Tags: []string{"o"}}}}
+	merged := MergeDefaults(policy, override)
+	merged.Prefix.Tenant.Tags[0] = "changed"
+	assert.Equal(t, []string{"o"}, override.Prefix.Tenant.Tags)
+}
+
+func TestMergeDefaults_AddedGroupIsAnotherTenant(t *testing.T) {
+	policy := &Defaults{Vrf: VRFDefaults{Tenant: TenantParameters{Name: "acme", Description: "d"}}}
+	merged := MergeDefaults(policy, &Defaults{Vrf: VRFDefaults{Tenant: TenantParameters{Group: "partners"}}})
+	assert.Equal(t, TenantParameters{Name: "acme", Group: "partners"}, merged.Vrf.Tenant,
+		"NetBox can hold an ungrouped and a grouped acme; neither takes the other's fields")
 }

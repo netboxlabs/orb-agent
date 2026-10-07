@@ -321,11 +321,12 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 
 // refineTenant overlays an override tenant onto dst field by field, or
 // replaces dst whole when the override names another tenant, by another name
-// or another group where both give one: another tenant must not take this
-// one's group or description. A replacement given no name keeps dst's. Tags
+// where both give one or a group other than dst's, including one dst lacks:
+// NetBox can hold an ungrouped and a grouped tenant of one name, and another
+// tenant must not take this one's group or description. A replacement given no name keeps dst's. Tags
 // are copied, so the result never aliases either side.
 func refineTenant(dst, override *TenantParameters) {
-	if differ(dst.Name, override.Name) || differ(dst.Group, override.Group) {
+	if group := trim(override.Group); differ(dst.Name, override.Name) || group != "" && group != trim(dst.Group) {
 		name := dst.Name
 		*dst = *override
 		if trim(dst.Name) == "" {

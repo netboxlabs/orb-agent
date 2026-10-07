@@ -372,5 +372,18 @@ func TestParsePolicies_VrfTenantWrittenTwice(t *testing.T) {
 
 	_, err = m.ParsePolicies(policy(consistent,
 		"          override_defaults:\n            ip_address:\n              tenant:\n                name: acme\n                description: x\n"))
-	require.ErrorContains(t, err, "target 192.0.2.1: defaults.vrf.tenant and defaults.ip_address.tenant")
+	require.ErrorContains(t, err, "target 192.0.2.1, with its override_defaults: defaults.vrf.tenant and defaults.ip_address.tenant")
+}
+
+func TestParsePolicies_TenantTemplateCompletedPerTarget(t *testing.T) {
+	policy := []byte("policies:\n  p1:\n    config:\n      defaults:\n        vrf:\n          tenant:\n            group: customers\n" +
+		"    scope:\n      targets:\n        - host: 192.0.2.1\n          override_defaults:\n            vrf:\n              tenant: acme\n" +
+		"        - host: 192.0.2.2\n          override_defaults:\n            vrf:\n              tenant: globex\n")
+	m := newTestManager(t)
+	_, err := m.ParsePolicies(policy)
+	require.NoError(t, err, "a nameless policy tenant every target names is fine")
+
+	_, err = m.ParsePolicies([]byte("policies:\n  p1:\n    config:\n      defaults:\n        vrf:\n          tenant:\n            group: customers\n" +
+		"    scope:\n      targets:\n        - host: 192.0.2.1\n"))
+	require.ErrorContains(t, err, "defaults.vrf.tenant has no name")
 }
