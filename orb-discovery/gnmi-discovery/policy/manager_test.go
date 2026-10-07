@@ -353,3 +353,37 @@ func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
 	})
 	assert.ErrorContains(t, err, "unhashable")
 }
+
+func TestParsePolicies_VrfTenantWrittenTwice(t *testing.T) {
+	policy := func(defaults, override string) []byte {
+		return []byte("policies:\n  p1:\n    config:\n      defaults:\n" + defaults +
+			"    scope:\n      targets:\n        - host: 192.0.2.1\n" + override)
+	}
+	const owner = "            name: acme\n            group: customers\n            description: d\n"
+	consistent := "        vrf:\n          tenant: &owner\n" + owner + "        ip_address:\n          tenant: *owner\n"
+
+	m := newTestManager(t)
+	parsed, err := m.ParsePolicies(policy(consistent, ""))
+	require.NoError(t, err)
+	require.Equal(t, "customers", parsed["p1"].Config.Defaults.IPAddress.Tenant.Group, "the anchor reached both tenants")
+
+	_, err = m.ParsePolicies(policy(consistent+"        prefix:\n          tenant: Acme\n", ""))
+	require.ErrorContains(t, err, "defaults.vrf.tenant and defaults.prefix.tenant name the same NetBox tenant")
+
+	_, err = m.ParsePolicies(policy(consistent,
+		"          override_defaults:\n            ip_address:\n              tenant:\n                name: acme\n                description: x\n"))
+	require.ErrorContains(t, err, "target 192.0.2.1, with its override_defaults: defaults.vrf.tenant and defaults.ip_address.tenant")
+}
+
+func TestParsePolicies_TenantTemplateCompletedPerTarget(t *testing.T) {
+	policy := []byte("policies:\n  p1:\n    config:\n      defaults:\n        vrf:\n          tenant:\n            group: customers\n" +
+		"    scope:\n      targets:\n        - host: 192.0.2.1\n          override_defaults:\n            vrf:\n              tenant: acme\n" +
+		"        - host: 192.0.2.2\n          override_defaults:\n            vrf:\n              tenant: globex\n")
+	m := newTestManager(t)
+	_, err := m.ParsePolicies(policy)
+	require.NoError(t, err, "a nameless policy tenant every target names is fine")
+
+	_, err = m.ParsePolicies([]byte("policies:\n  p1:\n    config:\n      defaults:\n        vrf:\n          tenant:\n            group: customers\n" +
+		"    scope:\n      targets:\n        - host: 192.0.2.1\n"))
+	require.ErrorContains(t, err, "invalid policy : defaults.vrf.tenant has no name", "no target prefix without an override")
+}

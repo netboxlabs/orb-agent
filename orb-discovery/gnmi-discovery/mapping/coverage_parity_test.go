@@ -33,7 +33,7 @@ func TestTranslateIPs_Defaults(t *testing.T) {
 	defs := &config.Defaults{
 		Tags: []string{"global"},
 		IPAddress: config.IPAddressDefaults{
-			Role: "mgmt", Tenant: "acme", Description: "desc", Comments: "c", Tags: []string{"ip"},
+			Role: "mgmt", Tenant: config.TenantParameters{Name: "acme", Group: "customers"}, Description: "desc", Comments: "c", Tags: []string{"ip"},
 		},
 	}
 	ents := translateIPs(base, snap, dev, defs, nil)
@@ -48,6 +48,8 @@ func TestTranslateIPs_Defaults(t *testing.T) {
 	assert.Equal(t, "mgmt", *ip.Role)
 	require.NotNil(t, ip.Tenant)
 	assert.Equal(t, "acme", *ip.Tenant.Name)
+	require.NotNil(t, ip.Tenant.Group)
+	assert.Equal(t, "customers", *ip.Tenant.Group.Name)
 	require.NotNil(t, ip.Description)
 	assert.Equal(t, "desc", *ip.Description)
 	require.NotNil(t, ip.Comments)
@@ -68,7 +70,7 @@ func TestTranslateVrfs_Defaults(t *testing.T) {
 	}
 	defs := &config.Defaults{
 		Tags: []string{"global"},
-		Vrf:  config.VRFDefaults{Tenant: "acme", Description: "d", Comments: "c", Tags: []string{"vrf"}},
+		Vrf:  config.VRFDefaults{Tenant: config.TenantParameters{Name: "acme", Group: "customers"}, Description: "d", Comments: "c", Tags: []string{"vrf"}},
 	}
 	ents, _ := translateVrfs(snap, defs)
 	require.Len(t, ents, 1)
@@ -78,6 +80,8 @@ func TestTranslateVrfs_Defaults(t *testing.T) {
 	assert.Equal(t, "65000:1", *v.Rd)
 	require.NotNil(t, v.Tenant)
 	assert.Equal(t, "acme", *v.Tenant.Name)
+	require.NotNil(t, v.Tenant.Group)
+	assert.Equal(t, "customers", *v.Tenant.Group.Name)
 	require.NotNil(t, v.Description)
 	assert.Equal(t, "d", *v.Description)
 	require.NotNil(t, v.Comments)

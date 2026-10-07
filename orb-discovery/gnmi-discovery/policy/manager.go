@@ -166,6 +166,14 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		if t.Host == "" {
 			return errors.New("target with empty host")
 		}
+		// Judged on the defaults the target uses: the policy's, or merged
+		// with its override, which can complete or clash with them.
+		if err := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults).ValidateTenants(); err != nil {
+			if t.OverrideDefaults == nil {
+				return err
+			}
+			return fmt.Errorf("target %s, with its override_defaults: %w", t.Host, err)
+		}
 		switch t.Mode {
 		case "", config.ModeAuto, config.ModeOnChange, config.ModeSample, config.ModeGet:
 		default:

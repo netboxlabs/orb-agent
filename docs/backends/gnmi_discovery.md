@@ -71,10 +71,28 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | device | map | Device overrides: `manufacturer`, `model`, `platform`, `comments`, `tags` |
 | interface | map | Interface defaults: `if_type` (fallback type, default `other`), `description`, `tags` |
 | ip_address | map | IP address defaults: `role`, `tenant`, `description`, `comments`, `tags` |
-| vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery) |
-| vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant`, `role`, `description`, `tags` |
+| prefix | map | Prefix defaults: `role`, `tenant`, `description`, `tags` |
+| vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery). See [VRF tenant](#vrf-tenant) |
+| vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant` (see [VRF tenant](#vrf-tenant)), `role`, `description`, `tags` |
 | interface_patterns | list | Name-regex → NetBox type, highest precedence (first match wins). |
 | interface_exclude_patterns | list | Name-regex; matching interfaces are skipped entirely. |
+
+`ip_address.tenant`, `prefix.tenant`, `vlan.tenant` and `vrf.tenant` accept a bare tenant name or a map with `name` and optional `group` / `description` / `comments` / `tags`. Give the group when the tenant's name exists in more than one tenant group in NetBox: without it, a bare name can bind to another group's tenant. Any other key in the map is refused rather than dropped, and so is a tenant that sets fields but no name in the defaults a target ends up with (a nameless policy tenant that every target's override names is fine); an empty map counts as unset. In a per-target `override_defaults`, a tenant with another name, or with a group other than the policy's (including one the policy lacks), replaces the policy's as a whole, keeping the policy's name when the override gives none; otherwise it refines the policy's field by field. A tenant named in another group is only a separate tenant once it exists in NetBox; until then Diode can match the existing one by its slug and move it between groups.
+
+##### VRF tenant
+`vrf.tenant` is applied to every VRF discovered on the device. Diode matches a VRF without an RD by its name and tenant, so when your VRFs belong to a tenant in NetBox, name that tenant here; otherwise Diode creates a second VRF with the same name and no tenant. A VRF with an RD is matched by its RD alone and gets this tenant written onto it, so on a device whose VRFs belong to different tenants, set `vrf.tenant` per target only where all of them share one.
+
+An address carries its own tenant and its VRF's, a prefix likewise, and an interface its VRF's and its VLAN's. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When two of `vrf.tenant`, `ip_address.tenant`, `prefix.tenant` and `vlan.tenant` name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both, rewrites the tenant on every run or creates a second tenant of that name, depending on what NetBox already holds, so such a policy is refused when either is written as a map with more than a name, as is one that writes a tenant group two ways. Two bare names are not compared, as before. Each target is checked with the defaults it ends up with, its `override_defaults` merged in. Copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
+
+```yaml
+defaults:
+  vrf:
+    tenant: &owner
+      name: "Example Tenant GmbH"
+      group: "Example Group"
+  ip_address:
+    tenant: *owner
+```
 
 ##### VLAN group
 

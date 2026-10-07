@@ -50,9 +50,9 @@ defaults:
 	require.NoError(t, yaml.Unmarshal([]byte(y), &pc))
 	assert.Equal(t, "/components/component[name=Chassis]/state/id", pc.Defaults.AssetTag)
 	assert.Equal(t, "mgmt", pc.Defaults.IPAddress.Role)
-	assert.Equal(t, "acme", pc.Defaults.IPAddress.Tenant)
+	assert.Equal(t, "acme", pc.Defaults.IPAddress.Tenant.Name)
 	assert.Equal(t, []string{"ip"}, pc.Defaults.IPAddress.Tags)
-	assert.Equal(t, "acme", pc.Defaults.Vrf.Tenant)
+	assert.Equal(t, "acme", pc.Defaults.Vrf.Tenant.Name)
 	assert.Equal(t, "vd", pc.Defaults.Vrf.Description)
 	assert.Equal(t, []string{"vrf"}, pc.Defaults.Vrf.Tags)
 }
@@ -60,8 +60,8 @@ defaults:
 func TestMergeDefaults_NewFieldsOverride(t *testing.T) {
 	base := &Defaults{
 		AssetTag:  "base-tag",
-		IPAddress: IPAddressDefaults{Role: "base-role", Tenant: "base-tenant", Tags: []string{"a"}},
-		Vrf:       VRFDefaults{Tenant: "base-vt", Tags: []string{"x"}},
+		IPAddress: IPAddressDefaults{Role: "base-role", Tenant: TenantParameters{Name: "base-tenant"}, Tags: []string{"a"}},
+		Vrf:       VRFDefaults{Tenant: TenantParameters{Name: "base-vt"}, Tags: []string{"x"}},
 	}
 	over := &Defaults{
 		AssetTag:  "over-tag",
@@ -70,11 +70,11 @@ func TestMergeDefaults_NewFieldsOverride(t *testing.T) {
 	}
 	m := MergeDefaults(base, over)
 	assert.Equal(t, "over-tag", m.AssetTag)
-	assert.Equal(t, "over-role", m.IPAddress.Role)     // overridden
-	assert.Equal(t, "base-tenant", m.IPAddress.Tenant) // not overridden → base kept
-	assert.Equal(t, []string{"b"}, m.IPAddress.Tags)   // override slice wins
-	assert.Equal(t, "base-vt", m.Vrf.Tenant)           // not overridden
-	assert.Equal(t, "over-desc", m.Vrf.Description)    // overridden
+	assert.Equal(t, "over-role", m.IPAddress.Role)          // overridden
+	assert.Equal(t, "base-tenant", m.IPAddress.Tenant.Name) // not overridden → base kept
+	assert.Equal(t, []string{"b"}, m.IPAddress.Tags)        // override slice wins
+	assert.Equal(t, "base-vt", m.Vrf.Tenant.Name)           // not overridden
+	assert.Equal(t, "over-desc", m.Vrf.Description)         // overridden
 	assert.Equal(t, []string{"y"}, m.Vrf.Tags)
 
 	// Slices must not alias the inputs.
