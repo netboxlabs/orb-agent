@@ -130,7 +130,7 @@ The prefix starts with a letter and holds only ASCII letters, `-` and `_`, in wo
 
 **What changes.**
 - Exclusion patterns and interface type patterns see the new name.
-- `emit_prefix_vlan` reads the names the device reports, so the prefix does not change which addresses associate a VLAN. An address on an interface left out of a run (below) carries no VLAN that run.
+- `emit_prefix_vlan` reads the names the device reports, so the prefix does not change which addresses associate a VLAN. On the switches above that report `vlan` in ifDescr, a renamed interface does not associate one. An address on an interface left out of a run (below) carries no VLAN that run.
 - **Missing ifType:** when a walk returns a VLAN interface without its ifType, the interface is left out of that run and its address is sent without an interface, so NetBox keeps what it has.
 - **Name collision:** when the new name equals another interface's name on the device, ignoring case, the VLAN interface is left out with a warning. On a stack, every member's interfaces count.
 - **Prefix unset:** each run logs how many such interfaces it found.

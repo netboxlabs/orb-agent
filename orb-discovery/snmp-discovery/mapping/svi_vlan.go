@@ -63,9 +63,9 @@ const vlanIfIndexBase = 100000
 const ifTypePropVirtual = "53"
 
 // numericSviVlanID reads the VLAN of an interface the switch names with the
-// bare VLAN ID, as Eltex MES 21xx/23xx, Cisco small-business and UniFi
-// switches do. A bare number is no SVI name in general, so it is read only
-// where the whole layout holds, on any vendor: ifIndex vlanIfIndexBase +
+// bare VLAN ID, as Eltex MES 21xx/23xx, most Cisco small-business and some
+// UniFi switches do. A bare number is no SVI name in general, so it is read
+// only where the whole layout holds, on any vendor: ifIndex vlanIfIndexBase +
 // VID - 1, ifName and ifDescr both exactly the VID, and ifType
 // propVirtual(53). Across the librenms recordings that layout picks out only
 // VLAN interfaces.
