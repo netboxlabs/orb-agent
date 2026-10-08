@@ -28,5 +28,22 @@
       <vlan-index>8</vlan-index>
       <vlan-l3-interface>vlan.70 (UP)</vlan-l3-interface>
     </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>VOICE</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-tag>80</vlan-tag>
+      <vlan-tag-string>80</vlan-tag-string>
+      <vlan-index>9</vlan-index>
+      <vlan-l3-interface>vlan.80 (UP)</vlan-l3-interface>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>VOICE-OLD</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-tag>0</vlan-tag>
+      <vlan-index>10</vlan-index>
+      <vlan-l3-interface>vlan.80 (UP)</vlan-l3-interface>
+    </vlan>
   </vlan-information>
 </rpc-reply>

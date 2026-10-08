@@ -1301,30 +1301,38 @@ def _l3_interface_vlan_ids(root) -> dict[str, int | None]:
     """
     Map each L3 VLAN interface in a VLAN-table reply to the VLAN it routes for.
 
-    A row without an L3 interface, or with a tag outside 1..4094 (the non-ELS
-    ``default`` VLAN carries tag 0), contributes nothing. An interface named by
-    rows with different tags maps to ``None``: the device contradicts itself and
-    neither VLAN is picked.
+    A row without an L3 interface contributes nothing. An interface maps to
+    ``None`` (reported, but not linked) when any row naming it carries a tag
+    outside 1..4094, or when rows naming it carry different tags: either way the
+    device does not give it one usable VLAN ID, and none is picked.
     """
     vids_by_iface: dict[str, set[int]] = {}
+    untagged: set[str] = set()
     for row in root.iter():
         fields = _VLAN_ROW_FIELDS.get(_localname(row))
         if fields is None:
             continue
         tag_field, l3_field = fields
         iface = _L3_INTERFACE_STATE_RE.sub("", _text(_find_child(row, l3_field)))
+        if not iface:
+            continue
         vid = coerce_vid(_maybe_int(_text(_find_child(row, tag_field))))
-        if not iface or vid is None:
+        if vid is None:
+            untagged.add(iface)
             continue
         vids_by_iface.setdefault(iface, set()).add(vid)
 
     result: dict[str, int | None] = {}
-    for iface, vids in vids_by_iface.items():
-        if len(vids) == 1:
+    for iface in sorted(untagged | vids_by_iface.keys()):
+        vids = vids_by_iface.get(iface, set())
+        if iface not in untagged and len(vids) == 1:
             result[iface] = next(iter(vids))
+            continue
+        if iface in untagged:
+            logger.debug("Junos %s is the L3 interface of a VLAN without a usable tag; not linking it", iface)
         else:
             logger.debug("Junos %s is the L3 interface of VLANs %s; not linking it", iface, sorted(vids))
-            result[iface] = None
+        result[iface] = None
     return result
 
 
