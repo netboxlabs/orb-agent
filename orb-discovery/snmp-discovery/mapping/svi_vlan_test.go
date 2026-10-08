@@ -255,7 +255,8 @@ func TestResolveSviVlans_RefusesAVidNamedDifferentlyAcrossVtpDomains(t *testing.
 
 // eltexSvi is an Eltex MES walk carrying the VLAN interface of vid at its
 // usual place, ifIndex 100000 + vid - 1, named with the bare VID in ifName and
-// ifDescr and typed propVirtual(53), with vid configured but unnamed.
+// ifDescr and typed propVirtual(53), with vid configured but unnamed. Cisco
+// small-business and UniFi switches lay it out the same way.
 func eltexSvi(vid int) (ObjectIDValueMap, int, *diode.VLAN) {
 	idx := 100000 + vid - 1
 	id, name := strconv.Itoa(idx), strconv.Itoa(vid)
@@ -269,17 +270,30 @@ func eltexSvi(vid int) (ObjectIDValueMap, int, *diode.VLAN) {
 	return oids, idx, &diode.VLAN{Vid: int64Ptr(int64(vid)), Name: strPtr("VLAN" + name)}
 }
 
-// Eltex MES switches name each VLAN's interface with the bare VLAN ID. A bare
-// number is no SVI name anywhere else, so it is read only where the whole
-// recorded layout holds.
-func TestResolveSviVlans_EltexNumericSvi(t *testing.T) {
-	oids, idx, vlan := eltexSvi(158)
-	got := ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default())
-	assert.Same(t, vlan, got[idx])
+// Eltex MES, Cisco small-business and UniFi switches name each VLAN's
+// interface with the bare VLAN ID. A bare number is no SVI name in general, so
+// it is read only where the whole recorded layout holds, whatever the vendor.
+func TestResolveSviVlans_NumericSvi(t *testing.T) {
+	for name, sysObjectID := range map[string]string{
+		"eltex":                 ".1.3.6.1.4.1.35265.1.192",
+		"cisco small business":  ".1.3.6.1.4.1.9.6.1.1004.28.5",
+		"cisco catalyst 1300":   ".1.3.6.1.4.1.9.1.3232",
+		"unifi, no vendor arc":  ".1.3.6.1.4.1",
+		"no sysObjectID at all": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			oids, idx, vlan := eltexSvi(158)
+			if sysObjectID == "" {
+				delete(oids, ".1.3.6.1.2.1.1.2.0")
+			} else {
+				oids[".1.3.6.1.2.1.1.2.0"] = Value{Value: sysObjectID}
+			}
+			got := ResolveSviVlans(oids, []diode.Entity{vlan}, slog.Default())
+			assert.Same(t, vlan, got[idx])
+		})
+	}
 
 	for name, edit := range map[string]func(ObjectIDValueMap){
-		"another vendor":         func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.1.2.0"] = Value{Value: ".1.3.6.1.4.1.9.1.1"} },
-		"no sysObjectID":         func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.1.2.0") },
 		"another interface type": func(o ObjectIDValueMap) { o[".1.3.6.1.2.1.2.2.1.3.100157"] = Value{Value: "6"} },
 		"no interface type":      func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.2.2.1.3.100157") },
 		"ifName absent":          func(o ObjectIDValueMap) { delete(o, ".1.3.6.1.2.1.31.1.1.1.1.100157") },
@@ -339,7 +353,7 @@ func TestDerivePrefixes_EltexNumericSvis(t *testing.T) {
 
 // The layout maps an ifIndex outside 100000..104093 to a VID NetBox does not
 // accept, so it names no VLAN however it is named.
-func TestEltexSviVlanID_StaysInTheVlanRange(t *testing.T) {
+func TestNumericSviVlanID_StaysInTheVlanRange(t *testing.T) {
 	for idx, name := range map[int]string{99999: "0", 104094: "4095"} {
 		id := strconv.Itoa(idx)
 		oids := ObjectIDValueMap{
@@ -347,7 +361,7 @@ func TestEltexSviVlanID_StaysInTheVlanRange(t *testing.T) {
 			".1.3.6.1.2.1.2.2.1.2." + id:    {Value: name},
 			".1.3.6.1.2.1.2.2.1.3." + id:    {Value: "53"},
 		}
-		_, ok := eltexSviVlanID(oids, idx, true)
+		_, ok := numericSviVlanID(oids, idx)
 		assert.False(t, ok, "ifIndex %d", idx)
 	}
 }

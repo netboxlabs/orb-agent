@@ -54,9 +54,6 @@ func sviVlanID(name string) (int, bool) {
 	return vid, true
 }
 
-// eltexArc is the sysObjectID arc of Eltex products.
-const eltexArc = ".1.3.6.1.4.1.35265.1."
-
 // vlanIfIndexBase is the ifIndex of VLAN 1's interface on switches that name
 // each VLAN interface by its bare VLAN ID (Eltex MES 21xx/23xx, Cisco small
 // business, UniFi); VLAN n's is vlanIfIndexBase + n - 1.
@@ -65,14 +62,16 @@ const vlanIfIndexBase = 100000
 // ifTypePropVirtual is IANAifType propVirtual(53).
 const ifTypePropVirtual = "53"
 
-// eltexSviVlanID reads the VLAN of an Eltex VLAN interface, which the switch
-// names with the bare VLAN ID. A bare number is no SVI name in general, so it
-// is read only on Eltex, and only where every recorded Eltex walk agrees:
-// ifIndex vlanIfIndexBase + VID - 1, ifName and ifDescr both exactly the
-// VID, and ifType propVirtual(53).
-func eltexSviVlanID(oids ObjectIDValueMap, idx int, eltex bool) (int, bool) {
+// numericSviVlanID reads the VLAN of an interface the switch names with the
+// bare VLAN ID, as Eltex MES 21xx/23xx, Cisco small-business and UniFi
+// switches do. A bare number is no SVI name in general, so it is read only
+// where the whole layout holds, on any vendor: ifIndex vlanIfIndexBase +
+// VID - 1, ifName and ifDescr both exactly the VID, and ifType
+// propVirtual(53). Across the librenms recordings that layout picks out only
+// VLAN interfaces.
+func numericSviVlanID(oids ObjectIDValueMap, idx int) (int, bool) {
 	vid := idx - vlanIfIndexBase + 1
-	if !eltex || vid < 1 || vid > 4094 {
+	if vid < 1 || vid > 4094 {
 		return 0, false
 	}
 	id, want := strconv.Itoa(idx), strconv.Itoa(vid)
@@ -153,7 +152,6 @@ func ResolveSviVlans(
 	}
 	collect(oidIfName)
 	collect(oidIfDescr)
-	eltex := sysObjectIDUnder(oids, eltexArc)
 
 	out := map[int]*diode.VLAN{}
 	for idx, names := range namesByIfIndex {
@@ -169,7 +167,7 @@ func ResolveSviVlans(
 				vids[vid] = struct{}{}
 			}
 		}
-		if vid, ok := eltexSviVlanID(oids, idx, eltex); ok {
+		if vid, ok := numericSviVlanID(oids, idx); ok {
 			vids[vid] = struct{}{}
 		}
 		if len(vids) > 1 {
