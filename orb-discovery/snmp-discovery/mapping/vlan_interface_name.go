@@ -49,9 +49,11 @@ func (m *InterfaceMapper) nameVlanInterface(
 }
 
 // leaveOutCollidingVlanInterfaces leaves out a VLAN interface whose new name
-// another interface on the device already has. An exact match would merge the
+// another interface on the target already has. An exact match would merge the
 // two into one NetBox interface, and one differing only in case would sit
-// beside it as a near-duplicate.
+// beside it as a near-duplicate. It runs before a stack is split into member
+// devices, so on a stack it compares across members; a prefix cannot render a
+// member's unit-numbered port name, and VLAN interfaces stay on the master.
 func (m *ObjectIDMapper) leaveOutCollidingVlanInterfaces(entities map[diode.Entity]bool) {
 	if len(m.registry.namedVlanInterfaces) == 0 {
 		return
