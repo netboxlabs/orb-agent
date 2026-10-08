@@ -1081,6 +1081,15 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	if name := resolveInterfaceName(m.nameSource, ifDescrRaw, ifNameRaw); name != "" {
 		interfaceEntity.Name = &name
 		fieldFound = true
+		if vid, ok := numericVlanID(getIndex(values), name); ok {
+			prefix := ""
+			if defaults != nil {
+				prefix = defaults.VlanInterfaceNamePrefix
+			}
+			if !m.nameVlanInterface(interfaceEntity, getIndex(values), vid, snmpIfType, prefix, entityRegistry) {
+				return nil
+			}
+		}
 	}
 
 	// Resolve interface type after all fields are collected

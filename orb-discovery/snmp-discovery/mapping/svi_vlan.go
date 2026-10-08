@@ -57,9 +57,10 @@ func sviVlanID(name string) (int, bool) {
 // eltexArc is the sysObjectID arc of Eltex products.
 const eltexArc = ".1.3.6.1.4.1.35265.1."
 
-// eltexSviIfIndexBase is the ifIndex of an Eltex switch's VLAN 1 interface;
-// VLAN n's is eltexSviIfIndexBase + n - 1.
-const eltexSviIfIndexBase = 100000
+// vlanIfIndexBase is the ifIndex of VLAN 1's interface on switches that name
+// each VLAN interface by its bare VLAN ID (Eltex MES, Cisco small business,
+// UniFi); VLAN n's is vlanIfIndexBase + n - 1.
+const vlanIfIndexBase = 100000
 
 // ifTypePropVirtual is IANAifType propVirtual(53).
 const ifTypePropVirtual = "53"
@@ -67,10 +68,10 @@ const ifTypePropVirtual = "53"
 // eltexSviVlanID reads the VLAN of an Eltex VLAN interface, which the switch
 // names with the bare VLAN ID. A bare number is no SVI name in general, so it
 // is read only on Eltex, and only where every recorded Eltex walk agrees:
-// ifIndex eltexSviIfIndexBase + VID - 1, ifName and ifDescr both exactly the
+// ifIndex vlanIfIndexBase + VID - 1, ifName and ifDescr both exactly the
 // VID, and ifType propVirtual(53).
 func eltexSviVlanID(oids ObjectIDValueMap, idx int, eltex bool) (int, bool) {
-	vid := idx - eltexSviIfIndexBase + 1
+	vid := idx - vlanIfIndexBase + 1
 	if !eltex || vid < 1 || vid > 4094 {
 		return 0, false
 	}

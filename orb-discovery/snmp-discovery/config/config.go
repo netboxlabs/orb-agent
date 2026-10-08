@@ -437,6 +437,9 @@ type Defaults struct {
 	VLAN                     VLANDefaults       `yaml:"vlan,omitempty"`
 	InterfacePatterns        []InterfacePattern `yaml:"interface_patterns,omitempty"`
 	InterfaceExcludePatterns []string           `yaml:"interface_exclude_patterns,omitempty"`
+	// VlanInterfaceNamePrefix names the VLAN interfaces a switch reports by
+	// the bare VLAN ID, as prefix + VID. Empty keeps the device's name.
+	VlanInterfaceNamePrefix string `yaml:"vlan_interface_name_prefix,omitempty"`
 	// StackMemberNameTemplate names non-master virtual-chassis members.
 	// Empty means DefaultStackMemberTemplate; see stack_naming.go.
 	StackMemberNameTemplate string `yaml:"stack_member_name_template,omitempty"`
@@ -543,6 +546,9 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	}
 	if overrideDefaults.StackMemberNameTemplate != "" {
 		merged.StackMemberNameTemplate = overrideDefaults.StackMemberNameTemplate
+	}
+	if overrideDefaults.VlanInterfaceNamePrefix != "" {
+		merged.VlanInterfaceNamePrefix = overrideDefaults.VlanInterfaceNamePrefix
 	}
 	if overrideDefaults.RackName() != "" {
 		merged.Rack = overrideDefaults.Rack
