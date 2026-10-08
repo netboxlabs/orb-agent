@@ -255,7 +255,30 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if err := validateVrfTenants(policy); err != nil {
 		return err
 	}
+	if err := validateVlanInterfaceNamePrefixes(policy); err != nil {
+		return err
+	}
 	return validateRackPlacement(policy)
+}
+
+// validateVlanInterfaceNamePrefixes refuses an invalid prefix wherever it is
+// set. Falling back to the device's names instead would rename every VLAN
+// interface back in NetBox.
+func validateVlanInterfaceNamePrefixes(policy config.Policy) error {
+	prefix := policy.Config.Defaults.VlanInterfaceNamePrefix
+	if err := config.ValidateVlanInterfaceNamePrefix(prefix); err != nil {
+		return fmt.Errorf("defaults.vlan_interface_name_prefix %q %w", prefix, err)
+	}
+	for _, target := range policy.Scope.Targets {
+		if target.OverrideDefaults == nil {
+			continue
+		}
+		prefix := target.OverrideDefaults.VlanInterfaceNamePrefix
+		if err := config.ValidateVlanInterfaceNamePrefix(prefix); err != nil {
+			return fmt.Errorf("target %s: override_defaults.vlan_interface_name_prefix %q %w", target.Host, prefix, err)
+		}
+	}
+	return nil
 }
 
 // validateVrfTenants checks the defaults each target uses: the policy's, or

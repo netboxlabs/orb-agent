@@ -1633,6 +1633,43 @@ func placed(host string, position any, face string, extra map[string]any) map[st
 	return map[string]any{"host": host, "override_defaults": override}
 }
 
+// An invalid prefix is refused at parse wherever it is set, rather than
+// falling back to the device's names and renaming every VLAN interface back.
+func TestManager_ParsePolicies_VlanInterfaceNamePrefix(t *testing.T) {
+	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	require.NoError(t, err)
+
+	for _, tt := range []struct {
+		name               string
+		defaults, override map[string]any
+		wantErr            string
+	}{
+		{name: "policy prefix", defaults: map[string]any{"vlan_interface_name_prefix": "Vlan"}},
+		{name: "target prefix with its space", override: map[string]any{"vlan_interface_name_prefix": "vlan "}},
+		{
+			name:     "invalid policy prefix",
+			defaults: map[string]any{"vlan_interface_name_prefix": "Vlan1"},
+			wantErr:  "defaults.vlan_interface_name_prefix",
+		},
+		{
+			name:     "invalid target prefix",
+			defaults: map[string]any{"vlan_interface_name_prefix": "Vlan"},
+			override: map[string]any{"vlan_interface_name_prefix": "vlan."},
+			wantErr:  "target 192.0.2.1: override_defaults.vlan_interface_name_prefix",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := manager.ParsePolicies(rackPolicy(t, "192.0.2.1", tt.defaults, tt.override))
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestManager_ParsePolicies_RackPlacement(t *testing.T) {
 	manager, err := policy.NewManager(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
 	require.NoError(t, err)

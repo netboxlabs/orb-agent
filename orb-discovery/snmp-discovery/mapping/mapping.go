@@ -65,6 +65,12 @@ type EntityRegistry struct {
 	ipSource           map[*diode.IPAddress]string
 	prefixRank         map[*diode.IPAddress]int
 	verifiedInterfaces map[*diode.Interface]struct{}
+
+	// namedVlanInterfaces holds the interfaces vlan_interface_name_prefix
+	// renamed, and unnamedVlanInterfaces counts those it would have renamed
+	// had it been set.
+	namedVlanInterfaces   map[*diode.Interface]struct{}
+	unnamedVlanInterfaces int
 }
 
 // NewEntityRegistry creates a new EntityRegistry
@@ -76,6 +82,8 @@ func NewEntityRegistry(logger *slog.Logger) *EntityRegistry {
 		ipSource:           make(map[*diode.IPAddress]string),
 		prefixRank:         make(map[*diode.IPAddress]int),
 		verifiedInterfaces: make(map[*diode.Interface]struct{}),
+
+		namedVlanInterfaces: make(map[*diode.Interface]struct{}),
 	}
 }
 
@@ -892,6 +900,10 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 			uniqueEntities[newEntity] = true
 		}
 	}
+	// Before dedup and dropUnverifiedInterfaceAssignments, so the addresses of a
+	// VLAN interface left out here go out unassigned.
+	m.leaveOutCollidingVlanInterfaces(uniqueEntities)
+	m.reportUnnamedVlanInterfaces()
 
 	// Dedup must run BEFORE filterExcludedEntities. Otherwise:
 	// legacy row (assigned to excluded interface) + modern row
