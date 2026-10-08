@@ -2492,14 +2492,30 @@ func TestMappingYAML_CiscoSBOverlayEntriesPresent(t *testing.T) {
 		t.Fatalf("yaml: %v", err)
 	}
 	wanted := map[string]bool{
+		".1.3.6.1.4.1.9.6.1.101.48.22.1": false, // vlanPortModeTable
 		".1.3.6.1.4.1.9.6.1.101.48.61.1": false, // vlanTrunkPortModeTable
 		".1.3.6.1.4.1.9.6.1.101.48.62.1": false, // vlanAccessPortModeTable
+	}
+	// The collector walks the child columns, not the table.
+	columns := map[string]bool{
+		".1.3.6.1.4.1.9.6.1.101.48.22.1.1": false, // vlanPortModeState
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.1": false, // vlanTrunkPortModeNativeVlanId
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.2": false, // vlanTrunkModeList1to1024
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.3": false, // vlanTrunkModeList1025to2048
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.4": false, // vlanTrunkModeList2049to3072
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.5": false, // vlanTrunkModeList3073to4094
+		".1.3.6.1.4.1.9.6.1.101.48.62.1.1": false, // vlanAccessPortModeVlanId
 	}
 	for _, e := range doc.Entries {
 		if _, want := wanted[e.OID]; !want {
 			continue
 		}
 		wanted[e.OID] = true
+		for _, child := range e.MappingEntries {
+			if _, want := columns[child.OID]; want {
+				columns[child.OID] = true
+			}
+		}
 		if e.Vendor != "cisco" {
 			t.Errorf("%s: vendor = %q, want cisco (these devices report sysObjectIDs under ciscoProducts)", e.OID, e.Vendor)
 		}
@@ -2512,6 +2528,11 @@ func TestMappingYAML_CiscoSBOverlayEntriesPresent(t *testing.T) {
 	for oid, found := range wanted {
 		if !found {
 			t.Errorf("mapping.yaml missing CISCOSB-scoped OID %s", oid)
+		}
+	}
+	for oid, found := range columns {
+		if !found {
+			t.Errorf("mapping.yaml missing CISCOSB column %s", oid)
 		}
 	}
 }
