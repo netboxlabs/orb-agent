@@ -2,7 +2,7 @@
 """
 Juniper Junos NAPALM driver subclass.
 
-Adds four optional extension methods on top of upstream NAPALM Junos:
+Adds five optional extension methods on top of upstream NAPALM Junos:
 
 - ``get_interfaces_vlans()``: per-interface VLAN classification from the
   ``<get-ethernet-switching-interface-information>`` RPC, tolerating both
@@ -1332,7 +1332,7 @@ class JunOSDriver(NapalmJunOSDriver):
     """
     Juniper Junos NAPALM driver.
 
-    Adds two optional extension methods on top of the upstream NAPALM driver:
+    Adds five optional extension methods on top of the upstream NAPALM driver:
 
     - ``get_interfaces_vlans()``: per-interface VLAN classification from the
       ``<get-ethernet-switching-interface-information>`` RPC, tolerating
@@ -1340,6 +1340,7 @@ class JunOSDriver(NapalmJunOSDriver):
     - ``get_chassis_members()``: Virtual Chassis topology from the
       ``<get-virtual-chassis-information>`` RPC, returning the vendor-
       neutral payload consumed by ``device_discovery.translate_chassis``.
+    - ``get_modules()``: module / module-bay discovery for modular chassis.
     - ``get_interfaces_lag()``: aggregated-Ethernet membership from the
       terse ``<get-interface-information>`` RPC.
     - ``get_interfaces_vlan_id()``: L3 VLAN interface to VLAN ID from the
