@@ -765,6 +765,20 @@ def test_prefix_vlan_still_attaches_when_every_member_agrees():
     assert all(p.vlan.vid == 10 for p in got), "an unanimous stack keeps its VLAN"
 
 
+def test_prefix_vlan_device_reported_vlan_id_reaches_every_stack_member():
+    """The device's interface-to-VLAN-ID map is honoured on a stack too."""
+    inputs = _stack_vlan_inputs()
+    # Member 2's routed port is a VLAN 10 interface by the device's own account,
+    # so it now agrees with member 1's SVI instead of abstaining.
+    inputs["iface_vlan_ids"] = {"Ethernet2/0/1": 10}
+
+    per_member = _build_per_member_interfaces(**inputs)
+
+    got = _prefixes_named(per_member, "10.0.0.0/24")
+    assert len(got) == 2
+    assert all(p.vlan.vid == 10 for p in got)
+
+
 def test_prefix_vlan_option_off_is_inert_on_a_stack():
     """With the option off no prefix carries a VLAN, whatever the members disagree about."""
     inputs = _stack_vlan_inputs()

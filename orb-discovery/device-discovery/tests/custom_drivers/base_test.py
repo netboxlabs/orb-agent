@@ -381,3 +381,22 @@ class BaseDriverTest:
         expected = _load_expected(mock_dir)
         if expected is not None:
             assert result == expected
+
+    def test_get_interfaces_vlan_id(self, scenario: str) -> None:
+        """Verify get_interfaces_vlan_id returns an interface -> VLAN ID map (driver-optional)."""
+        mock_dir = self._mock_dir("test_get_interfaces_vlan_id", scenario)
+        driver = self._build_driver(mock_dir)
+        if not hasattr(driver, "get_interfaces_vlan_id"):
+            pytest.skip(f"{self.driver_cls.__name__} does not expose get_interfaces_vlan_id")
+
+        result = driver.get_interfaces_vlan_id()
+        assert isinstance(result, dict), "get_interfaces_vlan_id must return a dict"
+        for name, vid in result.items():
+            assert isinstance(name, str) and name, f"bad interface name {name!r}"
+            if vid is not None:
+                assert isinstance(vid, int) and not isinstance(vid, bool), f"{name}: VLAN ID {vid!r} is not an int"
+                assert 1 <= vid <= 4094, f"{name}: VLAN ID {vid} out of range"
+
+        expected = _load_expected(mock_dir)
+        if expected is not None:
+            assert result == expected

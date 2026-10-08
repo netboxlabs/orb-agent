@@ -305,6 +305,7 @@ def _build_per_member_interfaces(
     options: "Options | None" = None,
     iface_vrf_map: dict[str, pb.VRF] | None = None,
     vlan_cache: dict[int, pb.VLAN] | None = None,
+    iface_vlan_ids: dict[str, int | None] | None = None,
 ) -> dict[int, list[Entity]]:
     """
     Run build_interface_entities once per member and return the per-member entity lists.
@@ -329,6 +330,7 @@ def _build_per_member_interfaces(
             options=options,
             iface_vrf_map=iface_vrf_map,
             vlan_cache=vlan_cache,
+            iface_vlan_ids=iface_vlan_ids,
         )
     # A prefix is keyed globally, not per member, so two members contributing
     # addresses to one network must agree on its VLAN or none may carry it.
@@ -361,7 +363,7 @@ def translate_as_stack(
     by parse_member_id. Mirrors the emission shape required by the
     netbox-diode-plugin for VC ingestion via the unique_master matcher.
     """
-    from device_discovery.translate import _build_vlan_cache, assign_primary_ip
+    from device_discovery.translate import _build_vlan_cache, _interfaces_vlan_ids, assign_primary_ip
 
     device_info = data.get("device") or {}
     interfaces = data.get("interface") or {}
@@ -433,6 +435,7 @@ def translate_as_stack(
         options=options,
         iface_vrf_map=iface_vrf_map,
         vlan_cache=vlan_cache,
+        iface_vlan_ids=_interfaces_vlan_ids(data.get("interfaces_vlan_id")),
     )
 
     # Primary-IP back-pointer is only meaningful on the master (mgmt IP).

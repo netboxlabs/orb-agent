@@ -352,6 +352,16 @@ Drivers that implement the optional `get_interfaces_lag()` getter report which p
 | `junos` | Supported (Juniper Junos via NETCONF) — `aenet` address families in the terse `get-interface-information` reply, the RPC behind `show interfaces terse`. Operational data only, so the discovery account needs no configuration-read permission, and the reply does not depend on LACP. Membership is reported per logical unit and collapses onto the physical port. Only `ae<N>` bundles are reported; SRX chassis-cluster `reth` and `fab` child links are not LAGs and are left out. Built from a reply captured on an EX4550 running Junos 15.1 (LACP bundles). |
 | other drivers | Not yet supported — open an issue with a real-device output capture if you need it. |
 
+## Prefix VLAN from the device
+
+Drivers that implement the optional `get_interfaces_vlan_id()` getter report the VLAN ID each L3 interface is bound to, so `emit_prefix_vlan: svi-name` can associate a prefix with its VLAN even when the interface name does not carry the VLAN ID. The getter is only called while that option is on; see the [device discovery README](./README.md#prefix) for the rules.
+
+| Driver | Status |
+|--------|--------|
+| `mikrotik_routeros` | Supported — `vlan-id` per VLAN interface from `interface vlan print detail` (one extra command per poll). Disabled interfaces are included. Withheld: 802.1ad S-tags (anything but an explicit `use-service-tag=no`, so a RouterOS that does not print the flag is withheld too), a VLAN interface stacked on another VLAN interface, and a VLAN ID configured on more than one parent. |
+| `brocade_fastiron` | Supported — the `router-interface ve <N>` line of each VLAN block in `show running-config vlan`; the VE number itself is never read as a VLAN ID. A VE bound by more than one VLAN is withheld. |
+| other drivers | Not yet supported. Interfaces fall back to the SVI-name rule. Open an issue with a real-device output capture if you need it. |
+
 ## Querying supported drivers at runtime
 
 device-discovery exposes its effective driver list via its capabilities endpoint:
