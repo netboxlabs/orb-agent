@@ -22,7 +22,7 @@ func ValidateVlanInterfaceNamePrefix(prefix string) error {
 		return nil
 	}
 	if !vlanInterfaceNamePrefixRe.MatchString(prefix) {
-		return errors.New("must start with a letter and hold only letters, - and _, " +
+		return errors.New("must start with an ASCII letter and hold only ASCII letters, - and _, " +
 			"in words joined by single spaces, optionally ending in one space")
 	}
 	if len(prefix) > maxVlanInterfaceNamePrefix {

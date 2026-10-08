@@ -80,9 +80,9 @@ func (m *ObjectIDMapper) leaveOutCollidingVlanInterfaces(entities map[diode.Enti
 }
 
 // forgetName drops the name of an interface left out of the run, so no lookup
-// by name can bind to it in place of the interface it was confused with. The
-// entity stays in the registry: its ifIndex still resolves the VRF of the
-// address it carried.
+// by name, such as a subinterface's parent, can bind to an interface the run
+// does not send. The entity stays in the registry: its ifIndex still resolves
+// the VRF of the address it carried.
 func forgetName(iface *diode.Interface) {
 	iface.Name = nil
 }
