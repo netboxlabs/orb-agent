@@ -2,7 +2,7 @@
 """
 Juniper Junos NAPALM driver subclass.
 
-Adds four optional extension methods on top of upstream NAPALM Junos:
+Adds five optional extension methods on top of upstream NAPALM Junos:
 
 - ``get_interfaces_vlans()``: per-interface VLAN classification from the
   ``<get-ethernet-switching-interface-information>`` RPC, tolerating both
@@ -19,6 +19,9 @@ Adds four optional extension methods on top of upstream NAPALM Junos:
 - ``get_interfaces_lag()``: aggregated-Ethernet membership from the terse
   ``<get-interface-information>`` reply — operational data only, so it needs
   no configuration-read permission.
+- ``get_interfaces_vlan_id()``: the VLAN each L3 VLAN interface (``vlan.N``,
+  ``irb.N``) routes for, from the extensive ``<get-vlan-information>``
+  reply — again operational data only.
 
 All fetch via PyEZ NETCONF RPC. The VLAN and Virtual Chassis getters target
 EX / QFX switching products; the LAG getter applies to any Junos platform.
@@ -1272,11 +1275,72 @@ def _lag_members_from_terse(root) -> dict[str, str]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# L3 VLAN interface -> VLAN ID (get-vlan-information extensive)
+# ---------------------------------------------------------------------------
+# Each VLAN row in ``show vlans extensive`` names the L3 interface that routes
+# for it, beside its 802.1Q tag:
+#
+#   non-ELS (EX4550, 15.1): <vlan> ... <vlan-tag>20</vlan-tag>
+#                                      <vlan-l3-interface>vlan.20 (UP)</vlan-l3-interface>
+#   ELS (QFX5100, 21.4):    <l2ng-l2ald-vlan-instance-group> ...
+#                               <l2ng-l2rtb-vlan-tag>166</l2ng-l2rtb-vlan-tag>
+#                               <l2ng-l2rtb-vlan-l3-interface>irb.166</l2ng-l2rtb-vlan-l3-interface>
+#
+# The tag, never the internal ``vlan-index``, is the VLAN ID, and the unit
+# number of the L3 interface is chosen by the operator, so it is not read.
+_VLAN_ROW_FIELDS = {
+    "vlan": ("vlan-tag", "vlan-l3-interface"),
+    "l2ng-l2ald-vlan-instance-group": ("l2ng-l2rtb-vlan-tag", "l2ng-l2rtb-vlan-l3-interface"),
+}
+# Non-ELS appends the interface state: "vlan.20 (UP)".
+_L3_INTERFACE_STATE_RE = re.compile(r"\s*\([^)]*\)\s*$")
+
+
+def _l3_interface_vlan_ids(root) -> dict[str, int | None]:
+    """
+    Map each L3 VLAN interface in a VLAN-table reply to the VLAN it routes for.
+
+    A row without an L3 interface contributes nothing. An interface maps to
+    ``None`` (reported, but not linked) when any row naming it carries a tag
+    outside 1..4094, or when rows naming it carry different tags: either way the
+    device does not give it one usable VLAN ID, and none is picked.
+    """
+    vids_by_iface: dict[str, set[int]] = {}
+    untagged: set[str] = set()
+    for row in root.iter():
+        fields = _VLAN_ROW_FIELDS.get(_localname(row))
+        if fields is None:
+            continue
+        tag_field, l3_field = fields
+        iface = _L3_INTERFACE_STATE_RE.sub("", _text(_find_child(row, l3_field)))
+        if not iface:
+            continue
+        vid = coerce_vid(_maybe_int(_text(_find_child(row, tag_field))))
+        if vid is None:
+            untagged.add(iface)
+            continue
+        vids_by_iface.setdefault(iface, set()).add(vid)
+
+    result: dict[str, int | None] = {}
+    for iface in sorted(untagged | vids_by_iface.keys()):
+        vids = vids_by_iface.get(iface, set())
+        if iface not in untagged and len(vids) == 1:
+            result[iface] = next(iter(vids))
+            continue
+        if iface in untagged:
+            logger.debug("Junos %s is the L3 interface of a VLAN without a usable tag; not linking it", iface)
+        else:
+            logger.debug("Junos %s is the L3 interface of VLANs %s; not linking it", iface, sorted(vids))
+        result[iface] = None
+    return result
+
+
 class JunOSDriver(NapalmJunOSDriver):
     """
     Juniper Junos NAPALM driver.
 
-    Adds two optional extension methods on top of the upstream NAPALM driver:
+    Adds five optional extension methods on top of the upstream NAPALM driver:
 
     - ``get_interfaces_vlans()``: per-interface VLAN classification from the
       ``<get-ethernet-switching-interface-information>`` RPC, tolerating
@@ -1284,8 +1348,11 @@ class JunOSDriver(NapalmJunOSDriver):
     - ``get_chassis_members()``: Virtual Chassis topology from the
       ``<get-virtual-chassis-information>`` RPC, returning the vendor-
       neutral payload consumed by ``device_discovery.translate_chassis``.
+    - ``get_modules()``: module / module-bay discovery for modular chassis.
     - ``get_interfaces_lag()``: aggregated-Ethernet membership from the
       terse ``<get-interface-information>`` RPC.
+    - ``get_interfaces_vlan_id()``: L3 VLAN interface to VLAN ID from the
+      extensive ``<get-vlan-information>`` RPC.
     """
 
     def get_interfaces_lag(self) -> dict[str, str]:
@@ -1311,6 +1378,30 @@ class JunOSDriver(NapalmJunOSDriver):
         except Exception as e:
             logger.warning("Junos terse interface reply could not be parsed; no LAG membership this cycle: %s", e)
             logger.debug("Junos terse interface parse failure detail", exc_info=True)
+            return {}
+
+    def get_interfaces_vlan_id(self) -> dict[str, int | None]:
+        """
+        Return ``{L3 VLAN interface: VLAN ID}`` from the device's VLAN table.
+
+        Read from the extensive ``<get-vlan-information>`` reply, which names the
+        ``vlan.N`` (non-ELS) or ``irb.N`` (ELS) interface routing for each VLAN.
+        Operational data, so a view-only account suffices. Routed subinterfaces
+        such as ``ae0.100`` are not in the VLAN table and are not reported.
+        Best-effort: a platform without switching (the RPC errors) or an
+        unexpected reply returns an empty dict, logged at debug.
+        """
+        try:
+            reply = self.device.rpc.get_vlan_information(extensive=True)
+        except Exception:
+            logger.debug("Junos get-vlan-information (extensive) failed; no interface VLAN IDs", exc_info=True)
+            return {}
+        if reply is None:
+            return {}
+        try:
+            return _l3_interface_vlan_ids(reply)
+        except Exception:
+            logger.debug("Junos VLAN table reply could not be parsed; no interface VLAN IDs", exc_info=True)
             return {}
 
     def get_chassis_members(self) -> dict | None:

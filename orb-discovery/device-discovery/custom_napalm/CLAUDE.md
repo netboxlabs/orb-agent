@@ -342,7 +342,7 @@ drivers without it are silently skipped and fall back to the SVI-name rule.
 **Tests**: add `mock_data/test_get_interfaces_vlan_id/<scenario>/` fixtures —
 `BaseDriverTest.test_get_interfaces_vlan_id` auto-discovers them, validates the
 shape, and compares against `expected_result.json` when present. Reference
-implementations: `mikrotik_routeros`, `brocade_fastiron`.
+implementations: `mikrotik_routeros`, `brocade_fastiron`, `junos`.
 
 ## Optional method: `get_network_instances`
 
