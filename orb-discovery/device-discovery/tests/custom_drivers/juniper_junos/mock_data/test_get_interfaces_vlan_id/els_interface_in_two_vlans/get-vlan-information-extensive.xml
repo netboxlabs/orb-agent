@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rpc-reply xmlns:junos="http://xml.juniper.net/junos/21.4R0/junos">
+  <l2ng-l2ald-vlan-instance-information xmlns="http://xml.juniper.net/junos/21.4R0/junos-l2al" junos:style="detail">
+    <l2ng-l2ald-vlan-instance-group>
+      <l2ng-l2rtb-name>default-switch</l2ng-l2rtb-name>
+      <l2ng-l2rtb-vlan-name>USERS</l2ng-l2rtb-vlan-name>
+      <l2ng-l2rtb-vlan-tag>200</l2ng-l2rtb-vlan-tag>
+      <l2ng-l2rtb-vlan-internal-index>2</l2ng-l2rtb-vlan-internal-index>
+      <l2ng-l2rtb-vlan-l3-interface>irb.20</l2ng-l2rtb-vlan-l3-interface>
+    </l2ng-l2ald-vlan-instance-group>
+    <l2ng-l2ald-vlan-instance-group>
+      <l2ng-l2rtb-name>default-switch</l2ng-l2rtb-name>
+      <l2ng-l2rtb-vlan-name>LAB-A</l2ng-l2rtb-vlan-name>
+      <l2ng-l2rtb-vlan-tag>300</l2ng-l2rtb-vlan-tag>
+      <l2ng-l2rtb-vlan-internal-index>3</l2ng-l2rtb-vlan-internal-index>
+      <l2ng-l2rtb-vlan-l3-interface>irb.300</l2ng-l2rtb-vlan-l3-interface>
+    </l2ng-l2ald-vlan-instance-group>
+    <l2ng-l2ald-vlan-instance-group>
+      <l2ng-l2rtb-name>VS1</l2ng-l2rtb-name>
+      <l2ng-l2rtb-vlan-name>LAB-B</l2ng-l2rtb-vlan-name>
+      <l2ng-l2rtb-vlan-tag>301</l2ng-l2rtb-vlan-tag>
+      <l2ng-l2rtb-vlan-internal-index>4</l2ng-l2rtb-vlan-internal-index>
+      <l2ng-l2rtb-vlan-l3-interface>irb.300</l2ng-l2rtb-vlan-l3-interface>
+    </l2ng-l2ald-vlan-instance-group>
+    <l2ng-l2ald-vlan-instance-group>
+      <l2ng-l2rtb-name>default-switch</l2ng-l2rtb-name>
+      <l2ng-l2rtb-vlan-name>default</l2ng-l2rtb-vlan-name>
+      <l2ng-l2rtb-vlan-tag>1</l2ng-l2rtb-vlan-tag>
+      <l2ng-l2rtb-vlan-internal-index>5</l2ng-l2rtb-vlan-internal-index>
+    </l2ng-l2ald-vlan-instance-group>
+  </l2ng-l2ald-vlan-instance-information>
+</rpc-reply>

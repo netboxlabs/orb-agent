@@ -683,7 +683,8 @@ snmp-discovery decoder does with one.
 `get_interfaces_vlan_id()` getter report the VLAN ID each L3 interface is bound to, read
 from the device rather than the name, so interfaces whose names carry no usable VLAN ID
 are associated too: a RouterOS VLAN interface named `sfpplus1.156` with `vlan-id=156`,
-or a FastIron `ve 400` that is the `router-interface` of VLAN 40. Where the name and the
+a FastIron `ve 400` that is the `router-interface` of VLAN 40, or a Junos `irb.166` or
+`vlan.20` that the switch's VLAN table names as the L3 interface of a VLAN. Where the name and the
 device disagree, the device wins. The driver can also withhold an interface it reports
 but whose tag is not a plain 802.1Q VLAN; such an interface is not associated, whatever
 its name says. The getter is only called while the option is `svi-name`. See the

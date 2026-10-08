@@ -3,8 +3,8 @@ Tests for prefix VLANs resolved from device-reported VLAN IDs.
 
 Covers the runner's ``_collect_interfaces_vlan_id`` gate and the seam between
 the drivers' ``get_interfaces_vlan_id()`` and the translator: interfaces whose
-names carry no usable VLAN ID (``sfpplus1.156``, ``ve400``) still link their
-prefix to the VLAN the device binds them to.
+names carry no usable VLAN ID (``sfpplus1.156``, ``ve400``, ``vlan.20``,
+``irb.166``) still link their prefix to the VLAN the device binds them to.
 """
 
 import logging
@@ -12,11 +12,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from custom_napalm.brocade_fastiron import FastIronDriver
+from custom_napalm.junos import JunOSDriver
 from custom_napalm.mikrotik_routeros import ROSDriver
 from device_discovery.policy.models import Config, Defaults, Options
 from device_discovery.policy.runner import PolicyRunner
 from device_discovery.translate import translate_data
-from tests.custom_drivers.mock_device import FakeCLIDevice
+from tests.custom_drivers.mock_device import FakeCLIDevice, FakePyEZDevice
 
 _DRIVERS = Path(__file__).parent / "custom_drivers"
 
@@ -162,3 +163,43 @@ def test_fastiron_ve_links_to_the_vlan_that_binds_it():
     got = _prefix_vlans(data)
     assert got["10.40.0.0/24"] == 40
     assert got["10.20.0.0/24"] is None, "a VE bound by two VLANs must not be linked"
+
+
+def test_junos_l3_vlan_interfaces_link_and_routed_units_stay_unlinked():
+    """
+    ``vlan.N`` links through the VLAN table; a routed unit outside it does not.
+
+    The VLAN IDs come from the EX4550's own extensive VLAN reply. The VLAN table
+    handed to the translator mirrors what upstream ``get_vlans`` builds from the
+    same device (tag -> name). ``ae120.1876`` carries a tag the switch has no
+    VLAN for, so its prefix is left without one by design.
+    """
+    mock = _DRIVERS / "juniper_junos" / "mock_data" / "test_get_interfaces_vlan_id" / "ex4550_non_els"
+    driver = object.__new__(JunOSDriver)
+    driver.device = FakePyEZDevice(mock)
+    vlan_ids = driver.get_interfaces_vlan_id()
+
+    data = {
+        "device": _device_info("Juniper", "EX4550-32F"),
+        "interface": {},
+        "interface_ip": {
+            "vlan.20": {"ipv4": {"192.0.2.1": {"prefix_length": 24}}},
+            "vlan.156": {"ipv4": {"198.51.100.1": {"prefix_length": 24}}},
+            "ae120.1876": {"ipv4": {"203.0.113.1": {"prefix_length": 30}}},
+        },
+        "vlan": {
+            "20": {"name": "MGMT", "interfaces": []},
+            "50": {"name": "Internet", "interfaces": []},
+            "156": {"name": "VL156", "interfaces": []},
+            "100": {"name": "VL100", "interfaces": []},
+        },
+        "interfaces_vlan_id": vlan_ids,
+        "driver": "junos",
+        "defaults": Defaults(site="dc1"),
+        "options": Options(emit_prefix_vlan="svi-name"),
+    }
+
+    got = _prefix_vlans(data)
+    assert got["192.0.2.0/24"] == 20
+    assert got["198.51.100.0/24"] == 156
+    assert got["203.0.113.0/30"] is None, "a routed unit with no VLAN in the table must stay unlinked"

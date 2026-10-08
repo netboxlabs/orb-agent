@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rpc-reply xmlns:junos="http://xml.juniper.net/junos/15.1R7/junos">
+  <vlan-information xmlns="http://xml.juniper.net/junos/15.1R7/junos-esw" junos:style="extensive">
+    <vlan-terse />
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>OFFICE</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-tag>40</vlan-tag>
+      <vlan-tag-string>40</vlan-tag-string>
+      <vlan-index>6</vlan-index>
+      <vlan-l3-interface>vlan.400 (DOWN)</vlan-l3-interface>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>LAB</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-tag>60</vlan-tag>
+      <vlan-tag-string>60</vlan-tag-string>
+      <vlan-index>7</vlan-index>
+      <vlan-l3-interface></vlan-l3-interface>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>STORAGE</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-tag>None</vlan-tag>
+      <vlan-index>8</vlan-index>
+      <vlan-l3-interface>vlan.70 (UP)</vlan-l3-interface>
+    </vlan>
+  </vlan-information>
+</rpc-reply>
