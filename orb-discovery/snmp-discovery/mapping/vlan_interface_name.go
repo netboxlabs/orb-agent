@@ -10,7 +10,8 @@ import (
 // numericVlanID reports the VLAN an interface stands for on switches that name
 // each VLAN interface by its bare VLAN ID and number it vlanIfIndexBase +
 // VID - 1. name is the one the agent would send, so the test follows
-// interface_name_source and holds when a walk lost one of the name columns.
+// interface_name_source, and where both name columns carry the VID it holds
+// when a walk lost one of them.
 func numericVlanID(index ObjectIDIndex, name string) (int, bool) {
 	ifIndex, err := strconv.Atoi(string(index))
 	if err != nil {
@@ -41,14 +42,16 @@ func (m *InterfaceMapper) nameVlanInterface(
 	case ifType == "" && prefix != "":
 		m.logger.Warn("interface: leaving a VLAN interface out of this run; its ifType was not returned",
 			"ifIndex", string(index), "vlan", vid)
+		forgetName(iface)
 		return false
 	}
 	return true
 }
 
 // leaveOutCollidingVlanInterfaces leaves out a VLAN interface whose new name
-// another interface on the device already has, in any case: NetBox would merge
-// the two into one interface.
+// another interface on the device already has. An exact match would merge the
+// two into one NetBox interface, and one differing only in case would sit
+// beside it as a near-duplicate.
 func (m *ObjectIDMapper) leaveOutCollidingVlanInterfaces(entities map[diode.Entity]bool) {
 	if len(m.registry.namedVlanInterfaces) == 0 {
 		return
@@ -72,7 +75,16 @@ func (m *ObjectIDMapper) leaveOutCollidingVlanInterfaces(entities map[diode.Enti
 		delete(m.registry.verifiedInterfaces, iface)
 		m.logger.Warn("interface: leaving a VLAN interface out of this run; its name collides with another interface",
 			"name", *iface.Name, "other", other)
+		forgetName(iface)
 	}
+}
+
+// forgetName drops the name of an interface left out of the run, so no lookup
+// by name can bind to it in place of the interface it was confused with. The
+// entity stays in the registry: its ifIndex still resolves the VRF of the
+// address it carried.
+func forgetName(iface *diode.Interface) {
+	iface.Name = nil
 }
 
 // reportUnnamedVlanInterfaces says once per run that the device names VLAN
@@ -80,6 +92,7 @@ func (m *ObjectIDMapper) leaveOutCollidingVlanInterfaces(entities map[diode.Enti
 func (m *ObjectIDMapper) reportUnnamedVlanInterfaces() {
 	if n := m.registry.unnamedVlanInterfaces; n > 0 {
 		m.logger.Info("interface: VLAN interfaces are named by their bare VLAN ID; "+
-			"set defaults.vlan_interface_name_prefix to send them as prefix + VLAN ID", "count", n)
+			"defaults.vlan_interface_name_prefix sends them as prefix + VLAN ID, "+
+			"which renames them in NetBox, so read the interface docs first", "count", n)
 	}
 }

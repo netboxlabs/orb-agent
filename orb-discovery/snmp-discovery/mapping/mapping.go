@@ -900,6 +900,8 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 			uniqueEntities[newEntity] = true
 		}
 	}
+	// Before dedup and dropUnverifiedInterfaceAssignments, so the addresses of a
+	// VLAN interface left out here go out unassigned.
 	m.leaveOutCollidingVlanInterfaces(uniqueEntities)
 	m.reportUnnamedVlanInterfaces()
 

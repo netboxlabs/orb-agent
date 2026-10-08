@@ -96,7 +96,7 @@ ifDescr is empty. `ifAlias` continues to populate the interface
 
 ### VLAN interfaces named by their VLAN ID
 
-Cisco small-business switches (Catalyst 1200/1300, CBS, SG and SX series), Eltex MES and some UniFi switches name each VLAN interface by its bare VLAN ID, so VLAN 5's interface reaches NetBox as `5`. Set `defaults.vlan_interface_name_prefix` to send it as the prefix followed by the VLAN ID instead:
+Cisco small-business switches (Catalyst 1200/1300, CBS, SG and SX series), Eltex MES 21xx and 23xx, and some UniFi switches name each VLAN interface by its bare VLAN ID, so VLAN 5's interface reaches NetBox as `5`. Set `defaults.vlan_interface_name_prefix` to send it as the prefix followed by the VLAN ID instead:
 
 ```yaml
 config:
@@ -123,10 +123,14 @@ Every other interface keeps its name. Some switches of the same family (SGE2010,
 - The NetBox device-type library names the VLAN 1 interface `Vlan1` on the Catalyst 1300 and most CBS types, and `vlan 1` or `vlan1` on SG-series types. Check the type you use.
 - When the device type defines that interface, a matching prefix makes the discovered interface bind to it rather than sit beside it.
 
-The prefix starts with a letter and holds only letters, `-` and `_`, in words joined by single spaces. It may end in one space and is at most 60 characters. Anything else is refused when the policy is loaded.
+The prefix starts with a letter and holds only ASCII letters, `-` and `_`, in words joined by single spaces. It may end in one space and is at most 60 characters. Anything else is refused when the policy is loaded.
+
+- **Quoting:** quote a prefix that ends in a space. YAML drops an unquoted trailing space, which would send `vlan5` rather than `vlan 5`.
+- **Overrides:** a target's `override_defaults` can change the prefix but not remove it. To keep some targets on the bare names, set the prefix per target rather than in the policy's `defaults`.
 
 **What changes.**
 - Exclusion patterns and interface type patterns see the new name.
+- `emit_prefix_vlan` reads the names the device reports, so the prefix does not change which addresses associate a VLAN: outside Eltex, a renamed interface does not qualify.
 - **Missing ifType:** when a walk returns a VLAN interface without its ifType, the interface is left out of that run and its address is sent without an interface, so NetBox keeps what it has.
 - **Name collision:** when the new name equals another interface's name on the device, ignoring case, the VLAN interface is left out with a warning.
 - **Prefix unset:** each run logs how many such interfaces it found.
@@ -142,7 +146,10 @@ The prefix starts with a letter and holds only letters, `-` and `_`, in words jo
 >
 > Alternatively, set the prefix and delete the old interfaces after the
 > next run. Deleting an interface also deletes anything attached to it,
-> such as addresses added by hand, so check them first.
+> such as addresses added by hand, so check them first. Use this path
+> when NetBox already has an interface with the new name, from a
+> device-type template or an earlier manual rename: the rename in step 2
+> would fail on it, while the prefix binds to it.
 
 device-discovery names these interfaces from the switch CLI (`vlan 5` on Cisco small business, `vlan5` on UniFi). Discover a device with one backend: the two backends also name its ports differently.
 

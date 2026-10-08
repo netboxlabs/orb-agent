@@ -2,6 +2,7 @@ package mapping_test
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"strconv"
 	"testing"
@@ -83,11 +84,11 @@ func mapVlanIfaces(t *testing.T, defaults config.Defaults, opts config.Options, 
 	if ipOn != 0 {
 		addIP(objectIDs, ipOn)
 	}
-	cfg, err := mapping.NewConfig(vlanIfaceEntries(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, nil, opts)
-	require.NoError(t, err)
 	if defaults.Interface.Type == "" {
 		defaults.Interface.Type = "other"
 	}
+	cfg, err := mapping.NewConfig(vlanIfaceEntries(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, &defaults, opts)
+	require.NoError(t, err)
 	var run vlanRun
 	for _, e := range mapping.NewObjectIDMapper(cfg, logger, &defaults, "").MapObjectIDsToEntity(objectIDs) {
 		switch v := e.(type) {
@@ -232,8 +233,9 @@ func TestVlanInterfaceName_MissingTypeLeavesTheInterfaceOut(t *testing.T) {
 	assert.Equal(t, "5", run.ipInterface())
 }
 
-// A prefix that renders another interface's name, in any case, would merge the
-// two in NetBox, so the VLAN interface is left out and the run says why.
+// A prefix that renders another interface's name would merge the two in
+// NetBox, or, differing only in case, put a near-duplicate beside it, so the
+// VLAN interface is left out and the run says why.
 func TestVlanInterfaceName_CollisionLeavesTheVlanInterfaceOut(t *testing.T) {
 	for _, other := range []string{"Po1", "PO1"} {
 		lag := iface{1000, other, other, "161"}
@@ -257,4 +259,74 @@ func TestVlanInterfaceName_ExclusionSeesTheNewName(t *testing.T) {
 		config.Options{}, []iface{svi5, gi1}, 100004)
 	assert.Nil(t, run.ip, "the address on an excluded interface is dropped")
 	assert.Equal(t, []string{"GigabitEthernet1"}, run.names())
+}
+
+// A VLAN interface left out for a collision must not stand in for the
+// interface it collides with: a subinterface of that name keeps its real
+// parent on every run, whatever the map order.
+func TestVlanInterfaceName_LeftOutInterfaceIsNotFoundByName(t *testing.T) {
+	lag := iface{1000, "Po1", "Po1", "161"}
+	sub := iface{2000, "Po1.100", "Po1.100", "53"}
+	svi1 := iface{100000, "1", "1", "53"}
+	for range 30 {
+		run := mapVlanIfaces(t, config.Defaults{VlanInterfaceNamePrefix: "Po"}, config.Options{},
+			[]iface{lag, sub, svi1}, 0)
+		var got *diode.Interface
+		for _, i := range run.ifaces {
+			if i.GetName() == "Po1.100" {
+				got = i
+			}
+		}
+		require.NotNil(t, got)
+		require.NotNil(t, got.Parent)
+		require.Equal(t, "lag", got.Parent.GetType())
+	}
+}
+
+// User interface patterns type the name that is sent.
+func TestVlanInterfaceName_UserPatternsSeeTheNewName(t *testing.T) {
+	run := mapVlanIfaces(t, config.Defaults{
+		VlanInterfaceNamePrefix: "Vlan",
+		InterfacePatterns:       []config.InterfacePattern{{Match: `^Vlan\d+$`, Type: "bridge"}},
+	}, config.Options{}, []iface{svi5}, 100004)
+	require.NotNil(t, run.ip)
+	assert.Equal(t, "bridge", run.ip.AssignedObject.(*diode.Interface).GetType())
+}
+
+// The device's primary address keeps its renamed interface.
+func TestVlanInterfaceName_PrimaryIPKeepsTheNewName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	objectIDs := mapping.ObjectIDValueMap{}
+	svi5.rows(objectIDs)
+	addIP(objectIDs, 100004)
+	defaults := &config.Defaults{VlanInterfaceNamePrefix: "Vlan", Interface: config.InterfaceDefaults{Type: "other"}}
+	cfg, err := mapping.NewConfig(vlanIfaceEntries(), logger, &FakeManufacturers{}, &FakeDeviceLookup{}, defaults, config.Options{})
+	require.NoError(t, err)
+	var device *diode.Device
+	for _, e := range mapping.NewObjectIDMapper(cfg, logger, defaults, "192.0.2.1").MapObjectIDsToEntity(objectIDs) {
+		if i, ok := e.(*diode.IPAddress); ok && i.AssignedObject != nil {
+			device = i.AssignedObject.(*diode.Interface).Device
+		}
+	}
+	require.NotNil(t, device)
+	require.NotNil(t, device.PrimaryIp4)
+	require.NotNil(t, device.PrimaryIp4.AssignedObject)
+	assert.Equal(t, "Vlan5", device.PrimaryIp4.AssignedObject.(*diode.Interface).GetName())
+}
+
+// The same holds for an interface left out for a missing ifType: a
+// subinterface named after it gets no parent rather than one never sent.
+func TestVlanInterfaceName_MissingTypeInterfaceIsNotFoundByName(t *testing.T) {
+	noType := iface{100004, "5", "5", ""}
+	sub := iface{3000, "5.100", "5.100", "53"}
+	run := mapVlanIfaces(t, config.Defaults{VlanInterfaceNamePrefix: "Vlan"}, config.Options{},
+		[]iface{noType, sub}, 0)
+	var got *diode.Interface
+	for _, i := range run.ifaces {
+		if i.GetName() == "5.100" {
+			got = i
+		}
+	}
+	require.NotNil(t, got)
+	assert.Nil(t, got.Parent)
 }

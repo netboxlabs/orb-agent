@@ -58,8 +58,8 @@ func sviVlanID(name string) (int, bool) {
 const eltexArc = ".1.3.6.1.4.1.35265.1."
 
 // vlanIfIndexBase is the ifIndex of VLAN 1's interface on switches that name
-// each VLAN interface by its bare VLAN ID (Eltex MES, Cisco small business,
-// UniFi); VLAN n's is vlanIfIndexBase + n - 1.
+// each VLAN interface by its bare VLAN ID (Eltex MES 21xx/23xx, Cisco small
+// business, UniFi); VLAN n's is vlanIfIndexBase + n - 1.
 const vlanIfIndexBase = 100000
 
 // ifTypePropVirtual is IANAifType propVirtual(53).
