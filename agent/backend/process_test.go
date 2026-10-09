@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -110,7 +111,7 @@ func TestStartProcess_RequiredFieldsValidated(t *testing.T) {
 	noop := func(string, bool) {}
 	setProc := func(Commander, <-chan CmdStatus) {}
 	ready := func() (string, error) { return "", nil }
-	full := StartSpec{Logger: testProcessLogger(), SetProc: setProc, LogLine: noop, ReadinessCheck: ready}
+	full := StartSpec{Logger: testProcessLogger(), SetProc: setProc, LogLine: noop, ReadinessCheck: ready, ListenAddr: testListenAddr(t)}
 
 	tests := []struct {
 		name string
@@ -120,6 +121,7 @@ func TestStartProcess_RequiredFieldsValidated(t *testing.T) {
 		{"missing setProc", func() StartSpec { s := full; s.SetProc = nil; return s }()},
 		{"missing logLine", func() StartSpec { s := full; s.LogLine = nil; return s }()},
 		{"missing readinessCheck", func() StartSpec { s := full; s.ReadinessCheck = nil; return s }()},
+		{"missing listenAddr", func() StartSpec { s := full; s.ListenAddr = ""; return s }()},
 		{"zero spec", StartSpec{}},
 	}
 	for _, tc := range tests {
@@ -159,6 +161,7 @@ func TestStartProcess_Success(t *testing.T) {
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "test-exec",
+		ListenAddr:     testListenAddr(t),
 		Args:           []string{"--flag"},
 		LogLine: func(line string, isStderr bool) {
 			logMu.Lock()
@@ -217,6 +220,7 @@ func TestStartProcess_SetProcBeforeReadiness(t *testing.T) {
 		NameDisplay:    "guard",
 		NameUnderscore: "guard",
 		Exec:           "guard-exec",
+		ListenAddr:     testListenAddr(t),
 		LogLine:        func(string, bool) {},
 		SetProc: func(c Commander, _ <-chan CmdStatus) {
 			published = c
@@ -254,6 +258,7 @@ func TestStartProcess_StartupCompleteError(t *testing.T) {
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
 			Exec:           "test-exec",
+			ListenAddr:     testListenAddr(t),
 			LogLine:        func(string, bool) {},
 			SetProc:        func(Commander, <-chan CmdStatus) {},
 			ReadinessCheck: func() (string, error) {
@@ -288,6 +293,7 @@ func TestStartProcess_StartupError(t *testing.T) {
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "test-exec",
+		ListenAddr:     testListenAddr(t),
 		LogLine:        func(string, bool) {},
 		SetProc:        func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "", nil },
@@ -327,6 +333,7 @@ func TestStartProcess_ProcessEndedDuringReadiness(t *testing.T) {
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
 			Exec:           "test-exec",
+			ListenAddr:     testListenAddr(t),
 			LogLine:        func(string, bool) {},
 			SetProc:        func(Commander, <-chan CmdStatus) {},
 			ReadinessCheck: func() (string, error) {
@@ -365,6 +372,7 @@ func TestStartProcess_ReadinessTimeout(t *testing.T) {
 			NameDisplay:    "test-backend",
 			NameUnderscore: "test_backend",
 			Exec:           "test-exec",
+			ListenAddr:     testListenAddr(t),
 			LogLine:        func(string, bool) {},
 			SetProc:        func(Commander, <-chan CmdStatus) {},
 			ReadinessCheck: func() (string, error) {
@@ -398,6 +406,7 @@ func TestStartProcess_PassesExecAndArgs(t *testing.T) {
 		NameDisplay:    "test-backend",
 		NameUnderscore: "test_backend",
 		Exec:           "my-binary",
+		ListenAddr:     testListenAddr(t),
 		Args:           []string{"run", "--flag", "value"},
 		LogLine:        func(string, bool) {},
 		SetProc:        func(Commander, <-chan CmdStatus) {},
@@ -417,16 +426,51 @@ func TestStartProcess_ReturnsBeforeSpawningWhenTheContextIsDone(t *testing.T) {
 	captured := stubNewCmdOptions(t, fake)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	// The address is held: a start cancelled before it began answers with
+	// the cancellation, not with the address, so a caller that reads the
+	// refusal as the environment's (the upgrade restart) sees a shutdown.
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
 
-	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+	err = StartProcess(StartSpec{
+		ListenAddr: holder.Addr().String(),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "1", nil },
 		Ctx:            ctx,
 	})
 
 	require.ErrorIs(t, err, context.Canceled)
+	assert.False(t, errors.Is(err, ErrListenAddrInUse), "a done context returns before the address is probed")
 	assert.Empty(t, captured.exec, "no command is built for a start that was cancelled before it began")
+	assert.Equal(t, int32(0), fake.stopCalls.Load())
+}
+
+// A cancellation that lands while the address is being reserved, a resolver
+// answering late, returns before anything is spawned.
+func TestStartProcess_ReturnsBeforeSpawningWhenCancelledDuringTheProbe(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(1)
+	captured := stubNewCmdOptions(t, fake)
+	ctx, cancel := context.WithCancel(context.Background())
+	orig := ReserveListenAddr
+	ReserveListenAddr = func(_ context.Context, addr string) (string, error) {
+		cancel()
+		return addr, nil
+	}
+	t.Cleanup(func() { ReserveListenAddr = orig })
+
+	err := StartProcess(StartSpec{
+		ListenAddr: "127.0.0.1:1",
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1", nil },
+		Ctx:            ctx,
+	})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, captured.exec, "no command is built for a start cancelled while its address was reserved")
 	assert.Equal(t, int32(0), fake.stopCalls.Load())
 }
 
@@ -443,7 +487,8 @@ func TestStartProcess_CancelledDuringTheStartupWait(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		ListenAddr: testListenAddr(t),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "1", nil },
 		Ctx:            ctx,
@@ -468,7 +513,8 @@ func TestStartProcess_CancelledDuringAReadinessBackoff(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		ListenAddr: testListenAddr(t),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) {
 			if checks.Add(1) == 2 {
@@ -497,7 +543,8 @@ func TestStartProcess_GivesUpWhenTheReadinessBudgetIsSpent(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		ListenAddr: testListenAddr(t),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck:  func() (string, error) { checks.Add(1); return "", errors.New("not yet") },
 		ReadinessBudget: 40 * time.Millisecond,
@@ -525,7 +572,8 @@ func TestStartProcess_StopsTheChildWhenCancelledDuringASuccessfulReadinessCheck(
 	var checks atomic.Int32
 
 	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		ListenAddr: testListenAddr(t),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) {
 			checks.Add(1)
@@ -552,7 +600,8 @@ func TestStartProcess_ReadsTheReadinessBudgetFromTheContext(t *testing.T) {
 	start := time.Now()
 
 	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		ListenAddr: testListenAddr(t),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck: func() (string, error) { return "", errors.New("not yet") },
 		Ctx:            WithReadinessBudget(context.Background(), 40*time.Millisecond),
@@ -573,7 +622,8 @@ func TestStartProcess_SpecBudgetWinsOverTheContextBudget(t *testing.T) {
 	stubNewCmdOptions(t, fake)
 
 	err := StartProcess(StartSpec{
-		Logger: testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
+		ListenAddr: testListenAddr(t),
+		Logger:     testProcessLogger(), NameDisplay: "test-backend", NameUnderscore: "test_backend", Exec: "test-exec",
 		LogLine: func(string, bool) {}, SetProc: func(Commander, <-chan CmdStatus) {},
 		ReadinessCheck:  func() (string, error) { return "", errors.New("not yet") },
 		ReadinessBudget: 40 * time.Millisecond,
@@ -588,4 +638,328 @@ func TestStartProcess_SpecBudgetWinsOverTheContextBudget(t *testing.T) {
 func TestReadinessBudgetFromAnUnmarkedContextIsZero(t *testing.T) {
 	assert.Equal(t, time.Duration(0), ReadinessBudgetFrom(context.Background()))
 	assert.Equal(t, 3*time.Second, ReadinessBudgetFrom(WithReadinessBudget(context.Background(), 3*time.Second)))
+}
+
+// A backend's readiness check asks localhost:<port> and takes whatever answers,
+// so while another process holds the port, the check would report that
+// process's answer as the child's. StartProcess refuses to spawn while the
+// address the backend would listen on is held.
+func TestStartProcess_RefusesWhileTheListenAddressIsHeld(t *testing.T) {
+	stubProcessTimers(t)
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+
+	fake := newFakeCommander(4242)
+	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+	captured := stubNewCmdOptions(t, fake)
+	var setProcCalled atomic.Bool
+
+	err = StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     holder.Addr().String(),
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) { setProcCalled.Store(true) },
+		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse), "the refusal is marked as the address being held: %v", err)
+	assert.Contains(t, err.Error(), holder.Addr().String(), "the error names the address")
+	assert.Contains(t, err.Error(), "in use", "the error says the address is held")
+	assert.Empty(t, captured.exec, "nothing is spawned while the address is held")
+	assert.False(t, setProcCalled.Load(), "no process is published")
+}
+
+// The probe holds the address only for the check: the child must be able to
+// bind it right after.
+func TestStartProcess_ReleasesTheProbedListenAddress(t *testing.T) {
+	stubProcessTimers(t)
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := probe.Addr().String()
+	require.NoError(t, probe.Close())
+
+	fake := newFakeCommander(4242)
+	fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+	stubNewCmdOptions(t, fake)
+
+	err = StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     addr,
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+	})
+	require.NoError(t, err, "a free address lets the start proceed")
+
+	child, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the address is free again for the child")
+	_ = child.Close()
+}
+
+// A readiness check that passed may have been answered by another process on
+// the address, with the child dead at its own bind by then: the child's exit
+// is checked again after the check passes, before the backend is called ready.
+func TestStartProcess_AChildDeadAfterAPassingReadinessCheckIsNotReady(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(4242)
+	var checked atomic.Bool
+	fake.statusFn = func() CmdStatus {
+		if checked.Load() {
+			return CmdStatus{PID: 4242, Complete: true, Exit: 1}
+		}
+		return CmdStatus{PID: 4242}
+	}
+	stubNewCmdOptions(t, fake)
+
+	err := StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     testListenAddr(t),
+		LogLine:        func(string, bool) {},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) {
+			// Answered by another process; the child dies right after.
+			checked.Store(true)
+			return "1.0.0", nil
+		},
+	})
+	require.Error(t, err, "a child that died is not ready, whatever answered the check")
+	assert.Contains(t, err.Error(), "process ended unexpectedly")
+}
+
+// testListenAddr is a free loopback address for a spec whose test is not
+// about the probe: reserved so it names a real port, released for the probe
+// to find free.
+func testListenAddr(t *testing.T) string {
+	t.Helper()
+	addr, err := ReserveListenAddr(context.Background(), "127.0.0.1:0")
+	require.NoError(t, err)
+	return addr
+}
+
+// With port 0 the reservation picks a free port and returns it, which is how
+// a backend that listens on any open port learns the one to be told; the
+// port is released for the child to bind.
+func TestReserveListenAddrPicksAFreePort(t *testing.T) {
+	addr, err := ReserveListenAddr(context.Background(), "127.0.0.1:0")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1", host)
+	assert.NotEqual(t, "0", port, "the picked port is a concrete one")
+
+	child, err := net.Listen("tcp", addr)
+	require.NoError(t, err, "the picked port is released for the child")
+	_ = child.Close()
+}
+
+// localhostIPv6 returns the IPv6 loopback the host resolves localhost to, or
+// skips the test on a host that has none or cannot bind it.
+func localhostIPv6(t *testing.T) string {
+	t.Helper()
+	ips, err := net.DefaultResolver.LookupIPAddr(context.Background(), "localhost")
+	require.NoError(t, err)
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			continue
+		}
+		probe, err := net.Listen("tcp", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			t.Skipf("localhost resolves to %s but it cannot be bound: %v", ip, err)
+		}
+		_ = probe.Close()
+		return ip.String()
+	}
+	t.Skip("localhost does not resolve to an IPv6 address on this host")
+	return ""
+}
+
+// The readiness check dials every address its host resolves to and takes
+// the first that answers, so a hostname reserves every one of them: a
+// process holding only the IPv6 loopback would answer for the child on the
+// IPv4 one.
+func TestReserveListenAddrRefusesAHostWhoseOtherAddressIsHeld(t *testing.T) {
+	v6 := localhostIPv6(t)
+	holder, err := net.Listen("tcp", net.JoinHostPort(v6, "0"))
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+	_, port, err := net.SplitHostPort(holder.Addr().String())
+	require.NoError(t, err)
+
+	_, err = ReserveListenAddr(context.Background(), net.JoinHostPort("localhost", port))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+	assert.Contains(t, err.Error(), net.JoinHostPort(v6, port), "names the held address")
+}
+
+// A hostname with port 0 picks one port free on every address the host
+// resolves to and returns it under the hostname, the one the child is told.
+func TestReserveListenAddrPicksOnePortForEveryAddressOfAHost(t *testing.T) {
+	v6 := localhostIPv6(t)
+
+	addr, err := ReserveListenAddr(context.Background(), "localhost:0")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.Equal(t, "localhost", host)
+	assert.NotEqual(t, "0", port)
+
+	for _, h := range []string{"127.0.0.1", v6} {
+		child, err := net.Listen("tcp", net.JoinHostPort(h, port))
+		require.NoError(t, err, "the picked port is free on %s", h)
+		_ = child.Close()
+	}
+}
+
+// stubLookupListenHost makes the reservation resolve every hostname to the
+// given addresses and records the context it was handed.
+func stubLookupListenHost(t *testing.T, ips ...string) *context.Context {
+	t.Helper()
+	var seen context.Context
+	orig := lookupListenHost
+	lookupListenHost = func(ctx context.Context, _ string) ([]net.IPAddr, error) {
+		seen = ctx
+		out := make([]net.IPAddr, 0, len(ips))
+		for _, ip := range ips {
+			out = append(out, net.IPAddr{IP: net.ParseIP(ip)})
+		}
+		return out, nil
+	}
+	t.Cleanup(func() { lookupListenHost = orig })
+	return &seen
+}
+
+// stubListenFamilies stands in for a host with the given address families.
+func stubListenFamilies(t *testing.T, v4, v6 bool) {
+	t.Helper()
+	orig := listenFamilies
+	listenFamilies = func() (bool, bool) { return v4, v6 }
+	t.Cleanup(func() { listenFamilies = orig })
+}
+
+// otherHostAddr is a documentation-range address, one another host would
+// have: this host cannot bind it, but a client here can dial it.
+const otherHostAddr = "192.0.2.1"
+
+// A host that resolves to an address this host does not have is refused:
+// the reservation cannot cover it while the readiness check could dial it
+// and take another machine's answer for the child's.
+func TestReserveListenAddrRefusesAnAddressAnotherHostHas(t *testing.T) {
+	stubLookupListenHost(t, "127.0.0.1", otherHostAddr)
+	stubListenFamilies(t, true, true)
+
+	_, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+	assert.Contains(t, err.Error(), otherHostAddr)
+}
+
+// A host may resolve to an address in a family this host has no address in,
+// the IPv6 loopback where IPv6 is disabled but the hosts file keeps the
+// entry: that address is left out, since nothing here can listen there and
+// the readiness check cannot dial it either, and the port is reserved on
+// the rest.
+func TestReserveListenAddrLeavesOutAFamilyTheHostHasNoAddressIn(t *testing.T) {
+	v6 := localhostIPv6(t)
+	stubLookupListenHost(t, "127.0.0.1", v6)
+	stubListenFamilies(t, true, false)
+	// The IPv6 loopback is held on the port, which proves it was never bound.
+	free, err := ReserveListenAddr(context.Background(), "127.0.0.1:0")
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(free)
+	require.NoError(t, err)
+	holder, err := net.Listen("tcp", net.JoinHostPort(v6, port))
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+
+	addr, err := ReserveListenAddr(context.Background(), net.JoinHostPort("example.test", port))
+	require.NoError(t, err)
+	assert.Equal(t, net.JoinHostPort("example.test", port), addr)
+}
+
+// A host with no address this host can bind is refused: nothing could listen
+// there and the readiness check could reach nothing.
+func TestReserveListenAddrRefusesAHostWithNoBindableAddress(t *testing.T) {
+	stubLookupListenHost(t, otherHostAddr)
+	stubListenFamilies(t, false, false)
+
+	_, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+}
+
+// A hosts file or a resolver may return an address more than once; it is
+// bound once, not refused as held by the probe's own first bind.
+func TestReserveListenAddrBindsARepeatedAddressOnce(t *testing.T) {
+	stubLookupListenHost(t, "127.0.0.1", "127.0.0.1")
+	stubListenFamilies(t, true, true)
+
+	addr, err := ReserveListenAddr(context.Background(), "example.test:0")
+	require.NoError(t, err)
+	_, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	assert.NotEqual(t, "0", port)
+}
+
+// The hostname is resolved under the caller's context, so a stalled resolver
+// ends with the start's cancellation rather than on its own clock.
+func TestReserveListenAddrResolvesUnderTheCallersContext(t *testing.T) {
+	seen := stubLookupListenHost(t, "127.0.0.1")
+	type key struct{}
+	ctx := context.WithValue(context.Background(), key{}, "the start's context")
+
+	_, err := ReserveListenAddr(ctx, "example.test:0")
+	require.NoError(t, err)
+	assert.Equal(t, "the start's context", (*seen).Value(key{}))
+}
+
+// A held address is refused with the sentinel, the same way StartProcess
+// reports it.
+func TestReserveListenAddrRefusesAHeldAddress(t *testing.T) {
+	holder, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = holder.Close() }()
+
+	_, err = ReserveListenAddr(context.Background(), holder.Addr().String())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrListenAddrInUse))
+}
+
+// A spec still carrying port 0 would probe fine and tell the child to pick a
+// port the readiness check cannot know, so it is refused before anything is
+// spawned: the port is reserved before the spec is built.
+func TestStartProcess_RefusesAnUnreservedPortZero(t *testing.T) {
+	// Every spelling net.Listen reads as "any port", including the empty
+	// one a `port: ""` config yields, and an address with no port at all.
+	for _, addr := range []string{"127.0.0.1:0", "127.0.0.1:", "127.0.0.1:00", "nohostport"} {
+		t.Run(addr, func(t *testing.T) {
+			stubProcessTimers(t)
+			fake := newFakeCommander(4242)
+			fake.statusFn = func() CmdStatus { return CmdStatus{PID: 4242} }
+			captured := stubNewCmdOptions(t, fake)
+
+			err := StartProcess(StartSpec{
+				Logger:         testProcessLogger(),
+				NameDisplay:    "test-backend",
+				NameUnderscore: "test_backend",
+				Exec:           "test-exec",
+				ListenAddr:     addr,
+				LogLine:        func(string, bool) {},
+				SetProc:        func(Commander, <-chan CmdStatus) {},
+				ReadinessCheck: func() (string, error) { return "1.0.0", nil },
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "ReserveListenAddr")
+			assert.Empty(t, captured.exec, "nothing is spawned")
+		})
+	}
 }

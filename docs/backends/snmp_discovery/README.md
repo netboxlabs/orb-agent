@@ -28,7 +28,11 @@ When the `discover_asset_tags` policy option is enabled, snmp-discovery reads `E
 
 When the `emit_device_name` policy option is set to `false`, snmp-discovery still walks `sysName` but does **not** emit `Device.name` on the matched device. Use this with a target `netbox_id` / `metadata.source_match` so Diode matches the existing NetBox record without proposing a hostname rename when the device's `sysName` differs from the NetBox name. The name is suppressed only when the device carries a matcher that also travels on its nested references — `source_match` (netbox_id) or `asset_tag`; if neither is present the name is kept and a warning is logged. (Matching by `serial` or `primary_ip` alone does not enable omission: `serial` is not a unique NetBox matcher, and `primary_ip` is stripped from the nested device stubs.) The name is suppressed across every representation of the device that reaches the payload: the device itself, the shared virtual-chassis master reference, the nested device stubs on interfaces, and the device reference embedded in its own `primary_ip4`/`primary_ip6`. On a virtual-chassis stack, member names and the virtual-chassis name are unaffected. Defaults to `true`.
 
+Interfaces that are members of a link aggregation carry a `lag` reference to their aggregate interface, read from the standard `IEEE8023-LAG-MIB` — see [LAG membership](#lag-membership) below. On by default; set `emit_lag_membership: false` to opt out.
+
 When a device exposes the relevant MIBs, interfaces also carry their switching configuration: `mode` (`access` / `tagged` / `tagged-all` / unset for routed), the untagged (access/native) VLAN, and the list of tagged VLANs. VLANs referenced on an interface but not present in the device's VLAN database are auto-emitted as VLAN entities so the association is complete in NetBox; this behavior can be disabled via the `create_unknown_vlans` option (see below). Auto-emitted stubs use the placeholder name `VLAN<vid>` (e.g. `VLAN42`) because NetBox's `ipam.vlan.name` is required — operators or sibling switches can later overwrite the placeholder via the same vid+group matcher. VLAN discovery uses Q-BRIDGE-MIB (RFC 4363) as the generic source, a Cisco-specific overlay (CISCO-VLAN-MEMBERSHIP-MIB, CISCO-VOICE-VLAN-MIB) on Cisco devices that don't fully implement Q-BRIDGE, a Juniper overlay that resolves internal VLAN indices to real tags on the Junos platforms that use them, and the HUAWEI-VLAN-MIB catalog on Huawei platforms (such as SmartAX OLTs) that implement no Q-BRIDGE-MIB at all — see [SNMP Discovery — Supported Platforms](./supported_platforms.md#interface--vlan-associations) for which device classes are covered.
+
+The switchport a membership lands on is the physical port (or aggregate), not the logical unit some platforms index their bridge ports by: on pre-ELS Junos `dot1dBasePortIfIndex` resolves to `xe-0/0/17.0` where the configuration belongs to `xe-0/0/17`. See [Switchport placement](./supported_platforms.md#interface--vlan-associations) for how units are resolved, combined, and when they are left alone.
 
 Note: when a switchport is converted to a routed (L3) interface between discovery cycles, prior `mode`/untagged-VLAN/tagged-VLAN associations are NOT automatically cleared in NetBox; operators must clear them manually. This is a current limitation of the Diode plugin's PATCH semantics and is tracked separately. The same caveat applies on device-discovery.
 
@@ -78,11 +82,12 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 |:---------:|:----:|:--------:|:-----------:|
 | create_unknown_vlans | bool | no | Auto-emit a VLAN entity for any VID referenced on an interface but absent from the device's `dot1qVlanStaticTable`. Stubs inherit attributes from `defaults.vlan` for stable matching. Defaults to `true`. Set `false` to drop unknown VIDs from interface associations entirely (requires every referenced VLAN to already exist in NetBox). |
 | discover_asset_tags | bool | no | When `true`, walks `ENTITY-MIB::entPhysicalAssetID` and populates each device's `asset_tag` from its chassis row — standalone devices get the chassis tag; each virtual-chassis member gets its own per-member tag. An operator-supplied `defaults.asset_tag` (literal or OID reference) always takes precedence on the target device. Values that are empty, non-printable, well-known placeholders (`UNKNOWN`, `N/A`, `None`, `0`, …), longer than NetBox's 50-character limit, or duplicated across chassis rows of the same target are skipped with a warning — `asset_tag` is unique in NetBox and is the highest-precedence device matcher, so a duplicated tag would merge two devices into one record. The same protection applies across targets of one policy: the first target to report a tag owns it for the lifetime of the policy, and other targets reporting the same value (vendor-cloned EEPROM data) are skipped with a warning. Defaults to `false` — the column is not even walked when off. |
-| discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces carry a `module=` ref to the transceiver they're connected to). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
+| discover_modules | string | no | Controls emission of `Module` / `ModuleBay` entities on modular chassis. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot — line cards and supervisors; PSU / fan recognised by the PID classifier but never emitted), or `full` (linecards plus one Module per transceiver sub-bay; interfaces are linked to the optic or line module holding them when the device populates `entAliasMappingTable`). Detection is vendor-neutral via `ENTITY-MIB::entPhysicalTable` — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | discover_vrfs | bool | no | When `true`, discovers VRFs from the device's VRF MIB tables and attaches them to the IP addresses of each VRF's member interfaces (matched by `ifIndex`). A discovered VRF takes precedence over the `vrf` / `vrf_ipv4` / `vrf_ipv6` defaults for those interfaces; other addresses keep the configured defaults. Defaults to `false` — the VRF tables are not even walked when off. See [VRFs](#vrfs) for the MIB tiers, route-distinguisher handling, and limitations. |
 | emit_prefixes | bool | no | Derive one `Prefix` entity per unique (network, VRF) from the discovered IP addresses, matching device-discovery's behavior. **Defaults to `true`** — set `false` to opt out. See [Prefixes](#prefixes). |
 | emit_host_prefixes | bool | no | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. **Defaults to `false`** (the opposite of `emit_prefixes`): a host prefix only restates the address, which is already emitted as an `IPAddress` entity. Set `true` to derive them anyway, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefixes](#prefixes). |
 | emit_prefix_vlan | string | no | Associate a derived `Prefix` with the VLAN of the SVI-style interface the contributing address lives on. One of `off` (**default**) or `svi-name`. An unrecognized or misspelled value normalizes to `off` rather than erroring, so a typo disables the feature instead of writing a guess into NetBox. See [Prefixes](#prefixes). |
+| emit_lag_membership | bool | no | **Defaults to `true`.** Read link-aggregation membership from `IEEE8023-LAG-MIB::dot3adAggPortTable` and set `lag` on each member port to its aggregate interface. Set `false` to leave `lag` unset and skip the table walk. See [LAG membership](#lag-membership). |
 | emit_device_name | bool | no | **Defaults to `true`.** Set `false` to stop emitting `Device.name` (from `sysName`) on the matched device, so continual discovery under Assurance does not propose a hostname rename when `sysName` differs from the NetBox name. `sysName` is still walked; only the emitted field is suppressed. Intended for use with a target `netbox_id` / `metadata.source_match`. Takes effect only when the device is matchable by a field that also travels on its nested references — `source_match` (netbox_id) or `asset_tag`; if neither is present the name is kept and a warning is logged, to avoid emitting an unmatchable device. Matching by `serial` (not unique in NetBox) or `primary_ip` alone does **not** enable omission. Does not affect virtual-chassis member names. |
 | interface_name_source | string | no | Source for the NetBox interface **name**. One of `auto` (default — ifDescr preferred, ifName used when ifDescr is empty or looks like a hardware description; zero behaviour change), `ifname` (force SNMP `ifName`), or `ifdescr` (force `ifDescr`). Each forced mode falls back to the other field when its primary is empty for an interface. An unrecognized value is warned once and treated as `auto`. ⚠️ Changing this on an existing deployment renames interfaces — see [Interface Name Selection](./interface.md#interface-name-selection). |
 | propagate_defaults_to_prefix_scope | bool | no | When `true` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to the Prefix scope site and `defaults.location` to the scope location (location wins, carrying the site). Defaults to `false`. Any explicit `defaults.prefix.scope_*` skips the cascade wholesale. |
@@ -93,12 +98,16 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | tags | list | no | List of tags to apply to all discovered entities |
 | site | string | no | Default site name for discovered devices |
 | location | string | no | Default location for discovered devices. Accepts a literal name or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)) |
+| rack | string | no | NetBox rack for discovered devices, by name. Always a literal, never an OID reference. In a target's `override_defaults` it replaces the policy value. See [Rack placement](#rack-placement) |
+| position | number | no | The U the target's device sits at in its rack, e.g. `40` or `40.5` for a half U. Only in a target's `override_defaults`, together with `face`. See [Rack placement](#rack-placement) |
+| face | string | no | The rack face the target's device is mounted on: `front` or `rear`, in any case. Only in a target's `override_defaults`, together with `position`. See [Rack placement](#rack-placement) |
 | asset_tag | string | no | Default asset tag for discovered devices. Accepts a literal value or an SNMP OID reference (see [Default values from SNMP OIDs](#default-values-from-snmp-oids)). NetBox enforces a 50-character limit; resolved values longer than 50 characters are warn-logged and skipped |
 | role | string | no | Default role for discovered devices |
 | stack_member_name_template | string | no | Template for non-master virtual-chassis member device names. Placeholders: `{name}` (the stack name, from `sysName`) and `{id}` (the device-reported member id). Defaults to `{name}-{id}`, which reproduces the naming emitted before this option existed. See [Member naming](#member-naming). |
-| tenant | string \| map | no | Default tenant for discovered devices. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see the [tenant map](#tenant-map) below). Applies to Device entities only — IP address, prefix, and VLAN tenants keep their own per-entity defaults (`ip_address.tenant`, `prefix.tenant`, `vlan.tenant`). Virtual-chassis members inherit the master's tenant. In a per-target `override_defaults`, tenant merges field-wise: overriding `name` keeps an inherited `group` |
+| tenant | string \| map | no | Default tenant for discovered devices. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see the [tenant map](#tenant-map) below). Applies to Device entities only; IP address, prefix, and VLAN tenants keep their own per-entity defaults (`ip_address.tenant`, `prefix.tenant`, `vlan.tenant`). Virtual-chassis members inherit the master's tenant. In a per-target `override_defaults`, a tenant with another name, or with a group other than the policy's (including one the policy lacks), replaces the policy's as a whole, keeping the policy's name when the override gives none, so give the group there too; otherwise it refines the policy's field by field |
 | interface_patterns | list  | no | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | no | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
+| vlan_interface_name_prefix | string | no | Sends VLAN interfaces that a switch names by the bare VLAN ID (Cisco small business, Eltex MES 21xx/23xx, UniFi) as this prefix followed by the VLAN ID, for example `Vlan` (`5` -> `Vlan5`) or `vlan ` (`vlan 5`). Unset keeps the device's names. ⚠️ Setting, changing or removing it renames interfaces. See [VLAN interfaces named by their VLAN ID](./interface.md#vlan-interfaces-named-by-their-vlan-id). |
 
 ##### Nested Defaults
 | Parameter | Type | Description |
@@ -111,9 +120,11 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ platform   | string  | Override the auto-discovered platform name   |
 | interface    | map  | Interface-specific defaults    |
 | ├─ description | string  | Interface description        |
-| ├─ if_type       | string | Interface type (e.g. "ethernet", "virtual")  |
+| ├─ if_type       | string | Interface type (e.g. "1000base-t", "other")  |
 | ip_address   | map  | IP address-specific defaults  |
 | ├─ role   | string  | IP address role                  |
+| ├─ tenant   | string \| map  | IP address tenant, in the same form as the top-level `tenant` (see the [tenant map](#tenant-map) below) |
+| ├─ description | string  | IP address description      |
 | ├─ vrf   | string \| map  | IP address VRF name, or a VRF map (see the [vrf map](#vrf-map) below). Used for both address families unless an AF-specific override is set. |
 | ├─ vrf_ipv4   | string \| map  | IPv4-specific VRF override (same shape as `vrf`). When set, IPv4 addresses use this VRF; IPv6 still uses `vrf`. The override replaces `vrf` wholesale for its family — it does not inherit `vrf.name`. |
 | ├─ vrf_ipv6   | string \| map  | IPv6-specific VRF override (same shape as `vrf`). When set, IPv6 addresses use this VRF; IPv4 still uses `vrf`. |
@@ -122,7 +133,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | ├─ comments | string  | Prefix comments |
 | ├─ tags | list  | Prefix tags |
 | ├─ role | string  | Prefix role |
-| ├─ tenant | string  | Prefix tenant |
+| ├─ tenant | string \| map  | Prefix tenant, in the same form as the top-level `tenant` |
 | ├─ vrf   | string \| map  | Prefix VRF (same `vrf` map shape; independent of `ip_address.vrf`) |
 | ├─ vrf_ipv4   | string \| map  | IPv4-specific prefix VRF override |
 | ├─ vrf_ipv6   | string \| map  | IPv6-specific prefix VRF override |
@@ -131,20 +142,19 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 | vrf | map | VRF-specific defaults (used within `ip_address` and `prefix`, incl. the `vrf_ipv4` / `vrf_ipv6` overrides) |
 | ├─ name | string  | VRF name |
 | ├─ rd | string  | Route distinguisher (e.g. `65000:100`) |
-| ├─ description | string  | VRF description |
-| ├─ comments | string  | VRF comments |
-| ├─ tags | list  | VRF tags |
-| ├─ tenant   | string  | IP address tenant              |
-| ├─ description | string  | IP address description      |
+| ├─ tenant | string \| map  | Tenant the VRF belongs to, in the same form as the top-level `tenant`. Never taken from another tenant default (see the [vrf map](#vrf-map) below) |
+| ├─ description | string  | VRF description, written to the VRF on every run |
+| ├─ comments | string  | VRF comments, written to the VRF on every run |
+| ├─ tags | list  | VRF tags, added to the VRF's existing tags |
 | vlan    | map  | VLAN-specific defaults  |
 | ├─ description | string  | VLAN description |
 | ├─ tags | list | Per-VLAN tags. Merged with the top-level `tags` list on each emitted VLAN entity, mirroring the `device`/`interface`/`ip_address` defaults pattern. |
 | ├─ group | string \| map | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see the [VLAN group map](#vlan-group-map) below). In a per-target `override_defaults`, the group replaces the policy value as a whole |
-| ├─ tenant | string | VLAN tenant |
+| ├─ tenant | string \| map | VLAN tenant, in the same form as the top-level `tenant` |
 | ├─ status | string | VLAN status override (`active`, `reserved`, `deprecated`). When unset, status is derived from `dot1qVlanStaticRowStatus`: `active(1)` → `active`, `notInService(2)` → `reserved`. |
 
 ##### Tenant Map
-The top-level `tenant` default accepts either a bare string (tenant name) or a map:
+Every tenant default (the top-level `tenant`, `ip_address.tenant`, `prefix.tenant`, `vlan.tenant`, and a VRF map's `tenant`) accepts either a bare string (tenant name) or a map:
 
 | Parameter | Type | Description |
 |---------|----|-----------|
@@ -154,7 +164,41 @@ The top-level `tenant` default accepts either a bare string (tenant name) or a m
 | comments | string  | Tenant comments |
 | tags | list  | Tenant tags |
 
+##### VRF Map
+`vrf`, `vrf_ipv4` and `vrf_ipv6` accept either a bare string (VRF name) or a map with the keys in the `vrf` rows above. Any other key in the map, or in its tenant map, is refused, so a misspelt key such as `rd`, `tenant` or `group` is not silently dropped.
+
+In a per-target `override_defaults`, a VRF map that names another VRF replaces the policy's as a whole, keeping only the policy's name when it gives none; a tenant it gives is still resolved against the policy VRF's tenant, by the tenant rule below. A policy VRF with neither a name nor an `rd` is a template that each override refines. Diode finds a VRF with an RD by the RD alone and one without by its name and tenant, so a VRF map names another VRF when it gives another name, an `rd` other than the policy's (including one the policy lacks), a tenant other than the policy VRF's, or, with no `rd` on either side, a tenant the policy VRF lacks. Otherwise it refines the policy's field by field, for example a tenant added to a VRF that has an `rd`. A tenant default names another tenant when it gives another name, or a group other than the policy's (including one the policy lacks), and is then replaced as a whole the same way. A tenant named in another group is only a separate tenant once it exists in NetBox; until then Diode can match the existing one by its slug and move it between groups.
+
+A VRF tenant needs a name, and a VRF map that sets a tenant needs a VRF name in the defaults a target ends up with; otherwise the policy is refused rather than the VRF being sent without its tenant, or dropped.
+
+The `ip_address`, `prefix` and top-level `tenant` defaults do not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
+
+When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
+
+Every tenant default reaches Diode in full on each run. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant, or an `ip_address`, `prefix` or `vlan` tenant written as a map with more than a name, names the same tenant as another tenant default, write the two identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both, rewrites the tenant on every run or creates a second tenant of that name, depending on what NetBox already holds, so such a policy is refused, as is one that writes a tenant group two ways. Each target is checked with the defaults it ends up with, its `override_defaults` merged in; copies in different targets, or in different policies, are not compared, so keep those consistent yourself. Pairs that could be written before VRF tenants and tenant maps existed, such as a top-level tenant map against a bare `ip_address.tenant`, are not compared either; a grouped and an ungrouped copy of one tenant can still create a second tenant of that name on an empty NetBox.
+
+If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
+
+VRFs discovered with `discover_vrfs` carry no tenant, so this applies only to the configured `vrf`, `vrf_ipv4` and `vrf_ipv6` defaults.
+
+```yaml
+defaults:
+  tenant: &owner
+    name: "Example Tenant GmbH"
+    group: "Example Group"
+  ip_address:
+    tenant: *owner
+    vrf: &example-vrf
+      name: "Example VRF"
+      tenant: *owner
+  prefix:
+    vrf: *example-vrf
+```
+
 ##### VLAN Group Map
+
+> **Set a site and a group.** Diode matches a VLAN that has no group on its VID alone, so such a VLAN never matches VLANs already scoped to a group in NetBox: ingestion duplicates them, and across several sites the same VID collides on a single record where the last writer's name wins. `vlan.group` alone is not enough — with no `defaults.site` the group is scoped to the placeholder site `undefined`, which cannot match your group of the same name under a real site, so you get a second group and the same duplicates. Set both. The agent logs a warning the first time it sends VLANs it cannot match. Note a site on the VLAN itself is not a substitute for the group: it leaves the duplication untouched, and NetBox has deprecated assigning a VLAN directly to a site.
+
 Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
 
 ```yaml
@@ -190,7 +234,7 @@ Each target in the `targets` list can include:
 | host | string | yes | Target hostname,  IP address, subnets or IP ranges |
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
-| override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope |
+| override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope. `position` and `face` are set here only (see [Rack placement](#rack-placement)) |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
 
 #### Subnet and range scanning
@@ -218,6 +262,101 @@ range. A conformant agent silently discards a request bearing the wrong
 community, so there is no substitute value the probe could send instead without
 turning every device into a false negative. Use SNMPv3 for range scanning where
 the segment is not trusted, or name targets individually.
+
+#### Rack placement
+
+`rack` places discovered devices in a NetBox rack. It is the rack's name, used
+as written, and can be set in `defaults` or in a target's `override_defaults`.
+The rack is sent with the device's site and, when the device has one, its
+location, so the device goes into the rack of that name in its own location.
+
+`position` and `face` place one target's device at a U of that rack. They are
+accepted only in a target's `override_defaults`, and a policy is refused
+unless:
+
+- `position` and `face` are set together, and the target has a rack, from its
+  own `override_defaults` or from the policy `defaults`.
+- `face` is `front` or `rear`, in any case.
+- `position` is 1 or more, in steps of 0.5 (`40.5` is a half U). Whether it
+  fits the rack's height is left to NetBox.
+- The target's `host` is a single address or hostname. A range or subnet would
+  place every device it finds at the same U. `rack` alone is fine on a range
+  or subnet.
+- No two targets are placed at the same U and face of one rack (the same site,
+  location and rack name). Two half-depth devices can share a U on opposite
+  faces. A device sent without a location (none on the target or in the
+  policy `defaults`) clashes with a target at the same U and face of a rack of
+  that name in any location of the site, because a rack sent without a
+  location can bind to any rack of that name in the site. A target whose
+  `location` is an OID reference is left out of this check: its location is
+  only known when the device is scanned. Two targets reaching the same host
+  (one address or name, written as itself, a `/32` or a one-address range, on
+  the same `port`), or with the same `netbox_id` or literal `asset_tag`,
+  update one device, so when they send a rack they must send the same rack,
+  position and face (a rack without a position counts too), and in a literal
+  location, since one read from an OID cannot be compared. An `asset_tag` in
+  the policy `defaults` reaches every target, so it makes all of them one
+  device; a tag read from an OID is only known at scan time and is not
+  compared. A target is matched by its strongest identifier, in the order
+  Diode matches on (`netbox_id`, then `asset_tag`, then the host), so a shared
+  identifier ties two targets only when it is the strongest of at least one:
+  two targets with different `netbox_id`s are two devices even when they send
+  the same tag or reach the same host. Two targets count as one device at a U
+  only when they share the strongest identifier of both. A target without a
+  rack that shares a device with a racked one must send that target's site and
+  location, or no location: NetBox refuses a device whose rack is in another
+  site or location. A `netbox_id` is ignored on any subnet or range syntax, a
+  `/32` or a one-address range included, so it does not tie such a target to
+  the device with that id.
+
+Quote a numeric rack name (`rack: "01"`). The agent passes the policy on
+through YAML, so an unquoted `01` would arrive as the number 1, and `010` as
+8; a rack that is not text is refused rather than guessed at.
+
+```yaml
+config:
+  defaults:
+    site: "DC1"
+    location: "Hall 1"
+    rack: "R12"
+scope:
+  targets:
+    - host: "192.0.2.10"
+      override_defaults:
+        position: 40
+        face: "front"
+    - host: "192.0.2.11"
+      override_defaults:
+        rack: "R14"
+        position: 12.5
+        face: "rear"
+    - host: "192.0.2.32/28" # every device found goes in R12, at no particular U
+  authentication:
+    protocol_version: "SNMPv2c"
+    community: "public"
+```
+
+How NetBox and Diode handle a placement:
+
+- A rack name that does not exist in the site is created by Diode, like any
+  other referenced object. Use the exact NetBox name, and set `location` when
+  racks in different locations share a name.
+- When NetBox cannot accept a placement (the U is taken, the device does not
+  fit, or the position is beyond the rack's height), NetBox rejects the
+  device's own record that cycle, and its reason appears in the Diode ingestion
+  logs. Its interfaces and addresses are separate records and still go in.
+- A device that is not in NetBox yet, sent to a U another device already
+  occupies, updates that other device, because Diode matches devices by rack,
+  position and face. Make sure the U is free before setting it.
+- The position is applied again on every run, so a device moved in NetBox
+  moves back on the next run unless its override is updated.
+- On a [stack](#switch-stacks--virtual-chassis), only the master device is
+  placed. A stack can span racks, so the other members are sent no rack,
+  position or face: NetBox keeps whatever it has for them, and a new member is
+  created without a rack. When a rack is sent, members get no `location`
+  either, since NetBox refuses a device location that differs from the
+  location of the device's rack. Without a rack, members take the location as
+  before.
 
 #### Authentication Parameters
 | Parameter | Type | Required | Description |
@@ -287,7 +426,7 @@ config:
       tenant: "network-ops"
       # vrf accepts either a bare name (rd left empty) ...
       # vrf: "management"
-      # ... or a map with name + optional rd / description / comments / tags:
+      # ... or a map with name + optional rd / tenant / description / comments / tags:
       vrf:
         name: "management"
         rd: "65000:100"
@@ -297,7 +436,7 @@ config:
       # vrf_ipv6: { name: "ipv6-vrf", rd: "65000:6" }
     interface:
       description: "Auto-discovered interface"
-      if_type: "ethernet"
+      if_type: "other"
     interface_patterns:
       - match: "^(GigabitEthernet|Gi).*"
         type: "1000base-t"
@@ -326,6 +465,9 @@ scope:
       override_defaults:
         role: "switch"
         tags: ["custom"]
+        rack: "R12"                     # Rack placement (see above)
+        position: 40                    # position and face: override_defaults only
+        face: "front"
         device:
           model: "CCR2004-16G-2S+"     # Hard-override auto-discovered model
           manufacturer: "MikroTik"      # Hard-override auto-discovered manufacturer
@@ -349,6 +491,8 @@ scope:
 
 When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) with non-empty serials, snmp-discovery emits a NetBox `VirtualChassis` plus one `Device` per stack member, and routes each interface and IP address to the correct member. Detection is vendor-neutral and driven entirely by `entPhysicalClass`, `entPhysicalContainedIn`, and `entPhysicalSerialNum`; no vendor-specific MIB is required. Standalone switches, devices not in stack mode, and members without a serial fall back to the existing single-`Device` path with no change in behaviour.
 
+The same chassis row supplies the standalone device's `serial`. On platforms where `ENTITY-MIB` yields no chassis serial — no `entPhysicalTable` at all, or a chassis row with an empty serial — the serial is read from the vendor's chassis-serial scalar (Juniper `jnxBoxSerialNo`, MikroTik `mtxrSerialNumber`) instead; a populated standard chassis serial always takes priority. See [Device serial](./supported_platforms.md#device-serial).
+
 **Topology patterns detected.** Two valid `ENTITY-MIB` shapes are supported:
 
 | Pattern | Chassis row's `entPhysicalContainedIn` | Used by |
@@ -360,7 +504,7 @@ When the target reports 2+ chassis rows in `ENTITY-MIB` (`entPhysicalTable`) wit
 
 1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named `<sysName>` from the SNMP walk; serial taken from the lowest-id chassis row.
 2. **`VirtualChassis`** — named `<sysName>`, with `master` set to the inline matcher block of the master Device.
-3. **N − 1 member `Device` entities** — each named from `defaults.stack_member_name_template` (see [Member naming](#member-naming)), carrying `vc_position = <memberID>` and an inline `virtual_chassis` ref pointing to the same matcher block. Per-member serial comes from `entPhysicalSerialNum` on the member's chassis row; per-member model comes from `entPhysicalModelName` when populated.
+3. **N − 1 member `Device` entities** — each named from `defaults.stack_member_name_template` (see [Member naming](#member-naming)), carrying `vc_position = <memberID>` and an inline `virtual_chassis` ref pointing to the same matcher block. Per-member serial comes from `entPhysicalSerialNum` on the member's chassis row; per-member model comes from `entPhysicalModelName` when populated, unless `defaults` or `override_defaults` sets `device.model` (see [Override precedence](#override-precedence)), in which case the master and every member carry that model.
 4. **Interface / IPAddress entities** — routed to the member that physically owns them. Routing uses `entAliasMappingTable` (RFC 6933) when present, then falls back to ifName parsing: Cisco IOS/IOS-XE/NX-OS 3-tuple (`Gi1/0/1`, `Te2/1/0/3`, etc., including short forms `Te`/`Fo`/`Hu`/`Tw`/`Fi`/`Twe`), Junos FPC, Aruba CX numeric, H3C dashed. Subinterface unit suffixes (`Gi2/0/1.100`) strip to the parent before parsing.
 
 **Member naming.** Non-master member names are rendered from `defaults.stack_member_name_template`, which takes two placeholders: `{name}` (the stack name, taken from `sysName`) and `{id}` (the device-reported member id). The default `{name}-{id}` reproduces the naming this backend emitted before the option existed, so setting nothing changes nothing.
@@ -387,17 +531,30 @@ The master does still receive a serial in that case, taken from the lowest `entP
 
 **Orphaned member ports.** If a chassis row is dropped from the validated payload (empty serial, duplicate serial collapsed against a lower-id row, etc.) but the device still reports ports owned by that member, those interfaces are **skipped with a WARNING** rather than routed to master. Routing them to master would silently misattribute member-N ports to a different device — operators see the warning in logs and the missing port in NetBox, not a corrupted port→device mapping.
 
+## LAG membership
+
+Link-aggregation membership is read from the standard `IEEE8023-LAG-MIB::dot3adAggPortTable` (`1.2.840.10006.300.43.1.2.1.1`), so it is vendor-neutral. Each row is indexed by the member port's `ifIndex` and names the aggregator by its `ifIndex`; both resolve to interfaces already discovered from `IF-MIB`, and the member's `Interface.lag` is set to the aggregate. `dot3adAggPortAttachedAggID` (the port's current attachment) is used where the agent publishes it; `dot3adAggPortSelectedAggID` stands in on agents that publish only the selection column. A value of `0` means the port is not attached and is ignored. Nothing is created: aggregate interfaces (`ae0`, `Port-channel1`, …) come from the interface walk as before and must be typed `lag` (`ifType` 161) for the reference to be set.
+
+**Junos logical units.** On Junos the aggregation port the MIB names is the logical unit (`xe-0/0/0.0`), not the physical port. NetBox does not allow a LAG parent on a virtual interface, so a member that is itself a subinterface is normalised to its physical parent by name — the same derivation used for `Interface.parent` — and the relationship is emitted once on the physical port: `xe-0/0/24.0 → ae120` and `xe-0/0/24.1876 → ae120` both become `xe-0/0/24 → ae120`. Platforms whose members are the physical ports themselves (Cisco, Arista, and most others) are used as-is.
+
+Whether a member is a logical interface is decided on the `ifType` the device reported for it, not on the interface type emitted to NetBox — that type is resolved from the name first, so any name parsing as a child is typed virtual before `ifType` is read. A channelized lane (`1/1/11:1`, `et-0/0/0:0`) is a member in its own right and keeps its own membership; a member the walk carries no `ifType` for is left alone for the same reason. The reference is emitted only on an interface that can carry one. A target typed `virtual` is skipped with a warning, since NetBox refuses the interface outright and that would fail the target's whole ingestion; so is a target typed `bridge` or `lag`, which is not a LAG member in practice.
+
+**What is refused, with a warning.** A member or aggregate `ifIndex` that is not in the interface walk; an aggregate the mapper did not type as `lag`; a virtual member whose physical parent is not in the walk, or whose parent name matches more than one interface on the device (a stack repeating a management-port name per member); a member that resolves to its own aggregate; and a physical port whose units name two different aggregates — that is contradictory, so the port is left without a `lag` rather than picking one. Runs after stack translation, so on a Virtual Chassis both member and aggregate references already name the owning stack member.
+
 ## VRFs
 
 When the `discover_vrfs` policy option is enabled (defaults to `false`), snmp-discovery walks the device's VRF MIB tables and emits a NetBox `VRF` entity per VRF, attached to the `IPAddress` entities of the VRF's member interfaces (membership is matched by `ifIndex`, so no name canonicalization is involved). With the option off, the VRF table columns are not walked at all — zero additional SNMP load.
 
-**MIB tiers.** Three sources are tried in order until one yields VRFs:
+**MIB tiers.** Four sources are tried in order until one yields VRFs:
 
 1. **MPLS-L3VPN-STD-MIB** (RFC 4382) — the standards path (`mplsL3VpnVrfTable` for names + route distinguishers, `mplsL3VpnIfConfTable` for membership). Implemented by Cisco IOS/IOS-XE/IOS-XR, Juniper, Nokia, Huawei, and others.
 2. **MPLS-VPN-MIB** (the pre-standard experimental arc) — same table shapes; common on older Cisco IOS.
 3. **CISCO-VRF-MIB** — VRF-lite platforms without the MPLS feature MIBs. No route distinguisher is available on this tier.
+4. **JUNIPER-VPN-MIB** `jnxVpnIfTable` — membership only, for Junos platforms that answer the standard VRF table but not the standard membership table (some EX switches). Only `bgpIpVpn` rows are read: the same table lists L2 circuits, L2 VPNs and VPLS instances, which are not VRFs. Rows are joined to the standard VRF by exact name, and the last index component is the member `ifIndex`.
 
 A tier that exposes VRF names but no membership (split-arc agents) merges membership from the lower tiers; lower tiers never introduce additional VRF names on their own.
+
+**Limitation — routing instances that are not VPNs.** Every one of these tables models BGP/MPLS VPNs. A routing instance configured as something else, such as a Junos `instance-type virtual-router`, has no route distinguisher and appears in none of them, so it is not emitted as a VRF and the addresses on its interfaces carry no VRF reference, whatever the interface type. The device publishes nothing over SNMP that could supply it. On platforms where this matters, device-discovery reads routing instances generally over NETCONF and is the complete source for that association; the two backends can run against the same device.
 
 **Precedence.** A discovered VRF wins over the `defaults.ip_address.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for member interfaces' addresses; every other address keeps the configured defaults. The device's primary IP reference is kept consistent with its underlying IP address entity, so NetBox (where IP identity is address + VRF) never sees the same address in two VRF contexts.
 
@@ -421,14 +578,14 @@ Prefix entities are derived from the discovered IP addresses — the network of 
 - **Data-quality note**: an agent that reports no usable prefix for an address leaves it at host length. With the default settings those addresses derive no prefix, per the rule above, so a missing prefix table costs prefix coverage rather than filling IPAM with host routes. Enabling `emit_host_prefixes` on such a target will produce a host prefix for every address it reports, which is usually not what you want.
 - **VLAN association (`emit_prefix_vlan`)**: when set to `svi-name`, a derived prefix carries the VLAN of the SVI-style interface the contributing address lives on, so an address on `Vlan10` associates its prefix with VLAN 10. Defaults to `off`. Any unrecognized value normalizes to `off` rather than erroring, so a typo disables the feature instead of writing a guess into NetBox.
 - **Where the VLAN names come from**: the Q-BRIDGE `dot1qVlanStaticTable`, plus the VTP VLAN table (`CISCO-VTP-MIB::vtpVlanName`) on Cisco devices only. A VID that two VTP management domains name differently is treated as uncorroborated and gets no association: those are different Layer 2 domains, and an SVI naming the VID does not say which one it means. The VTP walk runs *only* while this option is enabled **and** `emit_prefixes` is on, since with no prefixes there is nothing to associate and the walk could only change which VLAN names are emitted. With either off, a Cisco target emits exactly the VLAN entities it emitted before the option existed.
-- **Which interface names qualify**: case-insensitively, an optional leading `interface`, one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`, `vl`, an optional separator, and a VLAN ID in 1-4094 with leading zeros stripped. So `Vlan10`, `VLAN ID 0051` and `Interface vlan30` all qualify. Any name containing a dot is rejected, because the number after the dot is a subinterface index rather than reliably a VLAN ID.
-- **The VLAN must already be known and named**: only a VLAN whose name the **device itself reported** is attached. A VID known only from a row status, or whose name column came back empty, does not qualify, even though it is still emitted as a VLAN entity under the placeholder name `VLAN<vid>`. Unlike `create_unknown_vlans`, this never stubs a VLAN or attaches the placeholder; a miss is left unassociated.
+- **Which interface names qualify**: case-insensitively, an optional leading `interface`, one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`, `vl`, an optional separator, and a VLAN ID in 1-4094 with leading zeros stripped. So `Vlan10`, `VLAN ID 0051` and `Interface vlan30` all qualify. These are the names the device reports, before `vlan_interface_name_prefix` renames anything. Any name containing a dot is rejected, because the number after the dot is a subinterface index rather than reliably a VLAN ID. On any vendor, an interface also qualifies when its `ifIndex` is 100000 + VID − 1, its `ifName` and `ifDescr` are both exactly the VID, and its `ifType` is `propVirtual` (53): the layout Eltex MES 21xx/23xx, most Cisco small-business and some UniFi switches use for their VLAN interfaces. A bare number qualifies nowhere else. Switches that report `vlan` in `ifDescr` instead (SGE2010, Dell PowerConnect 2824, Alcatel OmniStack LS) do not qualify, even with `interface_name_source: ifname` and `vlan_interface_name_prefix` set.
+- **The VLAN must be configured on the device**: only a VLAN the device's own VLAN tables report is attached, named or not: a name row, a `dot1qVlanStaticTable` row status, or a vendor catalog row such as Huawei's. A configured VLAN the device leaves unnamed is emitted under the placeholder name `VLAN<vid>`, and the prefix points at that same VLAN, so the association sends no name that discovery was not already sending. With `create_unknown_vlans` off, such a VLAN is not emitted, so nothing attaches. A VID known only from an interface's VLAN membership (a PVID, a port mask or `dot1qVlanCurrentTable`) does not qualify: this never stubs a VLAN, and a miss is left unassociated.
 - **Unanimity, and what it cannot cover**: an interface is named by both `ifName` and `ifDescr`, and when both parse to a VLAN id they must agree, or the interface contributes nothing. A prefix is then tagged only when every contributing address resolves to the same VLAN. Any disagreement, or a contributing address with no resolvable VLAN, leaves it untagged, and that is logged only when at least one address actually proposed a VLAN. It cannot span devices: if two devices report the same network through different VLANs, the last to report wins.
 - **The association cannot be retracted**: the Diode reconciler never diffs a field the payload omits, so a VLAN written onto a prefix cannot later be cleared by discovery, and a manual correction in NetBox is overwritten on the next poll that still finds a unanimous VLAN. This is why the option defaults to `off`.
 
 ## Modules / ModuleBays
 
-When the `discover_modules` policy option is enabled, snmp-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot reported in `ENTITY-MIB` `entPhysicalTable` (and, in `full` mode, for each transceiver sub-bay). Discovery is **vendor-neutral**: rows are selected by `entPhysicalClass` alone — `chassis(3)` anchors the device, `container(5)` rows become module bays, `module(9)` rows become modules — with PID-prefix classification used only to split modules into `supervisor` / `linecard` / `transceiver` / `psu` / `fan` types. Any vendor that populates `entPhysicalTable` per ENTITY-MIB (RFC 6933) is supported; see the [supported platforms page](./supported_platforms.md#modules--modulebays) for the list known-tested. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
+When the `discover_modules` policy option is enabled, snmp-discovery emits NetBox `Module` and `ModuleBay` entities for each chassis slot reported in `ENTITY-MIB` `entPhysicalTable` (and, in `full` mode, for each transceiver sub-bay). Discovery is **vendor-neutral**: rows are selected by `entPhysicalClass` alone — `chassis(3)` anchors the device, `container(5)` rows become module bays, `module(9)` rows become modules — with PID-prefix classification used only to split modules into `supervisor` / `linecard` / `transceiver` / `psu` / `fan` types. The one exception is the built-in port module of fixed-configuration Cisco switches, described below. Any vendor that populates `entPhysicalTable` per ENTITY-MIB (RFC 6933) is supported; see the [supported platforms page](./supported_platforms.md#modules--modulebays) for the list known-tested. The option defaults to `off` so existing operators see zero behaviour change unless they explicitly opt in.
 
 **Three modes:**
 
@@ -436,7 +593,14 @@ When the `discover_modules` policy option is enabled, snmp-discovery emits NetBo
 |---|---|
 | `off` *(default)* | No module / module-bay entities. Existing behaviour. |
 | `linecards` | One `ModuleBay` + `Module` per chassis slot (line cards, supervisors). PSU and fan modules are recognised by the PID classifier so they label correctly in metrics, but are **never** emitted as `Module` entities — useful when operators care about the slot inventory but not power/cooling FRUs. Transceiver sub-bays are skipped. |
-| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces backed by a transceiver carry a `module=` reference to the transceiver module so NetBox shows which port is populated by which optic. Per-port linkage uses `entAliasMappingTable` (RFC 6933) when present to map transceiver rows to their owning `ifIndex`. |
+| `full` | `linecards` plus one extra `ModuleBay` + `Module` for every transceiver sub-bay reported by the device. Interfaces are linked to the optic or line module holding them when the device populates `entAliasMappingTable` (RFC 6933); see [Interface.Module routing](#modules--modulebays). |
+
+**Module type names.** A module's type is named by the first of these that gives a value:
+
+1. The module row's `entPhysicalModelName`.
+2. A `modules:` entry in a `lookup_extensions_dir` file for the row's `entPhysicalVendorType` (see [Module names](#module-names-modules)).
+3. On Comware devices (`sysObjectID` under `1.3.6.1.4.1.25506`), the part number that ends the row's `entPhysicalDescr`, such as `JC614A` in `HP A10500 Main Processing Unit JC614A`. Only a last word shaped like an HPE part number is taken.
+4. The row's `entPhysicalVendorType`, which is usually an OID, and finally `Unknown`.
 
 **Emission order** (standalone modular chassis): `Device` → all `ModuleBay` + `Module` entries → `Interface` / `IPAddress` entries. The order matters because each interface entity may reference the module installed in its bay; emitting modules first lets the Diode reconciler resolve `Interface.module` against the just-created module.
 
@@ -446,7 +610,11 @@ When the `discover_modules` policy option is enabled, snmp-discovery emits NetBo
 
 **Chassis-rooted modules.** On fixed-FRU switches where a `module(9)` row's `entPhysicalContainedIn` chain leads directly to the `chassis(3)` row without an intermediate `container(5)` bay, snmp-discovery synthesises a `ModuleBay` named `Slot <ParentRelPos>` derived from the module's own `entPhysicalParentRelPos`. The module is then installed in the synthesised bay, keeping the `Device → ModuleBay → Module` shape uniform regardless of how the vendor models its inventory tree.
 
-**Interface.Module routing.** The reference from an interface to the transceiver installed on it is populated through a bay matcher (Device + Serial + `ModuleBay{Name, Position, Device}`) so the Diode reconciler resolves to the standalone Module already emitted in the same payload, rather than creating a duplicate inline. When `entAliasMappingTable` is populated, transceiver rows are mapped to their owning `ifIndex` via that table; otherwise transceiver attachment falls back to the row's parent-bay name.
+**Built-in port modules.** A fixed-configuration Cisco switch (`sysObjectID` under `1.3.6.1.4.1.9`) publishes a `module(9)` row for its own ports, with no model name and no serial: `Switch 1 - WS-C2960X-48FPS-L - Fixed Module 0` on a model that stacks, `WS-C3560-48TS - Fixed Module 0` on one that does not. That row is the switch rather than a part, so it is not emitted: its ports are linked to no module apart from a transceiver they hold, and transceivers keep their own bays. A row of that shape that reports a model name or a serial is still emitted.
+
+A module that an earlier version created for such a row stays in NetBox, in its `Slot N` bay and with the ports still linked to it, since discovery never deletes. NetBox deletes a module's interfaces along with the module, and deleting the bay deletes the module, so unlink the interfaces first (bulk-edit their module to none) and only then delete the module or its bay. The module type, typically named after an OID or `Unknown`, can be deleted once no module uses it.
+
+**Interface.Module routing.** In `full` mode an interface is linked to a module through `entAliasMappingTable`, which maps entity rows to `ifIndex`; without it no interface is linked. A row that is itself an emitted module, such as a transceiver, links its interface to that module, and any other row, such as an access port, to the nearest emitted module that contains it. When several rows map to one `ifIndex`, the interface is linked only if their modules lie on one containment chain, and then to the most specific one, so an optic wins over the line card holding its cage. Rows in unrelated modules, such as the management port of each stack member, leave the interface with no module rather than a guessed one. The reference is populated through a bay matcher (Device + Serial + `ModuleBay{Name, Position, Device}`) so the Diode reconciler resolves to the standalone Module already emitted in the same payload, rather than creating a duplicate inline.
 
 **Current sub-bay rendering trade-off (transient).** In `full` mode the transceiver sub-bay is emitted device-rooted — i.e. without a `module=parent_linecard` link. As a result, NetBox renders the transceiver sub-bay at chassis level (alongside the line-card slot bays) instead of visually nested under its parent line card. The transceiver `Module` itself is still installed in the sub-bay correctly via `Module.module_bay`, so per-port optic visibility works as expected; only the bay-under-linecard hierarchy is lost. The link is dropped because, in the current per-entity reconciler, attaching `module=parent_linecard` on a sub-bay causes the parent Module to be re-created from inside the sub-bay's changeset and conflicts at apply with the line card already created by the prior top-level Module entity. The link will be restored once the reconciler resolves nested parent-module refs against committed sibling entities in a single ingest call.
 
@@ -472,11 +640,13 @@ row and the target fails.
 
 The `lookup_extensions_dir` config option points to a directory of YAML files that map SNMP `sysObjectID` OIDs to human-readable device model names. Without these files, snmp-discovery would ingest raw OIDs (for example `.1.3.6.1.4.1.9.1.489`) instead of recognizable model names (for example `catalyst2955C12`).
 
+For some product lines the device's own chassis row names the model better than the lookup does. Cisco (`sysObjectID` under enterprise 9), HP ProCurve and ArubaOS-Switch (11.2.3.7), Palo Alto Networks (25461), Arista (30065) and Aruba CX (47196) report the orderable part number in `entPhysicalModelName` (for example `WS-C2960X-48FPD-L` rather than `catWsC2960x48fpdL`), which is what curated device types, such as those in the NetBox device-type library, record. So do FortiGate, FortiWiFi and FortiGate Rugged (12356.101.1), spelled with underscores (`FGT_60F`, `FGR_60F_3G4G`), which snmp-discovery rewrites into Fortinet's orderable form (`FG-60F`, `FGR-60F-3G4G`), and the D-Link switch families recorded so far (DGS-1510, DGS-3000, DGS-3420, DGS-3620 and DGS-3627, under 171.10.137, 171.10.141, 171.10.133, 171.10.119, 171.10.118 and 171.10.70). Virtual FortiGates, which report their platform rather than hardware, and the FortiGate 6000F, 7000E and 7000F chassis systems, whose one `sysObjectID` stands for every chassis size, keep the lookup name. A standalone device of those product lines is typed after its chassis row, as every stack member already is, so the same hardware gets one device type whether it is stacked or not. Other product lines, including Aruba wireless (14823), Comware (25506), other HP products and other D-Link families, keep the lookup name, as does any standalone device whose chassis row reports no usable model. Some catalogs record the part number as a device type's `part_number` rather than its model (for example model `FortiGate 60F`, part number `FG-60F`); Diode binds a device to such a type with diode-netbox-plugin 1.18.0 or later. An entry you add to `lookup_extensions_dir` that changes or adds a model wins over the chassis row for a standalone device; an unchanged copy of a bundled entry does not.
+
 A curated set of vendor lookup files ships with the orb-agent and orb-discovery images (see [SNMP Discovery — Supported Platforms](./supported_platforms.md)), and `lookup_extensions_dir` only needs to be set when you want to add extra files or override the bundled ones.
 
 ### File format
 
-Lookup files must have a `.yaml` or `.yml` extension and contain a `devices` section keyed by OID (note the leading `.`):
+Lookup files must have a `.yaml` or `.yml` extension and contain a `devices`, `manufacturers` or `modules` section. The `devices` section is keyed by OID (note the leading `.`):
 
 ```yaml
 devices:
@@ -493,13 +663,26 @@ To add your own OIDs or override a bundled file:
 2. Create a YAML file in the format above with OIDs prefixed by `.`.
 3. Drop the file into the directory referenced by `lookup_extensions_dir`.
 
+The bundled files are always loaded, so the directory only needs the entries you add or change. To start from a bundled file, copy just that one:
+
 ```sh
-# Seed a local override directory from the bundled files
 git clone https://github.com/netboxlabs/orb-agent.git
-cp orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/*.yaml /opt/orb/snmp-extensions/
+cp orb-agent/orb-discovery/snmp-discovery/data/lookup_extensions/cisco.yaml /opt/orb/snmp-extensions/
 ```
 
 When snmp-discovery encounters a device, it reads the device's `sysObjectID`, searches the YAML files in `lookup_extensions_dir` for a match, and falls back to the raw OID when no match is found.
+
+### Module names (`modules:`)
+
+A lookup file can also carry a `modules:` section that names the module type for an `entPhysicalVendorType` OID. Use it for modules that report no `entPhysicalModelName` and whose type would otherwise be named after the OID:
+
+```yaml
+modules:
+  .1.3.6.1.4.1.25506.3.1.9.4.673: JC614A
+  .1.3.6.1.4.1.25506.3.1.9.4.680: JC623A
+```
+
+An entry applies only to a module that reports no model name of its own, because one vendor type often stands for several models. An entry for `0.0`, the null vendor type that unrelated rows share, is ignored. Module names are read from `lookup_extensions_dir` only; no bundled file carries them.
 
 ### Dynamic model resolution (shared sysObjectID)
 
@@ -572,7 +755,8 @@ Overrides are layered — a value from `lookup_extensions_dir` wins over a value
 
 When multiple sources can supply a device's `manufacturer`, `model`, or `platform`, the highest-priority non-empty value wins:
 
-1. Per-target `override_defaults.device.{model,manufacturer,platform}` (hard override)
-2. User `lookup_extensions_dir/*.yaml` (`manufacturers:` and `devices:` including dynamic refs)
-3. Bundled `lookup_extensions/*.yaml` (`manufacturers:` and `devices:`)
-4. Raw IANA manufacturer name / raw `sysObjectID` model
+1. Per-target `override_defaults.device.{model,manufacturer,platform}`, then the policy's `defaults.device.{model,manufacturer,platform}` (hard overrides). A model set here is carried by a stack's master and every member, and chassis rows never replace it. On a device that answers no `sysObjectID`, a model and manufacturer set here together are its device type.
+2. User `lookup_extensions_dir/*.yaml` (`manufacturers:` and `devices:` including dynamic refs). For the model, only an entry that changes or adds one counts, and a stack member's own chassis model (level 3) still wins over it, as it always has.
+3. The chassis row's `entPhysicalModelName` (model only). Every stack member takes any non-empty value. A standalone device of the product lines listed in [Device Model Lookup](#device-model-lookup) takes it unless it is empty, a placeholder, unprintable or over-long, or the device reports more than one chassis row, including rows refused as ambiguous or reporting no serial. A sole chassis row with no serial still names the model.
+4. Bundled `lookup_extensions/*.yaml` (`manufacturers:` and `devices:`)
+5. Raw IANA manufacturer name / raw `sysObjectID` model

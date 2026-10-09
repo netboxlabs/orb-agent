@@ -131,10 +131,12 @@ func TestOpenTelemetryBackendStart(t *testing.T) {
 
 	// Start the backend
 	ctx, cancel := context.WithCancel(context.Background())
+	probed := mocks.CaptureListenAddr(t)
 	err = be.Start(ctx, cancel)
 
 	// Assert successful start
 	assert.NoError(t, err)
+	assert.Equal(t, serverURL.Host, *probed, "the probe guards the address the readiness check asks")
 
 	// Get Running status
 	status, _, err := be.GetRunningStatus()
@@ -195,6 +197,7 @@ func TestOpenTelemetryBackendCompleted(t *testing.T) {
 	assert.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
+	mocks.AllowHeldListenAddr(t)
 	err = be.Start(ctx, cancel)
 
 	assert.Error(t, err)

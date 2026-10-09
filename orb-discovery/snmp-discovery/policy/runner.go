@@ -60,6 +60,12 @@ type Runner struct {
 	activeHostJobsMu sync.Mutex
 	assetTagOwners   map[string]string
 	assetTagOwnersMu sync.Mutex
+	// An unscoped VLAN is a config mistake, not an event: the policy either
+	// sets a scope or it does not. Warn once per runner rather than once per
+	// target per cycle, which on a large estate would be thousands of
+	// identical lines an operator learns to filter out. Targets run
+	// concurrently, hence Once rather than a bool.
+	warnedUnscopedVLANs sync.Once
 }
 
 // NewRunner returns a new policy runner
@@ -301,6 +307,40 @@ func (r *Runner) resolveTargetAuthentication(target config.Target) *config.Authe
 	return &r.scope.Authentication
 }
 
+// The production lookup names modules from an operator's modules: entries.
+var _ mapping.ModuleModelLookup = (*data.DeviceLookup)(nil)
+
+// moduleModels is the device lookup when it can name module types, else nil.
+func (r *Runner) moduleModels() mapping.ModuleModelLookup {
+	if lookup, ok := r.deviceLookup.(mapping.ModuleModelLookup); ok {
+		return lookup
+	}
+	return nil
+}
+
+// userDefinedModels is implemented by a device lookup that can say whether a
+// model came from lookup_extensions_dir.
+type userDefinedModels interface {
+	UserDefined(deviceOID string) bool
+}
+
+// The production lookup must keep answering, or a lookup pin silently lapses.
+var _ userDefinedModels = (*data.DeviceLookup)(nil)
+
+// modelPin reports whether the operator named this target's device model: in
+// its defaults, which pins every device of the target, or in a
+// lookup_extensions_dir entry for its sysObjectID, which pins a standalone
+// device. Either wins over the model a chassis row reports.
+func (r *Runner) modelPin(defaults *config.Defaults, sysOID string) mapping.ModelPin {
+	if defaults.Device.Model != "" {
+		return mapping.ModelPinnedByDefaults
+	}
+	if lookup, ok := r.deviceLookup.(userDefinedModels); ok && lookup.UserDefined(mapping.TrimSNMPString(sysOID)) {
+		return mapping.ModelPinnedByLookup
+	}
+	return mapping.ModelNotPinned
+}
+
 // resolveTargetDefaults returns the defaults to use for a target
 // Merges target-level override defaults with policy-level defaults
 func (r *Runner) resolveTargetDefaults(target config.Target) *config.Defaults {
@@ -468,6 +508,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		r.logger,
 	)
 	annotateEntitiesWithRunID(entities, run.ID)
+	r.warnUnscopedVLANs(entities, policyName, target.Host)
 	r.logEntitiesForIngestion(entities)
 
 	// Strip nested Device/Interface refs to matcher-only stubs to shrink
@@ -691,7 +732,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
 		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
-		targetDefaults.StackMemberNameTemplate, r.logger)
+		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, sysOID), r.logger)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path
@@ -728,7 +769,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		moduleEntities, ifaceModuleMap := mapping.TranslateModulesWithAlias(
 			oids, chassisInv, memberDevices,
 			&r.config.Options, targetDefaults,
-			r.logger, aliasMap,
+			r.logger, aliasMap, r.moduleModels(),
 		)
 
 		entitiesForTarget = mapping.SpliceModulesAfterDevices(entitiesForTarget, moduleEntities)
@@ -743,6 +784,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		// slice by MapObjectIDsToEntity.getAssignedInterfaces) still get
 		// their module set.
 		mapping.AttachIfaceModules(entitiesForTarget, ifaceModuleMap, ifIndexByIface)
+	}
+
+	// Link-aggregation membership (default on, opt-out via
+	// emit_lag_membership: false): set Interface.lag on each member port
+	// from IEEE8023-LAG-MIB. Runs after stack translation so the member and
+	// aggregate Device pointers already name the owning member.
+	if r.config.Options.LagMembershipEnabled() {
+		mapping.AttachLagMembership(oids, ifIndexByIface, r.logger)
 	}
 
 	// VRF discovery: translate the walked VRF MIB rows (the columns are
@@ -772,8 +821,8 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 	// Resolve SVI VLANs before prefix derivation: VLAN entities are already
 	// appended to entitiesForTarget by this point, and the resolver only
-	// references VLANs the device itself named. Gated on the option so a
-	// target pays nothing (no ifName/ifDescr rescan) when it's off.
+	// references VLANs the device's own VLAN tables report. Gated on the
+	// option so a target pays nothing (no ifName/ifDescr rescan) when it's off.
 	var sviVlanByIfIndex map[int]*diode.VLAN
 	if r.config.Options.PrefixVlanMode() != "off" {
 		sviVlanByIfIndex = mapping.ResolveSviVlans(oids, entitiesForTarget, r.logger)
@@ -849,4 +898,18 @@ func (r *Runner) Stop() error {
 		return err
 	}
 	return r.scheduler.Shutdown()
+}
+
+// warnUnscopedVLANs reports VLANs Diode cannot separate, once per runner. A
+// runner is per policy, so a re-applied policy warns again, and the Once keeps
+// concurrently scheduled targets from repeating it. The count test sits outside
+// the Once so a target with nothing to report cannot burn it.
+func (r *Runner) warnUnscopedVLANs(entities []diode.Entity, policyName, host string) {
+	n := mapping.CountUnscopedVLANs(entities)
+	if n == 0 {
+		return
+	}
+	r.warnedUnscopedVLANs.Do(func() {
+		r.logger.Warn(mapping.UnscopedVLANWarning, "policy", policyName, "host", host, "vlans", n)
+	})
 }

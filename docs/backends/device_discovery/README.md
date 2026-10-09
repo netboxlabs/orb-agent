@@ -36,6 +36,8 @@ When the `discover_modules` policy option is enabled, device-discovery additiona
 
 When the `discover_vrfs` policy option is enabled, device-discovery emits a `VRF` entity for each VRF configured on the device and attaches it to the IP addresses and prefixes of the interfaces inside that VRF — see [VRFs](#vrfs) below. Defaults to `false`, so existing operators see zero behaviour change.
 
+On drivers that report link-aggregation membership, interfaces that are members of a link aggregation carry a `lag` reference to their aggregate interface — see [LAG membership](#lag-membership) below. On by default; set `emit_lag_membership: false` to opt out.
+
 ## Configuration
 The `device_discovery` backend does not require any special configuration, though overriding `host`, `port` and `log_level` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
 
@@ -123,8 +125,9 @@ Current supported options:
 | discover_modules | str | Controls emission of `Module` / `ModuleBay` entities. One of `off` (default — no modules emitted, zero behaviour change), `linecards` (one Module per chassis slot on a modular target — line cards, supervisors, etc.; transceiver sub-bays and device-rooted optics both skipped), or `full` (linecards plus one Module per transceiver sub-bay or device-rooted optic; interfaces carry a `module=` ref to the transceiver they're connected to). An optic with no slot, linecard or FRU module above it — the whole inventory on a fixed-port target, or the fixed ports on a chassis whose only module is an uplink — is discovered too, as a device-rooted `ModuleBay`. Only drivers that implement `get_modules()` populate module data — see the [supported platforms page](./supported_platforms.md#modules--modulebays). See [Modules / ModuleBays](#modules--modulebays) for the emission shape and current sub-bay rendering trade-off. |
 | propagate_defaults_to_prefix_scope | bool | When `True` AND no explicit `defaults.prefix.scope_*` is set, `defaults.site` cascades to `Prefix.scope_site` (the literal placeholder `"undefined"` is skipped) and `defaults.location` cascades to `Prefix.scope_location`. Defaults to `False`. Setting any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale. |
 | discover_vrfs | bool | When `True`, discovers VRFs from the device via the driver's `get_network_instances()` and attaches each VRF to the IP addresses and prefixes of its member interfaces. A discovered VRF takes precedence over the `defaults.*.vrf` / `vrf_ipv4` / `vrf_ipv6` settings for those interfaces; interfaces in the default routing table keep the configured defaults. Defaults to `False`. Only drivers that implement `get_network_instances()` populate VRF data — see the [supported platforms page](./supported_platforms.md#vrfs). See [VRFs](#vrfs) for filtering rules and route-distinguisher handling. |
+| emit_lag_membership | bool | **Defaults to `true`.** Set `lag` on each link-aggregation member port to its aggregate interface, from the driver's `get_interfaces_lag()`. Set `false` to leave `lag` unset and skip the driver call. Only drivers that implement `get_interfaces_lag()` report membership — see the [supported platforms page](./supported_platforms.md#lag-membership). See [LAG membership](#lag-membership). Mirrors the snmp-discovery option of the same name. |
 | emit_host_prefixes | bool | Derive a `Prefix` from IPv4 `/32` and IPv6 `/128` addresses. Defaults to `False`: a host prefix only restates the address, which is already emitted as an `IPAddress` entity, so no prefix is derived for them. Set `True` to restore them, e.g. when loopback `/32`s are deliberately tracked as prefixes in NetBox. IPv6 link-local prefixes (`fe80::/10`) are never derived and are unaffected by this option. See [Prefix](#prefix). |
-| emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the SVI-style interface the contributing address lives on. One of `off` (default) or `svi-name`. Any scalar is read as its text, so a bare `on`, a number and a mistyped mode all resolve to `off` with a warning rather than erroring; a list or mapping is a policy error, as it is for snmp-discovery. See [Prefix](#prefix). |
+| emit_prefix_vlan | str | Associate a derived `Prefix` with the VLAN of the interface the contributing address lives on: the VLAN ID the device reports for that interface where the driver supports it, else the one an SVI-style name states. One of `off` (default) or `svi-name`. Any scalar is read as its text, so a bare `on`, a number and a mistyped mode all resolve to `off` with a warning rather than erroring; a list or mapping is a policy error, as it is for snmp-discovery. See [Prefix](#prefix). |
 | emit_device_name | bool | Emit `Device.name` from the discovered device name — the hostname fact, or the fqdn fact under `device_name_source: fqdn`. Defaults to `True`. Set `False` to suppress the name on the matched device so continual discovery stops proposing a hostname rename when the discovered hostname differs from the NetBox name. **Only takes effect when the device is matchable another way** — a scope `netbox_id`, or `defaults.device.asset_tag`; otherwise the name is kept and a warning is logged, because `name` is a primary NetBox device matcher and dropping it unguarded would emit a device NetBox cannot resolve. Matching by `serial` alone does **not** qualify (`Device.serial` is not unique in NetBox). On a virtual-chassis stack only the master's name is suppressed; member names come from `stack_member_name_template`. Mirrors the snmp-discovery option of the same name. |
 | device_name_source | string | Fact used for `Device.name`: `hostname` (default) or `fqdn`. With `fqdn`, the fqdn fact is used only when it positively looks like a domain-qualified form of the hostname — no whitespace and, case-insensitively, the hostname followed by a dot and at least one more character. Anything else falls back to the hostname: placeholders such as `None` (junos), `Unknown` (ios family), `N/A` (paloalto) or ios's `<hostname>.not set`, an fqdn equal to the hostname, or a hostname that already contains a dot (several drivers blindly append the domain again, producing `rtr1.dc1.example.net.dc1.example.net`). Does not apply to virtual-chassis stacks: every member's name, the master's included, comes from `stack_member_name_template`. Note: Diode matches devices by name, so switching an existing deployment to `fqdn` creates new records unless the NetBox devices are renamed first. An unrecognized value logs a warning and resolves to `hostname`. |
 
@@ -180,7 +183,9 @@ Current supported defaults:
 | interface_patterns | list | User-defined interface type patterns (see [Interface Type Matching](./interface.md)) |
 | interface_exclude_patterns | list | Regex patterns to exclude interfaces (and their IPs) from ingestion (see [Interface Exclusion](./interface.md#interface-exclusion-patterns)) |
 | location | str | Device location |
-| rack  | str | Rack name to associate the device with |
+| rack  | str | Rack name to place the device in. See [Rack placement](#rack-placement) |
+| position | number | Rack U position, a whole or half U from 1. Per device only, in a target's `override_defaults`, with `face` and a rack. See [Rack placement](#rack-placement) |
+| face | str | Rack face, `front` or `rear`. Per device only, in a target's `override_defaults`, with `position` |
 | stack_member_name_template | str | Template for stack / Virtual Chassis member device names. Placeholders: `{name}` (the stack name) and `{id}` (the device-reported member id). Defaults to `{name}-{id}`, which reproduces the legacy naming. See [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis). |
 | tenant | str/map | Device tenant |
 | description | str  | General description   |
@@ -199,7 +204,7 @@ Current supported defaults:
 | ├─ comments   | str  | Device comments               |
 | ├─ tags       | list | Device tags                   |
 | ├─ asset_tag | str  | Device asset tag                      |
-| tenant | map | Tenant-specific defaults              |
+| tenant | map | Tenant-specific defaults. In a target's `override_defaults`, a different tenant replaces the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
 | ├─ name | str | Tenant name                          |
 | ├─ group | str | Tenant group                        |
 | ├─ description | str  | Tenant description           |
@@ -230,9 +235,10 @@ Current supported defaults:
 | vrf | map | VRF-specific defaults (used within ipaddress and prefix) |
 | ├─ name | str | VRF name |
 | ├─ rd | str | Route distinguisher (e.g. `65000:100`) |
-| ├─ description | str | VRF description |
-| ├─ comments | str | VRF comments |
-| ├─ tags | list | VRF tags |
+| ├─ tenant | str/map | Tenant the VRF belongs to: a name, or a map with `name` and optional `group` / `description` / `comments` / `tags`. Never taken from the address or prefix tenant (see [VRF tenant](#vrf-tenant)) |
+| ├─ description | str | VRF description, written to the VRF on every run |
+| ├─ comments | str | VRF comments, written to the VRF on every run |
+| ├─ tags | list | VRF tags, added to the VRF's existing tags |
 | vlan       | map  | VLAN-specific defaults        |
 | ├─ group   | str/map  | VLAN group. A bare name attaches every emitted VLAN to an `ipam.vlangroup` scoped to `defaults.site`. The map form takes `name` plus one optional scope: `scope_site`, `scope_site_group`, `scope_region` or `scope_location` (see [VLAN group](#vlan-group) below). In a per-device `override_defaults`, the group replaces the policy value as a whole |
 | ├─ tenant   | str  | VLAN tenant                  |
@@ -241,7 +247,41 @@ Current supported defaults:
 | ├─ comments   | str  | VLAN comments              |
 | ├─ tags       | list | VLAN tags                  |
 
+##### VRF tenant
+A VRF map accepts only the keys above, and its tenant map only `name`, `group`, `description`, `comments` and `tags`. Any other key is refused, so a misspelt key such as `rd`, `tenant` or `group` is not silently dropped.
+
+The address and prefix `tenant` defaults do not set the VRF's tenant. Diode matches a VRF without an RD by its name and tenant, so when the VRF belongs to a tenant in NetBox, name that tenant under `vrf`. Otherwise Diode creates a second VRF with the same name and no tenant.
+
+When the VRF has an RD in NetBox, set `rd` too. Diode then finds the VRF by its RD alone and writes the policy's VRF name, and tenant when set, onto it, so both must match what NetBox holds.
+
+Every tenant default reaches Diode in full on each run, a device carrying its own and, through its primary address, that address's and its VRF's. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When a VRF's tenant and another tenant default (`tenant`, `ipaddress.tenant`, `prefix.tenant`, `vlan.tenant` or another VRF's tenant) name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both or rewrites the tenant on every run, so such a policy is refused, as is one that writes a tenant group two ways. Each target's merged `override_defaults` is checked too; copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
+
+In a per-target `override_defaults`, a tenant or VRF that differs from the policy's replaces it as a whole, keeping only the policy's name when it gives none:
+- a tenant differs when its name differs, or when it gives a group other than the policy's, including one the policy lacks;
+- a VRF differs when its name differs, when it gives an `rd` other than the policy's (including one the policy lacks), when both give a tenant and the tenants differ, or, with no `rd` on either side, when it gives a tenant the policy lacks. Diode finds a VRF with an RD by the RD alone and one without by its name and tenant, so each of these is another VRF.
+
+Otherwise the override refines the policy's field by field, for example a tenant added to a VRF that has an `rd`, and a bare name equal to the policy's, or a blank one, leaves it as it is. This applies to every tenant default, not only VRF tenants. A tenant named in another group is only a separate tenant once it exists in NetBox; until then Diode can match the existing one by its slug and move it between groups.
+
+If an earlier run already created the extra tenant-less VRF, discovered addresses and prefixes are created again in the tenant's VRF once the policy names its tenant. Reassign or delete the objects left in the extra VRF, then delete that VRF.
+
+VRFs discovered with `discover_vrfs` carry no tenant, so this applies only to the configured `vrf`, `vrf_ipv4` and `vrf_ipv6` defaults.
+
+```yaml
+defaults:
+  ipaddress:
+    vrf: &example-vrf
+      name: "Example VRF"
+      tenant:
+        name: "Example Tenant GmbH"
+        group: "Example Group"
+  prefix:
+    vrf: *example-vrf
+```
+
 ##### VLAN group
+
+> **Set a site and a group.** Diode matches a VLAN that has no group on its VID alone, so such a VLAN never matches VLANs already scoped to a group in NetBox: ingestion duplicates them, and across several sites the same VID collides on a single record where the last writer's name wins. `vlan.group` alone is not enough — with no `defaults.site` the group is scoped to the placeholder site `undefined`, which cannot match your group of the same name under a real site, so you get a second group and the same duplicates. Set both. The agent logs a warning the first time it sends VLANs it cannot match. Note a site on the VLAN itself is not a substitute for the group: it leaves the duplication untouched, and NetBox has deprecated assigning a VLAN directly to a site.
+
 Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. With a bare name the group is scoped to `defaults.site`. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
 
 ```yaml
@@ -273,7 +313,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | password | string | yes  | Device username's password |
 | driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
 | optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
-| override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope |
+| override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope. Fields merge with the policy's, except that a VLAN group the override sets, and a tenant or VRF it names differently, replace the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
 
 #### Subnet and range expansion
@@ -297,6 +337,35 @@ policy scopes expand to 1048544 addresses in total, more than the limit of 65536
 A single entry over the limit is also refused at expansion time as a backstop:
 it is skipped, named in an error, and recorded as a failed run, leaving the rest
 of the policy unaffected.
+
+#### Rack placement
+
+`rack` places the device in a NetBox rack, policy-wide in `defaults` or per device in `override_defaults`. The rack is sent with the device's site and, when `location` is set, its location. A device can also be given a U position and a face, but only per device, in a target's `override_defaults`:
+
+```yaml
+scope:
+  - hostname: 192.0.2.10
+    username: admin
+    password: ${PASS}
+    override_defaults:
+      rack: R12
+      position: 40
+      face: front
+```
+
+- `position` is a U from 1, in steps of 0.5 (`40.5` is a half U). `face` is `front` or `rear`. They are set together, and the target needs a rack, its own or the policy's. A target's `rack: ""` keeps its device out of the policy's rack.
+- Quote a numeric rack name (`rack: "01"`). YAML reads an unquoted `01` as the number 1 and `010` as 8, so a number is refused rather than guessed at.
+- A target with `netbox_id` needs a `site` (its own or the policy's) to set `position` and `face`: without one no site is sent, and the rack could not be looked up. Two targets reaching the same host (one address or name, written as itself, a `/32` or a one-address range, on the same `optional_args.port`), or with the same `netbox_id` or `device.asset_tag`, update one device, so when they send a rack they must send the same rack, position and face (a rack without a position counts too). An asset tag in the policy `defaults` reaches every target, so it makes all of them one device. A target is matched by its strongest identifier, in the order Diode matches on (`netbox_id`, then `device.asset_tag`, then the host), so a shared identifier ties two targets only when it is the strongest of at least one: two targets with different `netbox_id`s are two devices even when they send the same tag or reach the same host. Two targets count as one device at a U only when they share the strongest identifier of both. A target without a rack that shares a device with a racked one must send that target's site and location, or none: NetBox refuses a device whose rack is in another site or location. A `netbox_id` is ignored on any subnet or range syntax, a `/32` or a one-address range included, so it does not tie such a target to the device with that id.
+- A policy is refused when its `defaults` set `position` or `face`, when a target whose `hostname` expands to more than one address (a subnet or range) sets them, or when two targets are placed at the same rack, U and face in one site. A device sent without a location (none on the target or in the policy `defaults`) counts as any location, since its rack is matched by name across the site.
+- On a switch stack, only the master, which is the lowest member id (see [Switch stacks / Virtual Chassis](#switch-stacks--virtual-chassis)), is placed. A stack can span racks, so the other members are sent no rack, position or face: NetBox keeps whatever it has for them, and a new member is created without a rack. When a rack is sent, members get no `location` either, since NetBox refuses a device location that differs from the location of the device's rack. This also applies to a rack set in the policy `defaults`.
+- Without `position`, no position is sent, so NetBox keeps whatever it has.
+
+Placement follows Diode's rules:
+
+- A rack name that doesn't exist in the site is created, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): NetBox rejects the device's own record that cycle, and its reason appears in the Diode ingestion logs. Its interfaces and addresses are separate records and still go in.
+- A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode also matches devices by rack, position and face. Make sure the U is free before setting it.
+- The position is applied on every run, so a device moved in NetBox moves back unless its `override_defaults` entry changes.
 
 ### SSH Configuration and Jumphost Support
 
@@ -488,6 +557,20 @@ An optic the device serialises but does not identify — an inventory row with a
 
 **Supported drivers.** Module discovery is opt-in per driver (analogous to interface↔VLAN associations and stack discovery). See the [supported platforms page](./supported_platforms.md#modules--modulebays) for the current list; vendors land as follow-up PRs as the underlying drivers gain module-discovery support.
 
+## LAG membership
+
+When a driver implements `get_interfaces_lag()`, each interface that is a member of a link aggregation carries a `lag` reference to its aggregate interface (`ae0`, `Port-channel1`, …). Nothing is created: both the member and the aggregate must already be among the discovered interfaces, and the aggregate must be typed `lag` (the built-in patterns type `ae*`, `Port-channel*` and `Bundle-Ether*` as `lag`). On by default; set `emit_lag_membership: false` to leave `lag` unset and skip the driver call.
+
+**Physical ports only.** NetBox carries a LAG parent on the physical port and does not allow one on a virtual interface. Where a platform reports membership per logical unit — Junos does — the driver collapses every unit onto its physical port: `xe-0/0/24.0 → ae120.0` and `xe-0/0/24.1876 → ae120.1876` become one membership, `xe-0/0/24 → ae120`.
+
+**What is skipped, with a warning.** An aggregate that is not among the discovered interfaces, or that is not typed `lag`; a member typed `virtual` (NetBox refuses the interface outright, which would fail its ingestion), `bridge` or `lag`; a member that names itself as its aggregate; a name more than one discovered interface carries (it cannot be attributed); and a physical port whose units name two different aggregates — that is contradictory, so the port is left without a `lag` rather than picking one. A member the policy excluded through `interface_exclude_patterns` is skipped silently.
+
+**Switch stacks / Virtual Chassis.** The reference names the stack member that owns the aggregate, so a member port on one stack member can point at an aggregate attributed to another (on Junos the `ae` interfaces are attributed to the master). NetBox accepts such a cross-member reference only while both devices belong to the same virtual chassis, so if a stack member's own device or virtual-chassis membership fails to ingest, NetBox also refuses that member's LAG ports.
+
+**Removing a member.** When a port leaves an aggregate between discovery cycles, its existing `lag` in NetBox is not cleared automatically — the same Diode PATCH-semantics limitation noted for interface VLAN associations above. Clear it in NetBox manually.
+
+**Supported drivers.** See the [supported platforms page](./supported_platforms.md#lag-membership).
+
 ## VRFs
 
 When the `discover_vrfs` policy option is enabled (defaults to `false`), device-discovery calls the driver's standard NAPALM `get_network_instances()` getter and emits a NetBox `VRF` entity per VRF configured on the device. Each discovered VRF is attached to the `IPAddress` and `Prefix` entities of the interfaces inside that VRF; interfaces in the default routing table carry no discovered VRF and keep whatever `defaults.*.vrf` configuration is in effect.
@@ -523,6 +606,8 @@ The tables below show which fields are populated automatically from the device v
 | Site | **Not collected** | Must be set via `defaults.site` |
 | Role | **Not collected** | Must be set via `defaults.role` |
 | Location | **Not collected** | Must be set via `defaults.location` |
+| Rack | **Not collected** | Set via `defaults.rack` or a target's `override_defaults.rack` |
+| Position, face | **Not collected** | Set per device via a target's `override_defaults.position` and `override_defaults.face` |
 | Tenant | **Not collected** | Must be set via `defaults.tenant` |
 | Description | **Not collected** | Must be set via `defaults.device.description` |
 | Comments | **Not collected** | Must be set via `defaults.device.comments` |
@@ -538,6 +623,7 @@ The tables below show which fields are populated automatically from the device v
 | Description | `get_interfaces()` → `description` | Auto-collected; falls back to `defaults.interface.description` if empty |
 | Speed | `get_interfaces()` → `speed` (Mbps) | Auto-collected; stored in NetBox as Kbps |
 | MTU | `get_interfaces()` → `mtu` | Auto-collected |
+| LAG | `get_interfaces_lag()` → member port → aggregate | On drivers that implement it, unless `emit_lag_membership: false` — see [LAG membership](#lag-membership) |
 | Type | Interface name pattern matching + speed | Determined by: (1) user `interface_patterns`, (2) built-in patterns, (3) speed-based detection, (4) `defaults.if_type`. Subinterfaces (`.` or `:` separator) are always `"virtual"` |
 | Tags | **Not collected** | Must be set via `defaults.tags` or `defaults.interface.tags` |
 
@@ -586,12 +672,25 @@ The opt-in covers host prefixes only. IPv6 link-local prefixes stay suppressed e
 Prefix scope is a `oneof` — a Prefix carries one of `scope_site` or `scope_location`. When both `defaults.prefix.scope_*` are set, the most-specific wins on the wire: `scope_location` > `scope_site`. By default `defaults.site` does NOT auto-fill `Prefix.scope_site` — set `options.propagate_defaults_to_prefix_scope: true` to enable the cascade. Any explicit `defaults.prefix.scope_*` puts the operator in "explicit mode" and the cascade is skipped wholesale, so a cascaded more-specific scope can't override an operator's explicit less-specific choice. Clearing an existing scope requires editing NetBox directly.
 
 **VLAN association (`emit_prefix_vlan`).** When set to `svi-name`, a derived prefix
-carries the VLAN of the SVI-style interface the contributing address lives on, so an
-address on `Vlan10` associates its prefix with VLAN 10. Defaults to `off`. Any scalar is
+carries the VLAN of the interface the contributing address lives on, so an address on
+`Vlan10` associates its prefix with VLAN 10. Defaults to `off`. Any scalar is
 read as its text, so a bare `on`, a number, a YAML timestamp and a mistyped mode all
 resolve to `off` with a warning rather than erroring: a typo disables the feature instead
 of writing a guess into NetBox. A list or mapping is rejected, matching what the
 snmp-discovery decoder does with one.
+
+**The device's own VLAN ID comes first.** Drivers that implement the optional
+`get_interfaces_vlan_id()` getter report the VLAN ID each L3 interface is bound to, read
+from the device rather than the name, so interfaces whose names carry no usable VLAN ID
+are associated too: a RouterOS VLAN interface named `sfpplus1.156` with `vlan-id=156`,
+a FastIron `ve 400` that is the `router-interface` of VLAN 40, or a Junos `irb.166` or
+`vlan.20` that the switch's VLAN table names as the L3 interface of a VLAN. Where the name and the
+device disagree, the device wins. The driver can also withhold an interface it reports
+but whose tag is not a plain 802.1Q VLAN; such an interface is not associated, whatever
+its name says. The getter is only called while the option is `svi-name`. See the
+[supported platforms page](./supported_platforms.md#prefix-vlan-from-the-device) for
+the drivers and what each one withholds. Every other interface falls back to the name
+rule below.
 
 **Which interface names qualify.** Case-insensitively: an optional leading `interface`
 *followed by a separator*, one of `vlan-interface`, `vlan id`, `vlanif`, `vlan`, `svi`,
@@ -602,8 +701,10 @@ rejected, because the number after the dot is a subinterface index rather than r
 a VLAN ID.
 
 **The VLAN must already be known and named.** Only a VLAN already found in the device's
-VLAN database with a non-empty name is attached. Unlike `create_unknown_vlans`, this
-never stubs a VLAN to satisfy an SVI name; a miss is left unassociated.
+VLAN database with a non-empty name is attached, whether its ID came from the device or
+from the name. Unlike `create_unknown_vlans`, this never stubs a VLAN; a miss is left
+unassociated. A routed subinterface whose tag has no entry in the device's VLAN table
+(a Junos `ae0.100`, a Cisco `Gi0/0.100`) is therefore skipped by design.
 
 **Unanimity, and what it cannot cover.** A prefix is tagged only when every contributing
 address resolves to the same VLAN. Any disagreement, or a contributing address with no
@@ -615,7 +716,11 @@ report the same network through different VLANs, the last to report wins.
 **The association cannot be retracted.** The Diode reconciler never diffs a field the
 payload omits, so a VLAN written onto a prefix cannot later be cleared by discovery, and
 a manual correction in NetBox is overwritten on the next poll that still finds a
-unanimous VLAN. This is why the option defaults to `off`.
+unanimous VLAN. That includes a VLAN you set on the prefix by hand: once discovery
+resolves one, every poll writes it. This is why the option defaults to `off`. Set
+[`defaults.vlan.group`](#vlan-group) (with `defaults.site`) before enabling it, so the
+VLAN each prefix references matches the one already scoped in NetBox instead of a
+duplicate.
 
 ### VLAN
 

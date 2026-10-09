@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"time"
 )
 
@@ -64,6 +65,17 @@ type StartSpec struct {
 	NameUnderscore string // underscore form passed only to StopProcess (e.g. "network_discovery")
 	Exec           string
 	Args           []string
+	// ListenAddr is the host:port the backend serves its API on, the address
+	// the readiness check asks. It is required: StartProcess refuses to spawn
+	// while another process holds it, since the check takes whatever answers
+	// on that address, and with the port held elsewhere (another agent
+	// sharing the host network, a child left over from an earlier run) it
+	// would report the other process's answer as the child's, and the
+	// policies replayed after it would go to the other process too. A
+	// backend has no readiness check without an address to ask, so a spec
+	// without one, or with port 0, is refused as incomplete: a backend that
+	// listens on any open port reserves one with ReserveListenAddr first.
+	ListenAddr     string
 	LogLine        func(line string, isStderr bool)  // per-backend normalizer adapter
 	SetProc        func(Commander, <-chan CmdStatus) // publishes proc+statusChan to the backend BEFORE the readiness loop (see CRITICAL below)
 	ReadinessCheck func() (string, error)            // returns the version string + err; d.Version fits directly; pktvisor wraps an inline /metrics/app probe returning appMetrics.App.Version
@@ -83,7 +95,143 @@ type StartSpec struct {
 	ReadinessBudget time.Duration
 }
 
-// StartProcess launches the process, streams stdout/stderr to LogLine, then:
+// ErrListenAddrInUse marks a start refused because another process holds the
+// address the backend would listen on. It is the environment refusing the
+// start, not the binary failing, and a caller that would otherwise treat a
+// failed start as a bad binary reads it to leave the binary alone.
+var ErrListenAddrInUse = errors.New("listen address in use")
+
+// ReserveListenAddr binds addr, releases it at once and returns the address
+// it bound. With a port, it is the probe StartProcess runs on a spec's
+// ListenAddr: a backend about to be told to listen there is refused while
+// another process holds it, with the bind error saying why. With port 0, it
+// picks a free port, which is how a backend that is to listen on any open
+// port learns the one to be told before its spec is built. A hostname is
+// resolved under ctx and every address it resolves to is bound, since the
+// readiness check dials all of them and takes the first that answers; an
+// address in a family the host cannot bind is left out. The release narrows
+// the window in which the check can be answered by another process to the
+// time between it and the child's own bind; the check after readiness below
+// catches a child that lost that race and died, and only an answer that
+// proves it came from the child would close it.
+//
+// It is a variable so that a test standing a server in for the child on that
+// address can stub it, the way NewCmdOptions stands a Commander in for the
+// process.
+var ReserveListenAddr = reserveListenAddr
+
+// lookupListenHost resolves a listen hostname; a variable so a test can hand
+// the reservation an address the host has no route to bind.
+var lookupListenHost = net.DefaultResolver.LookupIPAddr
+
+// listenFamilies reports whether this host has an IPv4 and an IPv6 address
+// at all; a variable so a test can stand in for a host that lacks one.
+var listenFamilies = interfaceFamilies
+
+func interfaceFamilies() (v4, v6 bool) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		// Unknown; the bind decides.
+		return true, true
+	}
+	for _, a := range addrs {
+		ip, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		if ip.IP.To4() != nil {
+			v4 = true
+		} else {
+			v6 = true
+		}
+	}
+	return v4, v6
+}
+
+// namesAPort reports whether addr is host:port with a port other than 0.
+func namesAPort(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	n, err := net.LookupPort("tcp", port)
+	return err == nil && n != 0
+}
+
+// resolvedListenHosts is the addresses a listen host resolves to that this
+// host can be asked to bind, each once. An address in a family this host
+// has no address in, the IPv6 loopback where IPv6 is disabled but the hosts
+// file keeps the entry, is left out: nothing here can listen there and the
+// readiness check cannot dial it either. An address in a family this host
+// does have is kept whether or not it is this host's, since the readiness
+// check could dial it and take another machine's answer for the child's;
+// the bind then refuses it.
+func resolvedListenHosts(ips []net.IPAddr) []string {
+	v4, v6 := listenFamilies()
+	seen := make(map[string]bool, len(ips))
+	hosts := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if ip.IP.To4() != nil && !v4 || ip.IP.To4() == nil && !v6 {
+			continue
+		}
+		h := ip.String()
+		if seen[h] {
+			continue
+		}
+		seen[h] = true
+		hosts = append(hosts, h)
+	}
+	return hosts
+}
+
+func reserveListenAddr(ctx context.Context, addr string) (string, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %w", ErrListenAddrInUse, addr, err)
+	}
+	// The readiness check dials every address the host resolves to and takes
+	// the first that answers, so a hostname reserves all of them: a listen
+	// on the hostname alone binds one family, and a process holding the
+	// port on the other would answer for the child. An IP literal, or the
+	// empty host that is every interface, is the one address it names.
+	hosts := []string{host}
+	if host != "" && net.ParseIP(host) == nil {
+		ips, err := lookupListenHost(ctx, host)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s cannot be resolved, so the readiness check could not reach this backend: %w", ErrListenAddrInUse, addr, err)
+		}
+		hosts = resolvedListenHosts(ips)
+		if len(hosts) == 0 {
+			return "", fmt.Errorf("%w: no address of %s is in a family this host has, so nothing could listen there", ErrListenAddrInUse, addr)
+		}
+	}
+	// Every address is held until all are bound, so one port is free on all
+	// of them; a failure to release the probe's own sockets is nothing the
+	// child needs to know about.
+	var held []net.Listener
+	defer func() {
+		for _, l := range held {
+			_ = l.Close()
+		}
+	}()
+	for _, h := range hosts {
+		l, err := net.Listen("tcp", net.JoinHostPort(h, port))
+		if err != nil {
+			return "", fmt.Errorf("%w: %s is in use or cannot be bound, so the readiness check would not be answering for this backend: %w", ErrListenAddrInUse, net.JoinHostPort(h, port), err)
+		}
+		held = append(held, l)
+		if n, _ := net.LookupPort("tcp", port); n == 0 {
+			// Port 0 picked one on the first address; the rest bind that one.
+			_, port, _ = net.SplitHostPort(l.Addr().String())
+		}
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+// StartProcess checks the spec is complete, returns the cancellation if Ctx
+// is already done, reserves and releases ListenAddr, refusing the start with
+// ErrListenAddrInUse while another process holds it, and only then launches
+// the process and streams stdout/stderr to LogLine:
 //   - builds the Cmd, proc.Start(), and IMMEDIATELY calls spec.SetProc(proc, statusChan)
 //     to publish them to the backend (the CRITICAL step — see below), then spawns the
 //     stream goroutine.
@@ -93,7 +241,10 @@ type StartSpec struct {
 //   - logs "<NameDisplay> process started" (pid), then runs a 0..9 backoff loop;
 //     EACH iteration first re-checks proc.Status().Complete and, if complete,
 //     StopProcess + returns errors.New(NameDisplay+" process ended unexpectedly,
-//     check log"); else calls ReadinessCheck. On success logs "<NameDisplay>
+//     check log"); else calls ReadinessCheck. On success re-checks
+//     proc.Status().Complete, since another process on the address may have
+//     answered for a child that then died at its bind, and returns the same
+//     "process ended unexpectedly" error if so; else logs "<NameDisplay>
 //     readiness ok, got version" with "version" = the returned string; on per-iter
 //     failure logs "<NameDisplay> is not ready, trying again with backoff" with attr
 //     key "backoff_duration" and sleeps startProcessSleep(time.Duration(backoff) *
@@ -119,8 +270,8 @@ type StartSpec struct {
 // spec.ReadinessBudget; both are optional and their zero values keep the
 // historical behaviour.
 func StartProcess(spec StartSpec) error {
-	if spec.Logger == nil || spec.SetProc == nil || spec.LogLine == nil || spec.ReadinessCheck == nil {
-		return errors.New("StartProcess: Logger, SetProc, LogLine, and ReadinessCheck are required")
+	if spec.Logger == nil || spec.SetProc == nil || spec.LogLine == nil || spec.ReadinessCheck == nil || spec.ListenAddr == "" {
+		return errors.New("StartProcess: Logger, SetProc, LogLine, ReadinessCheck, and ListenAddr are required")
 	}
 
 	ctx := spec.Ctx
@@ -132,6 +283,22 @@ func StartProcess(spec StartSpec) error {
 	}
 	if spec.ReadinessBudget == 0 {
 		spec.ReadinessBudget = ReadinessBudgetFrom(ctx)
+	}
+	// Port 0, in any spelling net.Listen reads as "any port" (an empty one
+	// too), would probe fine and tell the child to pick a port the readiness
+	// check cannot know: a backend that listens on any open port reserves
+	// one before building its spec.
+	if !namesAPort(spec.ListenAddr) {
+		return fmt.Errorf("StartProcess: ListenAddr %q must name the port the child is told, reserve one with ReserveListenAddr first", spec.ListenAddr)
+	}
+	if _, err := ReserveListenAddr(ctx, spec.ListenAddr); err != nil {
+		spec.Logger.Error(spec.NameDisplay+" cannot start", "error", err)
+		return fmt.Errorf("%s: %w", spec.NameDisplay, err)
+	}
+	// The reservation resolves the host, which can take a while; a start
+	// cancelled meanwhile spawns nothing.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("%s start cancelled: %w", spec.NameDisplay, err)
 	}
 
 	proc := NewCmdOptions(CmdOptions{
@@ -210,6 +377,15 @@ func StartProcess(spec StartSpec) error {
 		if readinessErr == nil {
 			if ctx.Err() != nil {
 				return cancelled()
+			}
+			// A check that passed does not say the child answered it: on a
+			// shared network another process on the same address answers
+			// for a child that has not bound yet, and a child that lost
+			// the bind is usually dead by now, which its exit says. This
+			// narrows that window; it does not close it.
+			if status := proc.Status(); status.Complete {
+				StopProcess(spec.Logger, proc, statusChan, DefaultStopGracePeriod, spec.NameUnderscore)
+				return errors.New(spec.NameDisplay + " process ended unexpectedly, check log")
 			}
 			spec.Logger.Info(spec.NameDisplay+" readiness ok, got version", "version", version)
 			break

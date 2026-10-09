@@ -3,8 +3,10 @@ package policy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -956,20 +958,183 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	assert.Equal(t, "FOC1234A", *devices[0].Serial)
 }
 
-// TestRunWithMetadata_EmitsFullStackShape asserts the complete emission
-// shape for a 2-member stack end-to-end through the runner pipeline:
-// TranslateAsStack, annotators, and PruneNestedRefs. Checks:
-//   - 1 VirtualChassis with correct Name; VC.Metadata["run_id"] set
-//   - VC.Master.VirtualChassis nil (non-recursion invariant)
-//   - 2 Devices: master (VcPosition nil, source_match present) and
-//     member (VcPosition=2, source_match absent)
-//   - Interface Gi1/0/1 routed to master; Gi2/0/1 routed to member
-func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
-	// Two chassis rows: member 1 (parentRelPos=1) and member 2 (parentRelPos=2).
-	// Two interfaces: Gi1/0/1 (ifIndex=1, routes to member 1) and
-	// Gi2/0/1 (ifIndex=2, routes to member 2 via ParseMemberID).
-	// Integer-typed PDUs must use Go int values; MapPDU does a type-assertion.
+// fixedLookup answers every sysObjectID with one manufacturer and one
+// product name, standing in for the vendor lookup tables. user makes every
+// model look like a lookup_extensions_dir entry.
+type fixedLookup struct{ user bool }
+
+func (fixedLookup) GetManufacturer(string) (string, error) { return "VendorA", nil }
+func (fixedLookup) GetDevice(string) (string, error)       { return "vendorProductName48", nil }
+func (fixedLookup) GetDeviceModel(string, map[string]string) (string, error) {
+	return "vendorProductName48", nil
+}
+
+func (l fixedLookup) UserDefined(oid string) bool {
+	return l.user && oid == ".1.3.6.1.4.1.9.1.1" // the sysObjectID standaloneModelDevice walks
+}
+
+// standaloneModelDevice runs one standalone target, under an enterprise whose
+// chassis rows name the part, whose sysObjectID resolves to a product name and
+// whose chassis row reports a part number, and returns its Device.
+func standaloneModelDevice(t *testing.T, lookup fixedLookup, defaultModel string, target config.Target) *diode.Device {
+	t.Helper()
+	devices := modelDevices(t, lookup, defaultModel, target, false)
+	require.Len(t, devices, 1)
+	return devices[0]
+}
+
+// modelDevices runs the target of standaloneModelDevice, with a second chassis
+// row of another model when stacked, and returns its Devices.
+func modelDevices(t *testing.T, lookup fixedLookup, defaultModel string, target config.Target, stacked bool) []*diode.Device {
+	t.Helper()
 	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			".1.3.6.1.2.1.1.2.0": {
+				".1.3.6.1.2.1.1.2.0": {Value: ".1.3.6.1.4.1.9.1.1", Type: gosnmp.ObjectIdentifier, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "switch-1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.4": {
+				".1.3.6.1.2.1.47.1.1.1.1.4.1": {Value: 0, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.5": {
+				".1.3.6.1.2.1.47.1.1.1.1.5.1": {Value: 3, Type: gosnmp.Integer, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.11": {
+				".1.3.6.1.2.1.47.1.1.1.1.11.1": {Value: "SN0001", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+			"1.3.6.1.2.1.47.1.1.1.1.13": {
+				".1.3.6.1.2.1.47.1.1.1.1.13.1": {Value: "PN-48P-A", Type: gosnmp.OctetString, IdentifierSize: 2},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := chassisEntries()
+	entries[0].MappingEntries = append(entries[0].MappingEntries,
+		config.MappingEntry{OID: ".1.3.6.1.2.1.1.2.0", Entity: "device", Field: "platform"})
+	runner := queryTargetRunner(factory, entries)
+	runner.manufacturers = lookup
+	runner.deviceLookup = lookup
+	runner.config.Defaults.Device.Model = defaultModel
+
+	if stacked {
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.4"][".1.3.6.1.2.1.47.1.1.1.1.4.1000"] = snmp.PDU{Value: 0, Type: gosnmp.Integer, IdentifierSize: 2}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.5"][".1.3.6.1.2.1.47.1.1.1.1.5.1000"] = snmp.PDU{Value: 3, Type: gosnmp.Integer, IdentifierSize: 2}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.6"] = map[string]snmp.PDU{
+			".1.3.6.1.2.1.47.1.1.1.1.6.1":    {Value: 1, Type: gosnmp.Integer, IdentifierSize: 2},
+			".1.3.6.1.2.1.47.1.1.1.1.6.1000": {Value: 2, Type: gosnmp.Integer, IdentifierSize: 2},
+		}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.11"][".1.3.6.1.2.1.47.1.1.1.1.11.1000"] = snmp.PDU{Value: "SN0002", Type: gosnmp.OctetString, IdentifierSize: 2}
+		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.13"][".1.3.6.1.2.1.47.1.1.1.1.13.1000"] = snmp.PDU{Value: "PN-24P-B", Type: gosnmp.OctetString, IdentifierSize: 2}
+	}
+
+	entities, _, err := runner.queryTarget(context.Background(), target)
+	require.NoError(t, err)
+	var devices []*diode.Device
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok {
+			require.NotNil(t, d.DeviceType)
+			devices = append(devices, d)
+		}
+	}
+	return devices
+}
+
+func deviceTypeModels(devices []*diode.Device) []string {
+	models := make([]string, 0, len(devices))
+	for _, d := range devices {
+		models = append(models, d.DeviceType.GetModel())
+	}
+	return models
+}
+
+// A device model set in the defaults is carried by a stack's master and every
+// member; a lookup_extensions_dir entry leaves members on their own models.
+func TestRunWithMetadata_StackPinnedModel(t *testing.T) {
+	pinned := modelDevices(t, fixedLookup{}, "Operator Model", standaloneTarget, true)
+	assert.Equal(t, []string{"Operator Model", "Operator Model"}, deviceTypeModels(pinned))
+
+	byLookup := modelDevices(t, fixedLookup{user: true}, "", standaloneTarget, true)
+	assert.Equal(t, []string{"PN-48P-A", "PN-24P-B"}, deviceTypeModels(byLookup))
+
+	both := modelDevices(t, fixedLookup{user: true}, "Operator Model", standaloneTarget, true)
+	assert.Equal(t, []string{"Operator Model", "Operator Model"}, deviceTypeModels(both),
+		"defaults outrank a lookup entry, so they still pin the whole stack")
+}
+
+// A stack that answers ENTITY-MIB but not sysObjectID still carries the
+// model and manufacturer pinned in defaults, on the master and every member.
+func TestRunWithMetadata_StackPinnedModelWithoutSysObjectID(t *testing.T) {
+	walker := twoMemberStackWalker()
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	runner := queryTargetRunner(factory, chassisEntries())
+	runner.config.Defaults.Device = config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}
+
+	entities, _, err := runner.queryTarget(context.Background(), standaloneTarget)
+	require.NoError(t, err)
+	var devices []*diode.Device
+	for _, e := range entities {
+		if d, ok := e.(*diode.Device); ok {
+			devices = append(devices, d)
+		}
+	}
+	require.Len(t, devices, 2)
+	for _, d := range devices {
+		assert.Equal(t, "Operator Model", d.GetDeviceType().GetModel())
+		assert.Equal(t, "VendorA", d.GetDeviceType().GetManufacturer().GetName())
+	}
+}
+
+var standaloneTarget = config.Target{Host: "192.0.2.1", Port: 161}
+
+// A standalone device is typed after its chassis row's model, the part number
+// a curated device type records, not the sysObjectID product name.
+func TestRunWithMetadata_StandaloneTypedByChassisModel(t *testing.T) {
+	device := standaloneModelDevice(t, fixedLookup{}, "", standaloneTarget)
+	assert.Equal(t, "PN-48P-A", device.DeviceType.GetModel())
+	assert.Equal(t, "VendorA", device.DeviceType.GetManufacturer().GetName())
+}
+
+// A device model the operator set in the policy defaults still wins.
+func TestRunWithMetadata_StandalonePinnedModelWins(t *testing.T) {
+	device := standaloneModelDevice(t, fixedLookup{}, "Operator Model", standaloneTarget)
+	assert.Equal(t, "Operator Model", device.DeviceType.GetModel())
+}
+
+// So does one set in a target's override_defaults.
+func TestRunWithMetadata_StandaloneTargetOverrideModelWins(t *testing.T) {
+	target := standaloneTarget
+	target.OverrideDefaults = &config.Defaults{Device: config.DeviceDefaults{Model: "Target Model"}}
+	device := standaloneModelDevice(t, fixedLookup{}, "", target)
+	assert.Equal(t, "Target Model", device.DeviceType.GetModel())
+}
+
+// Defaults that name only the manufacturer leave the model to the chassis row.
+func TestRunWithMetadata_StandaloneManufacturerDefaultDoesNotPinModel(t *testing.T) {
+	target := standaloneTarget
+	target.OverrideDefaults = &config.Defaults{Device: config.DeviceDefaults{Manufacturer: "VendorB", Platform: "os-b"}}
+	device := standaloneModelDevice(t, fixedLookup{}, "", target)
+	assert.Equal(t, "PN-48P-A", device.DeviceType.GetModel())
+}
+
+// And so does a model the operator named in lookup_extensions_dir.
+func TestRunWithMetadata_StandaloneUserLookupModelWins(t *testing.T) {
+	device := standaloneModelDevice(t, fixedLookup{user: true}, "", standaloneTarget)
+	assert.Equal(t, "vendorProductName48", device.DeviceType.GetModel())
+}
+
+// twoMemberStackWalker serves a 2-member stack named "3850-stack".
+// Two chassis rows: member 1 (parentRelPos=1) and member 2 (parentRelPos=2).
+// Two interfaces: Gi1/0/1 (ifIndex=1, routes to member 1) and
+// Gi2/0/1 (ifIndex=2, routes to member 2 via ParseMemberID).
+// Integer-typed PDUs must use Go int values; MapPDU does a type-assertion.
+func twoMemberStackWalker() *staticWalker {
+	return &staticWalker{
 		pdus: map[string]map[string]snmp.PDU{
 			"1.3.6.1.2.1.1.5": {
 				"1.3.6.1.2.1.1.5.0": {Value: "3850-stack", Type: gosnmp.OctetString, IdentifierSize: 1},
@@ -1001,6 +1166,18 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 			},
 		},
 	}
+}
+
+// TestRunWithMetadata_EmitsFullStackShape asserts the complete emission
+// shape for a 2-member stack end-to-end through the runner pipeline:
+// TranslateAsStack, annotators, and PruneNestedRefs. Checks:
+//   - 1 VirtualChassis with correct Name; VC.Metadata["run_id"] set
+//   - VC.Master.VirtualChassis nil (non-recursion invariant)
+//   - 2 Devices: master (VcPosition nil, source_match present) and
+//     member (VcPosition=2, source_match absent)
+//   - Interface Gi1/0/1 routed to master; Gi2/0/1 routed to member
+func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
+	walker := twoMemberStackWalker()
 	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return walker, nil
 	}
@@ -1097,6 +1274,74 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	require.NotNil(t, gi2.Device)
 	assert.Equal(t, "3850-stack", *gi1.Device.Name, "Gi1/0/1 routes to master")
 	assert.Equal(t, "3850-stack-2", *gi2.Device.Name, "Gi2/0/1 routes to member")
+}
+
+// TestRunWithMetadata_StackRackPlacement drives a policy rack and a
+// target's position and face through the merge and the mappers: the master
+// takes all three, and the member and nested device references none of them.
+// The member takes no location either, so it cannot disagree with the
+// location of the rack NetBox keeps for it.
+func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
+	walker := twoMemberStackWalker()
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	runner := queryTargetRunner(factory, chassisEntries())
+	runner.config.Defaults = config.Defaults{Site: "DC1", Location: "Hall 1", Rack: "R12"}
+
+	position := 40.0
+	target := config.Target{
+		Host:             "192.0.2.1",
+		Port:             161,
+		OverrideDefaults: &config.Defaults{Position: &position, Face: "Front"},
+	}
+	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
+	require.NoError(t, err)
+	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
+
+	var master, member *diode.Device
+	var ifaces []*diode.Interface
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.Device:
+			if v.VcPosition == nil {
+				master = v
+			} else {
+				member = v
+			}
+		case *diode.Interface:
+			ifaces = append(ifaces, v)
+		}
+	}
+	require.NotNil(t, master)
+	require.NotNil(t, member)
+
+	require.NotNil(t, master.Rack)
+	assert.Equal(t, "R12", *master.Rack.Name)
+	require.NotNil(t, master.Rack.Site)
+	assert.Equal(t, "DC1", *master.Rack.Site.Name)
+	require.NotNil(t, master.Rack.Location)
+	assert.Equal(t, "Hall 1", *master.Rack.Location.Name)
+	require.NotNil(t, master.Position)
+	assert.InDelta(t, 40.0, *master.Position, 0)
+	require.NotNil(t, master.Face)
+	assert.Equal(t, "front", *master.Face)
+
+	assert.Nil(t, member.Rack, "a stack may span racks, so the member keeps the rack NetBox has")
+	assert.Nil(t, member.Position, "the member is not at the master's U")
+	assert.Nil(t, member.Face)
+	assert.Nil(t, member.Location, "the member keeps the location of the rack NetBox has for it")
+
+	require.Len(t, ifaces, 2)
+	for _, iface := range ifaces {
+		require.NotNil(t, iface.Device)
+		assert.Nil(t, iface.Device.Rack, "nested device references carry no placement")
+		assert.Nil(t, iface.Device.Position)
+		assert.Nil(t, iface.Device.Face)
+		if *iface.Device.Name == *member.Name {
+			assert.Nil(t, iface.Device.Location, "the member's reference carries no location")
+		}
+	}
 }
 
 func TestNewRunner_RangeScheduledWithCron(t *testing.T) {
@@ -1388,4 +1633,69 @@ func TestNewRunner_NormalizesStackMemberTemplate(t *testing.T) {
 		assert.Equal(t, "{name}-css{id}", merged.StackMemberNameTemplate,
 			"an empty override must not clear the policy-level template")
 	})
+}
+
+// moduleNamingLookup names no device, and one module vendor type, as an
+// operator's modules: entry would.
+type moduleNamingLookup struct{}
+
+func (moduleNamingLookup) GetDevice(string) (string, error) { return "", fmt.Errorf("not found") }
+func (moduleNamingLookup) GetDeviceModel(string, map[string]string) (string, error) {
+	return "", fmt.Errorf("not found")
+}
+
+func (moduleNamingLookup) GetModuleModel(oid string) (string, bool) {
+	if oid == ".1.3.6.1.4.1.99999.3.1.9.4.673" {
+		return "Operator Module", true
+	}
+	return "", false
+}
+
+// The runner hands its lookup to module discovery, so an operator's modules:
+// entry names a module that reports no model name.
+func TestRunWithMetadata_ModuleLookupNamesModuleType(t *testing.T) {
+	col := func(n string) string { return "1.3.6.1.2.1.47.1.1.1.1." + n }
+	row := func(n, idx string, v any, typ gosnmp.Asn1BER) map[string]snmp.PDU {
+		return map[string]snmp.PDU{"." + col(n) + "." + idx: {Value: v, Type: typ, IdentifierSize: 2}}
+	}
+	merge := func(ms ...map[string]snmp.PDU) map[string]snmp.PDU {
+		out := map[string]snmp.PDU{}
+		for _, m := range ms {
+			maps.Copy(out, m)
+		}
+		return out
+	}
+	walker := &staticWalker{pdus: map[string]map[string]snmp.PDU{
+		"1.3.6.1.2.1.1.5": {"1.3.6.1.2.1.1.5.0": {Value: "switch-1", Type: gosnmp.OctetString, IdentifierSize: 1}},
+		col("2"): merge(row("2", "1", "Example Chassis", gosnmp.OctetString), row("2", "100", "Slot 1", gosnmp.OctetString),
+			row("2", "101", "Example Module", gosnmp.OctetString)),
+		col("3"): merge(row("3", "101", ".1.3.6.1.4.1.99999.3.1.9.4.673", gosnmp.ObjectIdentifier)),
+		col("4"): merge(row("4", "1", 0, gosnmp.Integer), row("4", "100", 1, gosnmp.Integer), row("4", "101", 100, gosnmp.Integer)),
+		col("5"): merge(row("5", "1", 3, gosnmp.Integer), row("5", "100", 5, gosnmp.Integer), row("5", "101", 9, gosnmp.Integer)),
+		col("6"): merge(row("6", "1", 0, gosnmp.Integer), row("6", "100", 1, gosnmp.Integer), row("6", "101", 1, gosnmp.Integer)),
+		col("7"): merge(row("7", "1", "Chassis", gosnmp.OctetString), row("7", "100", "Slot 1", gosnmp.OctetString),
+			row("7", "101", "Board 1", gosnmp.OctetString)),
+		col("11"): merge(row("11", "1", "SN0001", gosnmp.OctetString), row("11", "101", "SN0101", gosnmp.OctetString)),
+	}}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := chassisEntries()
+	entries[2].MappingEntries = append(entries[2].MappingEntries,
+		config.MappingEntry{OID: col("2"), Entity: "chassis_module", Field: "descr"},
+		config.MappingEntry{OID: col("3"), Entity: "chassis_module", Field: "vendor_type"})
+	runner := queryTargetRunner(factory, entries)
+	runner.deviceLookup = moduleNamingLookup{}
+	mode := config.DiscoverModulesLinecards
+	runner.config.Options.DiscoverModules = &mode
+
+	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	require.NoError(t, err)
+	var models []string
+	for _, e := range entities {
+		if m, ok := e.(*diode.Module); ok {
+			models = append(models, m.GetModuleType().GetModel())
+		}
+	}
+	assert.Equal(t, []string{"Operator Module"}, models)
 }

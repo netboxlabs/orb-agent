@@ -116,7 +116,9 @@ func TestWorkerBackendStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	probed := mocks.CaptureListenAddr(t)
 	require.NoError(t, be.Start(ctx, cancel))
+	assert.Equal(t, serverURL.Host, *probed, "the probe guards the address the readiness check asks")
 
 	startTime := be.GetStartTime()
 	assert.False(t, startTime.IsZero(), "Expected start time to be set")
@@ -405,6 +407,7 @@ func createExecutable(t *testing.T, name string) {
 
 func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(options backend.CmdOptions, name string, args []string)) {
 	t.Helper()
+	mocks.AllowHeldListenAddr(t)
 
 	original := backend.NewCmdOptions
 	backend.NewCmdOptions = func(options backend.CmdOptions, name string, args ...string) backend.Commander {

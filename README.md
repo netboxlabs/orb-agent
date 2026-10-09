@@ -107,7 +107,7 @@ Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and
 #### Observability Backends
 Observability backends focus on collecting and exporting rich telemetry from network traffic, probes or device polling so you can feed metrics into your monitoring stack. SNMP Telemetry polls SNMP devices and receives their traps, exporting metrics over OTLP.
 
-- [pktvisor](./docs/backends/pktvisor.md)
+- [pktvisor](./docs/backends/pktvisor/README.md)
 - [OpenTelemetry Infinity](./docs/backends/opentelemetry_infinity.md)
 - [SNMP Telemetry](./docs/backends/snmp_telemetry.md)
 - [gNMI Telemetry](./docs/backends/gnmi_telemetry.md)
@@ -152,7 +152,7 @@ orb:
        # see docs/backends/worker.md
     snmp_discovery:
       snmp_policy_1:
-       # see docs/backends/snmp.md
+       # see docs/backends/snmp_discovery/README.md
     snmp_telemetry:
       snmp_telemetry_policy_1:
        # see docs/backends/snmp_telemetry.md
@@ -198,7 +198,7 @@ To run `orb-agent`, use the following command from the directory where your crea
 ```sh
  docker run --net=host -v ${PWD}:/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
 ```
-The container needs sufficient permissions, to send `icmp` and `tcp` packets. This can either be achieved by setting the network-mode to `host` or by changing the container user to `root`: 
+The container needs sufficient permissions, to send `icmp` and `tcp` packets. This can either be achieved by setting the network-mode to `host` or by running the container as `root`, which is the image default: 
 
 ```sh
  docker run -u root -v ${PWD}:/opt/orb/ netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml
@@ -258,6 +258,9 @@ docker stop orb-agent && docker rm orb-agent
 ```
 
 The same approach works through Docker Compose (`restart: unless-stopped` with `stop_grace_period: 60s`) or a systemd unit wrapping the container, if either fits your environment better.
+
+### Running as a non-root user
+The image runs the agent as root by default, and it can run as another UID with `user:` in Docker Compose or `--user` on `docker run`. See [Running as a Non-Root User](./docs/advanced_config/non_root_user.md) for what runs unchanged, the passwd entry that SSH config files need, and the features that still need root.
 
 ### Outbound proxy
 If the agent must send outbound traffic to your Diode target through a corporate forward proxy, see the [Outbound Proxy Support](./docs/advanced_config/outbound_proxy.md) guide for the supported proxy environment variables and examples.

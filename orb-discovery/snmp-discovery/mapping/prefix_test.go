@@ -88,7 +88,7 @@ func TestDerivePrefixes_DefaultsAndExplicitScope(t *testing.T) {
 		Prefix: config.PrefixDefaults{
 			Description: "derived",
 			Role:        "lan",
-			Tenant:      "net-ops",
+			Tenant:      config.TenantParameters{Name: "net-ops"},
 			Tags:        []string{"prefix"},
 			ScopeSite:   "DC-East",
 		},

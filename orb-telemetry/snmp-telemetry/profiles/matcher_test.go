@@ -372,7 +372,7 @@ func TestMatch_BundledDotlessWildcardIsReachable(t *testing.T) {
 // that became reachable, so it is enough to show nothing more specific already
 // claims that subtree and to name the profile it is taken from.
 func TestMatcher_BundledDotlessWildcardTakesOnlyFromLessSpecific(t *testing.T) {
-	const subtree = "1.3.6.1.4.1.43.45."
+	const subtree = "1.3.6.1.4.1.43.45"
 
 	l, err := LoadProfiles("", silentLogger)
 	require.NoError(t, err)
@@ -385,14 +385,14 @@ func TestMatcher_BundledDotlessWildcardTakesOnlyFromLessSpecific(t *testing.T) {
 		if e.prefix == subtree {
 			continue
 		}
-		assert.False(t, strings.HasPrefix(e.prefix, subtree),
+		assert.False(t, strings.HasPrefix(e.prefix, subtree+"."),
 			"no bundled wildcard may sit inside the subtree that became reachable")
-		if strings.HasPrefix(subtree, e.prefix) && len(e.prefix) > len(covering.prefix) {
+		if e.covers(subtree) && len(e.prefix) > len(covering.prefix) {
 			covering = e
 		}
 	}
 	for oid := range m.exactIndex {
-		assert.False(t, strings.HasPrefix(oid, subtree),
+		assert.False(t, oid == subtree || strings.HasPrefix(oid, subtree+"."),
 			"no bundled exact entry may sit inside the subtree that became reachable")
 	}
 
@@ -781,4 +781,96 @@ func TestMatchWithDescr_AnUnresolvableListEntryDoesNotStopTheMap(t *testing.T) {
 	got, ok := m.MatchWithDescr("1.3.6.1.4.1.9.1.46", "storage array controller")
 	require.True(t, ok)
 	assert.Equal(t, viaMap, got, "an unresolvable list entry does not consume the device's verdict")
+}
+
+// ktranslate resolves a device by probing "<sysObjectID>.*" first and then
+// successively shorter prefixes, so a wildcard covers the arc it names as well
+// as everything below it. RouterOS reports its enterprise arc itself,
+// 1.3.6.1.4.1.14988.1, and the MikroTik profile is written as
+// "1.3.6.1.4.1.14988.1.*"; a matcher that only accepts strict descendants
+// sends every such device to the generic profile.
+func TestMatch_WildcardMatchesItsOwnPrefix(t *testing.T) {
+	p := makeProfile("mikrotik-router.yml", "1.3.6.1.4.1.14988.1.*")
+	m := NewMatcher([]*Profile{p}, silentLogger)
+
+	got, ok := m.Match("1.3.6.1.4.1.14988.1")
+	require.True(t, ok, "the arc the wildcard names is inside it")
+	assert.Equal(t, p, got)
+
+	got, ok = m.Match(".1.3.6.1.4.1.14988.1")
+	require.True(t, ok, "the device spelling, with the leading dot, is the same arc")
+	assert.Equal(t, p, got)
+
+	_, ok = m.Match("1.3.6.1.4.1.14988.10")
+	assert.False(t, ok, "a sibling arc that starts with the same digits is outside it")
+
+	_, ok = m.Match("1.3.6.1.4.1.14988")
+	assert.False(t, ok, "the arc above the wildcard is outside it")
+}
+
+// The prefix itself takes part in longest-prefix ordering like any other OID
+// under the wildcard: the narrowest wildcard that contains it wins, and an
+// exact entry still beats them all.
+func TestMatch_WildcardOwnPrefixKeepsPrecedence(t *testing.T) {
+	broad := makeProfile("vendor.yml", "1.2.3.*")
+	narrow := makeProfile("series.yml", "1.2.3.4.*")
+	m := NewMatcher([]*Profile{broad, narrow}, silentLogger)
+
+	got, ok := m.Match("1.2.3.4")
+	require.True(t, ok)
+	assert.Equal(t, narrow, got, "the narrow wildcard's own arc belongs to it, not to the broad one")
+
+	got, ok = m.Match("1.2.3")
+	require.True(t, ok)
+	assert.Equal(t, broad, got, "the broad wildcard's own arc belongs to it")
+
+	exact := makeProfile("one-box.yml", "1.2.3.4")
+	m2 := NewMatcher([]*Profile{broad, narrow, exact}, silentLogger)
+	got, ok = m2.Match("1.2.3.4")
+	require.True(t, ok)
+	assert.Equal(t, exact, got, "an exact entry beats the wildcard whose own arc it is")
+}
+
+// The bundled set. A device that reports the very arc a wildcard names
+// reaches the profile that owns that wildcard: RouterOS and SwOS report the
+// MikroTik arcs, and the APC enterprise arc is the one apc_ups.yml's own
+// "318.*" names; all three fell to the generic profile before. Where a
+// broader wildcard also covers the arc, the narrower one wins, so an arc
+// moves from the vendor's catch-all to the model profile, which is what
+// ktranslate resolves too.
+func TestMatch_BundledWildcardOwnPrefixReachesVendorProfile(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	all, err := l.AllResolved()
+	require.NoError(t, err)
+	m := NewMatcher(all, silentLogger)
+
+	for oid, want := range map[string]string{
+		// From the generic profile.
+		".1.3.6.1.4.1.14988.1": "mikrotik/mikrotik-router.yml",
+		".1.3.6.1.4.1.14988.2": "mikrotik/mikrotik-switch.yml",
+		".1.3.6.1.4.1.318":     "apc/apc_ups.yml",
+		// From a broader profile of the same vendor.
+		".1.3.6.1.4.1.318.1.3.4":       "apc/apc_pdu.yml",                  // apc_ups.yml owns 318.1.3.*
+		".1.3.6.1.4.1.4526.22":         "netgear/readynas.yml",             // netgear-generic.yml owns 4526.*
+		".1.3.6.1.4.1.2636.1.1.1.4.82": "juniper/juniper-qfx-switches.yml", // juniper-all-devices.yml owns 2636.1.1.1.*
+	} {
+		got, ok := m.Match(oid)
+		require.True(t, ok, "%s must match", oid)
+		assert.Equal(t, want, got.RelPath, "the verdict for %s", oid)
+	}
+
+	// Neighbours that must not move.
+	for oid, want := range map[string]string{
+		"1.3.6.1.4.1.14988":       "generic/base.yml",
+		"1.3.6.1.4.1.14988.10":    "generic/base.yml",
+		"1.3.6.1.4.1.14988.1.1":   "mikrotik/mikrotik-router.yml",
+		"1.3.6.1.4.1.318.1.3":     "apc/apc_ups.yml",
+		"1.3.6.1.4.1.318.1.3.4.5": "apc/apc_pdu.yml",
+		"1.3.6.1.4.1.2011.2.1.1":  "huawei/huawei-all-devices.yml",
+	} {
+		got, ok := m.Match(oid)
+		require.True(t, ok, "%s must still match", oid)
+		assert.Equal(t, want, got.RelPath, "the verdict for %s must not move", oid)
+	}
 }

@@ -54,7 +54,7 @@ Interface types are determined using the following priority order (first match w
 - Maps speeds from 100 Mbps to 800G to appropriate interface types
 
 ### 5. Default Fallback (Lowest Priority)
-- If nothing else matches, uses `defaults.if_type`
+- If nothing else matches, uses `defaults.interface.if_type`
 - Defaults to `other` if not specified
 
 ## Interface Name Selection
@@ -93,6 +93,65 @@ ifDescr is empty. `ifAlias` continues to populate the interface
 > later discovery run will create new interfaces under the new names
 > alongside the existing ones until the old entries are reconciled or
 > removed. Choose the source before first discovery where practical.
+
+### VLAN interfaces named by their VLAN ID
+
+Cisco small-business switches (Catalyst 1200/1300, CBS, SG and SX series), Eltex MES 21xx and 23xx, and some UniFi switches name each VLAN interface by its bare VLAN ID, so VLAN 5's interface reaches NetBox as `5`. Set `defaults.vlan_interface_name_prefix` to send it as the prefix followed by the VLAN ID instead:
+
+```yaml
+config:
+  defaults:
+    vlan_interface_name_prefix: "Vlan"     # 5 -> Vlan5
+scope:
+  targets:
+    - host: 192.0.2.10
+      override_defaults:
+        vlan_interface_name_prefix: "vlan " # 5 -> vlan 5
+  authentication:
+    protocol_version: SNMPv2c
+    community: public
+```
+
+**Which interfaces.** An interface is renamed only when all of these hold:
+- its ifIndex is 100000 + VID − 1, with the VID in 1-4094;
+- its ifType is `propVirtual` (53);
+- the name this backend would otherwise send, after `interface_name_source`, is exactly the VID.
+
+Every other interface keeps its name. Some switches of the same family (SGE2010, Dell PowerConnect 2824, Alcatel OmniStack LS) report the VID only in ifName and `vlan` in ifDescr. On those, set `interface_name_source: ifname` as well. A Linksys LGS318P also carries its management address on an interface `1` at ifIndex 300000, which is not a VLAN interface and keeps its name.
+
+**Choosing the prefix.** Match what NetBox already holds for the device, including case and spaces, since the name is NetBox's match key:
+- The NetBox device-type library names the VLAN 1 interface `Vlan1` on the Catalyst 1300 and most CBS types, and `vlan 1` or `vlan1` on SG-series types. Check the type you use.
+- When the device type defines that interface, a matching prefix makes the discovered interface bind to it rather than sit beside it.
+
+The prefix starts with a letter and holds only ASCII letters, `-` and `_`, in words joined by single spaces. It may end in one space and is at most 60 characters. Anything else is refused when the policy is loaded.
+
+- **Quoting:** quote a prefix that ends in a space. YAML drops an unquoted trailing space, which would send `vlan5` rather than `vlan 5`.
+- **Overrides:** a target's `override_defaults` can change the prefix but not remove it. To keep some targets on the bare names, set the prefix per target rather than in the policy's `defaults`.
+
+**What changes.**
+- Exclusion patterns and interface type patterns see the new name.
+- `emit_prefix_vlan` reads the names the device reports, so the prefix does not change which addresses associate a VLAN. On the switches above that report `vlan` in ifDescr, a renamed interface does not associate one. An address on an interface left out of a run (below) carries no VLAN that run.
+- **Missing ifType:** when a walk returns a VLAN interface without its ifType, the interface is left out of that run and its address is sent without an interface, so NetBox keeps what it has.
+- **Name collision:** when the new name equals another interface's name on the device, ignoring case, the VLAN interface is left out with a warning. On a stack, every member's interfaces count.
+- **Prefix unset:** each run logs how many such interfaces it found.
+
+> ⚠️ **Setting, changing or removing the prefix renames interfaces**, like
+> `interface_name_source`. Diode cannot tell these interfaces apart by MAC
+> (they share one), so a new name creates a new NetBox interface, the
+> address moves to it, and the old interface stays. To switch without
+> leftovers:
+> 1. Stop every policy that discovers the device.
+> 2. Rename its VLAN interfaces in NetBox to exactly the new names.
+> 3. Set the prefix and resume.
+>
+> Alternatively, set the prefix and delete the old interfaces after the
+> next run. Deleting an interface also deletes anything attached to it,
+> such as addresses added by hand, so check them first. Use this path
+> when NetBox already has an interface with the new name, from a
+> device-type template or an earlier manual rename: the rename in step 2
+> would fail on it, while the prefix binds to it.
+
+device-discovery names these interfaces from the switch CLI (`vlan 5` on Cisco small business, `vlan5` on UniFi). Discover a device with one backend: the two backends also name its ports differently.
 
 ## Subinterface Detection and Parent Tracking
 
@@ -252,9 +311,10 @@ defaults:
 ### Per-Target Override
 
 ```yaml
-defaults:
-  interface_exclude_patterns:
-    - "^tap.*"
+config:
+  defaults:
+    interface_exclude_patterns:
+      - "^tap.*"
 scope:
   targets:
     - host: "192.168.1.1"
@@ -262,6 +322,9 @@ scope:
         interface_exclude_patterns:
           - "^tap.*"
           - "^veth.*"   # this target also excludes veth interfaces
+  authentication:
+    protocol_version: "SNMPv2c"
+    community: "public"
 ```
 
 ### Invalid Patterns
@@ -355,7 +418,8 @@ When SNMP ifType is unknown and no patterns match, the system uses interface spe
 
 ```yaml
 defaults:
-  if_type: other
+  interface:
+    if_type: other
   interface_patterns:
     - match: "^Gi.*"
       type: "10gbase-x-sfpp"  # User override for Gigabit interfaces
@@ -380,7 +444,8 @@ If no `interface_patterns` are configured, the system automatically provides int
 
 ```yaml
 defaults:
-  if_type: other
+  interface:
+    if_type: other
   # No interface_patterns specified
 ```
 
@@ -400,4 +465,4 @@ defaults:
 
 **Speed-Based Fallback:**
 - Generic interfaces with unknown ifType but speed data → Speed-based detection
-- Unknown interfaces without speed → `other` (defaults.if_type)
+- Unknown interfaces without speed → `other` (defaults.interface.if_type)

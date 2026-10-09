@@ -38,9 +38,7 @@ func translatePrefixes(entities []diode.Entity, dev *diode.Device, defaults *con
 		if p.Role != "" {
 			role = &diode.Role{Name: strptr(p.Role)}
 		}
-		if p.Tenant != "" {
-			tenant = &diode.Tenant{Name: strptr(p.Tenant)}
-		}
+		tenant = diodeTenant(p.Tenant)
 		// Prefix tags = policy-level tags + prefix-level tags (defaults.tags applies
 		// to all entities, mirroring the Device path).
 		tags = toTags(append(append([]string{}, defaults.Tags...), p.Tags...))

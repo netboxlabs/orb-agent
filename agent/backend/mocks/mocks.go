@@ -1,7 +1,9 @@
 package mocks
 
 import (
+	"context"
 	"errors"
+	"testing"
 	"time"
 
 	"github.com/stretchr/testify/mock"
@@ -176,4 +178,31 @@ func SetupFailingProcess(mockCmd *MockCmd, errorMsg string) {
 	go func() {
 		statusCh <- status
 	}()
+}
+
+// AllowHeldListenAddr stubs, for the test's duration, the probe that refuses
+// a start while another process holds the backend's listen address. A test
+// that stands a server in for the child on the configured address has that
+// address held on purpose, so the probe is set aside along with the process.
+func AllowHeldListenAddr(t testing.TB) {
+	t.Helper()
+	orig := backend.ReserveListenAddr
+	backend.ReserveListenAddr = func(_ context.Context, addr string) (string, error) { return addr, nil }
+	t.Cleanup(func() { backend.ReserveListenAddr = orig })
+}
+
+// CaptureListenAddr sets the probe aside like AllowHeldListenAddr and records
+// the address the backend asked it to guard, so a test can pin that it is
+// the address the backend serves its API on: a probe on any other address
+// guards nothing.
+func CaptureListenAddr(t testing.TB) *string {
+	t.Helper()
+	var addr string
+	orig := backend.ReserveListenAddr
+	backend.ReserveListenAddr = func(_ context.Context, a string) (string, error) {
+		addr = a
+		return a, nil
+	}
+	t.Cleanup(func() { backend.ReserveListenAddr = orig })
+	return &addr
 }

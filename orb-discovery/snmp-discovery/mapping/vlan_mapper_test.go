@@ -1,6 +1,7 @@
 package mapping
 
 import (
+	"bytes"
 	"io"
 	"log/slog"
 	"os"
@@ -319,7 +320,7 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 		VLAN: config.VLANDefaults{
 			Description: "auto-discovered",
 			Tags:        []string{"vlan-tag"},
-			Tenant:      "NetOps",
+			Tenant:      config.TenantParameters{Name: "NetOps", Group: "Operations"},
 			Group:       config.VLANGroupParameters{Name: "campus-vlans"},
 		},
 	}
@@ -339,6 +340,9 @@ func TestVlanMapper_EmitVLANs_AppliesDefaults(t *testing.T) {
 	}
 	if got.Description == nil || *got.Description != "auto-discovered" {
 		t.Errorf("Description: got %v, want \"auto-discovered\"", got.Description)
+	}
+	if got.Tenant == nil || got.Tenant.Group == nil || got.Tenant.Group.GetName() != "Operations" {
+		t.Errorf("Tenant group: got %v, want Operations", got.Tenant)
 	}
 	// Both defaults.VLAN.Tags and defaults.Tags must appear (entity-specific first,
 	// then top-level — matches the sibling mapper pattern in mappers.go).
@@ -681,6 +685,122 @@ func TestVlanMapper_PostMap_CiscoSB_AccessAndNativeColumnsAreDistinct(t *testing
 			}
 		})
 	}
+}
+
+// ciscoSBTrunkLists renders the four vlanTrunkModeList columns naming vids, as
+// the walk delivers them.
+func ciscoSBTrunkLists(vids ...int) [4]string {
+	var lists [4][]byte
+	for n := range lists {
+		lists[n] = make([]byte, 128)
+	}
+	for _, vid := range vids {
+		bit := (vid - 1) % 1024
+		lists[(vid-1)/1024][bit/8] |= 0x80 >> (bit % 8)
+	}
+	return [4]string{string(lists[0]), string(lists[1]), string(lists[2]), string(lists[3])}
+}
+
+// buildCiscoSBModeFixture models a Catalyst 1200 whose standard tables say
+// nothing true: PVID 1 everywhere, empty static masks. Port 1 is a trunk on
+// native 20 whose access setting still reads 30, port 2 an access port on 30
+// that keeps a trunk's default lists, and port-channel 1000 a trunk whose
+// native VLAN is not one it carries. VLAN 99 is in port 1's list but was never
+// created.
+func buildCiscoSBModeFixture() ObjectIDValueMap {
+	out := ObjectIDValueMap{}
+	put := func(oid, val string, t Asn1BER) { out[oid] = Value{Value: val, Type: t} }
+	ports := []struct {
+		ifIndex, mode, access, native int
+		lists                         [4]string
+	}{
+		{1, 12, 30, 20, ciscoSBTrunkLists(10, 20, 99, 1500, 2500, 3500)},
+		{2, 11, 30, 1, ciscoSBTrunkLists(10, 20, 30, 1500, 2500, 3500)},
+		{1000, 12, 1, 1, ciscoSBTrunkLists(10, 20)},
+	}
+	for _, p := range ports {
+		idx := strconv.Itoa(p.ifIndex)
+		put(".1.3.6.1.2.1.17.1.4.1.2."+idx, idx, Integer)
+		put(".1.3.6.1.2.1.17.7.1.4.5.1.1."+idx, "1", Integer)
+		put(".1.3.6.1.2.1.2.2.1.7."+idx, "1", Integer)
+		put(".1.3.6.1.2.1.2.2.1.3."+idx, "6", Integer)
+		put(".1.3.6.1.4.1.9.6.1.101.48.22.1.1."+idx, strconv.Itoa(p.mode), Integer)
+		put(".1.3.6.1.4.1.9.6.1.101.48.62.1.1."+idx, strconv.Itoa(p.access), Gauge32)
+		put(".1.3.6.1.4.1.9.6.1.101.48.61.1.1."+idx, strconv.Itoa(p.native), Gauge32)
+		for n, list := range p.lists {
+			put(".1.3.6.1.4.1.9.6.1.101.48.61.1."+strconv.Itoa(n+2)+"."+idx, list, OctetString)
+		}
+	}
+	for _, vid := range []string{"1", "10", "20", "30", "1500", "2500", "3500"} {
+		put(".1.3.6.1.2.1.17.7.1.4.3.1.1."+vid, "vlan"+vid, OctetString)
+		put(".1.3.6.1.2.1.17.7.1.4.3.1.2."+vid, string(make([]byte, 126)), OctetString)
+		put(".1.3.6.1.2.1.17.7.1.4.3.1.4."+vid, string(make([]byte, 126)), OctetString)
+	}
+	return out
+}
+
+// A port in a mode other than access or trunk is logged once per target, so
+// the first such switch shows up.
+func TestVlanMapper_PostMap_CiscoSB_LogsOtherModes(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 2, "gi2")
+	rows := buildCiscoSBFixture(2, 30)
+	rows[".1.3.6.1.4.1.9.6.1.101.48.22.1.1.2"] = Value{Value: "10", Type: Integer}
+	var buf bytes.Buffer
+	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{})
+	assert.Contains(t, buf.String(), "ifindex_modes=map[2:10]")
+
+	buf.Reset()
+	rows[".1.3.6.1.4.1.9.6.1.101.48.22.1.1.2"] = Value{Value: "11", Type: Integer}
+	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{})
+	assert.NotContains(t, buf.String(), "ifindex_modes=")
+}
+
+func TestHasVLANSignal_CountsTheCiscoSBModeAndLists(t *testing.T) {
+	assert.True(t, hasVLANSignal(ObjectIDValueMap{oidCiscoSBPortMode + "1": {Value: "12"}}))
+	assert.True(t, hasVLANSignal(ObjectIDValueMap{oidCiscoSBTrunkLists + "2.1": {Value: "\x80"}}))
+}
+
+func vids(vlans []*diode.VLAN) []int64 {
+	out := make([]int64, 0, len(vlans))
+	for _, v := range vlans {
+		out = append(out, *v.Vid)
+	}
+	return out
+}
+
+// The port mode and the trunk member lists describe each port where the
+// standard tables cannot.
+func TestVlanMapper_PostMap_CiscoSB_PortModeAndTrunkLists(t *testing.T) {
+	registry, trunk := newVlanTestRegistry(t, 1, "gi1")
+	access := &diode.Interface{Name: StringPtr("gi2")}
+	channel := &diode.Interface{Name: StringPtr("Po1")}
+	registry.entities[InterfaceEntityType]["2"] = access
+	registry.entities[InterfaceEntityType]["1000"] = channel
+	registry.MarkInterfaceVerified(access)
+	registry.MarkInterfaceVerified(channel)
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).
+		PostMap(buildCiscoSBModeFixture(), registry, &config.Defaults{})
+
+	require.NotNil(t, trunk.Mode)
+	assert.Equal(t, "tagged", *trunk.Mode)
+	require.NotNil(t, trunk.UntaggedVlan)
+	assert.Equal(t, int64(20), *trunk.UntaggedVlan.Vid, "the native VLAN, not the stale access setting")
+	assert.Equal(t, []int64{10, 1500, 2500, 3500}, vids(trunk.TaggedVlans),
+		"one member from each list, and not VLAN 99, which the device does not have")
+
+	require.NotNil(t, access.Mode)
+	assert.Equal(t, "access", *access.Mode)
+	require.NotNil(t, access.UntaggedVlan)
+	assert.Equal(t, int64(30), *access.UntaggedVlan.Vid)
+	assert.Empty(t, access.TaggedVlans)
+
+	require.NotNil(t, channel.Mode)
+	assert.Equal(t, "tagged", *channel.Mode)
+	assert.Nil(t, channel.UntaggedVlan, "native VLAN 1 is not in the port-channel's list")
+	assert.Equal(t, []int64{10, 20}, vids(channel.TaggedVlans))
 }
 
 func TestEmitVLANs_ReadsVtpVlanNameWhenDot1qAbsent(t *testing.T) {

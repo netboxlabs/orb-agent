@@ -57,7 +57,7 @@ Releasable backends (each cuts its own release and contributes to the
 aggregated agent release):
 
 - `device-discovery`
-- `gnmi-discovery` *(experimental)*
+- `gnmi-discovery`
 - `gnmi-telemetry`
 - `network-discovery`
 - `snmp-discovery`

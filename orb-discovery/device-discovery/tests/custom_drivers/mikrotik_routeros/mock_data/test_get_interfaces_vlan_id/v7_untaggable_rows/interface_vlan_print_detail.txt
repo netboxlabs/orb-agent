@@ -1,0 +1,9 @@
+Flags: X - disabled; R - running
+ 0 R name="Huis" mtu=1500 l2mtu=1588 mac-address=02:00:5E:10:00:02 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=10 interface=bridge use-service-tag=no mvrp=no 
+ 1 R name="Kantoor" mtu=1500 l2mtu=1584 mac-address=02:00:5E:10:00:02 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=11 interface=Huis use-service-tag=no mvrp=no 
+ 2 R ;;; customer vlan-id=99 handoff
+     name="svc100" mtu=1500 l2mtu=1588 mac-address=02:00:5E:10:00:03 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=100 interface=ether1 use-service-tag=yes mvrp=no 
+ 3 R name="vlan20" mtu=1500 l2mtu=1588 mac-address=02:00:5E:10:00:04 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=20 interface=ether2 use-service-tag=no mvrp=no 
+ 4 R name="ether3-vlan20" mtu=1500 l2mtu=1588 mac-address=02:00:5E:10:00:05 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=20 interface=ether3 use-service-tag=no mvrp=no 
+ 5 X name="vlan40" mtu=1500 l2mtu=1588 mac-address=02:00:5E:10:00:02 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=30 interface=bridge use-service-tag=no mvrp=no 
+ 6 R name="to isp" mtu=1500 l2mtu=1588 mac-address=02:00:5E:10:00:06 arp=enabled arp-timeout=auto loop-protect=default loop-protect-status=off loop-protect-send-interval=5s loop-protect-disable-time=5m vlan-id=200 interface="ether4 wan" use-service-tag=no mvrp=no 

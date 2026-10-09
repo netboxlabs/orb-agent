@@ -6,10 +6,18 @@ on:
       - release
     paths:
       - "orb-discovery/snmp-discovery/**"
+      - "docs/backends/snmp_discovery/**"
+      - "docs/config_samples.md"
+      - "docs/advanced_config/env_config.md"
+      - "docs/configs/agent_yaml.md"
       - "!orb-discovery/snmp-discovery/docker/**"
   pull_request:
     paths:
       - "orb-discovery/snmp-discovery/**"
+      - "docs/backends/snmp_discovery/**"
+      - "docs/config_samples.md"
+      - "docs/advanced_config/env_config.md"
+      - "docs/configs/agent_yaml.md"
       - "!orb-discovery/snmp-discovery/docker/**"
 
 concurrency:

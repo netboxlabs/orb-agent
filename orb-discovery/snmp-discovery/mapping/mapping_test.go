@@ -14,7 +14,7 @@ import (
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
@@ -2323,6 +2323,43 @@ func TestMappingYAML_HuaweiVlanCatalogPresent(t *testing.T) {
 	}
 }
 
+// The vendor chassis-serial scalars are post-pass columns read straight
+// from the walk by the chassis translation, so they must be declared under
+// the pseudo-entity whose mapper is a no-op, and each under its own vendor.
+func TestMappingYAML_VendorSerialScalarsPresent(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	want := map[string]string{
+		".1.3.6.1.4.1.2636.3.1.3":    "juniper",  // jnxBoxSerialNo
+		".1.3.6.1.4.1.14988.1.1.7.3": "mikrotik", // mtxrSerialNumber
+	}
+	for _, e := range doc.Entries {
+		vendor, ok := want[e.OID]
+		if !ok {
+			continue
+		}
+		if e.Vendor != vendor {
+			t.Errorf("%s: vendor = %q, want %q", e.OID, e.Vendor, vendor)
+		}
+		if e.Entity != string(mapping.ChassisInventoryEntityType) {
+			t.Errorf("%s: entity = %q, want %s (post-pass only)", e.OID, e.Entity, mapping.ChassisInventoryEntityType)
+		}
+		if len(e.MappingEntries) != 0 {
+			t.Errorf("%s: a scalar takes no child entries", e.OID)
+		}
+		delete(want, e.OID)
+	}
+	for oid, vendor := range want {
+		t.Errorf("mapping.yaml missing %s-scoped scalar %s", vendor, oid)
+	}
+}
+
 // The VTP VLAN catalog exists to corroborate SVI-derived prefix VLANs, so
 // with emit_prefix_vlan off it must not be walked at all: a stock Cisco
 // switch has to emit exactly the VLAN entities it emitted before the
@@ -2455,14 +2492,30 @@ func TestMappingYAML_CiscoSBOverlayEntriesPresent(t *testing.T) {
 		t.Fatalf("yaml: %v", err)
 	}
 	wanted := map[string]bool{
+		".1.3.6.1.4.1.9.6.1.101.48.22.1": false, // vlanPortModeTable
 		".1.3.6.1.4.1.9.6.1.101.48.61.1": false, // vlanTrunkPortModeTable
 		".1.3.6.1.4.1.9.6.1.101.48.62.1": false, // vlanAccessPortModeTable
+	}
+	// The collector walks the child columns, not the table.
+	columns := map[string]bool{
+		".1.3.6.1.4.1.9.6.1.101.48.22.1.1": false, // vlanPortModeState
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.1": false, // vlanTrunkPortModeNativeVlanId
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.2": false, // vlanTrunkModeList1to1024
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.3": false, // vlanTrunkModeList1025to2048
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.4": false, // vlanTrunkModeList2049to3072
+		".1.3.6.1.4.1.9.6.1.101.48.61.1.5": false, // vlanTrunkModeList3073to4094
+		".1.3.6.1.4.1.9.6.1.101.48.62.1.1": false, // vlanAccessPortModeVlanId
 	}
 	for _, e := range doc.Entries {
 		if _, want := wanted[e.OID]; !want {
 			continue
 		}
 		wanted[e.OID] = true
+		for _, child := range e.MappingEntries {
+			if _, want := columns[child.OID]; want {
+				columns[child.OID] = true
+			}
+		}
 		if e.Vendor != "cisco" {
 			t.Errorf("%s: vendor = %q, want cisco (these devices report sysObjectIDs under ciscoProducts)", e.OID, e.Vendor)
 		}
@@ -2475,6 +2528,11 @@ func TestMappingYAML_CiscoSBOverlayEntriesPresent(t *testing.T) {
 	for oid, found := range wanted {
 		if !found {
 			t.Errorf("mapping.yaml missing CISCOSB-scoped OID %s", oid)
+		}
+	}
+	for oid, found := range columns {
+		if !found {
+			t.Errorf("mapping.yaml missing CISCOSB column %s", oid)
 		}
 	}
 }

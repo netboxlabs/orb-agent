@@ -426,17 +426,11 @@ func (r *Runner) ipAddressEntity(host nmap.Host, ipAddr, addr, policyName string
 		hasComments = true
 		ip.Comments = diode.String(r.config.Defaults.Comments)
 	}
-	if r.config.Defaults.Vrf != "" {
-		vrf := &diode.VRF{Name: diode.String(r.config.Defaults.Vrf)}
-		if r.config.Defaults.Rd != "" {
-			vrf.Rd = diode.String(r.config.Defaults.Rd)
-		}
+	if vrf := diodeVrf(r.config.Defaults); vrf != nil {
 		ip.Vrf = vrf
 	}
-	if r.config.Defaults.Tenant != "" {
-		ip.Tenant = &diode.Tenant{
-			Name: diode.String(r.config.Defaults.Tenant),
-		}
+	if tenant := diodeTenant(r.config.Defaults.Tenant); tenant != nil {
+		ip.Tenant = tenant
 	}
 	if r.config.Defaults.Role != "" {
 		ip.Role = diode.String(r.config.Defaults.Role)

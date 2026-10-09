@@ -1,6 +1,7 @@
 package secretsmgr
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -10,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -17,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -47,22 +50,32 @@ func TestCyberArkStart_RequiresAppID(t *testing.T) {
 	require.Contains(t, err.Error(), "app_id is required")
 }
 
-func TestCyberArkStart_TrimsTrailingSlashFromURL(t *testing.T) {
-	c := &cyberarkManager{
-		preLogger: newTestLogger(),
-		config:    config.CyberArkManager{URL: "https://ccp.example.com/", AppID: "orb"},
+func TestCyberArkStart_ResolvesEndpoint(t *testing.T) {
+	// A base URL gets the default web service path appended; a URL already
+	// ending in /api/Accounts is the full endpoint and is used as given, which
+	// is how CCP installed under a non-default IIS application is reached.
+	for _, tc := range []struct {
+		url  string
+		want string
+	}{
+		{"https://ccp.example.com", "https://ccp.example.com/AIMWebService/api/Accounts"},
+		{"https://ccp.example.com/", "https://ccp.example.com/AIMWebService/api/Accounts"},
+		{"https://ccp.example.com/cyberark", "https://ccp.example.com/cyberark/AIMWebService/api/Accounts"},
+		{"https://ccp.example.com/AIMWebService/api/Accounts", "https://ccp.example.com/AIMWebService/api/Accounts"},
+		{"https://ccp.example.com/AIMWebService/api/Accounts/", "https://ccp.example.com/AIMWebService/api/Accounts"},
+		{"https://ccp.example.com/AIMWebServiceCustom/api/Accounts", "https://ccp.example.com/AIMWebServiceCustom/api/Accounts"},
+		{"https://ccp.example.com/aimwebservicecustom/api/accounts", "https://ccp.example.com/aimwebservicecustom/api/accounts"},
+		{"https://ccp.example.com/some/prefix/AIMWebService/api/Accounts", "https://ccp.example.com/some/prefix/AIMWebService/api/Accounts"},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			c := &cyberarkManager{
+				preLogger: newTestLogger(),
+				config:    config.CyberArkManager{URL: tc.url, AppID: "orb"},
+			}
+			require.NoError(t, c.Start(context.Background()))
+			require.Equal(t, tc.want, c.endpoint.String())
+		})
 	}
-	require.NoError(t, c.Start(context.Background()))
-	require.Equal(t, "https://ccp.example.com", c.baseURL.String())
-}
-
-func TestCyberArkStart_AcceptsURLWithPathPrefix(t *testing.T) {
-	c := &cyberarkManager{
-		preLogger: newTestLogger(),
-		config:    config.CyberArkManager{URL: "https://ccp.example.com/cyberark", AppID: "orb"},
-	}
-	require.NoError(t, c.Start(context.Background()))
-	require.Equal(t, "/cyberark", c.baseURL.Path, "path prefix must be preserved")
 }
 
 func TestCyberArkStart_RejectsURLWithQueryOrFragment(t *testing.T) {
@@ -101,28 +114,6 @@ func TestCyberArkStart_RejectsAppIDWithSlash(t *testing.T) {
 	err := c.Start(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "must not contain '/'")
-}
-
-func TestCyberArkStart_RejectsURLAlreadyAtCCPEndpoint(t *testing.T) {
-	// Operators copying examples from upstream CyberArk integrations
-	// sometimes paste the full endpoint URL. Catch it at startup; otherwise
-	// fetch builds /AIMWebService/api/Accounts/AIMWebService/api/Accounts
-	// and 404s consistently at runtime.
-	for _, bad := range []string{
-		"https://ccp.example.com/AIMWebService/api/Accounts",
-		"https://ccp.example.com/AIMWebService/api/Accounts/",
-		"https://ccp.example.com/some/prefix/AIMWebService/api/Accounts",
-	} {
-		t.Run(bad, func(t *testing.T) {
-			c := &cyberarkManager{
-				preLogger: newTestLogger(),
-				config:    config.CyberArkManager{URL: bad, AppID: "orb"},
-			}
-			err := c.Start(context.Background())
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "already includes the CCP endpoint path")
-		})
-	}
 }
 
 func TestCyberArkStart_RejectsCABundleWithOnlyPrivateKey(t *testing.T) {
@@ -335,7 +326,8 @@ func TestCyberArkParseBody_RejectsAppIDOverrideContainingSlash(t *testing.T) {
 	require.Contains(t, err.Error(), "AppID override must not contain '/'")
 }
 
-// fakeCCP emulates the GET /AIMWebService/api/Accounts endpoint.
+// fakeCCP emulates the GET /AIMWebService/api/Accounts endpoint, or the
+// same endpoint under another web service name via newFakeCCPAt.
 type fakeCCP struct {
 	*httptest.Server
 	mu       sync.Mutex
@@ -346,9 +338,13 @@ type fakeCCP struct {
 }
 
 func newFakeCCP() *fakeCCP {
+	return newFakeCCPAt("/AIMWebService/api/Accounts")
+}
+
+func newFakeCCPAt(endpointPath string) *fakeCCP {
 	f := &fakeCCP{accounts: map[string]map[string]any{}, missing: map[string]bool{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/AIMWebService/api/Accounts", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(endpointPath, func(w http.ResponseWriter, r *http.Request) {
 		f.calls.Add(1)
 		q := r.URL.Query()
 		f.lastReq.Store(q)
@@ -463,8 +459,192 @@ func TestCyberArkFetch_NotFound(t *testing.T) {
 	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
 	_, err := c.fetch("Lab/Missing")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "not found")
-	require.Contains(t, err.Error(), "Object not found", "underlying CCP error message must surface")
+	require.Contains(t, err.Error(), "account not found")
+	require.Contains(t, err.Error(), "APPAP004E: Object not found", "underlying CCP error must surface")
+}
+
+func TestCyberArkFetch_FullEndpointURL_NonDefaultWebService(t *testing.T) {
+	fake := newFakeCCPAt("/AIMWebServiceCustom/api/Accounts")
+	defer fake.Close()
+	fake.set("orb-agent", "Lab", "DB-Account", map[string]any{"Content": "s3cret"})
+
+	c := &cyberarkManager{preLogger: newTestLogger(), config: config.CyberArkManager{
+		URL:   fake.URL + "/AIMWebServiceCustom/api/Accounts",
+		AppID: "orb-agent",
+	}}
+	require.NoError(t, c.Start(context.Background()))
+	val, err := c.fetch("Lab/DB-Account")
+	require.NoError(t, err)
+	require.Equal(t, "s3cret", val)
+	require.Equal(t, int32(1), fake.calls.Load())
+}
+
+func TestCyberArkFetch_WebServer404IsNotAccountNotFound(t *testing.T) {
+	// A 404 without a CCP error code comes from the web server: the configured
+	// path has no CCP web service. It must not read as a missing account, and
+	// the web server's HTML error page must not be dumped into the error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("<!DOCTYPE html><html><body>404 - File or directory not found.</body></html>"))
+	}))
+	defer srv.Close()
+
+	c := &cyberarkManager{preLogger: newTestLogger(), config: config.CyberArkManager{URL: srv.URL, AppID: "orb-agent"}}
+	require.NoError(t, c.Start(context.Background()))
+	_, err := c.fetch("Lab/DB-Account")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "account not found")
+	require.NotContains(t, err.Error(), "DOCTYPE")
+	require.Contains(t, err.Error(), "HTTP 404 from "+srv.URL+"/AIMWebService/api/Accounts without a CCP error body")
+	require.Contains(t, err.Error(), "full endpoint URL ending in /api/Accounts", "the error must say how to reach a non-default web service")
+}
+
+func TestCyberArkFetch_WebServer404KeepsNonHTMLBody(t *testing.T) {
+	// A gateway's own 404 body helps diagnose a proxy in front of CCP.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"no Route matched"}`))
+	}))
+	defer srv.Close()
+
+	c := &cyberarkManager{preLogger: newTestLogger(), config: config.CyberArkManager{URL: srv.URL, AppID: "orb-agent"}}
+	require.NoError(t, c.Start(context.Background()))
+	_, err := c.fetch("Lab/DB-Account")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "account not found")
+	require.Contains(t, err.Error(), `without a CCP error body: {"message":"no Route matched"}`)
+}
+
+func TestCyberArkFetch_GatewayErrorCodeIsNotCCP(t *testing.T) {
+	// encoding/json decodes "errorCode" into ErrorCode, so only CCP's code
+	// shape may classify a 404 as a missing account.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errorCode":"NotFound","message":"route"}`))
+	}))
+	defer srv.Close()
+
+	c := &cyberarkManager{preLogger: newTestLogger(), config: config.CyberArkManager{URL: srv.URL, AppID: "orb-agent"}}
+	require.NoError(t, c.Start(context.Background()))
+	_, err := c.fetch("Lab/DB-Account")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "account not found")
+	require.Contains(t, err.Error(), `{"errorCode":"NotFound","message":"route"}`)
+}
+
+func TestNonHTMLBodySnippet(t *testing.T) {
+	long := strings.Repeat("a", maxBodySnippet+50)
+	for _, tc := range []struct {
+		name, contentType, body, want string
+	}{
+		{"html content type", "text/html; charset=utf-8", "anything", ""},
+		{"html body without html content type", "text/plain", "<!DOCTYPE html><html>404</html>", ""},
+		{"html body after a BOM", "", "\ufeff<!DOCTYPE html><html>404</html>", ""},
+		{"xhtml with an xml prolog", "", `<?xml version="1.0"?><!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0//EN"><html>`, ""},
+		{"page starting with head", "", "<head><title>404</title></head>", ""},
+		{"body element alone", "", "<body>404</body>", ""},
+		{"body element with attributes", "", `<body class="error">404</body>`, ""},
+		{"html element alone", "", "<html>404</html>", ""},
+		{"html element with attributes", "", `<html lang="en">404</html>`, ""},
+		{"head element with attributes", "", `<head profile="x"><title>404</title></head>`, ""},
+		{"html5 page without an html element", "", "<!doctype html><title>404</title>", ""},
+		{"json mentioning a header tag is kept", "application/json", `{"message":"missing <header> X-Api-Key"}`, `: {"message":"missing <header> X-Api-Key"}`},
+		{"empty body", "application/json", "   ", ""},
+		{"whitespace collapsed", "application/json", "{\n  \"message\": \"no route\"\n}", `: { "message": "no route" }`},
+		{"control characters dropped", "", "x\x1b[31mRED\x1b[0m\x00", ": x[31mRED[0m"},
+		{"invalid utf-8 replaced", "", "ok\xff", ": ok\ufffd"},
+		{"capped", "", long, ": " + long[:maxBodySnippet] + "…"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, nonHTMLBodySnippet(tc.contentType, []byte(tc.body)))
+		})
+	}
+}
+
+func TestNonHTMLBodySnippet_BoundsLargeBodies(t *testing.T) {
+	body := []byte(strings.Repeat("x", 10*maxBodyScan) + "<html>")
+	require.Equal(t, ": "+strings.Repeat("x", maxBodySnippet)+"…", nonHTMLBodySnippet("", body),
+		"only the first maxBodyScan bytes are inspected")
+}
+
+func TestCyberArkFetch_404WithOnlyErrorCodeIsAccountNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"ErrorCode":"APPAP004E"}`))
+	}))
+	defer srv.Close()
+
+	c := &cyberarkManager{preLogger: newTestLogger(), config: config.CyberArkManager{URL: srv.URL, AppID: "orb-agent"}}
+	require.NoError(t, c.Start(context.Background()))
+	_, err := c.fetch("Lab/DB-Account")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "account not found")
+	require.Contains(t, err.Error(), "APPAP004E")
+}
+
+func TestCyberArkStart_LogsRedactedEndpoint(t *testing.T) {
+	var buf bytes.Buffer
+	c := &cyberarkManager{
+		preLogger: slog.New(slog.NewJSONHandler(&buf, nil)),
+		config:    config.CyberArkManager{URL: "https://svc:hunter2@ccp.example.com/AIMWebServiceCustom/api/Accounts", AppID: "orb"},
+	}
+	require.NoError(t, c.Start(context.Background()))
+
+	var started map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var rec map[string]any
+		require.NoError(t, json.Unmarshal([]byte(line), &rec))
+		if rec["msg"] == "secrets manager started" {
+			started = rec
+		}
+	}
+	require.NotNil(t, started, "startup must log the resolved endpoint")
+	require.Equal(t, "https://svc:xxxxx@ccp.example.com/AIMWebServiceCustom/api/Accounts", started["endpoint"])
+	require.NotContains(t, buf.String(), "hunter2", "no startup log line may carry the url password")
+}
+
+func TestCyberArkStart_NeverEchoesURLPassword(t *testing.T) {
+	// A password with an unescaped '/', '?' or '#' that breaks parsing must
+	// not reach the error through net/url's message.
+	for _, tc := range []struct {
+		url       string
+		forbidden []string
+	}{
+		{"ftp://svc:hunter2@ccp.example.com", []string{"hunter2"}},
+		{"https://svc:hunter2@", []string{"hunter2"}},
+		{"https://svc:hunter2@ccp.example.com?x=y", []string{"hunter2"}},
+		{"https://svc:hunter2@ccp example.com/", []string{"hunter2"}},
+		{"https://svc:hun/ter2@ccp.example.com", []string{"hun", "ter2"}},
+		{"https://svc:hun?ter2@ccp.example.com", []string{"hun", "ter2"}},
+		{"https://svc:hun#ter2@ccp.example.com", []string{"hun", "ter2"}},
+		{"https://svc:hun%zzter2@ccp.example.com", []string{"hun", "%zz", "ter2"}},
+		{"https://svc:hunter2@127.0.0.1:1", []string{"hunter2"}},
+	} {
+		t.Run(tc.url, func(t *testing.T) {
+			var buf bytes.Buffer
+			c := &cyberarkManager{
+				preLogger: slog.New(slog.NewJSONHandler(&buf, nil)),
+				config:    config.CyberArkManager{URL: tc.url, AppID: "orb"},
+			}
+			var messages []string
+			if err := c.Start(context.Background()); err != nil {
+				messages = append(messages, err.Error())
+			} else {
+				_, err := c.fetch("Lab/DB-Account")
+				require.Error(t, err)
+				messages = append(messages, err.Error())
+			}
+			messages = append(messages, buf.String())
+			for _, m := range messages {
+				for _, f := range tc.forbidden {
+					require.NotContains(t, m, f)
+				}
+			}
+		})
+	}
 }
 
 func TestCyberArkFetch_FieldMissingFromResponse(t *testing.T) {
@@ -733,4 +913,15 @@ func TestCyberArk_SkipTLSVerify_AcceptsSelfSignedServer(t *testing.T) {
 	val, err := c.fetch("Lab/Acc")
 	require.NoError(t, err)
 	require.Equal(t, "skip-tls-ok", val)
+}
+
+func TestCyberArkStart_AcceptsAtSignInPath(t *testing.T) {
+	// An '@' in the path is ordinary. It cannot be told apart from a password
+	// with an unescaped '/', so the url is taken as written.
+	c := &cyberarkManager{
+		preLogger: newTestLogger(),
+		config:    config.CyberArkManager{URL: "https://ccp.example.com:8443/tenant/user@example.com", AppID: "orb"},
+	}
+	require.NoError(t, c.Start(context.Background()))
+	require.Equal(t, "https://ccp.example.com:8443/tenant/user@example.com/AIMWebService/api/Accounts", c.endpoint.String())
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -17,11 +18,17 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/policymgr"
 )
 
+// mqttReconnectBackoff delays after a failed CONNECT. Attempt 0 is the first
+// try of a new ConnectionManager and must be 0, or JWT reconnects sleep 10s
+// before dialing. autopaho calls ReconnectBackoff before every attempt.
+var mqttReconnectBackoff = autopaho.NewConstantBackoff(10 * time.Second)
+
 // TopicMessageHandler handles messages for a specific topic
 type TopicMessageHandler func(topic string, payload []byte) error
 
 // dispatchJob represents a message to be processed by the dispatch worker
 type dispatchJob struct {
+	topic        string
 	payload      []byte
 	orgID        string
 	agentID      string
@@ -128,8 +135,90 @@ func (connection *MQTTConnection) startDispatchWorker() {
 	}()
 }
 
-// processJob dispatches a single job to message handlers.
+// enqueueOrDispatch hands job to the dispatch worker, or processes it on the
+// caller's goroutine when the queue is full. A job arriving during shutdown is
+// dropped. dispatchMu is held across the shuttingDown check and the send so
+// stopDispatchWorker cannot close the queue between them.
+func (connection *MQTTConnection) enqueueOrDispatch(job dispatchJob) {
+	connection.dispatchMu.Lock()
+	if connection.shuttingDown {
+		connection.dispatchMu.Unlock()
+		connection.logger.Debug("ignoring message during shutdown", "topic", job.topic)
+		return
+	}
+	select {
+	case connection.dispatchQueue <- job:
+		connection.dispatchMu.Unlock()
+	default:
+		connection.dispatchMu.Unlock()
+		connection.logger.Warn("dispatch queue full, processing synchronously", "topic", job.topic)
+		connection.processJob(job)
+	}
+}
+
+// onPublishReceived routes a message from a subscribed topic: to its
+// topic-specific handler when one is registered, otherwise to the dispatch
+// worker.
+func (connection *MQTTConnection) onPublishReceived(topic string, payload []byte, agentID string) {
+	connection.logger.Debug("received MQTT message", "topic", topic)
+
+	connection.mu.Lock()
+	handler, hasHandler := connection.topicHandlers[topic]
+	connection.mu.Unlock()
+
+	if hasHandler {
+		// Process in goroutine to avoid blocking message acknowledgment
+		go connection.runTopicHandler(handler, topic, payload)
+		return
+	}
+
+	// Enqueue the job for sequential processing by the dispatch worker
+	// This preserves message ordering and prevents race conditions
+	parts := strings.Split(topic, "/")
+	if len(parts) < 2 {
+		connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", topic)
+		return
+	}
+
+	connection.enqueueOrDispatch(dispatchJob{
+		topic:   topic,
+		payload: payload,
+		orgID:   parts[1],
+		agentID: agentID,
+		topicActions: TopicActions{
+			Subscribe:   connection.subscribeToTopic,
+			Publish:     connection.publishToTopic,
+			Unsubscribe: connection.unsubscribeFromTopic,
+		},
+	})
+}
+
+// runTopicHandler runs a topic-specific handler, logging its error. A panic is
+// logged with its topic, then raised again (see logAndRaisePanic).
+func (connection *MQTTConnection) runTopicHandler(handler TopicMessageHandler, topic string, payload []byte) {
+	defer connection.logAndRaisePanic(topic)
+	if err := handler(topic, payload); err != nil {
+		connection.logger.Error("topic handler failed", "topic", topic, "error", err)
+	}
+}
+
+// logAndRaisePanic logs a panic raised while handling an MQTT message with its
+// topic and stack, then raises it again. A handler can leave policies, bundles
+// or secrets half applied, and only the process restart that follows rebuilds
+// them from a known-good state: filesmgr's crash recovery, backends started
+// fresh, and the full policy and bundle lists the agent requests on connect.
+func (connection *MQTTConnection) logAndRaisePanic(topic string) {
+	if r := recover(); r != nil {
+		connection.logger.Error("panic handling MQTT message",
+			"topic", topic, "panic", fmt.Sprint(r), "stack", string(debug.Stack()))
+		panic(r)
+	}
+}
+
+// processJob dispatches a single job to message handlers. A panic is logged
+// with the job's topic, then raised again (see logAndRaisePanic).
 func (connection *MQTTConnection) processJob(job dispatchJob) {
+	defer connection.logAndRaisePanic(job.topic)
 	err := connection.messaging.DispatchToHandlers(
 		context.Background(),
 		job.payload,
@@ -208,9 +297,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 		KeepAlive:                     30,
 		CleanStartOnInitialConnection: true,
 		ConnectTimeout:                10 * time.Second,
-		ReconnectBackoff: func(_ int) time.Duration {
-			return 10 * time.Second
-		},
+		ReconnectBackoff:              mqttReconnectBackoff,
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			connection.logger.Info("MQTT connection established", "server", serverURL.String())
 
@@ -327,75 +414,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 			ClientID: details.ClientID,
 			OnPublishReceived: []func(paho.PublishReceived) (bool, error){
 				func(pr paho.PublishReceived) (bool, error) {
-					// Log any published messages to subscribed topics
-					connection.logger.Debug("received MQTT message", "topic", pr.Packet.Topic)
-
-					// Check if there's a topic-specific handler
-					connection.mu.Lock()
-					handler, hasHandler := connection.topicHandlers[pr.Packet.Topic]
-					connection.mu.Unlock()
-
-					if hasHandler {
-						// Process in goroutine to avoid blocking message acknowledgment
-						go func() {
-							if err := handler(pr.Packet.Topic, pr.Packet.Payload); err != nil {
-								connection.logger.Error("topic handler failed", "topic", pr.Packet.Topic, "error", err)
-							}
-						}()
-						return true, nil
-					}
-
-					// Enqueue the job for sequential processing by the dispatch worker
-					// This preserves message ordering and prevents race conditions
-					parts := strings.Split(pr.Packet.Topic, "/")
-					if len(parts) < 2 {
-						connection.logger.Error("received MQTT message with malformed topic; cannot extract orgID", "topic", pr.Packet.Topic)
-						return true, nil
-					}
-					orgID := parts[1]
-
-					// Hold dispatchMu while checking shuttingDown and sending on
-					// dispatchQueue so stopDispatchWorker cannot close the queue
-					// between the check and the send.
-					connection.dispatchMu.Lock()
-					if connection.shuttingDown {
-						connection.dispatchMu.Unlock()
-						connection.logger.Debug("ignoring message during shutdown", "topic", pr.Packet.Topic)
-						return true, nil
-					}
-
-					select {
-					case connection.dispatchQueue <- dispatchJob{
-						payload: pr.Packet.Payload,
-						orgID:   orgID,
-						agentID: details.AgentID,
-						topicActions: TopicActions{
-							Subscribe:   connection.subscribeToTopic,
-							Publish:     connection.publishToTopic,
-							Unsubscribe: connection.unsubscribeFromTopic,
-						},
-					}:
-						connection.dispatchMu.Unlock()
-					default:
-						connection.dispatchMu.Unlock()
-						// Queue is full - log warning and process synchronously as fallback
-						connection.logger.Warn("dispatch queue full, processing synchronously", "topic", pr.Packet.Topic)
-						err := connection.messaging.DispatchToHandlers(
-							context.Background(),
-							pr.Packet.Payload,
-							orgID,
-							details.AgentID,
-							TopicActions{
-								Subscribe:   connection.subscribeToTopic,
-								Publish:     connection.publishToTopic,
-								Unsubscribe: connection.unsubscribeFromTopic,
-							},
-						)
-						if err != nil {
-							connection.logger.Error("failed to dispatch to handlers", "error", err)
-						}
-					}
-
+					connection.onPublishReceived(pr.Packet.Topic, pr.Packet.Payload, details.AgentID)
 					return true, nil
 				},
 			},

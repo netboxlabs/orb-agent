@@ -30,6 +30,7 @@ from netboxlabs.diode.sdk.ingester import (
 
 from device_discovery.device_name import apply_device_name_emission
 from device_discovery.interface import build_interface_entities
+from device_discovery.lag import apply_interface_lags
 from device_discovery.policy.models import (
     UNDEFINED_PLACEHOLDER,
     Defaults,
@@ -83,6 +84,7 @@ def translate_vrf(
             # supplying rd="" would otherwise make the rich VRF and its stub resolve
             # via different matchers.
             rd=blank_to_none(vrf.rd),
+            tenant=translate_tenant(vrf.tenant),
             comments=vrf.comments,
             description=vrf.description,
             tags=vrf.tags,
@@ -249,6 +251,10 @@ def translate_device(
         "rack": Rack(name=defaults.rack, site=site, location=location)
         if defaults.rack
         else None,
+        # Set per single-host target only (policy validation). Unset, no
+        # position is sent, so NetBox keeps whatever it has.
+        "position": defaults.position,
+        "face": defaults.face,
         "tenant": translate_tenant(defaults.tenant),
         "description": description,
         "comments": comments,
@@ -347,6 +353,39 @@ def _build_vlan_cache(
         if vlan is not None:
             cache[vlan.vid] = vlan
     return cache
+
+
+def _interfaces_vlan_ids(raw: object) -> dict[str, int | None]:
+    """
+    Validate a driver's ``get_interfaces_vlan_id()`` payload into name -> VID.
+
+    The payload is the VLAN ID the device itself reports for each routed
+    interface, or ``None`` for an interface whose tag the device reports but
+    that must not be linked (the SVI-name fallback is then skipped too).
+    Anything that is not a non-empty interface name mapped to ``None`` or an
+    integer VID in 1..4094 is dropped rather than trusted; a payload that is not
+    a mapping at all yields nothing, so a driver bug costs the prefix VLANs and
+    never the device.
+    """
+    if not raw:
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning(
+            "interfaces_vlan_id payload is not a dict (got %s); ignoring it",
+            type(raw).__name__,
+        )
+        return {}
+    out: dict[str, int | None] = {}
+    for name, vid in raw.items():
+        if (
+            isinstance(name, str)
+            and name
+            and (vid is None or (isinstance(vid, int) and not isinstance(vid, bool) and 1 <= vid <= 4094))
+        ):
+            out[name] = vid
+        else:
+            logger.warning("interfaces_vlan_id: skipping malformed entry %r -> %r", name, vid)
+    return out
 
 
 def _ensure_vlan(
@@ -486,6 +525,25 @@ def _apply_interface_vlan_associations(
         options,
         new_stubs,
     )
+
+
+def _apply_lag_membership(
+    data: dict,
+    interface_entities: list[Entity],
+    options: Options,
+) -> None:
+    """
+    Set Interface.lag from ``data["interfaces_lag"]`` unless the option is off.
+
+    Gated here as well as in the runner (which skips the driver call when
+    ``emit_lag_membership`` is False), so a caller handing translate_data a
+    pre-populated payload still honours the opt-out.
+    """
+    if options.emit_lag_membership is False:
+        return
+    applied = apply_interface_lags(interface_entities, data.get("interfaces_lag"))
+    if applied:
+        logger.debug("lag membership: set lag on %d interface(s)", applied)
 
 
 def apply_interface_vlans(
@@ -806,13 +864,17 @@ def translate_data(data: dict) -> Iterable[Entity]:
                 iface_vrf_map=iface_vrf_map,
             )
         )
+        stack_interfaces = [e for e in entities if e.HasField("interface")]
         _apply_interface_vlan_associations(
             data,
-            [e for e in entities if e.HasField("interface")],
+            stack_interfaces,
             defaults,
             options,
             new_stubs,
         )
+        # After stack translation, so member and aggregate already carry the
+        # stack member that owns them.
+        _apply_lag_membership(data, stack_interfaces, options)
         entities.extend(Entity(vrf=vrf) for vrf in discovered_vrfs)
         _emit_vlans_and_stubs(entities, data.get("vlan"), defaults, new_stubs)
         return entities
@@ -858,6 +920,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
             options=options,
             iface_vrf_map=iface_vrf_map,
             vlan_cache=vlan_cache,
+            iface_vlan_ids=_interfaces_vlan_ids(data.get("interfaces_vlan_id")),
         )
         # assign_primary_ip must run before the Device is wrapped into Entity
         # because Entity(device=...) copies the message; subsequent mutations
@@ -870,6 +933,7 @@ def translate_data(data: dict) -> Iterable[Entity]:
             options,
             new_stubs,
         )
+        _apply_lag_membership(data, interface_related_entities, options)
         entities.append(Entity(device=device))
         entities.extend(module_entities)
         entities.extend(interface_related_entities)

@@ -2,10 +2,12 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Models."""
 
+import ipaddress
 import logging
 import re
 import time
 import uuid
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
 
@@ -15,7 +17,8 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from device_discovery.policy.portscan import (
     MAX_EXPANDED_HOSTS as _MAX_EXPANDED_HOSTS,
 )
-from device_discovery.policy.portscan import count_hostnames
+from device_discovery.policy.portscan import count_hostnames, expand_hostnames
+from device_discovery.policy.tenants import written_differently
 from device_discovery.policy.unknown_keys import WarnUnknownKeys
 from device_discovery.stack_naming import (
     DEFAULT_STACK_MEMBER_TEMPLATE,
@@ -99,10 +102,33 @@ class TenantParameters(ObjectParameters):
 
 
 class VrfParameters(ObjectParameters):
-    """Model for VRF parameters."""
+    """
+    Model for VRF parameters.
+
+    ``tenant`` is the VRF's own tenant, never taken from the address or prefix
+    tenant: Diode matches a VRF without an rd by its name and tenant, so a VRF
+    owned by a tenant in NetBox is created again unless the policy names it.
+    Unknown keys are rejected: a misspelt rd or tenant would otherwise match a
+    different VRF, which then persists in NetBox.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str
     rd: str | None = Field(default=None, description="Route distinguisher, optional")
+    tenant: str | TenantParameters | None = Field(
+        default=None, description="VRF tenant, optional"
+    )
+
+    @field_validator("tenant", mode="before")
+    @classmethod
+    def _refuse_unknown_tenant_keys(cls, v: object) -> object:
+        """Reject an unknown key in the tenant map too: a misspelt group would match another tenant."""
+        if isinstance(v, dict):
+            unknown = sorted(map(str, set(v) - set(TenantParameters.model_fields)))
+            if unknown:
+                raise ValueError(f"tenant has no {unknown[0]!r} key")
+        return v
 
 
 class VlanGroupParameters(BaseModel):
@@ -197,6 +223,10 @@ UNDEFINED_PLACEHOLDER = "undefined"
 MAX_EXPANDED_HOSTS = _MAX_EXPANDED_HOSTS
 
 
+#: NetBox's rack faces.
+RACK_FACES = ("front", "rear")
+
+
 class Defaults(BaseModel):
     """Model for default configuration."""
 
@@ -217,6 +247,13 @@ class Defaults(BaseModel):
     )
     location: str | None = Field(default=None, description="Location name, optional")
     rack: str | None = Field(default=None, description="Rack name, optional")
+    position: float | None = Field(
+        default=None,
+        description="Rack U position, set per target in override_defaults, with face",
+    )
+    face: str | None = Field(
+        default=None, description="Rack face (front or rear), set per target with position"
+    )
     stack_member_name_template: str = Field(
         default=DEFAULT_STACK_MEMBER_TEMPLATE,
         description=(
@@ -232,6 +269,47 @@ class Defaults(BaseModel):
         """Treat an empty list as None so override_defaults does not clear the global list."""
         if isinstance(v, list) and len(v) == 0:
             return None
+        return v
+
+    @field_validator("rack", mode="before")
+    @classmethod
+    def _strip_rack(cls, v: object) -> object:
+        """
+        Trim the rack name; a blank one means no rack.
+
+        A number is refused rather than read as text: YAML reads an unquoted 01
+        as 1 and 010 as 8, so the name that was meant is already lost.
+        """
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError('rack must be text; quote a numeric rack name, e.g. rack: "01"')
+        return v.strip()
+
+    @field_validator("face", mode="before")
+    @classmethod
+    def _normalize_face(cls, v: object) -> object:
+        """Accept front or rear in any case; NetBox stores them lowercase."""
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return None
+        if isinstance(v, str) and v.strip().lower() in RACK_FACES:
+            return v.strip().lower()
+        raise ValueError("face must be front or rear")
+
+    @field_validator("position", mode="before")
+    @classmethod
+    def _refuse_bool_position(cls, v: object) -> object:
+        """YAML's yes/true would otherwise read as U1."""
+        if isinstance(v, bool):
+            raise ValueError("position must be a number")
+        return v
+
+    @field_validator("position")
+    @classmethod
+    def _check_position(cls, v: float | None) -> float | None:
+        """NetBox positions start at U1 and move in half-U steps."""
+        if v is not None and (v < 1 or (v * 2) % 1 != 0):
+            raise ValueError("position must be at least 1, in steps of 0.5")
         return v
 
     @field_validator("stack_member_name_template", mode="before")
@@ -293,6 +371,196 @@ class Defaults(BaseModel):
         if isinstance(v, IpamParameters) and not isinstance(v, PrefixParameters):
             return v.model_dump()
         return v
+
+
+_VRF_KNOBS = ("vrf", "vrf_ipv4", "vrf_ipv6")
+
+
+def _tenant_copies(defaults: Defaults) -> list[tuple[str, Any, bool]]:
+    """Return (path, tenant, is a VRF's) for every tenant default a run sends."""
+    copies = [("defaults.tenant", defaults.tenant, False)]
+    for block in ("ipaddress", "prefix", "vlan"):
+        params = getattr(defaults, block)
+        if params is None:
+            continue
+        copies.append((f"defaults.{block}.tenant", params.tenant, False))
+        # vrf is only a fallback: with both per-family knobs set it is never sent.
+        shadowed = block != "vlan" and params.vrf_ipv4 is not None and params.vrf_ipv6 is not None
+        for knob in _VRF_KNOBS if block != "vlan" else ():
+            vrf = getattr(params, knob)
+            if isinstance(vrf, VrfParameters) and not (knob == "vrf" and shadowed):
+                copies.append((f"defaults.{block}.{knob}.tenant", vrf.tenant, True))
+    return [copy for copy in copies if copy[1] is not None]
+
+
+def check_vrf_tenants(defaults: Defaults) -> None:
+    """
+    Refuse a VRF tenant written differently from another tenant default.
+
+    One run sends every tenant default in full, a device carrying its own and,
+    through its primary address, its VRF's. Diode merges the copies that
+    resolve to one tenant within an entity and refuses the entity when they
+    disagree, and across entities rewrites the tenant on every run. Pairs
+    without a VRF tenant are left as they were before VRF tenants existed. A
+    VRF tenant without a name is refused too: Diode can neither match nor
+    create it, so every address in the VRF would fail.
+    """
+    copies = _tenant_copies(defaults)
+    for at, tenant, is_vrf in copies:
+        name = tenant if isinstance(tenant, str) else tenant.name
+        if is_vrf and not name.strip():
+            raise ValueError(f"{at} has no name; a tenant is matched by its name")
+    for i, (first_at, first, first_vrf) in enumerate(copies):
+        for second_at, second, second_vrf in copies[i + 1 :]:
+            if not (first_vrf or second_vrf):
+                continue
+            found = written_differently(first, second)
+            if found == "group":
+                raise ValueError(
+                    f"{first_at} and {second_at} name the same NetBox tenant group in two ways; "
+                    "write it the same way in both places"
+                )
+            if found == "tenant":
+                raise ValueError(
+                    f"{first_at} and {second_at} name the same NetBox tenant but write it differently; "
+                    "give it the same name, group, description, comments and tags, in the same order, "
+                    "in both places, for example with a YAML anchor"
+                )
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge ``override`` into ``base``; override wins on non-dict conflicts."""
+    merged = dict(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def _named(value: object) -> str:
+    """Return the trimmed name a VRF or tenant default carries, in either form."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return (value.get("name") or "").strip()
+    return ""
+
+
+def _field(value: object, key: str) -> str:
+    """Return a trimmed text field of a default in map form, or an empty one."""
+    return (value.get(key) or "").strip() if isinstance(value, dict) else ""
+
+
+def _differ(a: str, b: str) -> bool:
+    """Report whether two trimmed values are both set and differ."""
+    return bool(a) and bool(b) and a != b
+
+
+def _other_tenant(base: object, override: object) -> bool:
+    """
+    Report whether override names another tenant.
+
+    Another name where both give one, or a group other than the base's,
+    including one the base lacks: NetBox can hold an ungrouped tenant and a
+    grouped one of the same name.
+    """
+    override_group = _field(override, "group")
+    return _differ(_named(base), _named(override)) or (bool(override_group) and override_group != _field(base, "group"))
+
+
+def _other_vrf(base: object, override: object) -> bool:
+    """
+    Report whether override names another VRF.
+
+    Diode finds a VRF with an rd by the rd alone, and one without by its name
+    and tenant, matching by name only when the payload has no rd. So another
+    name, an rd other than the base's (including one it lacks), or another
+    tenant is another VRF, and with no rd on either side so is a tenant the
+    base lacks. A tenant added to a VRF with an rd refines it: the rd still
+    identifies it.
+    """
+    base_tenant = base.get("tenant") if isinstance(base, dict) else None
+    override_tenant = override.get("tenant") if isinstance(override, dict) else None
+    base_rd, override_rd = _field(base, "rd"), _field(override, "rd")
+    if _differ(_named(base), _named(override)) or (override_rd and override_rd != base_rd):
+        return True
+    if _named(base_tenant) and override_tenant is not None:
+        return _other_tenant(base_tenant, override_tenant)
+    return not base_rd and not override_rd and bool(_named(override_tenant)) and not _named(base_tenant)
+
+
+def _merge_named(base: object, override: object, merged: object, other) -> object:
+    """
+    Resolve one named default, a VRF or a tenant, after the deep merge.
+
+    An override that ``other`` says names something else replaces the base
+    whole, so it takes no rd, tenant, group or other field from it, keeping
+    only the base's name when it gives none. One naming the same thing refines
+    it, a bare name equal to the base's, or a blank one, leaves it as is, and
+    a bare name completes a base map that has none.
+    """
+    if other(base, override):
+        if isinstance(override, dict) and not _named(override) and _named(base):
+            return {**override, "name": _named(base)}
+        return override
+    if isinstance(override, str):
+        name = _named(override)
+        if not name or name == _named(base):
+            return base if base is not None else merged
+        if isinstance(base, dict):
+            return {**base, "name": override}
+        return merged
+    if isinstance(merged, dict) and not _named(override) and _named(base):
+        return {**merged, "name": _named(base)}
+    return merged
+
+
+def _merge_tenant(base: object, override: object) -> object:
+    """Resolve an override tenant against the policy's, refining or replacing it."""
+    merged = _deep_merge(base, override) if isinstance(base, dict) and isinstance(override, dict) else override
+    return _merge_named(base, override, merged, _other_tenant)
+
+
+def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
+    """
+    Overlay a target's ``override_defaults`` onto the policy defaults.
+
+    Fields merge recursively, except where an override names something else:
+    ``vlan.group`` is replaced as a whole so a scope set on the policy cannot
+    leak into a group the override named without one, and a tenant or VRF the
+    override names differently is replaced as a whole so it takes no group, rd
+    or tenant from the policy's: another name or group is another tenant, and
+    another name, rd or tenant another VRF. Naming the same one refines it.
+    """
+    base_dump = base.model_dump()
+    override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
+    merged = _deep_merge(base_dump, override_dump)
+    override_group = override_dump.get("vlan", {}).get("group")
+    if override_group is not None:
+        merged["vlan"]["group"] = override_group
+    if "tenant" in override_dump:
+        merged["tenant"] = _merge_tenant(base_dump["tenant"], override_dump["tenant"])
+    for block in ("ipaddress", "prefix", "vlan"):
+        override_block = override_dump.get(block) or {}
+        base_block = base_dump.get(block) or {}
+        if "tenant" in override_block:
+            merged[block]["tenant"] = _merge_tenant(base_block.get("tenant"), override_block["tenant"])
+        for knob in _VRF_KNOBS if block != "vlan" else ():
+            if knob not in override_block:
+                continue
+            base_vrf, override_vrf = base_block.get(knob), override_block[knob]
+            vrf = _merge_named(base_vrf, override_vrf, merged[block][knob], _other_vrf)
+            if isinstance(vrf, dict) and isinstance(override_vrf, dict) and "tenant" in override_vrf:
+                base_tenant = base_vrf.get("tenant") if isinstance(base_vrf, dict) else None
+                vrf = {**vrf, "tenant": _merge_tenant(base_tenant, override_vrf["tenant"])}
+            merged[block][knob] = vrf
+    return Defaults.model_validate(merged)
 
 
 class Options(WarnUnknownKeys):
@@ -439,6 +707,15 @@ class Options(WarnUnknownKeys):
             "keep the configured defaults. Default False."
         ),
     )
+    emit_lag_membership: bool = Field(
+        default=True,
+        description=(
+            "Set Interface.lag on each link-aggregation member port to its "
+            "aggregate interface, from the driver's get_interfaces_lag(). "
+            "Set False to leave lag unset and skip the driver call. "
+            "Default True."
+        ),
+    )
     emit_device_name: bool = Field(
         default=True,
         description=(
@@ -578,6 +855,185 @@ class Napalm(BaseModel):
     )
 
 
+def _effective(override: Defaults, defaults: Defaults | None, field: str):
+    """A target's value for field, as merge_override_defaults resolves it."""
+    if field in override.model_fields_set and getattr(override, field) is not None:
+        return getattr(override, field)
+    return getattr(defaults, field) if defaults is not None else None
+
+
+def _check_target_placement(entry: Napalm, rack: str | None, site: str | None) -> str:
+    """Refuse a target's position and face unless set together, in a rack, for one host."""
+    override = entry.override_defaults
+    if override.position is None or override.face is None:
+        raise ValueError(f"{entry.hostname}: position and face go together; set both")
+    if not rack:
+        raise ValueError(
+            f"{entry.hostname}: position and face need a rack, "
+            "in override_defaults or the policy defaults"
+        )
+    if count_hostnames(entry.hostname) > 1:
+        raise ValueError(
+            f"{entry.hostname}: position and face need a single host; "
+            "a range or subnet would place every device at the same U"
+        )
+    # A netbox_id target sends no placeholder site, so the device keeps its
+    # own; the rack would then go without one and could not be looked up.
+    if _keeps_netbox_id(entry) and (site or "").strip() in ("", UNDEFINED_PLACEHOLDER):
+        raise ValueError(
+            f"{entry.hostname}: position and face need a site when netbox_id is set; "
+            "the rack is looked up in it"
+        )
+    return rack
+
+
+def _keeps_netbox_id(entry: Napalm) -> bool:
+    """Whether the runner applies entry's netbox_id: it drops it on any range or subnet syntax, a /32 included."""
+    return entry.netbox_id is not None and not expand_hostnames(entry.hostname)[1]
+
+
+def _site_and_location(override: Defaults, defaults: Defaults | None) -> tuple:
+    """The site and location a target's rack is sent in, as sent; no site is the undefined one."""
+    site = _effective(override, defaults, "site") or UNDEFINED_PLACEHOLDER
+    return site, _effective(override, defaults, "location") or None
+
+
+def _asset_tag(override: Defaults, defaults: Defaults | None) -> str | None:
+    """The asset tag a target's device is sent with, as translate_device emits it."""
+    for source in (override, defaults):
+        tag = source.device.asset_tag if source is not None and source.device is not None else None
+        if tag is not None:
+            return tag if tag.strip() else None
+    return None
+
+
+def _endpoint(entry: Napalm) -> str | None:
+    """The one device a target reaches, as its normalised address or name and any port; None for a range."""
+    if count_hostnames(entry.hostname) != 1:
+        return None
+    host = expand_hostnames(entry.hostname)[0][0]
+    try:
+        host = str(ipaddress.ip_address(host))
+    except ValueError:
+        host = host.lower()
+    port = (entry.optional_args or {}).get("port")
+    return host if port is None else f"{host} port {port}"
+
+
+def _device_ids(entry: Napalm, override: Defaults, defaults: Defaults | None) -> list[tuple]:
+    """
+    What a target's device is known by, strongest first as Diode matches.
+
+    A kept netbox_id, then an asset tag, then the host it reaches, which
+    stands for the name and site that host reports.
+    """
+    ids = []
+    if _keeps_netbox_id(entry):
+        ids.append(("netbox_id", entry.netbox_id))
+    tag = _asset_tag(override, defaults)
+    if tag is not None:
+        ids.append(("asset_tag", tag))
+    endpoint = _endpoint(entry)
+    if endpoint is not None:
+        ids.append(("host", endpoint))
+    return ids
+
+
+@dataclass
+class _Sharers:
+    """The racked entries sending one identifier: each placement they send, and one relying on it."""
+
+    placements: dict[tuple, str] = field(default_factory=dict)
+    relied_on: tuple[tuple, str] | None = None
+
+    def holders(self, rank: int) -> list:
+        """
+        The (placement, hostname) pairs an entry with this identifier at rank is tied to.
+
+        An entry is matched by its strongest identifier, so that one ties it to
+        every entry sending it; a weaker one only to an entry relying on it.
+        """
+        if rank == 0:
+            return list(self.placements.items())
+        return [self.relied_on] if self.relied_on else []
+
+
+def _seen_device(
+    pinned: dict[tuple, _Sharers], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+) -> bool:
+    """
+    Record the placement a target sends its device, refusing a different one for that device.
+
+    Entries tied by an identifier may update one device, so they must send it
+    the same rack, position and face; a rack without a position is a placement
+    too. Returns True when an earlier entry is known to be this device, relying
+    on the same strongest identifier.
+    """
+    placement = (*_site_and_location(override, defaults), rack, override.position, override.face)
+    seen = False
+    for rank, device_id in enumerate(_device_ids(entry, override, defaults)):
+        sharers = pinned.setdefault(device_id, _Sharers())
+        other_host = next((host for other, host in sharers.holders(rank) if other != placement), None)
+        if other_host is not None:
+            kind, value = device_id
+            raise ValueError(
+                f"targets {other_host} and {entry.hostname} place {kind} {value} at different slots"
+            )
+        if rank == 0:
+            seen = sharers.relied_on is not None
+            sharers.relied_on = sharers.relied_on or (placement, entry.hostname)
+        sharers.placements.setdefault(placement, entry.hostname)
+    return seen
+
+
+def _claim_slot(
+    placed: dict[tuple, dict], entry: Napalm, override: Defaults, defaults: Defaults | None, rack: str
+) -> None:
+    """
+    Record the U a target places its device at, refusing one another target took.
+
+    Diode matches a device by rack, position and face once name and site miss,
+    so a second device at one U would take the first's record. A rack sent
+    without a location binds a same-named rack in any location of the site, so
+    no location clashes with any. Each slot maps its locations (None for none)
+    to the target placed there, so both checks are one lookup.
+    """
+    site, location = _site_and_location(override, defaults)
+    slot = (site, rack, override.position, override.face)
+    taken = placed.setdefault(slot, {})
+    if location is None:
+        other_host = next(iter(taken.values()), None)
+    else:
+        other_host = taken.get(location) or taken.get(None)
+    if other_host is not None:
+        raise ValueError(
+            f"targets {other_host} and {entry.hostname} are both placed at "
+            f"{rack} U{override.position:g} {override.face}"
+        )
+    taken[location] = entry.hostname
+
+
+def _check_unracked(pinned: dict[tuple, _Sharers], entry: Napalm, override: Defaults, defaults: Defaults | None) -> None:
+    """
+    Refuse an entry without a rack moving a racked device away from its rack.
+
+    It still sends a site and location, and NetBox refuses a device whose rack
+    is in another; what it leaves out, the device keeps.
+    """
+    site, location = _site_and_location(override, defaults)
+    if site == UNDEFINED_PLACEHOLDER and _keeps_netbox_id(entry):
+        site = None  # not sent, as translate_device drops it
+    for rank, device_id in enumerate(_device_ids(entry, override, defaults)):
+        sharers = pinned.get(device_id)
+        for (racked_site, racked_location, rack, *_), racked_host in sharers.holders(rank) if sharers else []:
+            if (site is not None and site != racked_site) or (location is not None and location != racked_location):
+                kind, value = device_id
+                raise ValueError(
+                    f"targets {racked_host} and {entry.hostname} send {kind} {value} to different "
+                    f"sites or locations, and {racked_host} places it in rack {rack}"
+                )
+
+
 class Policy(BaseModel):
     """Model for a policy configuration."""
 
@@ -608,6 +1064,62 @@ class Policy(BaseModel):
                 f"policy scopes expand to {total} addresses in total, "
                 f"more than the limit of {MAX_EXPANDED_HOSTS}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_rack_placement(self):
+        """
+        Allow a rack position and face only per single-host target, together, with a rack.
+
+        One U for every device of a policy, or of a range or subnet, cannot be
+        right; NetBox requires a face for any position; and a position means
+        nothing without a rack, which may come from the policy defaults.
+        """
+        defaults = self.config.defaults if self.config else None
+        if defaults is not None and (defaults.position is not None or defaults.face is not None):
+            raise ValueError("defaults: position and face are set per target, in override_defaults")
+        # Runs after validate_expansion_budget, so an oversized policy is
+        # refused before any placement is checked.
+        placed: dict[tuple, dict] = {}
+        pinned: dict[tuple, _Sharers] = {}
+        for entry in self.scope:
+            override = entry.override_defaults or Defaults()
+            placed_here = override.position is not None or override.face is not None
+            rack = _effective(override, defaults, "rack")
+            if placed_here:
+                rack = _check_target_placement(entry, rack, _effective(override, defaults, "site"))
+            if rack and _seen_device(pinned, entry, override, defaults, rack):
+                continue
+            if placed_here:
+                _claim_slot(placed, entry, override, defaults, rack)
+        # Once every racked device is known, in whatever order entries come.
+        for entry in self.scope:
+            override = entry.override_defaults or Defaults()
+            if not _effective(override, defaults, "rack"):
+                _check_unracked(pinned, entry, override, defaults)
+        return self
+
+
+    @model_validator(mode="after")
+    def validate_vrf_tenants(self):
+        """
+        Refuse a VRF tenant written differently from another tenant default.
+
+        Checked on the defaults each target ends up with, the policy's or
+        merged with its override, never on an override alone: a partial
+        override is judged with what it inherits, and a blank name in it means
+        no change.
+        """
+        defaults = (self.config.defaults if self.config else None) or Defaults()
+        if not self.scope or any(entry.override_defaults is None for entry in self.scope):
+            check_vrf_tenants(defaults)
+        for entry in self.scope:
+            if entry.override_defaults is None:
+                continue
+            try:
+                check_vrf_tenants(merge_override_defaults(defaults, entry.override_defaults))
+            except ValueError as error:
+                raise ValueError(f"{entry.hostname}, with its override_defaults: {error}") from None
         return self
 
 

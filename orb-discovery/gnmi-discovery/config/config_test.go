@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestMergeDefaults(t *testing.T) {
@@ -233,17 +233,17 @@ func TestMergeDefaults(t *testing.T) {
 }
 
 func TestMergeDefaultsVlan(t *testing.T) {
-	policy := &Defaults{Site: "NYC", Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, Tenant: "t1", Role: "r1", Tags: []string{"a"}, Description: "d1"}}
+	policy := &Defaults{Site: "NYC", Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, Tenant: TenantParameters{Name: "t1"}, Role: "r1", Tags: []string{"a"}, Description: "d1"}}
 	// nil override -> clone preserves vlan
 	got := MergeDefaults(policy, nil)
 	require.Equal(t, VlanGroupParameters{Name: "g1", ScopeSiteGroup: "sg1"}, got.Vlan.Group)
-	require.Equal(t, "t1", got.Vlan.Tenant)
+	require.Equal(t, "t1", got.Vlan.Tenant.Name)
 	// override wins on non-empty fields, preserves the rest
 	override := &Defaults{Vlan: VlanDefaults{Group: VlanGroupParameters{Name: "g2"}, Role: "r2"}}
 	got = MergeDefaults(policy, override)
 	require.Equal(t, VlanGroupParameters{Name: "g2"}, got.Vlan.Group) // replaced whole: no policy scope leaks in
 	require.Equal(t, "r2", got.Vlan.Role)                             // overridden
-	require.Equal(t, "t1", got.Vlan.Tenant)                           // preserved
+	require.Equal(t, "t1", got.Vlan.Tenant.Name)                      // preserved
 	require.Equal(t, "d1", got.Vlan.Description)                      // preserved
 
 	// no-alias contract: mutating the merged Vlan.Tags must not touch the source
@@ -257,14 +257,14 @@ func TestMergeDefaultsVlan(t *testing.T) {
 }
 
 func TestMergeDefaultsPrefix(t *testing.T) {
-	policy := &Defaults{Site: "NYC", Prefix: PrefixDefaults{Role: "r1", Tenant: "t1", Tags: []string{"a"}, Description: "d1"}}
+	policy := &Defaults{Site: "NYC", Prefix: PrefixDefaults{Role: "r1", Tenant: TenantParameters{Name: "t1"}, Tags: []string{"a"}, Description: "d1"}}
 	got := MergeDefaults(policy, nil)
 	require.Equal(t, "r1", got.Prefix.Role)
-	require.Equal(t, "t1", got.Prefix.Tenant)
+	require.Equal(t, "t1", got.Prefix.Tenant.Name)
 	override := &Defaults{Prefix: PrefixDefaults{Role: "r2"}}
 	got = MergeDefaults(policy, override)
 	require.Equal(t, "r2", got.Prefix.Role)        // overridden
-	require.Equal(t, "t1", got.Prefix.Tenant)      // preserved
+	require.Equal(t, "t1", got.Prefix.Tenant.Name) // preserved
 	require.Equal(t, "d1", got.Prefix.Description) // preserved
 
 	// no-alias: mutating merged Prefix.Tags must not touch the source
@@ -374,4 +374,90 @@ func TestVlanGroupParametersUnmarshalResetsReceiver(t *testing.T) {
 	d := VlanDefaults{Group: VlanGroupParameters{Name: "stale", ScopeRegion: "stale"}}
 	require.NoError(t, yaml.Unmarshal([]byte("group: fresh\n"), &d))
 	require.Equal(t, VlanGroupParameters{Name: "fresh"}, d.Group)
+}
+
+func TestUnmarshalRackPlacement(t *testing.T) {
+	var target Target
+	require.NoError(t, yaml.Unmarshal([]byte(`
+host: 192.0.2.10
+override_defaults:
+  rack: R12
+  position: 40.5
+  face: front
+`), &target))
+	require.NotNil(t, target.OverrideDefaults)
+	require.Equal(t, RackText("R12"), target.OverrideDefaults.Rack)
+	require.NotNil(t, target.OverrideDefaults.Position)
+	require.InDelta(t, 40.5, *target.OverrideDefaults.Position, 0)
+	require.Equal(t, "front", target.OverrideDefaults.Face)
+
+	// An omitted position stays nil, so unset is distinguishable from any value.
+	var unset Defaults
+	require.NoError(t, yaml.Unmarshal([]byte("rack: R12\n"), &unset))
+	require.Nil(t, unset.Position)
+}
+
+func TestMergeDefaultsRackPlacement(t *testing.T) {
+	pos := func(v float64) *float64 { return &v }
+
+	t.Run("override rack replaces the policy rack", func(t *testing.T) {
+		got := MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: "R12"})
+		require.Equal(t, RackText("R12"), got.Rack)
+	})
+
+	t.Run("an unset or blank override rack keeps the policy rack", func(t *testing.T) {
+		require.Equal(t, RackText("R1"), MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{}).Rack)
+		require.Equal(t, RackText("R1"), MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: "  "}).Rack)
+	})
+
+	t.Run("override rack is trimmed", func(t *testing.T) {
+		require.Equal(t, RackText("R12"), MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: " R12 "}).Rack)
+	})
+
+	t.Run("nil override keeps the policy rack", func(t *testing.T) {
+		got := MergeDefaults(&Defaults{Rack: "R1"}, nil)
+		require.Equal(t, RackText("R1"), got.Rack)
+		require.Nil(t, got.Position)
+		require.Empty(t, got.Face)
+	})
+
+	t.Run("position and face come from the override and are not aliased", func(t *testing.T) {
+		override := &Defaults{Position: pos(40.5), Face: "rear"}
+		got := MergeDefaults(&Defaults{Rack: "R1"}, override)
+		require.Equal(t, RackText("R1"), got.Rack)
+		require.NotNil(t, got.Position)
+		require.InDelta(t, 40.5, *got.Position, 0)
+		require.Equal(t, "rear", got.Face)
+
+		*got.Position = 1
+		require.InDelta(t, 40.5, *override.Position, 0, "the merged position must not alias the override")
+	})
+
+	t.Run("an override without position or face leaves them unset", func(t *testing.T) {
+		got := MergeDefaults(&Defaults{Rack: "R1"}, &Defaults{Rack: "R12"})
+		require.Nil(t, got.Position)
+		require.Empty(t, got.Face)
+	})
+
+	t.Run("nil policy defaults copy the override without aliasing", func(t *testing.T) {
+		override := &Defaults{Rack: "R12", Position: pos(3), Face: "front"}
+		got := MergeDefaults(nil, override)
+		require.Equal(t, RackText("R12"), got.Rack)
+		require.NotNil(t, got.Position)
+		require.InDelta(t, 3, *got.Position, 0)
+		require.Equal(t, "front", got.Face)
+
+		*got.Position = 1
+		require.InDelta(t, 3, *override.Position, 0, "the merged position must not alias the override")
+	})
+
+	t.Run("the merge does not alias the policy position", func(t *testing.T) {
+		for name, override := range map[string]*Defaults{"nil override": nil, "empty override": {}} {
+			policy := &Defaults{Position: pos(7)}
+			got := MergeDefaults(policy, override)
+			require.NotNil(t, got.Position, name)
+			*got.Position = 1
+			require.InDelta(t, 7, *policy.Position, 0, "%s: the merged position must not alias the policy defaults", name)
+		}
+	})
 }

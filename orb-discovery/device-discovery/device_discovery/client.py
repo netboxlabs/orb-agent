@@ -19,6 +19,10 @@ from device_discovery.log_config import configure_default_logging
 from device_discovery.stubs import prune_nested_refs
 from device_discovery.translate import translate_data
 from device_discovery.version import version_semver
+from device_discovery.vlan_scope import (
+    UNSCOPED_VLAN_WARNING,
+    count_unscoped_vlans,
+)
 
 APP_NAME = "device-discovery"
 APP_VERSION = version_semver()
@@ -63,6 +67,21 @@ class Client:
     def __init__(self):
         """Initialize the Client instance with no Diode client."""
         if not hasattr(self, "diode_client"):  # Prevent reinitialization
+            # Assigned before diode_client, which is the re-init guard: a second
+            # thread that passes the guard must never reach ingest before this
+            # exists.
+            # An unscoped VLAN is a config mistake, not an event: a policy
+            # either sets a group or it does not. Warn once per policy rather
+            # than once per device per cycle, which on a large estate would be
+            # thousands of identical lines an operator learns to filter out.
+            # Keyed per policy RUNNER, not a single flag and not per policy
+            # name: this Client is a process-wide singleton shared by every
+            # policy, so one flag would report whichever policy ingested first
+            # and silence the rest. The key is the runner rather than the name
+            # so a policy that is deleted and recreated warns again, and so a
+            # job still in flight from the deleted runner cannot write a key
+            # its replacement reads. One short string per policy start.
+            self.warned_unscoped_vlan_runs: set[str] = set()
             self.diode_client = None
 
     def init_client(
@@ -143,6 +162,22 @@ class Client:
                 if isinstance(translated_entities, list)
                 else list(translated_entities)
             )
+            # Membership is tested before counting: once a policy has been
+            # warned the count would be discarded, and this runs for every
+            # device on every cycle for the life of the process.
+            policy_name = str((metadata or {}).get("policy_name", "<unnamed>"))
+            run_key = str((metadata or {}).get("policy_instance", policy_name))
+            if run_key not in self.warned_unscoped_vlan_runs:
+                unscoped_vlans = count_unscoped_vlans(entities_list)
+                if unscoped_vlans:
+                    self.warned_unscoped_vlan_runs.add(run_key)
+                    logger.warning(
+                        UNSCOPED_VLAN_WARNING,
+                        unscoped_vlans,
+                        str((metadata or {}).get("hostname", "unknown-host")),
+                        policy_name,
+                    )
+
             if run_id is not None:
                 apply_run_id_to_entities(entities_list, run_id)
 

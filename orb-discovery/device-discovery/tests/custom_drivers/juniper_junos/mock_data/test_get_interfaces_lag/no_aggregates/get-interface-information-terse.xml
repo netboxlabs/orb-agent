@@ -1,0 +1,33 @@
+<rpc-reply xmlns:junos="http://xml.juniper.net/junos/15.1R7/junos">
+  <interface-information xmlns="http://xml.juniper.net/junos/15.1R7/junos-interface" junos:style="terse">
+    <physical-interface>
+      <name>xe-0/0/1</name>
+      <admin-status>up</admin-status>
+      <oper-status>up</oper-status>
+      <logical-interface>
+        <name>xe-0/0/1.0</name>
+        <admin-status>up</admin-status>
+        <oper-status>up</oper-status>
+        <address-family>
+          <address-family-name>eth-switch</address-family-name>
+        </address-family>
+      </logical-interface>
+    </physical-interface>
+    <physical-interface>
+      <name>em0</name>
+      <admin-status>up</admin-status>
+      <oper-status>up</oper-status>
+      <logical-interface>
+        <name>em0.0</name>
+        <admin-status>up</admin-status>
+        <oper-status>up</oper-status>
+        <address-family>
+          <address-family-name>inet</address-family-name>
+          <interface-address>
+            <ifa-local>198.51.100.10/24</ifa-local>
+          </interface-address>
+        </address-family>
+      </logical-interface>
+    </physical-interface>
+  </interface-information>
+</rpc-reply>

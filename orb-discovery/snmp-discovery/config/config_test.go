@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	yaml "gopkg.in/yaml.v3"
+	yaml "go.yaml.in/yaml/v3"
 )
 
 func TestMergeDefaults(t *testing.T) {
@@ -102,7 +102,7 @@ func TestMergeDefaults(t *testing.T) {
 		policyDefaults := &Defaults{
 			IPAddress: IPAddressDefaults{
 				Role:        "anycast",
-				Tenant:      "default-tenant",
+				Tenant:      TenantParameters{Name: "default-tenant"},
 				Vrf:         VrfParameters{Name: "default-vrf"},
 				Description: "Policy IP",
 				Tags:        []string{"policy"},
@@ -113,14 +113,14 @@ func TestMergeDefaults(t *testing.T) {
 		overrideDefaults := &Defaults{
 			IPAddress: IPAddressDefaults{
 				Role:   "loopback",
-				Tenant: "override-tenant",
+				Tenant: TenantParameters{Name: "override-tenant"},
 				Tags:   []string{"override"},
 			},
 		}
 
 		result := MergeDefaults(policyDefaults, overrideDefaults)
 		assert.Equal(t, "loopback", result.IPAddress.Role)
-		assert.Equal(t, "override-tenant", result.IPAddress.Tenant)
+		assert.Equal(t, "override-tenant", result.IPAddress.Tenant.Name)
 		assert.Equal(t, []string{"override"}, result.IPAddress.Tags)
 		assert.Equal(t, "default-vrf", result.IPAddress.Vrf.Name)     // Not overridden
 		assert.Equal(t, "Policy IP", result.IPAddress.Description)    // Not overridden
@@ -144,29 +144,51 @@ func TestMergeDefaults(t *testing.T) {
 		}
 
 		t.Run("override only Rd", func(t *testing.T) {
+			// Diode finds a VRF with an rd by the rd alone, so another rd is
+			// another VRF: it keeps the policy's name and takes nothing else,
+			// which would otherwise be written onto that VRF.
 			overrideDefaults := &Defaults{
 				IPAddress: IPAddressDefaults{
 					Vrf: VrfParameters{Rd: "65000:200"},
 				},
 			}
 			result := MergeDefaults(policyDefaults, overrideDefaults)
-			assert.Equal(t, "prod", result.IPAddress.Vrf.Name)
-			assert.Equal(t, "65000:200", result.IPAddress.Vrf.Rd) // override won
+			assert.Equal(t, VrfParameters{Name: "prod", Rd: "65000:200"}, result.IPAddress.Vrf)
+		})
+
+		t.Run("override refining the same VRF", func(t *testing.T) {
+			overrideDefaults := &Defaults{
+				IPAddress: IPAddressDefaults{
+					Vrf: VrfParameters{Rd: "65000:100 ", Comments: "override comments"},
+				},
+			}
+			result := MergeDefaults(policyDefaults, overrideDefaults)
 			assert.Equal(t, "Prod VRF", result.IPAddress.Vrf.Description)
-			assert.Equal(t, "policy comments", result.IPAddress.Vrf.Comments)
+			assert.Equal(t, "override comments", result.IPAddress.Vrf.Comments)
 			assert.Equal(t, []string{"policy"}, result.IPAddress.Vrf.Tags)
 		})
 
-		t.Run("override only Name", func(t *testing.T) {
+		t.Run("override naming another VRF inherits nothing", func(t *testing.T) {
+			// The policy VRF's rd would make Diode match, and rename, that
+			// VRF instead of the one the override names.
 			overrideDefaults := &Defaults{
 				IPAddress: IPAddressDefaults{
 					Vrf: VrfParameters{Name: "edge-vrf"},
 				},
 			}
 			result := MergeDefaults(policyDefaults, overrideDefaults)
-			assert.Equal(t, "edge-vrf", result.IPAddress.Vrf.Name) // override won
-			assert.Equal(t, "65000:100", result.IPAddress.Vrf.Rd)  // inherited
-			assert.Equal(t, "Prod VRF", result.IPAddress.Vrf.Description)
+			assert.Equal(t, VrfParameters{Name: "edge-vrf"}, result.IPAddress.Vrf)
+		})
+
+		t.Run("override naming the same VRF refines it", func(t *testing.T) {
+			overrideDefaults := &Defaults{
+				IPAddress: IPAddressDefaults{
+					Vrf: VrfParameters{Name: "prod", Description: "Edge copy"},
+				},
+			}
+			result := MergeDefaults(policyDefaults, overrideDefaults)
+			assert.Equal(t, "65000:100", result.IPAddress.Vrf.Rd)
+			assert.Equal(t, "Edge copy", result.IPAddress.Vrf.Description)
 		})
 
 		t.Run("override all VRF fields", func(t *testing.T) {
@@ -238,7 +260,7 @@ func TestMergeDefaults(t *testing.T) {
 			},
 			IPAddress: IPAddressDefaults{
 				Role:   "anycast",
-				Tenant: "default-tenant",
+				Tenant: TenantParameters{Name: "default-tenant"},
 			},
 			InterfacePatterns: []InterfacePattern{
 				{Match: "^Eth", Type: "1000base-t"},
@@ -252,7 +274,7 @@ func TestMergeDefaults(t *testing.T) {
 				Description: "Override Device",
 			},
 			IPAddress: IPAddressDefaults{
-				Tenant: "override-tenant",
+				Tenant: TenantParameters{Name: "override-tenant"},
 			},
 		}
 
@@ -262,7 +284,7 @@ func TestMergeDefaults(t *testing.T) {
 		assert.Equal(t, "Override Site", result.Site)
 		assert.Equal(t, "router", result.Role)
 		assert.Equal(t, "Override Device", result.Device.Description)
-		assert.Equal(t, "override-tenant", result.IPAddress.Tenant)
+		assert.Equal(t, "override-tenant", result.IPAddress.Tenant.Name)
 
 		// Check non-overridden fields retain policy defaults
 		assert.Equal(t, "Default Location", result.Location)
@@ -508,7 +530,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 			Description: "policy desc",
 			Tags:        []string{"policy-tag"},
 			Group:       VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"},
-			Tenant:      "policy-tenant",
+			Tenant:      TenantParameters{Name: "policy-tenant"},
 			Status:      "active",
 		},
 	}
@@ -516,7 +538,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 		VLAN: VLANDefaults{
 			Description: "override desc",
 			Tags:        []string{"override-tag"},
-			Tenant:      "override-tenant",
+			Tenant:      TenantParameters{Name: "override-tenant"},
 		},
 	}
 	merged := MergeDefaults(policy, override)
@@ -524,7 +546,7 @@ func TestMergeDefaults_VLAN(t *testing.T) {
 	assert.Equal(t, "override desc", merged.VLAN.Description)
 	assert.Equal(t, []string{"override-tag"}, merged.VLAN.Tags)
 	assert.Equal(t, VLANGroupParameters{Name: "policy-group", ScopeSiteGroup: "policy-sg"}, merged.VLAN.Group, "Group should be preserved from policy")
-	assert.Equal(t, "override-tenant", merged.VLAN.Tenant)
+	assert.Equal(t, "override-tenant", merged.VLAN.Tenant.Name)
 	assert.Equal(t, "active", merged.VLAN.Status, "Status should be preserved from policy")
 }
 
@@ -613,11 +635,9 @@ func TestMergeDefaults_PerAfVrf_FieldLevelNoBleed(t *testing.T) {
 	}}
 	merged := MergeDefaults(policy, override)
 
-	// Field-level refinement: override rd lands without clearing the
-	// policy-level name/description of the SAME knob.
-	assert.Equal(t, "four", merged.IPAddress.VrfIpv4.Name)
-	assert.Equal(t, "65000:44", merged.IPAddress.VrfIpv4.Rd)
-	assert.Equal(t, "v4 desc", merged.IPAddress.VrfIpv4.Description)
+	// An rd the policy VRF lacks names another VRF (Diode matches by name only
+	// without an rd): it keeps the knob's name and takes nothing else.
+	assert.Equal(t, VrfParameters{Name: "four", Rd: "65000:44"}, merged.IPAddress.VrfIpv4)
 	// New knob introduced by override only.
 	assert.Equal(t, "six", merged.IPAddress.VrfIpv6.Name)
 	// No bleed between knobs: the AF-agnostic vrf is untouched.
@@ -633,7 +653,7 @@ func TestMergeDefaults_PrefixBlock(t *testing.T) {
 		Vrf:         VrfParameters{Name: "policy-vrf", Rd: "65000:1"},
 	}}
 	override := &Defaults{Prefix: PrefixDefaults{
-		Tenant:        "override-tenant",
+		Tenant:        TenantParameters{Name: "override-tenant"},
 		ScopeLocation: "override-loc",
 		Comments:      "override-comments",
 		Tags:          []string{"o"},
@@ -644,7 +664,7 @@ func TestMergeDefaults_PrefixBlock(t *testing.T) {
 	assert.Equal(t, "policy-desc", merged.Prefix.Description)
 	assert.Equal(t, "policy-role", merged.Prefix.Role)
 	assert.Equal(t, "policy-site", merged.Prefix.ScopeSite)
-	assert.Equal(t, "override-tenant", merged.Prefix.Tenant)
+	assert.Equal(t, "override-tenant", merged.Prefix.Tenant.Name)
 	assert.Equal(t, "override-loc", merged.Prefix.ScopeLocation)
 	assert.Equal(t, "override-comments", merged.Prefix.Comments)
 	assert.Equal(t, []string{"o"}, merged.Prefix.Tags)
@@ -886,11 +906,14 @@ func TestMergeDefaults_TenantFieldWise(t *testing.T) {
 	assert.Equal(t, "acme", merged.Tenant.Name, "empty override keeps policy tenant")
 	assert.Equal(t, "customers", merged.Tenant.Group)
 
-	// Field-wise like mergeVrfParameters: a name-only override must KEEP
-	// the policy group (device-discovery deep-merges overrides the same way).
+	// An override naming another tenant replaces the policy's whole: taking
+	// the policy group would put that tenant, or match it, in the wrong group.
 	merged = MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Name: "other"}})
-	assert.Equal(t, "other", merged.Tenant.Name)
-	assert.Equal(t, "customers", merged.Tenant.Group)
+	assert.Equal(t, TenantParameters{Name: "other"}, merged.Tenant)
+
+	// The same tenant, trimmed as Diode compares names, is refined.
+	merged = MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Name: "acme ", Description: "d"}})
+	assert.Equal(t, TenantParameters{Name: "acme ", Group: "customers", Description: "d"}, merged.Tenant)
 
 	// Group-only override refines group while keeping the policy name.
 	merged = MergeDefaults(policy, &Defaults{Tenant: TenantParameters{Group: "internal"}})
@@ -1006,4 +1029,86 @@ func TestVLANGroupParameters_UnmarshalNullAndReceiverReset(t *testing.T) {
 	var fresh VLANDefaults
 	require.NoError(t, yaml.Unmarshal([]byte("group: null\n"), &fresh))
 	assert.Equal(t, VLANGroupParameters{}, fresh.Group)
+}
+
+func TestDefaults_RackPlacement_ParsesFromYAML(t *testing.T) {
+	yamlContent := []byte(`
+override_defaults:
+  rack: "R12"
+  position: 40.5
+  face: Front
+`)
+	var parsed struct {
+		Override Defaults `yaml:"override_defaults"`
+	}
+	require.NoError(t, yaml.Unmarshal(yamlContent, &parsed))
+	assert.Equal(t, RackText("R12"), parsed.Override.Rack)
+	require.NotNil(t, parsed.Override.Position)
+	assert.InDelta(t, 40.5, *parsed.Override.Position, 0)
+	assert.Equal(t, "Front", parsed.Override.Face)
+}
+
+func TestDefaults_RackPlacement_Unset(t *testing.T) {
+	var parsed struct {
+		Defaults Defaults `yaml:"defaults"`
+	}
+	require.NoError(t, yaml.Unmarshal([]byte("defaults:\n  site: DC1\n"), &parsed))
+	assert.Empty(t, parsed.Defaults.Rack)
+	assert.Nil(t, parsed.Defaults.Position, "an absent position must stay distinguishable from any value")
+	assert.Empty(t, parsed.Defaults.Face)
+}
+
+func TestDefaults_RackName(t *testing.T) {
+	assert.Equal(t, "R12", (&Defaults{Rack: "  R12\t"}).RackName())
+	assert.Empty(t, (&Defaults{Rack: "   "}).RackName(), "a blank rack is unset")
+	assert.Empty(t, (&Defaults{}).RackName())
+}
+
+func TestDefaults_RackFace(t *testing.T) {
+	assert.Equal(t, "front", (&Defaults{Face: "Front"}).RackFace())
+	assert.Equal(t, "rear", (&Defaults{Face: " REAR "}).RackFace())
+	assert.Empty(t, (&Defaults{Face: "  "}).RackFace(), "a blank face is unset")
+	assert.Equal(t, "side", (&Defaults{Face: "Side"}).RackFace(), "values are normalized, not validated")
+}
+
+func TestMergeDefaults_Rack_OverrideReplacesPolicy(t *testing.T) {
+	merged := MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Rack: "R14"})
+	assert.Equal(t, "R14", merged.RackName())
+}
+
+func TestMergeDefaults_Rack_EmptyOrBlankOverrideKeepsPolicy(t *testing.T) {
+	assert.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{}).RackName())
+	assert.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Rack: "  "}).RackName(),
+		"a blank override rack is unset, so the policy rack stays")
+}
+
+func TestMergeDefaults_Rack_NoOverride(t *testing.T) {
+	assert.Equal(t, "R12", MergeDefaults(&Defaults{Rack: "R12"}, nil).RackName())
+}
+
+func TestMergeDefaults_PositionAndFaceCopiedFromOverride(t *testing.T) {
+	pos := 40.5
+	override := &Defaults{Position: &pos, Face: "rear"}
+	merged := MergeDefaults(&Defaults{Rack: "R12"}, override)
+
+	assert.Equal(t, "R12", merged.RackName(), "the policy rack applies when the override sets none")
+	require.NotNil(t, merged.Position)
+	assert.InDelta(t, 40.5, *merged.Position, 0)
+	assert.NotSame(t, override.Position, merged.Position, "the merged position must not alias the override")
+	assert.Equal(t, "rear", merged.Face)
+}
+
+func TestMergeDefaults_PositionAndFaceUnsetStayUnset(t *testing.T) {
+	merged := MergeDefaults(&Defaults{Rack: "R12"}, &Defaults{Site: "DC1"})
+	assert.Nil(t, merged.Position)
+	assert.Empty(t, merged.Face)
+}
+
+// An empty rack key is no rack, like an absent one.
+func TestRackText_EmptyKeyIsUnset(t *testing.T) {
+	for _, doc := range []string{"rack:\n", "rack: ~\n", "rack: \"\"\n"} {
+		var d Defaults
+		require.NoError(t, yaml.Unmarshal([]byte(doc), &d), doc)
+		assert.Empty(t, d.RackName(), doc)
+	}
 }

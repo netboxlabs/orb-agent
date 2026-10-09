@@ -7,9 +7,13 @@ For each target the backend dials gNMI, asks the device for its Capabilities,
 selects a metric profile from the vendor and network OS it reports, and opens
 one subscription carrying every path that profile names. Each notification is
 matched back to the profile, converted, and written into a last-value store that
-observable instruments read on the export cadence. Every series carries
-`device_ip` and `policy` attributes, plus `netbox_id` when the target sets an
-`id` and whatever path keys its profile promotes, such as `interface_name`.
+observable instruments read on the export cadence. Every series of a policy is
+exported under an instrumentation scope named `gnmi-telemetry` with the
+attribute `policy_name` set to the policy, one scope per policy. Every series
+carries `device_ip`, plus `netbox_id` when the target sets an `id` and
+whatever path keys its profile promotes, such as `interface_name`. The SDK
+keeps a meter, and an instrument per metric name, for every distinct policy
+name seen over the process lifetime; a restart clears it.
 Metrics are sent only when `--otel-endpoint` is set; without it, targets are
 still subscribed but nothing is exported.
 
@@ -110,11 +114,18 @@ by design. That bound applies to a call
 whose context carries no deadline of its own; a caller that already set one, the
 sweep below, keeps its own and the reading it draws from it.
 
-Then one STREAM subscription per target carries every path of its profile in a
-single request, each path with the mode the profile gives it: `sample` paths at
-the policy's `metrics_interval`, `on_change` paths as such, and each with its own
-origin. TARGET_DEFINED is never requested, so a device's own idea of a sample
-interval never replaces the policy's.
+Then the paths of the profile are subscribed as STREAM subscriptions, each
+path with the mode the profile gives it: `sample` paths at the policy's
+`metrics_interval`, `on_change` paths as such, and each with its own origin. A
+device takes one origin per Subscribe request, so the paths go on one request
+per origin, one for most profiles and two for one that adds a native path to
+the OpenConfig set, as the SR Linux profile does; the streams are one attempt
+to the ladder below, which reads one sync response once every stream has
+answered its own and is refused or reconnected for all of them at once. Each
+stream has to answer, with data or its sync response, within the probe
+deadline on its own: another stream's traffic does not keep it open.
+TARGET_DEFINED is never requested, so a device's own idea of a sample interval
+never replaces the policy's.
 
 The first subscribe on a session probes each of those paths first, with a
 one-path Get under that path's own origin, and leaves out the ones the target
@@ -146,13 +157,16 @@ ladder, and each step down counts one `gnmi.mode_fallback_total`:
 1. The profile's own modes, with `on_change` paths streaming on change.
 2. Every path as SAMPLE at `metrics_interval`, which is where a device that
    rejects ON_CHANGE lands. A stream that reports InvalidArgument or
-   Unimplemented is read as a refusal too, as long as the stream has not delivered data yet,
+   Unimplemented is read as a refusal too, as long as that stream has not
+   delivered data yet, whatever another stream of the attempt has delivered,
    since a device may accept the RPC and fail the subscription on the stream, and
    so is one that ends with no error at all, or sends nothing at all within the
-   probe deadline, before its first sync response or data. A stream that fails
-   under any other code keeps the rung it held and reconnects on it, before the
-   sync response as well as after, an initial dump that stalled after data
-   among them: an Unavailable during the initial dump is the
+   probe deadline, before its first sync response or data; a stream the device
+   ends after its sync response is a close, not a refusal. A stream that fails
+   under any other code does not step down from the rung it held: the
+   reconnect starts the ladder over, before the sync response as well as
+   after, an initial dump that stalled after data among them: an
+   Unavailable during the initial dump is the
    connection going, not the mode being refused, and a subscription over an empty
    subtree sends a sync and no data at all.
 3. Get polling at `metrics_interval`, last. A subscription whose profile gives
@@ -319,9 +333,10 @@ with reason `schema_conflict`.
 
 Every series carries:
 
-- `device_ip`, the target's host as the policy named it, and `policy`, the
-  policy that created the series. Together they are the identity, so two
-  policies watching one device keep separate series.
+- `device_ip`, the target's host as the policy named it. The policy is not a
+  datapoint attribute: it is the `policy_name` of the instrumentation scope
+  the series is exported under, so two policies watching one device keep
+  separate series on separate scopes.
 - `netbox_id`, when the target sets `id`.
 - Whatever the profile's subscription promotes from the path keys:
   `interface_name` on the interface subtrees, `cpu_index`, `component_name`,
@@ -378,11 +393,13 @@ rather than wrapped into a false reset.
 Cardinality is bounded at ten thousand attribute sets per instrument, the SDK's
 limit, and the backend holds its own series one short of it so a series it chose
 is never the one folded into the SDK's overflow bucket. That bound is one for
-the process: there is one instrument per metric name however many policies and
-profile sets write to it, so every policy running draws on the same allowance.
-Series are the product of the devices the policies name and the path keys their
-profiles promote, so policies over a wide prefix whose devices each have
-hundreds of interfaces are what approach it. An update refused by that bound is
+the process, and stricter than the SDK's own: each policy has its own
+instrument for a metric name, on its own scope, but the backend keeps its
+bound on the name across every policy's instrument, so every policy running
+draws on the same allowance. Series are the product of the devices the
+policies name and the path keys their profiles promote, so policies over a
+wide prefix whose devices each have hundreds of interfaces are what approach
+it. An update refused by that bound is
 counted, not exported. `gnmi.target_up` draws on the same allowance, one series
 per target, so a target refused a slot keeps collecting and its up point alone
 stands down until a slot frees.
@@ -392,7 +409,7 @@ Seven metrics describe the backend itself rather than a device:
 | Metric | Kind | Attributes | Meaning |
 | --- | --- | --- | --- |
 | `gnmi.targets_active` | up-down counter | none | Targets with a running loop, across every policy. |
-| `gnmi.target_up` | gauge | `device_ip`, `policy`, `mode` | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
+| `gnmi.target_up` | gauge | `device_ip`, `mode` (under the policy's scope) | 1 while the target has a live stream or poll, 0 while it is reconnecting. `mode` is the rung it settled on. |
 | `gnmi.subscription_reconnects_total` | counter | none | Reconnects after a stream ended or failed. Backoff runs from one second to a thirty second cap, and resets after an attempt that served: one that delivered data, or one whose stream answered the sync response closing its initial dump, which is all a subscription over an empty subtree ever carries. |
 | `gnmi.notifications_total` | counter | none | Notifications received from any target. |
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
@@ -488,8 +505,9 @@ subscriptions:
   for both attributes. Every key the path wildcards must be promoted by some
   attribute, since the key value is the only thing telling the elements of the
   list apart and an unpromoted one has them all write a single series. The
-  attribute name on the left may not be `device_ip`, `policy` or `netbox_id`,
-  which the collector sets itself.
+  attribute name on the left may not be `device_ip` or `netbox_id`, which the
+  collector sets on the datapoint, or `policy_name`, which it sets on the
+  series' instrumentation scope.
 - `origin` may be set per subscription, and overrides the target's for that path
   alone. `origin: ""` asks under the target's native schema, which is how the SR
   Linux overlay reads memory paths OpenConfig does not carry. A path with its own

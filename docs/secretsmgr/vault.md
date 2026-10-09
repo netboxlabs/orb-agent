@@ -1,4 +1,4 @@
-# Vault Secrets Manager
+# HashiCorp Vault
 
 The Orb Agent can integrate with HashiCorp Vault to securely manage sensitive information such as passwords and API keys. This feature allows you to reference secrets stored in Vault directly in your policy configurations without hardcoding sensitive values.
 

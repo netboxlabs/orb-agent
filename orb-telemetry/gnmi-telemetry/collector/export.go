@@ -127,8 +127,17 @@ func counterValue(_ profiles.Metric, v any) (int64, bool) {
 	return 0, false
 }
 
-// exporter owns the observable instruments, one per metric name, whose
-// callbacks read the store on every export cycle. There is one per
+// instrumentKey names one observable instrument: a metric name on one
+// policy's meter. The same metric under two policies is two instruments on
+// two meters, which is what keeps their series apart now that the datapoint
+// does not carry the policy.
+type instrumentKey struct {
+	policy string
+	name   string
+}
+
+// exporter owns the observable instruments, one per policy and metric name,
+// whose callbacks read the store on every export cycle. There is one per
 // collector: a second exporter over the same store would observe every
 // series twice and the SDK would sum them.
 type exporter struct {
@@ -143,9 +152,11 @@ type exporter struct {
 	held     map[string]bool
 	mu       sync.Mutex
 	closed   bool
-	counters map[string]metric.Int64ObservableCounter
-	gauges   map[string]metric.Float64ObservableGauge
-	regs     []metric.Registration
+	counters map[instrumentKey]metric.Int64ObservableCounter
+	gauges   map[instrumentKey]metric.Float64ObservableGauge
+	// regs is held per policy so forgetPolicy can give exactly that
+	// policy's callbacks back and close all of them.
+	regs map[string][]metric.Registration
 }
 
 // newExporter builds an exporter over a store. A nil registry gives it one of
@@ -160,7 +171,8 @@ func newExporter(st *store, logger *slog.Logger, schemas *Schemas) *exporter {
 	}
 	return &exporter{
 		store: st, logger: logger, schemas: schemas,
-		counters: map[string]metric.Int64ObservableCounter{}, gauges: map[string]metric.Float64ObservableGauge{},
+		counters: map[instrumentKey]metric.Int64ObservableCounter{}, gauges: map[instrumentKey]metric.Float64ObservableGauge{},
+		regs: map[string][]metric.Registration{},
 	}
 }
 
@@ -169,14 +181,14 @@ func newExporter(st *store, logger *slog.Logger, schemas *Schemas) *exporter {
 // stored, or the reason it was dropped. The instrument is ensured FIRST: a
 // series refused there must not be left in the store, holding a budget slot
 // against a name this collector will never export.
-func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) string {
-	if reason := e.ensureCounter(name, unit); reason != "" {
+func (e *exporter) observeCounter(policy, name, unit string, attrs []attribute.KeyValue, v int64, ts int64, maxAge time.Duration) string {
+	if reason := e.ensureCounter(policy, name, unit); reason != "" {
 		return reason
 	}
 	if !exporting() {
 		return ""
 	}
-	if !e.store.setCounter(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
+	if !e.store.setCounter(seriesKey{metric: name, policy: policy, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return dropSeriesLimit
 	}
 	return ""
@@ -184,14 +196,14 @@ func (e *exporter) observeCounter(name, unit string, attrs []attribute.KeyValue,
 
 // observeGauge stores a gauge value with its arrival time and staleness age,
 // and ensures its instrument, returning the reason it was dropped or "".
-func (e *exporter) observeGauge(name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) string {
-	if reason := e.ensureGauge(name, unit); reason != "" {
+func (e *exporter) observeGauge(policy, name, unit string, attrs []attribute.KeyValue, v float64, ts int64, maxAge time.Duration) string {
+	if reason := e.ensureGauge(policy, name, unit); reason != "" {
 		return reason
 	}
 	if !exporting() {
 		return ""
 	}
-	if !e.store.setGauge(seriesKey{metric: name, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
+	if !e.store.setGauge(seriesKey{metric: name, policy: policy, attrs: attrKey(attrs)}, v, ts, maxAge, attrs) {
 		return dropSeriesLimit
 	}
 	return ""
@@ -233,9 +245,10 @@ func (e *exporter) admit(name, kind, unit string) string {
 }
 
 // ensureCounter registers the name as a counter in the process registry and
-// creates the instrument on first use. It returns the reason to drop the
-// observation, or "".
-func (e *exporter) ensureCounter(name, unit string) string {
+// creates the instrument on first use. The instrument lives on the policy's
+// meter, so its series export under the policy's scope. It returns the reason
+// to drop the observation, or "".
+func (e *exporter) ensureCounter(policy, name, unit string) string {
 	if reason := e.admit(name, kindCounter, unit); reason != "" {
 		return reason
 	}
@@ -244,36 +257,38 @@ func (e *exporter) ensureCounter(name, unit string) string {
 	if e.closed {
 		return ""
 	}
-	if _, ok := e.counters[name]; ok {
+	key := instrumentKey{policy: policy, name: name}
+	if _, ok := e.counters[key]; ok {
 		return ""
 	}
-	m := metrics.GetMeter()
+	m := metrics.PolicyMeter(policy)
 	if m == nil {
 		return ""
 	}
 	inst, err := m.Int64ObservableCounter("gnmi."+name, metric.WithUnit(unit))
 	if err != nil {
-		e.logger.Error("failed to create counter", "name", name, "error", err)
+		e.logger.Error("failed to create counter", "name", name, "policy", policy, "error", err)
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		e.store.forEach(name, time.Now(), func(_ seriesKey, pt point) {
+		e.store.forEach(name, policy, time.Now(), func(_ seriesKey, pt point) {
 			o.ObserveInt64(inst, pt.i, metric.WithAttributes(pt.attrs...))
 		})
 		return nil
 	}, inst)
 	if err != nil {
-		e.logger.Error("failed to register counter callback", "name", name, "error", err)
+		e.logger.Error("failed to register counter callback", "name", name, "policy", policy, "error", err)
 		return ""
 	}
-	e.counters[name] = inst
-	e.regs = append(e.regs, reg)
+	e.counters[key] = inst
+	e.regs[policy] = append(e.regs[policy], reg)
 	return ""
 }
 
 // ensureGauge is ensureCounter for a gauge: the same registration, and the
-// same reason back.
-func (e *exporter) ensureGauge(name, unit string) string {
+// same reason back. The instrument lives on the policy's meter, so its
+// series export under the policy's scope.
+func (e *exporter) ensureGauge(policy, name, unit string) string {
 	if reason := e.admit(name, kindGauge, unit); reason != "" {
 		return reason
 	}
@@ -282,57 +297,106 @@ func (e *exporter) ensureGauge(name, unit string) string {
 	if e.closed {
 		return ""
 	}
-	if _, ok := e.gauges[name]; ok {
+	key := instrumentKey{policy: policy, name: name}
+	if _, ok := e.gauges[key]; ok {
 		return ""
 	}
-	m := metrics.GetMeter()
+	m := metrics.PolicyMeter(policy)
 	if m == nil {
 		return ""
 	}
 	inst, err := m.Float64ObservableGauge("gnmi."+name, metric.WithUnit(unit))
 	if err != nil {
-		e.logger.Error("failed to create gauge", "name", name, "error", err)
+		e.logger.Error("failed to create gauge", "name", name, "policy", policy, "error", err)
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		e.store.forEach(name, time.Now(), func(_ seriesKey, pt point) {
+		e.store.forEach(name, policy, time.Now(), func(_ seriesKey, pt point) {
 			o.ObserveFloat64(inst, pt.f, metric.WithAttributes(pt.attrs...))
 		})
 		return nil
 	}, inst)
 	if err != nil {
-		e.logger.Error("failed to register gauge callback", "name", name, "error", err)
+		e.logger.Error("failed to register gauge callback", "name", name, "policy", policy, "error", err)
 		return ""
 	}
-	e.gauges[name] = inst
-	e.regs = append(e.regs, reg)
+	e.gauges[key] = inst
+	e.regs[policy] = append(e.regs[policy], reg)
 	return ""
 }
 
 // register adds a callback the collector owns (the target_up gauge) so
-// close unregisters it with the rest.
-func (e *exporter) register(reg metric.Registration) {
+// close unregisters it with the rest. It reports whether it took the
+// registration: once closed, the exporter has already given every
+// registration it holds back to the meter and cleared regs, so one arriving
+// after that would sit in regs forever, past the point close ever looks at
+// it again. The caller owns reg in that case and must unregister it itself,
+// with no lock of the exporter held, following the same ordering rule as
+// close and forgetPolicy.
+func (e *exporter) register(policy string, reg metric.Registration) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.regs = append(e.regs, reg)
+	if e.closed {
+		return false
+	}
+	e.regs[policy] = append(e.regs[policy], reg)
+	return true
 }
 
-// close unregisters every callback. Unregister waits for a running
+// forgetPolicy gives the policy's callbacks back to the meter and drops its
+// instrument entries, so its scope goes quiet and a policy of the same name
+// arriving later registers afresh. Unregister waits for a running
 // collection, which takes the store's lock, so it runs with no lock of the
-// exporter or the store held.
+// exporter or the store held. The schema claims are per name and shared
+// with every other policy on this exporter, so they stay. The caller has
+// already stopped the policy's writers and waited for them (the collector
+// stops its loops and joins them before calling this), so no observation
+// for this policy can still be in flight to race the unregistration.
+func (e *exporter) forgetPolicy(policy string) {
+	e.mu.Lock()
+	regs := e.regs[policy]
+	delete(e.regs, policy)
+	for k := range e.counters {
+		if k.policy == policy {
+			delete(e.counters, k)
+		}
+	}
+	for k := range e.gauges {
+		if k.policy == policy {
+			delete(e.gauges, k)
+		}
+	}
+	e.mu.Unlock()
+	e.unregister(policy, regs)
+}
+
+// unregister gives registrations back to the meter, with no lock held.
+func (e *exporter) unregister(policy string, regs []metric.Registration) {
+	for _, r := range regs {
+		if err := r.Unregister(); err != nil {
+			e.logger.Warn("failed to unregister a callback", "policy", policy, "error", err)
+		}
+	}
+}
+
+// close unregisters every callback and releases the schema claims.
+// Unregister waits for a running collection, which takes the store's lock,
+// so it runs with no lock of the exporter or the store held.
 func (e *exporter) close() {
 	e.mu.Lock()
 	e.closed = true
 	regs := e.regs
-	e.regs = nil
+	e.regs = map[string][]metric.Registration{}
+	e.counters = map[instrumentKey]metric.Int64ObservableCounter{}
+	e.gauges = map[instrumentKey]metric.Float64ObservableGauge{}
 	names := make([]string, 0, len(e.held))
 	for name := range e.held {
 		names = append(names, name)
 	}
 	e.held = nil
 	e.mu.Unlock()
-	for _, r := range regs {
-		_ = r.Unregister()
+	for policy, policyRegs := range regs {
+		e.unregister(policy, policyRegs)
 	}
 	e.schemas.release(names)
 }

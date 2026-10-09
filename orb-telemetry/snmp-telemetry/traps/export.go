@@ -40,7 +40,9 @@ const (
 //
 // maxSeries is one short of the SDK's limit: the SDK keeps its last slot for
 // its own overflow point, so a tally offering exactly the limit would have
-// one arbitrary series folded.
+// one arbitrary series folded. Each policy's counter is its own instrument
+// now, so the SDK's limit applies per policy; the tally's cap stays
+// process-wide and is the stricter of the two.
 const (
 	maxSeries       = metrics.CardinalityLimit - 1
 	overflowReserve = 100
@@ -99,8 +101,16 @@ type Tally struct {
 	baselines     map[receivedKey]*list.Element
 	baselineOrder *list.List
 
-	regMu        sync.Mutex
+	regMu sync.Mutex
+	// registration is the process-level counters' callback (drops and
+	// datagrams). policyRegs holds one traps_received registration per
+	// active policy, on that policy's meter, so a policy's trap counts leave
+	// under the same scope as its polled series. active is every policy
+	// Activate has seen and Withdraw has not, so a Register that runs after
+	// an Activate attaches the counters it missed.
 	registration metric.Registration
+	policyRegs   map[string]metric.Registration
+	active       map[string]struct{}
 }
 
 // NewTally returns an empty tally. Register attaches it to the meter.
@@ -114,6 +124,8 @@ func NewTally(logger *slog.Logger) *Tally {
 		dormant:       make(map[receivedKey]struct{}),
 		baselines:     make(map[receivedKey]*list.Element),
 		baselineOrder: list.New(),
+		policyRegs:    make(map[string]metric.Registration),
+		active:        make(map[string]struct{}),
 	}
 }
 
@@ -192,12 +204,14 @@ func (t *Tally) receivedLocked(deviceIP, policy, trapName string, v Version) boo
 	return true
 }
 
-// Activate marks a policy acquired, so its counts are exported again. The
-// pool calls it as a policy's lease is granted.
+// Activate marks a policy acquired, so its counts are exported again, and
+// attaches its counter to the policy's own scope. The pool calls it as a
+// policy's lease is granted.
 func (t *Tally) Activate(policy string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	delete(t.withdrawn, policy)
+	t.mu.Unlock()
+	t.registerPolicy(policy)
 }
 
 // evictDormant removes one dormant series to make room for a live one and
@@ -284,10 +298,10 @@ func (t *Tally) Datagram() {
 // Withdraw makes every received series the policy owns dormant, so a stopped
 // policy stops exporting; the totals are kept so a series that reappears
 // resumes rather than restarts. Drops and datagrams are process-level and
-// are kept.
+// are kept. The policy's counter is given back to the meter, so its scope
+// exports nothing until it is activated again.
 func (t *Tally) Withdraw(policy string) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	for k, sr := range t.received {
 		if k.policy == policy {
 			sr.live = false
@@ -300,24 +314,31 @@ func (t *Tally) Withdraw(policy string) {
 	if t.polSeries[policy] > 0 {
 		t.withdrawn[policy] = struct{}{}
 	}
+	t.mu.Unlock()
+	t.unregisterPolicy(policy)
 }
 
-// Register attaches the observable counters. With no meter, which is the case
-// whenever no OTLP endpoint is configured, it does nothing, and every count
-// still lands in the maps so a later Register would export them.
+// Register attaches the observable counters: the process-level drop and
+// datagram counters on the plain meter, and a traps_received counter on
+// each active policy's meter. With no meter, which is the case whenever no
+// OTLP endpoint is configured, it does nothing, and every count still lands
+// in the maps so a later Register would export them.
 func (t *Tally) Register() {
 	t.regMu.Lock()
 	defer t.regMu.Unlock()
-	if t.registration != nil {
-		return
+	if t.registration == nil {
+		t.registerProcessLocked()
 	}
+	for policy := range t.active {
+		t.registerPolicyLocked(policy)
+	}
+}
+
+// registerProcessLocked attaches the drop and datagram counters. It needs
+// regMu.
+func (t *Tally) registerProcessLocked() {
 	m := metrics.GetMeter()
 	if m == nil {
-		return
-	}
-	received, err := m.Int64ObservableCounter(receivedName, metric.WithDescription("SNMP traps received, by device, policy, trap name and version"))
-	if err != nil {
-		t.logger.Error("Failed to create trap counter", "name", receivedName, "error", err)
 		return
 	}
 	dropped, err := m.Int64ObservableCounter(droppedName, metric.WithDescription("SNMP trap datagrams that produced no count, by reason"))
@@ -333,23 +354,12 @@ func (t *Tally) Register() {
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		t.mu.Lock()
 		defer t.mu.Unlock()
-		for k, sr := range t.received {
-			if !sr.live {
-				continue
-			}
-			o.ObserveInt64(received, sr.n, metric.WithAttributes(
-				attribute.String("device_ip", k.deviceIP),
-				attribute.String("policy", k.policy),
-				attribute.String("trap_name", k.trapName),
-				attribute.String("version", string(k.version)),
-			))
-		}
 		for r, n := range t.dropped {
 			o.ObserveInt64(dropped, n, metric.WithAttributes(attribute.String("reason", string(r))))
 		}
 		o.ObserveInt64(datagrams, t.datagrams)
 		return nil
-	}, received, dropped, datagrams)
+	}, dropped, datagrams)
 	if err != nil {
 		t.logger.Error("Failed to register trap counter callback", "error", err)
 		return
@@ -357,17 +367,105 @@ func (t *Tally) Register() {
 	t.registration = reg
 }
 
-// Close unregisters the callback. Safe to call without Register.
-func (t *Tally) Close() {
+// registerPolicy marks the policy active and attaches its counter when a
+// meter exists. Registering takes the SDK's pipeline lock but runs no
+// callback, so holding regMu across it is safe; the tally's own mu is not
+// held, since the callback takes it.
+func (t *Tally) registerPolicy(policy string) {
 	t.regMu.Lock()
 	defer t.regMu.Unlock()
-	if t.registration == nil {
+	t.active[policy] = struct{}{}
+	t.registerPolicyLocked(policy)
+}
+
+// registerPolicyLocked attaches traps_received on the policy's meter, once
+// per policy. The callback observes only that policy's live series, with
+// the device attributes the polled series carry and no policy attribute:
+// the scope names the policy. It needs regMu.
+func (t *Tally) registerPolicyLocked(policy string) {
+	if _, ok := t.policyRegs[policy]; ok {
 		return
 	}
-	if err := t.registration.Unregister(); err != nil {
-		t.logger.Warn("Failed to unregister trap counter callback", "error", err)
+	m := metrics.PolicyMeter(policy)
+	if m == nil {
+		return
 	}
-	t.registration = nil
+	received, err := m.Int64ObservableCounter(receivedName, metric.WithDescription("SNMP traps received, by device, trap name and version"))
+	if err != nil {
+		t.logger.Error("Failed to create trap counter", "name", receivedName, "error", err)
+		return
+	}
+	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		for k, sr := range t.received {
+			if k.policy != policy || !sr.live {
+				continue
+			}
+			o.ObserveInt64(received, sr.n, metric.WithAttributes(
+				attribute.String("device_ip", k.deviceIP),
+				attribute.String("trap_name", k.trapName),
+				attribute.String("version", string(k.version)),
+			))
+		}
+		return nil
+	}, received)
+	if err != nil {
+		t.logger.Error("Failed to register trap counter callback", "error", err)
+		return
+	}
+	t.policyRegs[policy] = reg
+}
+
+// unregisterPolicy forgets the policy as active and gives its counter back.
+// Unregister waits for a running collection, whose callback takes mu, so it
+// runs with no tally lock held.
+func (t *Tally) unregisterPolicy(policy string) {
+	t.regMu.Lock()
+	delete(t.active, policy)
+	reg := t.policyRegs[policy]
+	delete(t.policyRegs, policy)
+	t.regMu.Unlock()
+	if reg == nil {
+		return
+	}
+	if err := reg.Unregister(); err != nil {
+		t.logger.Warn("Failed to unregister trap counter callback", "policy", policy, "error", err)
+	}
+}
+
+// namedRegistration pairs a registration with the policy it belongs to, so a
+// failure to unregister it can be logged with that name. The process-level
+// registration (drops and datagrams) belongs to no policy and carries "".
+type namedRegistration struct {
+	policy string
+	reg    metric.Registration
+}
+
+// Close unregisters every callback, the process counters and each policy's.
+// Safe to call without Register. The active set is kept: a policy still
+// leased is still active, and only its lease's release withdraws it.
+func (t *Tally) Close() {
+	t.regMu.Lock()
+	regs := make([]namedRegistration, 0, len(t.policyRegs)+1)
+	if t.registration != nil {
+		regs = append(regs, namedRegistration{reg: t.registration})
+		t.registration = nil
+	}
+	for policy, reg := range t.policyRegs {
+		regs = append(regs, namedRegistration{policy: policy, reg: reg})
+		delete(t.policyRegs, policy)
+	}
+	t.regMu.Unlock()
+	for _, nr := range regs {
+		if err := nr.reg.Unregister(); err != nil {
+			if nr.policy == "" {
+				t.logger.Warn("Failed to unregister trap counter callback", "error", err)
+				continue
+			}
+			t.logger.Warn("Failed to unregister trap counter callback", "policy", nr.policy, "error", err)
+		}
+	}
 }
 
 // Test accessors. Exported through _test.go only by convention: they are

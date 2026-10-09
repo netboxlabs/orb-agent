@@ -75,10 +75,12 @@ policies:
       get_interval_ms: 900000      # GET poll interval (default 900000 = 15m)
       options:                     # per-policy behavior toggles (peer to defaults)
         capture_config: false      # capture the CONFIG datastore into Device.config.running (default off)
+        emit_lag_membership: true  # link LAG member ports to their aggregate (default on)
       defaults:
         site: New York NY          # NetBox site (default "undefined")
         role: Router               # NetBox device role (default "undefined")
         location: ""               # NetBox location (optional)
+        rack: ""                   # NetBox rack name (optional); position and face are per target
         tags: []                   # NetBox tags applied to all entities
         asset_tag: ""              # literal, or a "/"-prefixed gNMI path reference (see below)
         device:
@@ -98,7 +100,7 @@ policies:
           comments: ""
           tags: []
         vrf:                       # NetBox defaults applied to discovered VRFs (name/RD come from discovery)
-          tenant: ""
+          tenant: ""               # a name, or a map: {name, group, description, comments, tags}
           description: ""
           comments: ""
           tags: []
@@ -133,6 +135,9 @@ policies:
           netbox_id: 42              # kept for a bare address, ignored for a range
           override_defaults:         # per-target defaults override
             site: Chicago IL
+            rack: R12                # replaces the policy rack
+            position: 40.5           # U, from 1 in steps of 0.5; per target, single host only
+            face: front              # front or rear; required with position
 
         # An explicitly empty credential blocks the scope's; an omitted one
         # inherits it. Use this for a device that takes no auth inside a

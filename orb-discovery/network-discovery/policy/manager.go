@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
 )
@@ -42,6 +44,11 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 
 	if len(payload.Policies) == 0 {
 		return nil, errors.New("no policies found in the request")
+	}
+	for _, name := range slices.Sorted(maps.Keys(payload.Policies)) {
+		if err := payload.Policies[name].Config.Defaults.Validate(); err != nil {
+			return nil, fmt.Errorf("%s : %w", name, err)
+		}
 	}
 
 	return payload.Policies, nil

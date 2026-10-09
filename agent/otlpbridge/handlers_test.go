@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -15,6 +16,10 @@ import (
 	metricsv1 "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 type fakePublisher struct {
@@ -179,4 +184,108 @@ func TestBridge_Enqueue_QueuesDrainsOnReady(t *testing.T) {
 		return fp.getTopic() == "telemetry"
 	}, time.Second, time.Millisecond)
 	require.Equal(t, "hello", string(fp.getPayload()))
+}
+
+// newBridgeWithRepo is newBridgeWithTopics with a policy repository, the way
+// fleet mode builds the bridge.
+func newBridgeWithRepo(t *testing.T, encoding string, repo policies.PolicyRepo) (*BridgeServer, *fakePublisher) {
+	t.Helper()
+	fp := &fakePublisher{}
+	bridge, err := NewBridgeServer(BridgeConfig{Encoding: encoding}, repo, slog.Default())
+	require.NoError(t, err)
+	bridge.initialBackoff = 5 * time.Millisecond
+	bridge.SetPublisher(fp)
+	bridge.SetIngestTopic("ingest")
+	bridge.SetTelemetryTopic("telemetry")
+	return bridge, fp
+}
+
+func policyScopedRequest(policyName string) *collectormetrics.ExportMetricsServiceRequest {
+	return &collectormetrics.ExportMetricsServiceRequest{ResourceMetrics: []*metricsv1.ResourceMetrics{{
+		ScopeMetrics: []*metricsv1.ScopeMetrics{{
+			Scope: &commonv1.InstrumentationScope{Name: "pktvisor/" + policyName, Attributes: []*commonv1.KeyValue{
+				{Key: "policy_name", Value: &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: policyName}}},
+			}},
+			Metrics: []*metricsv1.Metric{{Name: "packets_total"}},
+		}},
+	}}}
+}
+
+func publishedMetrics(t *testing.T, fp *fakePublisher) *collectormetrics.ExportMetricsServiceRequest {
+	t.Helper()
+	var out collectormetrics.ExportMetricsServiceRequest
+	require.NoError(t, proto.Unmarshal(fp.getPayload(), &out))
+	return &out
+}
+
+// The published payload carries the stamps: what leaves the agent is what
+// the platform validates, so the test reads the bytes the publisher got.
+func TestMetricsHandler_Export_StampsPolicyIDOnScope(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-edge", Name: "edge", Backend: "pktvisor"}))
+	bridge, fp := newBridgeWithRepo(t, "protobuf", repo)
+	defer func() { _ = bridge.Stop(context.Background()) }()
+	s := &metricsServer{bridge: bridge}
+
+	_, err = s.Export(context.Background(), policyScopedRequest("edge"))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return fp.getTopic() == "telemetry" }, time.Second, time.Millisecond)
+
+	got := publishedMetrics(t, fp).ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes
+	assert.Equal(t, map[string]string{"policy_name": "edge", "orb.policy_id": "id-edge", "orb.backend": "pktvisor"}, attrMap(got))
+}
+
+// A bridge with no policy repository (outside fleet mode) forwards metrics
+// exactly as they arrived.
+func TestMetricsHandler_Export_WithoutRepo_PassesThrough(t *testing.T) {
+	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
+	defer func() { _ = bridge.Stop(context.Background()) }()
+	s := &metricsServer{bridge: bridge}
+	req := policyScopedRequest("edge")
+	want, err := proto.Marshal(req)
+	require.NoError(t, err)
+
+	_, err = s.Export(context.Background(), req)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return fp.getTopic() == "telemetry" }, time.Second, time.Millisecond)
+	assert.Equal(t, want, fp.getPayload())
+}
+
+// Stamping does not change where the request goes: Diode-marked metrics
+// still reach the ingest topic, stamped.
+func TestMetricsHandler_Export_DiodeMarkedScopedMetrics_StillIngest(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-core", Name: "core", Backend: "pktvisor"}))
+	bridge, fp := newBridgeWithRepo(t, "protobuf", repo)
+	defer func() { _ = bridge.Stop(context.Background()) }()
+	s := &metricsServer{bridge: bridge}
+	req := policyScopedRequest("core")
+	req.ResourceMetrics[0].Resource = diodeResource()
+
+	_, err = s.Export(context.Background(), req)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return fp.getTopic() == "ingest" }, time.Second, time.Millisecond)
+	assert.Equal(t, "id-core", attrMap(publishedMetrics(t, fp).ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes)["orb.policy_id"])
+}
+
+// Fleet mode uses JSON encoding (see agent/configmgr/fleet.go ~174), so
+// verify stamping works with JSON-marshalled payloads.
+func TestMetricsHandler_Export_StampsPolicyIDOnScope_JSON(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "id-edge", Name: "edge", Backend: "pktvisor"}))
+	bridge, fp := newBridgeWithRepo(t, "json", repo)
+	defer func() { _ = bridge.Stop(context.Background()) }()
+	s := &metricsServer{bridge: bridge}
+
+	_, err = s.Export(context.Background(), policyScopedRequest("edge"))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return fp.getTopic() == "telemetry" }, time.Second, time.Millisecond)
+
+	var out collectormetrics.ExportMetricsServiceRequest
+	require.NoError(t, protojson.Unmarshal(fp.getPayload(), &out))
+	got := out.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes
+	assert.Equal(t, map[string]string{"policy_name": "edge", "orb.policy_id": "id-edge", "orb.backend": "pktvisor"}, attrMap(got))
 }
