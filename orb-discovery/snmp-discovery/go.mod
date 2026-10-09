@@ -1,6 +1,6 @@
 module github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/gin-gonic/gin v1.12.0
