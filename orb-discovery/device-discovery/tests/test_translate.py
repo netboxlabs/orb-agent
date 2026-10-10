@@ -2610,3 +2610,67 @@ def test_junos_switching_unit_lands_on_the_physical_port():
     assert port.untagged_vlan.vid == 888
     assert unit.mode == "", "the subinterface must not carry the switchport config"
     assert not unit.HasField("untagged_vlan")
+
+
+def test_emit_prefixes_and_ip_addresses_default_on():
+    """Unset, both keep sending what device-discovery has always sent."""
+    assert Options().emit_prefixes is True
+    assert Options().emit_ip_addresses is True
+
+
+@pytest.mark.parametrize(
+    ("options", "want_prefixes", "want_addresses"),
+    [
+        (None, ["192.0.2.0/24", "2001:db8::/64"], ["192.0.2.1/24", "2001:db8::1/64"]),
+        (Options(), ["192.0.2.0/24", "2001:db8::/64"], ["192.0.2.1/24", "2001:db8::1/64"]),
+        (Options(emit_prefixes=False), [], ["192.0.2.1/24", "2001:db8::1/64"]),
+        (Options(emit_ip_addresses=False), ["192.0.2.0/24", "2001:db8::/64"], []),
+        (Options(emit_prefixes=False, emit_ip_addresses=False), [], []),
+    ],
+    ids=["no options", "defaults", "no prefixes", "no addresses", "neither"],
+)
+def test_emit_prefixes_and_ip_addresses_drop_only_their_own_entities(
+    sample_device_info, sample_interface_info, sample_defaults,
+    options, want_prefixes, want_addresses,
+):
+    """Each option drops its own entity kind and leaves the other as it was."""
+    interfaces_ip = {
+        "GigabitEthernet0/0/1": {
+            "ipv4": {"192.0.2.1": {"prefix_length": 24}},
+            "ipv6": {"2001:db8::1": {"prefix_length": 64}},
+        }
+    }
+    prefixes, addresses = _emit_ips_for(
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=options,
+    )
+    assert sorted(prefixes) == want_prefixes
+    assert sorted(addresses) == want_addresses
+
+
+def test_emit_ip_addresses_off_end_to_end(
+    sample_device_info, sample_interface_info, sample_interfaces_ip
+):
+    """
+    Both off: no IPAddress, no Prefix and no primary IP, but every interface.
+
+    That includes an interface only the IP data names.
+    """
+    interfaces_ip = dict(sample_interfaces_ip)
+    interfaces_ip["Loopback0"] = {"ipv4": {"198.51.100.1": {"prefix_length": 32}}}
+    data = {
+        "device": sample_device_info,
+        "interface": sample_interface_info,
+        "interface_ip": interfaces_ip,
+        "driver": "ios",
+        "target_hostname": "192.0.2.1",
+        "options": Options(emit_ip_addresses=False, emit_prefixes=False),
+    }
+    entities = list(translate_data(data))
+    kinds = {e.WhichOneof("entity") for e in entities}
+    assert "ip_address" not in kinds
+    assert "prefix" not in kinds
+    device = next(e.device for e in entities if e.WhichOneof("entity") == "device")
+    assert not device.HasField("primary_ip4")
+    names = {e.interface.name for e in entities if e.WhichOneof("entity") == "interface"}
+    assert {"GigabitEthernet0/0/1", "Loopback0"} <= names
