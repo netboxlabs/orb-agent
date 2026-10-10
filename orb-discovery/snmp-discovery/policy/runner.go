@@ -509,13 +509,21 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	)
 	annotateEntitiesWithRunID(entities, run.ID)
 	r.warnUnscopedVLANs(entities, policyName, target.Host)
-	r.logEntitiesForIngestion(entities)
 
 	// Strip nested Device/Interface refs to matcher-only stubs to shrink
 	// the wire payload. Runs after annotation so the annotators can walk
 	// the rich shared graph with their unsafe.Pointer dedup intact —
 	// otherwise every stub would need its own metadata pass.
-	mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
+	if r.config.Options.IPAddressEmissionEnabled() {
+		r.logEntitiesForIngestion(entities)
+		mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
+	} else {
+		// emit_ip_addresses: false. Prefixes, VRFs and stack routing have
+		// already used the addresses; each now gives way to the interface
+		// stub it carried.
+		entities = mapping.OmitIPAddresses(entities, currentDevice)
+		r.logEntitiesForIngestion(entities)
+	}
 
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
@@ -841,14 +849,6 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		entitiesForTarget = append(entitiesForTarget, prefixEntities...)
 	}
 
-	// Last, so prefixes, VRFs and stack routing have already used the
-	// addresses (default on, opt-out via emit_ip_addresses: false).
-	primaryHits := mapper.PrimaryIPHits()
-	if !r.config.Options.IPAddressEmissionEnabled() {
-		entitiesForTarget = mapping.OmitIPAddresses(entitiesForTarget)
-		primaryHits = nil
-	}
-
 	entities = append(entities, entitiesForTarget...)
 
 	// Update discovered hosts gauge
@@ -861,7 +861,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// Capture the per-target cycle-closer primary IP hits and return them
 	// by value so the caller can thread them into PruneNestedRefs without
 	// any shared Runner state (concurrency-safe).
-	return entities, primaryHits, nil
+	return entities, mapper.PrimaryIPHits(), nil
 }
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {

@@ -737,7 +737,7 @@ type Options struct {
 
 	// Tri-state pointer; unset defaults to TRUE. Set false to send no
 	// IPAddress entities, e.g. when addressing is planned in NetBox. The
-	// device then gets no primary IP; prefixes are still derived from the
+	// run then sets no primary IP; prefixes are still derived from the
 	// walked addresses unless emit_prefixes is false.
 	EmitIPAddresses *bool `yaml:"emit_ip_addresses,omitempty"`
 
