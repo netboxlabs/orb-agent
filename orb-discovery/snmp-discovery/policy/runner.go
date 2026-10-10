@@ -841,6 +841,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		entitiesForTarget = append(entitiesForTarget, prefixEntities...)
 	}
 
+	// Last, so prefixes, VRFs and stack routing have already used the
+	// addresses (default on, opt-out via emit_ip_addresses: false).
+	primaryHits := mapper.PrimaryIPHits()
+	if !r.config.Options.IPAddressEmissionEnabled() {
+		entitiesForTarget = mapping.OmitIPAddresses(entitiesForTarget)
+		primaryHits = nil
+	}
+
 	entities = append(entities, entitiesForTarget...)
 
 	// Update discovered hosts gauge
@@ -853,7 +861,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// Capture the per-target cycle-closer primary IP hits and return them
 	// by value so the caller can thread them into PruneNestedRefs without
 	// any shared Runner state (concurrency-safe).
-	return entities, mapper.PrimaryIPHits(), nil
+	return entities, primaryHits, nil
 }
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {

@@ -735,6 +735,12 @@ type Options struct {
 	// matching device-discovery's behavior. Set false to opt out.
 	EmitPrefixes *bool `yaml:"emit_prefixes,omitempty"`
 
+	// Tri-state pointer; unset defaults to TRUE. Set false to send no
+	// IPAddress entities, e.g. when addressing is planned in NetBox. The
+	// device then gets no primary IP; prefixes are still derived from the
+	// walked addresses unless emit_prefixes is false.
+	EmitIPAddresses *bool `yaml:"emit_ip_addresses,omitempty"`
+
 	// Tri-state pointer; unset defaults to FALSE — no Prefix is derived
 	// from an IPv4 /32 or IPv6 /128 address, because a host prefix only
 	// restates the address that is already emitted as an IPAddress. Set
@@ -788,6 +794,12 @@ type Options struct {
 // defaulting to TRUE.
 func (o *Options) PrefixEmissionEnabled() bool {
 	return o == nil || o.EmitPrefixes == nil || *o.EmitPrefixes
+}
+
+// IPAddressEmissionEnabled returns the effective emit_ip_addresses toggle,
+// defaulting to TRUE.
+func (o *Options) IPAddressEmissionEnabled() bool {
+	return o == nil || o.EmitIPAddresses == nil || *o.EmitIPAddresses
 }
 
 // HostPrefixEmissionEnabled returns the effective emit_host_prefixes

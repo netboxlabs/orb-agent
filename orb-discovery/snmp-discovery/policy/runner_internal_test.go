@@ -1699,3 +1699,69 @@ func TestRunWithMetadata_ModuleLookupNamesModuleType(t *testing.T) {
 	}
 	assert.Equal(t, []string{"Operator Module"}, models)
 }
+
+// With emit_ip_addresses off the run sends no IPAddress and no primary IP, yet
+// the interface the address sat on is still sent and its prefix still derived.
+func TestQueryTargetOmitsIPAddresses(t *testing.T) {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {Value: "Gi0", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.4.20.1.1": {
+				"1.3.6.1.2.1.4.20.1.1.10.0.0.1": {Value: "10.0.0.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
+			},
+			"1.3.6.1.2.1.4.20.1.2": {
+				"1.3.6.1.2.1.4.20.1.2.10.0.0.1": {Value: 1, Type: gosnmp.Integer, IdentifierSize: 4},
+			},
+			"1.3.6.1.2.1.4.20.1.3": {
+				"1.3.6.1.2.1.4.20.1.3.10.0.0.1": {Value: "255.255.255.0", Type: gosnmp.IPAddress, IdentifierSize: 4},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := []config.MappingEntry{
+		{
+			OID: "1.3.6.1.2.1.2.2.1", Entity: "interface", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"}},
+		},
+		{
+			OID: "1.3.6.1.2.1.4.20.1", Entity: "ipAddress", Field: "_id", IdentifierSize: 4,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+				{OID: "1.3.6.1.2.1.4.20.1.3", Entity: "ipAddress", Field: "addressPrefixSize"},
+				{
+					OID: "1.3.6.1.2.1.4.20.1.2", Entity: "ipAddress", Field: "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+			},
+		},
+	}
+
+	off := false
+	runner := queryTargetRunner(factory, entries)
+	runner.config.Options.EmitIPAddresses = &off
+	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	require.NoError(t, err)
+	assert.Empty(t, primaryHits)
+
+	var ifaces []*diode.Interface
+	var prefixes []string
+	for _, e := range entities {
+		switch v := e.(type) {
+		case *diode.IPAddress:
+			t.Fatalf("IPAddress %s sent with emit_ip_addresses off", v.GetAddress())
+		case *diode.Interface:
+			ifaces = append(ifaces, v)
+		case *diode.Prefix:
+			prefixes = append(prefixes, v.GetPrefix())
+		}
+	}
+	require.Len(t, ifaces, 1)
+	assert.Equal(t, "Gi0", ifaces[0].GetName())
+	require.NotNil(t, ifaces[0].Device)
+	assert.Nil(t, ifaces[0].Device.PrimaryIp4)
+	assert.Equal(t, []string{"10.0.0.0/24"}, prefixes)
+}
