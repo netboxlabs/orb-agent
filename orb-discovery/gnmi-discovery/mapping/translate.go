@@ -265,8 +265,8 @@ func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *confi
 	if opts.PrefixEmissionEnabled() {
 		entities = append(entities, translatePrefixes(entities, dev, defaults)...)
 	}
-	// Last, so prefixes and VRFs have used the addresses. The runner picks the
-	// primary IP from these entities, so none is set either.
+	// Last, so prefixes inherit the VRF the post-pass set on each address. The
+	// runner picks the primary IP from these entities, so none is set either.
 	if !opts.IPAddressEmissionEnabled() {
 		entities = withoutIPAddresses(entities)
 	}

@@ -76,6 +76,8 @@ policies:
       options:                     # per-policy behavior toggles (peer to defaults)
         capture_config: false      # capture the CONFIG datastore into Device.config.running (default off)
         emit_lag_membership: true  # link LAG member ports to their aggregate (default on)
+        emit_prefixes: true        # derive a prefix from each IP address (default on)
+        emit_ip_addresses: true    # send the discovered IP addresses (default on)
       defaults:
         site: New York NY          # NetBox site (default "undefined")
         role: Router               # NetBox device role (default "undefined")
