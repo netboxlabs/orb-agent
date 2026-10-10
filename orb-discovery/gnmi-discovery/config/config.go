@@ -434,6 +434,15 @@ type Options struct {
 	// EmitLagMembership sets each member port's Interface.lag from OpenConfig
 	// ethernet/state/aggregate-id. nil → on (default), as in snmp-discovery.
 	EmitLagMembership *bool `yaml:"emit_lag_membership,omitempty"`
+
+	// EmitPrefixes derives a Prefix from each discovered IP address. nil → on
+	// (default), as in snmp-discovery.
+	EmitPrefixes *bool `yaml:"emit_prefixes,omitempty"`
+
+	// EmitIPAddresses sends the discovered IP addresses. nil → on (default).
+	// Off, the run sets no primary IP; prefixes are still derived unless
+	// EmitPrefixes is off.
+	EmitIPAddresses *bool `yaml:"emit_ip_addresses,omitempty"`
 }
 
 // ConfigCaptureEnabled reports the effective capture_config toggle (default off).
@@ -445,6 +454,18 @@ func (o *Options) ConfigCaptureEnabled() bool {
 // (default on).
 func (o *Options) LagMembershipEnabled() bool {
 	return o == nil || o.EmitLagMembership == nil || *o.EmitLagMembership
+}
+
+// PrefixEmissionEnabled reports the effective emit_prefixes toggle (default
+// on).
+func (o *Options) PrefixEmissionEnabled() bool {
+	return o == nil || o.EmitPrefixes == nil || *o.EmitPrefixes
+}
+
+// IPAddressEmissionEnabled reports the effective emit_ip_addresses toggle
+// (default on).
+func (o *Options) IPAddressEmissionEnabled() bool {
+	return o == nil || o.EmitIPAddresses == nil || *o.EmitIPAddresses
 }
 
 // PolicyConfig holds policy-wide config (spec §7).

@@ -81,3 +81,23 @@ func TestMergeDefaults_NewFieldsOverride(t *testing.T) {
 	m.IPAddress.Tags[0] = "mutated"
 	assert.Equal(t, []string{"b"}, over.IPAddress.Tags, "merge must clone override slices")
 }
+
+func TestOptions_EmitPrefixesAndIPAddresses(t *testing.T) {
+	parse := func(y string) Options {
+		var pc PolicyConfig
+		require.NoError(t, yaml.Unmarshal([]byte(y), &pc))
+		return pc.Options
+	}
+	unset := parse("defaults: {}")
+	assert.True(t, unset.PrefixEmissionEnabled())
+	assert.True(t, unset.IPAddressEmissionEnabled())
+	o := parse("options:\n  emit_prefixes: false\n  emit_ip_addresses: false\n")
+	assert.False(t, o.PrefixEmissionEnabled())
+	assert.False(t, o.IPAddressEmissionEnabled())
+	o = parse("options:\n  emit_prefixes: true\n  emit_ip_addresses: true\n")
+	assert.True(t, o.PrefixEmissionEnabled())
+	assert.True(t, o.IPAddressEmissionEnabled())
+	var np *Options
+	assert.True(t, np.PrefixEmissionEnabled())
+	assert.True(t, np.IPAddressEmissionEnabled())
+}

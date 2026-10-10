@@ -230,3 +230,63 @@ func TestRunnerHonoursEmitLagMembership(t *testing.T) {
 		})
 	}
 }
+
+// The runner hands the policy options to translation, and with emit_ip_addresses
+// and emit_prefixes off the ingest carries neither, nor a primary IP.
+func TestRunnerHonoursEmitIPAddressesAndPrefixes(t *testing.T) {
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+
+	for name, opts := range map[string]config.Options{
+		"default": {},
+		"off":     {EmitIPAddresses: boolPtr(false), EmitPrefixes: boolPtr(false)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := &gnmi.FakeSession{
+				Caps:            &gnmi.CapabilitiesResult{Vendor: "Arista"},
+				OnChangeSupport: true,
+				OnChangeStream: []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/system/state/hostname", Value: "r1"},
+						{Path: "/interfaces/interface[name=Ethernet1]/state/type", Value: "iana-if-type:ethernetCsmacd"},
+						{Path: "/interfaces/interface[name=Ethernet1]/subinterfaces/subinterface[index=0]/ipv4/addresses/address[ip=10.0.0.1]/state/prefix-length", Value: 24},
+					}},
+					{SyncDone: true},
+				},
+			}
+			client := &recordingClient{}
+			pol := config.Policy{
+				Config: config.PolicyConfig{Mode: config.ModeOnChange, DebounceMs: 30, Options: opts},
+				Scope:  config.Scope{Targets: []config.Target{{Host: "10.0.0.1:6030"}}},
+			}
+			r, err := NewRunner(context.Background(), slog.Default(), "p1", pol, client, &gnmi.FakeDialer{Session: fake}, store)
+			require.NoError(t, err)
+			r.Start()
+			defer func() { require.NoError(t, r.Stop()) }()
+			require.Eventually(t, func() bool { return client.count() >= 1 }, 2*time.Second, 20*time.Millisecond)
+
+			var addrs, prefixes int
+			var device *diode.Device
+			for _, e := range client.lastIngested() {
+				switch v := e.(type) {
+				case *diode.IPAddress:
+					addrs++
+				case *diode.Prefix:
+					prefixes++
+				case *diode.Device:
+					device = v
+				}
+			}
+			require.NotNil(t, device)
+			if name == "off" {
+				require.Zero(t, addrs)
+				require.Zero(t, prefixes)
+				require.Nil(t, device.PrimaryIp4)
+			} else {
+				require.Equal(t, 1, addrs)
+				require.Equal(t, 1, prefixes)
+				require.NotNil(t, device.PrimaryIp4)
+			}
+		})
+	}
+}
