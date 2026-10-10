@@ -440,7 +440,7 @@ type Options struct {
 	EmitPrefixes *bool `yaml:"emit_prefixes,omitempty"`
 
 	// EmitIPAddresses sends the discovered IP addresses. nil → on (default).
-	// Off, the device gets no primary IP; prefixes are still derived unless
+	// Off, the run sets no primary IP; prefixes are still derived unless
 	// EmitPrefixes is off.
 	EmitIPAddresses *bool `yaml:"emit_ip_addresses,omitempty"`
 }
