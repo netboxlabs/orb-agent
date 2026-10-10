@@ -262,8 +262,28 @@ func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *confi
 	// Prefixes: derive the connected network of each discovered IP (VRF inherited
 	// from the IP, scoped to the device site). Must run after the VRF post-pass so
 	// IPAddress.Vrf is set.
-	entities = append(entities, translatePrefixes(entities, dev, defaults)...)
+	if opts.PrefixEmissionEnabled() {
+		entities = append(entities, translatePrefixes(entities, dev, defaults)...)
+	}
+	// Last, so prefixes and VRFs have used the addresses. The runner picks the
+	// primary IP from these entities, so none is set either.
+	if !opts.IPAddressEmissionEnabled() {
+		entities = withoutIPAddresses(entities)
+	}
 	return entities
+}
+
+// withoutIPAddresses drops the IPAddress entities. The interfaces they name
+// are sent on their own: translateInterfaces emits every interface and
+// translateIPs every subinterface before its first address.
+func withoutIPAddresses(entities []diode.Entity) []diode.Entity {
+	out := make([]diode.Entity, 0, len(entities))
+	for _, e := range entities {
+		if _, ok := e.(*diode.IPAddress); !ok {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // translateDevice builds the Device entity and returns the resolved device
