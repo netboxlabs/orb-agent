@@ -33,10 +33,12 @@ def _device_info(vendor: str, model: str) -> dict:
     }
 
 
-def _runner(emit_prefix_vlan: str = "svi-name") -> PolicyRunner:
+def _runner(emit_prefix_vlan: str = "svi-name", **options) -> PolicyRunner:
     runner = PolicyRunner()
     runner.name = "test-policy"
-    runner.config = Config(defaults=Defaults(), options=Options(emit_prefix_vlan=emit_prefix_vlan))
+    runner.config = Config(
+        defaults=Defaults(), options=Options(emit_prefix_vlan=emit_prefix_vlan, **options)
+    )
     return runner
 
 
@@ -58,6 +60,17 @@ def test_collect_interfaces_vlan_id_stores_the_driver_result():
 def test_collect_interfaces_vlan_id_skips_the_driver_when_prefix_vlans_are_off():
     """With emit_prefix_vlan off nothing consumes the map, so no device call is made."""
     runner = _runner(emit_prefix_vlan="off")
+    dev = MagicMock(spec=["get_interfaces_vlan_id"])
+    dev.get_interfaces_vlan_id = MagicMock(return_value={"sfpplus1.156": 156})
+    data: dict = {}
+    runner._collect_interfaces_vlan_id(runner.config, dev, data, "r1")
+    dev.get_interfaces_vlan_id.assert_not_called()
+    assert "interfaces_vlan_id" not in data
+
+
+def test_collect_interfaces_vlan_id_skips_the_driver_when_prefixes_are_off():
+    """With emit_prefixes off no prefix carries a VLAN, so no device call is made."""
+    runner = _runner(emit_prefixes=False)
     dev = MagicMock(spec=["get_interfaces_vlan_id"])
     dev.get_interfaces_vlan_id = MagicMock(return_value={"sfpplus1.156": 156})
     data: dict = {}

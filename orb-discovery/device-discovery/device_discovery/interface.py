@@ -411,7 +411,8 @@ def _undesirable_prefix_reason(
     keep the existing behavior.
 
     Suppression applies only to the derived Prefix. The IPAddress entity is
-    always still emitted, so the interface and its address stay documented.
+    still emitted, unless emit_ip_addresses is False, so the interface and its
+    address stay documented.
     """
     # Link-local is judged on the ADDRESS, not the derived network. A mask
     # shorter than /10 widens the network out of fe80::/10 — fe80::1/9
@@ -638,6 +639,8 @@ def translate_interface_ips(
     emit_host_prefixes = bool(options and options.emit_host_prefixes)
     emit_prefixes = options is None or options.emit_prefixes
     emit_ip_addresses = options is None or options.emit_ip_addresses
+    if not emit_prefixes and not emit_ip_addresses:
+        return []
 
     # Device state beats policy defaults: a VRF discovered for this
     # interface overrides every configured vrf default for its IPs and
