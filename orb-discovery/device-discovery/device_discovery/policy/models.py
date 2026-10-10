@@ -811,9 +811,10 @@ class Options(WarnUnknownKeys):
         description=(
             "Send the discovered IP addresses as IPAddress entities. Set False "
             "to send none, e.g. when addressing is planned in NetBox. The "
-            "device then gets no primary IP, so Diode matches it by its other "
-            "identifiers, such as name and site. Prefixes are still derived "
-            "unless emit_prefixes is False."
+            "run then sets no primary IP and leaves one already in NetBox as "
+            "it is; Diode matches the device by its other identifiers, such "
+            "as name and site. Prefixes are still derived unless "
+            "emit_prefixes is False."
         ),
     )
 
