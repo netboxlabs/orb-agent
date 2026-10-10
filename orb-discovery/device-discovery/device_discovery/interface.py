@@ -494,6 +494,55 @@ def _resolve_prefix_vlan_candidate(
     return vlan
 
 
+def _address_entities(
+    interface: Interface,
+    ip_address: str,
+    prefix_fields: dict | None,
+    ip_fields: dict | None,
+    emit_host_prefixes: bool,
+) -> list[Entity]:
+    """
+    Build the Prefix and the IPAddress for one discovered address.
+
+    ``None`` fields send nothing of that kind, which is how emit_prefixes and
+    emit_ip_addresses turn them off.
+    """
+    entities: list[Entity] = []
+    # ip_interface keeps the host bits, so .ip is the address the device
+    # reported and .network is the same value ip_network(..., strict=False)
+    # produced. Parsing once means the two can never disagree.
+    interface_address = ipaddress.ip_interface(ip_address)
+    network = interface_address.network
+    if prefix_fields is not None:
+        skip_reason = _undesirable_prefix_reason(
+            network, interface_address.ip, emit_host_prefixes
+        )
+        if skip_reason:
+            logger.debug(
+                "%s: not deriving a prefix from %s (%s)",
+                interface.name,
+                ip_address,
+                skip_reason,
+            )
+        else:
+            entities.append(Entity(prefix=Prefix(prefix=str(network), **prefix_fields)))
+    if ip_fields is not None:
+        entities.append(
+            Entity(
+                ip_address=IPAddress(
+                    address=ip_address,
+                    assigned_object_interface=Interface(
+                        device=interface.device,
+                        name=interface.name,
+                        type=interface.type,
+                    ),
+                    **ip_fields,
+                )
+            )
+        )
+    return entities
+
+
 def translate_interface_ips(
     interface: Interface,
     interfaces_ip: dict,
@@ -587,6 +636,8 @@ def translate_interface_ips(
     scope_kwargs = _resolve_prefix_scope_kwargs(defaults, options)
     # Opt-in: host prefixes are not derived unless the operator asks for them.
     emit_host_prefixes = bool(options and options.emit_host_prefixes)
+    emit_prefixes = options is None or options.emit_prefixes
+    emit_ip_addresses = options is None or options.emit_ip_addresses
 
     # Device state beats policy defaults: a VRF discovered for this
     # interface overrides every configured vrf default for its IPs and
@@ -618,56 +669,40 @@ def translate_interface_ips(
                 af_prefix_vrf = discovered_vrf or (
                     prefix_vrf_ipv4 if ip_version == "ipv4" else prefix_vrf_ipv6
                 ) or prefix_vrf
+                prefix_fields = (
+                    {
+                        "vrf": af_prefix_vrf,
+                        "role": prefix_role,
+                        "tenant": prefix_tenant,
+                        "tags": prefix_tags,
+                        "comments": prefix_comments,
+                        "description": prefix_description,
+                        "vlan": prefix_vlan_candidate,
+                        **scope_kwargs,
+                    }
+                    if emit_prefixes
+                    else None
+                )
+                ip_fields = (
+                    {
+                        "role": ip_role,
+                        "tenant": ip_tenant,
+                        "vrf": af_ip_vrf,
+                        "tags": ip_tags,
+                        "comments": ip_comments,
+                        "description": ip_description,
+                    }
+                    if emit_ip_addresses
+                    else None
+                )
                 for ip, details in ip_info.get(ip_version, {}).items():
-                    ip_address = f"{ip}/{details.get('prefix_length', default_prefix)}"
-                    # ip_interface keeps the host bits, so .ip is the address
-                    # the device reported and .network is the same value
-                    # ip_network(..., strict=False) produced. Parsing once
-                    # means the two can never disagree.
-                    interface_address = ipaddress.ip_interface(ip_address)
-                    network = interface_address.network
-                    skip_reason = _undesirable_prefix_reason(
-                        network, interface_address.ip, emit_host_prefixes
-                    )
-                    if skip_reason:
-                        logger.debug(
-                            "%s: not deriving a prefix from %s (%s)",
-                            interface.name,
-                            ip_address,
-                            skip_reason,
-                        )
-                    else:
-                        ip_entities.append(
-                            Entity(
-                                prefix=Prefix(
-                                    prefix=str(network),
-                                    vrf=af_prefix_vrf,
-                                    role=prefix_role,
-                                    tenant=prefix_tenant,
-                                    tags=prefix_tags,
-                                    comments=prefix_comments,
-                                    description=prefix_description,
-                                    vlan=prefix_vlan_candidate,
-                                    **scope_kwargs,
-                                )
-                            )
-                        )
-                    ip_entities.append(
-                        Entity(
-                            ip_address=IPAddress(
-                                address=ip_address,
-                                assigned_object_interface=Interface(
-                                    device=interface.device,
-                                    name=interface.name,
-                                    type=interface.type,
-                                ),
-                                role=ip_role,
-                                tenant=ip_tenant,
-                                vrf=af_ip_vrf,
-                                tags=ip_tags,
-                                comments=ip_comments,
-                                description=ip_description,
-                            )
+                    ip_entities.extend(
+                        _address_entities(
+                            interface,
+                            f"{ip}/{details.get('prefix_length', default_prefix)}",
+                            prefix_fields,
+                            ip_fields,
+                            emit_host_prefixes,
                         )
                     )
 
