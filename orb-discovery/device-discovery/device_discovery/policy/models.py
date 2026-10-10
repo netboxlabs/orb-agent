@@ -799,6 +799,24 @@ class Options(WarnUnknownKeys):
             "this option."
         ),
     )
+    emit_prefixes: bool = Field(
+        default=True,
+        description=(
+            "Derive a Prefix from the discovered IP addresses. Set False to "
+            "send no Prefix entities, e.g. when prefixes are planned in NetBox."
+        ),
+    )
+    emit_ip_addresses: bool = Field(
+        default=True,
+        description=(
+            "Send the discovered IP addresses as IPAddress entities. Set False "
+            "to send none, e.g. when addressing is planned in NetBox. The "
+            "run then sets no primary IP and leaves one already in NetBox as "
+            "it is; Diode matches the device by its other identifiers, such "
+            "as name and site. Prefixes are still derived unless "
+            "emit_prefixes is False."
+        ),
+    )
 
 
 class Config(WarnUnknownKeys):

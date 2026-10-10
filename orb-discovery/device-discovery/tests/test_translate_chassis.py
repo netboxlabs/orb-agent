@@ -12,6 +12,7 @@ produce, in order:
   4. interface entities, each routed to the correct member by parse_member_id
 """
 
+import pytest
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import VLAN
 
@@ -789,3 +790,14 @@ def test_prefix_vlan_option_off_is_inert_on_a_stack():
     got = _prefixes_named(per_member, "10.0.0.0/24")
     assert len(got) == 2
     assert not any(p.HasField("vlan") for p in got)
+
+
+@pytest.mark.parametrize("emit", [True, False])
+def test_stack_follows_emit_prefixes_and_ip_addresses(emit):
+    """A stack is translated through the same IP path and honours both options."""
+    data = _base_data(_two_member_payload())
+    data["interface_ip"] = {"Vlan10": {"ipv4": {"192.0.2.10": {"prefix_length": 24}}}}
+    data["options"] = Options(emit_ip_addresses=emit, emit_prefixes=emit)
+    kinds = [e.WhichOneof("entity") for e in translate_data(data)]
+    assert ("ip_address" in kinds) is emit
+    assert ("prefix" in kinds) is emit
