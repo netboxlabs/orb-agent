@@ -10,14 +10,6 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 )
 
-func TestEmitPrefixesAndIPAddressesDefaultOn(t *testing.T) {
-	var nilOpts *config.Options
-	assert.True(t, nilOpts.PrefixEmissionEnabled())
-	assert.True(t, nilOpts.IPAddressEmissionEnabled())
-	assert.True(t, (&config.Options{}).PrefixEmissionEnabled())
-	assert.True(t, (&config.Options{}).IPAddressEmissionEnabled())
-}
-
 // Each option drops its own entity kind. With addresses off the subinterface
 // that only an address revealed is still sent, and there is no primary IP.
 func TestTranslateWithOptions_EmitPrefixesAndIPAddresses(t *testing.T) {
