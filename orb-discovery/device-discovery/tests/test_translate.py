@@ -2648,7 +2648,7 @@ def test_emit_prefixes_and_ip_addresses_drop_only_their_own_entities(
     assert sorted(addresses) == want_addresses
 
 
-def test_emit_ip_addresses_off_end_to_end(
+def test_emit_prefixes_and_ip_addresses_off_end_to_end(
     sample_device_info, sample_interface_info, sample_interfaces_ip
 ):
     """
@@ -2674,3 +2674,16 @@ def test_emit_ip_addresses_off_end_to_end(
     assert not device.HasField("primary_ip4")
     names = {e.interface.name for e in entities if e.WhichOneof("entity") == "interface"}
     assert {"GigabitEthernet0/0/1", "Loopback0"} <= names
+
+
+def test_emit_prefixes_and_ip_addresses_off_skip_unreadable_addresses(
+    sample_device_info, sample_interface_info, sample_defaults
+):
+    """With both off the addresses are not read, so one that will not parse costs nothing."""
+    interfaces_ip = {"GigabitEthernet0/0/1": {"ipv4": {"not-an-address": {"prefix_length": 24}}}}
+    prefixes, addresses = _emit_ips_for(
+        sample_device_info, sample_interface_info, sample_defaults, interfaces_ip,
+        options=Options(emit_prefixes=False, emit_ip_addresses=False),
+    )
+    assert prefixes == []
+    assert addresses == []
