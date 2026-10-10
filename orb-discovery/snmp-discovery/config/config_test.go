@@ -1112,3 +1112,12 @@ func TestRackText_EmptyKeyIsUnset(t *testing.T) {
 		assert.Empty(t, d.RackName(), doc)
 	}
 }
+
+func TestIPAddressEmissionEnabled(t *testing.T) {
+	var nilOpts *Options
+	assert.True(t, nilOpts.IPAddressEmissionEnabled())
+	assert.True(t, (&Options{}).IPAddressEmissionEnabled())
+	on, off := true, false
+	assert.True(t, (&Options{EmitIPAddresses: &on}).IPAddressEmissionEnabled())
+	assert.False(t, (&Options{EmitIPAddresses: &off}).IPAddressEmissionEnabled())
+}

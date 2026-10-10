@@ -509,13 +509,21 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	)
 	annotateEntitiesWithRunID(entities, run.ID)
 	r.warnUnscopedVLANs(entities, policyName, target.Host)
-	r.logEntitiesForIngestion(entities)
 
 	// Strip nested Device/Interface refs to matcher-only stubs to shrink
 	// the wire payload. Runs after annotation so the annotators can walk
 	// the rich shared graph with their unsafe.Pointer dedup intact —
 	// otherwise every stub would need its own metadata pass.
-	mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
+	if r.config.Options.IPAddressEmissionEnabled() {
+		r.logEntitiesForIngestion(entities)
+		mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
+	} else {
+		// emit_ip_addresses: false. Prefixes, VRFs and stack routing have
+		// already used the addresses; each now gives way to the interface
+		// stub it carried.
+		entities = mapping.OmitIPAddresses(entities, currentDevice)
+		r.logEntitiesForIngestion(entities)
+	}
 
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,

@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -1698,4 +1699,150 @@ func TestRunWithMetadata_ModuleLookupNamesModuleType(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{"Operator Module"}, models)
+}
+
+// capturingClient keeps the entities of the last ingest.
+type capturingClient struct {
+	entities []diode.Entity
+}
+
+func (c *capturingClient) Close() error { return nil }
+
+func (c *capturingClient) Ingest(_ context.Context, entities []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	c.entities = entities
+	return &diodepb.IngestResponse{}, nil
+}
+
+func (c *capturingClient) IngestProto(context.Context, []*diodepb.Entity, ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	return &diodepb.IngestResponse{}, nil
+}
+
+// With emit_ip_addresses off the run sends no IPAddress and no primary IP, yet
+// the interface the address sat on is still sent and its prefix still derived.
+func TestRunOmitsIPAddresses(t *testing.T) {
+	walker := &staticWalker{
+		pdus: map[string]map[string]snmp.PDU{
+			"1.3.6.1.2.1.1.5": {
+				"1.3.6.1.2.1.1.5.0": {Value: "router-1", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.2.2.1.2": {
+				"1.3.6.1.2.1.2.2.1.2.1": {Value: "Gi0", Type: gosnmp.OctetString, IdentifierSize: 1},
+			},
+			"1.3.6.1.2.1.4.20.1.1": {
+				"1.3.6.1.2.1.4.20.1.1.10.0.0.1": {Value: "10.0.0.1", Type: gosnmp.IPAddress, IdentifierSize: 4},
+			},
+			"1.3.6.1.2.1.4.20.1.2": {
+				"1.3.6.1.2.1.4.20.1.2.10.0.0.1": {Value: 1, Type: gosnmp.Integer, IdentifierSize: 4},
+			},
+			"1.3.6.1.2.1.4.20.1.3": {
+				"1.3.6.1.2.1.4.20.1.3.10.0.0.1": {Value: "255.255.255.0", Type: gosnmp.IPAddress, IdentifierSize: 4},
+			},
+		},
+	}
+	factory := func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return walker, nil
+	}
+	entries := []config.MappingEntry{
+		{
+			OID: "1.3.6.1.2.1.1", Entity: "device", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{{OID: "1.3.6.1.2.1.1.5", Entity: "device", Field: "name"}},
+		},
+		{
+			OID: "1.3.6.1.2.1.2.2.1", Entity: "interface", Field: "_id", IdentifierSize: 1,
+			MappingEntries: []config.MappingEntry{{OID: "1.3.6.1.2.1.2.2.1.2", Entity: "interface", Field: "name"}},
+		},
+		{
+			OID: "1.3.6.1.2.1.4.20.1", Entity: "ipAddress", Field: "_id", IdentifierSize: 4,
+			MappingEntries: []config.MappingEntry{
+				{OID: "1.3.6.1.2.1.4.20.1.1", Entity: "ipAddress", Field: "address"},
+				{OID: "1.3.6.1.2.1.4.20.1.3", Entity: "ipAddress", Field: "addressPrefixSize"},
+				{
+					OID: "1.3.6.1.2.1.4.20.1.2", Entity: "ipAddress", Field: "assignedObject",
+					Relationship: config.Relationship{Type: "interface"},
+				},
+			},
+		},
+	}
+	ingest := func(t *testing.T, emit *bool, configure ...func(*Runner, *config.Target)) []diode.Entity {
+		t.Helper()
+		client := &capturingClient{}
+		runner := queryTargetRunner(factory, entries)
+		runner.client = client
+		runner.runStore = NewRunStore()
+		runner.timeout = 5 * time.Second
+		runner.config.Options.EmitIPAddresses = emit
+		target := config.Target{Host: "10.0.0.1", Port: 161}
+		for _, c := range configure {
+			c(runner, &target)
+		}
+		runner.runWithMetadata(target, "")
+		require.NotEmpty(t, client.entities)
+		return client.entities
+	}
+
+	t.Run("default sends the address as the primary IP", func(t *testing.T) {
+		var addrs []string
+		for _, e := range ingest(t, nil) {
+			switch v := e.(type) {
+			case *diode.IPAddress:
+				addrs = append(addrs, v.GetAddress())
+			case *diode.Device:
+				require.NotNil(t, v.PrimaryIp4)
+				assert.Equal(t, "10.0.0.1/24", v.PrimaryIp4.GetAddress())
+			}
+		}
+		assert.Equal(t, []string{"10.0.0.1/24"}, addrs)
+	})
+
+	t.Run("off", func(t *testing.T) {
+		off := false
+		devices := 0
+		var ifaces []*diode.Interface
+		var prefixes []string
+		for _, e := range ingest(t, &off) {
+			switch v := e.(type) {
+			case *diode.IPAddress:
+				t.Fatalf("IPAddress %s sent with emit_ip_addresses off", v.GetAddress())
+			case *diode.Device:
+				devices++
+				assert.Nil(t, v.PrimaryIp4)
+			case *diode.Interface:
+				ifaces = append(ifaces, v)
+			case *diode.Prefix:
+				prefixes = append(prefixes, v.GetPrefix())
+			}
+		}
+		assert.Equal(t, 1, devices)
+		require.Len(t, ifaces, 1)
+		assert.Equal(t, "Gi0", ifaces[0].GetName())
+		assert.NotEmpty(t, ifaces[0].Metadata["run_id"])
+		require.NotNil(t, ifaces[0].Device)
+		assert.Nil(t, ifaces[0].Device.PrimaryIp4)
+		assert.Equal(t, []string{"10.0.0.0/24"}, prefixes)
+	})
+
+	// With the device name suppressed, the interface still names a device
+	// stub, found through the target's device rather than by name.
+	t.Run("off with the device name suppressed", func(t *testing.T) {
+		off, noName, netboxID := false, false, 7
+		entities := ingest(t, &off, func(r *Runner, target *config.Target) {
+			r.config.Options.EmitDeviceName = &noName
+			target.NetboxID = &netboxID
+		})
+		var device *diode.Device
+		var iface *diode.Interface
+		for _, e := range entities {
+			switch v := e.(type) {
+			case *diode.Device:
+				device = v
+			case *diode.Interface:
+				iface = v
+			}
+		}
+		require.NotNil(t, device)
+		require.Nil(t, device.Name)
+		require.NotNil(t, iface)
+		require.NotNil(t, iface.Device)
+		assert.NotSame(t, device, iface.Device)
+	})
 }
