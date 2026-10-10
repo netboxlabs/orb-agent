@@ -743,7 +743,8 @@ type Options struct {
 
 	// Tri-state pointer; unset defaults to FALSE — no Prefix is derived
 	// from an IPv4 /32 or IPv6 /128 address, because a host prefix only
-	// restates the address that is already emitted as an IPAddress. Set
+	// restates the address that is already emitted as an IPAddress (unless
+	// emit_ip_addresses is false). Set
 	// true to derive them anyway, e.g. when loopback /32s are tracked as
 	// prefixes in NetBox. Note the default is the opposite of
 	// emit_prefixes. IPv6 link-local prefixes are never derived and this
@@ -805,7 +806,7 @@ func (o *Options) IPAddressEmissionEnabled() bool {
 // HostPrefixEmissionEnabled returns the effective emit_host_prefixes
 // toggle, defaulting to FALSE — the opposite of PrefixEmissionEnabled,
 // because a /32 or /128 prefix only restates an address already emitted
-// as an IPAddress entity.
+// as an IPAddress entity (unless emit_ip_addresses is false).
 func (o *Options) HostPrefixEmissionEnabled() bool {
 	return o != nil && o.EmitHostPrefixes != nil && *o.EmitHostPrefixes
 }
