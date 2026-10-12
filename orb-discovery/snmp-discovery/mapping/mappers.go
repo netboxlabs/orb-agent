@@ -961,9 +961,7 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 				case "description":
 					description := trimSNMPString(value.Value)
 					if description != "" {
-						if len(description) > 200 {
-							description = description[:197] + "..."
-						}
+						description = truncateText(description, descriptionMaxLen)
 						interfaceEntity.Description = &description
 						fieldFound = true
 					}
@@ -1322,9 +1320,7 @@ func (m *DeviceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEntry
 				case "description":
 					description := trimSNMPString(value.Value)
 					if description != "" {
-						if len(description) > 200 {
-							description = description[:197] + "..."
-						}
+						description = truncateText(description, descriptionMaxLen)
 						deviceEntity.Description = &description
 						fieldFound = true
 					}

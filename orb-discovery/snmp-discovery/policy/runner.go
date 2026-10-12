@@ -517,6 +517,14 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	// otherwise every stub would need its own metadata pass.
 	mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
 
+	// After pruning, so it checks exactly what is sent: until then, copies
+	// made during mapping can still hold a value this run dropped, such as a
+	// suppressed device name.
+	if err := r.repairInvalidUTF8(entities, policyName, target.Host); err != nil {
+		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, len(entities))
+		return
+	}
+
 	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
@@ -898,6 +906,28 @@ func (r *Runner) Stop() error {
 		return err
 	}
 	return r.scheduler.Shutdown()
+}
+
+// repairInvalidUTF8 repairs invalid UTF-8 in free text and logs each field it
+// touched, so the operator can find the value on the device. It returns an
+// error when any other field is invalid, and the target must then not be
+// ingested.
+func (r *Runner) repairInvalidUTF8(entities []diode.Entity, policyName, host string) error {
+	repaired, refused := mapping.RepairInvalidUTF8(entities)
+	if len(refused) == 0 {
+		for _, rep := range repaired {
+			r.logger.Warn(mapping.InvalidUTF8Warning, "policy", policyName, "host", host,
+				"entity", rep.Entity, "field", rep.Field, "count", rep.Count, "example", rep.Example)
+		}
+		return nil
+	}
+	fields := make([]string, 0, len(refused))
+	for _, rep := range refused {
+		r.logger.Error(mapping.InvalidUTF8Refusal, "policy", policyName, "host", host,
+			"entity", rep.Entity, "field", rep.Field, "count", rep.Count, "example", rep.Example)
+		fields = append(fields, rep.Entity+"."+rep.Field)
+	}
+	return fmt.Errorf("not ingested: invalid UTF-8 in %s", strings.Join(fields, ", "))
 }
 
 // warnUnscopedVLANs reports VLANs Diode cannot separate, once per runner. A
