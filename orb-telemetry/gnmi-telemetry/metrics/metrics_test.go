@@ -354,7 +354,7 @@ func TestResetMeterClearsInstrumentCaches(t *testing.T) {
 	firstReader := sdkmetric.NewManualReader()
 	firstProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(firstReader))
 	t.Cleanup(func() { _ = firstProvider.Shutdown(context.Background()) })
-	SetMeterForTest(firstProvider.Meter("test"))
+	SetMeterProviderForTest(firstProvider)
 	require.NotNil(t, GetCounter("x", ""))
 
 	ResetMeter()
@@ -363,7 +363,7 @@ func TestResetMeterClearsInstrumentCaches(t *testing.T) {
 	secondReader := sdkmetric.NewManualReader()
 	secondProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(secondReader))
 	t.Cleanup(func() { _ = secondProvider.Shutdown(context.Background()) })
-	SetMeterForTest(secondProvider.Meter("test"))
+	SetMeterProviderForTest(secondProvider)
 	counter := GetCounter("x", "")
 	require.NotNil(t, counter)
 	counter.Add(context.Background(), 1)
@@ -388,7 +388,7 @@ func TestHealthNamesAreTheInstrumentsThisPackageRegisters(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	SetMeterForTest(provider.Meter("test"))
+	SetMeterProviderForTest(provider)
 
 	ctx := context.Background()
 	GetTargetsActive().Add(ctx, 1)
@@ -498,4 +498,77 @@ func collectProbe(t *testing.T, reader sdkmetric.Reader) (points int, overflow b
 		}
 	}
 	return points, overflow
+}
+
+// A policy's meter is the process scope with the policy named as an
+// instrumentation attribute, so the SDK exports one ScopeMetrics per policy
+// and the datapoints never repeat the policy.
+func TestPolicyMeter_ExportsOneScopePerPolicy(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	SetMeterProviderForTest(provider)
+
+	ctx := context.Background()
+	a, err := PolicyMeter("core").Int64Counter("gnmi.test_total")
+	require.NoError(t, err)
+	b, err := PolicyMeter("edge").Int64Counter("gnmi.test_total")
+	require.NoError(t, err)
+	a.Add(ctx, 1)
+	b.Add(ctx, 2)
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(ctx, &rm))
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		assert.Equal(t, "gnmi-telemetry", sm.Scope.Name)
+		policy, ok := sm.Scope.Attributes.Value(attribute.Key(PolicyNameAttribute))
+		require.True(t, ok, "every policy scope names its policy")
+		for _, m := range sm.Metrics {
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				assert.Equal(t, 0, dp.Attributes.Len(), "the policy is on the scope, not the datapoint")
+				got[policy.AsString()] = dp.Value
+			}
+		}
+	}
+	assert.Equal(t, map[string]int64{"core": 1, "edge": 2}, got)
+}
+
+// The provider caches meters by scope, so the same policy always gets the
+// same meter and a second registration on it needs no cache of ours.
+func TestPolicyMeter_SamePolicySameMeter(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	provider := sdkmetric.NewMeterProvider()
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	SetMeterProviderForTest(provider)
+
+	assert.Same(t, PolicyMeter("core"), PolicyMeter("core"))
+	assert.NotSame(t, PolicyMeter("core"), PolicyMeter("edge"))
+}
+
+// With export disabled there is no provider, and a nil meter is how every
+// caller learns to register nothing.
+func TestPolicyMeter_NilWithoutExport(t *testing.T) {
+	ResetMeter()
+	assert.Nil(t, PolicyMeter("core"))
+	assert.Nil(t, GetMeter())
+}
+
+// The test hook installs a provider, so the plain meter, the health
+// counters and the policy meters all come from it, and ResetMeter takes
+// them away.
+func TestSetMeterProviderForTest_WiresBothMeters(t *testing.T) {
+	ResetMeter()
+	provider := sdkmetric.NewMeterProvider()
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	SetMeterProviderForTest(provider)
+	assert.NotNil(t, GetMeter())
+	assert.NotNil(t, PolicyMeter("core"))
+
+	ResetMeter()
+	assert.Nil(t, GetMeter())
+	assert.Nil(t, PolicyMeter("core"))
 }

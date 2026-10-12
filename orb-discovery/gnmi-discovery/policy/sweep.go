@@ -350,22 +350,50 @@ func (r *Runner) originalHosts() []string {
 }
 
 // candidate pairs an expanded target with whether the operator wrote it
-// literally. An explicit entry skips the probe and wins any dedupe.
+// literally. An explicit entry skips the probe and wins any dedupe. written is
+// the host of the entry it came from, as the operator wrote it.
 type candidate struct {
 	target   config.Target
 	explicit bool
+	written  string
+}
+
+// expansion is what a scope's targets expand to: one candidate per endpoint,
+// with counts of the duplicates that collapsed.
+type expansion struct {
+	candidates      []candidate
+	dropped, pinned int
+	firstDropped    string
 }
 
 func (r *Runner) expandTargets() ([]candidate, error) {
+	e, err := expandScope(r.policy.Scope.Targets)
+	if err != nil {
+		return nil, err
+	}
+	if e.dropped > 0 {
+		r.logger.Warn("dropping duplicate targets produced by expansion",
+			"policy", r.name, "count", e.dropped, "example_host", e.firstDropped)
+	}
+	if e.pinned > 0 {
+		r.logger.Debug("expansion skipped addresses pinned by their own target entries",
+			"policy", r.name, "count", e.pinned)
+	}
+	return e.candidates, nil
+}
+
+// expandScope expands each target and collapses duplicate endpoints. It
+// reads hosts with or without applyDefaults' port, so policy validation can
+// see the devices the runner will.
+func expandScope(scope []config.Target) (expansion, error) {
+	var e expansion
 	var out []candidate
 	seen := map[string]int{}
-	var dropped, pinned int
-	var firstDropped string
 
-	for _, t := range r.policy.Scope.Targets {
+	for _, t := range scope {
 		addrs, err := targets.Expand(t.Host)
 		if err != nil {
-			return nil, fmt.Errorf("target %q: %w", t.Host, err)
+			return expansion{}, fmt.Errorf("target %q: %w", t.Host, err)
 		}
 		// snmp's rule, matched exactly: a netbox_id survives only when the
 		// operator wrote the single address itself. Any CIDR or range form,
@@ -388,38 +416,30 @@ func (r *Runner) expandTargets() ([]candidate, error) {
 				// round.
 				switch {
 				case literal && !out[at].explicit:
-					out[at] = candidate{target: derived, explicit: true}
+					out[at] = candidate{target: derived, explicit: true, written: t.Host}
 				case out[at].explicit && !literal:
 					// Pinning a device inside a subnet is the documented way to
 					// give it its own credentials. It is not a mistake, and with
 					// rescan on, warning would repeat it on every tick forever.
-					pinned++
+					e.pinned++
 				default:
 					// Counted, not logged per address. Overlapping ranges produce
 					// one duplicate per shared address, so a policy with a few
 					// equivalent subnets emitted tens of thousands of lines per
 					// sweep — and with rescan on, per tick.
-					dropped++
-					if firstDropped == "" {
-						firstDropped = derived.Host
+					e.dropped++
+					if e.firstDropped == "" {
+						e.firstDropped = derived.Host
 					}
 				}
 				continue
 			}
 			seen[key] = len(out)
-			out = append(out, candidate{target: derived, explicit: literal})
+			out = append(out, candidate{target: derived, explicit: literal, written: t.Host})
 		}
 	}
-
-	if dropped > 0 {
-		r.logger.Warn("dropping duplicate targets produced by expansion",
-			"policy", r.name, "count", dropped, "example_host", firstDropped)
-	}
-	if pinned > 0 {
-		r.logger.Debug("expansion skipped addresses pinned by their own target entries",
-			"policy", r.name, "count", pinned)
-	}
-	return out, nil
+	e.candidates = out
+	return e, nil
 }
 
 // dedupeKey collapses two spellings of one endpoint.

@@ -1,4 +1,4 @@
-# Doppler Secrets Manager
+# Doppler
 
 The Orb Agent can integrate with [Doppler](https://www.doppler.com/) to securely manage sensitive information such as passwords and API keys. This feature allows you to reference secrets stored in Doppler directly in your policy configurations without hardcoding sensitive values.
 

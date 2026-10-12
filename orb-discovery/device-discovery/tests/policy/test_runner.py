@@ -241,6 +241,7 @@ def test_run_device_with_discovered_driver(
         kwargs = mock_ingest.call_args[1]
         assert metadata_arg == {
             "policy_name": policy_runner.name,
+            "policy_instance": policy_runner.instance_id,
             "hostname": sample_scopes[0].hostname,
         }
         run = run_store.get_runs_for_policy(policy_runner.name)[0]

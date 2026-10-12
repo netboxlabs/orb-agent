@@ -3,27 +3,38 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // VrfParameters mirrors device-discovery's VrfParameters: a polymorphic
 // config primitive that accepts either a scalar string (interpreted as
-// VRF Name) or a map of {name, rd, description, comments, tags}. This
-// lets operators attach a Route Distinguisher (and richer metadata) to
-// the discovered IP addresses' VRF so NetBox can match an existing
+// VRF Name) or a map of {name, rd, tenant, description, comments, tags}.
+// This lets operators attach a Route Distinguisher (and richer metadata)
+// to the discovered IP addresses' VRF so NetBox can match an existing
 // (name, rd) tuple instead of being forced into the legacy rd=name
-// fallback.
+// fallback. Tenant is the VRF's own tenant, never taken from another
+// tenant default: Diode matches a VRF without an rd by name and tenant,
+// so a VRF owned by a tenant in NetBox is created again unless named.
 type VrfParameters struct {
-	Name        string   `yaml:"name"`
-	Rd          string   `yaml:"rd,omitempty"`
-	Description string   `yaml:"description,omitempty"`
-	Comments    string   `yaml:"comments,omitempty"`
-	Tags        []string `yaml:"tags,omitempty"`
+	Name        string           `yaml:"name"`
+	Rd          string           `yaml:"rd,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
 }
+
+// The keys a vrf mapping, and the tenant inside it, accept.
+var (
+	vrfKeys    = yamlFieldNames(reflect.TypeFor[VrfParameters]())
+	tenantKeys = yamlFieldNames(reflect.TypeFor[TenantParameters]())
+)
 
 // UnmarshalYAML accepts both shapes:
 //   - scalar:  vrf: production
@@ -38,6 +49,10 @@ type VrfParameters struct {
 // clear an inherited VRF default at override merge time: MergeDefaults
 // treats the zero value the same way as an absent override key
 // (non-empty-wins, matching every other override_defaults field).
+//
+// An unknown key in the mapping or in its tenant is refused: a misspelt
+// rd, tenant or group would match a different VRF, which then stays in
+// NetBox.
 func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
 	// Reset up front so a stale receiver (re-decoded into the same
 	// struct) doesn't keep Rd / Description / Comments / Tags from a
@@ -53,6 +68,20 @@ func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
 		v.Name = node.Value
 		return nil
 	case yaml.MappingNode:
+		fields, err := mappingFields(node, "vrf", vrfKeys)
+		if err != nil {
+			return err
+		}
+		if tenant, ok := fields["tenant"]; ok {
+			for tenant.Kind == yaml.AliasNode {
+				tenant = *tenant.Alias
+			}
+			if tenant.Kind == yaml.MappingNode {
+				if _, err := mappingFields(&tenant, "vrf.tenant", tenantKeys); err != nil {
+					return err
+				}
+			}
+		}
 		type alias VrfParameters
 		var a alias
 		if err := node.Decode(&a); err != nil {
@@ -65,13 +94,25 @@ func (v *VrfParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-// TenantParameters names the tenant applied to discovered devices. Accepts
-// either a plain string (tenant name) or a mapping, mirroring
-// device-discovery's defaults.tenant. Merged field-wise at override time
-// (see mergeTenantParameters), with the same accepted divergence as
-// VrfParameters: a scalar override sets Name only and cannot clear other
-// inherited fields, because post-unmarshal the scalar and mapping forms
-// are indistinguishable.
+// mappingFields decodes a mapping once merge keys and aliases resolve, and
+// refuses a key outside known.
+func mappingFields(node *yaml.Node, path string, known map[string]bool) (map[string]yaml.Node, error) {
+	var fields map[string]yaml.Node
+	if err := node.Decode(&fields); err != nil {
+		return nil, err
+	}
+	for _, key := range slices.Sorted(maps.Keys(fields)) {
+		if !known[key] {
+			return nil, fmt.Errorf("%s has no %q key", path, key)
+		}
+	}
+	return fields, nil
+}
+
+// TenantParameters names a tenant: the device's, an address's, a prefix's,
+// a VLAN's or a VRF's. Accepts either a plain string (tenant name) or a
+// mapping, mirroring device-discovery. At override time it is refined or
+// replaced by refineTenant.
 type TenantParameters struct {
 	Name        string   `yaml:"name"`
 	Group       string   `yaml:"group,omitempty"`
@@ -105,11 +146,58 @@ func (t *TenantParameters) UnmarshalYAML(node *yaml.Node) error {
 	}
 }
 
-// mergeTenantParameters overlays non-zero override fields onto dst in
-// place, mirroring mergeVrfParameters so a per-target override can refine
-// a single knob without restating the rest.
-func mergeTenantParameters(dst, override *TenantParameters) {
-	if override.Name != "" {
+// otherTenant reports whether b names another tenant than a: another name
+// where both give one, or a group other than a's, including one a lacks, since
+// NetBox can hold an ungrouped tenant and a grouped one of the same name.
+// Values compare trimmed, as Diode compares them.
+func otherTenant(a, b TenantParameters) bool {
+	group := trim(b.Group)
+	return otherName(a.Name, b.Name) || group != "" && group != trim(a.Group)
+}
+
+// otherName reports whether two names are both given, once trimmed, and
+// differ: a blank name names nothing.
+func otherName(a, b string) bool {
+	a, b = trim(a), trim(b)
+	return a != "" && b != "" && a != b
+}
+
+// otherVrf reports whether b names another VRF than a. Diode finds a VRF with
+// an rd by the rd alone and one without by its name and tenant, matching by
+// name only when the payload has no rd: another name, an rd other than a's
+// (including one a lacks), another tenant where both give one, or, with no rd
+// on either side, a tenant a lacks. A tenant added to a VRF with an rd refines
+// it, since the rd still identifies it, and a VRF with neither name nor rd is
+// a template every override refines.
+func otherVrf(a, b VrfParameters) bool {
+	rdA, rdB := trim(a.Rd), trim(b.Rd)
+	if trim(a.Name) == "" && rdA == "" {
+		return false
+	}
+	if otherName(a.Name, b.Name) || rdB != "" && rdB != rdA {
+		return true
+	}
+	tenantA := trim(a.Tenant.Name)
+	if tenantA != "" && !b.Tenant.isZero() {
+		return otherTenant(a.Tenant, b.Tenant)
+	}
+	return rdA == "" && rdB == "" && trim(b.Tenant.Name) != "" && tenantA == ""
+}
+
+// refineTenant overlays non-zero override fields onto dst in place, or
+// replaces dst whole, keeping its name when the override gives none, when the
+// override names another tenant: that tenant must not take this one's group
+// or description, which would put it, or match it, in the wrong group.
+func refineTenant(dst, override *TenantParameters) {
+	if otherTenant(*dst, *override) {
+		name := dst.Name
+		*dst = *override
+		if trim(dst.Name) == "" {
+			dst.Name = name
+		}
+		return
+	}
+	if trim(override.Name) != "" {
 		dst.Name = override.Name
 	}
 	if override.Group != "" {
@@ -167,12 +255,12 @@ type Authentication struct {
 
 // IPAddressDefaults represents default values for a specific entity type
 type IPAddressDefaults struct {
-	Description string        `yaml:"description,omitempty"`
-	Tags        []string      `yaml:"tags,omitempty"`
-	Comments    string        `yaml:"comments,omitempty"`
-	Role        string        `yaml:"role,omitempty"`
-	Tenant      string        `yaml:"tenant,omitempty"`
-	Vrf         VrfParameters `yaml:"vrf,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
+	Role        string           `yaml:"role,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Vrf         VrfParameters    `yaml:"vrf,omitempty"`
 	// Per-address-family overrides mirroring device-discovery: when set,
 	// the family-specific VRF wins for that AF's IP addresses; otherwise
 	// the AF-agnostic Vrf above applies.
@@ -182,8 +270,18 @@ type IPAddressDefaults struct {
 
 // IsZero reports whether no VrfParameters field is set.
 func (v VrfParameters) IsZero() bool {
-	return v.Name == "" && v.Rd == "" && v.Description == "" &&
+	return v.Name == "" && v.Rd == "" && v.Tenant.isZero() && v.Description == "" &&
 		v.Comments == "" && len(v.Tags) == 0
+}
+
+// isZero reports whether no TenantParameters field is set.
+func (t TenantParameters) isZero() bool {
+	return t.Name == "" && !t.rich()
+}
+
+// rich reports whether the tenant is written as more than a bare name.
+func (t TenantParameters) rich() bool {
+	return t.Group != "" || t.Description != "" || t.Comments != "" || len(t.Tags) > 0
 }
 
 // resolveVrfForFamily implements the shared per-AF selection rule: the
@@ -213,14 +311,14 @@ func (d *IPAddressDefaults) VrfForFamily(family string) (VrfParameters, string) 
 // PrefixDefaults represents default values applied to derived Prefix
 // entities. Mirrors device-discovery's defaults.prefix block.
 type PrefixDefaults struct {
-	Description string        `yaml:"description,omitempty"`
-	Tags        []string      `yaml:"tags,omitempty"`
-	Comments    string        `yaml:"comments,omitempty"`
-	Role        string        `yaml:"role,omitempty"`
-	Tenant      string        `yaml:"tenant,omitempty"`
-	Vrf         VrfParameters `yaml:"vrf,omitempty"`
-	VrfIpv4     VrfParameters `yaml:"vrf_ipv4,omitempty"`
-	VrfIpv6     VrfParameters `yaml:"vrf_ipv6,omitempty"`
+	Description string           `yaml:"description,omitempty"`
+	Tags        []string         `yaml:"tags,omitempty"`
+	Comments    string           `yaml:"comments,omitempty"`
+	Role        string           `yaml:"role,omitempty"`
+	Tenant      TenantParameters `yaml:"tenant,omitempty"`
+	Vrf         VrfParameters    `yaml:"vrf,omitempty"`
+	VrfIpv4     VrfParameters    `yaml:"vrf_ipv4,omitempty"`
+	VrfIpv6     VrfParameters    `yaml:"vrf_ipv6,omitempty"`
 	// Explicit prefix scope. Setting either puts the operator in
 	// "explicit mode" and the propagate_defaults_to_prefix_scope cascade
 	// is skipped wholesale.
@@ -320,7 +418,7 @@ type VLANDefaults struct {
 	Description string              `yaml:"description,omitempty"`
 	Tags        []string            `yaml:"tags,omitempty"`
 	Group       VLANGroupParameters `yaml:"group,omitempty"`
-	Tenant      string              `yaml:"tenant,omitempty"`
+	Tenant      TenantParameters    `yaml:"tenant,omitempty"`
 	Status      string              `yaml:"status,omitempty"`
 }
 
@@ -339,19 +437,79 @@ type Defaults struct {
 	VLAN                     VLANDefaults       `yaml:"vlan,omitempty"`
 	InterfacePatterns        []InterfacePattern `yaml:"interface_patterns,omitempty"`
 	InterfaceExcludePatterns []string           `yaml:"interface_exclude_patterns,omitempty"`
+	// VlanInterfaceNamePrefix names the VLAN interfaces a switch reports by
+	// the bare VLAN ID, as prefix + VID. Empty keeps the device's name.
+	VlanInterfaceNamePrefix string `yaml:"vlan_interface_name_prefix,omitempty"`
 	// StackMemberNameTemplate names non-master virtual-chassis members.
 	// Empty means DefaultStackMemberTemplate; see stack_naming.go.
 	StackMemberNameTemplate string `yaml:"stack_member_name_template,omitempty"`
+	// Rack is a literal NetBox rack name. Position (a U, possibly a
+	// half U) and Face are accepted only in a target's override_defaults;
+	// policy validation enforces that and NetBox's rules for them.
+	Rack     RackText `yaml:"rack,omitempty"`
+	Position *float64 `yaml:"position,omitempty"`
+	Face     string   `yaml:"face,omitempty"`
+}
+
+// RackText is a rack name that must be YAML text. The agent re-marshals a
+// policy before posting it, so an unquoted 01 arrives as the number 1 and 010
+// as 8: a number is refused rather than taken as another rack's name.
+type RackText string
+
+// UnmarshalYAML refuses a rack name that is not YAML text. A null never
+// reaches it: yaml leaves the field empty.
+func (r *RackText) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.ScalarNode || node.ShortTag() != "!!str" {
+		return fmt.Errorf(`line %d: rack %s must be text; quote a numeric rack name, e.g. rack: "01"`,
+			node.Line, node.Value)
+	}
+	*r = RackText(node.Value)
+	return nil
+}
+
+// Rack faces accepted in override_defaults.face.
+const (
+	RackFaceFront = "front"
+	RackFaceRear  = "rear"
+)
+
+// RackName returns the rack name without surrounding whitespace; empty
+// means unset.
+func (d *Defaults) RackName() string {
+	return strings.TrimSpace(string(d.Rack))
+}
+
+// RackFace returns the face trimmed and lowercased; empty means unset.
+func (d *Defaults) RackFace() string {
+	return strings.ToLower(strings.TrimSpace(d.Face))
 }
 
 // mergeVrfParameters overlays non-zero override fields onto dst in place.
 func mergeVrfParameters(dst, override *VrfParameters) {
-	if override.Name != "" {
+	// An override naming another VRF (see otherVrf) takes nothing from the
+	// policy's but its name when it gives none: inheriting the rest would
+	// match, and rewrite, the policy's VRF. Its tenant is refined from the
+	// policy's.
+	if otherVrf(*dst, *override) {
+		tenant := dst.Tenant
+		refineTenant(&tenant, &override.Tenant)
+		name := dst.Name
+		*dst = *override
+		if trim(dst.Name) == "" {
+			dst.Name = name
+		}
+		if !override.Tenant.isZero() {
+			dst.Tenant = tenant
+		}
+		return
+	}
+	if trim(override.Name) != "" {
 		dst.Name = override.Name
 	}
 	if override.Rd != "" {
 		dst.Rd = override.Rd
 	}
+	refineTenant(&dst.Tenant, &override.Tenant)
 	if override.Description != "" {
 		dst.Description = override.Description
 	}
@@ -389,7 +547,22 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.StackMemberNameTemplate != "" {
 		merged.StackMemberNameTemplate = overrideDefaults.StackMemberNameTemplate
 	}
-	mergeTenantParameters(&merged.Tenant, &overrideDefaults.Tenant)
+	if overrideDefaults.VlanInterfaceNamePrefix != "" {
+		merged.VlanInterfaceNamePrefix = overrideDefaults.VlanInterfaceNamePrefix
+	}
+	if overrideDefaults.RackName() != "" {
+		merged.Rack = overrideDefaults.Rack
+	}
+	// Policy defaults never carry a position or face (validation rejects
+	// them there), so these come only from the override.
+	if overrideDefaults.Position != nil {
+		position := *overrideDefaults.Position
+		merged.Position = &position
+	}
+	if overrideDefaults.Face != "" {
+		merged.Face = overrideDefaults.Face
+	}
+	refineTenant(&merged.Tenant, &overrideDefaults.Tenant)
 	if len(overrideDefaults.Tags) > 0 {
 		merged.Tags = overrideDefaults.Tags
 	}
@@ -407,9 +580,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.IPAddress.Role != "" {
 		merged.IPAddress.Role = overrideDefaults.IPAddress.Role
 	}
-	if overrideDefaults.IPAddress.Tenant != "" {
-		merged.IPAddress.Tenant = overrideDefaults.IPAddress.Tenant
-	}
+	refineTenant(&merged.IPAddress.Tenant, &overrideDefaults.IPAddress.Tenant)
 	// Merge VRF defaults field-by-field so a per-target override can refine
 	// a single VrfParameters knob (e.g. rd) without having to restate every
 	// other field already set at the policy level. Matches the
@@ -433,9 +604,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.Prefix.Role != "" {
 		merged.Prefix.Role = overrideDefaults.Prefix.Role
 	}
-	if overrideDefaults.Prefix.Tenant != "" {
-		merged.Prefix.Tenant = overrideDefaults.Prefix.Tenant
-	}
+	refineTenant(&merged.Prefix.Tenant, &overrideDefaults.Prefix.Tenant)
 	if overrideDefaults.Prefix.ScopeSite != "" {
 		merged.Prefix.ScopeSite = overrideDefaults.Prefix.ScopeSite
 	}
@@ -487,9 +656,7 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 	if overrideDefaults.VLAN.Group.Name != "" {
 		merged.VLAN.Group = overrideDefaults.VLAN.Group
 	}
-	if overrideDefaults.VLAN.Tenant != "" {
-		merged.VLAN.Tenant = overrideDefaults.VLAN.Tenant
-	}
+	refineTenant(&merged.VLAN.Tenant, &overrideDefaults.VLAN.Tenant)
 	if overrideDefaults.VLAN.Status != "" {
 		merged.VLAN.Status = overrideDefaults.VLAN.Status
 	}
@@ -506,6 +673,11 @@ func MergeDefaults(policyDefaults, overrideDefaults *Defaults) *Defaults {
 
 	return &merged
 }
+
+// UndefinedPlaceholder is the stand-in applyDefaults writes into site and role
+// when the policy sets neither. It is a real NetBox object name, so an entity
+// carrying it is scoped in form only.
+const UndefinedPlaceholder = "undefined"
 
 // DiscoverModules* are the accepted values for options.discover_modules.
 // Off is the default when the field is unset.
@@ -572,6 +744,12 @@ type Options struct {
 	// option does not affect them.
 	EmitHostPrefixes *bool `yaml:"emit_host_prefixes,omitempty"`
 
+	// Tri-state pointer; unset defaults to TRUE — link-aggregation
+	// membership is read from IEEE8023-LAG-MIB dot3adAggPortTable and each
+	// member port's Interface.lag is set to its aggregate interface. Set
+	// false to leave lag unset and skip the table walk.
+	EmitLagMembership *bool `yaml:"emit_lag_membership,omitempty"`
+
 	// Tri-state pointer; unset defaults to TRUE — Device.name is emitted
 	// from SNMP sysName, matching legacy behaviour. Set false to suppress
 	// the name on the matched device so continual discovery under
@@ -618,6 +796,12 @@ func (o *Options) PrefixEmissionEnabled() bool {
 // as an IPAddress entity.
 func (o *Options) HostPrefixEmissionEnabled() bool {
 	return o != nil && o.EmitHostPrefixes != nil && *o.EmitHostPrefixes
+}
+
+// LagMembershipEnabled returns the effective emit_lag_membership toggle,
+// defaulting to TRUE.
+func (o *Options) LagMembershipEnabled() bool {
+	return o == nil || o.EmitLagMembership == nil || *o.EmitLagMembership
 }
 
 // DeviceNameEmissionEnabled returns the effective emit_device_name

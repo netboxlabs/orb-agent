@@ -25,6 +25,10 @@ func TestResolveVendor(t *testing.T) {
 		{"huawei vrp switch", ".1.3.6.1.4.1.2011.2.23.96", "S5720-28X-SI-AC", "huawei"},
 		{"huawei no-dot prefix", "1.3.6.1.4.1.2011.2.80.8", "", "huawei"},
 		{"an arc that merely starts like huawei", ".1.3.6.1.4.1.20111.1", "", ""},
+		{"mikrotik routeros", ".1.3.6.1.4.1.14988.1", "RouterOS CCR1016-12S-1S+", "mikrotik"},
+		{"mikrotik swos", ".1.3.6.1.4.1.14988.2", "", "mikrotik"},
+		{"mikrotik no-dot prefix", "1.3.6.1.4.1.14988.1", "", "mikrotik"},
+		{"an arc that merely starts like mikrotik", ".1.3.6.1.4.1.149881.1", "", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

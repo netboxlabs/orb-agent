@@ -95,10 +95,8 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 	if entity.Comments == nil && entityDefaults.Comments != "" {
 		entity.Comments = &entityDefaults.Comments
 	}
-	if entity.Tenant == nil && entityDefaults.Tenant != "" {
-		entity.Tenant = &diode.Tenant{
-			Name: &entityDefaults.Tenant,
-		}
+	if entity.Tenant == nil {
+		entity.Tenant = diodeTenant(entityDefaults.Tenant)
 	}
 	if entity.Role == nil && entityDefaults.Role != "" {
 		entity.Role = &entityDefaults.Role
@@ -116,27 +114,8 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 		vrfDefaults, vrfKnob := entityDefaults.VrfForFamily(family)
 		switch {
 		case vrfDefaults.Name != "":
-			vrf := &diode.VRF{Name: &vrfDefaults.Name}
-			if vrfDefaults.Rd != "" {
-				vrf.Rd = &vrfDefaults.Rd
-			}
-			if vrfDefaults.Description != "" {
-				vrf.Description = &vrfDefaults.Description
-			}
-			if vrfDefaults.Comments != "" {
-				vrf.Comments = &vrfDefaults.Comments
-			}
-			if len(vrfDefaults.Tags) > 0 {
-				tags := make([]*diode.Tag, 0, len(vrfDefaults.Tags))
-				for _, t := range vrfDefaults.Tags {
-					tagName := t
-					tags = append(tags, &diode.Tag{Name: &tagName})
-				}
-				vrf.Tags = tags
-			}
-			entity.Vrf = vrf
-		case vrfDefaults.Rd != "", vrfDefaults.Description != "",
-			vrfDefaults.Comments != "", len(vrfDefaults.Tags) > 0:
+			entity.Vrf = diodeVrf(vrfDefaults)
+		case !vrfDefaults.IsZero():
 			// One or more VRF sub-fields were configured but Name is empty,
 			// either via a policy default like `vrf: {rd: "65000:100"}` with
 			// no name OR a per-target override that refines fields without
@@ -164,6 +143,7 @@ func (m *IPAddressMapper) applyDefaults(entity *diode.IPAddress, defaults *confi
 					"description", vrfDefaults.Description,
 					"comments", vrfDefaults.Comments,
 					"tags", vrfDefaults.Tags,
+					"tenant", vrfDefaults.Tenant.Name,
 				)
 			})
 		}
@@ -1101,6 +1081,15 @@ func (m *InterfaceMapper) Map(values map[ObjectIDIndex]*ObjectIDValue, mappingEn
 	if name := resolveInterfaceName(m.nameSource, ifDescrRaw, ifNameRaw); name != "" {
 		interfaceEntity.Name = &name
 		fieldFound = true
+		if vid, ok := numericVlanID(getIndex(values), name); ok {
+			prefix := ""
+			if defaults != nil {
+				prefix = defaults.VlanInterfaceNamePrefix
+			}
+			if !m.nameVlanInterface(interfaceEntity, getIndex(values), vid, snmpIfType, prefix, entityRegistry) {
+				return nil
+			}
+		}
 	}
 
 	// Resolve interface type after all fields are collected
@@ -1194,6 +1183,13 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 	}
 	entityDefaults := defaults.Device
 
+	// Without a sysObjectID nothing was looked up, so a model and
+	// manufacturer pinned in defaults are the device type. NetBox needs both.
+	if entity.DeviceType == nil && entityDefaults.Model != "" && entityDefaults.Manufacturer != "" {
+		model, manufacturer := entityDefaults.Model, entityDefaults.Manufacturer
+		entity.DeviceType = &diode.DeviceType{Model: &model, Manufacturer: &diode.Manufacturer{Name: &manufacturer}}
+	}
+
 	// Collect tags from both entity-specific and global defaults
 	var tags []*diode.Tag
 	if len(entityDefaults.Tags) > 0 {
@@ -1232,21 +1228,8 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 		}
 	}
 
-	if entity.Tenant == nil && defaults.Tenant.Name != "" {
-		tenant := &diode.Tenant{Name: &defaults.Tenant.Name}
-		if defaults.Tenant.Group != "" {
-			tenant.Group = &diode.TenantGroup{Name: &defaults.Tenant.Group}
-		}
-		if defaults.Tenant.Description != "" {
-			tenant.Description = &defaults.Tenant.Description
-		}
-		if defaults.Tenant.Comments != "" {
-			tenant.Comments = &defaults.Tenant.Comments
-		}
-		for i := range defaults.Tenant.Tags {
-			tenant.Tags = append(tenant.Tags, &diode.Tag{Name: &defaults.Tenant.Tags[i]})
-		}
-		entity.Tenant = tenant
+	if entity.Tenant == nil {
+		entity.Tenant = diodeTenant(defaults.Tenant)
 	}
 
 	if defaults.Location != "" {
@@ -1262,6 +1245,18 @@ func (m *DeviceMapper) applyDefaults(entity *diode.Device, defaults *config.Defa
 				loc.Site = &diode.Site{Name: &defaults.Site}
 			}
 			entity.Location = loc
+		}
+	}
+
+	// The rack name is a literal, never resolved from a walked OID. The
+	// rack takes the device's own site and location, so it binds to the
+	// rack in the same location as the device.
+	if rack := defaults.RackName(); rack != "" {
+		entity.Rack = &diode.Rack{Name: &rack, Site: entity.Site, Location: entity.Location}
+		if face := defaults.RackFace(); defaults.Position != nil && face != "" {
+			position := *defaults.Position
+			entity.Position = &position
+			entity.Face = &face
 		}
 	}
 

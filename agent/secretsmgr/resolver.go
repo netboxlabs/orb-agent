@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"regexp"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // cachedSecret is a value cached during placeholder resolution, plus the set of

@@ -227,29 +227,7 @@ func prefixDefaultsVrf(d *config.PrefixDefaults, family string) (*diode.VRF, boo
 	if params.Name == "" {
 		return nil, !params.IsZero()
 	}
-	name := params.Name
-	vrf := &diode.VRF{Name: &name}
-	if params.Rd != "" {
-		rd := params.Rd
-		vrf.Rd = &rd
-	}
-	if params.Description != "" {
-		desc := params.Description
-		vrf.Description = &desc
-	}
-	if params.Comments != "" {
-		comments := params.Comments
-		vrf.Comments = &comments
-	}
-	if len(params.Tags) > 0 {
-		tags := make([]*diode.Tag, 0, len(params.Tags))
-		for _, t := range params.Tags {
-			tagName := t
-			tags = append(tags, &diode.Tag{Name: &tagName})
-		}
-		vrf.Tags = tags
-	}
-	return vrf, false
+	return diodeVrf(params), false
 }
 
 // vrfKey returns a stable dedupe key component for a VRF reference, keyed the
@@ -266,8 +244,8 @@ func prefixDefaultsVrf(d *config.PrefixDefaults, family string) (*diode.VRF, boo
 // entities for a single object and, worse, split the VLAN vote so each half
 // could be unanimous on its own while the object ended up with one of them.
 //
-// A VRF tenant would join the no-rd branch, but the config exposes only name
-// and rd on a prefix VRF, so nothing can set one today.
+// Without an rd the tenant joins the name. Its group is part of it too: a
+// grouped and an ungrouped tenant of one name can be two NetBox tenants.
 //
 // The "rd" / "name" tag keeps the two key spaces apart. NUL cannot appear in a
 // decoded VRF name, since the index decoder rejects control characters.
@@ -278,7 +256,14 @@ func vrfKey(vrf *diode.VRF) string {
 	if vrf.Rd != nil && *vrf.Rd != "" {
 		return "rd\x00" + *vrf.Rd
 	}
-	return "name\x00" + *vrf.Name
+	key := "name\x00" + *vrf.Name
+	if vrf.Tenant != nil {
+		key += "\x00" + vrf.Tenant.GetName()
+		if vrf.Tenant.Group != nil {
+			key += "\x00" + vrf.Tenant.Group.GetName()
+		}
+	}
+	return key
 }
 
 // applyPrefixDefaults applies the defaults.prefix block plus the scope
@@ -300,9 +285,8 @@ func applyPrefixDefaults(prefix *diode.Prefix, defaults *config.Defaults, option
 		role := d.Role
 		prefix.Role = &diode.Role{Name: &role}
 	}
-	if d.Tenant != "" {
-		tenant := d.Tenant
-		prefix.Tenant = &diode.Tenant{Name: &tenant}
+	if tenant := diodeTenant(d.Tenant); tenant != nil {
+		prefix.Tenant = tenant
 	}
 	var tags []*diode.Tag
 	for _, t := range d.Tags {

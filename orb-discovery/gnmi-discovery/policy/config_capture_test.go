@@ -182,3 +182,51 @@ func TestRunnerConfigCaptureDisabled(t *testing.T) {
 	assert.Nil(t, dev.Config)
 	assert.Equal(t, 0, fake.ConfigGets, "GetConfig must not be called when capture_config is off")
 }
+
+// The runner hands the policy's options to the translator: with
+// emit_lag_membership off, the ingested member port has no LAG.
+func TestRunnerHonoursEmitLagMembership(t *testing.T) {
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+
+	for name, opts := range map[string]config.Options{"default": {}, "off": {EmitLagMembership: boolPtr(false)}} {
+		t.Run(name, func(t *testing.T) {
+			fake := &gnmi.FakeSession{
+				Caps:            &gnmi.CapabilitiesResult{Vendor: "Arista"},
+				OnChangeSupport: true,
+				OnChangeStream: []gnmi.Notification{
+					{Updates: []gnmi.Update{
+						{Path: "/system/state/hostname", Value: "r1"},
+						{Path: "/interfaces/interface[name=Ethernet1]/state/type", Value: "iana-if-type:ethernetCsmacd"},
+						{Path: "/interfaces/interface[name=Ethernet1]/ethernet/state/aggregate-id", Value: "Port-Channel1"},
+						{Path: "/interfaces/interface[name=Port-Channel1]/state/type", Value: "iana-if-type:ieee8023adLag"},
+					}},
+					{SyncDone: true},
+				},
+			}
+			client := &recordingClient{}
+			pol := config.Policy{
+				Config: config.PolicyConfig{Mode: config.ModeOnChange, DebounceMs: 30, Options: opts},
+				Scope:  config.Scope{Targets: []config.Target{{Host: "10.0.0.1:6030"}}},
+			}
+			r, err := NewRunner(context.Background(), slog.Default(), "p1", pol, client, &gnmi.FakeDialer{Session: fake}, store)
+			require.NoError(t, err)
+			r.Start()
+			defer func() { require.NoError(t, r.Stop()) }()
+			require.Eventually(t, func() bool { return client.count() >= 1 }, 2*time.Second, 20*time.Millisecond)
+
+			var member *diode.Interface
+			for _, e := range client.lastIngested() {
+				if i, ok := e.(*diode.Interface); ok && i.Name != nil && *i.Name == "Ethernet1" {
+					member = i
+				}
+			}
+			require.NotNil(t, member)
+			if name == "off" {
+				require.Nil(t, member.Lag)
+			} else {
+				require.NotNil(t, member.Lag)
+			}
+		})
+	}
+}

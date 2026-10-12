@@ -90,9 +90,7 @@ func translateIPs(profile *Profile, snap map[string]any, dev *diode.Device, defa
 		if d.Role != "" {
 			ipRole = strptr(d.Role)
 		}
-		if d.Tenant != "" {
-			ipTenant = &diode.Tenant{Name: strptr(d.Tenant)}
-		}
+		ipTenant = diodeTenant(d.Tenant)
 		if d.Description != "" {
 			ipDesc = strptr(d.Description)
 		}

@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -114,6 +115,7 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		NameUnderscore: "opentelemetry_infinity",
 		Exec:           o.exec,
 		Args:           pvOptions,
+		ListenAddr:     net.JoinHostPort(o.apiHost, o.apiPort),
 		LogLine:        o.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			o.proc = p

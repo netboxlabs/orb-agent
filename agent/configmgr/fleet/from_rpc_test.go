@@ -1964,3 +1964,29 @@ func TestHandleAgentResetSkipsTheReconnectSignalWhenShutdownAbortsTheReset(t *te
 	}
 	assert.Equal(t, []string{"test"}, r.reasons())
 }
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key, inside the
+// MQTT handler, which took the agent down. The maintained fork returns an
+// error, so the policy data is left as sent.
+func TestMessageHandlers_handleAgentPolicies_MergeBesideComplexKeyDoesNotPanic(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManager{}
+	groupManager := newGroupManager()
+	handlers := NewMessaging(logger, mockPMgr, make(chan struct{}, 1), &groupManager, nil)
+	const data = "? {a: 1}\n: x\n<<: {k: v}\n"
+	mockPMgr.On("ManagePolicy", mock.MatchedBy(func(p config.PolicyPayload) bool {
+		return p.ID == "policy1" && p.Data == data
+	})).Return()
+	mockPMgr.On("GetPolicyState").Return([]policies.PolicyData{}, nil).Maybe()
+
+	policies := []messages.AgentPolicyRPCPayload{{
+		Action:  "apply",
+		ID:      "policy1",
+		Name:    "Test Policy",
+		Backend: "pktvisor",
+		Format:  "yaml",
+		Data:    data,
+	}}
+	assert.NotPanics(t, func() { handlers.handleAgentPolicies(policies, false) })
+	mockPMgr.AssertExpectations(t)
+}

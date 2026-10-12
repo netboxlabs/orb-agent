@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	"github.com/go-viper/mapstructure/v2"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Load reads the --config file(s) with the existing yaml.v3 decode (unchanged

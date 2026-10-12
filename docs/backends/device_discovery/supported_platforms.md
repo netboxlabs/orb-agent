@@ -343,6 +343,26 @@ Drivers that implement the standard NAPALM `get_network_instances()` getter disc
 
 **Demand-driven** (the platform has a VRF or VRF-like concept; implementation awaits a real-device output capture — open an issue with one if you need it): `brocade_fastiron` (ICX VRF-lite), `alcatel_aos` (OmniSwitch VRF), `aruba_aoscx_ssh` (use the REST `aruba_aoscx` driver meanwhile), `mikrotik_routeros` (RouterOS v7 `/ip/vrf` only — v6 routing marks will not be mapped), `fortinet_fortios_ssh` (only explicit interface VRF ids would be mapped — VDOMs are firewall contexts, never VRFs), `cisco_asa` / `cisco_asa_ssh` / `cisco_ftd_ssh` (multi-context/virtual-router semantics need design), `cisco_apic` (ACI tenant VRFs are fabric-level objects, out of scope for per-device discovery), `ericsson_ipos`, `mellanox_mlnxos`.
 
+## LAG membership
+
+Drivers that implement the optional `get_interfaces_lag()` getter report which physical ports are members of which link aggregation, and each member interface carries a `lag` reference to its aggregate. Emission is gated by the `emit_lag_membership` policy option (defaults to `true`); see the [device discovery README](./README.md#lag-membership) for the rules.
+
+| Driver | Status |
+|--------|--------|
+| `junos` | Supported (Juniper Junos via NETCONF) — `aenet` address families in the terse `get-interface-information` reply, the RPC behind `show interfaces terse`. Operational data only, so the discovery account needs no configuration-read permission, and the reply does not depend on LACP. Membership is reported per logical unit and collapses onto the physical port. Only `ae<N>` bundles are reported; SRX chassis-cluster `reth` and `fab` child links are not LAGs and are left out. Built from a reply captured on an EX4550 running Junos 15.1 (LACP bundles). |
+| other drivers | Not yet supported — open an issue with a real-device output capture if you need it. |
+
+## Prefix VLAN from the device
+
+Drivers that implement the optional `get_interfaces_vlan_id()` getter report the VLAN ID each L3 interface is bound to, so `emit_prefix_vlan: svi-name` can associate a prefix with its VLAN even when the interface name does not carry the VLAN ID. The getter is only called while that option is on; see the [device discovery README](./README.md#prefix) for the rules.
+
+| Driver | Status |
+|--------|--------|
+| `mikrotik_routeros` | Supported — `vlan-id` per VLAN interface from `interface vlan print detail` (one extra command per poll). Disabled interfaces are included. Withheld: 802.1ad S-tags (anything but an explicit `use-service-tag=no`, so a RouterOS that does not print the flag is withheld too), a VLAN interface stacked on another VLAN interface, and a VLAN ID configured on more than one parent. |
+| `brocade_fastiron` | Supported — the `router-interface ve <N>` line of each VLAN block in `show running-config vlan`; the VE number itself is never read as a VLAN ID. A VE bound by more than one VLAN is withheld. |
+| `junos` | Supported (EX / QFX switching, via NETCONF) — the L3 interface each VLAN names in the extensive `get-vlan-information` reply (`show vlans extensive`): `vlan.N` on non-ELS (`vlan-l3-interface`, state suffix stripped) and `irb.N` on ELS (`l2ng-l2rtb-vlan-l3-interface`). The VLAN tag is used, never the unit number or the internal VLAN index. Operational data only, so the discovery account needs no configuration-read permission (one extra RPC per poll). An L3 interface named by VLANs with different tags, or by a VLAN without a usable tag, is withheld. Routed subinterfaces such as `ae0.100` are not in the VLAN table and are not reported; MX bridge domains are not covered. Built from replies captured on an EX4550 (Junos 15.1) and a QFX5100 (Junos 21.4). |
+| other drivers | Not yet supported. Interfaces fall back to the SVI-name rule. Open an issue with a real-device output capture if you need it. |
+
 ## Querying supported drivers at runtime
 
 device-discovery exposes its effective driver list via its capabilities endpoint:

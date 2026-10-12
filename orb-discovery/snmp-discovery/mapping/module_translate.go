@@ -18,6 +18,7 @@ package mapping
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -39,7 +40,13 @@ func TranslateModules(
 	defaults *config.Defaults,
 	logger *slog.Logger,
 ) ([]diode.Entity, map[string]*diode.Module) {
-	return TranslateModulesWithAlias(oids, chassisInv, memberDevices, options, defaults, logger, nil)
+	return TranslateModulesWithAlias(oids, chassisInv, memberDevices, options, defaults, logger, nil, nil)
+}
+
+// ModuleModelLookup names a module type for a vendor-type OID, from an
+// operator's modules: lookup entries.
+type ModuleModelLookup interface {
+	GetModuleModel(vendorTypeOID string) (string, bool)
 }
 
 // TranslateModulesWithAlias is the full-fidelity entry point used by
@@ -52,6 +59,9 @@ func TranslateModules(
 //     members can reuse the same canonical ifName locally and an
 //     ifName-keyed map would collapse distinct transceivers.
 //
+// moduleModels, when not nil, names the type of a module that reports no
+// model name (see moduleTypeModel).
+//
 // Returns (nil, nil) when:
 //   - mode == "off"
 //   - the ENTITY-MIB walk produced no modules and no bays at all
@@ -63,6 +73,7 @@ func TranslateModulesWithAlias(
 	defaults *config.Defaults,
 	logger *slog.Logger,
 	aliasMap map[string]string,
+	moduleModels ModuleModelLookup,
 ) ([]diode.Entity, map[string]*diode.Module) {
 	mode := options.ModuleDiscoveryMode()
 	if mode == config.DiscoverModulesOff {
@@ -73,6 +84,7 @@ func TranslateModulesWithAlias(
 	if len(inv.Modules) == 0 && len(inv.SubModules) == 0 && len(inv.EmptyBays) == 0 {
 		return nil, nil
 	}
+	naming := moduleNaming{partInDescr: descrCarriesPartNumber(oids), lookup: moduleModels}
 
 	assignMemberID(&inv, chassisInv, oids, logger)
 
@@ -87,8 +99,9 @@ func TranslateModulesWithAlias(
 
 	for _, m := range inv.Modules {
 		// PSU / Fan are classified for labelling only — never emitted as
-		// module entities (mirrors device-discovery PR #419).
-		if m.Type == ModuleTypePSU || m.Type == ModuleTypeFan {
+		// module entities (mirrors device-discovery PR #419). Nor is a row
+		// that is the device's own ports rather than a part.
+		if m.Type == ModuleTypePSU || m.Type == ModuleTypeFan || m.Type == ModuleTypeBuiltIn {
 			continue
 		}
 		// A transceiver is full-mode-only. Modular optics are already
@@ -144,7 +157,7 @@ func TranslateModulesWithAlias(
 				attribute.String("vendor", vendorFromDevice(device)),
 			))
 		}
-		mod := emitModule(device, bay, m, defaults)
+		mod := emitModule(device, bay, m, defaults, naming)
 		entities = append(entities, mod)
 		if c := metrics.GetModulesEmitted(); c != nil {
 			c.Add(context.Background(), 1, metric.WithAttributes(
@@ -237,7 +250,7 @@ func TranslateModulesWithAlias(
 				))
 			}
 
-			mod := emitModule(device, subBay, tr, defaults)
+			mod := emitModule(device, subBay, tr, defaults, naming)
 			entities = append(entities, mod)
 			if c := metrics.GetModulesEmitted(); c != nil {
 				c.Add(context.Background(), 1, metric.WithAttributes(
@@ -317,18 +330,17 @@ func emitModuleBay(device *diode.Device, m ModuleEntry) *diode.ModuleBay {
 
 // emitModule constructs a Module entity attached to its ModuleBay.
 // Carries Device (NetBox matching scope) and a ModuleType built from
-// the PID (Model) + the manufacturer resolved from the emitted Device.
+// the PID (see moduleTypeModel) + the manufacturer resolved from the
+// emitted Device.
 // Manufacturer precedence: Device.DeviceType.Manufacturer.Name first
 // (so the ModuleType label always matches what NetBox sees on the
 // owning device), then the policy-level defaults, finally "Unknown".
 // Sharing vendorFromDevice with the metrics path keeps the label and
 // the emitted entity identical strings.
-func emitModule(device *diode.Device, bay *diode.ModuleBay, m ModuleEntry, defaults *config.Defaults) *diode.Module {
-	// Mirrors classifyModule's Model -> VendorType -> Unknown fallback so
-	// the emitted ModuleType label matches the classification. Aruba CX
-	// populates entPhysicalVendorType where Cisco populates ModelName;
-	// using Model alone would emit "Unknown" for valid Aruba hardware.
-	model := modelOrVendorType(m.Model, m.VendorType)
+func emitModule(device *diode.Device, bay *diode.ModuleBay, m ModuleEntry, defaults *config.Defaults,
+	naming moduleNaming,
+) *diode.Module {
+	model := moduleTypeModel(m, naming)
 	mfgName := resolveModuleManufacturer(device, defaults)
 	moduleType := &diode.ModuleType{
 		Model: &model,
@@ -368,11 +380,80 @@ func vendorFromDevice(d *diode.Device) string {
 	return "Unknown"
 }
 
+const (
+	// ciscoEnterprise is the sysObjectID arc of Cisco devices.
+	ciscoEnterprise = ".1.3.6.1.4.1.9."
+	// comwareEnterprise is the sysObjectID arc of Comware devices. Their
+	// module rows can leave entPhysicalModelName blank and may end
+	// entPhysicalDescr with the part number ("... Main Processing Unit JX123A").
+	comwareEnterprise = ".1.3.6.1.4.1.25506."
+)
+
+// hpePartNumberRe matches an HPE networking part number: J, a letter or a
+// digit, three digits and a letter (JX123A, J9123A).
+var hpePartNumberRe = regexp.MustCompile(`^J[A-Z0-9][0-9]{3}[A-Z]$`)
+
+// descrCarriesPartNumber reports whether the walked sysObjectID is a
+// Comware device's, whose module descriptions may end with the part number.
+func descrCarriesPartNumber(oids ObjectIDValueMap) bool {
+	return sysObjectIDUnder(oids, comwareEnterprise)
+}
+
+// sysObjectIDUnder reports whether the walked sysObjectID sits under arc,
+// given with leading and trailing dots.
+func sysObjectIDUnder(oids ObjectIDValueMap, arc string) bool {
+	v, ok := oids[oidSysObjectIDScalar]
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix("."+strings.TrimPrefix(trimSNMPString(v.Value), "."), arc)
+}
+
+// descrPartNumber is the part number ending descr, or "" when its last token
+// is not shaped like one.
+func descrPartNumber(descr string) string {
+	fields := strings.Fields(descr)
+	if len(fields) == 0 {
+		return ""
+	}
+	if last := fields[len(fields)-1]; hpePartNumberRe.MatchString(last) {
+		return last
+	}
+	return ""
+}
+
+// moduleNaming is what a target offers for naming modules that report no
+// model name.
+type moduleNaming struct {
+	partInDescr bool              // descriptions end with the part number (descrCarriesPartNumber)
+	lookup      ModuleModelLookup // the operator's modules: entries, or nil
+}
+
+// moduleTypeModel names a module's type: its entPhysicalModelName, else the
+// operator's modules: entry for its vendor type, else, on a device whose
+// descriptions carry it, the part number ending its entPhysicalDescr, else
+// its vendor type, as modelOrVendorType does. A reported model name is never
+// replaced, because one vendor type often stands for several models.
+func moduleTypeModel(m ModuleEntry, naming moduleNaming) string {
+	if strings.TrimSpace(m.Model) != "" {
+		return modelOrVendorType(m.Model, m.VendorType)
+	}
+	if naming.lookup != nil {
+		if model, ok := naming.lookup.GetModuleModel(m.VendorType); ok {
+			return model
+		}
+	}
+	if naming.partInDescr {
+		if part := descrPartNumber(m.Description); part != "" {
+			return part
+		}
+	}
+	return modelOrVendorType(m.Model, m.VendorType)
+}
+
 // modelOrVendorType prefers a non-blank trimmed model, falling back to
-// the trimmed vendorType, and finally "Unknown". Parallels
-// classifyModule so the emitted ModuleType.Model matches the type
-// classification for vendors (e.g. Aruba CX) that populate
-// entPhysicalVendorType instead of entPhysicalModelName.
+// the trimmed vendorType, and finally "Unknown", the same effective PID
+// classifyModule reads.
 func modelOrVendorType(model, vendorType string) string {
 	if v := strings.TrimSpace(model); v != "" {
 		return v

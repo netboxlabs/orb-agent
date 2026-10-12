@@ -21,7 +21,14 @@ from device_discovery.client import Client
 from device_discovery.discovery import discover_device_driver, supported_drivers
 from device_discovery.log_config import configure_default_logging, flatten_message
 from device_discovery.metrics import get_metric
-from device_discovery.policy.models import Config, Defaults, Napalm, Options, Status
+from device_discovery.policy.models import (
+    Config,
+    Defaults,
+    Napalm,
+    Options,
+    Status,
+    merge_override_defaults,
+)
 from device_discovery.policy.portscan import (
     expand_hostnames,
     find_reachable_hosts,
@@ -70,43 +77,17 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     return isinstance(error, _EXPECTED_TARGET_FAILURES)
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge ``override`` into ``base``; override wins on non-dict conflicts."""
-    merged = dict(base)
-    for key, value in override.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
-
-def merge_override_defaults(base: Defaults, override: Defaults) -> Defaults:
-    """
-    Overlay a target's ``override_defaults`` onto the policy defaults.
-
-    Fields merge recursively, except ``vlan.group``: an override group replaces
-    the policy group as a whole so a scope set on the policy cannot leak into
-    a group the override named without one.
-    """
-    override_dump = override.model_dump(exclude_unset=True, exclude_none=True)
-    merged = _deep_merge(base.model_dump(), override_dump)
-    override_group = override_dump.get("vlan", {}).get("group")
-    if override_group is not None:
-        merged["vlan"]["group"] = override_group
-    return Defaults.model_validate(merged)
-
-
 class PolicyRunner:
     """Policy Runner class."""
 
     def __init__(self):
         """Initialize the PolicyRunner."""
         self.name = ""
+        # Identifies this runner, not the policy it serves. A deleted policy
+        # can have a job still in flight (stop() shuts the scheduler down with
+        # wait=False), so per-run state keyed on the policy name would let that
+        # late job write state the policy's replacement then reads.
+        self.instance_id = uuid.uuid4().hex
         self.scopes = dict[str, Napalm]()
         self.config = None
         self.status = Status.NEW
@@ -349,6 +330,8 @@ class PolicyRunner:
                         f"Error getting interface VLANs: {e}. "
                         "Continuing without interface-VLAN data."
                     )
+            self._collect_lag_membership(config, device, data, sanitized_hostname)
+            self._collect_interfaces_vlan_id(config, device, data, sanitized_hostname)
             get_chassis_members = getattr(device, "get_chassis_members", None)
             if callable(get_chassis_members):
                 try:
@@ -361,12 +344,72 @@ class PolicyRunner:
                     )
             self._collect_modules(config, device, data, sanitized_hostname)
             self._collect_network_instances(config, device, data, sanitized_hostname)
-            metadata = {"policy_name": self.name, "hostname": sanitized_hostname}
+            metadata = {
+                "policy_name": self.name,
+                "policy_instance": self.instance_id,
+                "hostname": sanitized_hostname,
+            }
             entity_count = Client().ingest(metadata, data, run_id=run_id)
             discovery_success = get_metric("discovery_success")
             if discovery_success:
                 discovery_success.add(1, {"policy": self.name})
             return entity_count
+
+    def _collect_interfaces_vlan_id(
+        self,
+        config: Config,
+        device,
+        data: dict,
+        sanitized_hostname: str,
+    ) -> None:
+        """
+        Call the driver's optional get_interfaces_vlan_id() when prefix VLANs are on.
+
+        The map is only consumed by ``emit_prefix_vlan: svi-name``, so with the
+        option off no device command is issued. Drivers without the method are
+        skipped silently; a failure costs only the device-reported VLAN IDs, and
+        the SVI-name fallback still applies.
+        """
+        if not (config.options and config.options.emit_prefix_vlan == "svi-name"):
+            return
+        get_interfaces_vlan_id = getattr(device, "get_interfaces_vlan_id", None)
+        if not callable(get_interfaces_vlan_id):
+            return
+        try:
+            data["interfaces_vlan_id"] = get_interfaces_vlan_id()
+        except Exception as e:
+            logger.warning(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                f"Error getting interface VLAN IDs: {e}. "
+                "Continuing with SVI-name VLANs only."
+            )
+
+    def _collect_lag_membership(
+        self,
+        config: Config,
+        device,
+        data: dict,
+        sanitized_hostname: str,
+    ) -> None:
+        """
+        Call the driver's optional get_interfaces_lag() unless emit_lag_membership is off.
+
+        Drivers without the method are skipped silently. A failure is logged
+        and costs only the lag references, never the device's discovery cycle.
+        """
+        if config.options and config.options.emit_lag_membership is False:
+            return
+        get_interfaces_lag = getattr(device, "get_interfaces_lag", None)
+        if not callable(get_interfaces_lag):
+            return
+        try:
+            data["interfaces_lag"] = get_interfaces_lag()
+        except Exception as e:
+            logger.warning(
+                f"Policy {self.name}, Hostname {sanitized_hostname}: "
+                f"Error getting LAG membership: {e}. "
+                "Continuing without LAG membership."
+            )
 
     def _collect_modules(
         self,

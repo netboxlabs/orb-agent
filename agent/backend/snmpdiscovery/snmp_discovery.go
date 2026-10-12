@@ -5,12 +5,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -218,6 +219,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		NameUnderscore: "snmp_discovery",
 		Exec:           d.exec,
 		Args:           args,
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p

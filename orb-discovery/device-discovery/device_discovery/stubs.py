@@ -38,34 +38,42 @@ def vrf_match_key(vrf: pb.VRF) -> tuple[str, ...]:
     two VRFs with one rd and different names are the same record, and keying on
     the pair would treat them as two.
 
-    A VRF tenant would join the no-rd branch, but VrfParameters exposes only
-    name and rd, so nothing can set one today. Add it here if that changes.
+    Without an rd the tenant joins the name. Its group is part of it too: a
+    grouped and an ungrouped tenant of one name can be two NetBox tenants.
     """
     if vrf.rd:
         return ("rd", vrf.rd)
-    return ("name", vrf.name)
+    return ("name", vrf.name, vrf.tenant.name, vrf.tenant.group.name)
 
 
 def _vrf_match_stub(vrf: pb.VRF) -> pb.VRF:
     """
-    Return a VRF carrying only matcher identifiers (name, rd).
+    Return a VRF carrying only matcher identifiers (name, rd, tenant name and group).
 
-    The ipam.vrf matchers key on `name` and (when set) `rd`; tags/comments/description on
-    the rich VRF would just bloat the wire and could leak into create-time attributes if
-    the plugin's match-then-create fallback fires.
+    The ipam.vrf matchers key on `name`, `tenant` and (when set) `rd`; a stub without
+    the tenant would resolve to a different VRF than the rich one. Tags/comments/description
+    on the rich VRF and its tenant would just bloat the wire and could leak into create-time
+    attributes if the plugin's match-then-create fallback fires.
     """
     stub = pb.VRF(name=vrf.name)
     if vrf.rd:
         stub.rd = vrf.rd
+    if vrf.HasField("tenant"):
+        stub.tenant.CopyFrom(_tenant_match_stub(vrf.tenant))
     return stub
+
+
+def _vrf_identity(vrf: pb.VRF) -> tuple[str, str, str, str]:
+    """Return the fields _vrf_match_stub keeps, for comparing two VRF references."""
+    return (vrf.name, vrf.rd, vrf.tenant.name, vrf.tenant.group.name)
 
 
 def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
     """
     Return True when ``ip`` is the exact IP object the device's primary references.
 
-    Match on full identity — address WITH prefix, VRF (name + rd, matching how
-    _vrf_match_stub keys VRF identity), and the assigned interface — not just the
+    Match on full identity: address WITH prefix, VRF (name, rd and tenant, matching how
+    _vrf_match_stub keys VRF identity) and the assigned interface, not just the
     host portion. Two IP entities can share a host address yet be different objects:
     a differing prefix length (a /32 loopback vs a /24 SVI), a differing VRF (the
     same address in two routing tables, or the same VRF name under a different rd),
@@ -77,8 +85,8 @@ def _same_primary_ip(primary: pb.IPAddress, ip: pb.IPAddress) -> bool:
     """
     if primary.address != ip.address:
         return False
-    primary_vrf = (primary.vrf.name, primary.vrf.rd) if primary.HasField("vrf") else None
-    ip_vrf = (ip.vrf.name, ip.vrf.rd) if ip.HasField("vrf") else None
+    primary_vrf = _vrf_identity(primary.vrf) if primary.HasField("vrf") else None
+    ip_vrf = _vrf_identity(ip.vrf) if ip.HasField("vrf") else None
     if primary_vrf != ip_vrf:
         return False
     primary_iface = primary.assigned_object_interface.name if primary.HasField("assigned_object_interface") else ""
@@ -339,12 +347,23 @@ def _module_match_stub(rich: pb.Module, dev_stub: pb.Device) -> pb.Module:
     return stub
 
 
-def _prune_interface_entity(iface: pb.Interface, dev_stub: pb.Device) -> None:
-    """Replace ``iface.device`` + any nested parent/bridge/lag/module with stubs in place."""
+def _prune_interface_entity(
+    iface: pb.Interface,
+    dev_stub: pb.Device,
+    lag_dev_stub: pb.Device | None = None,
+) -> None:
+    """
+    Replace ``iface.device`` + any nested parent/bridge/lag/module with stubs in place.
+
+    ``lag_dev_stub`` is the stub for the device that owns the nested ``lag``,
+    when it differs from the interface's own: on a Virtual Chassis a member
+    port and its aggregate can sit on different stack members. Without it the
+    lag is stubbed with the interface's own device.
+    """
     iface.device.CopyFrom(dev_stub)
     _replace_iface_field(iface, "parent", dev_stub)
     _replace_iface_field(iface, "bridge", dev_stub)
-    _replace_iface_field(iface, "lag", dev_stub)
+    _replace_iface_field(iface, "lag", lag_dev_stub or dev_stub)
     if iface.HasField("module"):
         iface.module.CopyFrom(_module_match_stub(iface.module, dev_stub))
 
@@ -372,7 +391,22 @@ def _prune_interface_against_index(
             iface.name,
         )
         return
-    _prune_interface_entity(iface, stub_for(rich))
+    lag_dev_stub = None
+    if iface.HasField("lag") and iface.lag.HasField("device"):
+        lag_rich = _resolve_device(iface.lag.device, index)
+        if lag_rich is None:
+            # Falling back to the interface's own device would name an
+            # aggregate that member does not have, which Diode would then
+            # create there or reject. Losing the reference is the lesser harm.
+            logger.warning(
+                "prune_nested_refs: could not resolve the device of lag %r on interface %r — dropping the lag",
+                iface.lag.name,
+                iface.name,
+            )
+            iface.ClearField("lag")
+        else:
+            lag_dev_stub = stub_for(lag_rich)
+    _prune_interface_entity(iface, stub_for(rich), lag_dev_stub)
 
 
 def _prune_ip_address_against_index(

@@ -126,3 +126,9 @@ func TestNilLoggerIsSafe(t *testing.T) {
 		WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
 	})
 }
+
+func TestUnknownKeyReport_MergeBesideComplexKeyDoesNotPanic(t *testing.T) {
+	assert.NotPanics(t, func() {
+		captureWarnings(t, "policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n")
+	})
+}

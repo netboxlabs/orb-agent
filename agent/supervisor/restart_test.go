@@ -2078,3 +2078,26 @@ func TestARestartSupersedesARetryWhoseTimerAlreadyFired(t *testing.T) {
 		"the superseded retry must not restart the backend a second time")
 	assert.Equal(t, 0, rec.count("reset:lazy_superseded"), "and must not reset it")
 }
+
+// A start refused because another process holds the backend's listen address
+// is the environment refusing, not the upgraded binary failing: the binary
+// stays installed, nothing is rolled back, and the entry is left failed for
+// the next start to probe the address again.
+func TestRestartUpgradedDoesNotRollBackWhenTheListenAddressIsHeld(t *testing.T) {
+	rec := &recorder{}
+	applier := &stubApplier{rec: rec}
+	files := &stubFiles{rec: rec}
+	s := newTestSupervisor(t, rec, applier, files)
+	be := newStub(rec, "worker")
+	be.binary = "orb-stub"
+	backend.Register("sup_upgrade_addr_held", be)
+	require.NoError(t, s.ConfigureAll(map[string]any{"sup_upgrade_addr_held": nil}, config.BackendCommons{}, background))
+	be.startErrs = []error{fmt.Errorf("worker: %w: localhost:8074 is in use", backend.ErrListenAddrInUse)}
+	rec.reset()
+
+	require.NoError(t, s.RestartUpgraded(context.Background(), "sup_upgrade_addr_held"))
+
+	assert.Equal(t, 1, rec.count("start:worker"), "Start is attempted once, not retried on a rolled-back binary")
+	assert.Equal(t, 0, rec.count("rollback:orb-stub"), "the upgraded binary stays installed")
+	assert.Equal(t, Failed, s.entries["sup_upgrade_addr_held"].phase, "the entry is failed, for the next start to probe again")
+}

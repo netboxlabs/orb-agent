@@ -405,6 +405,18 @@ func (s *Supervisor) restartUpgraded(ctx context.Context, e *entry) error {
 		e.setPhase(Failed)
 		return nil
 	}
+	// A start refused because another process holds the backend's listen
+	// address says nothing about the binary: the rolled-back one would be
+	// refused the same way. The upgrade stays installed, and the next start,
+	// from the retry timer of an on-demand backend or the health monitor
+	// under fleet, is probed again, by which time the address may be free.
+	if errors.Is(startErr, backend.ErrListenAddrInUse) {
+		s.logger.Warn("filesmgr: backend start refused after upgrade, leaving the binary as it is", "backend", e.name, "error", startErr)
+		_, armed := s.failAndArm(e, startErr)
+		s.logArmed(e, armed)
+		s.scheduleReplay(e)
+		return nil
+	}
 	s.logger.Warn("filesmgr: backend Start failed after upgrade, rolling back", "backend", e.name, "error", startErr)
 
 	// Every failure exit after the removal schedules the replay: a stop that

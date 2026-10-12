@@ -66,7 +66,7 @@ func TestTranslateVlanDefinitions(t *testing.T) {
 func TestVlanBuilder(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
 	defs := map[int64]vlanDef{10: {name: "users", status: "ACTIVE"}, 20: {name: "voice", status: "SUSPENDED"}}
-	defaults := &config.Defaults{Tags: []string{"global"}, Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "Lab VLANs"}, Tenant: "acme", Role: "data", Tags: []string{"managed"}}}
+	defaults := &config.Defaults{Tags: []string{"global"}, Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "Lab VLANs"}, Tenant: config.TenantParameters{Name: "acme", Group: "customers"}, Role: "data", Tags: []string{"managed"}}}
 	b := newVlanBuilder(dev, defaults, defs)
 
 	v10 := b.get(10)
@@ -76,6 +76,9 @@ func TestVlanBuilder(t *testing.T) {
 	require.Equal(t, "lab", *v10.Site.Name)
 	require.NotNil(t, v10.Group)
 	require.Equal(t, "Lab VLANs", *v10.Group.Name)
+	require.NotNil(t, v10.Tenant)
+	require.NotNil(t, v10.Tenant.Group)
+	require.Equal(t, "customers", *v10.Tenant.Group.Name)
 	require.Equal(t, "lab-vlans", *v10.Group.Slug)
 	scopeSite, ok := v10.Group.Scope.(*diode.Site)
 	require.True(t, ok)

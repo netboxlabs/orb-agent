@@ -65,6 +65,12 @@ type EntityRegistry struct {
 	ipSource           map[*diode.IPAddress]string
 	prefixRank         map[*diode.IPAddress]int
 	verifiedInterfaces map[*diode.Interface]struct{}
+
+	// namedVlanInterfaces holds the interfaces vlan_interface_name_prefix
+	// renamed, and unnamedVlanInterfaces counts those it would have renamed
+	// had it been set.
+	namedVlanInterfaces   map[*diode.Interface]struct{}
+	unnamedVlanInterfaces int
 }
 
 // NewEntityRegistry creates a new EntityRegistry
@@ -76,6 +82,8 @@ func NewEntityRegistry(logger *slog.Logger) *EntityRegistry {
 		ipSource:           make(map[*diode.IPAddress]string),
 		prefixRank:         make(map[*diode.IPAddress]int),
 		verifiedInterfaces: make(map[*diode.Interface]struct{}),
+
+		namedVlanInterfaces: make(map[*diode.Interface]struct{}),
 	}
 }
 
@@ -227,6 +235,19 @@ func (r *EntityRegistry) ResolveSubinterfaceParents() {
 			continue // Not a subinterface
 		}
 
+		// NetBox accepts a parent only on a virtual interface: Interface
+		// .clean() refuses one on anything else ("Only virtual interfaces
+		// may be assigned to a parent interface"), and a refused interface
+		// fails the whole target's ingestion. A name-shaped child the
+		// device typed as a port — a channelized lane, an ONU port — is
+		// therefore left without the reference rather than carrying one
+		// that cannot be stored.
+		if iface.Type == nil || *iface.Type != "virtual" {
+			r.logger.Debug("interface is not virtual; not assigning a parent",
+				"interface", *iface.Name, "type", strDeref(iface.Type))
+			continue
+		}
+
 		// Look up the parent interface by name
 		parent := r.GetInterfaceByName(parentName)
 		if parent != nil {
@@ -304,7 +325,7 @@ func createEntity(entityType EntityType) (diode.Entity, error) {
 		return &diode.VLAN{}, nil
 	case "interface_vlan", "vtp_vlan":
 		return nil, fmt.Errorf("entity type %q is post-pass only and has no row entity", entityType)
-	case "chassis_inventory", "chassis_asset":
+	case "chassis_inventory", "chassis_asset", "lag_membership":
 		return nil, fmt.Errorf("entity type %q is post-pass only and has no row entity", entityType)
 	}
 	return nil, fmt.Errorf("unimplemented entity type: %s", entityType)
@@ -364,6 +385,12 @@ const (
 	// the table exists to corroborate SVI-derived prefix VLANs, so it is
 	// only walked when options.emit_prefix_vlan is not "off".
 	VtpVlanEntityType EntityType = "vtp_vlan"
+	// LagMembershipEntityType is a pseudo-entity that flags the
+	// IEEE8023-LAG-MIB dot3adAggPortTable aggregator columns for
+	// consumption by AttachLagMembership as a runner-level pass. Map() on
+	// its associated mapper is a no-op; data flows via the raw oids map.
+	// The columns are walked unless options.emit_lag_membership is false.
+	LagMembershipEntityType EntityType = "lag_membership"
 )
 
 // ObjectIDMapper is a struct that maps ObjectIDs to entities
@@ -523,6 +550,7 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 		string(ChassisModuleEntityType):    &ChassisModuleMapper{logger: logger},
 		string(VrfEntityType):              &VrfMapper{logger: logger},
 		string(ChassisAssetEntityType):     &ChassisInventoryMapper{logger: logger},
+		string(LagMembershipEntityType):    &LagMembershipMapper{logger: logger},
 	}
 	postPassMappers := []postPassMapper{vlanMapper}
 	// Validate index_kind on every entry (top-level and nested). A typo
@@ -576,7 +604,8 @@ func NewConfig(mappings []config.MappingEntry, logger *slog.Logger, manufacturer
 			Entry.Entity == string(ChassisInventoryEntityType) ||
 			Entry.Entity == string(ChassisModuleEntityType) ||
 			Entry.Entity == string(ChassisAssetEntityType) ||
-			Entry.Entity == string(VrfEntityType) {
+			Entry.Entity == string(VrfEntityType) ||
+			Entry.Entity == string(LagMembershipEntityType) {
 			postPassPrefixes = append(postPassPrefixes, m.OID+".")
 		}
 	}
@@ -871,6 +900,10 @@ func (m *ObjectIDMapper) MapObjectIDsToEntity(objectIDs ObjectIDValueMap) []diod
 			uniqueEntities[newEntity] = true
 		}
 	}
+	// Before dedup and dropUnverifiedInterfaceAssignments, so the addresses of a
+	// VLAN interface left out here go out unassigned.
+	m.leaveOutCollidingVlanInterfaces(uniqueEntities)
+	m.reportUnnamedVlanInterfaces()
 
 	// Dedup must run BEFORE filterExcludedEntities. Otherwise:
 	// legacy row (assigned to excluded interface) + modern row
@@ -1873,12 +1906,16 @@ func (m *Config) VendorObjectIDs(vendor string) map[string]int {
 //     an inert option alter a target's emitted VLANs. With either off the table
 //     is not walked, and a Cisco target emits exactly the VLAN entities it
 //     emitted before the option existed.
+//   - lag_membership: IEEE8023-LAG-MIB dot3adAggPortTable aggregator
+//     columns, consumed by AttachLagMembership. On by default; walked
+//     unless emit_lag_membership is false.
 func (m *Config) skippedWalkEntities() map[string]bool {
 	return map[string]bool{
 		string(ChassisModuleEntityType): m.options.ModuleDiscoveryMode() == config.DiscoverModulesOff,
 		string(VrfEntityType):           !m.options.VrfDiscoveryEnabled(),
 		string(ChassisAssetEntityType):  !m.options.AssetTagDiscoveryEnabled(),
 		string(VtpVlanEntityType):       m.options.PrefixVlanMode() == "off" || !m.options.PrefixEmissionEnabled(),
+		string(LagMembershipEntityType): !m.options.LagMembershipEnabled(),
 	}
 }
 

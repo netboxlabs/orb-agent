@@ -53,7 +53,8 @@ must return the correct empty type so the rest of the pipeline doesn't break.
 
 Beyond the required five, drivers should also implement the optional getters where the
 platform supports the concept — see [`get_interfaces_vlans`](#optional-method-get_interfaces_vlans)
-(switchport/VLAN associations) and [`get_network_instances`](#optional-method-get_network_instances)
+(switchport/VLAN associations), [`get_interfaces_vlan_id`](#optional-method-get_interfaces_vlan_id)
+(L3 interface → VLAN ID for prefix VLANs) and [`get_network_instances`](#optional-method-get_network_instances)
 (VRF discovery; implement on every platform with an L3 VRF concept).
 
 | Method | Return type | Empty return |
@@ -187,7 +188,8 @@ the `parent.X` convention; would need driver-local synthesis of
   `set vlanid` + `set interface "port1"`).
 - MikroTik RouterOS (VLAN sub-interfaces in `interface print
   detail` carry `vlan-id=` + `interface=` properties but operator
-  picks the name, e.g. `ether1-vlan100`).
+  picks the name, e.g. `ether1-vlan100`). Their VLAN IDs reach the
+  prefix-VLAN resolver through `get_interfaces_vlan_id()`.
 - Nokia SR OS (L3 interfaces have operator-chosen names like
   `to-peer-1`; SAPs use `:` separator e.g. `1/1/1:100`. The
   translator already handles the `:` form, but emitting SAPs at
@@ -271,6 +273,76 @@ def get_interfaces_vlans(self) -> dict[str, dict]:
         result[ifname] = classify_switchport(info)
     return result
 ```
+
+## Optional method: `get_interfaces_lag`
+
+A driver MAY implement `get_interfaces_lag()` to populate NetBox
+`Interface.lag`. The runner calls it via `getattr(...)` (skipped when the
+`emit_lag_membership` policy option is `false`) so drivers without it are
+silently skipped.
+
+**Output shape** — physical member port name → aggregate interface name:
+
+```python
+{"xe-0/0/24": "ae120", "xe-0/0/28": "ae0"}
+```
+
+- **Both names must match `get_interfaces()` naming exactly**: the
+  translator joins on interface name and creates nothing. A member or an
+  aggregate it cannot find is skipped.
+- **Report the physical port, never a logical unit**: NetBox does not allow a
+  LAG parent on a virtual interface. Collapse per-unit membership onto the
+  port in the driver (Junos reports `xe-0/0/24.0 -> ae120.0`).
+- **Drop contradictions rather than pick**: a port whose units name two
+  different aggregates is left out, with a WARNING.
+- **Prefer operational state over configuration**: discovery accounts often
+  lack configuration-read permission (the Junos implementation reads the
+  terse `get-interface-information` reply for this reason).
+- **Best-effort**: return `{}` on an RPC or parse failure rather than raising.
+
+`device_discovery.lag.apply_interface_lags()` applies the map after stack
+translation, so on a Virtual Chassis the reference names the stack member that
+owns the aggregate.
+
+**Tests**: add `mock_data/test_get_interfaces_lag/<scenario>/` fixtures —
+`BaseDriverTest.test_get_interfaces_lag` auto-discovers them, validates the
+shape, and compares against `expected_result.json` when present.
+
+## Optional method: `get_interfaces_vlan_id`
+
+A driver MAY implement `get_interfaces_vlan_id()` to tell the prefix-VLAN
+resolver which VLAN each L3 interface is bound to. The runner calls it via
+`getattr(...)` only when the `emit_prefix_vlan` policy option is `svi-name`, so
+drivers without it are silently skipped and fall back to the SVI-name rule.
+
+**Output shape** — interface name → VLAN ID, or `None`:
+
+```python
+{"sfpplus1.156": 156, "ve400": 40, "svc100": None}
+```
+
+- **Read the binding from the device, never from the name.** The point of the
+  getter is the interfaces whose names do not carry the VLAN ID (RouterOS
+  `vlan-id=`, FastIron `router-interface ve <N>`, Junos `l3-interface`). If all
+  you have is the name, do not implement it.
+- **Names must match `get_interfaces()` / `get_interfaces_ip()` exactly**: the
+  resolver joins on the interface name.
+- **`None` means "reported, but do not link"**: a tag that is not a plain
+  802.1Q VLAN (an 802.1ad S-tag, a tag stacked on another VLAN interface) or is
+  ambiguous (one VLAN ID on several parents, a VE bound by two VLANs). The
+  SVI-name fallback is skipped for it, so a name like `vlan100` cannot undo
+  the driver's refusal. Leave out an interface you know nothing about.
+- **Do not filter on the VLAN table**: the translator already links only to a
+  VLAN that `get_vlans()` reports with a name.
+- **Best-effort**: return `{}` on a command or parse failure rather than raising.
+
+`device_discovery.translate._interfaces_vlan_ids()` validates the payload
+(non-empty name → `None` or an int in 1..4094) and drops anything else.
+
+**Tests**: add `mock_data/test_get_interfaces_vlan_id/<scenario>/` fixtures —
+`BaseDriverTest.test_get_interfaces_vlan_id` auto-discovers them, validates the
+shape, and compares against `expected_result.json` when present. Reference
+implementations: `mikrotik_routeros`, `brocade_fastiron`, `junos`.
 
 ## Optional method: `get_network_instances`
 

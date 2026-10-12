@@ -1,0 +1,165 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<rpc-reply xmlns:junos="http://xml.juniper.net/junos/15.1R7/junos">
+  <vlan-information xmlns="http://xml.juniper.net/junos/15.1R7/junos-esw" junos:style="extensive">
+    <vlan-terse/>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>Internet</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-owner>static</vlan-owner>
+      <vlan-tag>50</vlan-tag>
+      <vlan-tag-string>50</vlan-tag-string>
+      <vlan-index>4</vlan-index>
+      <vlan-l3-interface>vlan.50 (UP)</vlan-l3-interface>
+      <vlan-protocol-port>Port Mode</vlan-protocol-port>
+      <vlan-members-count>1</vlan-members-count>
+      <vlan-members-upcount>1</vlan-members-upcount>
+      <vlan-detail>
+        <vlan-hardware-token>50</vlan-hardware-token>
+        <vlan-mac-aging-time>300 seconds</vlan-mac-aging-time>
+        <vlan-tagged-members-count>1</vlan-tagged-members-count>
+        <vlan-tagged-members-upcount>1</vlan-tagged-members-upcount>
+        <vlan-untagged-members-count>0</vlan-untagged-members-count>
+        <vlan-untagged-members-upcount>0</vlan-untagged-members-upcount>
+        <vlan-member-list>
+          <vlan-member>
+            <vlan-member-interface>xe-0/0/30.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+        </vlan-member-list>
+      </vlan-detail>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>MGMT</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-owner>static</vlan-owner>
+      <vlan-tag>20</vlan-tag>
+      <vlan-tag-string>20</vlan-tag-string>
+      <vlan-index>5</vlan-index>
+      <vlan-l3-interface>vlan.20 (UP)</vlan-l3-interface>
+      <vlan-protocol-port>Port Mode</vlan-protocol-port>
+      <vlan-members-count>2</vlan-members-count>
+      <vlan-members-upcount>2</vlan-members-upcount>
+      <vlan-detail>
+        <vlan-hardware-token>20</vlan-hardware-token>
+        <vlan-mac-aging-time>300 seconds</vlan-mac-aging-time>
+        <vlan-tagged-members-count>2</vlan-tagged-members-count>
+        <vlan-tagged-members-upcount>2</vlan-tagged-members-upcount>
+        <vlan-untagged-members-count>0</vlan-untagged-members-count>
+        <vlan-untagged-members-upcount>0</vlan-untagged-members-upcount>
+        <vlan-member-list>
+          <vlan-member>
+            <vlan-member-interface>ge-0/0/1.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+          <vlan-member>
+            <vlan-member-interface>xe-0/0/30.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+        </vlan-member-list>
+      </vlan-detail>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>VL100</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-owner>static</vlan-owner>
+      <vlan-tag>100</vlan-tag>
+      <vlan-tag-string>100</vlan-tag-string>
+      <vlan-index>12</vlan-index>
+      <vlan-description>TEST-ILO-VM</vlan-description>
+      <vlan-protocol-port>Port Mode</vlan-protocol-port>
+      <vlan-members-count>2</vlan-members-count>
+      <vlan-members-upcount>2</vlan-members-upcount>
+      <vlan-detail>
+        <vlan-hardware-token>100</vlan-hardware-token>
+        <vlan-mac-aging-time>300 seconds</vlan-mac-aging-time>
+        <vlan-tagged-members-count>2</vlan-tagged-members-count>
+        <vlan-tagged-members-upcount>2</vlan-tagged-members-upcount>
+        <vlan-untagged-members-count>0</vlan-untagged-members-count>
+        <vlan-untagged-members-upcount>0</vlan-untagged-members-upcount>
+        <vlan-member-list>
+          <vlan-member>
+            <vlan-member-interface>xe-0/0/4.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+          <vlan-member>
+            <vlan-member-interface>xe-0/0/30.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+        </vlan-member-list>
+      </vlan-detail>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>VL156</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-owner>static</vlan-owner>
+      <vlan-tag>156</vlan-tag>
+      <vlan-tag-string>156</vlan-tag-string>
+      <vlan-index>17</vlan-index>
+      <vlan-description>P2P_MGMT-ESXi</vlan-description>
+      <vlan-l3-interface>vlan.156 (UP)</vlan-l3-interface>
+      <vlan-protocol-port>Port Mode</vlan-protocol-port>
+      <vlan-members-count>2</vlan-members-count>
+      <vlan-members-upcount>2</vlan-members-upcount>
+      <vlan-detail>
+        <vlan-hardware-token>156</vlan-hardware-token>
+        <vlan-mac-aging-time>300 seconds</vlan-mac-aging-time>
+        <vlan-tagged-members-count>2</vlan-tagged-members-count>
+        <vlan-tagged-members-upcount>2</vlan-tagged-members-upcount>
+        <vlan-untagged-members-count>0</vlan-untagged-members-count>
+        <vlan-untagged-members-upcount>0</vlan-untagged-members-upcount>
+        <vlan-member-list>
+          <vlan-member>
+            <vlan-member-interface>xe-0/0/17.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+          <vlan-member>
+            <vlan-member-interface>xe-0/0/30.0*</vlan-member-interface>
+            <vlan-member-tagness>tagged</vlan-member-tagness>
+            <vlan-member-port-mode>trunk</vlan-member-port-mode>
+          </vlan-member>
+        </vlan-member-list>
+      </vlan-detail>
+    </vlan>
+    <vlan>
+      <vlan-instance>0</vlan-instance>
+      <vlan-name>default</vlan-name>
+      <vlan-status>Enabled</vlan-status>
+      <vlan-owner>static</vlan-owner>
+      <vlan-tag>0</vlan-tag>
+      <vlan-index>31</vlan-index>
+      <vlan-protocol-port>Port Mode</vlan-protocol-port>
+      <vlan-members-count>2</vlan-members-count>
+      <vlan-members-upcount>0</vlan-members-upcount>
+      <vlan-detail>
+        <vlan-hardware-token>1</vlan-hardware-token>
+        <vlan-mac-aging-time>300 seconds</vlan-mac-aging-time>
+        <vlan-tagged-members-count>0</vlan-tagged-members-count>
+        <vlan-tagged-members-upcount>0</vlan-tagged-members-upcount>
+        <vlan-untagged-members-count>2</vlan-untagged-members-count>
+        <vlan-untagged-members-upcount>0</vlan-untagged-members-upcount>
+        <vlan-member-list>
+          <vlan-member>
+            <vlan-member-interface>ae4.0</vlan-member-interface>
+            <vlan-member-tagness>untagged</vlan-member-tagness>
+            <vlan-member-port-mode>access</vlan-member-port-mode>
+          </vlan-member>
+          <vlan-member>
+            <vlan-member-interface>ae5.0</vlan-member-interface>
+            <vlan-member-tagness>untagged</vlan-member-tagness>
+            <vlan-member-port-mode>access</vlan-member-port-mode>
+          </vlan-member>
+        </vlan-member-list>
+      </vlan-detail>
+    </vlan>
+  </vlan-information>
+</rpc-reply>

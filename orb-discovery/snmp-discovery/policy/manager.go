@@ -6,16 +6,21 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
+	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/env"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
 )
 
 //go:embed mapping.yaml
@@ -24,6 +29,8 @@ var embeddedMapping embed.FS
 const (
 	// SNMPDefaultPort is the default SNMP port
 	SNMPDefaultPort = 161
+	// defaultSite is the site a policy that names none is given.
+	defaultSite = config.UndefinedPlaceholder
 )
 
 // Manager represents the policy manager
@@ -116,11 +123,11 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 	}
 
 	if policy.Config.Defaults.Role == "" {
-		policy.Config.Defaults.Role = "undefined"
+		policy.Config.Defaults.Role = config.UndefinedPlaceholder
 	}
 
 	if policy.Config.Defaults.Site == "" {
-		policy.Config.Defaults.Site = "undefined"
+		policy.Config.Defaults.Site = defaultSite
 	}
 
 	if policy.Config.Options.CreateUnknownVlans == nil {
@@ -245,7 +252,355 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 		}
 	}
 
+	if err := validateVrfTenants(policy); err != nil {
+		return err
+	}
+	if err := validateVlanInterfaceNamePrefixes(policy); err != nil {
+		return err
+	}
+	return validateRackPlacement(policy)
+}
+
+// validateVlanInterfaceNamePrefixes refuses an invalid prefix wherever it is
+// set. Falling back to the device's names instead would rename every VLAN
+// interface back in NetBox.
+func validateVlanInterfaceNamePrefixes(policy config.Policy) error {
+	prefix := policy.Config.Defaults.VlanInterfaceNamePrefix
+	if err := config.ValidateVlanInterfaceNamePrefix(prefix); err != nil {
+		return fmt.Errorf("defaults.vlan_interface_name_prefix %q %w", prefix, err)
+	}
+	for _, target := range policy.Scope.Targets {
+		if target.OverrideDefaults == nil {
+			continue
+		}
+		prefix := target.OverrideDefaults.VlanInterfaceNamePrefix
+		if err := config.ValidateVlanInterfaceNamePrefix(prefix); err != nil {
+			return fmt.Errorf("target %s: override_defaults.vlan_interface_name_prefix %q %w", target.Host, prefix, err)
+		}
+	}
 	return nil
+}
+
+// validateVrfTenants checks the defaults each target uses: the policy's, or
+// merged with its override, which can clash with a policy-level tenant or
+// supply a VRF name the policy leaves out.
+func validateVrfTenants(policy config.Policy) error {
+	for _, target := range policy.Scope.Targets {
+		if target.OverrideDefaults == nil {
+			if err := policy.Config.Defaults.ValidateVrfTenants(); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := config.MergeDefaults(&policy.Config.Defaults, target.OverrideDefaults).ValidateVrfTenants(); err != nil {
+			return fmt.Errorf("target %s, with its override_defaults: %w", target.Host, err)
+		}
+	}
+	return nil
+}
+
+// rackUnit is a U and face of a rack, named within a site. The location is
+// kept apart, since a target without one may land in any location.
+type rackUnit struct {
+	site, rack string
+	position   float64
+	face       string
+}
+
+// devicePlacement is what a target sends its device: a rack and, when it
+// places the device, a U and face (zero otherwise). location is empty when the
+// target has none; oidLocation marks one read from an OID at scan time.
+type devicePlacement struct {
+	unit        rackUnit
+	location    string
+	oidLocation bool
+}
+
+// pinnedPlacement is what a target naming a device sends it.
+type pinnedPlacement struct {
+	placement devicePlacement
+	host      string
+}
+
+// sharers is what the racked targets sending one identifier send its device:
+// each placement, in order, and the first target relying on the identifier.
+type sharers struct {
+	placements []pinnedPlacement
+	sent       map[devicePlacement]bool
+	reliedOn   *pinnedPlacement
+}
+
+// holders returns the targets one holding the identifier at rank is tied to.
+// A target is matched by its strongest identifier, so that one ties it to
+// every target sending it; a weaker one only to a target relying on it.
+func (s *sharers) holders(rank int) []pinnedPlacement {
+	if rank == 0 {
+		return s.placements
+	}
+	if s.reliedOn == nil {
+		return nil
+	}
+	return []pinnedPlacement{*s.reliedOn}
+}
+
+// deviceID is something a target's device is known by: the one host it
+// reaches, a kept netbox_id or a literal asset tag.
+type deviceID struct {
+	kind, value string
+}
+
+// validateRackPlacement rejects a position or face NetBox would refuse, or
+// that one target cannot describe. Only an upper bound and multi-U overlaps
+// are left to NetBox, since they depend on rack and device heights.
+func validateRackPlacement(policy config.Policy) error {
+	defaults := &policy.Config.Defaults
+	if defaults.Position != nil || defaults.RackFace() != "" {
+		return errors.New("defaults: position and face are set per target, in override_defaults")
+	}
+	// Each U maps its locations ("" for none) to the target placed there.
+	placedAt := map[rackUnit]map[string]string{}
+	pinnedAt := map[deviceID]*sharers{}
+	for _, target := range policy.Scope.Targets {
+		override := target.OverrideDefaults
+		placed := override != nil && (override.Position != nil || override.RackFace() != "")
+		if placed {
+			if err := checkTargetPlacement(target, defaults); err != nil {
+				return err
+			}
+		}
+		merged := config.MergeDefaults(defaults, override)
+		p := placementOf(merged, placed)
+		if p.unit.rack == "" {
+			continue
+		}
+		seen, err := pinDevice(pinnedAt, target, p, deviceIDs(target, merged))
+		if err != nil {
+			return err
+		}
+		if seen {
+			continue
+		}
+		if placed {
+			if err := claimUnit(placedAt, target, p); err != nil {
+				return err
+			}
+		}
+	}
+	// Once every racked device is known, in whatever order targets come.
+	for _, target := range policy.Scope.Targets {
+		merged := config.MergeDefaults(defaults, target.OverrideDefaults)
+		p := placementOf(merged, false)
+		if p.unit.rack != "" {
+			continue
+		}
+		if err := checkUnracked(pinnedAt, target, p, deviceIDs(target, merged)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkTargetPlacement refuses a target's position and face unless set
+// together, valid, in a rack, for a single host.
+func checkTargetPlacement(target config.Target, defaults *config.Defaults) error {
+	override := target.OverrideDefaults
+	face := override.RackFace()
+	switch {
+	case face == "":
+		return fmt.Errorf("target %s: override_defaults position needs a face (front or rear)", target.Host)
+	case override.Position == nil:
+		return fmt.Errorf("target %s: override_defaults face needs a position", target.Host)
+	case face != config.RackFaceFront && face != config.RackFaceRear:
+		return fmt.Errorf("target %s: override_defaults face %q must be front or rear", target.Host, override.Face)
+	// math.Mod is NaN for an infinite or NaN position, so those fail too.
+	case *override.Position < 1 || math.Mod(*override.Position, 0.5) != 0:
+		return fmt.Errorf("target %s: override_defaults position %v must be 1 or more, in steps of 0.5",
+			target.Host, *override.Position)
+	case override.RackName() == "" && defaults.RackName() == "":
+		return fmt.Errorf("target %s: override_defaults position and face need a rack, in defaults or override_defaults",
+			target.Host)
+	}
+	if coversSeveralAddresses(target.Host) {
+		return fmt.Errorf("target %s: position and face need a single host; a range or subnet would place every device at the same U",
+			target.Host)
+	}
+	return nil
+}
+
+// placementOf returns what a target sends its device, from its merged
+// defaults.
+func placementOf(merged *config.Defaults, placed bool) devicePlacement {
+	site := merged.Site
+	if site == "" {
+		site = defaultSite // as applyDefaults fills it in
+	}
+	p := devicePlacement{
+		unit:        rackUnit{site: site, rack: merged.RackName()},
+		location:    strings.TrimSpace(merged.Location),
+		oidLocation: data.IsOIDReference(merged.Location),
+	}
+	if placed {
+		p.unit.position = *merged.Position
+		p.unit.face = merged.RackFace()
+	}
+	return p
+}
+
+// deviceIDs lists what a target's device is known by, strongest first as
+// Diode matches: a kept netbox_id, a literal asset tag, then the host, which
+// stands for the name and site that host reports.
+func deviceIDs(target config.Target, merged *config.Defaults) []deviceID {
+	var ids []deviceID
+	if target.NetboxID != nil && keepsNetboxID(target.Host) {
+		ids = append(ids, deviceID{"netbox_id", strconv.Itoa(*target.NetboxID)})
+	}
+	if tag, ok := mapping.LiteralAssetTag(merged.AssetTag); ok {
+		ids = append(ids, deviceID{"asset_tag", tag})
+	}
+	if host, ok := endpointOf(target); ok {
+		ids = append(ids, deviceID{"host", host})
+	}
+	return ids
+}
+
+// endpointOf returns the one device a target reaches, as its normalised
+// address or name and any port other than the default. A range reaches
+// several and names none.
+func endpointOf(target config.Target) (string, bool) {
+	if coversSeveralAddresses(target.Host) {
+		return "", false
+	}
+	hosts, err := targets.Expand(target.Host)
+	if err != nil || len(hosts) != 1 {
+		return "", false
+	}
+	host := strings.ToLower(hosts[0])
+	if addr, err := netip.ParseAddr(hosts[0]); err == nil {
+		host = addr.String()
+	}
+	if target.Port != 0 && target.Port != SNMPDefaultPort {
+		host += " port " + strconv.Itoa(int(target.Port))
+	}
+	return host, true
+}
+
+// pinDevice records what a target sends the device each of ids names.
+// Targets tied by an identifier may update one device, so they must send it
+// the same rack, position and face (a rack without a position counts too). It
+// reports whether an earlier target is known to be this device, relying on the
+// same strongest identifier.
+func pinDevice(pinnedAt map[deviceID]*sharers, target config.Target, p devicePlacement, ids []deviceID) (bool, error) {
+	seen := false
+	for i, id := range ids {
+		s := pinnedAt[id]
+		if s == nil {
+			s = &sharers{sent: map[devicePlacement]bool{}}
+			pinnedAt[id] = s
+		}
+		for _, other := range s.holders(i) {
+			// A location read from an OID is only known at scan time, so it
+			// cannot be shown to match.
+			if other.placement.oidLocation || p.oidLocation {
+				return false, fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
+					other.host, target.Host, id.kind, id.value)
+			}
+			if other.placement != p {
+				return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
+					other.host, target.Host, id.kind, id.value)
+			}
+		}
+		this := pinnedPlacement{placement: p, host: target.Host}
+		if i == 0 {
+			seen = s.reliedOn != nil
+			if s.reliedOn == nil {
+				s.reliedOn = &this
+			}
+		}
+		if !s.sent[p] {
+			s.sent[p] = true
+			s.placements = append(s.placements, this)
+		}
+	}
+	return seen, nil
+}
+
+// checkUnracked refuses a target without a rack moving a racked device away
+// from its rack: it still sends a site and any location, and NetBox refuses a
+// device whose rack is in another. A location it leaves out, the device keeps.
+func checkUnracked(pinnedAt map[deviceID]*sharers, target config.Target, p devicePlacement, ids []deviceID) error {
+	for i, id := range ids {
+		s := pinnedAt[id]
+		if s == nil {
+			continue
+		}
+		for _, racked := range s.holders(i) {
+			if p.location != "" && (p.oidLocation || racked.placement.oidLocation) {
+				return fmt.Errorf("targets %s and %s place %s %s in a location read from an OID; set a literal location",
+					racked.host, target.Host, id.kind, id.value)
+			}
+			if p.unit.site != racked.placement.unit.site || (p.location != "" && p.location != racked.placement.location) {
+				return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
+					racked.host, target.Host, id.kind, id.value, racked.host, racked.placement.unit.rack)
+			}
+		}
+	}
+	return nil
+}
+
+// claimUnit records the U a target places its device at, refusing one
+// another target took. Diode matches a device by rack, position and face once
+// name and site miss, so a new device sent to a taken U would update the
+// device there.
+func claimUnit(placedAt map[rackUnit]map[string]string, target config.Target, p devicePlacement) error {
+	// A location read from an OID is only known at scan time, so such a
+	// target is left out of the check rather than compared by its OID.
+	if p.oidLocation {
+		return nil
+	}
+	taken := placedAt[p.unit]
+	if taken == nil {
+		taken = map[string]string{}
+		placedAt[p.unit] = taken
+	}
+	// A rack sent without a location binds any rack of that name in the
+	// site, so no location clashes with any.
+	other, clash := taken[p.location]
+	if p.location == "" {
+		for _, host := range taken {
+			other, clash = host, true
+			break
+		}
+	} else if !clash {
+		other, clash = taken[""]
+	}
+	if clash {
+		return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+			other, target.Host, p.unit.rack, p.unit.position, p.unit.face)
+	}
+	taken[p.location] = target.Host
+	return nil
+}
+
+// coversSeveralAddresses reports whether host is a subnet or range of more
+// than one address. A CIDR is judged by its prefix length, so a large subnet
+// is never listed just to be counted.
+func coversSeveralAddresses(host string) bool {
+	if p, err := netip.ParsePrefix(host); err == nil {
+		return p.Bits() < p.Addr().BitLen()
+	}
+	hosts, err := targets.Expand(host)
+	return err == nil && len(hosts) > 1
+}
+
+// keepsNetboxID reports whether the runner applies a target's netbox_id: only
+// when the host is written as the single address or name it expands to, so a
+// /32 or a one-address range drops it.
+func keepsNetboxID(host string) bool {
+	if _, err := netip.ParsePrefix(host); err == nil {
+		return false
+	}
+	hosts, err := targets.Expand(host)
+	return err == nil && len(hosts) == 1 && hosts[0] == host
 }
 
 // HasPolicy checks if the policy exists
@@ -454,25 +809,31 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 		return
 	}
 
-	total, mfrTotal := 0, 0
+	total, mfrTotal, moduleTotal := 0, 0, 0
 	for _, f := range files {
 		mfrTotal += f.ManufacturerEntries
+		moduleTotal += f.ModuleEntries
+		if f.ModulesErr != nil {
+			m.logger.Warn("lookup extension file has an unparseable modules section; its module entries were skipped",
+				"directory", safeDir,
+				"file", sanitizeLogValue(f.Name),
+				"error", sanitizeLogValue(f.ModulesErr.Error()))
+		}
 		switch {
 		case f.Err != nil:
-			// Only the devices section is lost. A manufacturers section in the
-			// same file is parsed separately by the manufacturer resolver and
-			// still applies, so do not imply the whole file was discarded.
+			// The devices section, or the whole file, could not be read. The
+			// counts show what the other sections still contributed.
 			m.logger.Warn("lookup extension file has an unparseable devices section; its device entries were skipped",
 				"directory", safeDir,
 				"file", sanitizeLogValue(f.Name),
 				"manufacturer_entries", f.ManufacturerEntries,
+				"module_entries", f.ModuleEntries,
 				"error", sanitizeLogValue(f.Err.Error()))
-		case f.Entries == 0 && f.ManufacturerEntries == 0:
-			// Only when neither recognised section contributed. A file carrying
-			// just a manufacturers: block declares no devices by design, and its
-			// overrides are applied by the manufacturer resolver over the same
-			// directory, so warning about it would nag a healthy config.
-			m.logger.Warn("lookup extension file contributed no device or manufacturer entries; check that it starts with a 'devices:' or 'manufacturers:' key and is indented with spaces",
+		case f.Entries == 0 && f.ManufacturerEntries == 0 && f.ModuleEntries == 0 && f.ModulesErr == nil:
+			// Only when no recognised section contributed. A file carrying just
+			// a manufacturers: or modules: block declares no devices by design,
+			// so warning about it would nag a healthy config.
+			m.logger.Warn("lookup extension file contributed no device, manufacturer or module entries; check that it starts with a 'devices:', 'manufacturers:' or 'modules:' key and is indented with spaces",
 				"directory", safeDir, "file", sanitizeLogValue(f.Name))
 		default:
 			total += f.Entries
@@ -480,7 +841,7 @@ func (m *Manager) logReportedExtensionFiles(lookup *data.DeviceLookup, dir strin
 	}
 	m.logger.Info("loaded device lookup extensions",
 		"directory", safeDir, "files", len(files),
-		"entries", total, "manufacturer_entries", mfrTotal)
+		"entries", total, "manufacturer_entries", mfrTotal, "module_entries", moduleTotal)
 }
 
 // sanitizeLogValue flattens CR and LF so a value cannot forge additional log

@@ -3,7 +3,8 @@
 Custom MikroTik RouterOS NAPALM driver.
 
 Implements only the methods used by device-discovery:
-  get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans.
+  get_facts, get_interfaces, get_interfaces_ip, get_config, get_vlans,
+  and the optional get_interfaces_vlan_id.
 
 Uses Netmiko mikrotik_routeros device type and ntc-templates for structured
 parsing of commands where templates are compatible across v6 and v7.  Falls
@@ -235,6 +236,92 @@ def _parse_vlans(output: str) -> dict:
                 "interfaces": [intf],
             }
     return vlans
+
+
+# ---------------------------------------------------------------------------
+# VLAN interface detail parsing (interface -> VLAN ID)
+# ---------------------------------------------------------------------------
+# "interface vlan print detail" prints one block per VLAN interface as
+# key=value pairs, values quoted when RouterOS considers them strings:
+#
+#    0 R  ;;; UPLINK_A
+#         name="sfpplus1.156" mtu=1500 ... vlan-id=156 interface=sfpplus1
+#         use-service-tag=no
+#
+# Unlike the tabular "interface vlan print" it carries use-service-tag, which
+# is what separates an 802.1Q C-tag from an 802.1ad S-tag.
+
+_VLAN_DETAIL_ATTR_RE = re.compile(r'(?<![\w-])(?P<key>[a-z][\w-]*)=(?:"(?P<quoted>[^"]*)"|(?P<bare>\S+))')
+_VLAN_DETAIL_COMMENT_RE = re.compile(r";;;[^\n]*")
+
+
+def _parse_vlan_interfaces_detail(output: str) -> list[dict[str, str]]:
+    """
+    Parse 'interface vlan print detail' into one attribute dict per row.
+
+    Blocks are split on the row-index line, as in 'interface print detail',
+    and a ``;;;`` comment is dropped before the attributes are read so that
+    comment text can never be mistaken for one. Rows without a name are
+    skipped.
+    """
+    rows: list[dict[str, str]] = []
+    if not output:
+        return rows
+    starts = [m.start() for m in re.finditer(r"(?m)^\s*\d+\s", output)]
+    for i, start in enumerate(starts):
+        end = starts[i + 1] if i + 1 < len(starts) else len(output)
+        block = _VLAN_DETAIL_COMMENT_RE.sub(" ", output[start:end])
+        attrs = {
+            m.group("key"): m.group("quoted") if m.group("quoted") is not None else m.group("bare")
+            for m in _VLAN_DETAIL_ATTR_RE.finditer(block)
+        }
+        if attrs.get("name"):
+            rows.append(attrs)
+    return rows
+
+
+def _vlan_ids_by_interface(rows: list[dict[str, str]]) -> dict[str, int | None]:
+    """
+    Map each VLAN interface to the VLAN ID it was configured with.
+
+    An interface maps to ``None`` (reported, but not to be linked to a VLAN)
+    when its tag is not a plain 802.1Q VLAN or is not unique:
+
+    - ``use-service-tag`` is anything but an explicit ``no`` (an 802.1ad
+      S-tag, or a RouterOS that does not say);
+    - its parent is itself a VLAN interface (a tag stacked inside another);
+    - its VLAN ID also sits on a different parent, so the same number names
+      more than one broadcast domain.
+
+    A disabled interface is still mapped: its configuration is as valid as
+    when it is up. A row with no usable vlan-id is left out entirely.
+    """
+    names = {row["name"] for row in rows}
+    parents_by_vid: dict[int, set[str]] = {}
+    parsed: list[tuple[str, int, str, dict[str, str]]] = []
+    for row in rows:
+        raw_vid = row.get("vlan-id", "")
+        if not raw_vid.isdigit() or not 1 <= int(raw_vid) <= 4094:
+            continue
+        vid = int(raw_vid)
+        parent = row.get("interface", "")
+        parents_by_vid.setdefault(vid, set()).add(parent)
+        parsed.append((row["name"], vid, parent, row))
+
+    result: dict[str, int | None] = {}
+    for name, vid, parent, row in parsed:
+        if row.get("use-service-tag") != "no":
+            reason = f"it is not reported as a plain 802.1Q tag (use-service-tag={row.get('use-service-tag', '<absent>')})"
+        elif parent in names:
+            reason = f"its parent {parent!r} is itself a VLAN interface"
+        elif len(parents_by_vid[vid]) > 1:
+            reason = f"VLAN ID {vid} is configured on more than one parent ({', '.join(sorted(parents_by_vid[vid]))})"
+        else:
+            result[name] = vid
+            continue
+        logger.debug("mikrotik_routeros: not linking %s to VLAN %d: %s", name, vid, reason)
+        result[name] = None
+    return result
 
 
 _ROS_TYPE_TO_NETBOX = {
@@ -854,6 +941,30 @@ class ROSDriver(_napalm_base.NetworkDriver):
             logger.warning(
                 "mikrotik_routeros: could not parse 'interface vlan print'; "
                 "no VLANs will be discovered for this device",
+                exc_info=True,
+            )
+            return {}
+
+
+    def get_interfaces_vlan_id(self) -> dict[str, int | None]:
+        """
+        Return the VLAN ID each VLAN interface was configured with.
+
+        Parsed from 'interface vlan print detail', so the ID is the device's
+        own ``vlan-id`` whatever the operator named the interface
+        (``sfpplus1.156``, ``to-isp``). Interfaces whose tag must not be
+        linked to a VLAN map to ``None``; see ``_vlan_ids_by_interface``.
+        Returns an empty dict when the command fails or prints nothing.
+        """
+        raw = self.device.send_command("interface vlan print detail")
+        if not raw:
+            return {}
+        try:
+            return _vlan_ids_by_interface(_parse_vlan_interfaces_detail(raw))
+        except Exception:
+            logger.warning(
+                "mikrotik_routeros: could not parse 'interface vlan print detail'; "
+                "prefix VLANs will fall back to interface names",
                 exc_info=True,
             )
             return {}

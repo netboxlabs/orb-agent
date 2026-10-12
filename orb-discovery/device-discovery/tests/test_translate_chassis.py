@@ -255,6 +255,65 @@ def test_member_devices_have_no_asset_tag():
         )
 
 
+def test_only_the_stack_master_is_placed():
+    """A stack can span racks, so members keep whatever placement NetBox has."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(rack="R12", position=40, face="front")
+
+    entities = list(translate_data(data))
+    devices = [e.device for e in entities if e.HasField("device")]
+    master = next(d for d in devices if not d.HasField("virtual_chassis"))
+    members = [d for d in devices if d.HasField("virtual_chassis")]
+    assert members, "expected at least one member Device"
+    assert master.rack.name == "R12"
+    assert master.position == 40
+    assert master.face == "front"
+    for md in members:
+        assert not md.HasField("rack"), f"member {md.name} carried rack {md.rack.name}"
+        assert not md.HasField("position"), f"member {md.name} carried position {md.position}"
+        assert not md.HasField("face"), f"member {md.name} carried face {md.face!r}"
+
+
+def test_stack_members_keep_their_location_when_the_master_is_racked():
+    """NetBox refuses a location that differs from a member's own rack's, so members are sent none."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(site="DC1", location="Row 1", rack="R12")
+
+    devices = [e.device for e in translate_data(data) if e.HasField("device")]
+    master = next(d for d in devices if not d.HasField("virtual_chassis"))
+    members = [d for d in devices if d.HasField("virtual_chassis")]
+    assert members, "expected at least one member Device"
+    assert master.location.name == "Row 1"
+    assert master.rack.location.name == "Row 1"
+    for md in members:
+        assert not md.HasField("location"), f"member {md.name} carried location {md.location.name}"
+        assert md.site.name == "DC1"
+
+
+def test_stack_members_take_the_location_without_a_rack():
+    """Without a rack nothing changes: every member is sent the policy location."""
+    data = _base_data(_two_member_payload())
+    data["defaults"] = Defaults(site="DC1", location="Row 1")
+
+    devices = [e.device for e in translate_data(data) if e.HasField("device")]
+    members = [d for d in devices if d.HasField("virtual_chassis")]
+    assert members, "expected at least one member Device"
+    for md in members:
+        assert md.location.name == "Row 1"
+
+
+def test_nested_device_refs_carry_no_placement():
+    """Device references match by name and site; rack, position and face stay off them."""
+    from device_discovery.stubs import _device_match_stub
+    from device_discovery.translate_chassis import _master_device_ref
+
+    placed = pb.Device(name="core-sw-1", rack=pb.Rack(name="R12"), position=40, face="front")
+    for ref in (_device_match_stub(placed), _master_device_ref(placed)):
+        assert not ref.HasField("rack")
+        assert not ref.HasField("position")
+        assert not ref.HasField("face")
+
+
 def test_vc_master_ref_carries_master_asset_tag_and_source_match():
     """VC master inline ref must repeat the emitted master's matcher fields (asset_tag + source_match)."""
     data = _base_data(_two_member_payload())
@@ -704,6 +763,20 @@ def test_prefix_vlan_still_attaches_when_every_member_agrees():
     got = _prefixes_named(per_member, "10.0.0.0/24")
     assert len(got) == 2
     assert all(p.vlan.vid == 10 for p in got), "an unanimous stack keeps its VLAN"
+
+
+def test_prefix_vlan_device_reported_vlan_id_reaches_every_stack_member():
+    """The device's interface-to-VLAN-ID map is honoured on a stack too."""
+    inputs = _stack_vlan_inputs()
+    # Member 2's routed port is a VLAN 10 interface by the device's own account,
+    # so it now agrees with member 1's SVI instead of abstaining.
+    inputs["iface_vlan_ids"] = {"Ethernet2/0/1": 10}
+
+    per_member = _build_per_member_interfaces(**inputs)
+
+    got = _prefixes_named(per_member, "10.0.0.0/24")
+    assert len(got) == 2
+    assert all(p.vlan.vid == 10 for p in got)
 
 
 def test_prefix_vlan_option_off_is_inert_on_a_stack():

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -132,6 +133,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		NameUnderscore: "pktvisor",
 		Exec:           p.binary,
 		Args:           pvOptions,
+		ListenAddr:     net.JoinHostPort(p.adminAPIHost, p.adminAPIPort),
 		LogLine:        p.logLineAdapter,
 		SetProc: func(proc backend.Commander, ch <-chan backend.CmdStatus) {
 			p.proc = proc

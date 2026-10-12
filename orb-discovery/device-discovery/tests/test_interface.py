@@ -3,6 +3,7 @@
 """NetBox Labs - Interface Unit Tests."""
 
 import datetime
+import logging
 
 import pytest
 from netboxlabs.diode.sdk.ingester import VLAN
@@ -1099,6 +1100,100 @@ def test_prefix_vlan_skips_stub_named_vlan():
         vlan_cache={10: _named_vlan(10, "")},
     )
     assert all(not p.HasField("vlan") for p in _prefixes(ents))
+
+
+ROUTED_SUBIF = {"sfpplus1.156": {"is_up": True, "is_enabled": True, "mtu": 1500}}
+ROUTED_SUBIF_IP = {"sfpplus1.156": {"ipv4": {"192.0.2.1": {"prefix_length": 30}}}}
+
+
+def _prefix_vlans(ents, prefix):
+    return [p.vlan.vid if p.HasField("vlan") else None for p in _prefixes(ents) if p.prefix == prefix]
+
+
+def test_prefix_vlan_from_device_reported_vlan_id():
+    """A routed sub-interface gets its VLAN from the device, not from its name."""
+    # The dotted name is rejected by the SVI-name parse on purpose; only the
+    # device-reported VLAN ID can link this prefix.
+    ents = build_interface_entities(
+        device="r1", interfaces=ROUTED_SUBIF, interfaces_ip=ROUTED_SUBIF_IP,
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={156: _named_vlan(156, "sfpplus1.156")},
+        iface_vlan_ids={"sfpplus1.156": 156},
+    )
+    assert _prefix_vlans(ents, "192.0.2.0/30") == [156]
+
+
+def test_prefix_vlan_device_vlan_id_wins_over_name():
+    """When the name and the device disagree, the device's VLAN ID is used."""
+    ents = build_interface_entities(
+        device="r1",
+        interfaces={"vlan20": TWO_SVIS["Vlan10"]},
+        interfaces_ip={"vlan20": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={20: _named_vlan(20, "twenty"), 30: _named_vlan(30, "thirty")},
+        iface_vlan_ids={"vlan20": 30},
+    )
+    assert _prefix_vlans(ents, "10.0.0.0/24") == [30]
+
+
+def test_prefix_vlan_withheld_when_device_withholds_the_vlan_id():
+    """An interface the device maps to None proposes no VLAN, whatever its name says."""
+    # The driver reports the interface but refuses its tag (an S-tag, a stacked
+    # tag, a VLAN ID on two parents). Falling back to the name would undo that.
+    ents = build_interface_entities(
+        device="r1",
+        interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
+        interfaces_ip={"Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={10: _named_vlan(10, "office")},
+        iface_vlan_ids={"Vlan10": None},
+    )
+    assert _prefix_vlans(ents, "10.0.0.0/24") == [None]
+
+
+def test_prefix_vlan_device_vlan_id_absent_from_vlan_database_is_skipped(caplog):
+    """A device-reported VLAN ID still has to be a named VLAN the device lists."""
+    # A tag on a routed interface that is not in the device's VLAN table has no
+    # name to give NetBox; it is skipped exactly like an unresolved SVI, and the
+    # skip is logged so an operator can see why the prefix has no VLAN.
+    caplog.set_level(logging.DEBUG, logger="device_discovery.interface")
+    ents = build_interface_entities(
+        device="r1", interfaces=ROUTED_SUBIF, interfaces_ip=ROUTED_SUBIF_IP,
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={},
+        iface_vlan_ids={"sfpplus1.156": 156},
+    )
+    assert _prefix_vlans(ents, "192.0.2.0/30") == [None]
+    assert "sfpplus1.156: device reports VLAN ID 156, but the device lists no named VLAN 156" in caplog.text
+
+
+def test_prefix_vlan_falls_back_to_svi_name_for_unreported_interfaces():
+    """Interfaces the driver says nothing about keep the SVI-name behaviour."""
+    ents = build_interface_entities(
+        device="sw1",
+        interfaces={"Vlan10": TWO_SVIS["Vlan10"]},
+        interfaces_ip={"Vlan10": {"ipv4": {"10.0.0.1": {"prefix_length": 24}}}},
+        defaults=Defaults(site="dc1"),
+        options=Options(emit_prefix_vlan="svi-name"),
+        vlan_cache={10: _named_vlan(10, "office")},
+        iface_vlan_ids={"sfpplus1.156": 156},
+    )
+    assert _prefix_vlans(ents, "10.0.0.0/24") == [10]
+
+
+def test_prefix_vlan_device_vlan_ids_ignored_when_option_off():
+    """The device map changes nothing while emit_prefix_vlan is off."""
+    ents = build_interface_entities(
+        device="r1", interfaces=ROUTED_SUBIF, interfaces_ip=ROUTED_SUBIF_IP,
+        defaults=Defaults(site="dc1"), options=Options(),
+        vlan_cache={156: _named_vlan(156, "sfpplus1.156")},
+        iface_vlan_ids={"sfpplus1.156": 156},
+    )
+    assert _prefix_vlans(ents, "192.0.2.0/30") == [None]
 
 
 @pytest.mark.parametrize(

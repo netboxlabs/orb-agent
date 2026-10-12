@@ -877,11 +877,13 @@ func TestNewManager_GivesTheDefaultDialerItsLogger(t *testing.T) {
 	assert.Same(t, testLogger, dialer.Logger)
 }
 
-// The cache hands one collector per profiles directory, and each of them
-// writes to the same SDK instrument per metric name, so the series bound has
-// to be the manager's rather than one made per collector: two profile sets
-// each holding a full allowance would hand that instrument twice what it
-// takes, and the SDK would fold the excess into its overflow set.
+// The cache hands one collector per profiles directory, and the series bound
+// is kept on each metric name across the whole process, stricter than the
+// SDK's own per-instrument limit now that each policy has its own
+// instrument, so the bound has to be the manager's rather than one made per
+// collector: two profile sets each holding a full allowance would together
+// draw twice what the name is meant to have, and the SDK would fold the
+// excess into its overflow set.
 func TestAcquireCollector_SharesTheProcessBudgetAndSchemasAcrossProfileDirs(t *testing.T) {
 	root := t.TempDir()
 	dirA, dirB := filepath.Join(root, "vendor-a"), filepath.Join(root, "vendor-b")
@@ -1037,4 +1039,15 @@ policies:
 `))
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "comma")
+}
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key; the
+// maintained fork returns an error, so the request gets an answer.
+func TestManager_ParsePolicies_MergeBesideComplexKeyIsAnError(t *testing.T) {
+	m := newTestManager()
+	var err error
+	require.NotPanics(t, func() {
+		_, err = m.ParsePolicies([]byte("policies:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"))
+	})
+	assert.ErrorContains(t, err, "unhashable")
 }

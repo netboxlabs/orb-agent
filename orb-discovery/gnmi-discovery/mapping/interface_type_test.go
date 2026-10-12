@@ -104,3 +104,15 @@ func TestOCDuplex(t *testing.T) {
 	_, ok := ocDuplex["AUTO"]
 	require.False(t, ok)
 }
+
+// Aggregate names other platforms use, for targets that report no OpenConfig
+// LAG type: without a lag type a member could not be linked to them.
+func TestResolveInterfaceTypeMoreLagNames(t *testing.T) {
+	for _, name := range []string{"po10", "Po10", "lag1", "lag-1", "bond0"} {
+		require.Equal(t, "lag", resolveInterfaceType(name, "", "", "other", nil), name)
+		require.Equal(t, "lag", resolveInterfaceType(name, "ETHERNETCSMACD", "", "other", nil), name)
+	}
+	for _, name := range []string{"lagoon1", "bonding", "port10", "lag", "bond"} {
+		require.NotEqual(t, "lag", resolveInterfaceType(name, "", "", "other", nil), name)
+	}
+}

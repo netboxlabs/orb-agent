@@ -39,7 +39,7 @@ policies:
     config:
       schedule: "0 */6 * * *" # Cron expression - every 6 hours
       timeout: 300 # Timeout for policy in seconds (default 2 minutes)
-      snmp_timeout: 300 # Timeout for SNMP operations in seconds (default 5 seconds)
+      snmp_timeout: 10 # Timeout for SNMP operations in seconds (default 5 seconds); must be below timeout
       snmp_probe_timeout: 1 # Timeout for SNMP probe operations in seconds (default 1 second)
       retries: 3 # Number of retries
       defaults:
@@ -55,7 +55,7 @@ policies:
           vrf: "management"
         interface:
           description: "Auto-discovered interface"
-          if_type: "ethernet"
+          if_type: "other"
         device:
           description: "SNMP discovered device"
           comments: "Automatically discovered via SNMP"
@@ -74,7 +74,7 @@ policies:
         - host: "10.0.0.1"
           port: 162  # Non-standard SNMP port
       authentication:
-        protocol_version: "v2c"
+        protocol_version: "SNMPv2c"
         community: "public"
         # For SNMPv3, use these fields instead:
         # security_level: "authPriv"
@@ -83,6 +83,7 @@ policies:
         # auth_passphrase: "${SNMP_AUTH_PASS}"
         # priv_protocol: "AES"
         # priv_passphrase: "${SNMP_PRIV_PASS}"
+```
 
 **Note:** The following authentication fields support environment variable substitution using the `${VARNAME}` syntax:
 
@@ -95,7 +96,7 @@ For example:
 
 ```yaml
 authentication:
-  protocol_version: "v3"
+  protocol_version: "SNMPv3"
   security_level: "authPriv"
   username: "${SNMP_USERNAME}"
   auth_protocol: "SHA"
@@ -157,7 +158,9 @@ policies:
 
 ### Per-Target Override Defaults
 
-SNMP discovery supports per-target default overrides, allowing you to customize site, role, tenant, tags, and other entity defaults for individual targets while maintaining policy-wide defaults as fallbacks. The `tenant` default accepts either a plain string (the tenant name) or a mapping, and overrides merge field-wise — a per-target override can refine one tenant field (e.g. `name`) without restating the rest.
+SNMP discovery supports per-target default overrides, allowing you to customize site, role, tenant, tags, and other entity defaults for individual targets while maintaining policy-wide defaults as fallbacks. The `tenant` default accepts either a plain string (the tenant name) or a mapping. An override that names the same tenant refines it field by field; one with another name, or with a group other than the policy's, replaces the policy's as a whole, so give its `group` there too.
+
+A target's `override_defaults` can also place its device in a rack at a given U: `rack` (also accepted in the policy `defaults`), `position` (a U, `40.5` for a half U) and `face` (`front` or `rear`). `position` and `face` are accepted only per target, must be set together, need a rack and a single-host target, and no two targets may share a U and face of one rack. See [Rack placement](../../docs/backends/snmp_discovery/README.md#rack-placement).
 
 #### Example Configuration
 
@@ -184,11 +187,12 @@ policies:
             role: "router"
             tags: ["core", "production"]
 
-        # Scalar tenant override: sets the tenant name for this target
-        # while keeping the policy-level group "customers" (field-wise merge)
+        # Another tenant replaces the policy's whole: restate its group
         - host: "192.168.1.4"
           override_defaults:
-            tenant: "customer-b"
+            tenant:
+              name: "customer-b"
+              group: "customers"
 
         # Override nested defaults
         - host: "192.168.1.3"
@@ -200,6 +204,13 @@ policies:
               if_type: "1000base-t"
             ip_address:
               role: "loopback"
+
+        # Place this device in rack R12 at U40, on the front face
+        - host: "192.168.1.5"
+          override_defaults:
+            rack: "R12"
+            position: 40
+            face: "front"
 
         # Works with IP ranges - all IPs inherit the override
         - host: "192.168.2.0/24"
@@ -250,7 +261,7 @@ defaults:
 - **Most specific match wins**: Within each priority tier, the longest matching pattern is used
 - **Case-sensitive**: Patterns are matched case-sensitively
 - **Regex syntax**: Uses Go's RE2 regex engine (see [syntax reference](https://github.com/google/re2/wiki/Syntax))
-- **Invalid patterns**: Will cause the policy to fail at load time with a clear error message
+- **Invalid patterns**: Are not caught when the policy is applied; every scan of a target that uses the pattern then fails with an error naming it
 
 #### Built-in Patterns
 
@@ -393,7 +404,7 @@ Controlled by the `discover_modules` option under `config.options`:
 |---|---|
 | `off` *(default)* | No module / module-bay entities emitted. Zero behaviour change versus prior releases. |
 | `linecards` | One `ModuleBay` + `Module` per top-level chassis slot — line cards and supervisors only. PSU and fan modules are classified for metric labelling but NOT emitted. |
-| `full` | Everything `linecards` emits, plus one `ModuleBay` + `Module` per transceiver sub-bay. Physical interfaces backed by a transceiver carry an `Interface.Module` reference for per-port optic visibility. |
+| `full` | Everything `linecards` emits, plus one `ModuleBay` + `Module` per transceiver sub-bay. Interfaces are linked to the optic or line module holding them when the device populates `entAliasMappingTable`. |
 
 Virtual-chassis-of-modular targets are supported from day one: when the device reports 2+ chassis members, modules are dispatched per-member using the same chassis inventory the VC path produces.
 
@@ -414,7 +425,7 @@ policies:
       targets:
         - host: "10.0.0.1"
       authentication:
-        protocol_version: "v2c"
+        protocol_version: "SNMPv2c"
         community: "public"
 ```
 
@@ -463,11 +474,11 @@ devices:
   .1.3.6.1.4.1.9.1.3233: Catalyst 1300-24P-4G
 ```
 
-Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. If you run the agent in a container, mount this directory into it.
+Each OID is resolved independently, so a single file can cover as many models as you need and every device gets its own name under one policy. A model you add or change here also wins over the part number some vendors' chassis rows report for a standalone device (see the backend docs' Override precedence); stack members keep their own chassis models. A file can also carry a `modules:` section naming the module type for an `entPhysicalVendorType` OID, for modules that report no model name of their own. If you run the agent in a container, mount this directory into it.
 
-The startup logs report how many files were read from the directory and the total number of entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
+The startup logs report how many files were read from the directory and the total number of device and module entries they registered, so you can confirm the directory was found and that your entries were counted. Two problems are called out per file, naming the file:
 
-- a file whose `devices:` section cannot be parsed is skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. Indenting with tabs lands here, because YAML rejects them outright
+- a file whose `devices:` or `modules:` section cannot be parsed has that section skipped with a warning, rather than aborting the load, so one bad file does not cost you the others. A wrong value in one section does not drop the other's entries, but a file that is not valid YAML, is not a mapping of sections, or repeats a top-level key such as `devices:` contributes nothing. Indenting with tabs lands here, because YAML rejects them outright
 - a file that parses but registers nothing, which is what a wrong or missing top-level key produces, is warned about individually
 
 A file that loads cleanly is counted in the totals rather than logged by name, so if you need to confirm one specific file's contribution, put it in the directory on its own and compare the entry total.

@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"regexp"
 	"sort"
@@ -207,9 +208,17 @@ func toTags(names []string) []*diode.Tag {
 // It always emits one *diode.Device, then interfaces, then components
 // (ModuleBay before its Module, mirroring snmp-discovery ordering).
 func Translate(profile *Profile, snap map[string]any, defaults *config.Defaults, discoveredVendor string) []diode.Entity {
+	return TranslateWithOptions(profile, snap, defaults, discoveredVendor, nil, nil)
+}
+
+// TranslateWithOptions is Translate with the policy's options applied and
+// skipped LAG memberships logged. opts and logger may be nil.
+func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *config.Defaults, discoveredVendor string,
+	opts *config.Options, logger *slog.Logger,
+) []diode.Entity {
 	dev, deviceMfg := translateDevice(profile, snap, defaults, discoveredVendor)
 	entities := []diode.Entity{dev}
-	ifaceEntities := translateInterfaces(profile, snap, dev, defaults)
+	ifaceEntities := translateInterfaces(profile, snap, dev, defaults, opts, logger)
 	entities = append(entities, ifaceEntities...)
 	entities = append(entities, translateComponents(profile, snap, dev, deviceMfg)...)
 	entities = append(entities, translateIPs(profile, snap, dev, defaults, compileInterfaceExcludes(defaults))...) // Device -> Interfaces -> Modules -> subifs+IPs
@@ -344,6 +353,18 @@ func translateDevice(profile *Profile, snap map[string]any, defaults *config.Def
 			// Location is scoped to the device's Site (NetBox requires a site).
 			dev.Location = &diode.Location{Name: strptr(defaults.Location), Site: dev.Site}
 		}
+		// The rack carries the device's site and location, so it binds to the
+		// rack in the device's location when racks elsewhere share its name.
+		// Position and face are set only in a rack (policy validation makes the
+		// override set both or neither).
+		if rack := strings.TrimSpace(string(defaults.Rack)); rack != "" {
+			dev.Rack = &diode.Rack{Name: strptr(rack), Site: dev.Site, Location: dev.Location}
+			if face := strings.ToLower(strings.TrimSpace(defaults.Face)); defaults.Position != nil && face != "" {
+				pos := *defaults.Position
+				dev.Position = &pos
+				dev.Face = strptr(face)
+			}
+		}
 		if defaults.Device.Comments != "" {
 			dev.Comments = strptr(defaults.Device.Comments)
 		}
@@ -412,7 +433,9 @@ func nameExcluded(name string, excludes []*regexp.Regexp) bool {
 	return false
 }
 
-func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Device, defaults *config.Defaults) []diode.Entity {
+func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Device, defaults *config.Defaults,
+	opts *config.Options, logger *slog.Logger,
+) []diode.Entity {
 	listPath := profile.Interfaces.ListPath
 	if listPath == "" {
 		return nil
@@ -466,6 +489,7 @@ func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Devic
 	duplexLeafPath := profile.Interfaces.Keys["duplex"]
 
 	var out []diode.Entity
+	var lagClaims []lagClaim
 	for _, key := range order {
 		leaves := byKey[key]
 		// 1) exclude patterns (regex on name) -> skip the interface entirely.
@@ -525,13 +549,13 @@ func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Devic
 				}
 			}
 		}
-		if lagLeafPath != "" {
+		if lagLeafPath != "" && opts.LagMembershipEnabled() {
 			if v, ok := leaves[lagLeafPath]; ok {
 				// Skip a self-referential aggregate-id (agg == own name): the LAG
 				// aggregate interface carries no aggregate-id under OC semantics, so
 				// this only guards against a malformed target and avoids a self-LAG edge.
 				if agg := strings.TrimSpace(toStr(v)); agg != "" && agg != key {
-					iface.Lag = &diode.Interface{Device: dev, Name: strptr(agg)}
+					lagClaims = append(lagClaims, lagClaim{member: iface, aggregate: agg})
 				}
 			}
 		}
@@ -542,7 +566,52 @@ func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Devic
 		}
 		out = append(out, iface)
 	}
+	attachLagMembership(out, lagClaims, dev, logger)
 	return out
+}
+
+// lagClaim is a member port and the aggregate its aggregate-id names.
+type lagClaim struct {
+	member    *diode.Interface
+	aggregate string
+}
+
+// attachLagMembership sets Interface.Lag on each claimed member, as a
+// matcher-only reference, when the aggregate was emitted this cycle and typed
+// lag. Nothing is created: an aggregate missing from the payload (absent or
+// excluded) or of another type is skipped with a warning, and so is a member
+// typed virtual (NetBox refuses a LAG parent on one), bridge or lag, as in
+// device-discovery.
+func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Device, logger *slog.Logger) {
+	if len(claims) == 0 {
+		return
+	}
+	byName := make(map[string]*diode.Interface, len(out))
+	for _, e := range out {
+		if i, ok := e.(*diode.Interface); ok && i.Name != nil {
+			byName[*i.Name] = i
+		}
+	}
+	warn := func(msg string, args ...any) {
+		if logger != nil {
+			logger.Warn(msg, args...)
+		}
+	}
+	for _, c := range claims {
+		member := *c.member.Name
+		agg, ok := byName[c.aggregate]
+		switch {
+		case !ok:
+			warn("lag: aggregate interface not discovered; skipping member", "member", member, "aggregate", c.aggregate)
+		case agg.Type == nil || *agg.Type != "lag":
+			warn("lag: aggregate interface is not typed lag; skipping member", "member", member, "aggregate", c.aggregate)
+		case c.member.Type != nil && (*c.member.Type == "virtual" || *c.member.Type == "bridge" || *c.member.Type == "lag"):
+			warn("lag: member interface type cannot carry a LAG; skipping member",
+				"member", member, "interface_type", *c.member.Type, "aggregate", c.aggregate)
+		default:
+			c.member.Lag = &diode.Interface{Device: dev, Name: strptr(c.aggregate)}
+		}
+	}
 }
 
 // emittableComponentTypes are OpenConfig component types we surface as Modules

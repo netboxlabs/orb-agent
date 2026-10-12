@@ -63,6 +63,7 @@ jobs:
           version: ${{ matrix.version }}
           working-directory: ${{ matrix.dir }}
           args: --config ${{ matrix.config }}
+          skip-cache: true
 
   py-lint:
     name: py-lint (${{ matrix.dir }})

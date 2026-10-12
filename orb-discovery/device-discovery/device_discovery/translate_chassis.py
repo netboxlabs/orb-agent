@@ -281,6 +281,15 @@ def _build_member_devices(
         # asset_tag is a high-precedence matcher in Diode — copying the
         # defaults.device.asset_tag onto every member would collide.
         member_dev.ClearField("asset_tag")
+        # The target's rack, position and face describe the master. A stack
+        # can span racks, so members are sent none and keep what NetBox has.
+        # Their location stays too: NetBox refuses one that differs from the
+        # location of a member's own rack.
+        if member_dev.HasField("rack"):
+            member_dev.ClearField("location")
+        member_dev.ClearField("rack")
+        member_dev.ClearField("position")
+        member_dev.ClearField("face")
         member_dev.vc_position = m["id"]
         member_devices[m["id"]] = member_dev
     return member_devices
@@ -296,6 +305,7 @@ def _build_per_member_interfaces(
     options: "Options | None" = None,
     iface_vrf_map: dict[str, pb.VRF] | None = None,
     vlan_cache: dict[int, pb.VLAN] | None = None,
+    iface_vlan_ids: dict[str, int | None] | None = None,
 ) -> dict[int, list[Entity]]:
     """
     Run build_interface_entities once per member and return the per-member entity lists.
@@ -320,6 +330,7 @@ def _build_per_member_interfaces(
             options=options,
             iface_vrf_map=iface_vrf_map,
             vlan_cache=vlan_cache,
+            iface_vlan_ids=iface_vlan_ids,
         )
     # A prefix is keyed globally, not per member, so two members contributing
     # addresses to one network must agree on its VLAN or none may carry it.
@@ -352,7 +363,7 @@ def translate_as_stack(
     by parse_member_id. Mirrors the emission shape required by the
     netbox-diode-plugin for VC ingestion via the unique_master matcher.
     """
-    from device_discovery.translate import _build_vlan_cache, assign_primary_ip
+    from device_discovery.translate import _build_vlan_cache, _interfaces_vlan_ids, assign_primary_ip
 
     device_info = data.get("device") or {}
     interfaces = data.get("interface") or {}
@@ -424,6 +435,7 @@ def translate_as_stack(
         options=options,
         iface_vrf_map=iface_vrf_map,
         vlan_cache=vlan_cache,
+        iface_vlan_ids=_interfaces_vlan_ids(data.get("interfaces_vlan_id")),
     )
 
     # Primary-IP back-pointer is only meaningful on the master (mgmt IP).

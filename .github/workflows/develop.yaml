@@ -17,6 +17,15 @@ on:
 permissions:
   contents: write
 
+# develop is a moving tag, so only the newest commit's image should land on it.
+# Concurrent builds finish in an order the commit order does not determine, so
+# without this a merge can overwrite the tag with an earlier commit's image.
+# Unlike the release workflows, which queue, a superseded develop image is one
+# nobody wants: cancel it rather than build and publish it.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: docker.io
   IMAGE_NAME: netboxlabs/orb-agent

@@ -1401,3 +1401,120 @@ func TestManager_EnsureSerializesFailureBookkeepingAcrossConcurrentCalls(t *test
 	assert.Equal(t, name, entries[0].Name)
 	assert.Equal(t, "2.0.0", entries[0].Version)
 }
+
+// TestManager_PanicLeavesNameUnlocked verifies that a panic while a name's
+// mutex is held does not leave it held. The agent's MQTT handler recovers
+// such a panic, so a leaked lock would hang every later call for that name.
+// A nil store makes the first step under the lock panic.
+func TestManager_PanicLeavesNameUnlocked(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+	spec := FileSpec{Name: "pkg", Version: "1.0.0", URL: srv.URL + "/x.tar.gz", SHA256: sha256Hex(archive), Extract: true}
+
+	ops := map[string]func(m Manager) error{
+		"ensure": func(m Manager) error {
+			_, err := m.Ensure(context.Background(), spec)
+			return err
+		},
+		"remove":   func(m Manager) error { return m.Remove(context.Background(), spec.Name) },
+		"rollback": func(m Manager) error { return m.Rollback(context.Background(), spec.Name) },
+	}
+	for name, op := range ops {
+		t.Run(name, func(t *testing.T) {
+			m, _ := newTestManager(t)
+			fm := m.(*filesmgr)
+			s := fm.store
+			fm.store = nil
+			require.Panics(t, func() { _ = op(m) })
+			fm.store = s
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_ = op(m)
+			}()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("the name is still locked after the panic")
+			}
+		})
+	}
+}
+
+// TestManager_EnsurePanicRecordsFailure verifies that a panic during Ensure
+// leaves the bundle reported as failed, not installing until the next attempt.
+func TestManager_EnsurePanicRecordsFailure(t *testing.T) {
+	m, _ := newTestManager(t)
+	fm := m.(*filesmgr)
+	fm.store = nil
+	require.Panics(t, func() {
+		_, _ = m.Ensure(context.Background(), FileSpec{
+			Name: "pkg", Version: "1.0.0", URL: "http://192.0.2.1/x.tar.gz", SHA256: strings.Repeat("0", 64), Extract: true,
+		})
+	})
+
+	pending := m.ListPending()
+	require.Len(t, pending, 1)
+	assert.Equal(t, FileEntryStateFailed, pending[0].State)
+	assert.Equal(t, "1.0.0", pending[0].Version)
+	assert.NotEmpty(t, pending[0].Error)
+}
+
+// TestManager_PublishesAfterReleasingTheName verifies that every event is
+// published once the name's mutex is released, so a subscriber may call back
+// into the manager for the same name.
+func TestManager_PublishesAfterReleasingTheName(t *testing.T) {
+	v1 := buildTarGz(t, map[string]string{"a.txt": "v1"})
+	v2 := buildTarGz(t, map[string]string{"a.txt": "v2"})
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v1) })
+	mux.HandleFunc("/v2.tar.gz", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(v2) })
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	spec := func(version string, archive []byte) FileSpec {
+		return FileSpec{Name: "pkg", Version: version, URL: srv.URL + "/" + version + ".tar.gz", SHA256: sha256Hex(archive), Extract: true}
+	}
+
+	m, _ := newTestManager(t)
+	fm := m.(*filesmgr)
+	var seen []FileEventType
+	m.Subscribe(func(ev FileEvent) {
+		mu := fm.mutexFor(ev.Entry.Name)
+		require.True(t, mu.TryLock(), "%s published while %s was locked", ev.Type, ev.Entry.Name)
+		mu.Unlock()
+		seen = append(seen, ev.Type)
+	})
+
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, spec("v1", v1))
+	require.NoError(t, err)
+	_, err = m.Ensure(ctx, spec("v2", v2))
+	require.NoError(t, err)
+	require.NoError(t, m.Rollback(ctx, "pkg"))
+	require.NoError(t, m.Rollback(ctx, "pkg"))
+	_, err = m.Ensure(ctx, spec("v1", v1))
+	require.NoError(t, err)
+	require.NoError(t, m.Remove(ctx, "pkg"))
+	assert.Equal(t, []FileEventType{EventInstalled, EventUpgraded, EventRolledBack, EventRemoved, EventInstalled, EventRemoved}, seen)
+}
+
+// TestManager_PublishesNothingWithoutAChange verifies that a call that fails
+// or finds nothing to do publishes no event.
+func TestManager_PublishesNothingWithoutAChange(t *testing.T) {
+	archive := buildTarGz(t, map[string]string{"a.txt": "alpha"})
+	srv := serveTarGz(t, archive)
+	defer srv.Close()
+
+	m, _ := newTestManager(t)
+	var seen []FileEvent
+	m.Subscribe(func(ev FileEvent) { seen = append(seen, ev) })
+
+	ctx := context.Background()
+	_, err := m.Ensure(ctx, FileSpec{Name: "pkg", Version: "1.0.0", URL: srv.URL + "/x.tar.gz", SHA256: strings.Repeat("0", 64), Extract: true})
+	require.Error(t, err)
+	require.NoError(t, m.Remove(ctx, "pkg"))
+	require.Error(t, m.Rollback(ctx, "pkg"))
+	assert.Empty(t, seen)
+}

@@ -273,9 +273,23 @@ func ResolveInterfaceType(
 	userPatternCount int,
 ) string {
 	// Tier 0: Subinterface detection (highest priority - structural)
-	// Subinterfaces are always virtual regardless of other attributes
-	if ExtractParentInterfaceName(interfaceName) != "" {
-		return "virtual"
+	// A dot-separated child is a subinterface and is virtual regardless of
+	// what else it reports: platforms commonly publish a unit with the
+	// ifType of the port it runs on.
+	//
+	// The colon is not that separator. It also names channelized lanes
+	// (Aruba CX 1/1/11:1, Extreme SLX Ethernet 0/54:1), ONU ports (BDCOM
+	// GPON0/2:1), management ports (Junos re0:mgmt-0) and, on some
+	// platforms, ports whose name IS a MAC address — every one of them a
+	// port in its own right. So for a colon the device decides: the name
+	// only makes it virtual when the reported ifType agrees, or when the
+	// walk reported no ifType at all and there is nothing to weigh the
+	// name against.
+	if parent := ExtractParentInterfaceName(interfaceName); parent != "" {
+		colonSeparated := len(interfaceName) > len(parent) && interfaceName[len(parent)] == ':'
+		if !colonSeparated || ifType == "" || isLogicalIfType(ifType) {
+			return "virtual"
+		}
 	}
 
 	// Tier 1: User-defined patterns (highest priority for non-subinterfaces)

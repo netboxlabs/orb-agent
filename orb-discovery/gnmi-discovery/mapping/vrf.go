@@ -80,9 +80,7 @@ func translateVrfs(snap map[string]any, defaults *config.Defaults) ([]diode.Enti
 	var vrfTags []*diode.Tag
 	if defaults != nil {
 		d := defaults.Vrf
-		if d.Tenant != "" {
-			vrfTenant = &diode.Tenant{Name: strptr(d.Tenant)}
-		}
+		vrfTenant = diodeTenant(d.Tenant)
 		if d.Description != "" {
 			vrfDesc = strptr(d.Description)
 		}

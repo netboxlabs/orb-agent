@@ -5,11 +5,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func TestNewManufacturerLookup(t *testing.T) {
@@ -1187,5 +1188,508 @@ func TestCountManufacturerEntries_MatchesResolverRules(t *testing.T) {
 			}
 			assert.Equal(t, len(applied), got, "count must equal what the resolver applies")
 		})
+	}
+}
+
+func TestDeviceLookup_ModuleModels(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": "PN-MPU-A"
+  "1.3.6.1.4.1.99999.3.1.9.4.680": " PN-48GT-B "
+  ".1.3.6.1.4.1.99999.3.1.9.4.999": "  "
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	for _, oid := range []string{".1.3.6.1.4.1.99999.3.1.9.4.673", "1.3.6.1.4.1.99999.3.1.9.4.673", " .1.3.6.1.4.1.99999.3.1.9.4.673 "} {
+		model, ok := lookup.GetModuleModel(oid)
+		assert.True(t, ok, oid)
+		assert.Equal(t, "PN-MPU-A", model, "either spelling of the vendor type, padded or not")
+	}
+	model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.680")
+	assert.True(t, ok)
+	assert.Equal(t, "PN-48GT-B", model, "an undotted key and a padded name")
+	_, ok = lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.999")
+	assert.False(t, ok, "a blank name registers nothing")
+	_, ok = lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.1")
+	assert.False(t, ok, "an unknown vendor type")
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Equal(t, 2, files[0].ModuleEntries)
+	assert.Equal(t, 0, files[0].Entries)
+
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	_, ok = bundled.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.False(t, ok, "module names come only from lookup_extensions_dir")
+}
+
+func TestDeviceLookup_UnparseableFileRegistersNoModules(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.yaml"),
+		[]byte("modules:\n\t\".1.3.6.1.4.1.99999.3.1.9.4.673\": PN-MPU-A\n"), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.False(t, ok)
+	files := lookup.UserExtensionFiles()
+	assert.Equal(t, 0, files[0].ModuleEntries)
+	assert.Error(t, files[0].Err, "a file that is not valid YAML is reported once, by Err")
+	assert.NoError(t, files[0].ModulesErr)
+}
+
+// A modules: section that cannot be read is skipped on its own: the file's
+// devices still apply.
+func TestDeviceLookup_BrokenModulesSectionKeepsTheFileDevices(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices:
+  ".1.3.6.1.4.1.99999.1.1": "Operator Model"
+modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": [PN-MPU-A]
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.99999.1.1", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Operator Model", model)
+	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.False(t, ok)
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.NoError(t, files[0].Err)
+	assert.Error(t, files[0].ModulesErr)
+	assert.Equal(t, 1, files[0].Entries)
+	assert.Equal(t, 0, files[0].ModuleEntries)
+}
+
+// And a devices: section that cannot be read leaves the file's modules.
+func TestDeviceLookup_BrokenDevicesSectionKeepsTheFileModules(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices: [not-a-map]
+modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": PN-MPU-A
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.True(t, ok)
+	assert.Equal(t, "PN-MPU-A", model)
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].Err)
+	assert.NoError(t, files[0].ModulesErr)
+	assert.Equal(t, 1, files[0].ModuleEntries)
+}
+
+// One file spelling a vendor type both ways names it by the dotted entry,
+// whatever order the map yields.
+func TestDeviceLookup_ModuleBothSpellingsInOneFileDottedWins(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  "1.3.6.1.4.1.99999.3.1.9.4.673": Undotted
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": Dotted
+`), 0o644))
+	for range 20 {
+		lookup, err := LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+		model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+		require.True(t, ok)
+		require.Equal(t, "Dotted", model)
+		assert.Equal(t, 1, lookup.UserExtensionFiles()[0].ModuleEntries)
+	}
+}
+
+// 0.0 is the null vendor type that unrelated rows share, so it names nothing.
+func TestDeviceLookup_ZeroDotZeroNamesNoModule(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  "0.0": Everything
+  ".0.0": Everything Else
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	for _, oid := range []string{"0.0", ".0.0"} {
+		_, ok := lookup.GetModuleModel(oid)
+		assert.False(t, ok, oid)
+	}
+	assert.Equal(t, 0, lookup.UserExtensionFiles()[0].ModuleEntries)
+}
+
+func TestDeviceLookup_NilLookupNamesNoModule(t *testing.T) {
+	var lookup *DeviceLookup
+	_, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.False(t, ok)
+}
+
+// A blank key would otherwise name every module that reports no vendor type.
+func TestDeviceLookup_BlankModuleKeyNamesNoModule(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  "": Everything
+  ".": Everything Else
+  " ": Everything Again
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, lookup.UserExtensionFiles()[0].ModuleEntries)
+	_, ok := lookup.GetModuleModel("")
+	assert.False(t, ok)
+}
+
+func TestDeviceLookup_BlankVendorTypeNamesNoModule(t *testing.T) {
+	lookup := &DeviceLookup{moduleModels: map[string]string{"": "Everything", ".": "Everything"}}
+	for _, oid := range []string{"", " "} {
+		_, ok := lookup.GetModuleModel(oid)
+		assert.False(t, ok, "%q", oid)
+	}
+}
+
+// A file that cannot be read as a mapping fails as a whole, so Err reports it
+// and the modules section adds no second error.
+func TestDeviceLookup_FileLevelErrorIsReportedOnce(t *testing.T) {
+	for name, content := range map[string]string{
+		"duplicate top-level key": "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\ndevices:\n  \".1.3.6.1.4.1.99999.1.2\": B\n",
+		"list root":               "- \".1.3.6.1.4.1.99999.1.1\"\n",
+		"scalar root":             "just text\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.yaml"), []byte(content), 0o644))
+			lookup, err := LoadDeviceLookupExtensions(dir)
+			require.NoError(t, err)
+
+			files := lookup.UserExtensionFiles()
+			require.Len(t, files, 1)
+			assert.Error(t, files[0].Err)
+			assert.NoError(t, files[0].ModulesErr)
+		})
+	}
+}
+
+// Any error confined to the modules section is reported, not only a value of
+// the wrong type, and the file's devices still apply.
+func TestDeviceLookup_ModulesSectionErrorOfAnyKindIsReported(t *testing.T) {
+	for name, modules := range map[string]string{
+		"wrong tag":       "  \".1.3.6.1.4.1.99999.3.1.9.4.673\": !!int abc\n",
+		"scalar merge":    "  <<: oops\n",
+		"duplicate key":   "  \".1.3.6.1.4.1.99999.3.1.9.4.673\": A\n  \".1.3.6.1.4.1.99999.3.1.9.4.673\": B\n",
+		"list for a name": "  \".1.3.6.1.4.1.99999.3.1.9.4.673\": [A]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"),
+				[]byte("devices:\n  \".1.3.6.1.4.1.99999.1.1\": \"Operator Model\"\nmodules:\n"+modules), 0o644))
+			lookup, err := LoadDeviceLookupExtensions(dir)
+			require.NoError(t, err)
+
+			files := lookup.UserExtensionFiles()
+			require.Len(t, files, 1)
+			assert.NoError(t, files[0].Err)
+			assert.Error(t, files[0].ModulesErr)
+			assert.Equal(t, 1, files[0].Entries)
+		})
+	}
+}
+
+// Files load in name order, so a later file renames a module vendor type
+// however either file spells its OID.
+func TestDeviceLookup_LaterFileRenamesAModuleInAnySpelling(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.yaml"),
+		[]byte("modules:\n  \".1.3.6.1.4.1.99999.3.1.9.4.673\": First Name\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.yaml"),
+		[]byte("modules:\n  \"1.3.6.1.4.1.99999.3.1.9.4.673\": Second Name\n"), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, ok := lookup.GetModuleModel(".1.3.6.1.4.1.99999.3.1.9.4.673")
+	assert.True(t, ok)
+	assert.Equal(t, "Second Name", model)
+}
+
+// Each section can be broken on its own, and then each is reported.
+func TestDeviceLookup_BothSectionsBrokenReportsBoth(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices: [not-a-map]
+modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": [PN-MPU-A]
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].Err)
+	assert.Error(t, files[0].ModulesErr)
+}
+
+// A root merge can trip yaml's alias limit for the modules decode and not the
+// devices one, so the modules error must not be folded into a nil Err.
+func TestDeviceLookup_ModulesAliasLimitIsReportedBesideReadableDevices(t *testing.T) {
+	keys := make([]string, 1500)
+	for i := range keys {
+		keys[i] = fmt.Sprintf("k%d: v", i)
+	}
+	var b strings.Builder
+	b.WriteString("base: &b {" + strings.Join(keys, ", ") + "}\n<<: *b\ndevices:\n")
+	for i := range 10 {
+		fmt.Fprintf(&b, "  \".1.3.6.1.4.1.99999.1.%d\": Model %d\n", i, i)
+	}
+	b.WriteString("modules:\n  \".1.3.6.1.4.1.99999.3.1.9.4.673\": PN-MPU-A\n")
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "merged.yaml"), []byte(b.String()), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	require.NoError(t, files[0].Err)
+	assert.Equal(t, 10, files[0].Entries)
+	assert.Error(t, files[0].ModulesErr)
+}
+
+// A merge key beside a complex key inside modules: is a modules error, not a
+// failed load.
+func TestDeviceLookup_ModulesMergeBesideComplexKeyIsAModulesError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed.yaml"), []byte(`devices:
+  ".1.3.6.1.4.1.99999.1.1": "Operator Model"
+modules:
+  ? {a: 1}
+  : x
+  <<: {k: v}
+`), 0o644))
+	var lookup *DeviceLookup
+	require.NotPanics(t, func() {
+		var err error
+		lookup, err = LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+	})
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.NoError(t, files[0].Err)
+	assert.Equal(t, 1, files[0].Entries)
+	assert.Error(t, files[0].ModulesErr)
+}
+
+// The file-level check fails cleanly where the section decoders do.
+func TestDeviceLookup_FileLevelCheckFailsCleanly(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "odd.yaml"), []byte(`devices: !!binary '!!!'
+manufacturers: !!binary '!!!'
+? {a: 1}
+: x
+<<: {k: v}
+`), 0o644))
+	var lookup *DeviceLookup
+	require.NotPanics(t, func() {
+		var err error
+		lookup, err = LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+	})
+
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].Err)
+}
+
+// A modules: section with one bad value is skipped whole, including the
+// entries around it that did decode.
+func TestDeviceLookup_BrokenModulesSectionAppliesNoEntry(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "modules.yaml"), []byte(`modules:
+  ".1.3.6.1.4.1.99999.3.1.9.4.673": PN-MPU-A
+  ".1.3.6.1.4.1.99999.3.1.9.4.680": [PN-48GT-B]
+  ".1.3.6.1.4.1.99999.3.1.9.4.681": PN-48GT-C
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	for _, oid := range []string{".1.3.6.1.4.1.99999.3.1.9.4.673", ".1.3.6.1.4.1.99999.3.1.9.4.681"} {
+		_, ok := lookup.GetModuleModel(oid)
+		assert.False(t, ok, oid)
+	}
+	files := lookup.UserExtensionFiles()
+	require.Len(t, files, 1)
+	assert.Error(t, files[0].ModulesErr)
+	assert.Equal(t, 0, files[0].ModuleEntries)
+}
+
+// mergeBesideComplexKey is a merge key next to a mapping used as a key, which
+// gopkg.in/yaml.v3 panicked on.
+const mergeBesideComplexKey = "? {a: 1}\n: x\n<<: {k: v}\n"
+
+// indented nests a block under a section key.
+func indented(block string) string {
+	return "  " + strings.ReplaceAll(strings.TrimSuffix(block, "\n"), "\n", "\n  ") + "\n"
+}
+
+// Such a file fails to parse rather than crashing the load.
+func TestDeviceLookup_MergeBesideComplexKeyIsAFileError(t *testing.T) {
+	for name, content := range map[string]string{
+		"in devices":       "devices:\n" + indented(mergeBesideComplexKey),
+		"in manufacturers": "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\nmanufacturers:\n" + indented(mergeBesideComplexKey),
+		"at the top level": mergeBesideComplexKey + "devices:\n  \".1.3.6.1.4.1.99999.1.1\": A\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "odd.yaml"), []byte(content), 0o644))
+			var lookup *DeviceLookup
+			require.NotPanics(t, func() {
+				var err error
+				lookup, err = LoadDeviceLookupExtensions(dir)
+				require.NoError(t, err)
+			})
+			files := lookup.UserExtensionFiles()
+			require.Len(t, files, 1)
+			assert.Equal(t, 0, files[0].ManufacturerEntries)
+			if name == "in manufacturers" {
+				assert.NoError(t, files[0].Err)
+				assert.Equal(t, 1, files[0].Entries, "the devices section still applies")
+			} else {
+				assert.Error(t, files[0].Err)
+			}
+		})
+	}
+}
+
+// The resolver skips such a file and keeps the others' overrides.
+func TestManufacturerResolver_MergeBesideComplexKeySkipsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.yaml"),
+		[]byte("manufacturers:\n"+indented(mergeBesideComplexKey)), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.yaml"),
+		[]byte("manufacturers:\n  \"99999\": \"Example Vendor\"\n"), 0o644))
+	builtin, err := NewManufacturerLookup()
+	require.NoError(t, err)
+
+	var resolver *ManufacturerResolver
+	require.NotPanics(t, func() {
+		resolver, err = NewManufacturerResolver(builtin, dir, nil)
+	})
+	require.NoError(t, err)
+	got, err := resolver.GetManufacturer("99999")
+	require.NoError(t, err)
+	assert.Equal(t, "Example Vendor", got)
+}
+
+func TestDeviceLookup_UserDefined(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`devices:
+  ".1.3.6.1.4.1.99999.1.1": "Operator Model"
+  ".1.3.6.1.4.1.9.1.1690": "Renamed Bundled Model"
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.99999.1.1"), "a model only the operator names")
+	assert.True(t, lookup.UserDefined("1.3.6.1.4.1.99999.1.1"), "either OID spelling")
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "an operator entry replacing a bundled one")
+
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	model, err := bundled.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err, "the bundled catalog carries this OID")
+	assert.NotEmpty(t, model)
+	assert.False(t, bundled.UserDefined(".1.3.6.1.4.1.9.1.1690"), "a bundled model is not the operator's")
+	assert.False(t, bundled.UserDefined(".1.3.6.1.4.1.99999.1.1"), "an unknown OID")
+}
+
+func TestDeviceLookup_CopiedBundledEntryIsNotUserDefined(t *testing.T) {
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	model, err := bundled.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "copied.yaml"),
+		[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \""+model+"\"\n"), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	assert.False(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"),
+		"seeding the directory with a bundled file names nothing new")
+}
+
+func TestDeviceLookup_UndottedUserKeyReplacesBundledEntry(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`devices:
+  "1.3.6.1.4.1.9.1.1690": "Operator Model"
+`), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Operator Model", model, "the operator's entry wins however its key is spelled")
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"))
+}
+
+func TestDeviceLookup_ModelRepeatedAcrossUserFilesStaysUserDefined(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.yaml", "b.yaml"} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name),
+			[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \"Site Model\"\n"), 0o644))
+	}
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "Site Model", model)
+	assert.True(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "a second file repeating the entry keeps it the operator's")
+}
+
+func TestDeviceLookup_BothSpellingsInOneFileDottedWins(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "custom.yaml"), []byte(`devices:
+  "1.3.6.1.4.1.99999.1": "Undotted"
+  ".1.3.6.1.4.1.99999.1": "Dotted"
+`), 0o644))
+	for range 20 {
+		lookup, err := LoadDeviceLookupExtensions(dir)
+		require.NoError(t, err)
+		model, err := lookup.GetDeviceModel(".1.3.6.1.4.1.99999.1", nil)
+		require.NoError(t, err)
+		require.Equal(t, "Dotted", model)
+		assert.Equal(t, 1, lookup.UserExtensionFiles()[0].Entries, "one OID, however it is spelled")
+	}
+}
+
+func TestDeviceLookup_UserFileRestoringBundledModelIsNotUserDefined(t *testing.T) {
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	model, err := bundled.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.yaml"),
+		[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \"Site Model\"\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "b.yaml"),
+		[]byte("devices:\n  \".1.3.6.1.4.1.9.1.1690\": \""+model+"\"\n"), 0o644))
+	lookup, err := LoadDeviceLookupExtensions(dir)
+	require.NoError(t, err)
+
+	got, err := lookup.GetDeviceModel(".1.3.6.1.4.1.9.1.1690", nil)
+	require.NoError(t, err)
+	assert.Equal(t, model, got, "files load in name order, so the later one wins")
+	assert.False(t, lookup.UserDefined(".1.3.6.1.4.1.9.1.1690"), "the winning entry is the bundled one")
+}
+
+// A user entry is judged against the bundled catalog by its dotted key, so
+// every bundled key must be spelled with the leading dot.
+func TestDeviceLookup_BundledKeysAreDotted(t *testing.T) {
+	bundled, err := LoadDeviceLookupExtensions("")
+	require.NoError(t, err)
+	require.NotEmpty(t, bundled.devicesByVendor)
+	for oid := range bundled.devicesByVendor {
+		assert.True(t, strings.HasPrefix(oid, "."), "bundled key %q", oid)
 	}
 }

@@ -17,6 +17,9 @@ import (
 // directory) at a destination path.
 type fetcher struct {
 	logger *slog.Logger
+	// retry controls retries of transient download failures; the zero value
+	// uses the defaults.
+	retry retryPolicy
 }
 
 func newFetcher(logger *slog.Logger) *fetcher {
@@ -32,14 +35,6 @@ func newFetcher(logger *slog.Logger) *fetcher {
 var allowedSchemes = map[string]bool{
 	"http":  true,
 	"https": true,
-}
-
-// httpGetters is the explicit getter map used when constructing go-getter
-// clients. Defense-in-depth: even if the scheme check above is bypassed,
-// go-getter will not find a registered getter for unlisted schemes.
-var httpGetters = map[string]getter.Getter{
-	"http":  new(getter.HttpGetter),
-	"https": new(getter.HttpGetter),
 }
 
 // knownArchiveSuffixes lists the archive extensions go-getter recognizes from a
@@ -229,22 +224,7 @@ func (f *fetcher) fetch(ctx context.Context, spec FileSpec, dst string) error {
 		stagePath = filepath.Join(tmp, filename)
 	}
 
-	client := &getter.Client{
-		Ctx:     ctx,
-		Src:     u.String(),
-		Dst:     stagePath,
-		Mode:    mode,
-		Getters: httpGetters,
-		// DisableSymlinks blocks tar entries that are symbolic links from being
-		// honored during extraction. Without this a crafted archive can include
-		// a symlink entry pointing outside the extraction target (e.g. "/etc")
-		// and subsequent regular-file entries that write through it, escaping
-		// the staging directory. Since FileSpec.URL can come from runtime
-		// (untrusted) configuration, this is a real filesystem-escape vector
-		// rather than a theoretical hardening concern.
-		DisableSymlinks: true,
-	}
-	if err := client.Get(); err != nil {
+	if err := f.download(ctx, spec.Name, u.String(), stagePath, mode); err != nil {
 		return fmt.Errorf("fetch %s: %w", spec.Name, err)
 	}
 

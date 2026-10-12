@@ -62,7 +62,10 @@ func newMACMatchStub(mac *diode.MACAddress) *diode.MACAddress {
 // are NOT matchers and NOT required for create, so they are dropped — this is the
 // whole point of the stub (Config is large). source_match metadata (netbox_id) is
 // the plugin's PK match path, so it must not diverge between rich and stub; run_id
-// annotation is matcher-irrelevant and intentionally omitted.
+// annotation is matcher-irrelevant and intentionally omitted. Rack / Position /
+// Face are the other exception to the invariant: they form a matcher, but Diode
+// tries it only after name and site, which the stub carries, so the placement
+// rides on the top-level Device alone.
 func newDeviceStub(d *diode.Device) *diode.Device {
 	if d == nil {
 		return nil

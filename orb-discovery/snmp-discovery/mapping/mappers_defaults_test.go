@@ -207,3 +207,144 @@ func TestDeviceMapper_applyDefaults_AssetTagGarbageViaOIDSkips(t *testing.T) {
 	assert.Nil(t, entity.AssetTag,
 		"OID reference resolving to a value with control bytes must be rejected")
 }
+
+func TestDeviceMapper_applyDefaults_RackCarriesDeviceSiteAndLocation(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	m.applyDefaults(entity, &config.Defaults{Site: "DC1", Location: "Hall 1", Rack: "R12"}, nil)
+	require.NotNil(t, entity.Rack)
+	require.NotNil(t, entity.Rack.Name)
+	assert.Equal(t, "R12", *entity.Rack.Name)
+	require.NotNil(t, entity.Site)
+	assert.Same(t, entity.Site, entity.Rack.Site, "the rack is in the device's site")
+	require.NotNil(t, entity.Location)
+	assert.Same(t, entity.Location, entity.Rack.Location, "the rack is in the device's location")
+	assert.Nil(t, entity.Position)
+	assert.Nil(t, entity.Face)
+}
+
+func TestDeviceMapper_applyDefaults_RackWithoutLocation(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	m.applyDefaults(entity, &config.Defaults{Site: "DC1", Rack: "R12"}, nil)
+	require.NotNil(t, entity.Rack)
+	assert.Equal(t, "R12", *entity.Rack.Name)
+	assert.Same(t, entity.Site, entity.Rack.Site)
+	assert.Nil(t, entity.Rack.Location)
+}
+
+func TestDeviceMapper_applyDefaults_RackTakesOIDResolvedLocation(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	defaults := &config.Defaults{Site: "DC1", Location: ".1.3.6.1.2.1.1.6.0", Rack: "R12"}
+	m.applyDefaults(entity, defaults, map[string]string{".1.3.6.1.2.1.1.6.0": "Hall 1"})
+	require.NotNil(t, entity.Rack)
+	require.NotNil(t, entity.Rack.Location)
+	assert.Same(t, entity.Location, entity.Rack.Location)
+	assert.Equal(t, "Hall 1", *entity.Rack.Location.Name)
+}
+
+func TestDeviceMapper_applyDefaults_RackWithoutUnresolvedLocation(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	defaults := &config.Defaults{Site: "DC1", Location: ".1.3.6.1.2.1.1.6.0", Rack: "R12"}
+	m.applyDefaults(entity, defaults, map[string]string{})
+	require.NotNil(t, entity.Rack)
+	assert.Nil(t, entity.Location)
+	assert.Nil(t, entity.Rack.Location, "a location the device did not get is not sent on the rack")
+}
+
+func TestDeviceMapper_applyDefaults_RackNameIsLiteral(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	defaults := &config.Defaults{Site: "DC1", Rack: ".1.3.6.1.2.1.1.6.0"}
+	m.applyDefaults(entity, defaults, map[string]string{".1.3.6.1.2.1.1.6.0": "Hall 1"})
+	require.NotNil(t, entity.Rack)
+	assert.Equal(t, ".1.3.6.1.2.1.1.6.0", *entity.Rack.Name, "a rack name is never resolved from a walked OID")
+}
+
+func TestDeviceMapper_applyDefaults_RackNameTrimmed(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	m.applyDefaults(entity, &config.Defaults{Site: "DC1", Rack: "  R12 "}, nil)
+	require.NotNil(t, entity.Rack)
+	assert.Equal(t, "R12", *entity.Rack.Name)
+
+	blank := &diode.Device{}
+	m.applyDefaults(blank, &config.Defaults{Site: "DC1", Rack: "   "}, nil)
+	assert.Nil(t, blank.Rack, "a blank rack is unset")
+}
+
+func TestDeviceMapper_applyDefaults_PositionAndFace(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	pos := 40.5
+	m.applyDefaults(entity, &config.Defaults{Site: "DC1", Rack: "R12", Position: &pos, Face: "Front"}, nil)
+	require.NotNil(t, entity.Rack)
+	require.NotNil(t, entity.Position)
+	assert.InDelta(t, 40.5, *entity.Position, 0)
+	require.NotNil(t, entity.Face)
+	assert.Equal(t, "front", *entity.Face, "face is emitted lowercase")
+}
+
+func TestDeviceMapper_applyDefaults_NoRackPlacementWhenUnset(t *testing.T) {
+	m := newTestDeviceMapper()
+	entity := &diode.Device{}
+	m.applyDefaults(entity, &config.Defaults{Site: "DC1", Location: "Hall 1"}, nil)
+	assert.Nil(t, entity.Rack)
+	assert.Nil(t, entity.Position)
+	assert.Nil(t, entity.Face)
+}
+
+func TestDeviceMapper_applyDefaults_PositionNeedsRackAndFace(t *testing.T) {
+	m := newTestDeviceMapper()
+	pos := 10.0
+
+	noRack := &diode.Device{}
+	m.applyDefaults(noRack, &config.Defaults{Site: "DC1", Position: &pos, Face: "front"}, nil)
+	assert.Nil(t, noRack.Position, "NetBox refuses a position without a rack")
+	assert.Nil(t, noRack.Face)
+
+	noFace := &diode.Device{}
+	m.applyDefaults(noFace, &config.Defaults{Site: "DC1", Rack: "R12", Position: &pos}, nil)
+	require.NotNil(t, noFace.Rack)
+	assert.Nil(t, noFace.Position, "NetBox refuses a position without a face")
+	assert.Nil(t, noFace.Face)
+}
+
+// Without a sysObjectID the mapper looks nothing up, so a model and
+// manufacturer pinned in defaults are the device type. Either alone is not:
+// NetBox needs both.
+func TestDeviceMapper_applyDefaults_DeviceTypeFromDefaults(t *testing.T) {
+	m := newTestDeviceMapper()
+	for name, tc := range map[string]struct {
+		device    config.DeviceDefaults
+		wantModel string
+	}{
+		"model and manufacturer": {config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}, "Operator Model"},
+		"model only":             {config.DeviceDefaults{Model: "Operator Model"}, ""},
+		"manufacturer only":      {config.DeviceDefaults{Manufacturer: "VendorA"}, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			entity := &diode.Device{}
+			m.applyDefaults(entity, &config.Defaults{Device: tc.device}, nil)
+			if tc.wantModel == "" {
+				assert.Nil(t, entity.DeviceType)
+				return
+			}
+			require.NotNil(t, entity.DeviceType)
+			assert.Equal(t, tc.wantModel, entity.DeviceType.GetModel())
+			assert.Equal(t, "VendorA", entity.DeviceType.GetManufacturer().GetName())
+		})
+	}
+}
+
+// A device type the sysObjectID lookup built, with the defaults already
+// applied, is left as it is.
+func TestDeviceMapper_applyDefaults_KeepsALookedUpDeviceType(t *testing.T) {
+	m := newTestDeviceMapper()
+	looked := &diode.DeviceType{Model: strPtr("vendorProductName48"), Manufacturer: &diode.Manufacturer{Name: strPtr("VendorB")}}
+	entity := &diode.Device{DeviceType: looked}
+	m.applyDefaults(entity, &config.Defaults{Device: config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}}, nil)
+	assert.Same(t, looked, entity.DeviceType)
+}

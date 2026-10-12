@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/env"
@@ -35,6 +35,9 @@ const maxIntervalMs = int64(math.MaxInt64) / int64(time.Millisecond)
 // pinned hosts, or nested prefixes carrying different credentials, while refusing
 // the degenerate case.
 const maxScanWork = 4 * uint64(targets.MaxExpand)
+
+// defaultSite is the site a policy that names none is given.
+const defaultSite = config.UndefinedPlaceholder
 
 // Manager owns the set of running policies.
 type Manager struct {
@@ -108,6 +111,11 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		if err := validateTargetHosts(&policy, m.logger); err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
+		// Also after resolution: whether a target keeps its netbox_id depends
+		// on how its host is written.
+		if err := checkRackSlots(&policy); err != nil {
+			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
+		}
 		m.applyDefaults(&policy)
 		payload.Policies[name] = policy
 	}
@@ -151,9 +159,20 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 	if err := validateInterfaceRegexes(&policy.Config.Defaults); err != nil {
 		return err
 	}
+	if d := policy.Config.Defaults; d.Position != nil || d.Face != "" {
+		return errors.New("defaults: position and face are set per target, in override_defaults")
+	}
 	for _, t := range policy.Scope.Targets {
 		if t.Host == "" {
 			return errors.New("target with empty host")
+		}
+		// Judged on the defaults the target uses: the policy's, or merged
+		// with its override, which can complete or clash with them.
+		if err := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults).ValidateTenants(); err != nil {
+			if t.OverrideDefaults == nil {
+				return err
+			}
+			return fmt.Errorf("target %s, with its override_defaults: %w", t.Host, err)
 		}
 		switch t.Mode {
 		case "", config.ModeAuto, config.ModeOnChange, config.ModeSample, config.ModeGet:
@@ -164,9 +183,218 @@ func (m *Manager) validatePolicy(policy config.Policy) error {
 			if err := validateInterfaceRegexes(t.OverrideDefaults); err != nil {
 				return fmt.Errorf("target %s: %w", t.Host, err)
 			}
+			if err := validatePlacement(policy.Config.Defaults.Rack, t.OverrideDefaults); err != nil {
+				return fmt.Errorf("target %s: %w", t.Host, err)
+			}
 		}
 	}
 	return nil
+}
+
+// checkRackSlots refuses two devices at one U, and two placements for one
+// device. Targets must have passed validatePlacement. It reads the devices
+// the runner will discover, after expansion and dedupe: a duplicate endpoint is
+// one device, and a netbox_id written on range syntax is already dropped.
+func checkRackSlots(policy *config.Policy) error {
+	expanded, err := expandScope(policy.Scope.Targets)
+	if err != nil {
+		return err
+	}
+	// Each U (a placement without its location) maps its locations ("" for
+	// none) to the target placed there, so each check is one lookup.
+	placed := map[placementKey]map[string]string{}
+	pinned := map[deviceID]*sharers{}
+	for _, c := range expanded.candidates {
+		t := c.target
+		t.Host = c.written
+		d := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults)
+		key := placementOf(d)
+		if key.rack == "" {
+			continue
+		}
+		seen, err := pinDevice(pinned, key, t, deviceIDs(t, d))
+		if err != nil {
+			return err
+		}
+		if seen {
+			continue
+		}
+		// Diode matches a device on rack, position and face after name and
+		// site, so a new device sent to an occupied U lands on the record of
+		// the device already there. Multi-U overlaps are NetBox's to refuse.
+		if hasPlacement(t.OverrideDefaults) {
+			if err := claimUnit(placed, key, t); err != nil {
+				return err
+			}
+		}
+	}
+	// Once every racked device is known, in whatever order targets come.
+	for _, c := range expanded.candidates {
+		t := c.target
+		t.Host = c.written
+		d := config.MergeDefaults(&policy.Config.Defaults, t.OverrideDefaults)
+		if key := placementOf(d); key.rack == "" {
+			if err := checkUnracked(pinned, key, t, deviceIDs(t, d)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// placementKey is the U a target places its device at, as emitted.
+type placementKey struct {
+	site, location, rack, face string
+	position                   float64
+}
+
+// placedTarget is a target already placed, for the duplicate checks.
+type placedTarget struct {
+	key  placementKey
+	host string
+}
+
+// sharers is what the racked targets sending one identifier send its device:
+// each placement, in order, and the first target relying on the identifier.
+type sharers struct {
+	placements []placedTarget
+	sent       map[placementKey]bool
+	reliedOn   *placedTarget
+}
+
+// holders returns the targets one holding the identifier at rank is tied to.
+// A target is matched by its strongest identifier, so that one ties it to
+// every target sending it; a weaker one only to a target relying on it.
+func (s *sharers) holders(rank int) []placedTarget {
+	if rank == 0 {
+		return s.placements
+	}
+	if s.reliedOn == nil {
+		return nil
+	}
+	return []placedTarget{*s.reliedOn}
+}
+
+// deviceID is something a device is matched by ahead of its name: a kept
+// netbox_id or a literal asset tag.
+type deviceID struct {
+	kind, value string
+}
+
+// deviceIDs lists what candidate t's device is matched by, strongest first as
+// Diode tries them. A tag read from a path is only known at scan time, and one
+// the mapper would not send is none.
+func deviceIDs(t config.Target, d *config.Defaults) []deviceID {
+	var ids []deviceID
+	if t.NetboxID != nil {
+		ids = append(ids, deviceID{"netbox_id", strconv.Itoa(*t.NetboxID)})
+	}
+	if tag, ok := mapping.ResolveAssetTag(d.AssetTag, nil, nil); ok {
+		ids = append(ids, deviceID{"asset_tag", tag})
+	}
+	return ids
+}
+
+// pinDevice records what target t sends the device each of ids names. Targets
+// tied by an identifier may update one device, so they must send it the same
+// rack, position and face (a rack without a position counts too). It reports
+// whether an earlier target is known to be this device, relying on the same
+// strongest identifier.
+func pinDevice(pinned map[deviceID]*sharers, key placementKey, t config.Target, ids []deviceID) (bool, error) {
+	seen := false
+	for i, id := range ids {
+		s := pinned[id]
+		if s == nil {
+			s = &sharers{sent: map[placementKey]bool{}}
+			pinned[id] = s
+		}
+		for _, other := range s.holders(i) {
+			if other.key != key {
+				return false, fmt.Errorf("targets %s and %s place %s %s at different slots",
+					other.host, t.Host, id.kind, id.value)
+			}
+		}
+		this := placedTarget{key: key, host: t.Host}
+		if i == 0 {
+			seen = s.reliedOn != nil
+			if s.reliedOn == nil {
+				s.reliedOn = &this
+			}
+		}
+		if !s.sent[key] {
+			s.sent[key] = true
+			s.placements = append(s.placements, this)
+		}
+	}
+	return seen, nil
+}
+
+// checkUnracked refuses target t, which sends no rack, moving a racked device
+// away from its rack: it still sends a site and any location, and NetBox
+// refuses a device whose rack is in another. A location it leaves out, the
+// device keeps.
+func checkUnracked(pinned map[deviceID]*sharers, key placementKey, t config.Target, ids []deviceID) error {
+	for i, id := range ids {
+		s := pinned[id]
+		if s == nil {
+			continue
+		}
+		for _, racked := range s.holders(i) {
+			if key.site != racked.key.site || (key.location != "" && key.location != racked.key.location) {
+				return fmt.Errorf("targets %s and %s send %s %s to different sites or locations, and %s places it in rack %s",
+					racked.host, t.Host, id.kind, id.value, racked.host, racked.key.rack)
+			}
+		}
+	}
+	return nil
+}
+
+// claimUnit records the U target t places its device at, refusing one another
+// target took. A rack sent without a location binds a same-named rack in any
+// location of the site, so no location clashes with any.
+func claimUnit(placed map[placementKey]map[string]string, key placementKey, t config.Target) error {
+	slot := key
+	slot.location = ""
+	taken := placed[slot]
+	if taken == nil {
+		taken = map[string]string{}
+		placed[slot] = taken
+	}
+	other, clash := taken[key.location]
+	if key.location == "" {
+		for _, host := range taken {
+			other, clash = host, true
+			break
+		}
+	} else if !clash {
+		other, clash = taken[""]
+	}
+	if clash {
+		return fmt.Errorf("targets %s and %s are both placed at %s U%v %s",
+			other, t.Host, key.rack, key.position, key.face)
+	}
+	taken[key.location] = t.Host
+	return nil
+}
+
+// placementOf returns what a target that passed validatePlacement sends its
+// device, from its merged defaults d: a rack and, when placed, a U and face
+// (zero otherwise).
+func placementOf(d *config.Defaults) placementKey {
+	site := d.Site
+	if site == "" {
+		site = defaultSite
+	}
+	key := placementKey{
+		site:     site,
+		location: d.Location, // as translate sends it
+		rack:     strings.TrimSpace(string(d.Rack)),
+		face:     strings.ToLower(strings.TrimSpace(d.Face)),
+	}
+	if d.Position != nil {
+		key.position = *d.Position
+	}
+	return key
 }
 
 // validateInterfaceRegexes compiles every interface_patterns match and every
@@ -194,6 +422,37 @@ func validateInterfaceRegexes(d *config.Defaults) error {
 	return nil
 }
 
+// validatePlacement checks a target's rack position and face against NetBox's
+// rules: both or neither, in a rack, on the front or rear, from U1 in half
+// units. The upper bound depends on the rack's height, which only NetBox knows.
+func validatePlacement(policyRack config.RackText, d *config.Defaults) error {
+	if !hasPlacement(d) {
+		return nil
+	}
+	face := strings.TrimSpace(d.Face)
+	if d.Position == nil || face == "" {
+		return errors.New("position and face must be set together; NetBox requires a face for any position")
+	}
+	if strings.TrimSpace(string(d.Rack)) == "" && strings.TrimSpace(string(policyRack)) == "" {
+		return errors.New("position and face need a rack, in this target's override_defaults or the policy defaults")
+	}
+	switch strings.ToLower(face) {
+	case "front", "rear":
+	default:
+		return fmt.Errorf("face %q must be front or rear", d.Face)
+	}
+	// !(p >= 1) also refuses NaN, which every comparison reports false for.
+	if p := *d.Position; !(p >= 1) || math.IsInf(p, 0) || p*2 != math.Trunc(p*2) {
+		return fmt.Errorf("position %v must be at least 1, in increments of 0.5", p)
+	}
+	return nil
+}
+
+// hasPlacement reports whether d sets a rack position or face.
+func hasPlacement(d *config.Defaults) bool {
+	return d != nil && (d.Position != nil || strings.TrimSpace(d.Face) != "")
+}
+
 func (m *Manager) applyDefaults(policy *config.Policy) {
 	if policy.Config.Mode == "" {
 		policy.Config.Mode = config.ModeAuto
@@ -208,10 +467,10 @@ func (m *Manager) applyDefaults(policy *config.Policy) {
 		policy.Config.GetIntervalMs = config.DefaultGetInterval
 	}
 	if policy.Config.Defaults.Site == "" {
-		policy.Config.Defaults.Site = "undefined"
+		policy.Config.Defaults.Site = defaultSite
 	}
 	if policy.Config.Defaults.Role == "" {
-		policy.Config.Defaults.Role = "undefined"
+		policy.Config.Defaults.Role = config.UndefinedPlaceholder
 	}
 	if policy.Config.Defaults.Interface.Type == "" {
 		policy.Config.Defaults.Interface.Type = "other"
@@ -326,6 +585,12 @@ func validateTargetHosts(policy *config.Policy, logger *slog.Logger) error {
 			return fmt.Errorf(
 				"target %q expands to %d addresses, more than the %d supported",
 				t.Host, count, targets.MaxExpand,
+			)
+		}
+		if count > 1 && hasPlacement(t.OverrideDefaults) {
+			return fmt.Errorf(
+				"target %q: position and face need a single host; a range or subnet would place every device at the same U",
+				t.Host,
 			)
 		}
 

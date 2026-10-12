@@ -48,3 +48,45 @@ vulnerabilities:
       is no upgrade that clears it; removing runtime pip would, at the cost of
       those two documented options.
     expired_at: 2026-11-18
+
+  - id: CVE-2026-59890
+    statement: >-
+      setuptools reported at 70.3.0 from pip 26.2.1's vendor.txt, the same
+      source as CVE-2025-47273 above and absent for the same reason: pip ships
+      no _vendor/setuptools, only _vendor/pkg_resources, so the sdist build
+      path this affects is not in the image. The finding is vendor.txt metadata
+      rather than reachable code. pip 26.2.1 is the current latest release and
+      still pins this version, so there is no upgrade that clears it.
+    expired_at: 2026-11-18
+
+  - id: CVE-2026-97687
+    statement: >-
+      urllib3 reported at 2.7.0 from pip 26.2.1's vendor.txt. Unlike the
+      setuptools entries the code is present, under pip/_vendor/urllib3, where
+      pip uses it through requests to fetch distributions. Intercepting traffic
+      through the proxy TLS override requires pip to run against an attacker
+      controlled proxy, and pip only runs here when an operator opts into
+      INSTALL_DRIVERS_PATH or INSTALL_WORKERS_PATH. The agent's own dependencies
+      resolve urllib3 to 2.8.0, which is not affected; only pip's vendored copy
+      is pinned back. pip 26.2.1 is the current latest release and still pins
+      2.7.0, so there is no upgrade that clears it.
+    expired_at: 2026-11-18
+
+  - id: CVE-2026-97689
+    statement: >-
+      urllib3 at 2.7.0 from pip 26.2.1's vendor.txt, same vendored copy as
+      CVE-2026-97687. Exhausting memory in chunk parsing requires pip to read a
+      hostile chunked response during a pip invocation, which happens only when
+      an operator opts into installing extra drivers or workers. A denial of
+      service there fails that install rather than affecting a running agent,
+      since pip is never invoked during normal operation. The agent's own
+      dependencies resolve urllib3 to 2.8.0.
+    expired_at: 2026-11-18
+
+  - id: CVE-2026-97688
+    statement: >-
+      urllib3 at 2.7.0 from pip 26.2.1's vendor.txt, same vendored copy and same
+      exposure as CVE-2026-97689: a malformed chunked Deflate response read by
+      pip during an operator-initiated driver or worker install. The agent's own
+      dependencies resolve urllib3 to 2.8.0.
+    expired_at: 2026-11-18

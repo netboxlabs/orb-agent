@@ -442,3 +442,31 @@ func TestGitStartNamesThePolicyFileOnParseError(t *testing.T) {
 	require.Contains(t, err.Error(), "policies/broken.yaml",
 		"a parse error must name the policy file it came from")
 }
+
+// yaml.v3 panicked on a merge key beside a mapping used as a key, which took
+// the agent down at startup. The maintained fork returns an error naming the
+// file.
+func TestGitStartMergeBesideComplexKeyIsAParseError(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"selector.yaml": {"selector.yaml": "test_selector:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n"},
+		"broken.yaml": {
+			"selector.yaml": "test_selector:\n" +
+				"  selector:\n" +
+				"    env: test\n" +
+				"  policies:\n" +
+				"    test_policy:\n" +
+				"      enabled: true\n" +
+				"      path: \"policies/broken.yaml\"\n",
+			"policies/broken.yaml": "backend1:\n  ? {a: 1}\n  : x\n  <<: {k: v}\n",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repoURL := writeGitRepo(t, files)
+			var err error
+			require.NotPanics(t, func() { err = startWithRepo(t, repoURL) })
+			require.Error(t, err)
+			require.Contains(t, err.Error(), name)
+			require.Contains(t, err.Error(), "unhashable")
+		})
+	}
+}

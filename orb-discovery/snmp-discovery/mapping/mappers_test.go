@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
@@ -287,7 +287,7 @@ func TestIPAddressMapper_Map(t *testing.T) {
 			defaults: &config.Defaults{
 				IPAddress: config.IPAddressDefaults{
 					Description: "IP Address specific description",
-					Tenant:      "ip-address-tenant",
+					Tenant:      config.TenantParameters{Name: "ip-address-tenant"},
 					Role:        "ip-address-role",
 					Vrf:         config.VrfParameters{Name: "ip-address-vrf"},
 				},

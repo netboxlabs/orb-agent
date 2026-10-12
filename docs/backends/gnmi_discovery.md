@@ -57,7 +57,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
 | rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
 | send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not verify the server. Off by default. See [Credentials and ranges](#credentials-and-ranges). |
-| options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). |
+| options | map | no | Per-policy toggles. `capture_config` (bool) captures the CONFIG datastore into `Device.config.running` (default off). `emit_lag_membership` (bool) links each LAG member port to its aggregate (default on; see [LAG membership](#lag-membership)). |
 | defaults | map | no | NetBox defaults applied to discovered entities (see below). |
 
 #### Defaults
@@ -66,16 +66,38 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | site | str | NetBox site (default `undefined`) |
 | role | str | NetBox device role (default `undefined`) |
 | location | str | NetBox location (optional) |
+| rack | str | NetBox rack name (optional). Sent with the device's site and location. See [Rack placement](#rack-placement) |
 | tags | list | NetBox tags applied to all entities |
 | device | map | Device overrides: `manufacturer`, `model`, `platform`, `comments`, `tags` |
 | interface | map | Interface defaults: `if_type` (fallback type, default `other`), `description`, `tags` |
 | ip_address | map | IP address defaults: `role`, `tenant`, `description`, `comments`, `tags` |
-| vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery) |
-| vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant`, `role`, `description`, `tags` |
+| prefix | map | Prefix defaults: `role`, `tenant`, `description`, `tags` |
+| vrf | map | VRF defaults: `tenant`, `description`, `comments`, `tags` (name/RD come from discovery). See [VRF tenant](#vrf-tenant) |
+| vlan | map | VLAN defaults: `group` (see [VLAN group](#vlan-group)), `tenant` (see [VRF tenant](#vrf-tenant)), `role`, `description`, `tags` |
 | interface_patterns | list | Name-regex → NetBox type, highest precedence (first match wins). |
 | interface_exclude_patterns | list | Name-regex; matching interfaces are skipped entirely. |
 
+`ip_address.tenant`, `prefix.tenant`, `vlan.tenant` and `vrf.tenant` accept a bare tenant name or a map with `name` and optional `group` / `description` / `comments` / `tags`. Give the group when the tenant's name exists in more than one tenant group in NetBox: without it, a bare name can bind to another group's tenant. Any other key in the map is refused rather than dropped, and so is a tenant that sets fields but no name in the defaults a target ends up with (a nameless policy tenant that every target's override names is fine); an empty map counts as unset. In a per-target `override_defaults`, a tenant with another name, or with a group other than the policy's (including one the policy lacks), replaces the policy's as a whole, keeping the policy's name when the override gives none; otherwise it refines the policy's field by field. A tenant named in another group is only a separate tenant once it exists in NetBox; until then Diode can match the existing one by its slug and move it between groups.
+
+##### VRF tenant
+`vrf.tenant` is applied to every VRF discovered on the device. Diode matches a VRF without an RD by its name and tenant, so when your VRFs belong to a tenant in NetBox, name that tenant here; otherwise Diode creates a second VRF with the same name and no tenant. A VRF with an RD is matched by its RD alone and gets this tenant written onto it, so on a device whose VRFs belong to different tenants, set `vrf.tenant` per target only where all of them share one.
+
+An address carries its own tenant and its VRF's, a prefix likewise, and an interface its VRF's and its VLAN's. Diode trims names and, when a tenant's name and group match no tenant, falls back to its slug whatever its group, so names with the same slug, for example ones that differ only in case or accents, or by a space against a hyphen, are one tenant to it. When two of `vrf.tenant`, `ip_address.tenant`, `prefix.tenant` and `vlan.tenant` name the same tenant, write them identically, for example with a YAML anchor. If they disagree on its name, group, `description`, `comments`, `tags` or the order of its tags, Diode refuses the objects carrying both, rewrites the tenant on every run or creates a second tenant of that name, depending on what NetBox already holds, so such a policy is refused when either is written as a map with more than a name, as is one that writes a tenant group two ways. Two bare names are not compared, as before. Each target is checked with the defaults it ends up with, its `override_defaults` merged in. Copies in different targets, or in different policies, are not compared, so keep those consistent yourself.
+
+```yaml
+defaults:
+  vrf:
+    tenant: &owner
+      name: "Example Tenant GmbH"
+      group: "Example Group"
+  ip_address:
+    tenant: *owner
+```
+
 ##### VLAN group
+
+> **Set a site and a group.** A VLAN with no group never matches VLANs already scoped to a group in NetBox, so ingestion duplicates them. This backend always sends a site with the VLAN, so Diode matches it on VID and site rather than on VID alone, and whether the same VID also collides across sites depends on whether anything separates them: a real site does, a real group scope does, and the placeholder site `undefined` does not, being one record estate-wide. `vlan.group` alone is not enough — with no `defaults.site` the group is scoped to the placeholder site `undefined`, which cannot match your group of the same name under a real site, so you get a second group and the same duplicates. Set both. The agent logs a warning the first time it sends VLANs it cannot match. Note a site on the VLAN itself is not a substitute for the group: it leaves the duplication untouched, and NetBox has deprecated assigning a VLAN directly to a site.
+
 `vlan.group` attaches every emitted VLAN to an `ipam.vlangroup`. Diode matches a VLAN group on its name and scope, so the group must be scoped the way it is in NetBox. A bare name scopes the group to the device's site. When VLANs are shared across several sites, scope the group to the site group, region or location that holds them instead:
 
 ```yaml
@@ -129,7 +151,7 @@ in a range whose contents are not known in advance.
 | profile | str | no | Pin a gNMI profile (auto-detected when omitted). |
 | origin | str | no | gNMI path origin (default `openconfig`); set `""` for origin-less paths. |
 | netbox_id | int | no | Pin discovery to an existing NetBox device ID. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
-| override_defaults | map | no | Per-target overrides of the policy `defaults`. |
+| override_defaults | map | no | Per-target overrides of the policy `defaults`. Also takes `position` and `face`, which are valid only here (see [Rack placement](#rack-placement)). |
 
 #### Ranges and subnets
 A `host` covering more than one address is expanded, and each address is probed
@@ -191,6 +213,52 @@ Each interface's NetBox type is resolved per interface, in precedence order:
 1. `interface_exclude_patterns` — a name matching any regex is skipped (no interface emitted).
 2. `interface_patterns` — the first matching regex assigns its `type` (wins over the rest).
 3. OpenConfig `state/type` — the discovered identityref maps to a NetBox type for structural families (LAG → `lag`; loopback/VLAN/tunnel/prop-virtual → `virtual`).
+4. Built-in name rules — media from names such as `GigabitEthernet` or `xe-`, and LAGs (see below); used only when `state/type` gave no structural family.
+5. Port speed — `ethernet/state/port-speed` picks a media type.
+6. The policy's `interface.if_type` default, else `other`.
+
+#### LAG membership
+With `options.emit_lag_membership` on (the default), a port whose OpenConfig `ethernet/state/aggregate-id` names an aggregate gets `Interface.lag` set to it. Nothing is created: the link is made only when the aggregate was discovered in the same cycle and typed `lag`, so an aggregate that is absent or excluded by `interface_exclude_patterns` leaves the member without a LAG and logs a warning. An aggregate is typed `lag` by its OpenConfig `state/type`, by a built-in name rule (`Port-Channel`/`po`, `ae`, `Bundle-Ether`, `Eth-Trunk`, `PortChannel`, `lag`/`lag-`, `bond`) or by `interface_patterns`; add an `interface_patterns` rule for an aggregate name none of these cover. A member typed `virtual` is skipped too, since NetBox refuses a LAG parent on one, and so is a member typed `bridge` or `lag`. device-discovery applies the same membership rules, with a shorter list of built-in LAG names.
+
+#### Rack placement
+`rack` places discovered devices in a NetBox rack. It is a literal rack name, set
+in the policy `defaults` or in a target's `override_defaults`, where it replaces
+the policy value. The rack is sent with the device's site and, when `location` is
+set, its location.
+
+A target's `override_defaults` can also place its device at a U in that rack:
+
+```yaml
+targets:
+  - host: 192.0.2.10
+    override_defaults:
+      rack: R12
+      position: 40.5
+      face: front
+```
+
+| Key | Type | Description |
+|:---:|:----:|:-----------:|
+| position | number | Rack unit the device sits at: at least `1`, in steps of `0.5` (`40.5` is a half U). |
+| face | str | `front` or `rear`, in any case. |
+
+The policy is rejected when:
+- `position` or `face` is set in the policy `defaults`. They describe one device, so they are set per target.
+- only one of `position` and `face` is set. NetBox requires a face for any position.
+- `position` and `face` are set but neither the target nor the policy sets a `rack`.
+- `face` is not `front` or `rear`.
+- `position` is below `1` or not a multiple of `0.5`. There is no upper bound check, since only NetBox knows the rack's height.
+- the target's `host` is a CIDR or range covering more than one address. A range or subnet would place every device at the same U. `rack` alone is allowed on such a target.
+- two targets with the same `netbox_id`, or the same literal `asset_tag`, send that device different placements: both update one device. A rack without a position counts too. Only a target written as a single address keeps its `netbox_id`; a `/32` or a one-address range drops it, as discovery does. An `asset_tag` in the policy `defaults` reaches every target, and every device of a subnet, so it makes all of them one device; a tag read from a path is only known at discovery time and is not compared. A target is matched by its strongest identifier, in the order Diode matches on (`netbox_id`, then `asset_tag`), so a shared identifier ties two targets only when it is the strongest of at least one: two targets with different `netbox_id`s are two devices even when they send the same tag. Two targets count as one device at a U only when they share the strongest identifier of both. A target without a rack that shares a device with a racked one must send that target's site and location, or no location: NetBox refuses a device whose rack is in another site or location.
+- two targets are placed at the same U: the same site, location, rack, position and face. A device sent without a location (none on the target or in the policy `defaults`) counts as any location, since its rack is matched by name across the site. Two half-depth devices may share a U on opposite faces. Overlaps between devices taller than one U are left to NetBox, which knows their heights. Targets naming one address count once, as discovery runs it once: a target written as that single address wins over a `/32`, range or subnet covering it.
+
+Quote a numeric rack name (`rack: "01"`). The agent passes the policy through YAML, so an unquoted `01` would arrive as the number 1 and `010` as 8; a rack that is not text is refused rather than guessed at.
+
+How the placement behaves:
+- A rack name that doesn't exist in the site is created by Diode, like any other referenced object. Use the exact NetBox name, and set `location` when racks in different locations share a name.
+- A placement NetBox can't accept (the U is taken, the device doesn't fit, or the position is beyond the rack's height): NetBox rejects the device's own record that cycle, and its reason appears in the Diode ingestion logs. Its interfaces and addresses are separate records and still go in.
+- A device that isn't in NetBox yet, sent to a U another device already occupies, updates that other device, because Diode matches devices by rack, position and face. Make sure the U is free before setting it.
+- The position is re-applied every run, so a device moved in NetBox moves back on the next run unless its override is updated.
 
 ### Sample
 A sample policy exercising the common gNMI discovery parameters.
@@ -224,8 +292,28 @@ orb:
             - host: 10.1.0.0-50
             - host: 10.0.0.11            # a named host is subscribed without probing
               profile: arista_eos
+              override_defaults:         # place this device at U40, front, in rack R12
+                rack: R12
+                position: 40
+                face: front
             - host: 10.0.0.21            # Nokia SR-OS
               port: 57400
               username: admin
               netbox_id: 42              # honoured: a bare address, not a range
 ```
+
+## Delivery mode in the log
+
+In `auto` mode the agent tries `ON_CHANGE` first and steps down to `SAMPLE`, then
+`GET`, for devices that do not offer streaming. Many platforms serve `GET` and
+`SAMPLE` but not `ON_CHANGE`, so a downgrade is expected rather than an error.
+The step down and the first successful ingest are each logged once per
+connection:
+
+```
+INFO  on_change not available, using sample  policy=… host=… reason=…
+INFO  discovery flushed                      policy=… host=… active_mode=sample entities=47
+```
+
+The second line is the one that confirms the target is discovering. After it the
+target stays quiet, since the line is per connection rather than per flush.
