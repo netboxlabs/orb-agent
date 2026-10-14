@@ -82,9 +82,9 @@ func TestIPAddressEntityKeepsThePolicysCommentsWithScanMetadataOff(t *testing.T)
 	assert.Equal(t, "owned by the policy", *ip.Comments)
 }
 
-// With the scan metadata off, a replaced name is reported as not kept rather
-// than as kept in comments the run never sends.
-func TestIPAddressEntityReportsAReplacedNameAsNotKeptWithScanMetadataOff(t *testing.T) {
+// With the scan metadata off by choice, a replaced name is logged at debug,
+// not warned about on every run; the run's summary still counts it.
+func TestIPAddressEntityLogsAReplacedNameAtDebugWithScanMetadataOff(t *testing.T) {
 	off := false
 	var logs bytes.Buffer
 	r := &Runner{
@@ -92,7 +92,20 @@ func TestIPAddressEntityReportsAReplacedNameAsNotKeptWithScanMetadataOff(t *test
 		config: config.PolicyConfig{Options: config.Options{EmitScanMetadata: &off}},
 	}
 	r.ipAddressEntity(scannedHost("abc*unit.example.net"), "192.0.2.15/24", "192.0.2.15", "p")
-	assert.Contains(t, logs.String(), "level=WARN")
-	assert.Contains(t, logs.String(), "the original is not kept")
+	assert.NotContains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "emit_scan_metadata is off")
 	assert.NotContains(t, logs.String(), "original kept in comments")
+}
+
+// When the policy's own comments leave no room, the replaced name is warned
+// about, as before.
+func TestIPAddressEntityWarnsWhenThePolicysCommentsLeaveNoRoom(t *testing.T) {
+	var logs bytes.Buffer
+	r := &Runner{
+		logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		config: config.PolicyConfig{Defaults: config.Defaults{Comments: "owned by the policy"}},
+	}
+	r.ipAddressEntity(scannedHost("abc*unit.example.net"), "192.0.2.16/24", "192.0.2.16", "p")
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "the policy's comments leave no room for the original")
 }

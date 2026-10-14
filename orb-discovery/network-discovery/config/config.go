@@ -242,9 +242,10 @@ func (d Defaults) VrfRd() string {
 
 // Options holds per-policy behavior toggles, peer to Defaults.
 type Options struct {
-	// EmitScanMetadata writes the scan result (ports and the reverse hostname
-	// nmap gave) into each IP's comments when the policy sets none. nil → on
-	// (default). Off, the IP carries no comments, so NetBox keeps its own.
+	// EmitScanMetadata writes the scan result (the ports nmap lists, and a
+	// reverse hostname that had to change or was left off) into each IP's
+	// comments when the policy sets none. nil → on (default). Off, the IP
+	// carries no comments, so NetBox keeps its own.
 	EmitScanMetadata *bool `yaml:"emit_scan_metadata,omitempty"`
 }
 

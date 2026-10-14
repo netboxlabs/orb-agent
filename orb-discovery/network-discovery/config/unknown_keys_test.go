@@ -83,6 +83,7 @@ func TestBlocksWithOperatorChosenKeysStaySilent(t *testing.T) {
 	out := captureWarnings(t, `
 policies:
   p1:
+    stray_policy_key: 1
     config:
       defaults:
         stray_default: 1
@@ -146,4 +147,45 @@ policies:
         - 192.0.2.0/24
 `)
 	require.Contains(t, out, "emit_scan_metdata")
+}
+
+// An option key under defaults or scope would otherwise be dropped in silence,
+// and the option would stay on.
+func TestOptionKeyUnderAnotherBlockIsPointedAtOptions(t *testing.T) {
+	for name, policy := range map[string]string{
+		"defaults": `
+policies:
+  p1:
+    config:
+      defaults:
+        emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`,
+		"scope": `
+policies:
+  p1:
+    config:
+      timeout: 5
+    scope:
+      emit_scan_metadata: false
+      targets: [192.0.2.0/24]
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Contains(t, captureWarnings(t, policy), "did_you_mean=options.emit_scan_metadata")
+		})
+	}
+}
+
+func TestOptionsBesideConfigIsPointedAtConfig(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    options:
+      emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`)
+	require.Contains(t, out, "did_you_mean=config.options")
 }

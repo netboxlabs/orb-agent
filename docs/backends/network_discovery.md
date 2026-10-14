@@ -20,9 +20,9 @@ with no letter or digit, is left off; the address is still sent, and a
 `dns_name` NetBox already holds for it stays as it is. In either case the
 name as nmap gave it is kept under `hostnames` in the IP's comments, unless
 the policy sets `defaults.comments`, which the backend does not add to, or
-turns off `options.emit_scan_metadata`. A name that needed no change is not recorded, so this changes nothing in the
-comments of an IP whose name was already acceptable. Each run logs how many
-names it replaced or left off. A name that was already accepted with an
+turns off `options.emit_scan_metadata`. A name that needed no change is not
+recorded, so this changes nothing in the comments of an IP whose name was
+already acceptable. Each run logs how many names it replaced or left off. A name that was already accepted with an
 asterisk, which NetBox allows as a leading wildcard label, changes on the
 next run, since nmap's asterisk never marks a wildcard.
 
@@ -64,7 +64,7 @@ Config defines data for the whole scope and is optional overall.
 
 | Key | Type | Description |
 |:---:|:----:|:-----------:|
-| emit_scan_metadata | bool | Write the scan result, the open ports and the reverse hostname nmap gave, into each discovered IP's comments. Defaults to `true`. Set `false` to send no comments, so the comments in NetBox stay as they are, including ones an earlier run wrote. Comments set with `defaults.comments` are still sent. With it off, a reverse hostname that had to change to fit `dns_name` is not recorded anywhere. |
+| emit_scan_metadata | bool | Write the scan result into each discovered IP's comments: every port nmap lists with its state, a count of the ports it summarised, and the reverse hostname when it had to change to fit `dns_name` or was left off. Defaults to `true`. Set `false` to send no comments, so the comments in NetBox stay as they are, including ones an earlier run wrote. When `defaults.comments` is set, that text is sent instead of the scan result, whatever this option says. With it off, a reverse hostname that had to change or was left off is not recorded anywhere; each run still logs how many there were. |
 
 ```yaml
 policies:
@@ -188,6 +188,8 @@ orb:
         config:
           schedule: "* * * * *"
           timeout: 5
+          options:
+            emit_scan_metadata: true
           defaults:
             description: IP discovered by network discovery
             tags: [net-discovery, orb-agent]

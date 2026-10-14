@@ -73,10 +73,16 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 	sources := suggestionSources()
 	for _, entry := range typeErr.Errors {
 		match := unknownFieldRe.FindStringSubmatch(entry)
-		if match == nil || !narrowedTypes[match[2]] {
+		if match == nil {
 			continue
 		}
 		key := match[1]
+		if !narrowedTypes[match[2]] {
+			if path, ok := misplacedOption(match[2], key); ok {
+				logger.Warn("ignoring unrecognized config key", "key", key, "did_you_mean", path, "detail", entry)
+			}
+			continue
+		}
 		if label, ok := suggestFor(key, sources); ok {
 			logger.Warn("ignoring unrecognized config key",
 				"key", key, "did_you_mean", label+"."+key, "detail", entry)
@@ -84,6 +90,18 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 		}
 		logger.Warn("ignoring unrecognized config key", "key", key, "detail", entry)
 	}
+}
+
+// misplacedOption names where an option written in another block belongs.
+// Those blocks are otherwise unchecked, so only option keys are reported.
+func misplacedOption(blockType, key string) (string, bool) {
+	switch blockType {
+	case "config.Policy":
+		return "config.options", key == "options"
+	case "config.Defaults", "config.Scope":
+		return "options." + key, yamlFieldNames(reflect.TypeFor[Options]())[key]
+	}
+	return "", false
 }
 
 // suggestFor returns the label of the first block that accepts key.
