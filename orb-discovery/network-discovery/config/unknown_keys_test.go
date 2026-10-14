@@ -173,7 +173,7 @@ policies:
 `,
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.Contains(t, captureWarnings(t, policy), "did_you_mean=options.emit_scan_metadata")
+			require.Contains(t, captureWarnings(t, policy), "did_you_mean=config.options.emit_scan_metadata")
 		})
 	}
 }
@@ -188,4 +188,40 @@ policies:
       targets: [192.0.2.0/24]
 `)
 	require.Contains(t, out, "did_you_mean=config.options")
+}
+
+// An options block nested under defaults or scope, or a bare option key on the
+// policy, would otherwise be dropped in silence as well.
+func TestOptionsNestedElsewhereArePointedAtConfig(t *testing.T) {
+	for name, tc := range map[string]struct{ policy, want string }{
+		"options under defaults": {`
+policies:
+  p1:
+    config:
+      defaults:
+        options:
+          emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`, "did_you_mean=config.options"},
+		"options under scope": {`
+policies:
+  p1:
+    scope:
+      options:
+        emit_scan_metadata: false
+      targets: [192.0.2.0/24]
+`, "did_you_mean=config.options"},
+		"option key on the policy": {`
+policies:
+  p1:
+    emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`, "did_you_mean=config.options.emit_scan_metadata"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Contains(t, captureWarnings(t, tc.policy), tc.want)
+		})
+	}
 }

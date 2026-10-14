@@ -29,7 +29,8 @@ var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type (\S+)$`)
 // no set to check against, so reporting those would fire on correct files and
 // train operators to ignore the warning. Scope is excluded for the same
 // reason it is in the other backends, and because its own keys are checked by
-// the validation that already runs over them.
+// the validation that already runs over them. Those blocks still report an
+// option written in them, see misplacedOption.
 var narrowedTypes = map[string]bool{
 	"config.PolicyConfig": true,
 	"config.Options":      true,
@@ -53,8 +54,9 @@ func suggestionSources() []suggestionSource {
 }
 
 // WarnUnknownPolicyKeys logs one warning per unrecognized key in a policy's
-// config block, naming the block the key belongs to when it is a field of one
-// of the blocks alongside it.
+// config or options block, naming the block the key belongs to when it is a
+// field of one of the blocks alongside it, and one per option written in
+// another block of the policy.
 //
 // Decoding happens a second time purely to collect the report; the error is
 // never returned, so an unrecognized key stays non-fatal.
@@ -92,14 +94,16 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 	}
 }
 
-// misplacedOption names where an option written in another block belongs.
-// Those blocks are otherwise unchecked, so only option keys are reported.
+// misplacedOption names where an options block or an option written in
+// another block of the policy belongs, as a full path from the policy. Those
+// blocks are otherwise unchecked, so nothing else in them is reported.
 func misplacedOption(blockType, key string) (string, bool) {
 	switch blockType {
-	case "config.Policy":
-		return "config.options", key == "options"
-	case "config.Defaults", "config.Scope":
-		return "options." + key, yamlFieldNames(reflect.TypeFor[Options]())[key]
+	case "config.Policy", "config.Defaults", "config.Scope":
+		if key == "options" {
+			return "config.options", true
+		}
+		return "config.options." + key, yamlFieldNames(reflect.TypeFor[Options]())[key]
 	}
 	return "", false
 }

@@ -109,3 +109,19 @@ func TestIPAddressEntityWarnsWhenThePolicysCommentsLeaveNoRoom(t *testing.T) {
 	assert.Contains(t, logs.String(), "level=WARN")
 	assert.Contains(t, logs.String(), "the policy's comments leave no room for the original")
 }
+
+// The policy's comments decide even with the scan metadata off, so the
+// warning still says why the name is not kept.
+func TestIPAddressEntityWarnsAboutThePolicysCommentsWithScanMetadataOff(t *testing.T) {
+	off := false
+	var logs bytes.Buffer
+	r := &Runner{
+		logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		config: config.PolicyConfig{
+			Defaults: config.Defaults{Comments: "owned by the policy"},
+			Options:  config.Options{EmitScanMetadata: &off},
+		},
+	}
+	r.ipAddressEntity(scannedHost("abc*unit.example.net"), "192.0.2.17/24", "192.0.2.17", "p")
+	assert.Contains(t, logs.String(), "the policy's comments leave no room for the original")
+}

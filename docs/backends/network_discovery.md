@@ -22,9 +22,10 @@ name as nmap gave it is kept under `hostnames` in the IP's comments, unless
 the policy sets `defaults.comments`, which the backend does not add to, or
 turns off `options.emit_scan_metadata`. A name that needed no change is not
 recorded, so this changes nothing in the comments of an IP whose name was
-already acceptable. Each run logs how many names it replaced or left off. A name that was already accepted with an
-asterisk, which NetBox allows as a leading wildcard label, changes on the
-next run, since nmap's asterisk never marks a wildcard.
+already acceptable. Each run logs how many names it replaced or left off. A
+name that was already accepted with an asterisk, which NetBox allows as a
+leading wildcard label, changes on the next run, since nmap's asterisk never
+marks a wildcard.
 
 ## Configuration
 The `network_discovery` backend does not require any special configuration, though overriding `host` and `port` values can be specified. The backend will use the `diode` settings specified in the `common` subsection to forward discovery results.
