@@ -65,6 +65,16 @@ const (
 	hostnameRefused                          // the name had no acceptable form and was left off
 )
 
+// hostnameRecord says whether a replaced or refused name can go in the IP's
+// comments, and why not when it cannot.
+type hostnameRecord int
+
+const (
+	recordInComments hostnameRecord = iota // the comments are the backend's to write
+	policyComments                         // the policy sets the comments
+	scanMetadataOff                        // emit_scan_metadata is off
+)
+
 // applyHostname sets the IP's dns_name from the host's reverse lookup,
 // preferring a PTR record and otherwise the last name nmap listed. When the
 // name used had to change or could not be used, and the comments are the
@@ -72,7 +82,7 @@ const (
 // comments, so the original is not lost; a name that needed no change
 // returns nothing, and the comments of every IP already in NetBox stay as
 // they are.
-func (r *Runner) applyHostname(ip *diode.IPAddress, hostnames []nmap.Hostname, addr, policyName string, canRecord bool) (hostnameOutcome, []config.Hostname) {
+func (r *Runner) applyHostname(ip *diode.IPAddress, hostnames []nmap.Hostname, addr, policyName string, record hostnameRecord) (hostnameOutcome, []config.Hostname) {
 	var chosen nmap.Hostname
 	for _, hostname := range hostnames {
 		chosen = hostname
@@ -95,12 +105,14 @@ func (r *Runner) applyHostname(ip *diode.IPAddress, hostnames []nmap.Hostname, a
 	switch {
 	case !ok:
 		r.logger.Warn("reverse hostname has no form NetBox accepts as dns_name; left off", "hostname", chosen.Name, "ip_address", addr, "policy", policyName)
-	case canRecord:
+	case record == recordInComments:
 		r.logger.Debug("reverse hostname carried characters NetBox does not accept as dns_name; replaced, original kept in comments", "hostname", chosen.Name, "dns_name", name, "ip_address", addr, "policy", policyName)
+	case record == scanMetadataOff:
+		r.logger.Debug("reverse hostname carried characters NetBox does not accept as dns_name; replaced, original not recorded as emit_scan_metadata is off", "hostname", chosen.Name, "dns_name", name, "ip_address", addr, "policy", policyName)
 	default:
 		r.logger.Warn("reverse hostname carried characters NetBox does not accept as dns_name; replaced, and the policy's comments leave no room for the original", "hostname", chosen.Name, "dns_name", name, "ip_address", addr, "policy", policyName)
 	}
-	if !canRecord {
+	if record != recordInComments {
 		return outcome, nil
 	}
 	return outcome, []config.Hostname{{Name: chosen.Name, Type: chosen.Type}}

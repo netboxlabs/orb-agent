@@ -62,7 +62,7 @@ func TestApplyHostnamePrefersThePTRAndRecordsOnlyAnAlteredName(t *testing.T) {
 	outcome, recorded := r.applyHostname(ip, []nmap.Hostname{
 		{Name: "abc1234-vendor*model*unit.example.net", Type: "PTR"},
 		{Name: "other.example.net", Type: "user"},
-	}, "192.0.2.10", "p", true)
+	}, "192.0.2.10", "p", recordInComments)
 	assert.Equal(t, hostnameReplaced, outcome)
 	require.NotNil(t, ip.DnsName)
 	assert.Equal(t, "abc1234-vendor-model-unit.example.net", *ip.DnsName)
@@ -71,7 +71,7 @@ func TestApplyHostnamePrefersThePTRAndRecordsOnlyAnAlteredName(t *testing.T) {
 	assert.Equal(t, "PTR", recorded[0].Type)
 
 	ip = &diode.IPAddress{}
-	outcome, recorded = r.applyHostname(ip, []nmap.Hostname{{Name: "Clean-01.example.net", Type: "PTR"}}, "192.0.2.11", "p", true)
+	outcome, recorded = r.applyHostname(ip, []nmap.Hostname{{Name: "Clean-01.example.net", Type: "PTR"}}, "192.0.2.11", "p", recordInComments)
 	assert.Equal(t, hostnameUnchanged, outcome)
 	require.NotNil(t, ip.DnsName)
 	assert.Equal(t, "clean-01.example.net", *ip.DnsName)
@@ -81,7 +81,7 @@ func TestApplyHostnamePrefersThePTRAndRecordsOnlyAnAlteredName(t *testing.T) {
 // Without a PTR the last name nmap listed is used, as before.
 func TestApplyHostnameFallsBackToTheLastName(t *testing.T) {
 	ip := &diode.IPAddress{}
-	testRunner().applyHostname(ip, []nmap.Hostname{{Name: "first.example.net", Type: "user"}, {Name: "Second.example.net", Type: "user"}}, "192.0.2.12", "p", true)
+	testRunner().applyHostname(ip, []nmap.Hostname{{Name: "first.example.net", Type: "user"}, {Name: "Second.example.net", Type: "user"}}, "192.0.2.12", "p", recordInComments)
 	require.NotNil(t, ip.DnsName)
 	assert.Equal(t, "second.example.net", *ip.DnsName)
 }
@@ -90,7 +90,7 @@ func TestApplyHostnameFallsBackToTheLastName(t *testing.T) {
 // address itself is still ingested.
 func TestApplyHostnameLeavesAnUnusableNameOff(t *testing.T) {
 	ip := &diode.IPAddress{}
-	outcome, recorded := testRunner().applyHostname(ip, []nmap.Hostname{{Name: "bad..name.example.net", Type: "PTR"}}, "192.0.2.13", "p", true)
+	outcome, recorded := testRunner().applyHostname(ip, []nmap.Hostname{{Name: "bad..name.example.net", Type: "PTR"}}, "192.0.2.13", "p", recordInComments)
 	assert.Equal(t, hostnameRefused, outcome)
 	assert.Nil(t, ip.DnsName)
 	require.Len(t, recorded, 1)
@@ -102,7 +102,7 @@ func TestApplyHostnameLeavesAnUnusableNameOff(t *testing.T) {
 // the run can report it.
 func TestApplyHostnameRecordsNothingWhenCommentsAreThePolicys(t *testing.T) {
 	ip := &diode.IPAddress{}
-	outcome, recorded := testRunner().applyHostname(ip, []nmap.Hostname{{Name: "abc*unit.example.net", Type: "PTR"}}, "192.0.2.14", "p", false)
+	outcome, recorded := testRunner().applyHostname(ip, []nmap.Hostname{{Name: "abc*unit.example.net", Type: "PTR"}}, "192.0.2.14", "p", policyComments)
 	assert.Equal(t, hostnameReplaced, outcome)
 	require.NotNil(t, ip.DnsName)
 	assert.Equal(t, "abc-unit.example.net", *ip.DnsName)

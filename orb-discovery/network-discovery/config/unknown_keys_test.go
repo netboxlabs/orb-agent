@@ -83,6 +83,7 @@ func TestBlocksWithOperatorChosenKeysStaySilent(t *testing.T) {
 	out := captureWarnings(t, `
 policies:
   p1:
+    stray_policy_key: 1
     config:
       defaults:
         stray_default: 1
@@ -119,4 +120,108 @@ func TestNilLoggerIsSafe(t *testing.T) {
 	assert.NotPanics(t, func() {
 		WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
 	})
+}
+
+func TestOptionKeyWrittenOnConfigNamesOptions(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      emit_scan_metadata: false
+    scope:
+      targets:
+        - 192.0.2.0/24
+`)
+	require.Contains(t, out, "options.emit_scan_metadata")
+}
+
+func TestUnknownKeyInOptionsIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      options:
+        emit_scan_metdata: false
+    scope:
+      targets:
+        - 192.0.2.0/24
+`)
+	require.Contains(t, out, "emit_scan_metdata")
+}
+
+// An option key under defaults or scope would otherwise be dropped in silence,
+// and the option would stay on.
+func TestOptionKeyUnderAnotherBlockIsPointedAtOptions(t *testing.T) {
+	for name, policy := range map[string]string{
+		"defaults": `
+policies:
+  p1:
+    config:
+      defaults:
+        emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`,
+		"scope": `
+policies:
+  p1:
+    config:
+      timeout: 5
+    scope:
+      emit_scan_metadata: false
+      targets: [192.0.2.0/24]
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Contains(t, captureWarnings(t, policy), "did_you_mean=config.options.emit_scan_metadata")
+		})
+	}
+}
+
+func TestOptionsBesideConfigIsPointedAtConfig(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    options:
+      emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`)
+	require.Contains(t, out, "did_you_mean=config.options")
+}
+
+// An options block nested under defaults or scope, or a bare option key on the
+// policy, would otherwise be dropped in silence as well.
+func TestOptionsNestedElsewhereArePointedAtConfig(t *testing.T) {
+	for name, tc := range map[string]struct{ policy, want string }{
+		"options under defaults": {`
+policies:
+  p1:
+    config:
+      defaults:
+        options:
+          emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`, "did_you_mean=config.options"},
+		"options under scope": {`
+policies:
+  p1:
+    scope:
+      options:
+        emit_scan_metadata: false
+      targets: [192.0.2.0/24]
+`, "did_you_mean=config.options"},
+		"option key on the policy": {`
+policies:
+  p1:
+    emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+`, "did_you_mean=config.options.emit_scan_metadata"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.Contains(t, captureWarnings(t, tc.policy), tc.want)
+		})
+	}
 }

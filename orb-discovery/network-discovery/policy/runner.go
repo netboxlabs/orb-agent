@@ -443,10 +443,16 @@ func (r *Runner) ipAddressEntity(host nmap.Host, ipAddr, addr, policyName string
 		ip.Tags = tags
 	}
 
-	canRecord := !hasComments
-	outcome, recordedHostnames := r.applyHostname(ip, host.Hostnames, addr, policyName, canRecord)
+	record := recordInComments
+	switch {
+	case hasComments:
+		record = policyComments
+	case !r.config.Options.ScanMetadataEmissionEnabled():
+		record = scanMetadataOff
+	}
+	outcome, recordedHostnames := r.applyHostname(ip, host.Hostnames, addr, policyName, record)
 
-	if !hasComments {
+	if record == recordInComments {
 		metadata := config.HostMetadata{Hostnames: recordedHostnames}
 
 		if host.ExtraPorts != nil {
