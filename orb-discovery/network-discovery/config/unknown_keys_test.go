@@ -120,3 +120,30 @@ func TestNilLoggerIsSafe(t *testing.T) {
 		WarnUnknownPolicyKeys([]byte("policies:\n  p1:\n    config:\n      bogus: 1\n"), nil)
 	})
 }
+
+func TestOptionKeyWrittenOnConfigNamesOptions(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      emit_scan_metadata: false
+    scope:
+      targets:
+        - 192.0.2.0/24
+`)
+	require.Contains(t, out, "options.emit_scan_metadata")
+}
+
+func TestUnknownKeyInOptionsIsReported(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      options:
+        emit_scan_metdata: false
+    scope:
+      targets:
+        - 192.0.2.0/24
+`)
+	require.Contains(t, out, "emit_scan_metdata")
+}

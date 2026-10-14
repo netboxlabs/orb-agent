@@ -240,10 +240,25 @@ func (d Defaults) VrfRd() string {
 	return trim(d.Rd)
 }
 
+// Options holds per-policy behavior toggles, peer to Defaults.
+type Options struct {
+	// EmitScanMetadata writes the scan result (ports and the reverse hostname
+	// nmap gave) into each IP's comments when the policy sets none. nil → on
+	// (default). Off, the IP carries no comments, so NetBox keeps its own.
+	EmitScanMetadata *bool `yaml:"emit_scan_metadata,omitempty"`
+}
+
+// ScanMetadataEmissionEnabled reports the effective emit_scan_metadata toggle
+// (default on).
+func (o *Options) ScanMetadataEmissionEnabled() bool {
+	return o == nil || o.EmitScanMetadata == nil || *o.EmitScanMetadata
+}
+
 // PolicyConfig represents the configuration of a policy
 type PolicyConfig struct {
 	Schedule *string  `yaml:"schedule,omitempty"`
 	Defaults Defaults `yaml:"defaults"`
+	Options  Options  `yaml:"options,omitempty"`
 	Timeout  int      `yaml:"timeout"`
 }
 

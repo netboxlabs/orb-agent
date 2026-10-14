@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -56,4 +57,42 @@ func TestIPAddressEntityLeavesThePolicysCommentsAlone(t *testing.T) {
 	assert.Equal(t, "abc-unit.example.net", *ip.DnsName)
 	require.NotNil(t, ip.Comments)
 	assert.Equal(t, "owned by the policy", *ip.Comments)
+}
+
+// With emit_scan_metadata off and no policy comments, the IP carries no
+// comments, so whatever NetBox holds stays; the name is still replaced.
+func TestIPAddressEntitySendsNoCommentsWithScanMetadataOff(t *testing.T) {
+	off := false
+	r := &Runner{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), config: config.PolicyConfig{Options: config.Options{EmitScanMetadata: &off}}}
+	ip, outcome := r.ipAddressEntity(scannedHost("abc*unit.example.net"), "192.0.2.13/24", "192.0.2.13", "p")
+	assert.Equal(t, hostnameReplaced, outcome)
+	assert.Equal(t, "abc-unit.example.net", *ip.DnsName)
+	assert.Nil(t, ip.Comments)
+}
+
+// The option only drops the scan metadata: comments the policy sets still go out.
+func TestIPAddressEntityKeepsThePolicysCommentsWithScanMetadataOff(t *testing.T) {
+	off := false
+	r := &Runner{logger: slog.New(slog.NewTextHandler(io.Discard, nil)), config: config.PolicyConfig{
+		Defaults: config.Defaults{Comments: "owned by the policy"},
+		Options:  config.Options{EmitScanMetadata: &off},
+	}}
+	ip, _ := r.ipAddressEntity(scannedHost("clean.example.net"), "192.0.2.14/24", "192.0.2.14", "p")
+	require.NotNil(t, ip.Comments)
+	assert.Equal(t, "owned by the policy", *ip.Comments)
+}
+
+// With the scan metadata off, a replaced name is reported as not kept rather
+// than as kept in comments the run never sends.
+func TestIPAddressEntityReportsAReplacedNameAsNotKeptWithScanMetadataOff(t *testing.T) {
+	off := false
+	var logs bytes.Buffer
+	r := &Runner{
+		logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		config: config.PolicyConfig{Options: config.Options{EmitScanMetadata: &off}},
+	}
+	r.ipAddressEntity(scannedHost("abc*unit.example.net"), "192.0.2.15/24", "192.0.2.15", "p")
+	assert.Contains(t, logs.String(), "level=WARN")
+	assert.Contains(t, logs.String(), "the original is not kept")
+	assert.NotContains(t, logs.String(), "original kept in comments")
 }

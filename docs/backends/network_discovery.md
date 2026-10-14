@@ -19,8 +19,8 @@ NetBox accepts, one with an empty label, longer than 255 characters or left
 with no letter or digit, is left off; the address is still sent, and a
 `dns_name` NetBox already holds for it stays as it is. In either case the
 name as nmap gave it is kept under `hostnames` in the IP's comments, unless
-the policy sets `defaults.comments`, which the backend does not add to. A
-name that needed no change is not recorded, so this changes nothing in the
+the policy sets `defaults.comments`, which the backend does not add to, or
+turns off `options.emit_scan_metadata`. A name that needed no change is not recorded, so this changes nothing in the
 comments of an IP whose name was already acceptable. Each run logs how many
 names it replaced or left off. A name that was already accepted with an
 asterisk, which NetBox allows as a leading wildcard label, changes on the
@@ -57,7 +57,24 @@ Config defines data for the whole scope and is optional overall.
 |:---------:|:----:|:--------:|:-----------:|
 | schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. If not defined, it will execute scope only once  |
 | defaults | map | no  |  key value pair that defines default values  |
+| options | map | no | Per-policy toggles, see [Options](#options). |
 | timeout | int | no | Timeout in minutes for the nmap scan operation. The default value is 5 minutes.
+
+#### Options
+
+| Key | Type | Description |
+|:---:|:----:|:-----------:|
+| emit_scan_metadata | bool | Write the scan result, the open ports and the reverse hostname nmap gave, into each discovered IP's comments. Defaults to `true`. Set `false` to send no comments, so the comments in NetBox stay as they are, including ones an earlier run wrote. Comments set with `defaults.comments` are still sent. With it off, a reverse hostname that had to change to fit `dns_name` is not recorded anywhere. |
+
+```yaml
+policies:
+  network_1:
+    config:
+      options:
+        emit_scan_metadata: false
+    scope:
+      targets: [192.0.2.0/24]
+```
 
 #### Defaults
 Current supported defaults:
@@ -68,7 +85,7 @@ Current supported defaults:
 | rd | str | Route Distinguisher (RD) for the VRF (only used when `vrf` is set). Optional; when omitted the VRF is emitted without an RD so NetBox can match an existing VRF whose `rd` is null. Equivalent to `vrf.rd`; a policy that sets both to different values is refused. |
 | tenant | string \| map | Tenant to assign to discovered IP addresses. Accepts a bare tenant name or a map with `name` + optional `group` / `description` / `comments` / `tags` (see [Tenant map](#tenant-map) below). Use the map form when the tenant already exists in a tenant group so Diode matches it instead of planning a create. |
 | role | str | Role to assign to discovered IP addresses |
-| comments | str | NetBox Comments information to be added to discovered IP |
+| comments | str | Comments for discovered IPs, sent on every run in place of the scan metadata (see [Options](#options)) |
 | description | str | NetBox Description data to be added to discovered IP |
 | tags | list | NetBox Tags to be added to discovered IP |
 | network_mask | int | Default network mask to be applied to IPv4 (default: 32) |

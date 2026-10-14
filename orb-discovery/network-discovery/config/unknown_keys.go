@@ -32,6 +32,7 @@ var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type (\S+)$`)
 // the validation that already runs over them.
 var narrowedTypes = map[string]bool{
 	"config.PolicyConfig": true,
+	"config.Options":      true,
 }
 
 // suggestionSource is a block a misplaced config-level key may belong to.
@@ -45,6 +46,7 @@ type suggestionSource struct {
 // scan_types), so a key landing on config is usually meant for it.
 func suggestionSources() []suggestionSource {
 	return []suggestionSource{
+		{"options", yamlFieldNames(reflect.TypeFor[Options]())},
 		{"defaults", yamlFieldNames(reflect.TypeFor[Defaults]())},
 		{"scope", yamlFieldNames(reflect.TypeFor[Scope]())},
 	}

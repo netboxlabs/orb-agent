@@ -98,7 +98,7 @@ func (r *Runner) applyHostname(ip *diode.IPAddress, hostnames []nmap.Hostname, a
 	case canRecord:
 		r.logger.Debug("reverse hostname carried characters NetBox does not accept as dns_name; replaced, original kept in comments", "hostname", chosen.Name, "dns_name", name, "ip_address", addr, "policy", policyName)
 	default:
-		r.logger.Warn("reverse hostname carried characters NetBox does not accept as dns_name; replaced, and the policy's comments leave no room for the original", "hostname", chosen.Name, "dns_name", name, "ip_address", addr, "policy", policyName)
+		r.logger.Warn("reverse hostname carried characters NetBox does not accept as dns_name; replaced, and the original is not kept since the backend does not write this IP's comments", "hostname", chosen.Name, "dns_name", name, "ip_address", addr, "policy", policyName)
 	}
 	if !canRecord {
 		return outcome, nil
