@@ -52,6 +52,9 @@ _COMWARE_IFACE_PREFIX_MAP = {
     "GE": "GigabitEthernet",
     "XGE": "Ten-GigabitEthernet",
     "M-GE": "M-GigabitEthernet",
+    "WGE": "Twenty-FiveGigE",
+    "FGE": "FortyGigE",
+    "HGE": "HundredGigE",
     "25GE": "Twenty-FiveGigE",
     "40GE": "FortyGigE",
     "50GE": "FiftyGigE",
@@ -74,7 +77,7 @@ def _expand_comware_iface(name: str) -> str:
     Expand a Comware abbreviated interface name to its full form.
 
     ``GE1/0/1`` → ``GigabitEthernet1/0/1``; ``XGE1/0/49`` →
-    ``Ten-GigabitEthernet1/0/49``; ``100GE1/0/1`` → ``HundredGigE1/0/1``.
+    ``Ten-GigabitEthernet1/0/49``; ``FGE1/0/53`` → ``FortyGigE1/0/53``.
     Names that don't match a known prefix (or already use the full form)
     are returned unchanged. The match anchors on a digit immediately after
     the prefix to avoid false positives like ``GEORGE``.
