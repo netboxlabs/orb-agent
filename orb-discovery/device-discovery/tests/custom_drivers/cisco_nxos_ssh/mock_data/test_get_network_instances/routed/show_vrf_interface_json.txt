@@ -1,0 +1,6 @@
+{"TABLE_if": {"ROW_if": [
+  {"if_name": "loopback0", "vrf_name": "default", "vrf_id": 1, "soo": "--"},
+  {"if_name": "Ethernet1/1", "vrf_name": "blue", "vrf_id": 3, "soo": "--"},
+  {"if_name": "port-channel20", "vrf_name": "blue", "vrf_id": 3, "soo": "--"},
+  {"if_name": "mgmt0", "vrf_name": "management", "vrf_id": 2, "soo": "--"}
+]}}

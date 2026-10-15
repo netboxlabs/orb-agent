@@ -1,0 +1,19 @@
+Ethernet1/49 is up
+admin state is up, Dedicated Interface
+  Belongs to Po10
+  Hardware: 40000/100000 Ethernet, address: 0000.5e00.5301 (bia 0000.5e00.5301)
+  Description: uplink
+  MTU 9216 bytes, BW 100000000 Kbit , DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA, medium is broadcast
+  Port mode is trunk
+  full-duplex, 100 Gb/s, media type is 100G
+port-channel10 is up
+admin state is up,
+  Hardware: Port-Channel, address: 0000.5e00.5301 (bia 0000.5e00.5301)
+  Description: uplink bundle
+  MTU 9216 bytes, BW 100000000 Kbit , DLY 10 usec
+  reliability 255/255, txload 1/255, rxload 1/255
+  Encapsulation ARPA, medium is broadcast
+  Port mode is trunk
+  full-duplex, 100 Gb/s

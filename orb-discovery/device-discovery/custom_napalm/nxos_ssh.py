@@ -2,15 +2,22 @@
 """
 Cisco NX-OS-SSH NAPALM driver subclass adding ``get_interfaces_vlans()`` and ``get_modules()``.
 
+It also keys napalm's ``get_interfaces_ip()`` and ``get_network_instances()``
+by the canonical names ``get_interfaces()`` reports: NX-OS prints
+``loopback0``, ``mgmt0`` and ``port-channel10`` where napalm's interface list
+has ``Loopback0``, ``Management0`` and ``Port-channel10``.
+
 Fetches ``show interface switchport`` over SSH (Netmiko), parses via
 ntc-templates ``cisco_nxos`` platform, and reuses the shared NX-OS
-field mapper so output is byte-identical with the NX-API path.
+field mapper, so each interface gets the same values as on the NX-API path,
+keyed by the names this driver's ``get_interfaces()`` reports.
 ``get_modules()`` adds Module / module-bay discovery for Nexus modular chassis via SSH + ntc-templates.
 """
 
 import logging
 import re
 
+from napalm.base.helpers import canonical_interface_name
 from napalm.nxos_ssh.nxos_ssh import NXOSSSHDriver as NapalmNXOSSSHDriver
 from ntc_templates.parse import parse_output
 
@@ -582,8 +589,26 @@ class NXOSSSHDriver(NapalmNXOSSSHDriver):
             if not ifname:
                 continue
             info = nxos_row_to_switchport_info(row)
-            result[ifname] = classify_switchport(info)
+            # The same canonical form napalm's get_interfaces() reports (NX-OS
+            # prints port-channel10, napalm names it Port-channel10), so the
+            # names match when VLANs are attached to interfaces.
+            result[canonical_interface_name(ifname)] = classify_switchport(info)
         return result
+
+    def get_interfaces_ip(self) -> dict:
+        """Return napalm's addresses, keyed by the names get_interfaces() reports."""
+        return {canonical_interface_name(name): families for name, families in super().get_interfaces_ip().items()}
+
+    def get_network_instances(self, name: str = "") -> dict:
+        """Return napalm's VRFs, with members keyed by the names get_interfaces() reports."""
+        instances = super().get_network_instances(name)
+        for instance in instances.values():
+            members = (instance.get("interfaces") or {}).get("interface")
+            if isinstance(members, dict):
+                instance["interfaces"]["interface"] = {
+                    canonical_interface_name(member): value for member, value in members.items()
+                }
+        return instances
 
     def get_modules(self) -> dict | None:
         """Return Module / ModuleBay inventory for Cisco Nexus via SSH CLI."""

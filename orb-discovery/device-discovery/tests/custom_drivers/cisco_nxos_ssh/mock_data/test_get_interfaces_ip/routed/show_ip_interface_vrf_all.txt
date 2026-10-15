@@ -1,0 +1,13 @@
+IP Interface Status for VRF "default"(1)
+loopback0, Interface status: protocol-up/link-up/admin-up, iod: 3,
+  IP address: 192.0.2.1, IP subnet: 192.0.2.1/32 route-preference: 0, tag: 0
+
+IP Interface Status for VRF "blue"(3)
+Ethernet1/1, Interface status: protocol-up/link-up/admin-up, iod: 5,
+  IP address: 198.51.100.1, IP subnet: 198.51.100.0/30 route-preference: 0, tag: 0
+port-channel20, Interface status: protocol-up/link-up/admin-up, iod: 7,
+  IP address: 198.51.100.5, IP subnet: 198.51.100.4/30 route-preference: 0, tag: 0
+
+IP Interface Status for VRF "management"(2)
+mgmt0, Interface status: protocol-up/link-up/admin-up, iod: 2,
+  IP address: 203.0.113.10, IP subnet: 203.0.113.0/24 route-preference: 0, tag: 0
