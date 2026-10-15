@@ -149,6 +149,52 @@ func TestPollingBase_SolvePolicySecrets(t *testing.T) {
 	require.Equal(t, "s3cret", auth["token"])
 }
 
+// TestPollingBase_SolvePolicySecrets_GenericScheme verifies that the
+// provider-agnostic ${secret://…} scheme resolves identically to the
+// provider's native scheme, and that a payload mixing both forms across two
+// separate string leaves resolves both.
+func TestPollingBase_SolvePolicySecrets_GenericScheme(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("TOKEN", "s3cret")
+	s.setValue("OTHER", "0th3r")
+	b := newBaseForTest(t, "scheme", s.fn)
+
+	payload := config.PolicyPayload{
+		ID: "p1",
+		Data: map[string]any{
+			"auth": map[string]any{
+				"native":  "${scheme://TOKEN}",
+				"generic": "${secret://OTHER}",
+			},
+		},
+	}
+	out, err := b.SolvePolicySecrets(payload)
+	require.NoError(t, err)
+	auth := out.Data.(map[string]any)["auth"].(map[string]any)
+	require.Equal(t, "s3cret", auth["native"])
+	require.Equal(t, "0th3r", auth["generic"])
+}
+
+// TestPollingBase_SolveConfigSecrets_GenericScheme verifies the config-secrets
+// path also accepts the provider-agnostic ${secret://…} scheme.
+func TestPollingBase_SolveConfigSecrets_GenericScheme(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("FS", "fs1")
+	b := newBaseForTest(t, "scheme", s.fn)
+
+	backends := map[string]any{}
+	cm := config.ManagerConfig{
+		Active: "fleet",
+		Sources: config.Sources{
+			Fleet: config.FleetManager{ClientSecret: "${secret://FS}"},
+		},
+	}
+
+	_, outCM, err := b.SolveConfigSecrets(backends, cm)
+	require.NoError(t, err)
+	require.Equal(t, "fs1", outCM.Sources.Fleet.ClientSecret)
+}
+
 func TestPollingBase_SolveConfigSecretsClearsTracking(t *testing.T) {
 	s := newStubFetcher()
 	s.setValue("BE", "be1")
