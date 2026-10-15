@@ -54,6 +54,20 @@ class TestNXOSSSHDriver(BaseDriverTest):
         """Skip: inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver."""
         pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
 
+    def test_get_interfaces_vlans_names_match_get_interfaces(self) -> None:
+        """
+        Keys use the names napalm's get_interfaces() reports.
+
+        NX-OS prints ``port-channel10`` in ``show interface switchport`` while
+        napalm canonicalizes it to ``Port-channel10``; the interface VLAN
+        mapping matches on exact names, so a raw key leaves the port-channel
+        without its VLANs.
+        """
+        driver = self._build_driver(self.mock_data_root / "test_get_interfaces_vlans" / "port_channel")
+        vlans = driver.get_interfaces_vlans()
+        assert "Port-channel10" in vlans
+        assert set(vlans) <= set(driver.get_interfaces())
+
     def test_nxos_ssh_driver_exposes_get_modules(self) -> None:
         """get_modules() must exist on NXOSSSHDriver after this batch lands."""
         assert hasattr(NXOSSSHDriver, "get_modules")

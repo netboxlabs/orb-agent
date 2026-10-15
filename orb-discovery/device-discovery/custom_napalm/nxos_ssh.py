@@ -11,6 +11,7 @@ field mapper so output is byte-identical with the NX-API path.
 import logging
 import re
 
+from napalm.base.helpers import canonical_interface_name
 from napalm.nxos_ssh.nxos_ssh import NXOSSSHDriver as NapalmNXOSSSHDriver
 from ntc_templates.parse import parse_output
 
@@ -582,7 +583,10 @@ class NXOSSSHDriver(NapalmNXOSSSHDriver):
             if not ifname:
                 continue
             info = nxos_row_to_switchport_info(row)
-            result[ifname] = classify_switchport(info)
+            # The same canonical form napalm's get_interfaces() reports (NX-OS
+            # prints port-channel10, napalm names it Port-channel10), so the
+            # names match when VLANs are attached to interfaces.
+            result[canonical_interface_name(ifname)] = classify_switchport(info)
         return result
 
     def get_modules(self) -> dict | None:
