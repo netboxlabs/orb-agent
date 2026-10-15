@@ -6,7 +6,7 @@
       20,
       30
     ],
-    "untagged": 1
+    "untagged": 99
   },
   "Port-channel10": {
     "mode": "trunk",

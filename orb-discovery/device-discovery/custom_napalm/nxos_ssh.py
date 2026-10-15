@@ -4,7 +4,8 @@ Cisco NX-OS-SSH NAPALM driver subclass adding ``get_interfaces_vlans()`` and ``g
 
 Fetches ``show interface switchport`` over SSH (Netmiko), parses via
 ntc-templates ``cisco_nxos`` platform, and reuses the shared NX-OS
-field mapper so output is byte-identical with the NX-API path.
+field mapper, so each interface gets the same values as on the NX-API path,
+keyed by the names this driver's ``get_interfaces()`` reports.
 ``get_modules()`` adds Module / module-bay discovery for Nexus modular chassis via SSH + ntc-templates.
 """
 
