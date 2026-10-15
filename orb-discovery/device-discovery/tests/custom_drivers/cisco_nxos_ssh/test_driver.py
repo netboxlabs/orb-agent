@@ -38,10 +38,6 @@ class TestNXOSSSHDriver(BaseDriverTest):
         """Skip: inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver."""
         pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
 
-    def test_get_interfaces_ip(self, scenario):
-        """Skip: inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver."""
-        pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
-
     def test_get_config(self, scenario):
         """Skip: inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver."""
         pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
