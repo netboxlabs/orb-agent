@@ -68,6 +68,36 @@ class TestNXOSSSHDriver(BaseDriverTest):
         assert "Port-channel10" in vlans
         assert set(vlans) <= set(driver.get_interfaces())
 
+    def test_get_interfaces_ip_names_match_get_interfaces(self) -> None:
+        """
+        Addresses are keyed by the names napalm's get_interfaces() reports.
+
+        ``show ip interface vrf all`` prints ``loopback0``, ``mgmt0`` and
+        ``port-channel20``; get_interfaces() reports ``Loopback0``,
+        ``Management0`` and ``Port-channel20``. A raw key put the address on a
+        second, lowercase interface instead of the real one.
+        """
+        driver = self._build_driver(self.mock_data_root / "test_get_interfaces_ip" / "routed")
+        addresses = driver.get_interfaces_ip()
+        assert set(addresses) <= set(driver.get_interfaces())
+        assert addresses["Loopback0"] == {
+            "ipv4": {"192.0.2.1": {"prefix_length": 32}},
+            "ipv6": {"2001:db8::1": {"prefix_length": 128}},
+        }
+        assert addresses["Management0"]["ipv4"] == {"203.0.113.10": {"prefix_length": 24}}
+        assert addresses["Port-channel20"]["ipv4"] == {"198.51.100.5": {"prefix_length": 30}}
+
+    def test_get_network_instances_names_match_get_interfaces(self) -> None:
+        """VRF members are keyed by the names napalm's get_interfaces() reports."""
+        driver = self._build_driver(self.mock_data_root / "test_get_network_instances" / "routed")
+        members = {
+            name
+            for instance in driver.get_network_instances().values()
+            for name in instance["interfaces"]["interface"]
+        }
+        assert members == {"Loopback0", "Management0", "Ethernet1/1", "Port-channel20"}
+        assert members <= set(driver.get_interfaces())
+
     def test_nxos_ssh_driver_exposes_get_modules(self) -> None:
         """get_modules() must exist on NXOSSSHDriver after this batch lands."""
         assert hasattr(NXOSSSHDriver, "get_modules")
