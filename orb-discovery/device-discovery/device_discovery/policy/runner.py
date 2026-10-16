@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Runner."""
 
+import copy
 import logging
 import time
 import traceback
@@ -273,12 +274,14 @@ class PolicyRunner:
 
         # Measure device connection time
         connection_start_time = time.perf_counter()
+        # A copy, as drivers pop keys from optional_args and the next run
+        # needs them.
         with np_driver(
             scope.hostname,
             scope.username,
             scope.password,
             scope.timeout,
-            scope.optional_args,
+            copy.deepcopy(scope.optional_args),
         ) as device:
             connection_duration = (time.perf_counter() - connection_start_time) * 1000
             device_connection_latency = get_metric("device_connection_latency")

@@ -314,7 +314,8 @@ The scope defines a list of devices that can be accessed and pulled data.
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
 | driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
-| optional_args | map | no  | NAPALM optional arguments defined [here](https://napalm.readthedocs.io/en/latest/support/#list-of-supported-optional-arguments). Commonly used: `ssh_config_file` for jumphost support (see [SSH Configuration guide](./ssh.md)), `canonical_int` for interface naming, `timeout` for slow connections. |
+| timeout | integer | no | Seconds the driver waits on the device, 60 by default. Used by most drivers that talk to an API or NETCONF, such as `nxos`, `eos` over eAPI and `junos`, and as the per-command wait by `iosxr`. The other SSH drivers ignore it: see [Timeouts](./optional_args.md#timeouts). |
+| optional_args | map | no  | Arguments for the driver and its SSH connection, such as `ssh_config_file` for jumphosts or `read_timeout_override` for devices that are slow to answer. See [Optional Arguments](./optional_args.md). |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope. Fields merge with the policy's, except that a VLAN group the override sets, and a tenant or VRF it names differently, replace the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
 | netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when hostname is a subnet or IP range. |
 
