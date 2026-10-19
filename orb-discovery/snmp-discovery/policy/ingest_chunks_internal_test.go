@@ -190,13 +190,16 @@ func TestIngestSendsEveryChunk(t *testing.T) {
 func TestIngestStopsAtTheFirstFailedRequest(t *testing.T) {
 	withChunkLimit(t, 10_000)
 	client := &chunkRecordingClient{failOn: 2}
+	entities := describedInterfaces(40, 1000)
 
-	_, err := chunkRunner(client).ingest("192.0.2.10", describedInterfaces(40, 1000))
+	_, err := chunkRunner(client).ingest("192.0.2.10", entities)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request 2 of")
 	assert.Contains(t, err.Error(), "connection reset")
 	assert.Len(t, client.calls, 2)
+	// The requests before it went through, and the error says how much.
+	assert.Contains(t, err.Error(), fmt.Sprintf("%d of %d entities already sent", len(client.calls[0]), len(entities)))
 }
 
 // Diode queues a request even when it reports errors for some entities, so
