@@ -644,7 +644,7 @@ When running in dry run mode, the agent will:
 1. Process all policies as usual
 2. Write the data that would be sent to Diode as JSON files in the specified output directory.
 3. For this sample policy, a file named `agent01_device-discovery_<timestamp>.json` will be generated in `/opt/orb` folder.
-   Device Discovery and SNMP Discovery send a target whose data is over 3 MB in several requests, to stay under Diode's message size limit, so such a target is written as several files, one per request.
+   Device Discovery, SNMP Discovery and gNMI Discovery send a target whose data is over 3 MB in several requests, to stay under Diode's message size limit, so such a target is written as several files, one per request.
 4. No data will be sent to any remote server
 
 This allows you to inspect the data that would be collected and sent to Diode Server before configuring the actual connection.
