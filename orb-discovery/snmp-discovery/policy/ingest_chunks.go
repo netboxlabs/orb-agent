@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
@@ -20,8 +21,8 @@ var maxIngestChunkBytes = 3 * 1024 * 1024
 const ingestEntityOverheadBytes = 160
 
 // ingestEntitySize is an entity's share of an ingest request. It is measured
-// as JSON, which the OTLP client sends and which is never smaller than the
-// protobuf the gRPC client sends, so one budget holds over both transports.
+// as JSON, which the OTLP client sends and which in practice is larger than
+// the protobuf the gRPC client sends, so one budget holds over both transports.
 func ingestEntitySize(entity diode.Entity) int {
 	pe := entity.ConvertToProtoEntity()
 	body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(pe)
@@ -53,7 +54,8 @@ func chunkEntities(entities []diode.Entity, maxBytes int) [][]diode.Entity {
 // ingest sends a target's entities in requests under maxIngestChunkBytes.
 // Diode queues a request even when it reports errors for some of its
 // entities, so every request is sent and the errors of all of them are
-// returned together. A request that fails outright stops the rest.
+// returned together. A request that fails outright stops the rest, keeping
+// the errors already reported.
 func (r *Runner) ingest(host string, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	chunks := chunkEntities(entities, maxIngestChunkBytes)
 	if len(chunks) > 1 {
@@ -66,7 +68,10 @@ func (r *Runner) ingest(host string, entities []diode.Entity, opts ...diode.Inge
 		resp, err := r.client.Ingest(r.ctx, chunk, opts...)
 		if err != nil {
 			if len(chunks) > 1 {
-				return nil, fmt.Errorf("request %d of %d: %w", i+1, len(chunks), err)
+				err = fmt.Errorf("request %d of %d: %w", i+1, len(chunks), err)
+			}
+			if len(errs) > 0 {
+				err = fmt.Errorf("%w (earlier requests reported: %s)", err, strings.Join(errs, "; "))
 			}
 			return nil, err
 		}

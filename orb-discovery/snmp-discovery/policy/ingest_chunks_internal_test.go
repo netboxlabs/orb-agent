@@ -214,6 +214,20 @@ func TestIngestSendsEveryChunkAndCollectsTheirErrors(t *testing.T) {
 	assert.Len(t, client.calls, len(chunkEntities(entities, 10_000)))
 }
 
+// A request that fails outright keeps the errors earlier requests reported,
+// since Diode already queued those requests.
+func TestIngestFailureKeepsTheErrorsOfEarlierRequests(t *testing.T) {
+	withChunkLimit(t, 10_000)
+	client := &chunkRecordingClient{errorsOn: map[int]bool{1: true}, failOn: 3}
+
+	_, err := chunkRunner(client).ingest("192.0.2.10", describedInterfaces(40, 1000))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "request 3 of")
+	assert.Contains(t, err.Error(), "connection reset")
+	assert.Contains(t, err.Error(), "rejected in request 1")
+}
+
 // otlpReceiver is an OTLP logs receiver with gRPC's default 4 MB limit, as
 // the agent's own bridge and an OTel Collector left on its defaults have.
 type otlpReceiver struct {
