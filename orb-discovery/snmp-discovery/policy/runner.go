@@ -533,7 +533,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		return
 	}
 
-	resp, err := r.ingest(entities, diode.WithIngestMetadata(diode.Metadata{
+	resp, err := r.ingest(target.Host, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
 	}))
