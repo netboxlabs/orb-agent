@@ -350,7 +350,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// every interface/IP/module reference. Mirrors snmp-discovery (#392) and
 		// device-discovery (#394).
 		mapping.PruneNestedRefs(entities, dev, primaryIP)
-		resp, ierr := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
+		resp, ierr := r.ingest(entities, diode.WithIngestMetadata(diode.Metadata{
 			"policy_name": r.name, "run_id": run.ID, // keys match snmp/network backends
 		}))
 		// A nil Go error does NOT mean success — Diode reports per-entity
