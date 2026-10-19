@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,7 +16,11 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	logsservicepb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
@@ -22,22 +28,24 @@ import (
 )
 
 // chunkRecordingClient records every Ingest call. failOn makes that call
-// (1-based) return an error; errorsOn makes it return a response with errors.
+// (1-based) return an error; the calls in errorsOn return a response with
+// an error naming the call.
 type chunkRecordingClient struct {
 	calls    [][]diode.Entity
 	failOn   int
-	errorsOn int
+	errorsOn map[int]bool
 }
 
 func (c *chunkRecordingClient) Close() error { return nil }
 
 func (c *chunkRecordingClient) Ingest(_ context.Context, entities []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	c.calls = append(c.calls, entities)
-	switch len(c.calls) {
-	case c.failOn:
+	n := len(c.calls)
+	if n == c.failOn {
 		return nil, errors.New("connection reset")
-	case c.errorsOn:
-		return &diodepb.IngestResponse{Errors: []string{"rejected"}}, nil
+	}
+	if c.errorsOn[n] {
+		return &diodepb.IngestResponse{Errors: []string{fmt.Sprintf("rejected in request %d", n)}}, nil
 	}
 	return &diodepb.IngestResponse{}, nil
 }
@@ -60,9 +68,30 @@ func describedInterfaces(n, descriptionBytes int) []diode.Entity {
 func chunkSize(entities []diode.Entity) int {
 	size := 0
 	for _, e := range entities {
-		size += proto.Size(e.ConvertToProtoEntity()) + ingestEntityOverheadBytes
+		size += ingestEntitySize(e)
 	}
 	return size
+}
+
+// trunkPayload is a switch with many VLANs and trunks tagging all of them,
+// the shape that outgrows a single request.
+func trunkPayload(vlanCount, trunkCount int) []diode.Entity {
+	site := &diode.Site{Name: diode.String("lab")}
+	device := &diode.Device{Name: diode.String("core-1"), Site: site}
+	group := &diode.VLANGroup{Name: diode.String("lab-vlans")}
+	vlans := make([]*diode.VLAN, vlanCount)
+	entities := make([]diode.Entity, 0, vlanCount+trunkCount)
+	for i := range vlans {
+		vlans[i] = &diode.VLAN{Vid: diode.Int64(int64(i + 2)), Name: diode.String(fmt.Sprintf("VLAN %04d", i+2)), Group: group}
+		entities = append(entities, vlans[i])
+	}
+	for i := range trunkCount {
+		entities = append(entities, &diode.Interface{
+			Name: diode.String(fmt.Sprintf("Ethernet%d", i+1)), Device: device,
+			Mode: diode.String("tagged"), TaggedVlans: vlans,
+		})
+	}
+	return entities
 }
 
 func withChunkLimit(t *testing.T, limit int) {
@@ -112,23 +141,29 @@ func TestChunkEntitiesStartsWithAnOversizedEntity(t *testing.T) {
 	assert.Equal(t, [][]diode.Entity{{entities[0]}, {entities[1]}}, chunks)
 }
 
-// Each entity counts its share of the request beyond its own encoding, so
-// small entities do not overfill a chunk.
-func TestChunkEntitiesCountsEachEntitysRequestOverhead(t *testing.T) {
-	entities := make([]diode.Entity, 30)
-	for i := range entities {
-		entities[i] = &diode.Interface{Name: diode.String(fmt.Sprintf("Ethernet%02d", i))}
-	}
-	perEntity := proto.Size(entities[0].ConvertToProtoEntity()) + ingestEntityOverheadBytes
-
-	chunks := chunkEntities(entities, 10*perEntity)
-
-	assert.Len(t, chunks[0], 10)
-}
-
 func TestChunkEntitiesSmallPayloadIsOneChunk(t *testing.T) {
 	entities := describedInterfaces(3, 100)
 	assert.Equal(t, [][]diode.Entity{entities}, chunkEntities(entities, maxIngestChunkBytes))
+}
+
+// A gRPC request built as the SDK builds it, with a timestamp on every
+// entity, is no bigger than the estimate of its entities plus the envelope.
+func TestIngestEntitySizeCoversTheGRPCRequest(t *testing.T) {
+	for name, entities := range map[string][]diode.Entity{
+		"small":   describedInterfaces(50, 10),
+		"unicode": {&diode.Interface{Name: diode.String("Ethernet1"), Description: diode.String(strings.Repeat("Zürich 東京 ", 200))}},
+		"trunks":  trunkPayload(300, 3),
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := &diodepb.IngestRequest{Id: "00000000-0000-0000-0000-000000000000", Stream: "latest", ProducerAppName: "agent01/gnmi-discovery", ProducerAppVersion: "0.0.0", SdkName: "diode-sdk-go", SdkVersion: "0.0.0"}
+			for _, e := range entities {
+				pe := e.ConvertToProtoEntity()
+				pe.Timestamp = timestamppb.New(time.Now().UTC())
+				request.Entities = append(request.Entities, pe)
+			}
+			assert.LessOrEqual(t, proto.Size(request), chunkSize(entities)+512)
+		})
+	}
 }
 
 func chunkRunner(client diode.Client) *Runner {
@@ -140,7 +175,7 @@ func TestIngestSendsEveryChunk(t *testing.T) {
 	client := &chunkRecordingClient{}
 	entities := describedInterfaces(40, 1000)
 
-	resp, err := chunkRunner(client).ingest(entities)
+	resp, err := chunkRunner(client).ingest("192.0.2.10", entities)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -148,33 +183,107 @@ func TestIngestSendsEveryChunk(t *testing.T) {
 	assert.Equal(t, chunkEntities(entities, 10_000), client.calls)
 }
 
-func TestIngestStopsAtTheFirstFailedChunk(t *testing.T) {
+func TestIngestStopsAtTheFirstFailedRequest(t *testing.T) {
 	withChunkLimit(t, 10_000)
 	client := &chunkRecordingClient{failOn: 2}
 
-	_, err := chunkRunner(client).ingest(describedInterfaces(40, 1000))
+	_, err := chunkRunner(client).ingest("192.0.2.10", describedInterfaces(40, 1000))
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "chunk 2 of")
+	assert.Contains(t, err.Error(), "request 2 of")
 	assert.Contains(t, err.Error(), "connection reset")
 	assert.Len(t, client.calls, 2)
 }
 
-func TestIngestStopsAtTheFirstChunkWithErrors(t *testing.T) {
+// Diode queues a request even when it reports errors for some entities, so
+// the rest are still sent and every request's errors come back.
+func TestIngestSendsEveryChunkAndCollectsTheirErrors(t *testing.T) {
 	withChunkLimit(t, 10_000)
-	client := &chunkRecordingClient{errorsOn: 1}
+	client := &chunkRecordingClient{errorsOn: map[int]bool{1: true, 3: true}}
+	entities := describedInterfaces(40, 1000)
 
-	resp, err := chunkRunner(client).ingest(describedInterfaces(40, 1000))
+	resp, err := chunkRunner(client).ingest("192.0.2.10", entities)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	assert.Equal(t, []string{"rejected"}, resp.Errors)
-	assert.Len(t, client.calls, 1)
+	assert.Equal(t, []string{"rejected in request 1", "rejected in request 3"}, resp.Errors)
+	assert.Len(t, client.calls, len(chunkEntities(entities, 10_000)))
 }
 
-// A flush whose payload is over the limit goes out in several requests and
-// the run completes with every entity counted.
-func TestRunnerFlushesALargeTargetInChunks(t *testing.T) {
+// otlpReceiver is an OTLP logs receiver with gRPC's default 4 MB limit, as
+// the agent's own bridge and an OTel Collector left on its defaults have.
+type otlpReceiver struct {
+	logsservicepb.UnimplementedLogsServiceServer
+	mu          sync.Mutex
+	records     int
+	exports     int
+	recordSizes []int
+}
+
+func (o *otlpReceiver) Export(_ context.Context, in *logsservicepb.ExportLogsServiceRequest) (*logsservicepb.ExportLogsServiceResponse, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.exports++
+	for _, rl := range in.GetResourceLogs() {
+		for _, sl := range rl.GetScopeLogs() {
+			for _, lr := range sl.GetLogRecords() {
+				o.records++
+				// The record's share of the request, with its field tag and length.
+				o.recordSizes = append(o.recordSizes, 1+protowire.SizeBytes(proto.Size(lr)))
+			}
+		}
+	}
+	return &logsservicepb.ExportLogsServiceResponse{}, nil
+}
+
+func startOTLPReceiver(t *testing.T) (*otlpReceiver, diode.Client) {
+	t.Helper()
+	receiver := &otlpReceiver{}
+	server := grpc.NewServer()
+	logsservicepb.RegisterLogsServiceServer(server, receiver)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	client, err := diode.NewOTLPClient("grpc://"+listener.Addr().String(), "agent01/gnmi-discovery", "0.0.0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = client.Close() })
+	return receiver, client
+}
+
+// The estimate covers each log record the OTLP client builds, which for a
+// small entity is mostly the record around it rather than its JSON.
+func TestIngestEntitySizeCoversTheOTLPLogRecord(t *testing.T) {
+	receiver, client := startOTLPReceiver(t)
+	entities := append(describedInterfaces(3, 0), &diode.IPAddress{Address: diode.String("192.0.2.1/24")}, &diode.VLAN{Vid: diode.Int64(10)})
+
+	_, err := chunkRunner(client).ingest("192.0.2.10", entities)
+
+	require.NoError(t, err)
+	require.Len(t, receiver.recordSizes, len(entities))
+	for i, e := range entities {
+		assert.LessOrEqual(t, receiver.recordSizes[i], ingestEntitySize(e), "entity %d", i)
+	}
+}
+
+// Over OTLP the SDK sends each entity as JSON, larger than its protobuf, and
+// every request still fits under the receiver's limit.
+func TestIngestStaysUnderTheOTLPReceiverLimit(t *testing.T) {
+	receiver, client := startOTLPReceiver(t)
+	entities := trunkPayload(2000, 40)
+
+	resp, err := chunkRunner(client).ingest("192.0.2.10", entities, diode.WithIngestMetadata(diode.Metadata{"policy_name": "p"}))
+
+	require.NoError(t, err)
+	assert.Empty(t, resp.Errors)
+	assert.Greater(t, receiver.exports, 1)
+	assert.Equal(t, len(entities), receiver.records)
+}
+
+// startLargeFlush runs an on_change policy whose first flush is over the
+// chunk limit, ingesting into client.
+func startLargeFlush(t *testing.T, client diode.Client) *Runner {
+	t.Helper()
 	withChunkLimit(t, 1_000)
 	store, err := mapping.LoadProfiles("")
 	require.NoError(t, err)
@@ -189,7 +298,6 @@ func TestRunnerFlushesALargeTargetInChunks(t *testing.T) {
 		Caps: &gnmi.CapabilitiesResult{Vendor: "Arista"}, OnChangeSupport: true,
 		OnChangeStream: []gnmi.Notification{{Updates: updates}, {SyncDone: true}},
 	}
-	client := &recordingClient{}
 	pol := config.Policy{
 		Config: config.PolicyConfig{Mode: config.ModeOnChange, DebounceMs: 20, Defaults: config.Defaults{Site: "lab", Role: "router"}},
 		Scope:  config.Scope{Targets: []config.Target{{Host: "h:1"}}},
@@ -197,7 +305,15 @@ func TestRunnerFlushesALargeTargetInChunks(t *testing.T) {
 	r, err := NewRunner(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)), "chunks", pol, client, &gnmi.FakeDialer{Session: fake}, store)
 	require.NoError(t, err)
 	r.Start()
-	defer func() { require.NoError(t, r.Stop()) }()
+	t.Cleanup(func() { require.NoError(t, r.Stop()) })
+	return r
+}
+
+// A flush whose payload is over the limit goes out in several requests and
+// the run completes with every entity counted.
+func TestRunnerFlushesALargeTargetInChunks(t *testing.T) {
+	client := &recordingClient{}
+	r := startLargeFlush(t, client)
 
 	require.Eventually(t, func() bool {
 		runs := r.Runs()
@@ -211,4 +327,25 @@ func TestRunnerFlushesALargeTargetInChunks(t *testing.T) {
 	}
 	client.mu.Unlock()
 	assert.Equal(t, sent, r.Runs()[0].EntityCount)
+}
+
+// A flush fails when its requests report errors, after sending every one.
+func TestRunnerFailsAFlushWhoseRequestsReportErrors(t *testing.T) {
+	client := &recordingClient{respErrors: []string{"rejected"}}
+	r := startLargeFlush(t, client)
+
+	require.Eventually(t, func() bool {
+		runs := r.Runs()
+		return len(runs) >= 1 && runs[0].Status == RunStatusFailed
+	}, 5*time.Second, 20*time.Millisecond)
+	sent := 0
+	client.mu.Lock()
+	calls := len(client.ingested)
+	for _, call := range client.ingested {
+		sent += len(call)
+	}
+	client.mu.Unlock()
+	require.Greater(t, calls, 1)
+	assert.Equal(t, sent, r.Runs()[0].EntityCount)
+	assert.Contains(t, r.Runs()[0].Reason, "rejected")
 }
