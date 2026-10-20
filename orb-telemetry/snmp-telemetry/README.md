@@ -565,6 +565,46 @@ edited. The backend logs one warning naming the tag and the profile the first
 time a device matches that profile. No bundled profile declares such a tag, so
 only an override reaches this, and renaming the tag applies it.
 
+A tag read from an OCTET STRING is bytes, and OTLP strings must be valid UTF-8:
+one value that is not fails the marshalling of the whole export, and every
+policy of the process loses that interval. So the value is rendered first, as a whole:
+
+- A value of only NUL bytes is empty. Devices answer an unset string that way,
+  such as an unconfigured `ifAlias` on Dell Networking OS.
+- UTF-8 text with no control characters but tab and line breaks is kept,
+  trimmed of surrounding space and of NUL padding at its end.
+- Anything else is binary and reads as the colon-separated hex of every byte,
+  the way `hwaddr` renders a MAC. A MAC in `ifPhysAddress` or an LLDP chassis
+  ID read without a conversion reads `00:1b:21:bb:e6:f0`, so adding `hwaddr`
+  later keeps the series, and two binary values never read alike.
+
+Text that is not UTF-8, such as Latin-1 `Caf\xe9`, reads as hex too
+(`43:61:66:e9`). Decoding it as Latin-1 was tried: across the LibreNMS
+recordings, a sixth of the binary MACs consist of bytes that are all printable
+Latin-1 and would read as letters, against one real Latin-1 text. A binary
+value whose bytes all happen to be printable ASCII reads as that text, since
+nothing in the bytes tells them apart; a column that holds MACs needs `hwaddr`
+in its profile to always read as one.
+
+`sysDescr` and the text a `to_one` symbol carries are rendered the same way,
+and a column's `condition` and the profile's `match_attributes` see the
+rendered value. What changes from before, when values went out as their raw
+bytes:
+
+- A value that was not UTF-8 dropped the export; it now reads as hex.
+- A value that was UTF-8 but held a control character, such as a MAC with a
+  zero byte or a string with an escape sequence, went out as unreadable text;
+  it now reads as hex.
+- Text padded with NULs loses the padding, and a value of only NULs is empty.
+
+Each of those starts a new series for the value once.
+
+The exporter repairs any string of an export that is still not UTF-8, as the
+hex of its bytes, counts it in `snmp.invalid_utf8_repaired{attribute}`, and
+logs a warning naming the attribute, the policy and the metric the first time.
+The collector renders device text before it records it, so a count there means
+a path that did not, and is worth reporting.
+
 A reading also derives attributes of its own, under the export name of the
 symbol that produced it: `<name>_status` for the enum member its value falls on,
 and `<name>_value` for the text a conversion rendered it as. A profile declaring

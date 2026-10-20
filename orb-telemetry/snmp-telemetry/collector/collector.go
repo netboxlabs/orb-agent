@@ -22,6 +22,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/octets"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/profiles"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
 )
@@ -2150,11 +2151,13 @@ func (c *MetricsCollector) walkScalar(walker snmp.Walker, oid string) (string, e
 	for _, pdu := range pdus {
 		switch pdu.Type {
 		case gosnmp.OctetString:
+			// sysDescr becomes an attribute through the device tags, so it is
+			// rendered the way every tag is.
 			if s, ok := pdu.Value.(string); ok {
-				return strings.TrimSpace(s), nil
+				return octets.Text([]byte(s)), nil
 			}
 			if b, ok := pdu.Value.([]byte); ok {
-				return strings.TrimSpace(string(b)), nil
+				return octets.Text(b), nil
 			}
 		case gosnmp.ObjectIdentifier:
 			if s, ok := pdu.Value.(string); ok {
@@ -2534,7 +2537,9 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 				}
 			}
 		}
-		return strings.TrimSpace(string(raw))
+		// A binary column read without a conversion, such as ifPhysAddress,
+		// renders as hex rather than as bytes that are not UTF-8.
+		return octets.Text(raw)
 	case gosnmp.Integer:
 		if v, ok := pdu.Value.(int); ok {
 			if col != nil {
