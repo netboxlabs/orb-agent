@@ -104,10 +104,26 @@ orb:
 
 ### `fleet`
 
-Policies come from Fleet, NetBox Labs' cloud, which provides the connection settings (`url`, `token_url`, `client_id`, `client_secret`). The agent forwards its backends' telemetry to Fleet through a local OTLP bridge, which the backends export to:
+Policies come from Fleet, NetBox Labs' cloud. The agent signs in with the OAuth client credentials issued for it, and forwards its backends' telemetry to Fleet through a local OTLP bridge, which the backends export to.
+
+```yaml
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      fleet:
+        token_url: ${FLEET_AUTH_URL}
+        client_id: ${FLEET_CLIENT_ID}
+        client_secret: ${FLEET_CLIENT_SECRET}
+```
+
+The Docker image ships this configuration as `default_config.yaml` (`agent/docker/default_config.yaml`). With `FLEET_CLIENT_ID` and `FLEET_CLIENT_SECRET` set and no `-c`, the container runs with it; that file also moves the bridge to ports `4337` and `4338`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
+| `token_url` | string | Yes | OAuth token endpoint the agent requests its token from |
+| `client_id` | string | Yes | OAuth client ID issued for the agent |
+| `client_secret` | string | Yes | OAuth client secret issued for the agent |
 | `timeout` | int | No | Seconds to wait for the token request (default: `30`) |
 | `skip_tls` | bool | No | Skip TLS certificate verification of the token URL (default: `false`) |
 | `token_expiry_check_interval` | int | No | Seconds between checks of the token's expiry (default: `30`) |
