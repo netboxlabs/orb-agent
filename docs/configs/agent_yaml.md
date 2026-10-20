@@ -50,7 +50,7 @@ Controls how the agent loads policies. Exactly one source is active at a time.
 ```yaml
 orb:
   config_manager:
-    active: local   # or: git, fleet
+    active: local   # or: git
     sources:
       local: ...
       git: ...
@@ -58,7 +58,7 @@ orb:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `active` | string | Yes | Which source to use: `local`, `git` or `fleet` |
+| `active` | string | Yes | Which source to use: `local` or `git` |
 
 ### `local`
 
@@ -101,46 +101,6 @@ orb:
 | `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
 | `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
 | `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
-
-### `fleet`
-
-Policies come from Fleet, NetBox Labs' cloud. The agent signs in with the OAuth client credentials issued for it, and forwards its backends' telemetry to Fleet through a local OTLP bridge, which the backends export to.
-
-```yaml
-orb:
-  config_manager:
-    active: fleet
-    sources:
-      fleet:
-        token_url: ${FLEET_AUTH_URL}
-        client_id: ${FLEET_CLIENT_ID}
-        client_secret: ${FLEET_CLIENT_SECRET}
-```
-
-The Docker image ships this configuration as `default_config.yaml` (`agent/docker/default_config.yaml`). With `FLEET_CLIENT_ID` and `FLEET_CLIENT_SECRET` set and no `-c`, the container runs with it; that file also moves the bridge to ports `4337` and `4338`.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `token_url` | string | Yes | OAuth token endpoint the agent requests its token from |
-| `client_id` | string | Yes | OAuth client ID issued for the agent |
-| `client_secret` | string | Yes | OAuth client secret issued for the agent |
-| `timeout` | int | No | Seconds to wait for the token request (default: `30`) |
-| `skip_tls` | bool | No | Skip TLS certificate verification of the token URL (default: `false`) |
-| `token_expiry_check_interval` | int | No | Seconds between checks of the token's expiry (default: `30`) |
-| `token_reconnect_buffer` | int | No | Seconds before the token expires at which the agent reconnects with a new one (default: `120`) |
-| `otlp_bridge_grpc_port` | int | No | OTLP/gRPC port of the bridge (default: `4317`) |
-| `otlp_bridge_http_port` | int | No | OTLP/HTTP port of the bridge, used by pktvisor (default: `4318`) |
-| `otlp_bridge_bind_host` | string | No | Host both listeners bind to (default: `localhost`). `0.0.0.0` or `::` exposes them; `127.0.0.1` and `::1` are also accepted |
-
-The bridge publishes each export over the agent's MQTT 5 connection to Fleet, with its encoding in the MQTT Content Type property:
-
-| Export | Topic | Encoding | Content type |
-|--------|-------|----------|--------------|
-| Metrics | telemetry | OTLP protobuf | `application/x-protobuf` |
-| Logs and traces | telemetry | OTLP JSON | `application/json` |
-| Diode data (marked with `diode.metadata.policy_name` on a resource, or on a log scope) | ingest | OTLP JSON | `application/json` |
-
-Protobuf metrics take about half the bytes of JSON. Earlier agents send every export as OTLP JSON with no content type, and Fleet reads both.
 
 ---
 
