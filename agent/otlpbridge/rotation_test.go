@@ -34,7 +34,7 @@ type recordingPublisher struct {
 	messages []publishedMsg
 }
 
-func (r *recordingPublisher) Publish(_ context.Context, topic string, payload []byte) error {
+func (r *recordingPublisher) Publish(_ context.Context, topic string, payload []byte, _ string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.messages = append(r.messages, publishedMsg{topic: topic, payload: append([]byte(nil), payload...)})
@@ -97,7 +97,7 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	pub1 := &recordingPublisher{}
 
 	for i := 0; i < preReadyCount; i++ {
-		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("pre-%04d", i))))
+		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("pre-%04d", i)), "application/json"))
 	}
 	assert.Empty(t, pub1.snapshot(), "nothing should be published before ready")
 
@@ -119,7 +119,7 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 	// ---- Phase 2: steady-state publishing ----
 	for i := 0; i < steadyCount; i++ {
 		isIngest := i%3 == 0
-		require.NoError(t, bridge.Enqueue(ctx, isIngest, []byte(fmt.Sprintf("steady-%04d", i))))
+		require.NoError(t, bridge.Enqueue(ctx, isIngest, []byte(fmt.Sprintf("steady-%04d", i)), "application/json"))
 	}
 
 	require.Eventually(t, func() bool {
@@ -158,7 +158,7 @@ func TestBridge_ZeroDataLoss_CredentialRotation(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < batchSize; i++ {
 				seq := startSeq + i
-				if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("rot-%04d", seq))); err != nil {
+				if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("rot-%04d", seq)), "application/json"); err != nil {
 					enqueueErrs <- fmt.Errorf("rot-%04d: %w", seq, err)
 				}
 				if i == rotationPoint {

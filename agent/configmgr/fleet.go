@@ -153,6 +153,21 @@ func fleetOTLPHTTPPort(cfg config.Config) int {
 	return httpPort
 }
 
+// fleetOTLPBridgeConfig is the bridge the fleet config manager runs. Metrics
+// for the telemetry topic go out as protobuf, about half the bytes of JSON,
+// with a content type the telemetry enricher decodes them by. Logs, traces
+// and everything for the ingest topic stay JSON: the enricher tells a JSON log
+// from metrics by its first key, which protobuf hides, and orb-pro's OTLP
+// Bridge service decodes the ingest topic as JSON only.
+func fleetOTLPBridgeConfig(bindHost string, grpcPort, httpPort int) otlpbridge.BridgeConfig {
+	return otlpbridge.BridgeConfig{
+		ListenAddr:      net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
+		HTTPListenAddr:  net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
+		Encoding:        "json",
+		MetricsEncoding: "protobuf",
+	}
+}
+
 // StartOTLPBridge starts the local OTLP bridge (gRPC and HTTP listeners) so
 // backends can export telemetry before the MQTT connection is established.
 // Safe to call once; subsequent calls are no-ops when the bridge is already
@@ -168,11 +183,7 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 	if err != nil {
 		return err
 	}
-	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr:     net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
-		HTTPListenAddr: net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
-		Encoding:       "json",
-	}
+	bridgeConfig := fleetOTLPBridgeConfig(bindHost, grpcPort, httpPort)
 
 	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
 	if err != nil {
