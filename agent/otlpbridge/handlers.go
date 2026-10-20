@@ -50,7 +50,7 @@ func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTrac
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload, s.bridge.enc.ContentType()); err != nil {
 		return nil, err
 	}
 	return &collectortrace.ExportTraceServiceResponse{}, nil
@@ -76,11 +76,18 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	// and the request is forwarded as it arrived.
 	enrichMetricsWithPolicy(req, s.bridge.GetPolicyRepo(), s.bridge.logger)
 
-	payload, err := s.bridge.enc.Marshal(req)
+	// Metrics for the telemetry topic use the metrics encoding; Diode data
+	// keeps the ingest topic's.
+	isIngest := isIngestRequest(resources)
+	enc := s.bridge.metricsEnc
+	if isIngest {
+		enc = s.bridge.enc
+	}
+	payload, err := enc.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngest, payload, enc.ContentType()); err != nil {
 		return nil, err
 	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
@@ -104,7 +111,7 @@ func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsSe
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bridge.Enqueue(ctx, isIngest, payload); err != nil {
+	if err := s.bridge.Enqueue(ctx, isIngest, payload, s.bridge.enc.ContentType()); err != nil {
 		return nil, err
 	}
 	return &collectorlogs.ExportLogsServiceResponse{}, nil

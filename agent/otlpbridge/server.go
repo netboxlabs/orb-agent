@@ -30,8 +30,9 @@ const (
 
 // pendingPublish holds a marshaled OTLP payload queued for publishing.
 type pendingPublish struct {
-	isIngest bool
-	payload  []byte
+	isIngest    bool
+	payload     []byte
+	contentType string
 }
 
 // BridgeServer holds the lifecycle for the OTLP → MQTT bridge server.
@@ -43,6 +44,7 @@ type pendingPublish struct {
 type BridgeServer struct {
 	cfg              BridgeConfig
 	enc              Encoder
+	metricsEnc       Encoder // metrics for the telemetry topic
 	ingestGRPCServer *grpc.Server
 	listener         net.Listener
 	httpServer       *http.Server
@@ -76,6 +78,12 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 	if err != nil {
 		return nil, err
 	}
+	metricsEnc := enc
+	if strings.TrimSpace(cfg.MetricsEncoding) != "" {
+		if metricsEnc, err = buildEncoder(cfg.MetricsEncoding); err != nil {
+			return nil, fmt.Errorf("metrics: %w", err)
+		}
+	}
 	maxPending := cfg.MaxPendingQueue
 	if maxPending <= 0 {
 		maxPending = defaultMaxPendingQueue
@@ -84,6 +92,7 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 	s := &BridgeServer{
 		cfg:            cfg,
 		enc:            enc,
+		metricsEnc:     metricsEnc,
 		policyRepo:     policyRepo,
 		logger:         logger,
 		ctx:            ctx,
@@ -164,7 +173,7 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		s.mu.RUnlock()
 
 		if pub != nil && topic != "" {
-			err := pub.Publish(s.ctx, topic, msg.payload)
+			err := pub.Publish(s.ctx, topic, msg.payload, msg.contentType)
 			if err == nil {
 				return
 			}
@@ -188,9 +197,9 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 // Enqueue adds a marshaled OTLP payload to the publish queue. Returns
 // ResourceExhausted if the queue is full, providing backpressure to the
 // OTLP client.
-func (s *BridgeServer) Enqueue(_ context.Context, isIngest bool, payload []byte) error {
+func (s *BridgeServer) Enqueue(_ context.Context, isIngest bool, payload []byte, contentType string) error {
 	select {
-	case s.msgCh <- pendingPublish{isIngest: isIngest, payload: payload}:
+	case s.msgCh <- pendingPublish{isIngest: isIngest, payload: payload, contentType: contentType}:
 		return nil
 	default:
 		return status.Error(codes.ResourceExhausted, "OTLP pending queue is full")

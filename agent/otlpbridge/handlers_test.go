@@ -23,17 +23,25 @@ import (
 )
 
 type fakePublisher struct {
-	mu      sync.Mutex
-	topic   string
-	payload []byte
+	mu          sync.Mutex
+	topic       string
+	payload     []byte
+	contentType string
 }
 
-func (f *fakePublisher) Publish(_ context.Context, topic string, payload []byte) error {
+func (f *fakePublisher) Publish(_ context.Context, topic string, payload []byte, contentType string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.topic = topic
 	f.payload = append([]byte(nil), payload...)
+	f.contentType = contentType
 	return nil
+}
+
+func (f *fakePublisher) getContentType() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.contentType
 }
 
 func (f *fakePublisher) getTopic() string {
@@ -168,7 +176,7 @@ func TestBridge_Enqueue_QueuesDrainsOnReady(t *testing.T) {
 	defer func() { _ = bridge.Stop(context.Background()) }()
 
 	// Enqueue before publisher is set — should queue, not error.
-	if err := bridge.Enqueue(context.Background(), false, []byte("hello")); err != nil {
+	if err := bridge.Enqueue(context.Background(), false, []byte("hello"), "application/json"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fp.getTopic() != "" {
