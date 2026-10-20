@@ -98,6 +98,13 @@ Every series of a policy is exported under an instrumentation scope carrying `po
 
 The `trap_name` set and the drop reasons are listed under [Receiving traps](../../orb-telemetry/snmp-telemetry/README.md#receiving-traps).
 
+Tag values read from an OCTET STRING are rendered as valid UTF-8 before export, since one value that is not would drop the whole export of every policy:
+
+- UTF-8 text is kept, and a value of only NUL bytes, an unset string, is empty.
+- Anything else, such as a MAC read without a `hwaddr` conversion or text that is not UTF-8, reads as the colon-separated hex of its bytes: `00:1b:21:bb:e6:f0`, the same value `hwaddr` gives for a MAC.
+
+`snmp.invalid_utf8_repaired{attribute}` counts any string the exporter still had to repair, which should stay at zero. The rules are in the backend README under [SNMP Profiles](../../orb-telemetry/snmp-telemetry/README.md#snmp-profiles).
+
 ## Traps and the container
 The trap socket is the one listener in the backend that must be reachable from the device network. With `--net=host` the port a policy's `listen` names is already exposed. In bridge mode publish it, `-p 162:162/udp` for a policy listening on 162. The container runs as root by default, the image sets no other user, so binding a port below 1024 inside it needs no capability.
 

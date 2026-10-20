@@ -135,7 +135,9 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 		return fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
 
-	reader := sdkmetric.NewPeriodicReader(exporter,
+	// One export carries every policy, so one string that is not UTF-8 would
+	// fail the whole request: the wrapper repairs it first.
+	reader := sdkmetric.NewPeriodicReader(newValidUTF8Exporter(exporter, logg),
 		sdkmetric.WithInterval(time.Duration(exportPeriodSeconds)*time.Second),
 	)
 	meterProvider = sdkmetric.NewMeterProvider(append(providerOptions(), sdkmetric.WithReader(reader))...)
