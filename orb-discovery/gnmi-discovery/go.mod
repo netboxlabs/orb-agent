@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
-	github.com/netboxlabs/diode-sdk-go v1.11.1
+	github.com/netboxlabs/diode-sdk-go v1.12.1
 	github.com/openconfig/gnmi v0.14.1
 	github.com/openconfig/gnmic/pkg/api v0.1.11
 	github.com/stretchr/testify v1.11.1
