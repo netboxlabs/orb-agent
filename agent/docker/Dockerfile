@@ -184,7 +184,7 @@ ENV DEFAULT_CONFIG_PATH=/usr/local/share/orb-agent/default_config.yaml
 # The runtime pip: used by the entrypoint's INSTALL_DRIVERS_PATH feature and
 # what image scans see. Pinned to a recent release with fewer vulnerabilities;
 # pip's self-upgrade cleanly removes the base image's copy first.
-RUN python -m pip install --upgrade --no-cache-dir pip==26.2.1 && \
+RUN python -m pip install --upgrade --no-cache-dir pip==26.2.2 && \
     rm -rf /usr/local/lib/python3.14/ensurepip/_bundled/pip-*.whl
 
 # Copy Python site-packages and binaries from builder (application packages and
