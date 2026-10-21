@@ -76,8 +76,8 @@ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJ
 github.com/modern-go/reflect2 v1.0.2/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
 github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee h1:W5t00kpgFdJifH4BDsTlE89Zl93FEloxaWZfGcifgq8=
 github.com/modern-go/reflect2 v1.0.3-0.20250322232337-35a7c28c31ee/go.mod h1:yWuevngMOJpCy52FWWMvUC8ws7m/LJsjYzDa0/r8luk=
-github.com/netboxlabs/diode-sdk-go v1.11.1 h1:wOZZNlKkSeTRuucetsFoPDMITd84N/IvscNoGEEg/Jw=
-github.com/netboxlabs/diode-sdk-go v1.11.1/go.mod h1:mcEpqnPP6EsjJ6nqNnyh4RoawBJCKrqcmBFbHAzcKi8=
+github.com/netboxlabs/diode-sdk-go v1.12.1 h1:79KJ/Js5+jw1sAp3sLBhW+j/muXClobPbrdWRc4NMJA=
+github.com/netboxlabs/diode-sdk-go v1.12.1/go.mod h1:vaFzVX931ksamivv2MzWWLDo4Za77/Po5pG2mpm2guE=
 github.com/openconfig/gnmi v0.14.1 h1:qKMuFvhIRR2/xxCOsStPQ25aKpbMDdWr3kI+nP9bhMs=
 github.com/openconfig/gnmi v0.14.1/go.mod h1:whr6zVq9PCU8mV1D0K9v7Ajd3+swoN6Yam9n8OH3eT0=
 github.com/openconfig/gnmic/pkg/api v0.1.11 h1:Jrkz3ROyPQDGiXNm4oR52pYgKGApHxb5pDGlFJ1gDso=
