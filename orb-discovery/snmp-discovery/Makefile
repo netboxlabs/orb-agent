@@ -61,7 +61,7 @@ test:
 # Integration tests against orb-test-lab SNMP simulators (172.28.0.20–22, .24).
 # Requires: `make up` in eng-observability-skunkworks/orb-test-lab.
 # Runs inside Docker on the orb-test-lab network so simulators are reachable.
-INTEGRATION_GO_IMAGE ?= golang:1.26.4
+INTEGRATION_GO_IMAGE ?= golang:1.26.10
 .PHONY: test-integration test-integration-local
 test-integration:
 	@if ! docker network inspect orb-test-lab >/dev/null 2>&1; then \
