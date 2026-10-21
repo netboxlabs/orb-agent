@@ -44,7 +44,7 @@ vulnerabilities:
       out-of-bounds read requires pip to unpack attacker-influenced cache data
       during a pip invocation, and pip only runs here when an operator opts into
       installing extra drivers or workers from their own requirements file. pip
-      26.2.1 is the current latest release and still pins this version, so there
+      26.2.2 is the current latest release and still pins this version, so there
       is no upgrade that clears it; removing runtime pip would, at the cost of
       those two documented options.
     expired_at: 2026-11-18
