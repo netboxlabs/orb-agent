@@ -132,13 +132,16 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	if err != nil {
 		return nil, err
 	}
+	if err := s.bridge.enqueue(ctx, signalMetrics, isIngest, payloads, contentType); err != nil {
+		// Refused while the queue is full, the export is sent again whole, so
+		// a point left out of it is counted by the attempt that is accepted,
+		// not by every attempt. Refused for good, the export was counted once.
+		return nil, err
+	}
 	for _, d := range dropped {
 		s.bridge.dropped.add(signalMetrics, reasonTooLarge, 1)
 		s.bridge.logger.Warn("OTLP metric data point exceeds the message cap on its own, dropping it",
 			"metric", d.Metric, "bytes", d.Bytes, "cap", limit)
-	}
-	if err := s.bridge.enqueue(ctx, signalMetrics, isIngest, payloads, contentType); err != nil {
-		return nil, err
 	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
 }

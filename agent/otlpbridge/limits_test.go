@@ -184,6 +184,47 @@ func TestMetricsExport_APointThatCannotFitIsDroppedCountedAndReported(t *testing
 	assert.True(t, counted, "the next export carries the drop count")
 }
 
+// A point left out of an export the full queue refuses is not counted: the
+// client sends the whole export again, and the point is counted once, by the
+// attempt that is accepted.
+func TestMetricsExport_APointIsCountedOnlyWhenItsExportIsAccepted(t *testing.T) {
+	pub := &blockingPublisher{entered: make(chan struct{}, 10), release: make(chan struct{})}
+	var once sync.Once
+	release := func() { once.Do(func() { close(pub.release) }) }
+	bridge := limitedBridge(t, BridgeConfig{MaxMessageBytes: 4 << 10, MaxPendingQueue: 1}, pub)
+	t.Cleanup(release)
+	ctx := context.Background()
+	server := &metricsServer{bridge: bridge}
+	withAnOversizePoint := func() *collectormetrics.ExportMetricsServiceRequest {
+		huge := gaugeMetric("snmp.sysdescr", "10.0.0.9", 1)
+		huge.GetGauge().DataPoints[0].Attributes = append(huge.GetGauge().DataPoints[0].Attributes, strAttr("descr", strings.Repeat("d", 8<<10)))
+		return export(backendResource("snmp-telemetry", policyScope("core", gaugeMetric("snmp.ifinoctets", "10.0.0.1", 20), huge)))
+	}
+
+	// The writer takes one message and parks in Publish; a second fills the
+	// queue.
+	require.NoError(t, bridge.enqueue(ctx, signalMetrics, false, [][]byte{{1}}, ContentTypeProtobuf))
+	<-pub.entered
+	require.NoError(t, bridge.enqueue(ctx, signalMetrics, false, [][]byte{{2}}, ContentTypeProtobuf))
+
+	for range 2 {
+		_, err := server.Export(ctx, withAnOversizePoint())
+		require.Error(t, err)
+		assert.Equal(t, codes.ResourceExhausted, status.Code(err))
+	}
+	assert.Zero(t, bridge.dropped.total(signalMetrics, reasonTooLarge), "a refused export has dropped nothing")
+
+	release()
+	require.Eventually(t, func() bool {
+		bridge.queueMu.Lock()
+		defer bridge.queueMu.Unlock()
+		return bridge.pending == 0
+	}, 5*time.Second, 10*time.Millisecond)
+	_, err := server.Export(ctx, withAnOversizePoint())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), bridge.dropped.total(signalMetrics, reasonTooLarge), "counted once, by the accepted attempt")
+}
+
 // Diode data on the ingest topic never carries the agent's own series.
 func TestMetricsExport_TheDropCountStaysOffTheIngestTopic(t *testing.T) {
 	pub := &scriptedPublisher{}
