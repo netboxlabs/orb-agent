@@ -21,13 +21,16 @@ orb:
 Backends export OTLP to a bridge the agent runs locally, and the bridge publishes
 what they send on the agent's MQTT connection: metrics to the telemetry topic,
 Diode data to the ingest topic. Both listeners are unauthenticated, so they bind
-to the loopback address unless told otherwise.
+to the loopback address unless told otherwise. Each accepts requests of up to
+64 MiB from whoever can reach it (see [Message size](#message-size)), so expose
+them with `otlp_bridge_bind_host` only on a network where every host that can
+reach the ports is trusted to send the agent telemetry.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `otlp_bridge_grpc_port` | int | `4317` | Port of the OTLP/gRPC listener. |
 | `otlp_bridge_http_port` | int | `4318` | Port of the OTLP/HTTP listener (pktvisor's). |
-| `otlp_bridge_bind_host` | string | `localhost` | Host both listeners bind to: `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` / `::` to expose them. |
+| `otlp_bridge_bind_host` | string | `localhost` | Host both listeners bind to: `localhost`, `127.0.0.1`, `::1`, or `0.0.0.0` / `::` to expose them, unauthenticated, to the network. |
 | `otlp_bridge_max_message_bytes` | int | `4194304` (4 MiB) | The largest payload one MQTT message carries, from 65536 to 67108864. See [Message size](#message-size). |
 | `otlp_bridge_max_pending_bytes` | int | `67108864` (64 MiB) | The most payload bytes the bridge holds while it waits for the broker, at least one message at the cap. |
 
