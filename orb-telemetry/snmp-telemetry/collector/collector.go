@@ -1006,7 +1006,12 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 		// Every name this publish holds is this poll's to export once,
 		// retained points included: a declaration throttled by poll_time_sec
 		// is read on this poll from what it left, and leaves once per poll
-		// like the rest rather than once per poll_time_sec.
+		// like the rest rather than once per poll_time_sec. A poll that
+		// lands before the previous one was collected replaces its values
+		// and its marks alike: the collection takes the device's latest
+		// poll, as a gauge reports its latest value. That loses polls only
+		// when a policy polls faster than the export period checks, which
+		// the policy manager warns about at start.
 		if len(newStore) == 0 {
 			delete(c.unexported, key)
 		} else {

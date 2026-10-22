@@ -135,6 +135,12 @@ func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribu
 	apply(pt, fresh)
 	pt.ts = ts
 	pt.maxAge = maxAge
+	// One mark, not a count: an update that lands before the previous one
+	// was collected replaces its value, and the collection takes the latest,
+	// as a gauge reports its latest value. The updates between two checks
+	// are a device streaming faster than the export period, which the
+	// policy manager warns about at start when the policy's own interval
+	// is the shorter.
 	pt.pending = true
 	return true
 }

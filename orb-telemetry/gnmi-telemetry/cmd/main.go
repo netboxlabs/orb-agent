@@ -107,7 +107,8 @@ func main() {
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10,
 		fmt.Sprintf("seconds between checks for new values to export, from 1 to %d (one year); "+
-			"each update is exported once, by the first check after it arrives",
+			"each check exports a series' latest value once, so keep this at or below the shortest "+
+			"metrics_interval of any policy, or the samples between two checks are not all exported",
 			config.MaxDurationSeconds))
 	profilesDirFlag := flag.String("profiles-dir", "",
 		"directory of metric profile YAML files overlaid on the profiles bundled into the "+
@@ -152,10 +153,16 @@ func main() {
 	}
 
 	profilesDir := env.ResolveEnvOrExit(*profilesDirFlag)
+	// The export period only matters when something exports.
+	var exportPeriod time.Duration
+	if endpoint != "" {
+		exportPeriod = time.Duration(*otelExportPeriod) * time.Second
+	}
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*profilesRootFlag),
 		AllowedEnvVars:     splitList(*policyEnvVars),
+		ExportPeriod:       exportPeriod,
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 

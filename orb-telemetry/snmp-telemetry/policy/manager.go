@@ -68,6 +68,10 @@ type Manager struct {
 	// names, as its runner starts, and takes it back as the runner stops. Nil
 	// makes such a policy fail to start.
 	trapPool TrapPool
+	// exportPeriod is how often polled values are checked for export, so a
+	// policy polling faster than that can be told its polls will not all
+	// leave. Zero while metrics export is off.
+	exportPeriod time.Duration
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*cachedCollector
@@ -111,6 +115,12 @@ type Options struct {
 	// names, as its runner starts, and takes it back as the runner stops. Nil
 	// makes such a policy fail to start.
 	TrapPool TrapPool
+	// ExportPeriod is the metrics export period, how often polled values are
+	// checked for export. Each check exports a device's latest poll, so a
+	// policy whose metrics_interval is shorter than this loses the polls in
+	// between; starting one logs a warning. Zero, the default, warns never,
+	// as when export is off.
+	ExportPeriod time.Duration
 }
 
 // NewManager returns a new policy manager
@@ -132,6 +142,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		allowedEnvVars:     allowed,
 		collectorsByDir:    make(map[string]*cachedCollector),
 		trapPool:           opts.TrapPool,
+		exportPeriod:       opts.ExportPeriod,
 	}
 }
 
@@ -451,6 +462,13 @@ func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, 
 	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector, m.trapPool)
 	if err != nil {
 		return Handle{}, err
+	}
+	if r.metricsInterval > 0 && r.metricsInterval < m.exportPeriod {
+		// A check exports a device's latest poll, so of the polls between
+		// two checks only the last leaves. The policy still runs: its polls
+		// are not wrong, just more than are sent.
+		m.logger.Warn("metrics_interval is shorter than the export period, only the latest poll before each check is exported; set otel-export-period at or below the shortest metrics_interval",
+			"policy", config.SanitizeLogValue(name), "metrics_interval", r.metricsInterval, "export_period", m.exportPeriod)
 	}
 
 	r.Start()

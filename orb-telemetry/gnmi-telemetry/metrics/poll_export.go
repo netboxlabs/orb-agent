@@ -33,19 +33,31 @@ type pollExporter struct {
 	now  func() time.Time
 	mu   sync.Mutex
 	last time.Time // when an export was last sent; zero before the first
+	// all has every export sent whatever it carries. Shutdown sets it before
+	// the provider's own shutdown, whose last collection is the process's
+	// final totals: held back, they would wait for an idle interval that
+	// never comes.
+	all bool
 }
 
 func newPollExporter(next sdkmetric.Exporter) *pollExporter {
 	return &pollExporter{Exporter: next, now: time.Now}
 }
 
-// Export hands rm on when it carries a policy's series, or when no export
-// has been sent for IdleExportInterval, and otherwise drops it.
+// Export hands rm on when it carries a policy's series, when no export has
+// been sent for IdleExportInterval, or after sendAll, and otherwise drops it.
 func (e *pollExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
 	if !e.sends(rm) {
 		return nil
 	}
 	return e.Exporter.Export(ctx, rm)
+}
+
+// sendAll lifts the idle bound: every export from here on is sent.
+func (e *pollExporter) sendAll() {
+	e.mu.Lock()
+	e.all = true
+	e.mu.Unlock()
 }
 
 func (e *pollExporter) sends(rm *metricdata.ResourceMetrics) bool {
@@ -55,7 +67,7 @@ func (e *pollExporter) sends(rm *metricdata.ResourceMetrics) bool {
 	now := e.now()
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !carriesPolicySeries(rm) && !e.last.IsZero() && now.Sub(e.last) < IdleExportInterval {
+	if !e.all && !carriesPolicySeries(rm) && !e.last.IsZero() && now.Sub(e.last) < IdleExportInterval {
 		return false
 	}
 	e.last = now

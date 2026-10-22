@@ -26,13 +26,18 @@ backend checks for newly polled values every `--otel-export-period` (10
 seconds by default), so the period is the longest a poll's values wait before
 they are sent, not how often they are sent: at `metrics_interval: 60` a device
 is exported once a minute, not six times with a new timestamp each time, which
-would store six samples of every reading downstream. A declaration throttled
-by `poll_time_sec` leaves with each poll from the reading it kept, so every
-series of a device has one sample per poll. A run that fails or is cut short
-exports nothing, rather than its device's previous values again. A check that
-finds no policy's values to send, only the process's own counters (trap
-datagrams and drops, UTF-8 repairs), sends an export at most once a minute; the
-counters are cumulative, so the next export carries their totals. Trap counts
+would store six samples of every reading downstream. A check exports a
+device's latest poll, so keep the period at or below the shortest
+`metrics_interval` of any policy: a policy polling faster than the checks come
+has only its latest poll before each check exported, and starting one logs a
+warning naming both periods. A declaration throttled by `poll_time_sec` leaves
+with each poll from the reading it kept, so every series of a device has one
+sample per poll. A run that fails or is cut short exports nothing, rather than
+its device's previous values again. A check that finds no policy's values to
+send, only the process's own counters (trap datagrams and drops, UTF-8
+repairs), sends an export at most once a minute; the counters are cumulative,
+so the next export carries their totals, and the export made at shutdown is
+sent whatever it carries, so they leave with their final totals. Trap counts
 are not polled and keep being exported at every check while a policy holds
 them. A poll whose export still fails after the OTLP exporter's own retries is
 not sent again by a later one.
@@ -61,7 +66,7 @@ Usage of snmp-telemetry:
   -otel-endpoint string
     	OpenTelemetry exporter endpoint (e.g. localhost:4317). Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})
   -otel-export-period int
-    	seconds between checks for newly polled values to export, from 1 to 31536000 (one year); each poll's values are exported once, by the first check after the poll (default 10)
+    	seconds between checks for newly polled values to export, from 1 to 31536000 (one year); each check exports a device's latest poll once, so keep this at or below the shortest metrics_interval of any policy, or the polls between two checks are not all exported (default 10)
   -policy-env-vars string
     	comma-separated environment variable names a policy may read through a ${NAME} reference in community, username, auth_passphrase or priv_passphrase. Empty, the default, rejects every reference.
   -port int

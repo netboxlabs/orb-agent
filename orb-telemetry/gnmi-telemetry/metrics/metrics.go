@@ -36,6 +36,9 @@ const PolicyNameAttribute = "policy_name"
 // Global variables for meter and cache
 var (
 	meterProvider *sdkmetric.MeterProvider
+	// exportGate is the pollExporter in front of the OTLP exporter, kept so
+	// Shutdown can lift its idle bound ahead of the provider's last export.
+	exportGate *pollExporter
 	// provider is where meters come from: the SDK provider above once
 	// SetupMetricsExport ran, or whatever a test installed. It is nil while
 	// export is disabled, and every Get*/PolicyMeter answers nil then.
@@ -229,7 +232,8 @@ func SetupMetricsExport(ctx context.Context, logg *slog.Logger, endpoint string,
 		return fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}
 
-	reader := sdkmetric.NewPeriodicReader(newPollExporter(exporter),
+	exportGate = newPollExporter(exporter)
+	reader := sdkmetric.NewPeriodicReader(exportGate,
 		sdkmetric.WithInterval(time.Duration(exportPeriodSeconds)*time.Second),
 	)
 	meterProvider = sdkmetric.NewMeterProvider(append(providerOptions(), sdkmetric.WithReader(reader))...)
@@ -367,10 +371,15 @@ func SetMeterProviderForTest(p metric.MeterProvider) {
 	meter = p.Meter(scopeName)
 }
 
-// Shutdown gracefully shuts down the metrics exporter
+// Shutdown flushes and shuts down the metrics exporter. The provider's
+// shutdown collects once more and exports that collection, so the process's
+// counters leave with their final totals: the idle bound that holds back an
+// export with no policy's series is lifted first, or a final collection
+// within IdleExportInterval of the last export would be dropped.
 func Shutdown(ctx context.Context) error {
-	if meterProvider != nil {
-		return meterProvider.Shutdown(ctx)
+	if meterProvider == nil {
+		return nil
 	}
-	return nil
+	exportGate.sendAll()
+	return meterProvider.Shutdown(ctx)
 }

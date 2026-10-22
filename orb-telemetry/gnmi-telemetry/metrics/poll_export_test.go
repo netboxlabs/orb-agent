@@ -106,6 +106,23 @@ func TestPollExporter_APollRestartsTheIdleInterval(t *testing.T) {
 	assert.Equal(t, 4, next.exports, "the first collection, then the updates at 30s, 90s and 150s")
 }
 
+// Once sendAll has been called, a collection with none of a policy's series
+// is sent however soon after the last: that is the final collection of a
+// shutdown, which would otherwise wait for an idle interval that never comes.
+func TestPollExporter_SendsAnExportWithNoPolicysSeriesOnceSendAllIsCalled(t *testing.T) {
+	e, next, now := clockedPollExporter()
+	require.NoError(t, e.Export(t.Context(), collection(true)))
+	*now = now.Add(time.Second)
+	require.NoError(t, e.Export(t.Context(), collection(true)))
+	assert.Equal(t, 1, next.exports, "the second is within the idle interval")
+
+	e.sendAll()
+	require.NoError(t, e.Export(t.Context(), collection(true)))
+	assert.Equal(t, 2, next.exports, "and is sent once the bound is lifted")
+	require.NoError(t, e.Export(t.Context(), &metricdata.ResourceMetrics{}))
+	assert.Equal(t, 2, next.exports, "an empty collection still is not")
+}
+
 // A collection that holds nothing at all is never sent.
 func TestPollExporter_SendsNothingForAnEmptyCollection(t *testing.T) {
 	e, next, now := clockedPollExporter()
@@ -181,6 +198,46 @@ func TestSetupMetricsExport_HoldsBackAnExportWithNoPolicysSeries(t *testing.T) {
 		scopes[policy] = true
 	}
 	assert.Equal(t, map[string]bool{"": true, "core": true}, scopes, "the update's export carries the process's series too")
+}
+
+// Shutdown's final collection is sent whatever it carries, so the process's
+// counters leave with their final totals: here a count raised after the last
+// export, within the idle interval of it.
+func TestShutdown_SendsTheFinalCollection(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	addr, srv := startOTLPServer(t)
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), addr, 3600))
+	ctx := context.Background()
+
+	processCounter := GetCounter("gnmi.test.final", "a series of the process's own")
+	require.NotNil(t, processCounter)
+	processCounter.Add(ctx, 1)
+	require.NoError(t, meterProvider.ForceFlush(ctx))
+	assert.Equal(t, int64(1), sumOf(t, receive(t, srv), "gnmi.test.final"))
+
+	processCounter.Add(ctx, 1)
+	require.NoError(t, Shutdown(ctx))
+	assert.Equal(t, int64(2), sumOf(t, receive(t, srv), "gnmi.test.final"), "the final total left with the shutdown")
+}
+
+// sumOf is the value of the one data point of the sum named name in req.
+func sumOf(t *testing.T, req *collectormetricspb.ExportMetricsServiceRequest, name string) int64 {
+	t.Helper()
+	for _, rm := range req.GetResourceMetrics() {
+		for _, sm := range rm.GetScopeMetrics() {
+			for _, m := range sm.GetMetrics() {
+				if m.GetName() != name {
+					continue
+				}
+				points := m.GetSum().GetDataPoints()
+				require.Len(t, points, 1, "one data point of %s", name)
+				return points[0].GetAsInt()
+			}
+		}
+	}
+	t.Fatalf("the export carries no %s", name)
+	return 0
 }
 
 func receive(t *testing.T, srv *otlpServer) *collectormetricspb.ExportMetricsServiceRequest {
