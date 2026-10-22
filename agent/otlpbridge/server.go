@@ -220,7 +220,7 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 			// (the queue fills before the first connection), a payload can
 			// still be over the broker's: a check here rather than nothing,
 			// since the broker's answer would be to drop the connection.
-			if limit := s.broker.payloadCap(topic, msg.contentType); limit > 0 && len(msg.payload) > limit {
+			if limit, limited := s.broker.payloadCap(topic, msg.contentType); limited && len(msg.payload) > limit {
 				s.dropped.add(msg.signal, reasonTooLarge, 1)
 				s.logger.Warn("OTLP payload exceeds the broker's maximum packet size, dropping it",
 					"signal", msg.signal, "bytes", len(msg.payload), "broker_payload_limit", limit)

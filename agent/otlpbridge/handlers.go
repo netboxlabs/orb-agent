@@ -119,6 +119,15 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	// cannot fit is dropped and counted rather than sent to fail.
 	contentType := enc.ContentType()
 	limit := s.bridge.messageCap(s.bridge.topicFor(isIngest), contentType)
+	if limit == 0 {
+		// The broker's maximum packet size leaves no room for a payload: no
+		// piece of the export could be sent, so it is dropped and counted
+		// once rather than point by point.
+		s.bridge.dropped.add(signalMetrics, reasonTooLarge, 1)
+		s.bridge.logger.Warn("the broker's maximum packet size leaves no room for an OTLP payload, dropping the metrics export",
+			"broker_max_packet_size", s.bridge.BrokerMaxPacketSize())
+		return nil, status.Error(codes.InvalidArgument, "the broker's maximum packet size leaves no room for a metrics export; dropped")
+	}
 	payloads, dropped, err := splitMetrics(req, enc, limit)
 	if err != nil {
 		return nil, err

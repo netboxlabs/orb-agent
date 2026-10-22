@@ -237,6 +237,42 @@ func TestWriter_APayloadOverTheBrokersLimitIsDroppedAndTheQueueKeepsGoing(t *tes
 	assert.Equal(t, int64(1), bridge.dropped.total(signalTraces, reasonTooLarge))
 }
 
+// The broker's limit is told apart from no limit: one no larger than the
+// PUBLISH framing leaves no room for any payload, rather than reading as none.
+func TestBrokerCeiling_ALimitThatLeavesNoRoomIsStillALimit(t *testing.T) {
+	var b brokerCeiling
+	limit, limited := b.payloadCap("telemetry", ContentTypeProtobuf)
+	assert.False(t, limited, "no CONNACK limit yet")
+	assert.Zero(t, limit)
+
+	b.set(1 << 10)
+	limit, limited = b.payloadCap("telemetry", ContentTypeProtobuf)
+	assert.True(t, limited)
+	assert.Equal(t, 1<<10-mqttPublishOverhead("telemetry", ContentTypeProtobuf), limit)
+
+	b.set(10)
+	limit, limited = b.payloadCap("telemetry", ContentTypeProtobuf)
+	assert.True(t, limited, "a limit under the framing is still a limit")
+	assert.Zero(t, limit)
+}
+
+// With a broker limit that leaves no room, nothing is published: the writer
+// drops what the queue held, and an export is refused and counted once.
+func TestABrokerLimitThatLeavesNoRoomPublishesNothing(t *testing.T) {
+	pub := &scriptedPublisher{}
+	bridge := limitedBridge(t, BridgeConfig{}, pub)
+	bridge.SetBrokerMaxPacketSize(10)
+
+	require.NoError(t, bridge.enqueue(context.Background(), signalTraces, false, [][]byte{[]byte("small")}, ContentTypeJSON))
+	require.Eventually(t, func() bool { return bridge.dropped.total(signalTraces, reasonTooLarge) == 1 }, 5*time.Second, 10*time.Millisecond)
+
+	_, err := (&metricsServer{bridge: bridge}).Export(context.Background(), largeExport())
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err), "not retried: no piece could be sent")
+	assert.Equal(t, int64(1), bridge.dropped.total(signalMetrics, reasonTooLarge), "counted once, not point by point")
+	assert.Zero(t, pub.callCount(), "nothing reached the publisher")
+}
+
 // A publish the client refuses as invalid ends that payload's retries at
 // once: the same arguments would fail again. A transient failure keeps the
 // backoff and goes through.

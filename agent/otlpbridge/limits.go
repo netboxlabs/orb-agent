@@ -46,13 +46,15 @@ type brokerCeiling struct {
 func (b *brokerCeiling) set(n uint32) { b.maxPacketSize.Store(n) }
 
 // payloadCap is the most payload bytes a publish to topic with contentType
-// may carry under the broker's limit, or 0 when there is no limit.
-func (b *brokerCeiling) payloadCap(topic, contentType string) int {
+// may carry under the broker's limit, and whether the broker set one. A limit
+// no larger than the PUBLISH framing leaves no room for any payload: 0, and
+// limited.
+func (b *brokerCeiling) payloadCap(topic, contentType string) (limit int, limited bool) {
 	n := int(b.maxPacketSize.Load())
 	if n == 0 {
-		return 0
+		return 0, false
 	}
-	return max(n-mqttPublishOverhead(topic, contentType), 0)
+	return max(n-mqttPublishOverhead(topic, contentType), 0), true
 }
 
 // SetBrokerMaxPacketSize records the broker's maximum packet size from its
@@ -72,10 +74,10 @@ func (s *BridgeServer) BrokerMaxPacketSize() uint32 {
 
 // messageCap is the most payload bytes one message to topic with contentType
 // may carry: the configured cap, or less when the broker's maximum packet
-// size leaves less.
+// size leaves less, down to 0 when it leaves no room at all.
 func (s *BridgeServer) messageCap(topic, contentType string) int {
 	limit := s.maxMessageBytes
-	if broker := s.broker.payloadCap(topic, contentType); broker > 0 && broker < limit {
+	if broker, limited := s.broker.payloadCap(topic, contentType); limited && broker < limit {
 		return broker
 	}
 	return limit
