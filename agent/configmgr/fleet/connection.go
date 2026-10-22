@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -54,6 +55,11 @@ type MQTTConnection struct {
 	groupMembershipFailCount int
 	heartbeatFailCount       int
 	mu                       sync.Mutex
+	// brokerMaxPacketSize is the broker's CONNACK maximum packet size. The
+	// client stores it too but never checks a publish against it, and an
+	// MQTT 5 server answers an oversized packet by closing the connection,
+	// so the OTLP bridge reads it to keep its messages under.
+	brokerMaxPacketSize atomic.Uint32
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -76,6 +82,26 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
 func (connection *MQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	connection.onReadyHooks = append(connection.onReadyHooks, fn)
+}
+
+// recordBrokerLimits keeps what the broker's CONNACK says of its limits, for
+// the ready hooks to read. A broker that sets no maximum packet size, or a
+// CONNACK without properties, records zero.
+func (connection *MQTTConnection) recordBrokerLimits(connack *paho.Connack) {
+	var limit uint32
+	if connack != nil && connack.Properties != nil && connack.Properties.MaximumPacketSize != nil {
+		limit = *connack.Properties.MaximumPacketSize
+	}
+	connection.brokerMaxPacketSize.Store(limit)
+	if limit > 0 {
+		connection.logger.Info("MQTT broker maximum packet size", "bytes", limit)
+	}
+}
+
+// BrokerMaxPacketSize is the broker's CONNACK maximum packet size, zero when
+// it announced none.
+func (connection *MQTTConnection) BrokerMaxPacketSize() uint32 {
+	return connection.brokerMaxPacketSize.Load()
 }
 
 // RegisterTopicHandler registers a handler for a specific topic
@@ -123,6 +149,10 @@ type MQTTConnector interface {
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 	// SetResetter installs the resetter a full agent reset restarts through.
 	SetResetter(r Resetter)
+	// BrokerMaxPacketSize is the maximum packet size the broker announced in
+	// its CONNACK, set before the ready hooks run; zero when it announced
+	// none, or before the first connection.
+	BrokerMaxPacketSize() uint32
 }
 
 // startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.
@@ -298,8 +328,9 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 		CleanStartOnInitialConnection: true,
 		ConnectTimeout:                10 * time.Second,
 		ReconnectBackoff:              mqttReconnectBackoff,
-		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, connack *paho.Connack) {
 			connection.logger.Info("MQTT connection established", "server", serverURL.String())
+			connection.recordBrokerLimits(connack)
 
 			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
 				Subscriptions: []paho.SubscribeOptions{

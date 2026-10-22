@@ -76,6 +76,9 @@ A SAMPLE or Get series that receives no update for three `metrics_interval`s is 
 
 Seven metrics describe the backend itself, among them `gnmi.target_up{device_ip, mode}`, `gnmi.updates_dropped_total{reason}` and `gnmi.mode_fallback_total`; they are listed under [Metrics](../../orb-telemetry/gnmi-telemetry/README.md#metrics), and the profile format under [Metric Profiles](../../orb-telemetry/gnmi-telemetry/README.md#metric-profiles).
 
+### Export size
+One export carries every policy the backend runs, so its size grows with the agent's targets and the series their profiles select per interface. Under Fleet the agent's OTLP bridge splits an export too large for one MQTT message into several, each with its targets' policy and resource, and counts any data point too large to send on its own; see [Message size](../configs/fleet.md#message-size).
+
 ## When metrics are exported
 Each update is exported once, by the first export after it arrives. `otel_export_period` is how often the backend checks for new values, so it is the longest an update waits before it leaves, not how often a value is sent. A SAMPLE subscription or Get poll at `metrics_interval: 30` is exported every 30 seconds, one sample per series per update; policies on different intervals in one backend each export once per update.
 

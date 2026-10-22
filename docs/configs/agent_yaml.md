@@ -58,7 +58,7 @@ orb:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `active` | string | Yes | Which source to use: `local` or `git` |
+| `active` | string | Yes | Which source to use: `local`, `git` or `fleet` |
 
 ### `local`
 
@@ -101,6 +101,10 @@ orb:
 | `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
 | `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
 | `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
+
+### `fleet`
+
+Policies come from Fleet over the agent's MQTT connection, and backends' telemetry goes out the same way through a local OTLP bridge. See the [Fleet configuration manager documentation](fleet.md), including the bridge's ports and message size limits.
 
 ---
 

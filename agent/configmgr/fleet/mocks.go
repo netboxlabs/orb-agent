@@ -102,6 +102,8 @@ type MockMQTTConnection struct {
 	ConnectError    error
 	DisconnectError error
 	ReconnectError  error
+	// MaxPacketSize is what BrokerMaxPacketSize answers.
+	MaxPacketSize uint32
 
 	// OnDisconnect, when set, runs inside Disconnect with its context, so a
 	// test can hold the disconnect until that context ends.
@@ -166,6 +168,11 @@ func (m *MockMQTTConnection) Reconnect(_ context.Context, _ context.Context, _ C
 // AddOnReadyHook registers a hook function to be called when the MQTT connection is ready.
 func (m *MockMQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	m.hooks = append(m.hooks, fn)
+}
+
+// BrokerMaxPacketSize answers MaxPacketSize.
+func (m *MockMQTTConnection) BrokerMaxPacketSize() uint32 {
+	return m.MaxPacketSize
 }
 
 // RegisterTopicHandler registers a handler for a specific topic (mock implementation)

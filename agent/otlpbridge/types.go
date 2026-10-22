@@ -38,4 +38,13 @@ type BridgeConfig struct {
 	// Encoding, like every log and trace.
 	MetricsEncoding string // "protobuf" (or "proto") | "json" | ""
 	MaxPendingQueue int    // max queued messages before MQTT is ready; 0 = default (1000)
+	// MaxMessageBytes caps the payload of one published message; 0 = default
+	// (4 MiB). A metrics export over it is split into messages under it; a
+	// logs or traces export over it is dropped and counted. The broker's own
+	// maximum packet size lowers the cap when it is smaller.
+	MaxMessageBytes int
+	// MaxPendingBytes bounds the payload bytes the pending queue holds; 0 =
+	// default (64 MiB). Past it an export is refused with ResourceExhausted,
+	// as past MaxPendingQueue.
+	MaxPendingBytes int64
 }

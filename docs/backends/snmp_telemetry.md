@@ -105,6 +105,9 @@ Tag values read from an OCTET STRING are rendered as valid UTF-8 before export, 
 
 `snmp.invalid_utf8_repaired{attribute}` counts any string the exporter still had to repair, which should stay at zero. The rules are in the backend README under [SNMP Profiles](../../orb-telemetry/snmp-telemetry/README.md#snmp-profiles).
 
+### Export size
+One export carries every policy the backend runs, so its size grows with the agent's devices and their interfaces: measured at about 7 to 11 KB of OTLP protobuf per interface per export (15 to 24 KB as JSON), so a 146-interface switch exports about 1.5 MB, and several such switches pass the 4 MiB a single message used to be limited to. Under Fleet the agent's OTLP bridge splits an export too large for one MQTT message into several, each with its devices' policy and resource, and counts any data point too large to send on its own; see [Message size](../configs/fleet.md#message-size).
+
 ## When metrics are exported
 Each poll's values are exported once, by the first export after the poll. `otel_export_period` is how often the backend checks for newly polled values, so it is the longest a poll's values wait before they leave, not how often they are sent. At `metrics_interval: 60` a device is exported once a minute and the backend downstream stores one sample per series per poll; policies on different intervals in one backend each export once per poll.
 

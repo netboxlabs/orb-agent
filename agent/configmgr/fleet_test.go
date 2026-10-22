@@ -1270,6 +1270,42 @@ func TestFleetConfigManager_Start_OTLPBridgeStartsBeforeMQTT(t *testing.T) {
 	assert.Nil(t, fleetManager.otlpBridge, "OTLP bridge should be stopped when startup is cancelled")
 }
 
+// When the connection comes up, the bridge is bound to it with the broker's
+// maximum packet size from the CONNACK, so its messages are cut to fit under
+// it from the first publish.
+func TestFleetConfigManager_ReadyHookHandsTheBridgeTheBrokersLimit(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	mockConn := &fleet.MockMQTTConnection{MaxPacketSize: 1 << 20}
+	fleetManager := newFleetConfigManagerWithConnection(logger, mockPMgr, &mockBackendState{}, mockConn)
+
+	validJWT := fleet.RawJWTWithClaims(map[string]any{
+		"orb:org_id": "test-org", "orb:zone": "default", "orb:agent_id": "test-agent",
+		"client_id": "test-client", "iat": 1516239022,
+		"ext": map[string]any{"orb:mqtt_url": "mqtt://test.example.com:1883"},
+	})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(fleet.TokenResponse{AccessToken: validJWT, MQTTURL: "mqtt://test.example.com:1883", ExpiresIn: 3600})
+	}))
+	defer server.Close()
+	ephemeralPort := 0
+	cfg := config.Config{OrbAgent: config.OrbAgent{ConfigManager: config.ManagerConfig{Sources: config.Sources{Fleet: config.FleetManager{
+		TokenURL: server.URL, SkipTLS: true, ClientID: "test_client", ClientSecret: "test_secret",
+		OTLPBridgeGRPCPort: &ephemeralPort, OTLPBridgeHTTPPort: &ephemeralPort,
+	}}}}}
+
+	require.NoError(t, fleetManager.Start(context.Background(), cfg, map[string]backend.Backend{}))
+	t.Cleanup(func() { _ = fleetManager.Stop(context.Background()) })
+	require.NotNil(t, fleetManager.otlpBridge)
+	assert.Zero(t, fleetManager.otlpBridge.BrokerMaxPacketSize(), "nothing is known before the connection is up")
+
+	mockConn.TriggerOnReadyHook(nil, fleet.TokenResponseTopics{Ingest: "ingest", Telemetry: "telemetry"})
+	assert.Equal(t, uint32(1<<20), fleetManager.otlpBridge.BrokerMaxPacketSize())
+	assert.Equal(t, "telemetry", fleetManager.otlpBridge.GetTelemetryTopic())
+}
+
 // controlledTokenServer is a test HTTP server whose response can switch from failure to success
 // after a configurable number of requests. Thread-safe.
 type controlledTokenServer struct {
@@ -1798,6 +1834,47 @@ func TestFleetOTLPBindHost_Validation(t *testing.T) {
 		require.Error(t, err, "%q must be rejected: backends dial localhost", bad)
 		assert.Contains(t, err.Error(), "localhost")
 	}
+}
+
+// The bridge's size settings are read as set, zero when unset for the bridge
+// to default, and refused outside their bounds: a cap too small to hold a
+// device's scope or past what the listeners receive, and a queue bound that
+// could not hold one message at the cap.
+func TestFleetOTLPBridgeLimits(t *testing.T) {
+	limits := func(message, pending *int) (int, int64, error) {
+		var cfg config.Config
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeMaxMessageBytes = message
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeMaxPendingBytes = pending
+		return fleetOTLPBridgeLimits(cfg)
+	}
+	intp := func(n int) *int { return &n }
+
+	message, pending, err := limits(nil, nil)
+	require.NoError(t, err)
+	assert.Zero(t, message, "unset is left to the bridge's default")
+	assert.Zero(t, pending)
+
+	message, pending, err = limits(intp(2<<20), intp(32<<20))
+	require.NoError(t, err)
+	assert.Equal(t, 2<<20, message)
+	assert.Equal(t, int64(32<<20), pending)
+
+	for _, bad := range []int{0, 1, 64<<10 - 1, 64<<20 + 1} {
+		_, _, err := limits(intp(bad), nil)
+		require.Error(t, err, "message cap %d must be refused", bad)
+		assert.Contains(t, err.Error(), "otlp_bridge_max_message_bytes")
+	}
+	_, _, err = limits(intp(64<<10), intp(64<<10))
+	assert.NoError(t, err, "a queue bound of exactly one message at the cap is enough")
+	_, _, err = limits(intp(4<<20), intp(4<<20-1))
+	require.Error(t, err, "a queue bound under the cap could hold no message")
+	assert.Contains(t, err.Error(), "otlp_bridge_max_pending_bytes")
+	_, _, err = limits(nil, intp(1<<10))
+	require.Error(t, err, "a queue bound under the smallest cap is refused with the cap unset too")
+
+	cfg := fleetOTLPBridgeConfig("localhost", 4317, 4318, 2<<20, 32<<20)
+	assert.Equal(t, 2<<20, cfg.MaxMessageBytes)
+	assert.Equal(t, int64(32<<20), cfg.MaxPendingBytes)
 }
 
 // A reconnect signal that is already queued when shutdown begins is dropped:
