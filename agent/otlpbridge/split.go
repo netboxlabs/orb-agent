@@ -11,10 +11,12 @@ import (
 // not is cut along the OTLP tree: by resource, then scope, then metric, then
 // data point, so every payload keeps the resource and the scope (with its
 // policy_name) of each point it carries, and the enricher attributes it as it
-// would the whole. A single data point whose payload is still over limit on
-// its own is left out, and reported in dropped with the metric it belongs to:
-// the alternative, sending it and losing the connection, costs every other
-// point too.
+// would the whole. A metric with no data point is carried too, its header in
+// one payload. A single data point, or a pointless metric's header, whose
+// payload is still over limit on its own is left out, and reported in dropped
+// with the metric it belongs to: the alternative, sending it and losing the
+// connection, costs every other point too. A resource or scope with no metric
+// carries nothing to publish and is not carried over.
 //
 // Sizes are measured in the encoding published, not in protobuf: a JSON
 // payload is about twice its protobuf size, and the broker's limit is on the
@@ -29,8 +31,8 @@ func splitMetrics(req *collectormetrics.ExportMetricsServiceRequest, enc Encoder
 	}
 	units := flattenMetrics(req)
 	if len(units) == 0 {
-		// Over the limit with no data point to cut it by: the headers alone
-		// do not fit.
+		// Over the limit with no metric to cut it by: the resource and scope
+		// headers alone do not fit.
 		return nil, []droppedPoint{{Bytes: len(whole)}}, nil
 	}
 	// The packing estimate is each unit's protobuf size scaled by how much
@@ -47,7 +49,7 @@ func splitMetrics(req *collectormetrics.ExportMetricsServiceRequest, enc Encoder
 
 // droppedPoint names a data point that could not be published: its metric,
 // and the bytes its own payload would have taken. An export over the limit
-// with no data point at all is one droppedPoint naming no metric.
+// with no metric at all is one droppedPoint naming no metric.
 type droppedPoint struct {
 	Metric string
 	Bytes  int
@@ -55,18 +57,21 @@ type droppedPoint struct {
 
 // unit is one data point with the path that leads to it: its resource, its
 // scope and its metric, so a payload rebuilt from units can carry each of
-// those once however many points it has.
+// those once however many points it has. A metric with no data point is one
+// unit with no point, which carries its header.
 type unit struct {
-	rm    *metricsv1.ResourceMetrics
-	sm    *metricsv1.ScopeMetrics
-	m     *metricsv1.Metric
+	rm *metricsv1.ResourceMetrics
+	sm *metricsv1.ScopeMetrics
+	m  *metricsv1.Metric
+	// point is nil for the unit of a metric with no data point.
 	point proto.Message
 	// estimate is the unit's protobuf size, the point plus its share of the
 	// headers it would introduce in a new payload.
 	estimate int
 }
 
-// flattenMetrics lists every data point of req in order, with its path.
+// flattenMetrics lists every data point of req in order, with its path, and
+// a unit with no point for each metric that has none.
 // Headers are counted on the first unit of each resource, scope and metric,
 // which overstates a payload that starts in the middle of one by at most
 // those headers: the estimate errs on the small side of the cap, and a
@@ -88,8 +93,13 @@ func flattenMetrics(req *collectormetrics.ExportMetricsServiceRequest) []unit {
 					continue
 				}
 				mHeader := proto.Size(withoutPoints(m))
+				pts := points(m)
+				if len(pts) == 0 {
+					units = append(units, unit{rm: rm, sm: sm, m: m, estimate: rmHeader + smHeader + mHeader + 12})
+					continue
+				}
 				first := true
-				for _, pt := range points(m) {
+				for _, pt := range pts {
 					u := unit{rm: rm, sm: sm, m: m, point: pt, estimate: proto.Size(pt) + 4}
 					if first {
 						u.estimate += rmHeader + smHeader + mHeader + 12
@@ -184,7 +194,9 @@ func build(units []unit) *collectormetrics.ExportMetricsServiceRequest {
 			sm.Metrics = append(sm.Metrics, m)
 			lastM = u.m
 		}
-		addPoint(m, u.point)
+		if u.point != nil {
+			addPoint(m, u.point)
+		}
 	}
 	return out
 }

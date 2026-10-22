@@ -255,6 +255,58 @@ func TestSplitMetrics_KeepsEveryKindsHeader(t *testing.T) {
 	assert.Equal(t, map[string]int{"h": 2, "e": 2, "s": 2, "c": 2}, kinds)
 }
 
+// A metric with no data point is not lost in the cut: its header lands in one
+// payload, as it would have in the whole export, and nothing is dropped.
+func TestSplitMetrics_AMetricWithNoPointKeepsItsHeader(t *testing.T) {
+	emptyGauge := &metricsv1.Metric{Name: "snmp.empty_gauge", Unit: "1", Data: &metricsv1.Metric_Gauge{Gauge: &metricsv1.Gauge{}}}
+	emptySum := sumMetric("snmp.empty_sum", "10.0.0.1", 0)
+	req := export(backendResource("snmp-telemetry",
+		policyScope("core", gaugeMetric("snmp.ifinoctets", "10.0.0.1", 200), emptyGauge),
+		policyScope("edge", emptySum, gaugeMetric("snmp.ifoutoctets", "10.0.0.2", 200)),
+	))
+	whole, err := ProtobufEncoder{}.Marshal(req)
+	require.NoError(t, err)
+	limit := len(whole) / 4
+
+	payloads, dropped, err := splitMetrics(req, ProtobufEncoder{}, limit)
+	require.NoError(t, err)
+	assert.Empty(t, dropped)
+	require.GreaterOrEqual(t, len(payloads), 4)
+	headers := map[string]string{}
+	for i, p := range payloads {
+		assert.LessOrEqual(t, len(p), limit, "payload %d", i)
+		for _, rm := range decodeProto(p).GetResourceMetrics() {
+			for _, sm := range rm.GetScopeMetrics() {
+				for _, m := range sm.GetMetrics() {
+					if len(points(m)) == 0 {
+						assert.NotContains(t, headers, m.GetName(), "carried once")
+						headers[m.GetName()] = sm.GetScope().GetAttributes()[0].GetValue().GetStringValue()
+						if s := m.GetSum(); s != nil {
+							assert.True(t, s.GetIsMonotonic(), "the sum keeps its header")
+						}
+					}
+				}
+			}
+		}
+	}
+	assert.Equal(t, map[string]string{"snmp.empty_gauge": "core", "snmp.empty_sum": "edge"}, headers, "each under its own scope")
+	assert.Equal(t, pointKeys(t, [][]byte{whole}, decodeProto), pointKeys(t, payloads, decodeProto))
+}
+
+// A metric with no data point whose header alone is over the limit is
+// dropped and reported like a point that cannot fit.
+func TestSplitMetrics_AMetricHeaderThatCannotFitIsDroppedAndReported(t *testing.T) {
+	huge := &metricsv1.Metric{Name: "snmp.huge", Description: strings.Repeat("d", 5000), Data: &metricsv1.Metric_Gauge{Gauge: &metricsv1.Gauge{}}}
+	req := export(backendResource("snmp-telemetry", policyScope("core", gaugeMetric("snmp.ifinoctets", "10.0.0.1", 50), huge)))
+
+	payloads, dropped, err := splitMetrics(req, ProtobufEncoder{}, 2000)
+	require.NoError(t, err)
+	require.Len(t, dropped, 1)
+	assert.Equal(t, "snmp.huge", dropped[0].Metric)
+	assert.Greater(t, dropped[0].Bytes, 2000)
+	assert.Len(t, pointKeys(t, payloads, decodeProto), 50, "every point is published")
+}
+
 // The request handed in is not changed by splitting: the handler answers the
 // backend from it after the split.
 func TestSplitMetrics_LeavesTheRequestAsItWas(t *testing.T) {

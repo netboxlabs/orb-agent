@@ -48,7 +48,8 @@ size when the broker announces a smaller one when the agent connects.
 - **A metrics export over the cap is split** into several messages, by resource,
   then scope, then data point. Every message keeps the resource and the scope,
   with its `policy_name`, of each point it carries, so the platform attributes
-  the pieces as it would the whole.
+  the pieces as it would the whole. A metric with no data points keeps its
+  header in one of the messages.
 - **A single data point too large for a message on its own is dropped**, logged
   and counted; the rest of its export is published.
 - **A logs or traces export over the cap is dropped**, logged and counted, and
