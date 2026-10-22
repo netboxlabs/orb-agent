@@ -120,7 +120,9 @@ func main() {
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10,
-		fmt.Sprintf("period in seconds between OpenTelemetry exports, from 1 to %d (one year)",
+		fmt.Sprintf("seconds between checks for newly polled values to export, from 1 to %d (one year); "+
+			"each check exports a device's latest poll once, so keep this at or below the shortest "+
+			"metrics_interval of any policy, or the polls between two checks are not all exported",
 			config.MaxDurationSeconds))
 	snmpProfilesDir := flag.String("snmp-profiles-dir", "",
 		"directory of ktranslate-compatible SNMP profile YAML files to overlay on the "+
@@ -169,11 +171,17 @@ func main() {
 	trapTally := traps.NewTally(logger)
 	trapTally.Register()
 	pool := traps.NewPool(trapTally, logger)
+	// The export period only matters when something exports.
+	var exportPeriod time.Duration
+	if endpoint != "" {
+		exportPeriod = time.Duration(*otelExportPeriod) * time.Second
+	}
 	manager := policy.NewManager(rootCtx, logger, policy.Options{
 		DefaultProfilesDir: profilesDir,
 		ProfilesRoot:       env.ResolveEnvOrExit(*snmpProfilesRoot),
 		AllowedEnvVars:     splitList(*policyEnvVars),
 		TrapPool:           newTrapPool(pool),
+		ExportPeriod:       exportPeriod,
 	})
 	srv := server.NewServer(*host, *port, logger, manager, version.GetBuildVersion())
 

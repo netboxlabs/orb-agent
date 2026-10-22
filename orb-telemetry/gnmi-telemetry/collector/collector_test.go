@@ -94,13 +94,14 @@ func TestCollectTargetExportsMatchedUpdatesAndDropsTheRest(t *testing.T) {
 	require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", "42"), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
 
 	waitFor(t, 3*time.Second, func() bool {
-		got := collect(t, reader)
+		got := exported(t, reader)
 		_, a := got["gnmi.if_in_octets"]
 		_, b := got["gnmi.if_oper_status"]
 		_, m := got["gnmi.memory_physical"]
 		return a && b && m
 	})
-	got := collect(t, reader)
+	by := exportedByPolicy(t, reader)
+	got := by["p"]
 	sum := got["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
 	require.Len(t, sum.DataPoints, 1)
 	assert.Equal(t, int64(1394), sum.DataPoints[0].Value)
@@ -111,17 +112,17 @@ func TestCollectTargetExportsMatchedUpdatesAndDropsTheRest(t *testing.T) {
 	}
 	_, hasPolicy := sum.DataPoints[0].Attributes.Value("policy")
 	assert.False(t, hasPolicy, "the policy is the scope's, not the datapoint's")
-	_, inScope := collectByPolicy(t, reader)["p"]["gnmi.if_in_octets"]
-	assert.True(t, inScope, "the series left under the policy's scope")
+	_, unscoped := by[""]["gnmi.if_in_octets"]
+	assert.False(t, unscoped, "the series left under the policy's scope, not the process's")
 	g := got["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 	assert.Equal(t, 1.0, g.DataPoints[0].Value)
 	_, unmatched := got["gnmi.x"]
 	assert.False(t, unmatched, "an unmatched path yields no metric")
 	up, ok := got["gnmi.target_up"].Data.(metricdata.Gauge[int64])
 	require.True(t, ok, "target_up is exported")
-	require.Len(t, up.DataPoints, 1)
-	assert.Equal(t, int64(1), up.DataPoints[0].Value)
-	mode, _ := up.DataPoints[0].Attributes.Value("mode")
+	last := latest(up.DataPoints)
+	assert.Equal(t, int64(1), last.Value)
+	mode, _ := last.Attributes.Value("mode")
 	assert.Equal(t, "on_change", mode.AsString())
 
 	subs := sess.Subscriptions()
@@ -161,12 +162,12 @@ func TestCollectTarget_SameDeviceUnderTwoPoliciesExportsInBothScopes(t *testing.
 		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", "42"), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
 	}
 	waitFor(t, 3*time.Second, func() bool {
-		by := collectByPolicy(t, reader)
+		by := exportedByPolicy(t, reader)
 		_, a := by["core"]["gnmi.if_in_octets"]
 		_, b := by["edge"]["gnmi.if_in_octets"]
 		return a && b
 	})
-	by := collectByPolicy(t, reader)
+	by := exportedByPolicy(t, reader)
 	for _, policy := range []string{"core", "edge"} {
 		sum := by[policy]["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
 		require.Len(t, sum.DataPoints, 1, policy)
@@ -653,19 +654,28 @@ func TestOnChangeSeriesAreNeverStale(t *testing.T) {
 	defer cancel()
 	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
 	waitFor(t, 3*time.Second, func() bool {
-		got := collect(t, reader)
+		got := exported(t, reader)
 		_, gauge := got["gnmi.if_oper_status"]
 		_, counter := got["gnmi.if_in_octets"]
 		return gauge && counter
 	})
 	waitFor(t, 3*time.Second, func() bool {
-		m, ok := collect(t, reader)["gnmi.if_in_octets"]
-		return !ok || len(m.Data.(metricdata.Sum[int64]).DataPoints) == 0
+		collect(t, reader)
+		_, counter := held(c, "p")["gnmi.if_in_octets"]
+		return !counter
 	})
-	g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
-	require.True(t, ok, "the on_change gauge outlives the counter's age")
+	_, gauge := held(c, "p")["gnmi.if_oper_status"]
+	require.True(t, gauge, "the on_change gauge outlives the counter's age")
+
+	// Past the counter's age, the gauge's value is still sent once per
+	// interval, and the counter's is not sent at all.
+	later := exportedWithin(t, reader, 200*time.Millisecond)["p"]
+	g, ok := later["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+	require.True(t, ok, "the on_change gauge is sent again at the interval")
 	require.Len(t, g.DataPoints, 1)
 	assert.Equal(t, 1.0, g.DataPoints[0].Value)
+	_, counter := later["gnmi.if_in_octets"]
+	assert.False(t, counter, "the aged counter is not")
 }
 
 // An ON_CHANGE series carries no age, so an element removed while the stream
@@ -674,7 +684,7 @@ func TestOnChangeSeriesAreNeverStale(t *testing.T) {
 // response is what says the dump is complete, and every never-stale series of
 // this target older than that stream goes with it.
 func TestReconnectReconcilesOnChangeSeries(t *testing.T) {
-	reader := testReader(t)
+	testReader(t)
 	var attempts atomic.Int64
 	// The replacement stream holds its dump until the test has seen both
 	// series, so the window the eviction closes is not one the test has to
@@ -735,20 +745,20 @@ func TestReconnectReconcilesOnChangeSeries(t *testing.T) {
 	// what happens to it is the eviction's doing rather than its own age.
 	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
 	waitFor(t, 3*time.Second, func() bool {
-		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 		return ok && len(g.DataPoints) == 2
 	})
 	waitFor(t, 3*time.Second, func() bool { return attempts.Load() >= 2 })
 	close(resume)
 	waitFor(t, 3*time.Second, func() bool {
-		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 		if !ok || len(g.DataPoints) != 1 {
 			return false
 		}
 		name, has := g.DataPoints[0].Attributes.Value("interface_name")
 		return has && name.AsString() == "e2"
 	})
-	sum, ok := collect(t, reader)["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+	sum, ok := held(c, "p")["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
 	require.True(t, ok, "the aged counter is untouched by the eviction")
 	require.Len(t, sum.DataPoints, 1)
 	assert.Equal(t, int64(11), sum.DataPoints[0].Value)
@@ -1009,12 +1019,12 @@ func TestGetContainerResultIsFlattenedToLeaves(t *testing.T) {
 	defer cancel()
 	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
 	waitFor(t, 3*time.Second, func() bool {
-		got := collect(t, reader)
+		got := exported(t, reader)
 		_, physical := got["gnmi.memory_physical"]
 		_, reserved := got["gnmi.memory_reserved"]
 		return physical && reserved
 	})
-	got := collect(t, reader)
+	got := exported(t, reader)
 	assert.Equal(t, 4096.0, got["gnmi.memory_physical"].Data.(metricdata.Gauge[float64]).DataPoints[0].Value)
 	assert.Equal(t, 512.0, got["gnmi.memory_reserved"].Data.(metricdata.Gauge[float64]).DataPoints[0].Value)
 }
@@ -1091,7 +1101,7 @@ func TestCollectorsSharingABudgetRefuseSeriesPastIt(t *testing.T) {
 
 	first := newCollector("10.0.0.1")
 	waitFor(t, 3*time.Second, func() bool {
-		_, ok := collect(t, reader)["gnmi.if_in_octets"]
+		_, ok := exported(t, reader)["gnmi.if_in_octets"]
 		return ok
 	})
 	require.Zero(t, drops(t, reader, "series_limit"), "the first collector's series fit the allowance")
@@ -1099,7 +1109,7 @@ func TestCollectorsSharingABudgetRefuseSeriesPastIt(t *testing.T) {
 	newCollector("10.0.0.2")
 	waitFor(t, 3*time.Second, func() bool { return drops(t, reader, "series_limit") > 0 })
 
-	sum := collect(t, reader)["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
+	sum := exported(t, reader)["gnmi.if_in_octets"].Data.(metricdata.Sum[int64])
 	require.Len(t, sum.DataPoints, 1, "the second collector's series is refused, not exported alongside")
 	device, _ := sum.DataPoints[0].Attributes.Value("device_ip")
 	assert.Equal(t, "10.0.0.1", device.AsString(), "the series the allowance already holds is the one kept")
@@ -1171,13 +1181,17 @@ func TestTargetUpIsBoundedByTheSharedBudget(t *testing.T) {
 		return c
 	}
 	upDevices := func() []string {
-		m, ok := collectByPolicy(t, reader)["p"]["gnmi.target_up"]
+		m, ok := exportedByPolicy(t, reader)["p"]["gnmi.target_up"]
 		if !ok {
 			return nil
 		}
+		// One host per loop: the log keeps a point per mode a loop has
+		// reported under.
+		seen := map[string]bool{}
 		var hosts []string
 		for _, pt := range m.Data.(metricdata.Gauge[int64]).DataPoints {
-			if v, ok := pt.Attributes.Value("device_ip"); ok {
+			if v, ok := pt.Attributes.Value("device_ip"); ok && !seen[v.AsString()] {
+				seen[v.AsString()] = true
 				hosts = append(hosts, v.AsString())
 			}
 		}
@@ -1202,6 +1216,7 @@ func TestTargetUpIsBoundedByTheSharedBudget(t *testing.T) {
 	assert.Equal(t, int64(1), drops(t, reader, "series_limit"), "the refused up point is counted once for the target")
 
 	first.ForgetPolicy("p")
+	forgetExported(reader)
 	waitFor(t, 3*time.Second, func() bool { return onlyUp("10.0.0.2") })
 }
 
@@ -1239,13 +1254,13 @@ func TestCollectorsSharingASchemaRegistryRefuseADisagreeingSeries(t *testing.T) 
 	}
 
 	first := start("10.0.0.1", loadStore(t))
-	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_free_native"]; return ok })
+	waitFor(t, 3*time.Second, func() bool { _, ok := exported(t, reader)["gnmi.memory_free_native"]; return ok })
 	require.Zero(t, drops(t, reader, "schema_conflict"), "the first definition of a name is the process's")
 
 	start("10.0.0.2", disagreeing)
 	waitFor(t, 3*time.Second, func() bool { return drops(t, reader, "schema_conflict") > 0 })
 
-	got := collect(t, reader)
+	got := exported(t, reader)
 	g, ok := got["gnmi.memory_free_native"].Data.(metricdata.Gauge[float64])
 	require.True(t, ok, "the name keeps the kind it was first exported with")
 	require.Len(t, g.DataPoints, 1, "the disagreeing series is refused, not exported alongside")
@@ -1395,7 +1410,7 @@ func TestASyncClearsAPriorError(t *testing.T) {
 // an ageless series of a skipped subscription is not one any snapshot could
 // restate, and evicting it would blank a subtree on the first poll.
 func TestGetRungReconcilesOnlyTheMetricsItPolls(t *testing.T) {
-	reader := testReader(t)
+	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mixed_origin.yaml"), []byte(`
 match: {}
@@ -1465,7 +1480,7 @@ subscriptions:
 	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "mixed_origin"})
 	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
 	points := func(name string) int {
-		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")[name].Data.(metricdata.Gauge[float64])
 		if !ok {
 			return 0
 		}
@@ -1477,7 +1492,7 @@ subscriptions:
 	// The element the snapshot omits goes, the element it restates stays, and the
 	// series of the subscription the poll never asked for stays with it.
 	waitFor(t, 3*time.Second, func() bool {
-		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 		if !ok || len(g.DataPoints) != 1 {
 			return false
 		}
@@ -1492,7 +1507,7 @@ subscriptions:
 // fetched: a path whose Get failed restates nothing because it was never read,
 // and evicting under it would take an element the device still carries.
 func TestGetRungReconcilesOnlyFetchedPaths(t *testing.T) {
-	reader := testReader(t)
+	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_paths.yaml"), []byte(`
 match: {}
@@ -1563,7 +1578,7 @@ subscriptions:
 	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "two_paths"})
 	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
 	points := func(name string) int {
-		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")[name].Data.(metricdata.Gauge[float64])
 		if !ok {
 			return 0
 		}
@@ -1575,7 +1590,7 @@ subscriptions:
 	// Under the fetched path the omitted element goes and the restated one
 	// stays; both interface series stand, the snapshot having never read them.
 	waitFor(t, 3*time.Second, func() bool {
-		g, ok := collect(t, reader)["gnmi.control_memory_free"].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")["gnmi.control_memory_free"].Data.(metricdata.Gauge[float64])
 		if !ok || len(g.DataPoints) != 1 {
 			return false
 		}
@@ -1590,7 +1605,7 @@ subscriptions:
 // of the first poll: an element that went while the target was disconnected
 // keeps its ageless series otherwise, for as long as the poll runs.
 func TestGetRungReconcilesAPathWhenItFirstRecovers(t *testing.T) {
-	reader := testReader(t)
+	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_paths.yaml"), []byte(`
 match: {}
@@ -1666,7 +1681,7 @@ subscriptions:
 	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "two_paths"})
 	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 50 * time.Millisecond, Mode: "auto", PolicyName: "p"}))
 	points := func(name string) int {
-		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")[name].Data.(metricdata.Gauge[float64])
 		if !ok {
 			return 0
 		}
@@ -1678,7 +1693,7 @@ subscriptions:
 	// The snapshot that first fetches the interfaces withdraws e2, the element
 	// it omits; e1, which it restates, stands.
 	waitFor(t, 3*time.Second, func() bool {
-		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 		if !ok || len(g.DataPoints) != 1 {
 			return false
 		}
@@ -1695,7 +1710,7 @@ subscriptions:
 // this session will ever restate, so it goes with the elements the dump
 // omitted rather than standing for ever on a value nothing can refresh.
 func TestSyncWithdrawsThePrunedPathsSeries(t *testing.T) {
-	reader := testReader(t)
+	testReader(t)
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "two_streams.yaml"), []byte(`
 match: {}
@@ -1773,7 +1788,7 @@ subscriptions:
 	pinned := config.EffectiveTarget(config.Scope{}, config.Target{Host: "h", Profile: "two_streams"})
 	require.NoError(t, c.CollectTarget(ctx, pinned, Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: "p"}))
 	points := func(name string) int {
-		g, ok := collect(t, reader)[name].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")[name].Data.(metricdata.Gauge[float64])
 		if !ok {
 			return 0
 		}
@@ -1786,7 +1801,7 @@ subscriptions:
 	// one stays; the series of the pruned subscription goes too, no stream of
 	// this session being able to restate it.
 	waitFor(t, 3*time.Second, func() bool {
-		g, ok := collect(t, reader)["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
+		g, ok := held(c, "p")["gnmi.if_oper_status"].Data.(metricdata.Gauge[float64])
 		if !ok || len(g.DataPoints) != 1 {
 			return false
 		}
@@ -2604,23 +2619,25 @@ func TestTargetUp_OneScopePerPolicy(t *testing.T) {
 		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
 	}
 	waitFor(t, 3*time.Second, func() bool {
-		by := collectByPolicy(t, reader)
+		by := exportedByPolicy(t, reader)
 		_, a := by["core"]["gnmi.target_up"]
 		_, b := by["edge"]["gnmi.target_up"]
 		return a && b
 	})
-	by := collectByPolicy(t, reader)
+	by := exportedByPolicy(t, reader)
 	for _, policy := range []string{"core", "edge"} {
 		g := by[policy]["gnmi.target_up"].Data.(metricdata.Gauge[int64])
-		require.Len(t, g.DataPoints, 1, policy)
-		_, hasPolicy := g.DataPoints[0].Attributes.Value("policy")
-		assert.False(t, hasPolicy)
-		v, ok := g.DataPoints[0].Attributes.Value("device_ip")
-		require.True(t, ok)
-		assert.Equal(t, "10.0.0.1", v.AsString())
-		_, ok = g.DataPoints[0].Attributes.Value("mode")
-		require.True(t, ok, "mode is on the datapoint")
-		assert.Equal(t, 2, g.DataPoints[0].Attributes.Len(), "device_ip and mode, nothing else")
+		require.NotEmpty(t, g.DataPoints, policy)
+		for _, pt := range g.DataPoints {
+			_, hasPolicy := pt.Attributes.Value("policy")
+			assert.False(t, hasPolicy)
+			v, ok := pt.Attributes.Value("device_ip")
+			require.True(t, ok)
+			assert.Equal(t, "10.0.0.1", v.AsString())
+			_, ok = pt.Attributes.Value("mode")
+			require.True(t, ok, "mode is on the datapoint")
+			assert.Equal(t, 2, pt.Attributes.Len(), "device_ip and mode, nothing else")
+		}
 	}
 	_, unscoped := by[""]["gnmi.target_up"]
 	assert.False(t, unscoped, "target_up never leaves on the process scope")
@@ -2641,24 +2658,27 @@ func TestForgetPolicy_StopsExportingThatPolicy(t *testing.T) {
 	start := func(policy string) {
 		require.NoError(t, c.CollectTarget(ctx, target("10.0.0.1", ""), Options{MetricsInterval: 30 * time.Second, Mode: "auto", PolicyName: policy}))
 	}
-	exported := func(policy string) bool {
-		by := collectByPolicy(t, reader)
+	exportedFor := func(policy string) bool {
+		by := exportedByPolicy(t, reader)
 		_, series := by[policy]["gnmi.if_in_octets"]
 		_, up := by[policy]["gnmi.target_up"]
 		return series && up
 	}
 	start("core")
 	start("edge")
-	waitFor(t, 3*time.Second, func() bool { return exported("core") && exported("edge") })
+	waitFor(t, 3*time.Second, func() bool { return exportedFor("core") && exportedFor("edge") })
 
 	c.ForgetPolicy("core")
 
-	by := collectByPolicy(t, reader)
-	assert.Empty(t, by["core"], "a forgotten policy exports nothing under its scope")
-	assert.True(t, exported("edge"), "the other policy is untouched")
+	assert.Empty(t, held(c, "core"), "a forgotten policy keeps nothing to export")
+	assert.Empty(t, c.TargetStatuses("core"))
+	assert.NotEmpty(t, held(c, "edge"), "the other policy is untouched")
+	assert.Len(t, c.TargetStatuses("edge"), 1)
+	assert.Empty(t, exportedWithin(t, reader, 50*time.Millisecond)["core"], "and nothing leaves under its scope")
 
+	forgetExported(reader)
 	start("core")
-	waitFor(t, 3*time.Second, func() bool { return exported("core") })
+	waitFor(t, 3*time.Second, func() bool { return exportedFor("core") })
 }
 
 // Unregister waits for a running collection, whose callbacks take the
@@ -2816,10 +2836,9 @@ func TestForgetPolicy_RacesACollectionSafely(t *testing.T) {
 		assert.NoError(t, err, "CollectTarget failed during the race")
 	}
 
-	waitFor(t, 3*time.Second, func() bool {
-		_, up := collectByPolicy(t, reader)["b"]["gnmi.target_up"]
-		return up
-	})
+	assert.Len(t, c.TargetStatuses("b"), 1, "policy b's target runs after the race")
+	assert.Empty(t, c.TargetStatuses("a"), "policy a has no target after the last ForgetPolicy")
+	assert.Empty(t, held(c, "a"), "and keeps nothing to export")
 	by := collectByPolicy(t, reader)
 	assert.Empty(t, by["a"], "policy a's scope is empty after the last ForgetPolicy")
 }

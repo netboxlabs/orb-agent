@@ -1355,6 +1355,10 @@ func TestForgetPolicy_StopsExportingThatPolicy(t *testing.T) {
 	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-b", DialOptions{}))
 	require.Len(t, exportedByPolicy(t, reader, "snmp.cpuutil"), 2)
 
+	// Polled again, each policy has a poll to export; forgetting one drops
+	// only its own.
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-a", DialOptions{}))
+	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-b", DialOptions{}))
 	c.ForgetPolicy("policy-a")
 
 	byPolicy := exportedByPolicy(t, reader, "snmp.cpuutil")
@@ -1364,7 +1368,7 @@ func TestForgetPolicy_StopsExportingThatPolicy(t *testing.T) {
 	require.NoError(t, c.CollectTarget(ctx, target, mustAuth(), "policy-a", DialOptions{}))
 	byPolicy = exportedByPolicy(t, reader, "snmp.cpuutil")
 	assert.Len(t, byPolicy["policy-a"], 1, "a policy of the same name registers afresh")
-	assert.Len(t, byPolicy["policy-b"], 1)
+	assert.Empty(t, byPolicy["policy-b"], "the other policy's poll already left and is not sent again")
 }
 
 func TestCollectTarget_SameHostDifferentPortStaysSeparate(t *testing.T) {
