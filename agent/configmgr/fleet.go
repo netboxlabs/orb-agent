@@ -156,7 +156,8 @@ func fleetOTLPHTTPPort(cfg config.Config) int {
 // Bounds on the bridge's size settings. The cap has a floor under which a
 // device's one scope rarely fits and every export is cut to pieces, and a
 // ceiling at what the listeners receive, past which it could never apply.
-// The queue bound has to hold at least one message at the cap.
+// The queue bound has to hold at least one message at the cap the bridge
+// uses: the one set, or its default when none is.
 const (
 	minOTLPBridgeMessageBytes = 64 << 10
 	maxOTLPBridgeMessageBytes = 64 << 20
@@ -174,9 +175,17 @@ func fleetOTLPBridgeLimits(cfg config.Config) (messageBytes int, pendingBytes in
 	}
 	if fleetCfg.OTLPBridgeMaxPendingBytes != nil {
 		pendingBytes = int64(*fleetCfg.OTLPBridgeMaxPendingBytes)
-		floor := int64(max(messageBytes, minOTLPBridgeMessageBytes))
-		if pendingBytes < floor {
-			return 0, 0, fmt.Errorf("otlp_bridge_max_pending_bytes %d must hold at least one message: %d or more", pendingBytes, floor)
+		// Against the cap the bridge will use: the bridge's default when
+		// the cap is unset, not the smallest cap a configuration may set.
+		// A bound under it would pass here and then drop every export larger
+		// than the bound as too large for the whole queue.
+		effectiveMessageBytes := messageBytes
+		if effectiveMessageBytes == 0 {
+			effectiveMessageBytes = otlpbridge.DefaultMaxMessageBytes
+		}
+		if pendingBytes < int64(effectiveMessageBytes) {
+			return 0, 0, fmt.Errorf("otlp_bridge_max_pending_bytes %d must hold at least one message at the cap of %d bytes: %d or more",
+				pendingBytes, effectiveMessageBytes, effectiveMessageBytes)
 		}
 	}
 	return messageBytes, pendingBytes, nil

@@ -339,7 +339,7 @@ func TestGRPC_AnExportPastTheDefaultReceiveLimitIsAcceptedAndSplit(t *testing.T)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return len(pub.published()) >= 2 }, 10*time.Second, 20*time.Millisecond)
 	for _, m := range pub.published() {
-		assert.LessOrEqual(t, len(m.payload), defaultMaxMessageBytes)
+		assert.LessOrEqual(t, len(m.payload), DefaultMaxMessageBytes)
 	}
 }
 

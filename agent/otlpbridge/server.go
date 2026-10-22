@@ -117,7 +117,7 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 	}
 	maxMessageBytes := cfg.MaxMessageBytes
 	if maxMessageBytes <= 0 {
-		maxMessageBytes = defaultMaxMessageBytes
+		maxMessageBytes = DefaultMaxMessageBytes
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &BridgeServer{

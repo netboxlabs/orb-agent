@@ -5,11 +5,14 @@ import (
 )
 
 const (
-	// defaultMaxMessageBytes caps one published payload. An export over it is
-	// split (metrics) or dropped (logs, traces). Four MiB keeps every message
-	// well under RabbitMQ's 16 MiB default maximum and gives the telemetry
-	// enricher bodies it can hold several of at once.
-	defaultMaxMessageBytes = 4 << 20
+	// DefaultMaxMessageBytes caps one published payload when
+	// BridgeConfig.MaxMessageBytes is unset. An export over it is split
+	// (metrics) or dropped (logs, traces). Four MiB keeps every message well
+	// under RabbitMQ's 16 MiB default maximum and gives the telemetry
+	// enricher bodies it can hold several of at once. Exported so the agent's
+	// configuration checks its queue bound against the cap the bridge will
+	// actually use.
+	DefaultMaxMessageBytes = 4 << 20
 	// defaultMaxPendingBytes bounds the payload bytes the pending queue holds
 	// before the broker is ready or while it is slow, so a burst of large
 	// exports cannot grow the agent's memory without limit. Sixteen messages
