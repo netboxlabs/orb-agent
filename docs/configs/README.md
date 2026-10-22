@@ -13,7 +13,6 @@ orb:
 |:--|:--|:--|
 | [Local](local.md) | `local` | Policies are read from `orb.policies` in the config file itself. Nothing external is contacted, and no credentials are needed. |
 | [Git](git.md) | `git` | Policies are fetched from a Git repository and re-synced on a schedule, so they can be changed without touching the agent host. |
-| [Fleet](fleet.md) | `fleet` | Policies come from Fleet, NetBox Labs' cloud control plane, over the agent's MQTT connection, which also carries the telemetry its backends export. |
 
 Only policies come from the selected source. The `config_manager` and `backends`
 sections are always read from the file at startup, including under `git`, so
