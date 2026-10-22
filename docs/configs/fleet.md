@@ -24,7 +24,10 @@ Diode data to the ingest topic. Both listeners are unauthenticated, so they bind
 to the loopback address unless told otherwise. Each accepts requests of up to
 64 MiB from whoever can reach it (see [Message size](#message-size)), so expose
 them with `otlp_bridge_bind_host` only on a network where every host that can
-reach the ports is trusted to send the agent telemetry.
+reach the ports is trusted to send the agent telemetry. The bridge does not limit
+how many connections a client opens or how often it sends (the HTTP listener only
+times out slow requests), so put a firewall or proxy that limits both in front of
+an exposed listener.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
