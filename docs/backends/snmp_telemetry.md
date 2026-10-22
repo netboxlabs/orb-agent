@@ -18,7 +18,7 @@ orb:
       port: 8078                         # default 8078
       log_level: INFO                    # default INFO (DEBUG, INFO, WARN, ERROR)
       log_format: TEXT                   # default TEXT (TEXT, JSON)
-      otel_export_period: 10             # seconds between exports, default 10
+      otel_export_period: 10             # seconds between checks for newly polled values, default 10
       policy_env_vars: [SNMP_COMMUNITY]  # unset by default: every ${NAME} reference in a policy is refused
       # Both directories must exist; the image creates neither, so they are shown commented out.
       # snmp_profiles_root: /opt/orb/profiles   # unset by default: every per-policy profiles_dir is refused
@@ -31,7 +31,7 @@ orb:
 | port | int | 8078 | Port of the backend's API, 1 to 65535. |
 | log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
 | log_format | str | `TEXT` | `TEXT` or `JSON`; any other value is refused. |
-| otel_export_period | int | 10 | Seconds between OTLP exports, 1 to 31536000. |
+| otel_export_period | int | 10 | Seconds between checks for newly polled values to export, 1 to 31536000: the longest a poll's values wait before they are sent. Each poll is exported once; see [When metrics are exported](#when-metrics-are-exported). |
 | policy_env_vars | str or list | unset | Environment variable names a policy may read through `${NAME}` in `community`, `username`, `auth_passphrase` or `priv_passphrase`. A comma-separated string or a list of names, never `${...}` references. Unset refuses every reference. |
 | snmp_profiles_root | str | unset | Directory a policy's own `profiles_dir` must resolve inside. Unset refuses every per-policy `profiles_dir`. |
 | snmp_profiles_dir | str | unset | Directory of profile YAML files overlaid on the bundled profiles. |
@@ -104,6 +104,24 @@ Tag values read from an OCTET STRING are rendered as valid UTF-8 before export, 
 - Anything else, such as a MAC read without a `hwaddr` conversion or text that is not UTF-8, reads as the colon-separated hex of its bytes: `00:1b:21:bb:e6:f0`, the same value `hwaddr` gives for a MAC.
 
 `snmp.invalid_utf8_repaired{attribute}` counts any string the exporter still had to repair, which should stay at zero. The rules are in the backend README under [SNMP Profiles](../../orb-telemetry/snmp-telemetry/README.md#snmp-profiles).
+
+## When metrics are exported
+Each poll's values are exported once, by the first export after the poll. `otel_export_period` is how often the backend checks for newly polled values, so it is the longest a poll's values wait before they leave, not how often they are sent. At `metrics_interval: 60` a device is exported once a minute and the backend downstream stores one sample per series per poll; policies on different intervals in one backend each export once per poll.
+
+- A declaration throttled by `poll_time_sec` leaves with every poll, from the reading it kept, so every series of a device has one sample per poll.
+- A run that fails or is cut short exports nothing: the device's earlier values are not sent again as if they were current.
+- An export that would carry no policy's values, only the backend's own counters (`snmp.traps_datagrams`, `snmp.traps_dropped`, `snmp.invalid_utf8_repaired`), is sent at most once a minute. The counters are cumulative, so the next export carries their totals.
+- Trap counts are not polled: `snmp.traps_received` is exported at every check while a policy holds it, as before.
+- A poll whose export still fails after the OTLP exporter's own retries is not sent again.
+- With a `metrics_interval` of five minutes or more, samples are as far apart as Prometheus' default five-minute lookback, so a panel showing the latest value can show gaps between polls. Query such a policy's series with a range at least one interval wide, such as `last_over_time(metric[6m])` at `metrics_interval: 300`.
+
+Why this way. The backend used to export every `otel_export_period` whatever the interval, re-sending each stored value, and every export stamps a value with the time it is collected, so each poll was stored `metrics_interval / otel_export_period` times, six at the defaults: six times the broker traffic, the platform's processing and the samples stored downstream. Of the ways to send a poll once:
+
+- An export period tied to `metrics_interval` cannot serve two policies on different intervals in one backend, and a poll that drifts against the export tick is still sent twice or not at all.
+- An export right after each poll sends one export per device per poll, since each target is polled as its own job: a policy over a /24 would send about 254 exports a minute instead of 6.
+- Delta temporality changes how counters and histograms report, not gauges, and every polled value is a gauge whose callback reads the stored value again at every export, so the repeats would stay.
+
+So the backend keeps one periodic export and hands each poll's values to it once.
 
 ## Traps and the container
 The trap socket is the one listener in the backend that must be reachable from the device network. With `--net=host` the port a policy's `listen` names is already exposed. In bridge mode publish it, `-p 162:162/udp` for a policy listening on 162. The container runs as root by default, the image sets no other user, so binding a port below 1024 inside it needs no capability.

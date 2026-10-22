@@ -21,6 +21,22 @@ name exported under it, for the life of the process with no eviction: memory
 grows with how many distinct policy names the process has ever seen, not how
 many are active, and only a restart clears it.
 
+Each poll's values are exported once, by the first export after the poll. The
+backend checks for newly polled values every `--otel-export-period` (10
+seconds by default), so the period is the longest a poll's values wait before
+they are sent, not how often they are sent: at `metrics_interval: 60` a device
+is exported once a minute, not six times with a new timestamp each time, which
+would store six samples of every reading downstream. A declaration throttled
+by `poll_time_sec` leaves with each poll from the reading it kept, so every
+series of a device has one sample per poll. A run that fails or is cut short
+exports nothing, rather than its device's previous values again. A check that
+finds no policy's values to send, only the process's own counters (trap
+datagrams and drops, UTF-8 repairs), sends an export at most once a minute; the
+counters are cumulative, so the next export carries their totals. Trap counts
+are not polled and keep being exported at every check while a policy holds
+them. A poll whose export still fails after the OTLP exporter's own retries is
+not sent again by a later one.
+
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
 `https://collector.example.com:4317`). Both forms dial the given address.
@@ -45,7 +61,7 @@ Usage of snmp-telemetry:
   -otel-endpoint string
     	OpenTelemetry exporter endpoint (e.g. localhost:4317). Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})
   -otel-export-period int
-    	period in seconds between OpenTelemetry exports, from 1 to 31536000 (one year) (default 10)
+    	seconds between checks for newly polled values to export, from 1 to 31536000 (one year); each poll's values are exported once, by the first check after the poll (default 10)
   -policy-env-vars string
     	comma-separated environment variable names a policy may read through a ${NAME} reference in community, username, auth_passphrase or priv_passphrase. Empty, the default, rejects every reference.
   -port int

@@ -23,17 +23,20 @@ func testReader(t *testing.T) *sdkmetric.ManualReader {
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader), sdkmetric.WithCardinalityLimit(metrics.CardinalityLimit))
 	metrics.SetMeterProviderForTest(provider)
 	t.Cleanup(metrics.ResetMeter)
+	t.Cleanup(func() { forgetExported(reader) })
 	return reader
 }
 
+// collect runs one collection and returns what it exported by name, the
+// scopes flattened, which is right for a single-policy test. A series is in
+// it only when an update set it since the collection before; exported reads
+// everything exported so far.
 func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata.Metrics {
 	t.Helper()
-	var rm metricdata.ResourceMetrics
-	require.NoError(t, reader.Collect(context.Background(), &rm))
 	out := map[string]metricdata.Metrics{}
-	for _, sm := range rm.ScopeMetrics {
-		for _, m := range sm.Metrics {
-			out[m.Name] = m
+	for _, metrics := range collectByPolicy(t, reader) {
+		for name, m := range metrics {
+			out[name] = m
 		}
 	}
 	return out
@@ -41,8 +44,8 @@ func collect(t *testing.T, reader *sdkmetric.ManualReader) map[string]metricdata
 
 // collectByPolicy runs one collection and indexes metrics by the policy_name
 // of the scope they were exported under ("" for the process scope), then by
-// name. collect flattens scopes, which is right for a single-policy test;
-// this is for tests that care which scope a series left under.
+// name, for tests that care which scope a series left under. Every
+// collection is recorded in the reader's log (exportedByPolicy).
 func collectByPolicy(t *testing.T, reader *sdkmetric.ManualReader) map[string]map[string]metricdata.Metrics {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
@@ -60,6 +63,7 @@ func collectByPolicy(t *testing.T, reader *sdkmetric.ManualReader) map[string]ma
 			out[policy][m.Name] = m
 		}
 	}
+	record(reader, out)
 	return out
 }
 
@@ -212,7 +216,7 @@ func TestExporterObservesStoreAsCounterAndGauge(t *testing.T) {
 	require.Len(t, g.DataPoints, 1)
 	assert.Equal(t, 1.0, g.DataPoints[0].Value)
 
-	byPolicy := collectByPolicy(t, reader)
+	byPolicy := exportedByPolicy(t, reader)
 	_, inScope := byPolicy["p"]["gnmi.if_in_octets"]
 	assert.True(t, inScope, "the series left under its policy's scope")
 	_, hasPolicy := sum.DataPoints[0].Attributes.Value("policy")
@@ -266,6 +270,11 @@ func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
 	e.store.forgetPolicy("core")
 	e.forgetPolicy("core")
 
+	// edge's value is sent again, so a collection would carry it if its
+	// callback were still registered; core's is too, so one would carry it
+	// if its callback were.
+	require.Empty(t, e.observeGauge("edge", "cpu", "%", attrs, 2, time.Now().UnixNano(), age))
+	e.store.setGauge(seriesKey{metric: "cpu", policy: "core", attrs: attrKey(attrs)}, 1, time.Now().UnixNano(), age, attrs)
 	byPolicy := collectByPolicy(t, reader)
 	_, coreLeft := byPolicy["core"]["gnmi.cpu"]
 	assert.False(t, coreLeft, "a forgotten policy exports nothing")
@@ -277,6 +286,7 @@ func TestExporterForgetPolicyStopsThatPolicysExport(t *testing.T) {
 	e.mu.Unlock()
 	assert.False(t, stillKeyed)
 	assert.False(t, regsLeft)
+	e.store.forgetPolicy("core")
 
 	require.Empty(t, e.observeGauge("core", "cpu", "%", attrs, 3, time.Now().UnixNano(), age))
 	byPolicy = collectByPolicy(t, reader)

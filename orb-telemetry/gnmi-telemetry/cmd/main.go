@@ -106,7 +106,8 @@ func main() {
 	otelEndpoint := flag.String("otel-endpoint", "", "OpenTelemetry exporter endpoint (e.g. localhost:4317)."+
 		" Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})")
 	otelExportPeriod := flag.Int("otel-export-period", 10,
-		fmt.Sprintf("period in seconds between OpenTelemetry exports, from 1 to %d (one year)",
+		fmt.Sprintf("seconds between checks for new values to export, from 1 to %d (one year); "+
+			"each update is exported once, by the first check after it arrives",
 			config.MaxDurationSeconds))
 	profilesDirFlag := flag.String("profiles-dir", "",
 		"directory of metric profile YAML files overlaid on the profiles bundled into the "+

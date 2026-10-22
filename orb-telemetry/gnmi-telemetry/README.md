@@ -43,7 +43,7 @@ Usage of gnmi-telemetry:
   -otel-endpoint string
     	OpenTelemetry exporter endpoint (e.g. localhost:4317). Environment variable can be used by wrapping it in ${} (e.g. ${OTEL_ENDPOINT})
   -otel-export-period int
-    	period in seconds between OpenTelemetry exports, from 1 to 31536000 (one year) (default 10)
+    	seconds between checks for new values to export, from 1 to 31536000 (one year); each update is exported once, by the first check after it arrives (default 10)
   -policy-env-vars string
     	comma-separated environment variable names a policy may read through a ${NAME} reference in username, password or a tls file path. Empty, the default, rejects every reference.
   -port int
@@ -349,12 +349,22 @@ that entry names, and one carrying `bool: true` maps true to 1 and false to 0. A
 value that fits none of those, such as an unmapped string, is dropped and
 counted rather than exported as a zero.
 
-Export runs on `--otel-export-period` (10 seconds by default), independently of
-the sample cadence. What is exported is the last value of each series, whenever
-it arrived: a 30 second SAMPLE subscription read every 10 seconds repeats a
-value twice, and an ON_CHANGE leaf that changed three times between exports
-reports the last of the three. The device timestamp is not exported, because the
-SDK stamps an observation at collection time.
+Each update is exported once, by the first export after it arrives. The
+backend checks for new values every `--otel-export-period` (10 seconds by
+default), so the period is the longest an update waits before it is sent, not
+how often a value is sent: a 30 second SAMPLE subscription is exported every 30
+seconds, each sample once, rather than at every check with a new timestamp,
+which would store three samples of each reading downstream. An ON_CHANGE leaf
+that changed three times between two checks reports the last of the three. A
+leaf the device streams on change is sent again once per `metrics_interval`
+while its value holds, because the device sends nothing until it changes and
+the series would otherwise go quiet downstream; `gnmi.target_up` is sent when it
+changes and otherwise once per `metrics_interval` too. A check that finds none
+of a policy's series to send, only the process's health counters, sends an
+export at most once a minute; the counters are cumulative, so the next export
+carries their totals. An update whose export still fails after the OTLP
+exporter's own retries is not sent again by a later one. The device timestamp
+is not exported, because the SDK stamps an observation at collection time.
 
 Staleness is what keeps a quiet device from reporting a stale value as current.
 A SAMPLE or Get series is withheld from export and dropped from the store when

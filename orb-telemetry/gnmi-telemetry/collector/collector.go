@@ -79,8 +79,29 @@ type loop struct {
 	// callback reading them holds too, so neither joins the status lock below.
 	upSlot   bool
 	upWarned bool
+	// upSent is the target_up value last exported and when, and interval the
+	// policy's metrics_interval: the gauge is exported when its value
+	// changes, and otherwise once per interval, like a series the device
+	// streams on change. Guarded by loopsMu as upSlot is.
+	upSent   upSample
+	interval time.Duration
 	mu       sync.Mutex
 	status   TargetStatus
+}
+
+// upSample is one exported target_up point. The zero value is none yet.
+type upSample struct {
+	at    time.Time
+	value int64
+	mode  string
+}
+
+// upDue reports whether target_up's point, value under mode, is due for
+// export at now: never exported, changed since, or last exported an interval
+// ago.
+func (l *loop) upDue(value int64, mode string, now time.Time) bool {
+	last := l.upSent
+	return last.at.IsZero() || last.value != value || last.mode != mode || now.Sub(last.at) >= l.interval
 }
 
 func (l *loop) update(fn func(*TargetStatus)) {
@@ -167,7 +188,9 @@ const targetUpSeries = metrics.TargetUp
 // poll, 0 while it reconnects. A collector built before the meter exists
 // registers nothing and keeps nothing, so the first target that arrives with
 // a meter registers the gauge. The callback observes only that policy's
-// loops, with device_ip and mode: the policy is the scope's.
+// loops, with device_ip and mode: the policy is the scope's. A loop's point
+// is observed when it changes and otherwise once per metrics_interval
+// (upDue), not on every export.
 func (c *Collector) ensureTargetUp(policyName string) {
 	m := metrics.PolicyMeter(policyName)
 	if m == nil {
@@ -205,9 +228,14 @@ func (c *Collector) ensureTargetUp(policyName string) {
 			if s.Up {
 				v = 1
 			}
+			now := time.Now()
+			if !l.upDue(v, s.Mode, now) {
+				continue
+			}
 			o.ObserveInt64(inst, v, metric.WithAttributes(
 				attribute.String("device_ip", k.host), attribute.String("mode", s.Mode),
 			))
+			l.upSent = upSample{at: now, value: v, mode: s.Mode}
 		}
 		return nil
 	}, inst)
@@ -246,9 +274,10 @@ func (c *Collector) CollectTarget(ctx context.Context, target config.Target, opt
 		return fmt.Errorf("mode %q is not auto, on_change or sample", opts.Mode)
 	}
 	c.ensureTargetUp(opts.PolicyName)
+	c.store.setResend(opts.PolicyName, opts.MetricsInterval)
 	k := loopKey{opts.PolicyName, target.Host}
 	loopCtx, cancel := context.WithCancel(ctx)
-	l := &loop{cancel: cancel, done: make(chan struct{}), status: TargetStatus{Host: target.Host}}
+	l := &loop{cancel: cancel, done: make(chan struct{}), status: TargetStatus{Host: target.Host}, interval: opts.MetricsInterval}
 	c.loopsMu.Lock()
 	if c.closed {
 		c.loopsMu.Unlock()

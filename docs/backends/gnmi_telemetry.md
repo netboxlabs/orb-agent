@@ -18,7 +18,7 @@ orb:
       port: 8079                         # default 8079
       log_level: INFO                    # default INFO (DEBUG, INFO, WARN, ERROR)
       log_format: TEXT                   # default TEXT (TEXT, JSON)
-      otel_export_period: 10             # seconds between exports, default 10
+      otel_export_period: 10             # seconds between checks for new values, default 10
       policy_env_vars: [GNMI_PASSWORD]   # unset by default: every ${NAME} reference in a policy is refused
       # Both directories must exist; the image creates neither, so they are shown commented out.
       # profiles_root: /opt/orb/profiles   # unset by default: every per-policy profiles_dir is refused
@@ -31,7 +31,7 @@ orb:
 | port | int | 8079 | Port of the backend's API, 1 to 65535. |
 | log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
 | log_format | str | `TEXT` | `TEXT` or `JSON`; any other value is refused. |
-| otel_export_period | int | 10 | Seconds between OTLP exports, 1 to 31536000. |
+| otel_export_period | int | 10 | Seconds between checks for new values to export, 1 to 31536000: the longest an update waits before it is sent. Each update is exported once; see [When metrics are exported](#when-metrics-are-exported). |
 | policy_env_vars | str or list | unset | Environment variable names a policy may read through `${NAME}` in `username`, `password` or a `tls` file path. A comma-separated string or a list of names, never `${...}` references. Unset refuses every reference. |
 | profiles_root | str | unset | Directory a policy's own `profiles_dir` must resolve inside. Unset refuses every per-policy `profiles_dir`. |
 | profiles_dir | str | unset | Directory of metric profile YAML files overlaid on the bundled profiles; a file replaces the bundled profile of the same name. |
@@ -72,6 +72,23 @@ The full parameter tables are in the backend README under [Policy Configuration]
 ## Metrics
 Every metric name comes from the profile: a profile metric named `if_in_octets` is exported as `gnmi.if_in_octets`, so the names a policy produces are known before it runs. Every series is exported under an instrumentation scope carrying `policy_name`, one scope per policy, and carries `device_ip`, plus `netbox_id` when the target sets `id`, and whatever path keys the profile promotes, such as `interface_name`. A profile metric of type `counter` is exported as a cumulative total and one of type `gauge` as a gauge; an enumerated or boolean leaf is mapped to the integer the profile names.
 
-Export runs on `otel_export_period`, independently of the sample cadence, and carries the last value of each series. A SAMPLE or Get series that receives no update for three `metrics_interval`s is withheld and dropped until the device sends the leaf again; an ON_CHANGE series keeps its last value until the device deletes the element, the stream's next initial dump omits it, or the policy stops.
+A SAMPLE or Get series that receives no update for three `metrics_interval`s is withheld and dropped until the device sends the leaf again; an ON_CHANGE series keeps its last value until the device deletes the element, the stream's next initial dump omits it, or the policy stops.
 
 Seven metrics describe the backend itself, among them `gnmi.target_up{device_ip, mode}`, `gnmi.updates_dropped_total{reason}` and `gnmi.mode_fallback_total`; they are listed under [Metrics](../../orb-telemetry/gnmi-telemetry/README.md#metrics), and the profile format under [Metric Profiles](../../orb-telemetry/gnmi-telemetry/README.md#metric-profiles).
+
+## When metrics are exported
+Each update is exported once, by the first export after it arrives. `otel_export_period` is how often the backend checks for new values, so it is the longest an update waits before it leaves, not how often a value is sent. A SAMPLE subscription or Get poll at `metrics_interval: 30` is exported every 30 seconds, one sample per series per update; policies on different intervals in one backend each export once per update.
+
+- A leaf the device streams on change is sent when it changes and, while its value holds, again once per `metrics_interval`: the device sends nothing until it changes, and the series would otherwise go quiet downstream. `gnmi.target_up` is sent the same way.
+- An export that would carry no policy's values, only the backend's own counters (`gnmi.updates_dropped_total`, `gnmi.mode_fallback_total` and the rest), is sent at most once a minute. The counters are cumulative, so the next export carries their totals.
+- An update whose export still fails after the OTLP exporter's own retries is not sent again.
+- With a `metrics_interval` of five minutes or more, samples are as far apart as Prometheus' default five-minute lookback, so a panel showing the latest value can show gaps between updates. Query such a policy's series with a range at least one interval wide, such as `last_over_time(metric[6m])` at `metrics_interval: 300`.
+
+Why this way. The backend used to export every `otel_export_period` whatever the cadence, re-sending the last value of each series, and every export stamps a value with the time it is collected, so a 30 second sample was stored three times at the defaults, and a 60 second one six: that many times the broker traffic, the platform's processing and the samples stored downstream. Of the ways to send an update once:
+
+- An export period tied to `metrics_interval` cannot serve two policies on different intervals in one backend, and an update that drifts against the export tick is still sent twice or not at all.
+- An export right after each update would send one export per notification, and a device streams its subscriptions as many notifications.
+- Delta temporality changes how counters report, not gauges, and the gauges' callbacks read the stored value again at every export, so the repeats would stay.
+
+So the backend keeps one periodic export and hands each update to it once.
+

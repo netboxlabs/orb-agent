@@ -38,16 +38,20 @@ func attrKey(attrs []attribute.KeyValue) string {
 
 // point is a series' last value: i for counters, f for gauges, the local time
 // the update that set it arrived, the age past which it is withheld from
-// export, and how many resets were seen. Its policy is not stored here: it is
-// a field of the key that reaches every function taking a point, and keeping
-// it out of the point as well is one fewer place for it to drift from the key.
+// export, and how many resets were seen. pending is whether no collection has
+// exported the value since it arrived, and sentAt when one last did. Its
+// policy is not stored here: it is a field of the key that reaches every
+// function taking a point, and keeping it out of the point as well is one
+// fewer place for it to drift from the key.
 type point struct {
-	i      int64
-	f      float64
-	ts     int64
-	maxAge time.Duration
-	resets int
-	attrs  []attribute.KeyValue
+	i       int64
+	f       float64
+	ts      int64
+	maxAge  time.Duration
+	resets  int
+	attrs   []attribute.KeyValue
+	pending bool
+	sentAt  int64
 }
 
 // store keeps the last value per series, bounded per metric name by a budget.
@@ -64,11 +68,16 @@ type point struct {
 // metric directly instead of scanning every series the store holds. It is
 // maintained everywhere a series is inserted into or removed from series, and
 // remove is the one place that keeps the two in step.
+//
+// resend is, per policy, its metrics_interval: how often exportDue sends again
+// the last value of a series the device streams on change, which no update
+// refreshes while the value holds.
 type store struct {
 	mu     sync.RWMutex
 	budget *Budget
 	series map[seriesKey]*point
 	index  map[string]map[string]map[seriesKey]*point
+	resend map[string]time.Duration
 }
 
 // newStore gives one store a budget of its own. A collector sharing the
@@ -82,7 +91,16 @@ func newStoreOn(budget *Budget) *store {
 		budget: budget,
 		series: map[seriesKey]*point{},
 		index:  map[string]map[string]map[seriesKey]*point{},
+		resend: map[string]time.Duration{},
 	}
+}
+
+// setResend records the policy's metrics_interval, the period at which
+// exportDue sends again the value of a series with no age.
+func (s *store) setResend(policy string, every time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resend[policy] = every
 }
 
 // setCounter records a cumulative value at its arrival time; a value below
@@ -117,6 +135,7 @@ func (s *store) set(k seriesKey, ts int64, maxAge time.Duration, attrs []attribu
 	apply(pt, fresh)
 	pt.ts = ts
 	pt.maxAge = maxAge
+	pt.pending = true
 	return true
 }
 
@@ -165,27 +184,43 @@ func (s *store) remove(k seriesKey) {
 	s.budget.release(k.metric)
 }
 
-// forEach visits every series of one metric and one policy whose last update
-// arrived within its own maxAge of now, reading the policy index rather than
-// scanning every series the store holds: a callback runs once per (policy,
-// metric) instrument, so without the index a collection over many policies
-// and metric names would cost their product times every series in the store.
-// A series with no age is never withheld, which is how a leaf the device
-// streams on change keeps its last value until the device deletes it. A
-// series past its age is dropped as it is withheld, in the same pass:
+// exportDue visits the series of one metric and one policy that are due for
+// export at now, and marks them exported. It reads the policy index rather
+// than scanning every series the store holds: a callback runs once per
+// (policy, metric) instrument, so without the index a collection over many
+// policies and metric names would cost their product times every series in
+// the store.
+//
+// A series is due when an update has set it since a collection last exported
+// it, so each update leaves once, by the first export after it, rather than
+// on every export until the next update, each time with a new timestamp. A
+// series with no age, a leaf the device streams on change, is due as well
+// once its policy's metrics_interval has passed since it was last exported:
+// the device sends nothing while the value holds, and the value it holds
+// stays current downstream only if it is sent at the interval the policy
+// asked for. It keeps its last value until the device deletes it.
+//
+// A series past its age is dropped as it is withheld, in the same pass:
 // withholding it alone would leave it holding a slot of the metric's bound
 // forever, and a device that renamed its interfaces would eventually refuse
 // every new series. Deleting during the range is defined behaviour in Go, and
 // the write lock is held for it; visit must not call back into the store.
-func (s *store) forEach(metric, policy string, now time.Time, visit func(seriesKey, point)) {
+func (s *store) exportDue(metric, policy string, now time.Time, visit func(seriesKey, point)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	every := s.resend[policy]
+	at := now.UnixNano()
 	for k, pt := range s.index[policy][metric] {
 		if pt.maxAge > 0 && pt.ts < now.Add(-pt.maxAge).UnixNano() {
 			s.remove(k)
 			continue
 		}
+		if !pt.pending && (pt.maxAge > 0 || every <= 0 || at-pt.sentAt < int64(every)) {
+			continue
+		}
 		visit(k, *pt)
+		pt.pending = false
+		pt.sentAt = at
 	}
 }
 
@@ -200,6 +235,7 @@ func (s *store) forgetPolicy(policy string) {
 		}
 	}
 	delete(s.index, policy)
+	delete(s.resend, policy)
 }
 
 // releaseAll withdraws every series the store holds and returns each one's
@@ -216,6 +252,7 @@ func (s *store) releaseAll() {
 	}
 	s.series = map[seriesKey]*point{}
 	s.index = map[string]map[string]map[seriesKey]*point{}
+	s.resend = map[string]time.Duration{}
 }
 
 // deleteMatching withdraws every series of one of the named metrics that
