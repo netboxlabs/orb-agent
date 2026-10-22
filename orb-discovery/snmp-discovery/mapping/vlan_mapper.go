@@ -318,7 +318,8 @@ func applyVLANDefaults(v *diode.VLAN, defaults *config.Defaults) {
 	}
 	if vd.Group.Name != "" {
 		name := vd.Group.Name
-		group := &diode.VLANGroup{Name: &name, Slug: toSlug(&name)}
+		slug := config.Slug(name)
+		group := &diode.VLANGroup{Name: &name, Slug: &slug}
 		setVLANGroupScope(group, vd.Group, defaults.Site)
 		v.Group = group
 	}
