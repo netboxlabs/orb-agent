@@ -9,6 +9,8 @@ import (
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -46,14 +48,39 @@ func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTrac
 		}
 	}
 
-	payload, err := s.bridge.enc.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.bridge.Enqueue(ctx, isIngestRequest(resources), payload, s.bridge.enc.ContentType()); err != nil {
+	if err := s.bridge.exportWhole(ctx, signalTraces, isIngestRequest(resources), req); err != nil {
 		return nil, err
 	}
 	return &collectortrace.ExportTraceServiceResponse{}, nil
+}
+
+// exportWhole publishes a logs or traces export as one message in the ingest
+// encoding. One over the message cap is dropped and counted, and the client
+// is told with InvalidArgument, which the OTLP exporters do not retry: the
+// same export would be over the cap again.
+func (s *BridgeServer) exportWhole(ctx context.Context, signal string, isIngest bool, req ProtoMessage) error {
+	payload, err := s.enc.Marshal(req)
+	if err != nil {
+		return err
+	}
+	contentType := s.enc.ContentType()
+	if limit := s.messageCap(s.topicFor(isIngest), contentType); len(payload) > limit {
+		s.dropped.add(signal, reasonTooLarge, 1)
+		s.logger.Warn("OTLP export exceeds the message cap, dropping it", "signal", signal, "bytes", len(payload), "cap", limit)
+		return status.Errorf(codes.InvalidArgument, "%s export of %d bytes exceeds the bridge's message cap of %d bytes; dropped", signal, len(payload), limit)
+	}
+	return s.enqueue(ctx, signal, isIngest, [][]byte{payload}, contentType)
+}
+
+// topicFor is the topic an export goes to: the ingest topic for Diode
+// data, the telemetry topic otherwise. Empty before the connection is up.
+func (s *BridgeServer) topicFor(isIngest bool) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if isIngest {
+		return s.ingestTopic
+	}
+	return s.telemetryTopic
 }
 
 // Metrics service handler
@@ -83,12 +110,38 @@ func (s *metricsServer) Export(ctx context.Context, req *collectormetrics.Export
 	if isIngest {
 		enc = s.bridge.enc
 	}
-	payload, err := enc.Marshal(req)
+	if !isIngest {
+		// The bridge's own drop counts ride with the agent's metrics.
+		s.bridge.dropped.appendTo(req)
+	}
+	// An export is published in messages under the cap, each carrying the
+	// resource and the scope of every point in it; a single point that
+	// cannot fit is dropped and counted rather than sent to fail.
+	contentType := enc.ContentType()
+	limit := s.bridge.messageCap(s.bridge.topicFor(isIngest), contentType)
+	if limit == 0 {
+		// The broker's maximum packet size leaves no room for a payload: no
+		// piece of the export could be sent, so it is dropped and counted
+		// once rather than point by point.
+		s.bridge.dropped.add(signalMetrics, reasonTooLarge, 1)
+		s.bridge.logger.Warn("the broker's maximum packet size leaves no room for an OTLP payload, dropping the metrics export",
+			"broker_max_packet_size", s.bridge.BrokerMaxPacketSize())
+		return nil, status.Error(codes.InvalidArgument, "the broker's maximum packet size leaves no room for a metrics export; dropped")
+	}
+	payloads, dropped, err := splitMetrics(req, enc, limit)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.bridge.Enqueue(ctx, isIngest, payload, enc.ContentType()); err != nil {
+	if err := s.bridge.enqueue(ctx, signalMetrics, isIngest, payloads, contentType); err != nil {
+		// Refused while the queue is full, the export is sent again whole, so
+		// a point left out of it is counted by the attempt that is accepted,
+		// not by every attempt. Refused for good, the export was counted once.
 		return nil, err
+	}
+	for _, d := range dropped {
+		s.bridge.dropped.add(signalMetrics, reasonTooLarge, 1)
+		s.bridge.logger.Warn("OTLP metric data point exceeds the message cap on its own, dropping it",
+			"metric", d.Metric, "bytes", d.Bytes, "cap", limit)
 	}
 	return &collectormetrics.ExportMetricsServiceResponse{}, nil
 }
@@ -107,11 +160,7 @@ func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsSe
 		s.bridge.logger.Debug("ingesting enriched logs with dataset_ids", "request", req)
 	}
 
-	payload, err := s.bridge.enc.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.bridge.Enqueue(ctx, isIngest, payload, s.bridge.enc.ContentType()); err != nil {
+	if err := s.bridge.exportWhole(ctx, signalLogs, isIngest, req); err != nil {
 		return nil, err
 	}
 	return &collectorlogs.ExportLogsServiceResponse{}, nil

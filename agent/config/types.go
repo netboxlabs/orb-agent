@@ -54,17 +54,19 @@ type GitManager struct {
 
 // FleetManager represents the Fleet ConfigManager configuration.
 type FleetManager struct {
-	URL                      string `yaml:"url"`
-	TokenURL                 string `yaml:"token_url"`
-	Timeout                  *int   `yaml:"timeout,omitempty"`
-	SkipTLS                  bool   `yaml:"skip_tls"`
-	ClientID                 string `yaml:"client_id"`
-	ClientSecret             string `yaml:"client_secret"`
-	TokenExpiryCheckInterval *int   `yaml:"token_expiry_check_interval,omitempty"` // Check interval in seconds (default: 30)
-	TokenReconnectBuffer     *int   `yaml:"token_reconnect_buffer,omitempty"`      // Reconnect buffer in seconds before expiry (default: 120)
-	OTLPBridgeGRPCPort       *int   `yaml:"otlp_bridge_grpc_port,omitempty"`       // GRPC port for the OTLP bridge (default: 4317)
-	OTLPBridgeHTTPPort       *int   `yaml:"otlp_bridge_http_port,omitempty"`       // HTTP port for the OTLP bridge (default: 4318)
-	OTLPBridgeBindHost       string `yaml:"otlp_bridge_bind_host,omitempty"`       // Host both bridge listeners bind to (default: localhost; set 0.0.0.0 or :: to expose them)
+	URL                       string `yaml:"url"`
+	TokenURL                  string `yaml:"token_url"`
+	Timeout                   *int   `yaml:"timeout,omitempty"`
+	SkipTLS                   bool   `yaml:"skip_tls"`
+	ClientID                  string `yaml:"client_id"`
+	ClientSecret              string `yaml:"client_secret"`
+	TokenExpiryCheckInterval  *int   `yaml:"token_expiry_check_interval,omitempty"`   // Check interval in seconds (default: 30)
+	TokenReconnectBuffer      *int   `yaml:"token_reconnect_buffer,omitempty"`        // Reconnect buffer in seconds before expiry (default: 120)
+	OTLPBridgeGRPCPort        *int   `yaml:"otlp_bridge_grpc_port,omitempty"`         // GRPC port for the OTLP bridge (default: 4317)
+	OTLPBridgeHTTPPort        *int   `yaml:"otlp_bridge_http_port,omitempty"`         // HTTP port for the OTLP bridge (default: 4318)
+	OTLPBridgeBindHost        string `yaml:"otlp_bridge_bind_host,omitempty"`         // Host both bridge listeners bind to (default: localhost; set 0.0.0.0 or :: to expose them)
+	OTLPBridgeMaxMessageBytes *int   `yaml:"otlp_bridge_max_message_bytes,omitempty"` // Cap on one published MQTT payload; larger metrics exports are split (default: 4 MiB)
+	OTLPBridgeMaxPendingBytes *int   `yaml:"otlp_bridge_max_pending_bytes,omitempty"` // Bound on the payload bytes the bridge queues before MQTT is ready (default: 64 MiB)
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.

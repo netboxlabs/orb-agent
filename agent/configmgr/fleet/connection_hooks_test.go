@@ -48,6 +48,24 @@ func TestAddOnReadyHook_RegistersHook(t *testing.T) {
 	}
 }
 
+// A lost connection runs every down hook, in order, before onConnectionDown
+// returns to the client, and the client keeps reconnecting.
+func TestOnConnectionDown_RunsTheDownHooksBeforeTheClientReconnects(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	conn := NewMQTTConnection(logger, noopPM{}, make(chan struct{}, 1), make(chan struct{}, 1), noopBackendState{}, nil)
+
+	var ran []int
+	conn.AddOnDownHook(func() { ran = append(ran, 1) })
+	conn.AddOnDownHook(func() { ran = append(ran, 2) })
+
+	if !conn.onConnectionDown() {
+		t.Fatal("onConnectionDown stopped the client reconnecting")
+	}
+	if len(ran) != 2 || ran[0] != 1 || ran[1] != 2 {
+		t.Fatalf("down hooks ran %v, want [1 2]", ran)
+	}
+}
+
 func TestConnect_StoresTopicsBeforeConnecting(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	reset := make(chan struct{}, 1)

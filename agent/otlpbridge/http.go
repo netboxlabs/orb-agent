@@ -22,9 +22,10 @@ import (
 
 const (
 	// maxHTTPBodyBytes bounds a single OTLP/HTTP request body (after
-	// decompression). pktvisor and the OTel collector send far smaller exports;
-	// anything bigger is refused with 413 instead of being buffered.
-	maxHTTPBodyBytes int64 = 16 << 20
+	// decompression): the same bound as the gRPC listener's, above the
+	// message cap so a large export is split rather than refused. Anything
+	// bigger is refused with 413 instead of being buffered.
+	maxHTTPBodyBytes int64 = maxReceiveBytes
 
 	httpReadHeaderTimeout = 10 * time.Second
 	httpReadTimeout       = 30 * time.Second // headers + body; a stalled body must not pin a handler
@@ -99,9 +100,16 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signa
 
 	resp, err := export(r.Context(), req)
 	if err != nil {
-		if status.Code(err) == codes.ResourceExhausted {
+		switch status.Code(err) {
+		case codes.ResourceExhausted:
 			w.Header().Set("Retry-After", "5")
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		case codes.InvalidArgument:
+			// An export over the message cap or the whole pending queue:
+			// dropped and counted, and 400 is a status the OTLP exporters
+			// do not retry.
+			http.Error(w, status.Convert(err).Message(), http.StatusBadRequest)
 			return
 		}
 		s.logger.Warn("OTLP HTTP export failed", "signal", signal, "error", err)
