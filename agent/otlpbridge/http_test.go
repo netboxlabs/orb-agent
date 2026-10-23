@@ -31,8 +31,16 @@ import (
 // an ephemeral port too, since Start always binds it) and returns its base URL.
 func startHTTPBridge(t *testing.T, encoding string) (*BridgeServer, *fakePublisher, string) {
 	t.Helper()
+	return startHTTPBridgeConfig(t, BridgeConfig{Encoding: encoding})
+}
+
+// startHTTPBridgeConfig is startHTTPBridge with the bridge's encodings set by
+// cfg; its listen addresses are always ephemeral loopback ones.
+func startHTTPBridgeConfig(t *testing.T, cfg BridgeConfig) (*BridgeServer, *fakePublisher, string) {
+	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	bridge, err := NewBridgeServer(BridgeConfig{ListenAddr: ":0", HTTPListenAddr: "127.0.0.1:0", Encoding: encoding}, nil, logger)
+	cfg.ListenAddr, cfg.HTTPListenAddr = ":0", "127.0.0.1:0"
+	bridge, err := NewBridgeServer(cfg, nil, logger)
 	require.NoError(t, err)
 	bridge.initialBackoff = 5 * time.Millisecond
 	fp := &fakePublisher{}
@@ -99,6 +107,32 @@ func TestHTTP_MetricsProtobuf_PublishesToTelemetry(t *testing.T) {
 	var published collectormetrics.ExportMetricsServiceRequest
 	require.NoError(t, protojson.Unmarshal(fp.getPayload(), &published))
 	assert.Equal(t, "dns_wire_packets_total", published.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Name)
+}
+
+// pktvisor exports OTLP/HTTP, as protobuf or as JSON. With the fleet
+// encodings its metrics reach MQTT as protobuf, with the content type the
+// telemetry enricher decodes them by, either way.
+func TestHTTP_FleetEncodings_MetricsArePublishedAsProtobuf(t *testing.T) {
+	for name, tc := range map[string]struct {
+		contentType string
+		marshal     func(proto.Message) ([]byte, error)
+	}{
+		"protobuf body": {"application/x-protobuf", proto.Marshal},
+		"JSON body":     {"application/json", protojson.Marshal},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, fp, base := startHTTPBridgeConfig(t, BridgeConfig{Encoding: "json", MetricsEncoding: "protobuf"})
+			body, err := tc.marshal(metricsRequest())
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, postBody(t, base+"/v1/metrics", tc.contentType, body).status)
+
+			waitForPayload(t, fp)
+			assert.Equal(t, ContentTypeProtobuf, fp.getContentType())
+			var published collectormetrics.ExportMetricsServiceRequest
+			require.NoError(t, proto.Unmarshal(fp.getPayload(), &published))
+			assert.Equal(t, "dns_wire_packets_total", published.ResourceMetrics[0].ScopeMetrics[0].Metrics[0].Name)
+		})
+	}
 }
 
 func TestHTTP_MetricsJSON_PublishesToTelemetry(t *testing.T) {
@@ -189,7 +223,7 @@ type blockingPublisher struct {
 	release chan struct{}
 }
 
-func (b *blockingPublisher) Publish(ctx context.Context, _ string, _ []byte) error {
+func (b *blockingPublisher) Publish(ctx context.Context, _ string, _ []byte, _ string) error {
 	select {
 	case b.entered <- struct{}{}:
 	case <-ctx.Done():
@@ -217,14 +251,14 @@ func TestHTTP_QueueFull_Returns429WithRetryAfter(t *testing.T) {
 	base := "http://" + bridge.httpListener.Addr().String()
 
 	// Message 1: the writer picks it up and parks inside Publish.
-	require.NoError(t, bridge.Enqueue(context.Background(), false, []byte("one")))
+	require.NoError(t, bridge.Enqueue(context.Background(), false, []byte("one"), "application/json"))
 	select {
 	case <-pub.entered:
 	case <-time.After(2 * time.Second):
 		t.Fatal("writer never entered Publish")
 	}
 	// Message 2 fills the single-slot queue.
-	require.NoError(t, bridge.Enqueue(context.Background(), false, []byte("two")))
+	require.NoError(t, bridge.Enqueue(context.Background(), false, []byte("two"), "application/json"))
 
 	// Message 3 over HTTP must be refused with a retryable status.
 	body, err := proto.Marshal(metricsRequest())

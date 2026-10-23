@@ -39,14 +39,6 @@ func TestMapVlanStatus(t *testing.T) {
 	require.Equal(t, "reserved", mapVlanStatus("suspended"))
 }
 
-func TestSlugify(t *testing.T) {
-	require.Equal(t, "lab-vlans", slugify("Lab VLANs"))
-	require.Equal(t, "lab-vlans", slugify("  lab   vlans  "))
-	require.Equal(t, "a-b-c", slugify("a/b.c"))
-	require.Equal(t, "v100", slugify("v100"))
-	require.Equal(t, "", slugify("!!!"))
-}
-
 func TestTranslateVlanDefinitions(t *testing.T) {
 	snap := map[string]any{
 		"/network-instances/network-instance[name=default]/vlans/vlan[vlan-id=10]/state/name":   "users",
@@ -122,13 +114,32 @@ func TestVlanBuilderGroupNilSiteScope(t *testing.T) {
 	require.NotNil(t, v.ConvertToProtoMessage()) // serializes cleanly
 }
 
-// A group name with no [a-z0-9] runes slugifies to "" — NetBox requires a
-// non-empty VLANGroup.slug, so no group must be created (VLANs stay ungrouped).
+// A group name with no ASCII letter or digit once accents are folded slugifies
+// to "" — NetBox requires a non-empty VLANGroup.slug, so no group must be
+// created (VLANs stay ungrouped).
 func TestVlanBuilderGroupEmptySlugSkipped(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
 	b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: "!!!"}}}, nil)
 	v := b.get(10)
 	require.Nil(t, v.Group, "group with empty slug must not be created")
+}
+
+// The group slug is Django's, as NetBox and the other backends build it: the
+// same group name gives the same slug everywhere, accents folded to ASCII.
+func TestVlanBuilderGroupSlugMatchesDjango(t *testing.T) {
+	dev := &diode.Device{Name: strptr("r1"), Site: &diode.Site{Name: strptr("lab")}}
+	for name, want := range map[string]string{
+		"Café VLANs":      "cafe-vlans",
+		"Niño (B)":        "nino-b",
+		"site_a VLANs":    "site_a-vlans",
+		"Lab 1.2 -":       "lab-12",
+		"  lab   vlans  ": "lab-vlans",
+	} {
+		b := newVlanBuilder(dev, &config.Defaults{Vlan: config.VlanDefaults{Group: config.VlanGroupParameters{Name: name}}}, nil)
+		v := b.get(10)
+		require.NotNil(t, v.Group, name)
+		require.Equal(t, want, v.Group.GetSlug(), name)
+	}
 }
 
 func TestVlanGroupNoReferenceCycle(t *testing.T) {

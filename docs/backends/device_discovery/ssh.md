@@ -100,6 +100,11 @@ The agent runs as root by default and can read the keys whatever their owner. Wh
 
 ProxyJump is the modern, recommended approach for jumphost connectivity (OpenSSH 7.3+). It's simpler and more maintainable than ProxyCommand.
 
+ProxyJump works with the SSH drivers as a single hop: Netmiko refuses a
+comma-separated list of hops. `junos` and `iosxr_netconf` connect through a
+NETCONF client that ignores ProxyJump and goes straight to the device, so use
+the [ProxyCommand Pattern](#proxycommand-pattern) for them.
+
 ### SSH Config
 
 Create `/local/orb/ssh-napalm.conf`:
@@ -298,7 +303,8 @@ scope:
     password: ${ROUTER_PASS}
     optional_args:
       ssh_config_file: /opt/orb/ssh-napalm.conf
-      timeout: 120  # Increase timeout for VRF connections
+      conn_timeout: 30  # Allow longer to connect through the VRF
+      banner_timeout: 30
 ```
 
 ## Multi-Environment Pattern
@@ -511,12 +517,18 @@ Always use SSH keys (not passwords) for jumphost authentication:
    docker exec <container_id> nc -zv 203.0.113.50 22
    ```
 
-2. Increase NAPALM timeout:
+2. Give the connection more time. Netmiko allows 10 seconds for the TCP
+   connect and the whole SSH handshake, banner included, and at most 15
+   seconds for the banner, so raise both:
    ```yaml
    optional_args:
      ssh_config_file: /opt/orb/ssh-napalm.conf
-     timeout: 120
+     conn_timeout: 30
+     banner_timeout: 30
    ```
+   If the connection succeeds but commands time out, raise
+   `read_timeout_override` instead (see [Timeouts](./optional_args.md#timeouts)).
+   `timeout` has no effect inside `optional_args` on the SSH drivers.
 
 3. Check Docker network mode and firewall rules
 
@@ -817,14 +829,16 @@ orb:
             password: ${ROUTER_PASS}
             optional_args:
               ssh_config_file: /opt/orb/ssh-vrf.conf
-              timeout: 120
+              conn_timeout: 30
+              banner_timeout: 30
           - driver: iosxr
             hostname: 172.16.2.1
             username: admin
             password: ${ROUTER_PASS}
             optional_args:
               ssh_config_file: /opt/orb/ssh-vrf.conf
-              timeout: 120
+              conn_timeout: 30
+              banner_timeout: 30
 ```
 
 **Prerequisites on Jumphost:**

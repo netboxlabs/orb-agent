@@ -1,0 +1,5 @@
+{
+  "Twenty-FiveGigE1/0/1": {"mode": "access", "tagged": [], "untagged": 10},
+  "FortyGigE1/0/49": {"mode": "trunk", "tagged": [100], "untagged": 1},
+  "HundredGigE1/0/53": {"mode": "trunk", "tagged": [100], "untagged": 1}
+}

@@ -805,6 +805,43 @@ policies:
 	assert.Contains(t, buf.String(), "metrics_intervl")
 }
 
+// A check for new values exports a series' latest, so a policy sampling
+// faster than the checks come has samples that never leave. Starting one
+// warns, naming the two periods; one sampling at the check period or slower
+// starts quietly. With export off there is no period to compare against.
+func TestManager_WarnsWhenAPolicySamplesFasterThanTheExportPeriod(t *testing.T) {
+	manager := func(exportPeriod time.Duration) (*Manager, *bytes.Buffer) {
+		var buf bytes.Buffer
+		lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		m := NewManager(t.Context(), lg, Options{Dialer: testDialer(), ExportPeriod: exportPeriod})
+		t.Cleanup(func() { _ = m.Stop() })
+		return m, &buf
+	}
+	sampling := func(intervalSec int) config.Policy {
+		pol := minimalPolicy()
+		pol.Config.MetricsInterval = &intervalSec
+		return pol
+	}
+	const warning = "metrics_interval is shorter than the export period"
+
+	m, buf := manager(10 * time.Second)
+	require.NoError(t, m.StartPolicy("faster", sampling(6)))
+	out := buf.String()
+	assert.Contains(t, out, warning)
+	assert.Contains(t, out, "policy=faster")
+	assert.Contains(t, out, "metrics_interval=6s")
+	assert.Contains(t, out, "export_period=10s")
+
+	buf.Reset()
+	require.NoError(t, m.StartPolicy("at-the-period", sampling(10)))
+	require.NoError(t, m.StartPolicy("slower", sampling(30)))
+	assert.NotContains(t, buf.String(), warning, "at the period every sample is checked")
+
+	m, buf = manager(0)
+	require.NoError(t, m.StartPolicy("faster", sampling(6)))
+	assert.NotContains(t, buf.String(), warning, "no export, no period")
+}
+
 // ---------------------------------------------------------------------------
 // Empty target list
 // ---------------------------------------------------------------------------

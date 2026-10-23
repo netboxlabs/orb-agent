@@ -153,6 +153,61 @@ func fleetOTLPHTTPPort(cfg config.Config) int {
 	return httpPort
 }
 
+// Bounds on the bridge's size settings. The cap has a floor under which a
+// device's one scope rarely fits and every export is cut to pieces, and a
+// ceiling at what the listeners receive, past which it could never apply.
+// The queue bound has to hold at least one message at the cap the bridge
+// uses: the one set, or its default when none is.
+const (
+	minOTLPBridgeMessageBytes = 64 << 10
+	maxOTLPBridgeMessageBytes = 64 << 20
+)
+
+// fleetOTLPBridgeLimits reads the bridge's size settings: zero where unset,
+// which the bridge fills with its defaults.
+func fleetOTLPBridgeLimits(cfg config.Config) (messageBytes int, pendingBytes int64, err error) {
+	fleetCfg := cfg.OrbAgent.ConfigManager.Sources.Fleet
+	if fleetCfg.OTLPBridgeMaxMessageBytes != nil {
+		messageBytes = *fleetCfg.OTLPBridgeMaxMessageBytes
+		if messageBytes < minOTLPBridgeMessageBytes || messageBytes > maxOTLPBridgeMessageBytes {
+			return 0, 0, fmt.Errorf("otlp_bridge_max_message_bytes %d must be from %d to %d", messageBytes, minOTLPBridgeMessageBytes, maxOTLPBridgeMessageBytes)
+		}
+	}
+	if fleetCfg.OTLPBridgeMaxPendingBytes != nil {
+		pendingBytes = int64(*fleetCfg.OTLPBridgeMaxPendingBytes)
+		// Against the cap the bridge will use: the bridge's default when
+		// the cap is unset, not the smallest cap a configuration may set.
+		// A bound under it would pass here and then drop every export larger
+		// than the bound as too large for the whole queue.
+		effectiveMessageBytes := messageBytes
+		if effectiveMessageBytes == 0 {
+			effectiveMessageBytes = otlpbridge.DefaultMaxMessageBytes
+		}
+		if pendingBytes < int64(effectiveMessageBytes) {
+			return 0, 0, fmt.Errorf("otlp_bridge_max_pending_bytes %d must hold at least one message at the cap of %d bytes: %d or more",
+				pendingBytes, effectiveMessageBytes, effectiveMessageBytes)
+		}
+	}
+	return messageBytes, pendingBytes, nil
+}
+
+// fleetOTLPBridgeConfig is the bridge the fleet config manager runs. Metrics
+// for the telemetry topic go out as protobuf, about half the bytes of JSON,
+// with a content type the telemetry enricher decodes them by. Logs, traces
+// and everything for the ingest topic stay JSON: the enricher tells a JSON log
+// from metrics by its first key, which protobuf hides, and orb-pro's OTLP
+// Bridge service decodes the ingest topic as JSON only.
+func fleetOTLPBridgeConfig(bindHost string, grpcPort, httpPort, messageBytes int, pendingBytes int64) otlpbridge.BridgeConfig {
+	return otlpbridge.BridgeConfig{
+		ListenAddr:      net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
+		HTTPListenAddr:  net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
+		Encoding:        "json",
+		MetricsEncoding: "protobuf",
+		MaxMessageBytes: messageBytes,
+		MaxPendingBytes: pendingBytes,
+	}
+}
+
 // StartOTLPBridge starts the local OTLP bridge (gRPC and HTTP listeners) so
 // backends can export telemetry before the MQTT connection is established.
 // Safe to call once; subsequent calls are no-ops when the bridge is already
@@ -168,11 +223,11 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 	if err != nil {
 		return err
 	}
-	bridgeConfig := otlpbridge.BridgeConfig{
-		ListenAddr:     net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
-		HTTPListenAddr: net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
-		Encoding:       "json",
+	messageBytes, pendingBytes, err := fleetOTLPBridgeLimits(cfg)
+	if err != nil {
+		return err
 	}
+	bridgeConfig := fleetOTLPBridgeConfig(bindHost, grpcPort, httpPort, messageBytes, pendingBytes)
 
 	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
 	if err != nil {
@@ -255,14 +310,32 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 			return
 		}
 
-		// Create publisher adapter and bind to bridge
+		// Create publisher adapter and bind to bridge. The broker's limit
+		// goes first, so no message is cut to the bridge's own cap alone
+		// once the topics let one through.
 		pub := otlpbridge.NewCMAdapterPublisher(cm)
+		brokerMax := fleetManager.connection.BrokerMaxPacketSize()
+		fleetManager.otlpBridge.SetBrokerMaxPacketSize(brokerMax)
 		fleetManager.otlpBridge.SetPublisher(pub)
 		fleetManager.otlpBridge.SetIngestTopic(topics.Ingest)
 		fleetManager.otlpBridge.SetTelemetryTopic(topics.Telemetry)
 		fleetManager.logger.Info("OTLP bridge bound to Fleet MQTT",
 			slog.String("ingest_topic", topics.Ingest),
-			slog.String("telemetry_topic", topics.Telemetry))
+			slog.String("telemetry_topic", topics.Telemetry),
+			slog.Uint64("broker_max_packet_bytes", uint64(brokerMax)))
+	})
+
+	// A connection the client lost takes the bridge's publisher with it.
+	// autopaho makes the next connection live before OnConnectionUp, and the
+	// hook above installs that broker's limit only after the subscribe, so
+	// until then a payload cut to the old broker's limit could go out over the
+	// new one's and close the connection again. Without a publisher the writer
+	// holds its messages, spending no retries, until the hook installs the
+	// limit and then the publisher.
+	fleetManager.connection.AddOnDownHook(func() {
+		if fleetManager.otlpBridge != nil {
+			fleetManager.otlpBridge.ClearPublisher()
+		}
 	})
 
 	// Retry loop for token fetch + MQTT connect. These depend on external services

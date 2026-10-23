@@ -1051,3 +1051,43 @@ def test_collect_device_data_no_get_interfaces_vlans_method(
         mock_ingest.assert_called_once()
         _metadata, data = mock_ingest.call_args[0]
         assert "interfaces_vlans" not in data
+
+
+def test_collect_device_data_keeps_the_target_optional_args(policy_runner):
+    """Every run must hand the driver the target's optional_args as configured."""
+    original = {"port": 2222, "key_file": "/opt/orb/key", "enable_password": "invalid"}
+    scope = Napalm(
+        driver="eos",
+        hostname="router1",
+        username="admin",
+        password="password",
+        optional_args=dict(original),
+    )
+    config = Config(defaults=Defaults(site="NY"))
+
+    fake_device = MagicMock()
+    fake_device.get_facts.return_value = {"hostname": "router1"}
+    fake_device.get_interfaces.return_value = {}
+    fake_device.get_interfaces_ip.return_value = {}
+    fake_device.get_vlans.return_value = {}
+    fake_device.__enter__ = MagicMock(return_value=fake_device)
+    fake_device.__exit__ = MagicMock(return_value=False)
+
+    received = []
+
+    def driver(hostname, username, password, timeout, optional_args):
+        # Drivers such as eos and iosxr_netconf pop their own keys.
+        received.append(dict(optional_args))
+        optional_args.pop("enable_password", None)
+        optional_args.pop("port", None)
+        return fake_device
+
+    with (
+        patch("device_discovery.policy.runner.get_network_driver", return_value=driver),
+        patch("device_discovery.policy.runner.Client"),
+    ):
+        policy_runner._collect_device_data(scope, "router1", config, "run-1")
+        policy_runner._collect_device_data(scope, "router1", config, "run-2")
+
+    assert received == [original, original]
+    assert scope.optional_args == original

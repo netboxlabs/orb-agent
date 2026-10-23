@@ -131,8 +131,9 @@ def test_collect_network_instances_swallows_not_implemented(caplog) -> None:
 
 # Pins the support matrix VRF discovery relies on: these drivers carry a real
 # get_network_instances() and it lives in the expected package — inherited
-# from upstream NAPALM (ios/eos/junos/nxos/nxos_ssh) or implemented in
-# custom_napalm (iosxr/iosxr_netconf/nokia_sros/nokia_srl). Asserting the
+# from upstream NAPALM (ios/eos/junos/nxos) or implemented in custom_napalm
+# (iosxr/iosxr_netconf/nokia_sros/nokia_srl; nxos_ssh wraps the upstream
+# getter to canonicalize member names). Asserting the
 # owning module (not just "is not the base-class stub") also catches the
 # case where a wrapper driver accidentally shadows the upstream getter,
 # which a bare identity check against NetworkDriver would miss.
@@ -143,7 +144,7 @@ def test_collect_network_instances_swallows_not_implemented(caplog) -> None:
         pytest.param(EOSDriver, "napalm.", id="eos"),
         pytest.param(JunOSDriver, "napalm.", id="junos"),
         pytest.param(NXOSDriver, "napalm.", id="nxos"),
-        pytest.param(NXOSSSHDriver, "napalm.", id="nxos_ssh"),
+        pytest.param(NXOSSSHDriver, "custom_napalm.", id="nxos_ssh"),
         pytest.param(IOSXRDriver, "custom_napalm.", id="iosxr"),
         pytest.param(IOSXRNETCONFDriver, "custom_napalm.", id="iosxr_netconf"),
         pytest.param(SROSDriver, "custom_napalm.", id="nokia_sros"),

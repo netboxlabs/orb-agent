@@ -130,7 +130,7 @@ func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
 
 	// Fill the channel buffer.
 	for i := 0; i < 5; i++ {
-		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))))
+		require.NoError(t, bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i)), "application/json"))
 	}
 
 	// Beyond the limit — should return ResourceExhausted.
@@ -138,7 +138,7 @@ func TestBridgeServer_Enqueue_BoundedQueue(t *testing.T) {
 	// so we verify that most attempts beyond the limit are rejected.
 	var rejected int
 	for i := 5; i < 10; i++ {
-		if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i))); err != nil {
+		if err := bridge.Enqueue(ctx, false, []byte(fmt.Sprintf("msg-%d", i)), "application/json"); err != nil {
 			assert.Contains(t, err.Error(), "queue is full")
 			rejected++
 		}

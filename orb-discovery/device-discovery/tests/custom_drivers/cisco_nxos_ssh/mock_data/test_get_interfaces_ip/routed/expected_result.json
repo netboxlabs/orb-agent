@@ -1,0 +1,16 @@
+{
+  "Loopback0": {
+    "ipv4": {"192.0.2.1": {"prefix_length": 32}},
+    "ipv6": {"2001:db8::1": {"prefix_length": 128}}
+  },
+  "Ethernet1/1": {
+    "ipv4": {"198.51.100.1": {"prefix_length": 30}}
+  },
+  "Port-channel20": {
+    "ipv4": {"198.51.100.5": {"prefix_length": 30}}
+  },
+  "Management0": {
+    "ipv4": {"203.0.113.10": {"prefix_length": 24}},
+    "ipv6": {}
+  }
+}

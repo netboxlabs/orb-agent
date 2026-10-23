@@ -137,7 +137,8 @@ type instrumentKey struct {
 }
 
 // exporter owns the observable instruments, one per policy and metric name,
-// whose callbacks read the store on every export cycle. There is one per
+// whose callbacks read the store on every export cycle and observe the series
+// due for export (store.exportDue). There is one per
 // collector: a second exporter over the same store would observe every
 // series twice and the SDK would sum them.
 type exporter struct {
@@ -271,7 +272,7 @@ func (e *exporter) ensureCounter(policy, name, unit string) string {
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		e.store.forEach(name, policy, time.Now(), func(_ seriesKey, pt point) {
+		e.store.exportDue(name, policy, time.Now(), func(_ seriesKey, pt point) {
 			o.ObserveInt64(inst, pt.i, metric.WithAttributes(pt.attrs...))
 		})
 		return nil
@@ -311,7 +312,7 @@ func (e *exporter) ensureGauge(policy, name, unit string) string {
 		return ""
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		e.store.forEach(name, policy, time.Now(), func(_ seriesKey, pt point) {
+		e.store.exportDue(name, policy, time.Now(), func(_ seriesKey, pt point) {
 			o.ObserveFloat64(inst, pt.f, metric.WithAttributes(pt.attrs...))
 		})
 		return nil

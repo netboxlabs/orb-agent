@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Device Discovery Policy Runner."""
 
+import copy
 import logging
 import time
 import traceback
@@ -273,12 +274,14 @@ class PolicyRunner:
 
         # Measure device connection time
         connection_start_time = time.perf_counter()
+        # A copy, as drivers pop keys from optional_args and the next run
+        # needs them.
         with np_driver(
             scope.hostname,
             scope.username,
             scope.password,
             scope.timeout,
-            scope.optional_args,
+            copy.deepcopy(scope.optional_args),
         ) as device:
             connection_duration = (time.perf_counter() - connection_start_time) * 1000
             device_connection_latency = get_metric("device_connection_latency")
@@ -365,12 +368,13 @@ class PolicyRunner:
         """
         Call the driver's optional get_interfaces_vlan_id() when prefix VLANs are on.
 
-        The map is only consumed by ``emit_prefix_vlan: svi-name``, so with the
-        option off no device command is issued. Drivers without the method are
+        The map is only consumed by ``emit_prefix_vlan: svi-name``, so with that
+        option or emit_prefixes off no device command is issued. Drivers without the method are
         skipped silently; a failure costs only the device-reported VLAN IDs, and
         the SVI-name fallback still applies.
         """
-        if not (config.options and config.options.emit_prefix_vlan == "svi-name"):
+        options = config.options
+        if not (options and options.emit_prefix_vlan == "svi-name" and options.emit_prefixes):
             return
         get_interfaces_vlan_id = getattr(device, "get_interfaces_vlan_id", None)
         if not callable(get_interfaces_vlan_id):

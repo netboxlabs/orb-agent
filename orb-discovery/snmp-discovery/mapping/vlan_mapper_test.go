@@ -488,6 +488,29 @@ func TestApplyVLANDefaults_GroupScopeSite_WhenSiteDefined(t *testing.T) {
 	}
 }
 
+// The group slug is Django's, as NetBox and the other backends build it: the
+// same group name gives the same slug everywhere, accents folded to ASCII.
+func TestApplyVLANDefaults_GroupSlugMatchesDjango(t *testing.T) {
+	for name, want := range map[string]string{
+		"Café VLANs":   "cafe-vlans",
+		"Niño (B)":     "nino-b",
+		"site_a VLANs": "site_a-vlans",
+		"Lab 1.2 -":    "lab-12",
+	} {
+		v := &diode.VLAN{}
+		defaults := &config.Defaults{
+			Site: "NYC",
+			VLAN: config.VLANDefaults{Group: config.VLANGroupParameters{Name: name}},
+		}
+
+		applyVLANDefaults(v, defaults)
+
+		if v.Group == nil || v.Group.Slug == nil || *v.Group.Slug != want {
+			t.Errorf("%q: Group.Slug got %v, want %q", name, v.Group.GetSlug(), want)
+		}
+	}
+}
+
 // applyVLANDefaults: when defaults.Site is the sentinel "undefined" string,
 // scope_site is still populated (the value "undefined" is treated like any
 // other site name so the scoped-slug dedup path keeps working).

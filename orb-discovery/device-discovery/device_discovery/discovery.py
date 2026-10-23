@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """Discover the correct NAPALM Driver."""
 
+import copy
 import inspect
 import logging
 from importlib import import_module
@@ -164,12 +165,14 @@ def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str 
         try:
             logger.info(f"Hostname {info.hostname}: Trying '{driver}' driver")
             np_driver = get_network_driver(driver)
+            # Drivers pop and rename keys in optional_args (iosxr_netconf
+            # takes port and ssh_config_file), so each one gets its own copy.
             with np_driver(
                 info.hostname,
                 info.username,
                 info.password,
                 info.timeout,
-                info.optional_args,
+                copy.deepcopy(info.optional_args),
             ) as device:
                 device_info = device.get_facts()
                 if device_info.get("serial_number", "Unknown").lower() == "unknown":

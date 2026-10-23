@@ -265,3 +265,21 @@ func TestDefaults_ValidateBlankVrfName(t *testing.T) {
 		"defaults.vrf has a blank name; Diode trims it to nothing and refuses the address")
 	assert.NoError(t, Defaults{Vrf: VrfParameters{}}.Validate(), "no VRF at all is fine")
 }
+
+func TestScanMetadataEmissionEnabled(t *testing.T) {
+	off, on := false, true
+	assert.True(t, (*Options)(nil).ScanMetadataEmissionEnabled())
+	assert.True(t, (&Options{}).ScanMetadataEmissionEnabled())
+	assert.True(t, (&Options{EmitScanMetadata: &on}).ScanMetadataEmissionEnabled())
+	assert.False(t, (&Options{EmitScanMetadata: &off}).ScanMetadataEmissionEnabled())
+}
+
+func TestPolicyConfigDecodesOptions(t *testing.T) {
+	var p PolicyConfig
+	require.NoError(t, yaml.Unmarshal([]byte("options:\n  emit_scan_metadata: false\n"), &p))
+	assert.False(t, p.Options.ScanMetadataEmissionEnabled())
+
+	p = PolicyConfig{}
+	require.NoError(t, yaml.Unmarshal([]byte("timeout: 5\n"), &p))
+	assert.True(t, p.Options.ScanMetadataEmissionEnabled())
+}

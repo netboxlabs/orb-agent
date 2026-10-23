@@ -22,8 +22,9 @@ var (
 	slugCollapse = regexp.MustCompile(`[-\t\n\v\f\r\x1c-\x1f ]+`)
 )
 
-// slug returns Django's slugify of s, which Diode matches tenants by.
-func slug(s string) string {
+// Slug returns Django's slugify of s, as NetBox builds slugs: ASCII only,
+// accents folded. Diode matches tenants by it, and VLAN groups carry it.
+func Slug(s string) string {
 	var ascii strings.Builder
 	for _, r := range norm.NFKD.String(s) {
 		if r <= unicode.MaxASCII {
@@ -43,7 +44,7 @@ func trim(s string) string {
 // sameName reports whether two trimmed names resolve alike: equal, or the
 // same non-empty slug.
 func sameName(a, b string) bool {
-	return a == b || slug(a) != "" && slug(a) == slug(b)
+	return a == b || Slug(a) != "" && Slug(a) == Slug(b)
 }
 
 // tenantConflict reports what makes two copies of one tenant disagree: "group"

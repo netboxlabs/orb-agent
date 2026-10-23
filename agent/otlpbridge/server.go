@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
@@ -30,8 +31,12 @@ const (
 
 // pendingPublish holds a marshaled OTLP payload queued for publishing.
 type pendingPublish struct {
-	isIngest bool
-	payload  []byte
+	// signal names what the payload carries (metrics, logs, traces), for
+	// the drop counter.
+	signal      string
+	isIngest    bool
+	payload     []byte
+	contentType string
 }
 
 // BridgeServer holds the lifecycle for the OTLP → MQTT bridge server.
@@ -43,6 +48,7 @@ type pendingPublish struct {
 type BridgeServer struct {
 	cfg              BridgeConfig
 	enc              Encoder
+	metricsEnc       Encoder // metrics for the telemetry topic
 	ingestGRPCServer *grpc.Server
 	listener         net.Listener
 	httpServer       *http.Server
@@ -64,6 +70,25 @@ type BridgeServer struct {
 	// Buffered channel serves as the bounded FIFO queue. A single writer
 	// goroutine consumes from it and publishes to MQTT.
 	msgCh chan pendingPublish
+	// queueMu guards the queue's accounting: pending is how many payloads
+	// are queued, pendingBytes their payload bytes, and enqueue admits an
+	// export's payloads all together or not at all under both bounds. The
+	// channel's capacity is the count bound, so a send admitted here never
+	// blocks. The one payload the writer holds while it publishes is not
+	// counted, as it never was against the channel: at most one message
+	// more than the bounds.
+	queueMu         sync.Mutex
+	pending         int
+	pendingBytes    int64
+	maxPendingBytes int64
+
+	// maxMessageBytes caps one published payload; broker lowers it to what
+	// the MQTT server accepts once that is known.
+	maxMessageBytes int
+	broker          brokerCeiling
+	// dropped counts what the bridge could not publish, and is published
+	// with the agent's metrics.
+	dropped *droppedCounter
 
 	// initialBackoff is the starting retry delay used by the writer goroutine.
 	// Defaults to initialRetryBackoff; tests override it for speed.
@@ -76,20 +101,38 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 	if err != nil {
 		return nil, err
 	}
+	metricsEnc := enc
+	if strings.TrimSpace(cfg.MetricsEncoding) != "" {
+		if metricsEnc, err = buildEncoder(cfg.MetricsEncoding); err != nil {
+			return nil, fmt.Errorf("metrics: %w", err)
+		}
+	}
 	maxPending := cfg.MaxPendingQueue
 	if maxPending <= 0 {
 		maxPending = defaultMaxPendingQueue
 	}
+	maxPendingBytes := cfg.MaxPendingBytes
+	if maxPendingBytes <= 0 {
+		maxPendingBytes = defaultMaxPendingBytes
+	}
+	maxMessageBytes := cfg.MaxMessageBytes
+	if maxMessageBytes <= 0 {
+		maxMessageBytes = DefaultMaxMessageBytes
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &BridgeServer{
-		cfg:            cfg,
-		enc:            enc,
-		policyRepo:     policyRepo,
-		logger:         logger,
-		ctx:            ctx,
-		cancel:         cancel,
-		msgCh:          make(chan pendingPublish, maxPending),
-		initialBackoff: initialRetryBackoff,
+		cfg:             cfg,
+		enc:             enc,
+		metricsEnc:      metricsEnc,
+		policyRepo:      policyRepo,
+		logger:          logger,
+		ctx:             ctx,
+		cancel:          cancel,
+		msgCh:           make(chan pendingPublish, maxPending),
+		maxPendingBytes: maxPendingBytes,
+		maxMessageBytes: maxMessageBytes,
+		dropped:         newDroppedCounter(),
+		initialBackoff:  initialRetryBackoff,
 	}
 	go s.writer()
 	return s, nil
@@ -127,6 +170,14 @@ func (s *BridgeServer) SetTelemetryTopic(topic string) {
 	s.mu.Unlock()
 }
 
+// HasPublisher reports whether a publisher is set: without one the writer
+// holds its messages.
+func (s *BridgeServer) HasPublisher() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.publisher != nil
+}
+
 // ClearPublisher clears the publisher, causing the writer goroutine to retry
 // with backoff until a new publisher is set via SetPublisher.
 func (s *BridgeServer) ClearPublisher() {
@@ -140,6 +191,7 @@ func (s *BridgeServer) writer() {
 	for {
 		select {
 		case msg := <-s.msgCh:
+			s.release(msg)
 			s.publishWithRetry(msg)
 		case <-s.ctx.Done():
 			return
@@ -148,9 +200,17 @@ func (s *BridgeServer) writer() {
 }
 
 // publishWithRetry publishes a single message, retrying with exponential
-// backoff when no publisher is available or a publish call fails. Only
-// actual publish failures count toward the retry budget; waiting for
-// publisher/topic readiness does not consume attempts.
+// backoff when no publisher is available or a publish call fails for a
+// reason a retry can get past. Only actual publish failures count toward
+// the retry budget; waiting for publisher/topic readiness does not consume
+// attempts.
+//
+// Two failures end the retries at once, the payload dropped and counted: a
+// payload over the broker's maximum packet size, which the broker would
+// answer by closing the agent's one connection, so it is never sent; and a
+// publish the client refuses as invalid (paho.ErrInvalidArguments), which
+// the same arguments would fail again. One message never stalls the queue
+// behind it for good.
 func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 	backoff := s.initialBackoff
 	failures := 0
@@ -164,14 +224,30 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 		s.mu.RUnlock()
 
 		if pub != nil && topic != "" {
-			err := pub.Publish(s.ctx, topic, msg.payload)
+			// Cut to the configured cap before the broker's limit was known
+			// (the queue fills before the first connection), a payload can
+			// still be over the broker's: a check here rather than nothing,
+			// since the broker's answer would be to drop the connection.
+			if limit, limited := s.broker.payloadCap(topic, msg.contentType); limited && len(msg.payload) > limit {
+				s.dropped.add(msg.signal, reasonTooLarge, 1)
+				s.logger.Warn("OTLP payload exceeds the broker's maximum packet size, dropping it",
+					"signal", msg.signal, "bytes", len(msg.payload), "broker_payload_limit", limit)
+				return
+			}
+			err := pub.Publish(s.ctx, topic, msg.payload, msg.contentType)
 			if err == nil {
+				return
+			}
+			if errors.Is(err, paho.ErrInvalidArguments) {
+				s.dropped.add(msg.signal, reasonPublishFailed, 1)
+				s.logger.Warn("OTLP publish refused, dropping message", "signal", msg.signal, "error", err)
 				return
 			}
 			failures++
 			s.logger.Warn("OTLP publish failed, retrying", "error", err, "attempt", failures, "backoff", backoff)
 			if failures >= maxPublishRetries {
-				s.logger.Warn("OTLP publish retries exhausted, dropping message", "max_retries", maxPublishRetries)
+				s.dropped.add(msg.signal, reasonPublishFailed, 1)
+				s.logger.Warn("OTLP publish retries exhausted, dropping message", "signal", msg.signal, "max_retries", maxPublishRetries)
 				return
 			}
 		}
@@ -185,16 +261,51 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 	}
 }
 
-// Enqueue adds a marshaled OTLP payload to the publish queue. Returns
+// Enqueue adds one marshaled OTLP payload to the publish queue. Returns
 // ResourceExhausted if the queue is full, providing backpressure to the
 // OTLP client.
-func (s *BridgeServer) Enqueue(_ context.Context, isIngest bool, payload []byte) error {
-	select {
-	case s.msgCh <- pendingPublish{isIngest: isIngest, payload: payload}:
-		return nil
-	default:
+func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byte, contentType string) error {
+	return s.enqueue(ctx, "", isIngest, [][]byte{payload}, contentType)
+}
+
+// enqueue adds an export's payloads to the publish queue, all of them or
+// none: an export split into several messages is not half sent and then
+// retried whole by its client. It returns ResourceExhausted when the queue
+// has no room for them, in messages or in bytes, so the client backs off.
+// An export larger than the whole queue could never be admitted, so it is
+// dropped and counted instead, with InvalidArgument, which the client does
+// not retry.
+func (s *BridgeServer) enqueue(_ context.Context, signal string, isIngest bool, payloads [][]byte, contentType string) error {
+	var bytes int64
+	for _, p := range payloads {
+		bytes += int64(len(p))
+	}
+	if len(payloads) > cap(s.msgCh) || bytes > s.maxPendingBytes {
+		s.dropped.add(signal, reasonTooLarge, 1)
+		s.logger.Warn("OTLP export is larger than the whole pending queue, dropping it",
+			"signal", signal, "messages", len(payloads), "bytes", bytes,
+			"max_pending_messages", cap(s.msgCh), "max_pending_bytes", s.maxPendingBytes)
+		return status.Errorf(codes.InvalidArgument, "%s export of %d messages and %d bytes exceeds the bridge's pending queue; dropped", signal, len(payloads), bytes)
+	}
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	if s.pending+len(payloads) > cap(s.msgCh) || s.pendingBytes+bytes > s.maxPendingBytes {
 		return status.Error(codes.ResourceExhausted, "OTLP pending queue is full")
 	}
+	s.pending += len(payloads)
+	s.pendingBytes += bytes
+	for _, p := range payloads {
+		s.msgCh <- pendingPublish{signal: signal, isIngest: isIngest, payload: p, contentType: contentType}
+	}
+	return nil
+}
+
+// release returns a payload's room to the queue as the writer takes it.
+func (s *BridgeServer) release(msg pendingPublish) {
+	s.queueMu.Lock()
+	s.pending--
+	s.pendingBytes -= int64(len(msg.payload))
+	s.queueMu.Unlock()
 }
 
 // GetIngestTopic returns the current ingest topic.
@@ -245,7 +356,9 @@ func (s *BridgeServer) Start(ctx context.Context) error {
 	}
 	s.listener = lis
 
-	s.ingestGRPCServer = grpc.NewServer()
+	// Above the message cap on purpose: a large export is split, not
+	// refused.
+	s.ingestGRPCServer = grpc.NewServer(grpc.MaxRecvMsgSize(maxReceiveBytes))
 
 	// Register services with the bridge
 	collectortrace.RegisterTraceServiceServer(s.ingestGRPCServer, &traceServer{bridge: s})

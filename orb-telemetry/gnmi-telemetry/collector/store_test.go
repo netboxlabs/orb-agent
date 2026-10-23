@@ -76,7 +76,7 @@ func TestStoreStalenessIsPerSeries(t *testing.T) {
 	require.True(t, s.setGauge(ks, 1, now.Add(-100*time.Second).UnixNano(), age, as))
 	require.True(t, s.setGauge(kl, 1, now.Add(-100*time.Second).UnixNano(), 10*time.Minute, al))
 	var seen []string
-	s.forEach("g", "p", now, func(k seriesKey, _ point) { seen = append(seen, k.attrs) })
+	s.exportDue("g", "p", now, func(k seriesKey, _ point) { seen = append(seen, k.attrs) })
 	assert.ElementsMatch(t, []string{kf.attrs, kl.attrs}, seen, "a series is withheld only past its own policy's age")
 	_, ok := s.get(ks)
 	assert.False(t, ok, "the series it withheld is dropped, not kept forever")
@@ -91,7 +91,7 @@ func TestStoreReclaimsStaleSeriesAtItsLimit(t *testing.T) {
 	require.True(t, s.setGauge(kf, 1, now.Add(-10*time.Second).UnixNano(), age, af))
 	require.True(t, s.setGauge(ks, 1, now.Add(-100*time.Second).UnixNano(), age, as))
 	require.False(t, s.setGauge(kn, 1, now.UnixNano(), age, an), "the metric is at its limit")
-	s.forEach("g", "p", now, func(seriesKey, point) {})
+	s.exportDue("g", "p", now, func(seriesKey, point) {})
 	assert.Len(t, s.series, 1, "the stale series is reclaimed, not only withheld")
 	assert.True(t, s.setGauge(kn, 1, now.UnixNano(), age, an), "the slot it freed takes a new series")
 }
@@ -108,7 +108,7 @@ func TestStoreSeriesWithNoAgeIsNeverStale(t *testing.T) {
 	k, attrs := series("g", "1", "p", "on-change")
 	require.True(t, s.setGauge(k, 1, now.Add(-time.Hour).UnixNano(), 0, attrs))
 	var seen int
-	s.forEach("g", "p", now, func(seriesKey, point) { seen++ })
+	s.exportDue("g", "p", now, func(seriesKey, point) { seen++ })
 	assert.Equal(t, 1, seen, "a series with no age is exported however old it is")
 	_, ok := s.get(k)
 	assert.True(t, ok, "and it is not evicted")
@@ -195,9 +195,9 @@ func TestStoreDeleteAndEvictAreScopedToThePolicy(t *testing.T) {
 	assert.True(t, ok, "the other policy's series stays")
 }
 
-// forEach visits one policy's series of a metric and nobody else's, and
+// exportDue visits one policy's series of a metric and nobody else's, and
 // still evicts the aged series it visits.
-func TestStoreForEachIsScopedToThePolicy(t *testing.T) {
+func TestStoreExportDueIsScopedToThePolicy(t *testing.T) {
 	s := newStore(10)
 	now := time.Unix(1000, 0)
 	k1, a1 := series("g", "1", "p1", "a")
@@ -208,7 +208,7 @@ func TestStoreForEachIsScopedToThePolicy(t *testing.T) {
 	require.True(t, s.setGauge(ks, 3, now.Add(-2*age).UnixNano(), age, as))
 
 	var seen []float64
-	s.forEach("g", "p1", now, func(_ seriesKey, pt point) { seen = append(seen, pt.f) })
+	s.exportDue("g", "p1", now, func(_ seriesKey, pt point) { seen = append(seen, pt.f) })
 	assert.Equal(t, []float64{1}, seen, "only p1's fresh series is visited")
 	_, ok := s.get(ks)
 	assert.False(t, ok, "p1's stale series is dropped in the same pass")
@@ -219,7 +219,7 @@ func TestStoreForEachIsScopedToThePolicy(t *testing.T) {
 // indexKeys flattens the store's policy index back to a flat key set, so a
 // test can compare it against series's key set directly: the two must hold
 // exactly the same keys after every operation that inserts into or removes
-// from the store, or forEach would either miss a live series through the
+// from the store, or exportDue would either miss a live series through the
 // index or visit one that series no longer has.
 func indexKeys(s *store) map[seriesKey]struct{} {
 	out := map[seriesKey]struct{}{}
@@ -243,7 +243,7 @@ func seriesKeys(s *store) map[seriesKey]struct{} {
 
 // Every path that inserts into or removes from series has its own copy of
 // the same bookkeeping against the policy index: a fresh set, a stale drop
-// inside forEach, deleteMatching, evictBefore, forgetPolicy and releaseAll.
+// inside exportDue, deleteMatching, evictBefore, forgetPolicy and releaseAll.
 // This walks all six and checks after each one that the index reaches
 // exactly the keys series does, no more and no fewer.
 func TestStoreIndexStaysInStepWithSeries(t *testing.T) {
@@ -267,9 +267,9 @@ func TestStoreIndexStaysInStepWithSeries(t *testing.T) {
 	require.True(t, s.setGauge(kStale, 1, now.Add(-2*age).UnixNano(), age, aStale))
 	assertInStep()
 
-	// forEach's stale drop removes kStale in the same pass it visits m2/p1.
+	// exportDue's stale drop removes kStale in the same pass it visits m2/p1.
 	var seen []seriesKey
-	s.forEach("m2", "p1", now, func(k seriesKey, _ point) { seen = append(seen, k) })
+	s.exportDue("m2", "p1", now, func(k seriesKey, _ point) { seen = append(seen, k) })
 	assert.Equal(t, []seriesKey{k3}, seen)
 	_, ok := s.get(kStale)
 	assert.False(t, ok)

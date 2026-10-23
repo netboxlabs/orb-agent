@@ -1,0 +1,5 @@
+IPv6 Interface Status for VRF "default"(1)
+loopback0, Interface status: protocol-up/link-up/admin-up, iod: 3
+  IPv6 address:
+    2001:db8::1/128 [VALID]
+  IPv6 subnet:  2001:db8::1/128

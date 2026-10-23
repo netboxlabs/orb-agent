@@ -22,12 +22,10 @@ import (
 
 const (
 	// maxHTTPBodyBytes bounds a single OTLP/HTTP request body (after
-	// decompression). pktvisor and the OTel collector send far smaller exports;
-	// anything bigger is refused with 413 instead of being buffered.
-	maxHTTPBodyBytes int64 = 16 << 20
-
-	contentTypeProtobuf = "application/x-protobuf"
-	contentTypeJSON     = "application/json"
+	// decompression): the same bound as the gRPC listener's, above the
+	// message cap so a large export is split rather than refused. Anything
+	// bigger is refused with 413 instead of being buffered.
+	maxHTTPBodyBytes int64 = maxReceiveBytes
 
 	httpReadHeaderTimeout = 10 * time.Second
 	httpReadTimeout       = 30 * time.Second // headers + body; a stalled body must not pin a handler
@@ -70,7 +68,7 @@ func (s *BridgeServer) otlpHTTPHandler() http.Handler {
 // signal is a fixed name for log lines; nothing request-derived is logged.
 func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signal string, req proto.Message, export func(context.Context, proto.Message) (proto.Message, error)) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || (mediaType != contentTypeProtobuf && mediaType != contentTypeJSON) {
+	if err != nil || (mediaType != ContentTypeProtobuf && mediaType != ContentTypeJSON) {
 		http.Error(w, "unsupported content type: use application/x-protobuf or application/json", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -90,7 +88,7 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signa
 		return
 	}
 
-	if mediaType == contentTypeJSON {
+	if mediaType == ContentTypeJSON {
 		err = protojson.UnmarshalOptions{DiscardUnknown: true}.Unmarshal(body, req)
 	} else {
 		err = proto.Unmarshal(body, req)
@@ -102,9 +100,16 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signa
 
 	resp, err := export(r.Context(), req)
 	if err != nil {
-		if status.Code(err) == codes.ResourceExhausted {
+		switch status.Code(err) {
+		case codes.ResourceExhausted:
 			w.Header().Set("Retry-After", "5")
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		case codes.InvalidArgument:
+			// An export over the message cap or the whole pending queue:
+			// dropped and counted, and 400 is a status the OTLP exporters
+			// do not retry.
+			http.Error(w, status.Convert(err).Message(), http.StatusBadRequest)
 			return
 		}
 		s.logger.Warn("OTLP HTTP export failed", "signal", signal, "error", err)
@@ -113,7 +118,7 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signa
 	}
 
 	var out []byte
-	if mediaType == contentTypeJSON {
+	if mediaType == ContentTypeJSON {
 		out, err = protojson.Marshal(resp)
 	} else {
 		out, err = proto.Marshal(resp)

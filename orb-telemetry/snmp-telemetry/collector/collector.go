@@ -22,6 +22,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/config"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/metrics"
+	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/octets"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/profiles"
 	"github.com/netboxlabs/orb-agent/orb-telemetry/snmp-telemetry/snmp"
 )
@@ -300,18 +301,29 @@ type MetricsCollector struct {
 	interruptedRuns map[deviceKey]int // device -> consecutive interrupted runs
 
 	// Observable gauge store: device -> metricName -> observations.
-	// Updated after each CollectTarget run; read by OTLP callbacks on every export cycle.
+	// Replaced by each CollectTarget run that publishes; read by the OTLP
+	// callbacks.
 	//
 	// policyDevices is a side index of deviceStore's keys grouped by policy, so
 	// a per-policy callback can walk its own devices instead of the whole
 	// store and skipping every other policy's keys. It is maintained under
 	// storeMu at every place deviceStore gains or loses a key: the publish in
-	// collect, forgetDevice, ForgetPolicy and Close. A callback reads it under
-	// storeMu.RLock only, the same lock deviceStore itself is read under, so
-	// the two can never disagree about what a policy currently owns.
+	// collect, forgetDevice, ForgetPolicy and Close.
+	//
+	// unexported is, per device, the metric names whose points the device's
+	// last publish holds and no collection has observed yet. A callback
+	// observes a device's points under its name only while the name is here,
+	// and takes it out as it does, so each poll's values are exported once:
+	// by the first export after the poll, not again by every export until the
+	// next one. Without it the periodic reader re-sends the stored values on
+	// every cycle, each time with a new timestamp, so the backend downstream
+	// stores otel_export_period / metrics_interval samples of one reading. It
+	// is maintained with deviceStore, in the same places, under the same
+	// lock, which a callback takes for writing because observing changes it.
 	storeMu       sync.RWMutex
 	deviceStore   map[deviceKey]map[string][]observedPoint
 	policyDevices map[string]map[deviceKey]struct{}
+	unexported    map[deviceKey]map[string]struct{}
 
 	// Registered observable gauge instruments, one per policy and metric
 	// name, each on its policy's meter so the policy's series export under
@@ -355,6 +367,7 @@ func NewMetricsCollector(clientFactory snmp.ClientFactory, matcher *profiles.Mat
 		interruptedRuns:  make(map[deviceKey]int),
 		deviceStore:      make(map[deviceKey]map[string][]observedPoint),
 		policyDevices:    make(map[string]map[deviceKey]struct{}),
+		unexported:       make(map[deviceKey]map[string]struct{}),
 		instruments:      make(map[instrumentKey]metric.Int64ObservableGauge),
 		registrations:    make(map[string][]metric.Registration),
 		reviewedProfiles: make(map[string]struct{}),
@@ -454,7 +467,9 @@ func (c *MetricsCollector) restorePollWindows(key deviceKey, windows map[string]
 // every OTLP export cycle to find that policy's devices, rather than the
 // whole deviceStore, so a callback's cost is its own policy's devices, not
 // every policy's, regardless of how many other policies share the
-// collector. Each policy's series leave under its own scope and the
+// collector. It observes a device's points only when they have not been
+// observed since the device's last publish (unexported), so a poll's values
+// leave once. Each policy's series leave under its own scope and the
 // datapoint carries no policy of its own.
 func (c *MetricsCollector) ensureInstrument(policyName, name, description string) {
 	c.gaugeMu.Lock()
@@ -476,11 +491,19 @@ func (c *MetricsCollector) ensureInstrument(policyName, name, description string
 		return
 	}
 	reg, err := m.RegisterCallback(func(_ context.Context, o metric.Observer) error {
-		c.storeMu.RLock()
-		defer c.storeMu.RUnlock()
+		c.storeMu.Lock()
+		defer c.storeMu.Unlock()
 		for device := range c.policyDevices[policyName] {
+			pending := c.unexported[device]
+			if _, ok := pending[name]; !ok {
+				continue
+			}
 			for _, pt := range c.deviceStore[device][name] {
 				o.ObserveInt64(g, pt.value, metric.WithAttributes(pt.attrs...))
+			}
+			delete(pending, name)
+			if len(pending) == 0 {
+				delete(c.unexported, device)
 			}
 		}
 		return nil
@@ -540,6 +563,7 @@ func (c *MetricsCollector) Close() {
 	c.storeMu.Lock()
 	c.deviceStore = make(map[deviceKey]map[string][]observedPoint)
 	c.policyDevices = make(map[string]map[deviceKey]struct{})
+	c.unexported = make(map[deviceKey]map[string]struct{})
 	c.storeMu.Unlock()
 
 	c.pollMu.Lock()
@@ -581,6 +605,7 @@ func (c *MetricsCollector) ForgetPolicy(policyName string) {
 	for key := range c.deviceStore {
 		if key.policy == policyName {
 			delete(c.deviceStore, key)
+			delete(c.unexported, key)
 		}
 	}
 	delete(c.policyDevices, policyName)
@@ -654,6 +679,7 @@ func (c *MetricsCollector) noteProfile(key deviceKey, id string) {
 func (c *MetricsCollector) forgetDevice(key deviceKey) {
 	c.storeMu.Lock()
 	delete(c.deviceStore, key)
+	delete(c.unexported, key)
 	if devices := c.policyDevices[key.policy]; devices != nil {
 		delete(devices, key)
 		if len(devices) == 0 {
@@ -977,6 +1003,24 @@ func (c *MetricsCollector) collect(ctx context.Context, key deviceKey, target co
 	emptyRun := len(newStore) == 0
 	if !emptyRun || failed == 0 {
 		c.deviceStore[key] = newStore
+		// Every name this publish holds is this poll's to export once,
+		// retained points included: a declaration throttled by poll_time_sec
+		// is read on this poll from what it left, and leaves once per poll
+		// like the rest rather than once per poll_time_sec. A poll that
+		// lands before the previous one was collected replaces its values
+		// and its marks alike: the collection takes the device's latest
+		// poll, as a gauge reports its latest value. That loses polls only
+		// when a policy polls faster than the export period checks, which
+		// the policy manager warns about at start.
+		if len(newStore) == 0 {
+			delete(c.unexported, key)
+		} else {
+			pending := make(map[string]struct{}, len(newStore))
+			for name := range newStore {
+				pending[name] = struct{}{}
+			}
+			c.unexported[key] = pending
+		}
 		devices := c.policyDevices[key.policy]
 		if devices == nil {
 			devices = make(map[deviceKey]struct{})
@@ -2150,11 +2194,13 @@ func (c *MetricsCollector) walkScalar(walker snmp.Walker, oid string) (string, e
 	for _, pdu := range pdus {
 		switch pdu.Type {
 		case gosnmp.OctetString:
+			// sysDescr becomes an attribute through the device tags, so it is
+			// rendered the way every tag is.
 			if s, ok := pdu.Value.(string); ok {
-				return strings.TrimSpace(s), nil
+				return octets.Text([]byte(s)), nil
 			}
 			if b, ok := pdu.Value.([]byte); ok {
-				return strings.TrimSpace(string(b)), nil
+				return octets.Text(b), nil
 			}
 		case gosnmp.ObjectIdentifier:
 			if s, ok := pdu.Value.(string); ok {
@@ -2534,7 +2580,9 @@ func pduToString(pdu snmp.PDU, col *profiles.TagColumn) string {
 				}
 			}
 		}
-		return strings.TrimSpace(string(raw))
+		// A binary column read without a conversion, such as ifPhysAddress,
+		// renders as hex rather than as bytes that are not UTF-8.
+		return octets.Text(raw)
 	case gosnmp.Integer:
 		if v, ok := pdu.Value.(int); ok {
 			if col != nil {

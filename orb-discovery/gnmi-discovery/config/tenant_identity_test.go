@@ -21,7 +21,7 @@ func TestSlug(t *testing.T) {
 		"a\vb":      "a-b",
 		"a\x1cb":    "a-b",
 	} {
-		assert.Equal(t, want, slug(in), in)
+		assert.Equal(t, want, Slug(in), in)
 	}
 }
 

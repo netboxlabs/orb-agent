@@ -29,9 +29,11 @@ var unknownFieldRe = regexp.MustCompile(`field (.+) not found in type (\S+)$`)
 // no set to check against, so reporting those would fire on correct files and
 // train operators to ignore the warning. Scope is excluded for the same
 // reason it is in the other backends, and because its own keys are checked by
-// the validation that already runs over them.
+// the validation that already runs over them. Those blocks still report an
+// option written in them, see misplacedOption.
 var narrowedTypes = map[string]bool{
 	"config.PolicyConfig": true,
+	"config.Options":      true,
 }
 
 // suggestionSource is a block a misplaced config-level key may belong to.
@@ -45,14 +47,16 @@ type suggestionSource struct {
 // scan_types), so a key landing on config is usually meant for it.
 func suggestionSources() []suggestionSource {
 	return []suggestionSource{
+		{"options", yamlFieldNames(reflect.TypeFor[Options]())},
 		{"defaults", yamlFieldNames(reflect.TypeFor[Defaults]())},
 		{"scope", yamlFieldNames(reflect.TypeFor[Scope]())},
 	}
 }
 
 // WarnUnknownPolicyKeys logs one warning per unrecognized key in a policy's
-// config block, naming the block the key belongs to when it is a field of one
-// of the blocks alongside it.
+// config or options block, naming the block the key belongs to when it is a
+// field of one of the blocks alongside it, and one per option written in
+// another block of the policy.
 //
 // Decoding happens a second time purely to collect the report; the error is
 // never returned, so an unrecognized key stays non-fatal.
@@ -71,10 +75,16 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 	sources := suggestionSources()
 	for _, entry := range typeErr.Errors {
 		match := unknownFieldRe.FindStringSubmatch(entry)
-		if match == nil || !narrowedTypes[match[2]] {
+		if match == nil {
 			continue
 		}
 		key := match[1]
+		if !narrowedTypes[match[2]] {
+			if path, ok := misplacedOption(match[2], key); ok {
+				logger.Warn("ignoring unrecognized config key", "key", key, "did_you_mean", path, "detail", entry)
+			}
+			continue
+		}
 		if label, ok := suggestFor(key, sources); ok {
 			logger.Warn("ignoring unrecognized config key",
 				"key", key, "did_you_mean", label+"."+key, "detail", entry)
@@ -82,6 +92,20 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 		}
 		logger.Warn("ignoring unrecognized config key", "key", key, "detail", entry)
 	}
+}
+
+// misplacedOption names where an options block or an option written in
+// another block of the policy belongs, as a full path from the policy. Those
+// blocks are otherwise unchecked, so nothing else in them is reported.
+func misplacedOption(blockType, key string) (string, bool) {
+	switch blockType {
+	case "config.Policy", "config.Defaults", "config.Scope":
+		if key == "options" {
+			return "config.options", true
+		}
+		return "config.options." + key, yamlFieldNames(reflect.TypeFor[Options]())[key]
+	}
+	return "", false
 }
 
 // suggestFor returns the label of the first block that accepts key.

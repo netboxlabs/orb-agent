@@ -542,3 +542,46 @@ def test_discover_device_driver_defaults_to_standard_napalm_only(mock_get_networ
         assert call.args[0] not in custom_only_drivers, (
             f"Custom driver '{call.args[0]}' was tried during default auto-discovery"
         )
+
+
+def _fake_driver(received, serial, pops=()):
+    """A driver class that records its optional_args and pops keys, as iosxr_netconf does."""
+
+    class FakeDriver:
+        def __init__(self, hostname, username, password, timeout, optional_args):
+            received.append(dict(optional_args))
+            for key in pops:
+                optional_args.pop(key, None)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_facts(self):
+            return {"serial_number": serial, "hostname": "sw1", "fqdn": "sw1"}
+
+    return FakeDriver
+
+
+def test_discover_device_driver_gives_each_driver_its_own_optional_args(mock_get_network_driver):
+    """A driver that pops keys must not take them from the next driver or the target."""
+    original = {"port": 2222, "key_file": "/opt/orb/key", "ssh_config_file": "/opt/orb/ssh.conf"}
+    info = SimpleNamespace(
+        hostname="testhost",
+        username="testuser",
+        password="testpass",
+        timeout=10,
+        optional_args=dict(original),
+    )
+    first, second = [], []
+    drivers = {
+        "first": _fake_driver(first, "Unknown", pops=("port", "key_file", "ssh_config_file")),
+        "second": _fake_driver(second, "ABC123"),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(info, drivers=["first", "second"]) == "second"
+    assert second == [original]
+    assert info.optional_args == original

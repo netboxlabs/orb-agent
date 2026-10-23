@@ -656,6 +656,46 @@ policies:
 	assert.Equal(t, "0.0.0.0:1162", pool.listens["p1"])
 }
 
+// A check for polled values exports a device's latest poll, so a policy
+// polling faster than the checks come has polls that never leave. Starting
+// one warns, naming the two periods; one polling at the check period or
+// slower, or a trap-only policy, starts quietly. With export off there is no
+// period to compare against.
+func TestManager_WarnsWhenAPolicyPollsFasterThanTheExportPeriod(t *testing.T) {
+	manager := func(exportPeriod time.Duration) (*Manager, *bytes.Buffer) {
+		var buf bytes.Buffer
+		lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		m := NewManager(t.Context(), lg, Options{TrapPool: newSpyPool(), ExportPeriod: exportPeriod})
+		t.Cleanup(func() { _ = m.Stop() })
+		return m, &buf
+	}
+	polling := func(intervalSec int) config.Policy {
+		pol := policyWithTargets("10.0.0.1")
+		pol.Config.MetricsInterval = &intervalSec
+		return pol
+	}
+	const warning = "metrics_interval is shorter than the export period"
+
+	m, buf := manager(10 * time.Second)
+	require.NoError(t, m.StartPolicy("faster", polling(6)))
+	out := buf.String()
+	assert.Contains(t, out, warning)
+	assert.Contains(t, out, "policy=faster")
+	assert.Contains(t, out, "metrics_interval=6s")
+	assert.Contains(t, out, "export_period=10s")
+
+	buf.Reset()
+	require.NoError(t, m.StartPolicy("at-the-period", polling(10)))
+	trapsOnly := withTraps(policyWithTargets("10.0.0.1"), ":162")
+	trapsOnly.Config.MetricsInterval = nil
+	require.NoError(t, m.StartPolicy("traps-only", trapsOnly))
+	assert.NotContains(t, buf.String(), warning, "at the period every poll is checked, and a trap-only policy polls nothing")
+
+	m, buf = manager(0)
+	require.NoError(t, m.StartPolicy("faster", polling(6)))
+	assert.NotContains(t, buf.String(), warning, "no export, no period")
+}
+
 // A target with its own v3 authentication registers with that credential,
 // not the policy-level one, so the receiver tries the right secret for the
 // right device.

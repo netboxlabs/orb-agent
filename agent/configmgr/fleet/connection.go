@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -43,6 +44,7 @@ type MQTTConnection struct {
 	messaging                *Messaging
 	resetChan                chan struct{}
 	onReadyHooks             []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	onDownHooks              []func()
 	topicHandlers            map[string]TopicMessageHandler
 	connectionTopics         TokenResponseTopics
 	reconnectChan            chan struct{}
@@ -54,6 +56,11 @@ type MQTTConnection struct {
 	groupMembershipFailCount int
 	heartbeatFailCount       int
 	mu                       sync.Mutex
+	// brokerMaxPacketSize is the broker's CONNACK maximum packet size. The
+	// client stores it too but never checks a publish against it, and an
+	// MQTT 5 server answers an oversized packet by closing the connection,
+	// so the OTLP bridge reads it to keep its messages under.
+	brokerMaxPacketSize atomic.Uint32
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -76,6 +83,45 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
 func (connection *MQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	connection.onReadyHooks = append(connection.onReadyHooks, fn)
+}
+
+// AddOnDownHook registers a callback for a connection the client lost and is
+// about to reconnect on its own. The hooks run in order on the client's
+// goroutine, before it reconnects, so they must not block: autopaho makes the
+// next connection live before OnConnectionUp, and whatever must not reach it
+// until its ready hooks have run is stopped here.
+func (connection *MQTTConnection) AddOnDownHook(fn func()) {
+	connection.onDownHooks = append(connection.onDownHooks, fn)
+}
+
+// onConnectionDown is autopaho's OnConnectionDown: it runs the down hooks and
+// lets the client reconnect.
+func (connection *MQTTConnection) onConnectionDown() bool {
+	connection.logger.Warn("MQTT connection lost, reconnecting")
+	for _, hook := range connection.onDownHooks {
+		hook()
+	}
+	return true
+}
+
+// recordBrokerLimits keeps what the broker's CONNACK says of its limits, for
+// the ready hooks to read. A broker that sets no maximum packet size, or a
+// CONNACK without properties, records zero.
+func (connection *MQTTConnection) recordBrokerLimits(connack *paho.Connack) {
+	var limit uint32
+	if connack != nil && connack.Properties != nil && connack.Properties.MaximumPacketSize != nil {
+		limit = *connack.Properties.MaximumPacketSize
+	}
+	connection.brokerMaxPacketSize.Store(limit)
+	if limit > 0 {
+		connection.logger.Info("MQTT broker maximum packet size", "bytes", limit)
+	}
+}
+
+// BrokerMaxPacketSize is the broker's CONNACK maximum packet size, zero when
+// it announced none.
+func (connection *MQTTConnection) BrokerMaxPacketSize() uint32 {
+	return connection.brokerMaxPacketSize.Load()
 }
 
 // RegisterTopicHandler registers a handler for a specific topic
@@ -120,9 +166,16 @@ type MQTTConnector interface {
 	Disconnect(ctx context.Context, heartbeatTopic string) error
 	Reconnect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
 	AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics))
+	// AddOnDownHook registers a callback run when the client loses the
+	// connection, before it reconnects on its own.
+	AddOnDownHook(fn func())
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 	// SetResetter installs the resetter a full agent reset restarts through.
 	SetResetter(r Resetter)
+	// BrokerMaxPacketSize is the maximum packet size the broker announced in
+	// its CONNACK, set before the ready hooks run; zero when it announced
+	// none, or before the first connection.
+	BrokerMaxPacketSize() uint32
 }
 
 // startDispatchWorker starts the worker goroutine that processes dispatch jobs sequentially.
@@ -298,8 +351,9 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 		CleanStartOnInitialConnection: true,
 		ConnectTimeout:                10 * time.Second,
 		ReconnectBackoff:              mqttReconnectBackoff,
-		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, connack *paho.Connack) {
 			connection.logger.Info("MQTT connection established", "server", serverURL.String())
+			connection.recordBrokerLimits(connack)
 
 			_, err := cm.Subscribe(context.Background(), &paho.Subscribe{
 				Subscriptions: []paho.SubscribeOptions{
@@ -407,6 +461,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 				return nil
 			})
 		},
+		OnConnectionDown: connection.onConnectionDown,
 		OnConnectError: func(err error) {
 			connection.logger.Error("MQTT connection error", "error", err)
 		},

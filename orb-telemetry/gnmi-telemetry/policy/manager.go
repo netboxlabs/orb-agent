@@ -79,6 +79,10 @@ type Manager struct {
 	// across every policy's scope, however many profile sets feed it, so the
 	// registry keeps one kind and unit per name across them too.
 	schemas *collector.Schemas
+	// exportPeriod is how often new values are checked for export, so a
+	// policy sampling faster than that can be told its samples will not all
+	// leave. Zero while metrics export is off.
+	exportPeriod time.Duration
 
 	collectorsMu    sync.Mutex
 	collectorsByDir map[string]*cachedCollector
@@ -121,6 +125,12 @@ type Options struct {
 	// Dialer opens a gNMI session to a target. Nil, the default, uses the real
 	// gnmic dialer; a test substitutes a fake so no policy touches the network.
 	Dialer gnmi.Dialer
+	// ExportPeriod is the metrics export period, how often new values are
+	// checked for export. Each check exports a series' latest value, so a
+	// policy whose metrics_interval is shorter than this loses the samples in
+	// between; starting one logs a warning. Zero, the default, warns never,
+	// as when export is off.
+	ExportPeriod time.Duration
 }
 
 // NewManager returns a new policy manager
@@ -151,6 +161,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, opts Options) *Manager
 		dialer:             dialer,
 		budget:             collector.NewBudget(),
 		schemas:            collector.NewSchemas(),
+		exportPeriod:       opts.ExportPeriod,
 	}
 }
 
@@ -508,6 +519,13 @@ func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, 
 	r, err := NewRunner(m.ctx, m.logger, name, policy, sharedCollector, m.dialer)
 	if err != nil {
 		return Handle{}, err
+	}
+	if r.interval < m.exportPeriod {
+		// A check exports a series' latest value, so of the samples between
+		// two checks only the last leaves. The policy still runs: its
+		// samples are not wrong, just more than are sent.
+		m.logger.Warn("metrics_interval is shorter than the export period, only the latest sample before each check is exported; set otel-export-period at or below the shortest metrics_interval",
+			"policy", config.SanitizeLogValue(name), "metrics_interval", r.interval, "export_period", m.exportPeriod)
 	}
 
 	r.Start()

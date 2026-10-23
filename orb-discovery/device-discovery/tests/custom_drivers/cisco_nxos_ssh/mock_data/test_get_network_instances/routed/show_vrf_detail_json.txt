@@ -1,0 +1,5 @@
+{"TABLE_vrf": {"ROW_vrf": [
+  {"vrf_name": "default", "vrf_id": 1, "vrf_state": "Up", "rd": "0:0"},
+  {"vrf_name": "management", "vrf_id": 2, "vrf_state": "Up", "rd": "0:0"},
+  {"vrf_name": "blue", "vrf_id": 3, "vrf_state": "Up", "rd": "65000:1"}
+]}}
