@@ -155,13 +155,15 @@ func enrichLogsWithDatasets(req *collectorlogs.ExportLogsServiceRequest, repo po
 			continue
 		}
 
-		// Find policy_name attribute in Resource attributes first
-		policyName := ""
+		// A resource-level policy applies to every scope. A legacy scope-level
+		// name is read again for each scope, so it cannot leak onto a later
+		// scope that has no policy of its own.
+		resourcePolicyName := ""
 		if rl.Resource != nil && rl.Resource.Attributes != nil {
 			for _, attr := range rl.Resource.Attributes {
 				if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
 					if sv := attr.Value.GetStringValue(); sv != "" {
-						policyName = sv
+						resourcePolicyName = sv
 						break
 					}
 				}
@@ -169,11 +171,11 @@ func enrichLogsWithDatasets(req *collectorlogs.ExportLogsServiceRequest, repo po
 		}
 
 		for _, sl := range rl.ScopeLogs {
-			if sl == nil || sl.Scope == nil || sl.Scope.Attributes == nil {
+			if sl == nil || sl.Scope == nil {
 				continue
 			}
 
-			// If not found in Resource, check Scope attributes for backward compatibility
+			policyName := resourcePolicyName
 			if policyName == "" {
 				for _, attr := range sl.Scope.Attributes {
 					if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
@@ -219,6 +221,11 @@ func enrichLogsWithDatasets(req *collectorlogs.ExportLogsServiceRequest, repo po
 						Values: datasetIDsValues,
 					},
 				},
+			}
+
+			// A scope that arrived without attributes still gets dataset_ids.
+			if sl.Scope.Attributes == nil {
+				sl.Scope.Attributes = make([]*commonv1.KeyValue, 0, 1)
 			}
 
 			// Find or create dataset_ids attribute

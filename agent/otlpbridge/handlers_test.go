@@ -13,6 +13,7 @@ import (
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	commonv1 "go.opentelemetry.io/proto/otlp/common/v1"
+	logsv1 "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricsv1 "go.opentelemetry.io/proto/otlp/metrics/v1"
 	resourcev1 "go.opentelemetry.io/proto/otlp/resource/v1"
 	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
@@ -296,4 +297,138 @@ func TestMetricsHandler_Export_StampsPolicyIDOnScope_JSON(t *testing.T) {
 	require.NoError(t, protojson.Unmarshal(fp.getPayload(), &out))
 	got := out.ResourceMetrics[0].ScopeMetrics[0].Scope.Attributes
 	assert.Equal(t, map[string]string{"policy_name": "edge", "orb.policy_id": "id-edge", "orb.backend": "pktvisor"}, attrMap(got))
+}
+
+// datasetIDValues returns the string elements of a scope's dataset_ids array.
+func datasetIDValues(attrs []*commonv1.KeyValue) []string {
+	for _, kv := range attrs {
+		if kv == nil || kv.Key != "dataset_ids" || kv.Value == nil || kv.Value.GetArrayValue() == nil {
+			continue
+		}
+		vals := kv.Value.GetArrayValue().GetValues()
+		out := make([]string, 0, len(vals))
+		for _, v := range vals {
+			out = append(out, v.GetStringValue())
+		}
+		return out
+	}
+	return nil
+}
+
+// enrichLogsWithDatasets stamps the dataset id stored for the policy named by
+// diode.metadata.policy_name. The Diode SDK sends a scope with no attributes,
+// so a nil attribute list still has to receive dataset_ids.
+func TestEnrichLogsWithDatasets(t *testing.T) {
+	const (
+		policyName = "device-discovery"
+		policyID   = "9b15a75b-6d44-4a93-ac13-dd163793a0b1"
+		datasetID  = "3f63339c-be47-4c40-b525-ae36682b1c53"
+	)
+
+	repoWithDataset := func(t *testing.T) policies.PolicyRepo {
+		t.Helper()
+		repo, err := policies.NewMemRepo()
+		require.NoError(t, err)
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID:       policyID,
+			Name:     policyName,
+			Datasets: map[string]bool{datasetID: true},
+		}))
+		return repo
+	}
+
+	policyResource := func(name string) *resourcev1.Resource {
+		return &resourcev1.Resource{Attributes: []*commonv1.KeyValue{
+			strAttr(diodePolicyNameAttributeKey, name),
+		}}
+	}
+
+	logsWith := func(resource *resourcev1.Resource, scope *commonv1.InstrumentationScope) *collectorlogs.ExportLogsServiceRequest {
+		return &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
+			Resource:  resource,
+			ScopeLogs: []*logsv1.ScopeLogs{{Scope: scope}},
+		}}}
+	}
+
+	t.Run("nil scope attributes receive the stored dataset id", func(t *testing.T) {
+		scope := &commonv1.InstrumentationScope{Name: "netboxlabs-diode", Version: "1.14.2"}
+		enrichLogsWithDatasets(logsWith(policyResource(policyName), scope), repoWithDataset(t))
+
+		require.NotNil(t, scope.Attributes)
+		assert.Equal(t, "dataset_ids", scope.Attributes[0].Key)
+		assert.Equal(t, []string{datasetID}, datasetIDValues(scope.Attributes))
+		assert.NotContains(t, datasetIDValues(scope.Attributes), policyID)
+	})
+
+	t.Run("existing scope attributes keep their values and gain dataset_ids", func(t *testing.T) {
+		scope := &commonv1.InstrumentationScope{Attributes: []*commonv1.KeyValue{
+			strAttr("diode.metadata.hostname", "edge-1"),
+		}}
+		enrichLogsWithDatasets(logsWith(policyResource(policyName), scope), repoWithDataset(t))
+
+		assert.Equal(t, "edge-1", attrMap(scope.Attributes)["diode.metadata.hostname"])
+		assert.Equal(t, []string{datasetID}, datasetIDValues(scope.Attributes))
+		assert.Equal(t, 1, attrCount(scope.Attributes, "dataset_ids"))
+	})
+
+	t.Run("missing policy name stays unstamped", func(t *testing.T) {
+		scope := &commonv1.InstrumentationScope{Name: "netboxlabs-diode", Version: "1.14.2"}
+		enrichLogsWithDatasets(logsWith(&resourcev1.Resource{}, scope), repoWithDataset(t))
+
+		assert.Nil(t, scope.Attributes)
+	})
+
+	t.Run("unknown policy name stays unstamped", func(t *testing.T) {
+		scope := &commonv1.InstrumentationScope{Name: "netboxlabs-diode", Version: "1.14.2"}
+		enrichLogsWithDatasets(logsWith(policyResource("not-a-known-policy"), scope), repoWithDataset(t))
+
+		assert.Nil(t, scope.Attributes)
+	})
+
+	t.Run("nil scope is left alone", func(t *testing.T) {
+		req := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
+			Resource:  policyResource(policyName),
+			ScopeLogs: []*logsv1.ScopeLogs{{Scope: nil}},
+		}}}
+		enrichLogsWithDatasets(req, repoWithDataset(t))
+
+		assert.Nil(t, req.ResourceLogs[0].ScopeLogs[0].Scope)
+	})
+
+	t.Run("legacy policy name does not stamp a later scope with no attributes", func(t *testing.T) {
+		const (
+			otherName   = "other-discovery"
+			otherPolicy = "11111111-2222-3333-4444-555555555555"
+			otherSet    = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		)
+		repo, err := policies.NewMemRepo()
+		require.NoError(t, err)
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID: policyID, Name: policyName, Datasets: map[string]bool{datasetID: true},
+		}))
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID: otherPolicy, Name: otherName, Datasets: map[string]bool{otherSet: true},
+		}))
+
+		named := &commonv1.InstrumentationScope{Attributes: []*commonv1.KeyValue{
+			strAttr(diodePolicyNameAttributeKey, policyName),
+		}}
+		unmarked := &commonv1.InstrumentationScope{Name: "netboxlabs-diode", Version: "1.14.2"}
+		other := &commonv1.InstrumentationScope{Attributes: []*commonv1.KeyValue{
+			strAttr(diodePolicyNameAttributeKey, otherName),
+		}}
+		req := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
+			Resource: &resourcev1.Resource{},
+			ScopeLogs: []*logsv1.ScopeLogs{
+				{Scope: named},
+				{Scope: unmarked},
+				{Scope: other},
+			},
+		}}}
+		enrichLogsWithDatasets(req, repo)
+
+		assert.Equal(t, []string{datasetID}, datasetIDValues(named.Attributes))
+		assert.Nil(t, unmarked.Attributes)
+		assert.Equal(t, []string{otherSet}, datasetIDValues(other.Attributes))
+	})
 }
