@@ -394,4 +394,41 @@ func TestEnrichLogsWithDatasets(t *testing.T) {
 
 		assert.Nil(t, req.ResourceLogs[0].ScopeLogs[0].Scope)
 	})
+
+	t.Run("legacy policy name does not stamp a later scope with no attributes", func(t *testing.T) {
+		const (
+			otherName   = "other-discovery"
+			otherPolicy = "11111111-2222-3333-4444-555555555555"
+			otherSet    = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+		)
+		repo, err := policies.NewMemRepo()
+		require.NoError(t, err)
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID: policyID, Name: policyName, Datasets: map[string]bool{datasetID: true},
+		}))
+		require.NoError(t, repo.Update(policies.PolicyData{
+			ID: otherPolicy, Name: otherName, Datasets: map[string]bool{otherSet: true},
+		}))
+
+		named := &commonv1.InstrumentationScope{Attributes: []*commonv1.KeyValue{
+			strAttr(diodePolicyNameAttributeKey, policyName),
+		}}
+		unmarked := &commonv1.InstrumentationScope{Name: "netboxlabs-diode", Version: "1.14.2"}
+		other := &commonv1.InstrumentationScope{Attributes: []*commonv1.KeyValue{
+			strAttr(diodePolicyNameAttributeKey, otherName),
+		}}
+		req := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
+			Resource: &resourcev1.Resource{},
+			ScopeLogs: []*logsv1.ScopeLogs{
+				{Scope: named},
+				{Scope: unmarked},
+				{Scope: other},
+			},
+		}}}
+		enrichLogsWithDatasets(req, repo)
+
+		assert.Equal(t, []string{datasetID}, datasetIDValues(named.Attributes))
+		assert.Nil(t, unmarked.Attributes)
+		assert.Equal(t, []string{otherSet}, datasetIDValues(other.Attributes))
+	})
 }

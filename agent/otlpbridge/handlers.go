@@ -155,13 +155,15 @@ func enrichLogsWithDatasets(req *collectorlogs.ExportLogsServiceRequest, repo po
 			continue
 		}
 
-		// Find policy_name attribute in Resource attributes first
-		policyName := ""
+		// A resource-level policy applies to every scope. A legacy scope-level
+		// name is read again for each scope, so it cannot leak onto a later
+		// scope that has no policy of its own.
+		resourcePolicyName := ""
 		if rl.Resource != nil && rl.Resource.Attributes != nil {
 			for _, attr := range rl.Resource.Attributes {
 				if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
 					if sv := attr.Value.GetStringValue(); sv != "" {
-						policyName = sv
+						resourcePolicyName = sv
 						break
 					}
 				}
@@ -173,9 +175,8 @@ func enrichLogsWithDatasets(req *collectorlogs.ExportLogsServiceRequest, repo po
 				continue
 			}
 
-			// If not found in Resource, check Scope attributes for backward compatibility.
-			// A nil attribute list has no policy name to read.
-			if policyName == "" && sl.Scope.Attributes != nil {
+			policyName := resourcePolicyName
+			if policyName == "" {
 				for _, attr := range sl.Scope.Attributes {
 					if attr != nil && attr.Key == diodePolicyNameAttributeKey && attr.Value != nil {
 						if sv := attr.Value.GetStringValue(); sv != "" {
