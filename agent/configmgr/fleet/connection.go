@@ -44,6 +44,7 @@ type MQTTConnection struct {
 	messaging                *Messaging
 	resetChan                chan struct{}
 	onReadyHooks             []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	onDownHooks              []func()
 	topicHandlers            map[string]TopicMessageHandler
 	connectionTopics         TokenResponseTopics
 	reconnectChan            chan struct{}
@@ -82,6 +83,25 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 // AddOnReadyHook registers a callback to be invoked when MQTT connection is ready.
 func (connection *MQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	connection.onReadyHooks = append(connection.onReadyHooks, fn)
+}
+
+// AddOnDownHook registers a callback for a connection the client lost and is
+// about to reconnect on its own. The hooks run in order on the client's
+// goroutine, before it reconnects, so they must not block: autopaho makes the
+// next connection live before OnConnectionUp, and whatever must not reach it
+// until its ready hooks have run is stopped here.
+func (connection *MQTTConnection) AddOnDownHook(fn func()) {
+	connection.onDownHooks = append(connection.onDownHooks, fn)
+}
+
+// onConnectionDown is autopaho's OnConnectionDown: it runs the down hooks and
+// lets the client reconnect.
+func (connection *MQTTConnection) onConnectionDown() bool {
+	connection.logger.Warn("MQTT connection lost, reconnecting")
+	for _, hook := range connection.onDownHooks {
+		hook()
+	}
+	return true
 }
 
 // recordBrokerLimits keeps what the broker's CONNACK says of its limits, for
@@ -146,6 +166,9 @@ type MQTTConnector interface {
 	Disconnect(ctx context.Context, heartbeatTopic string) error
 	Reconnect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error
 	AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics))
+	// AddOnDownHook registers a callback run when the client loses the
+	// connection, before it reconnects on its own.
+	AddOnDownHook(fn func())
 	RegisterTopicHandler(topic string, handler TopicMessageHandler)
 	// SetResetter installs the resetter a full agent reset restarts through.
 	SetResetter(r Resetter)
@@ -438,6 +461,7 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 				return nil
 			})
 		},
+		OnConnectionDown: connection.onConnectionDown,
 		OnConnectError: func(err error) {
 			connection.logger.Error("MQTT connection error", "error", err)
 		},

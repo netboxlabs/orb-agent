@@ -170,6 +170,14 @@ func (s *BridgeServer) SetTelemetryTopic(topic string) {
 	s.mu.Unlock()
 }
 
+// HasPublisher reports whether a publisher is set: without one the writer
+// holds its messages.
+func (s *BridgeServer) HasPublisher() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.publisher != nil
+}
+
 // ClearPublisher clears the publisher, causing the writer goroutine to retry
 // with backoff until a new publisher is set via SetPublisher.
 func (s *BridgeServer) ClearPublisher() {

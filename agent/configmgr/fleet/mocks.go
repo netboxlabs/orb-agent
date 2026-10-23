@@ -114,7 +114,8 @@ type MockMQTTConnection struct {
 	disconnectCalled   bool
 	lastConnectDetails ConnectionDetails
 
-	hooks []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	hooks     []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
+	downHooks []func()
 
 	resetter Resetter
 }
@@ -168,6 +169,18 @@ func (m *MockMQTTConnection) Reconnect(_ context.Context, _ context.Context, _ C
 // AddOnReadyHook registers a hook function to be called when the MQTT connection is ready.
 func (m *MockMQTTConnection) AddOnReadyHook(fn func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)) {
 	m.hooks = append(m.hooks, fn)
+}
+
+// AddOnDownHook registers a hook function to be called when the MQTT connection drops.
+func (m *MockMQTTConnection) AddOnDownHook(fn func()) {
+	m.downHooks = append(m.downHooks, fn)
+}
+
+// TriggerOnDownHook runs the registered down hooks, as a lost connection does (for testing).
+func (m *MockMQTTConnection) TriggerOnDownHook() {
+	for _, hook := range m.downHooks {
+		hook()
+	}
 }
 
 // BrokerMaxPacketSize answers MaxPacketSize.

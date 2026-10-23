@@ -261,6 +261,25 @@ func TestLogsExport_OverTheCapIsRefusedAndCounted(t *testing.T) {
 	assert.Zero(t, pub.callCount(), "nothing was published")
 }
 
+// A message held while there is no publisher is checked against the broker's
+// limit when the next publisher comes, so a limit installed before that
+// publisher holds for every message cut under the previous broker's.
+func TestWriter_AHeldMessageMeetsTheLimitInstalledBeforeTheNextPublisher(t *testing.T) {
+	pub := &scriptedPublisher{}
+	bridge := limitedBridge(t, BridgeConfig{}, pub)
+	bridge.ClearPublisher()
+	require.NoError(t, bridge.enqueue(context.Background(), signalMetrics, false, [][]byte{make([]byte, 4000), make([]byte, 100)}, ContentTypeProtobuf))
+	assert.Zero(t, pub.callCount(), "nothing goes out without a publisher")
+
+	bridge.SetBrokerMaxPacketSize(2000)
+	bridge.SetPublisher(pub)
+	require.Eventually(t, func() bool { return len(pub.published()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Len(t, pub.published()[0].payload, 100)
+	assert.Equal(t, 1, pub.callCount(), "the payload over the new limit is never sent")
+	assert.Equal(t, int64(1), bridge.dropped.total(signalMetrics, reasonTooLarge))
+	assert.Zero(t, bridge.dropped.total(signalMetrics, reasonPublishFailed))
+}
+
 // A payload over the broker's maximum packet size is never sent: the broker
 // would close the agent's connection. It is dropped and counted, and the
 // message behind it goes out.

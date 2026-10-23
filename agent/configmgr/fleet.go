@@ -325,6 +325,19 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 			slog.Uint64("broker_max_packet_bytes", uint64(brokerMax)))
 	})
 
+	// A connection the client lost takes the bridge's publisher with it.
+	// autopaho makes the next connection live before OnConnectionUp, and the
+	// hook above installs that broker's limit only after the subscribe, so
+	// until then a payload cut to the old broker's limit could go out over the
+	// new one's and close the connection again. Without a publisher the writer
+	// holds its messages, spending no retries, until the hook installs the
+	// limit and then the publisher.
+	fleetManager.connection.AddOnDownHook(func() {
+		if fleetManager.otlpBridge != nil {
+			fleetManager.otlpBridge.ClearPublisher()
+		}
+	})
+
 	// Retry loop for token fetch + MQTT connect. These depend on external services
 	// (token endpoint, MQTT broker) that may not be up yet at agent startup.
 	// AuthError (401/403) is permanent — bad credentials won't be fixed by retrying.
