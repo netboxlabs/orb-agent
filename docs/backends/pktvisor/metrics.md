@@ -22,6 +22,15 @@ handler reports per direction, per device or per target:
 - Flow metrics carry a `device` label, and most also carry `device_interface`.
 - Netprobe metrics carry a `target` label.
 
+Some label values come from packets, such as the `qname` label of the top QNAME
+series and the hostname in `dhcp_top_clients`, and a DNS name or DHCP hostname
+may hold any byte. Prometheus and OpenTelemetry accept only UTF-8, so
+`pktvisord` keeps valid UTF-8 as it is and writes each other byte as `\DDD`, its
+decimal value, as DNS presentation format does. For example, a query for
+`www.bad<0xff>name.test` is counted in `dns_top_qname2_xacts` with the `qname`
+value `.bad\255name.test`. A backslash followed by three digits is written as
+`\092`, so a name that holds the text `\255` stays distinct.
+
 One caveat on the `_sum` series: for quantile and rate metrics `pktvisord`
 writes the maximum observed value into `_sum`, not a sum, so it does not mean
 what the Prometheus summary convention implies.
