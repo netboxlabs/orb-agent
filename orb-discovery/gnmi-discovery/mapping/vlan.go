@@ -54,24 +54,6 @@ func mapVlanStatus(s string) string {
 	return "active"
 }
 
-// slugify lower-cases and replaces each run of non-[a-z0-9] with a single hyphen,
-// trimming leading/trailing hyphens. Used for the VLANGroup slug (NetBox requires one).
-func slugify(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	prevHyphen := false
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-			prevHyphen = false
-		} else if b.Len() > 0 && !prevHyphen {
-			b.WriteByte('-')
-			prevHyphen = true
-		}
-	}
-	return strings.TrimRight(b.String(), "-")
-}
-
 type vlanDef struct{ name, status string }
 
 // translateVlanDefinitions reads VLAN name/status out of the network-instance
@@ -154,10 +136,10 @@ func newVlanBuilder(dev *diode.Device, defaults *config.Defaults, defs map[int64
 	if defaults != nil {
 		v := defaults.Vlan
 		// Only create the group when the name yields a non-empty slug — NetBox
-		// requires VLANGroup.slug to be non-empty, so a name with no [a-z0-9] runes
-		// (slug == "") would make ingestion fail. Skip the group in that case (the
-		// VLANs are still emitted, just ungrouped).
-		if slug := slugify(v.Group.Name); v.Group.Name != "" && slug != "" {
+		// requires VLANGroup.slug to be non-empty, so a name with no ASCII letter
+		// or digit once accents are folded (slug == "") would make ingestion fail.
+		// Skip the group in that case (the VLANs are still emitted, just ungrouped).
+		if slug := config.Slug(v.Group.Name); v.Group.Name != "" && slug != "" {
 			g := &diode.VLANGroup{Name: strptr(v.Group.Name), Slug: strptr(slug)}
 			setVlanGroupScope(g, v.Group, b.site)
 			b.group = g

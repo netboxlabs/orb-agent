@@ -2,6 +2,8 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Translate Unit Tests."""
 
+import re
+
 import pytest
 from netboxlabs.diode.sdk.ingester import Device, Entity, Interface
 
@@ -963,6 +965,26 @@ def test_translate_vlan_group_no_scope_site_when_site_none(sample_defaults):
     assert vlan.group.name == "Default Group"
     assert vlan.group.slug == "default-group"
     assert vlan.group.scope_site.name == ""
+
+
+@pytest.mark.parametrize(
+    ("group", "slug"),
+    [
+        ("Café VLANs", "cafe-vlans"),
+        ("Niño (B)", "nino-b"),
+        ("site_a VLANs", "site_a-vlans"),
+        ("Lab 1.2 -", "lab-12"),
+    ],
+)
+def test_translate_vlan_group_slug_is_netbox_valid(sample_defaults, group, slug):
+    """The group slug is Django's, which NetBox requires to be ASCII: accents are folded, not kept."""
+    sample_defaults.site = "New York"
+    sample_defaults.vlan = VlanParameters(group=group)
+
+    vlan = translate_vlan("14", "V14", sample_defaults)
+
+    assert vlan.group.slug == slug
+    assert re.fullmatch(r"[-a-zA-Z0-9_]+", vlan.group.slug)
 
 
 def test_translate_vlan_no_group_unaffected_by_site(sample_defaults):

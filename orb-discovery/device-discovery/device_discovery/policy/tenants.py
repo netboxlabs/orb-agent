@@ -9,16 +9,9 @@ and written differently the entity is refused or the tenant rewritten on every
 run.
 """
 
-import re
-import unicodedata
 from typing import Any
 
-
-def slug(value: str) -> str:
-    """Return Django's slugify of value, which Diode matches tenants by."""
-    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
-    value = re.sub(r"[^\w\s-]", "", value.lower())
-    return re.sub(r"[-\s]+", "-", value).strip("-_")
+from device_discovery.slug import slug
 
 
 def _same(a: str, b: str) -> bool:

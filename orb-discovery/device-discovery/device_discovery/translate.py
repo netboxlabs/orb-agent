@@ -25,7 +25,6 @@ from netboxlabs.diode.sdk.ingester import (
     Tenant,
     TenantGroup,
     VLANGroup,
-    slugify,
 )
 
 from device_discovery.device_name import apply_device_name_emission
@@ -40,6 +39,7 @@ from device_discovery.policy.models import (
     VrfParameters,
 )
 from device_discovery.proto_presence import blank_to_none
+from device_discovery.slug import slug
 from device_discovery.translate_chassis import (
     translate_as_stack,
     validate_chassis_payload,
@@ -339,7 +339,7 @@ def translate_vlan_group(
         scope["scope_site"] = group.scope_site
     elif default_site:
         scope["scope_site"] = default_site
-    return VLANGroup(name=group.name, slug=slugify(group.name), **scope)
+    return VLANGroup(name=group.name, slug=slug(group.name), **scope)
 
 
 def _build_vlan_cache(
