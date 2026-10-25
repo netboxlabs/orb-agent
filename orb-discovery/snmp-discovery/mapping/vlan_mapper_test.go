@@ -2019,3 +2019,34 @@ func TestVlanMapper_PostMap_Cisco_TrunkByDynamicStatus(t *testing.T) {
 		t.Fatalf("port trunking by its dynamic status made access: mode=%v untagged=%+v", trunk.Mode, trunk.UntaggedVlan)
 	}
 }
+
+// With no bridge table, a vmVlan row that ends up applied to no interface keeps
+// the warning that the bridge table is missing.
+func TestVlanMapper_PostMap_Cisco_NoBridgeTableWarnsWhenNothingApplies(t *testing.T) {
+	registry, omitted := newVlanTestRegistry(t, 436207616, "Ethernet1/24")
+	rows := ObjectIDValueMap{}
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+	rows[".1.3.6.1.2.1.2.2.1.7.436207616"] = Value{Value: "2", Type: Integer}
+	var buf bytes.Buffer
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if omitted.Mode != nil {
+		t.Fatalf("a port that is down was classified: mode=%v", *omitted.Mode)
+	}
+	assert.Contains(t, buf.String(), "missing dot1dBasePortIfIndex")
+}
+
+// The same holds when the row names an interface discovery did not keep.
+func TestVlanMapper_PostMap_Cisco_NoBridgeTableWarnsForAnUndiscoveredInterface(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 101, "Ethernet1/1")
+	rows := ObjectIDValueMap{}
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+	var buf bytes.Buffer
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(&buf, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	assert.Contains(t, buf.String(), "missing dot1dBasePortIfIndex")
+}

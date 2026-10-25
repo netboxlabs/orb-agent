@@ -178,21 +178,41 @@ func TestApplyCisco_OmittedPortWithoutTrunkStateIsNotAdded(t *testing.T) {
 	}
 }
 
-// The dynamic status is the device's own verdict; a trunking port-channel
-// member can still report its encapsulation as not applicable.
-func TestApplyCisco_DynamicStatusWinsOverEncapsulation(t *testing.T) {
+// Either column saying the port trunks is enough to skip it. The dynamic status
+// is operational, so a configured trunk that is down reads notTrunking while
+// NX-OS keeps its encapsulation at dot1Q; and a trunking port-channel member can
+// report its encapsulation as not applicable while its dynamic status trunks.
+func TestApplyCisco_EitherColumnSayingTrunkingWins(t *testing.T) {
 	infos := map[int]*SwitchportInfo{}
 	ApplyCisco(infos, CiscoRows{
-		MembershipAccessVlan: map[int]int{5: 30, 6: 40},
-		TrunkStatus:          map[int]int{5: trunkStatusTrunking, 6: trunkStatusNotTrunking},
-		TrunkEncapsulation:   map[int]int{5: encapNotApplicable, 6: 4},
-		IfAdminStatus:        map[int]int{5: 1, 6: 1},
+		MembershipAccessVlan: map[int]int{5: 30, 6: 40, 7: 50, 8: 60},
+		TrunkStatus: map[int]int{
+			5: trunkStatusTrunking, 6: trunkStatusNotTrunking,
+			7: trunkStatusNotTrunking, 8: trunkStatusNotTrunking,
+		},
+		TrunkEncapsulation: map[int]int{5: encapNotApplicable, 6: 4, 7: encapNotApplicable},
+		IfAdminStatus:      map[int]int{5: 1, 6: 1, 7: 1, 8: 1},
 	})
-	if _, ok := infos[5]; ok {
-		t.Error("ifIndex 5 trunks by its dynamic status but was added")
+	for ifIndex, want := range map[int]bool{5: false, 6: false, 7: true, 8: true} {
+		if _, got := infos[ifIndex]; got != want {
+			t.Errorf("ifIndex %d: added=%v, want %v", ifIndex, got, want)
+		}
 	}
-	if _, ok := infos[6]; !ok {
-		t.Error("ifIndex 6 does not trunk by its dynamic status but was not added")
+}
+
+// A dynamic status that is neither trunking nor notTrunking says nothing, so
+// without an encapsulation row the port is not added.
+func TestApplyCisco_UnexpectedDynamicStatusIsNoAnswer(t *testing.T) {
+	for _, status := range []int{0, 3} {
+		infos := map[int]*SwitchportInfo{}
+		ApplyCisco(infos, CiscoRows{
+			MembershipAccessVlan: map[int]int{436207616: 300},
+			TrunkStatus:          map[int]int{436207616: status},
+			IfAdminStatus:        map[int]int{436207616: 1},
+		})
+		if _, ok := infos[436207616]; ok {
+			t.Errorf("status %d: added a port the trunk table gave no verdict on", status)
+		}
 	}
 }
 

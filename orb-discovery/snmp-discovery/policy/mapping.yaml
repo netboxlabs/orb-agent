@@ -305,7 +305,8 @@ entries:
     vendor: "juniper"
     description: "JUNIPER-VLAN-MIB jnxExVlanName (corroborates the tag table's keying)"
 
-  # CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable — non-trunk access VLAN per ifIndex.
+  # CISCO-VLAN-MEMBERSHIP-MIB vmMembershipTable — configured access VLAN per
+  # ifIndex. NX-OS publishes it for trunks too; vlanTrunkPortTable tells them apart.
   - oid: ".1.3.6.1.4.1.9.9.68.1.2.2.1"
     entity: "interface_vlan"
     field: "_id"

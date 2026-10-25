@@ -141,8 +141,7 @@ func (m *VlanMapper) PostMap(
 		// context's bridge table is empty when no port is in VLAN 1.
 		infos := map[int]*qbridge.SwitchportInfo{}
 		qbridge.ApplyCisco(infos, cisco)
-		if len(infos) > 0 {
-			m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults))
+		if m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults)) > 0 {
 			return vlanEntities
 		}
 		if hasVLANSignal(allObjectIDs) {
@@ -193,18 +192,25 @@ func (m *VlanMapper) PostMap(
 	return vlanEntities
 }
 
-// applyInfos classifies each port and applies the result to its interface.
+// applyInfos classifies each port, applies the result to its interface, and
+// returns how many ports with a discovered interface got a mode.
 func (m *VlanMapper) applyInfos(
 	registry *EntityRegistry,
 	infos map[int]*qbridge.SwitchportInfo,
 	allObjectIDs ObjectIDValueMap,
 	ensureVLAN func(int) *diode.VLAN,
-) {
+) int {
 	classifications := make(map[int]qbridge.Classification, len(infos))
+	applied := 0
 	for ifIndex, info := range infos {
-		classifications[ifIndex] = qbridge.Classify(*info)
+		c := qbridge.Classify(*info)
+		classifications[ifIndex] = c
+		if classificationToNetboxMode(c.Mode) != "" && verifiedInterface(registry, ifIndex) != nil {
+			applied++
+		}
 	}
 	m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
+	return applied
 }
 
 // vlanIndex indexes the emitted VLAN entities by VID and returns the
@@ -219,8 +225,8 @@ func (m *VlanMapper) applyInfos(
 // via dot1qVlanStaticName, so ports classify as access but the index is
 // empty — the stub ensures NetBox never receives mode=access with a nil
 // untagged_vlan reference. With create_unknown_vlans off no stub is made and
-// such a port keeps mode=access with no VLAN. Stubs are appended to *vlanEntities so the
-// caller's returned slice carries them.
+// such a port keeps mode=access with no VLAN. Stubs are appended to
+// *vlanEntities so the caller's returned slice carries them.
 func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults) func(int) *diode.VLAN {
 	vlanByVid := make(map[int]*diode.VLAN, len(*vlanEntities))
 	for _, e := range *vlanEntities {
