@@ -122,13 +122,15 @@ func TestApplyCisco_AccessRowOverridesATrunkInferredFromOneTaggedVlan(t *testing
 	}
 }
 
-// Cisco instances BRIDGE-MIB per VLAN, so the default context lists only the
-// ports in VLAN 1. vmMembershipTable is indexed by ifIndex and needs no bridge
-// port, so an access port in another VLAN still classifies from its row.
+// Cisco keeps a BRIDGE-MIB instance per VLAN, so the default context lists only
+// the ports in VLAN 1. vmMembershipTable is indexed by ifIndex and needs no
+// bridge port, so an access port in another VLAN still classifies from its row
+// once the trunk table confirms it does not trunk.
 func TestApplyCisco_AddsAnAccessPortTheBridgeTableOmits(t *testing.T) {
 	infos := map[int]*SwitchportInfo{}
 	rows := CiscoRows{
 		MembershipAccessVlan: map[int]int{436207616: 300},
+		TrunkEncapsulation:   map[int]int{436207616: encapNotApplicable},
 		IfAdminStatus:        map[int]int{436207616: 1},
 	}
 	ApplyCisco(infos, rows)
@@ -143,12 +145,79 @@ func TestApplyCisco_AddsAnAccessPortTheBridgeTableOmits(t *testing.T) {
 	}
 }
 
+// NX-OS publishes vmMembershipTable rows for trunk ports too, so a trunk that
+// does not carry VLAN 1 is missing from the bridge table and still has a row.
+// The trunk table says it trunks, and it is not added.
+func TestApplyCisco_OmittedPortThatTrunksIsNotAdded(t *testing.T) {
+	for name, rows := range map[string]CiscoRows{
+		"encapsulation dot1Q":     {TrunkEncapsulation: map[int]int{436207616: 4}},
+		"encapsulation negotiate": {TrunkEncapsulation: map[int]int{436207616: 5}},
+		"encapsulation isl":       {TrunkEncapsulation: map[int]int{436207616: 1}},
+		"dynamic status":          {TrunkStatus: map[int]int{436207616: trunkStatusTrunking}},
+	} {
+		rows.MembershipAccessVlan = map[int]int{436207616: 1}
+		rows.IfAdminStatus = map[int]int{436207616: 1}
+		infos := map[int]*SwitchportInfo{}
+		ApplyCisco(infos, rows)
+		if _, ok := infos[436207616]; ok {
+			t.Errorf("%s: added a trunk as an access port", name)
+		}
+	}
+}
+
+// Without the trunk table an omitted port cannot be told from a trunk that
+// does not carry VLAN 1, so it is left alone as before.
+func TestApplyCisco_OmittedPortWithoutTrunkStateIsNotAdded(t *testing.T) {
+	infos := map[int]*SwitchportInfo{}
+	ApplyCisco(infos, CiscoRows{
+		MembershipAccessVlan: map[int]int{436207616: 300},
+		IfAdminStatus:        map[int]int{436207616: 1},
+	})
+	if _, ok := infos[436207616]; ok {
+		t.Error("added a port the device said nothing about trunking for")
+	}
+}
+
+// The dynamic status is the device's own verdict; a trunking port-channel
+// member can still report its encapsulation as not applicable.
+func TestApplyCisco_DynamicStatusWinsOverEncapsulation(t *testing.T) {
+	infos := map[int]*SwitchportInfo{}
+	ApplyCisco(infos, CiscoRows{
+		MembershipAccessVlan: map[int]int{5: 30, 6: 40},
+		TrunkStatus:          map[int]int{5: trunkStatusTrunking, 6: trunkStatusNotTrunking},
+		TrunkEncapsulation:   map[int]int{5: encapNotApplicable, 6: 4},
+		IfAdminStatus:        map[int]int{5: 1, 6: 1},
+	})
+	if _, ok := infos[5]; ok {
+		t.Error("ifIndex 5 trunks by its dynamic status but was added")
+	}
+	if _, ok := infos[6]; !ok {
+		t.Error("ifIndex 6 does not trunk by its dynamic status but was not added")
+	}
+}
+
+// A bridged port the trunk table says trunks keeps what the generic pass made
+// of it: its vmVlan row is the configured access VLAN, not what it carries.
+func TestApplyCisco_BridgedPortThatTrunksIsNotMadeAccess(t *testing.T) {
+	infos := map[int]*SwitchportInfo{
+		201: {Enabled: true, BridgePortPresent: true, AdminMode: AdminUnknown, OperMode: OperRouted},
+	}
+	ApplyCisco(infos, CiscoRows{
+		MembershipAccessVlan: map[int]int{201: 30},
+		TrunkStatus:          map[int]int{201: trunkStatusTrunking},
+	})
+	if infos[201].AccessVlan != nil || infos[201].AdminMode != AdminUnknown {
+		t.Errorf("trunking port made access: %+v", infos[201])
+	}
+}
+
 // An omitted port follows the rule bridged ports follow: administratively
 // down, it is not classified.
 func TestApplyCisco_OmittedPortThatIsDownIsNotClassified(t *testing.T) {
 	infos := map[int]*SwitchportInfo{}
 	rows := CiscoRows{
 		MembershipAccessVlan: map[int]int{436207616: 300},
+		TrunkEncapsulation:   map[int]int{436207616: encapNotApplicable},
 		IfAdminStatus:        map[int]int{436207616: 2},
 	}
 	ApplyCisco(infos, rows)
@@ -166,6 +235,7 @@ func TestApplyCisco_OmittedPortWithoutAValidVlanIsNotAdded(t *testing.T) {
 		infos := map[int]*SwitchportInfo{}
 		ApplyCisco(infos, CiscoRows{
 			MembershipAccessVlan: map[int]int{436207616: vid},
+			TrunkEncapsulation:   map[int]int{436207616: encapNotApplicable},
 			IfAdminStatus:        map[int]int{436207616: 1},
 		})
 		if _, ok := infos[436207616]; ok {
@@ -181,6 +251,7 @@ func TestApplyCisco_VoiceVlanOnAnOmittedAccessPort(t *testing.T) {
 	ApplyCisco(infos, CiscoRows{
 		MembershipAccessVlan: map[int]int{436207616: 30},
 		VoiceVlanByIfIndex:   map[int]int{436207616: 100},
+		TrunkEncapsulation:   map[int]int{436207616: encapNotApplicable},
 		IfAdminStatus:        map[int]int{436207616: 1},
 	})
 
@@ -200,6 +271,7 @@ func TestApplyCisco_VoiceRowAloneAddsNoPort(t *testing.T) {
 	infos := map[int]*SwitchportInfo{}
 	ApplyCisco(infos, CiscoRows{
 		VoiceVlanByIfIndex: map[int]int{436207616: 100},
+		TrunkEncapsulation: map[int]int{436207616: encapNotApplicable},
 		IfAdminStatus:      map[int]int{436207616: 1},
 	})
 	if _, ok := infos[436207616]; ok {

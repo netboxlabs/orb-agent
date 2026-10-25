@@ -317,6 +317,23 @@ entries:
         entity: "interface_vlan"
         field: "vmVlan"
 
+  # CISCO-VTP-MIB vlanTrunkPortTable — whether each port trunks, per ifIndex.
+  # NX-OS publishes vmMembershipTable rows for trunk ports too, so a vmVlan row
+  # alone does not make a port access. Only these two columns are walked.
+  - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1"
+    entity: "interface_vlan"
+    field: "_id"
+    identifier_size: 1
+    vendor: "cisco"
+    description: "CISCO-VTP-MIB vlanTrunkPortTable (trunking state per port)"
+    mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.14"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortDynamicStatus"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.16"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortEncapsulationOperType"
+
   # CISCO-VOICE-VLAN-MIB vmVoiceVlanTable — per-port voice VLAN.
   # Sentinels: 0 = none, 4095 = dot1p-only, 4096 = untagged.
   - oid: ".1.3.6.1.4.1.9.9.68.1.5.1"

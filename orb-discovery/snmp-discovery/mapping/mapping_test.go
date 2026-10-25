@@ -2192,6 +2192,7 @@ func TestMappingYAML_CiscoOverlayEntriesPresent(t *testing.T) {
 	wanted := map[string]bool{
 		".1.3.6.1.4.1.9.9.68.1.2.2.1": false, // vmMembershipTable
 		".1.3.6.1.4.1.9.9.68.1.5.1":   false, // vmVoiceVlanTable
+		".1.3.6.1.4.1.9.9.46.1.6.1.1": false, // vlanTrunkPortTable
 	}
 	for _, e := range doc.Entries {
 		if e.Vendor != "cisco" {

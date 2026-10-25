@@ -42,8 +42,12 @@ const (
 	oidIfDescr = ".1.3.6.1.2.1.2.2.1.2."
 	oidIfName  = ".1.3.6.1.2.1.31.1.1.1.1."
 	// Cisco overlay
-	oidCiscoVMVlan        = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
-	oidCiscoVMVoiceVlanID = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
+	oidCiscoVMVlan = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
+	// CISCO-VTP-MIB vlanTrunkPortDynamicStatus and
+	// vlanTrunkPortEncapsulationOperType, keyed by ifIndex.
+	oidCiscoTrunkPortDynamicStatus = ".1.3.6.1.4.1.9.9.46.1.6.1.1.14."
+	oidCiscoTrunkPortEncapsulation = ".1.3.6.1.4.1.9.9.46.1.6.1.1.16."
+	oidCiscoVMVoiceVlanID          = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
 	// CISCOSB overlay (Cisco small-business: Catalyst 1200/1300, CBS/SG).
 	// All are indexed by ifIndex, not by bridge port.
 	oidCiscoSBPortMode        = ".1.3.6.1.4.1.9.6.1.101.48.22.1.1."
@@ -135,9 +139,9 @@ func (m *VlanMapper) PostMap(
 		}
 		// Cisco's vmMembershipTable is indexed by ifIndex, and the default
 		// context's bridge table is empty when no port is in VLAN 1.
-		if len(cisco.MembershipAccessVlan) > 0 {
-			infos := map[int]*qbridge.SwitchportInfo{}
-			qbridge.ApplyCisco(infos, cisco)
+		infos := map[int]*qbridge.SwitchportInfo{}
+		qbridge.ApplyCisco(infos, cisco)
+		if len(infos) > 0 {
 			m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults))
 			return vlanEntities
 		}
@@ -214,7 +218,8 @@ func (m *VlanMapper) applyInfos(
 // classic Cisco IOS exposes vmVlan/dot1qPvid VIDs without advertising them
 // via dot1qVlanStaticName, so ports classify as access but the index is
 // empty — the stub ensures NetBox never receives mode=access with a nil
-// untagged_vlan reference. Stubs are appended to *vlanEntities so the
+// untagged_vlan reference. With create_unknown_vlans off no stub is made and
+// such a port keeps mode=access with no VLAN. Stubs are appended to *vlanEntities so the
 // caller's returned slice carries them.
 func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults) func(int) *diode.VLAN {
 	vlanByVid := make(map[int]*diode.VLAN, len(*vlanEntities))
@@ -849,6 +854,8 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	rows := qbridge.CiscoRows{
 		MembershipAccessVlan: map[int]int{},
 		VoiceVlanByIfIndex:   map[int]int{},
+		TrunkStatus:          map[int]int{},
+		TrunkEncapsulation:   map[int]int{},
 	}
 	for oid, v := range all {
 		switch {
@@ -863,6 +870,18 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 			vid, ok2 := atoi(v.Value)
 			if ok1 && ok2 {
 				rows.VoiceVlanByIfIndex[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortDynamicStatus):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortDynamicStatus))
+			status, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.TrunkStatus[ifx] = status
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortEncapsulation):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortEncapsulation))
+			encap, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.TrunkEncapsulation[ifx] = encap
 			}
 		}
 	}

@@ -1896,9 +1896,17 @@ func TestVlanMapper_BuildGenericRows_DisjointTimeMarksAreNotPaired(t *testing.T)
 
 // ciscoOmittedAccessPort adds a port that Cisco's default-context BRIDGE-MIB
 // leaves out, because it is an access port outside VLAN 1, with its
-// vmMembershipTable row, admin status and ifType.
+// vmMembershipTable row, its trunk encapsulation (not applicable), admin status
+// and ifType.
 func ciscoOmittedAccessPort(rows ObjectIDValueMap, ifIndex, vid int) {
+	ciscoOmittedPort(rows, ifIndex, vid, 6)
+}
+
+// ciscoOmittedPort is ciscoOmittedAccessPort with the trunk encapsulation
+// given: 4 is dot1Q, a trunk.
+func ciscoOmittedPort(rows ObjectIDValueMap, ifIndex, vid, encapsulation int) {
 	idx := strconv.Itoa(ifIndex)
+	rows[".1.3.6.1.4.1.9.9.46.1.6.1.1.16."+idx] = Value{Value: strconv.Itoa(encapsulation), Type: Integer}
 	rows[".1.3.6.1.4.1.9.9.68.1.2.2.1.2."+idx] = Value{Value: strconv.Itoa(vid), Type: Integer}
 	rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
 	rows[".1.3.6.1.2.1.2.2.1.3."+idx] = Value{Value: "6", Type: Integer}
@@ -1920,8 +1928,8 @@ func emittedVid(entities []diode.Entity, vid int) bool {
 	return false
 }
 
-// Cisco instances BRIDGE-MIB per VLAN, so the default context lists only the
-// VLAN 1 ports. An access port in another VLAN still takes its vmVlan.
+// Cisco keeps a BRIDGE-MIB instance per VLAN, so the default context lists only
+// the VLAN 1 ports. An access port in another VLAN still takes its vmVlan.
 func TestVlanMapper_PostMap_Cisco_AccessPortOutsideTheBridgeTable(t *testing.T) {
 	registry, bridged := newVlanTestRegistry(t, 101, "Ethernet1/1")
 	omitted := addVerifiedInterface(registry, 436207616, "Ethernet1/24")
@@ -1975,5 +1983,39 @@ func TestVlanMapper_PostMap_Cisco_RowForAnUndiscoveredInterface(t *testing.T) {
 
 	if emittedVid(entities, 300) {
 		t.Error("VLAN 300 emitted for an interface discovery did not keep")
+	}
+}
+
+// NX-OS gives trunk ports a vmVlan row too, the configured access VLAN, and a
+// trunk that does not carry VLAN 1 is missing from the bridge table. It is
+// left as it was.
+func TestVlanMapper_PostMap_Cisco_TrunkOutsideTheBridgeTable(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 101, "Ethernet1/1")
+	trunk := addVerifiedInterface(registry, 436207616, "Ethernet1/2")
+	rows := buildAccessPortFixture(101, 1)
+	ciscoOmittedPort(rows, 436207616, 1, 4)
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if trunk.Mode != nil || trunk.UntaggedVlan != nil {
+		t.Fatalf("trunk made access: mode=%v untagged=%+v", trunk.Mode, trunk.UntaggedVlan)
+	}
+}
+
+// The mapper reads the trunk table's dynamic status as well as its
+// encapsulation, and the dynamic status decides.
+func TestVlanMapper_PostMap_Cisco_TrunkByDynamicStatus(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 101, "Ethernet1/1")
+	trunk := addVerifiedInterface(registry, 436207616, "Ethernet1/2")
+	rows := buildAccessPortFixture(101, 1)
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+	rows[".1.3.6.1.4.1.9.9.46.1.6.1.1.14.436207616"] = Value{Value: "1", Type: Integer}
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if trunk.Mode != nil || trunk.UntaggedVlan != nil {
+		t.Fatalf("port trunking by its dynamic status made access: mode=%v untagged=%+v", trunk.Mode, trunk.UntaggedVlan)
 	}
 }
