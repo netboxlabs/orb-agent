@@ -39,7 +39,7 @@ const (
 )
 
 // trunking reports whether either column says the port trunks, and whether
-// either answered at all. The dynamic status is operational, so a configured
+// either gave a verdict. The dynamic status is operational, so a configured
 // trunk that is down reads notTrunking; the encapsulation alone still marks it.
 func (r CiscoRows) trunking(ifIndex int) (trunks, known bool) {
 	status, hasStatus := r.TrunkStatus[ifIndex]
@@ -63,11 +63,12 @@ func (r CiscoRows) trunking(ifIndex int) (trunks, known bool) {
 //   - VoiceVlan: parsed via CoerceVid so sentinels (0/4095/4096) drop out.
 //     Promotion logic lives in Classify, not here.
 //   - A port with a vmVlan row but no entry in infos is added as an access
-//     port when the trunk table answered and neither column says it trunks. Cisco keeps a
-//     BRIDGE-MIB instance per VLAN, so the default context lists only the
-//     ports in VLAN 1, while vmMembershipTable is indexed by ifIndex. Without
-//     a trunk row such a port cannot be told from a trunk that does not carry
-//     VLAN 1, and is left alone. A voice row alone adds no port.
+//     port when the trunk table gave a verdict and neither column says it
+//     trunks. Cisco keeps a BRIDGE-MIB instance per VLAN, so the default
+//     context lists only the ports in VLAN 1, while vmMembershipTable is
+//     indexed by ifIndex. Without a verdict such a port cannot be told from a
+//     trunk that does not carry VLAN 1, and is left alone. A voice row alone
+//     adds no port.
 func ApplyCisco(infos map[int]*SwitchportInfo, rows CiscoRows) {
 	for ifIndex, vlan := range rows.MembershipAccessVlan {
 		vid := CoerceVid(vlan)
@@ -92,9 +93,8 @@ func ApplyCisco(infos map[int]*SwitchportInfo, rows CiscoRows) {
 			infos[ifIndex] = info
 		}
 		if info.AdminMode == AdminTrunk && !info.TrunkFromOneTaggedVlan {
-			// vmMembership is non-trunk-only by spec; if extract_generic
-			// already classified this as trunk from membership in several
-			// VLANs, that wins over the Cisco overlay.
+			// If extract_generic already classified this as a trunk from
+			// membership in several VLANs, that wins over the Cisco overlay.
 			continue
 		}
 		if info.TrunkFromOneTaggedVlan {

@@ -2004,7 +2004,7 @@ func TestVlanMapper_PostMap_Cisco_TrunkOutsideTheBridgeTable(t *testing.T) {
 }
 
 // The mapper reads the trunk table's dynamic status as well as its
-// encapsulation, and the dynamic status decides.
+// encapsulation, and either one saying the port trunks is enough.
 func TestVlanMapper_PostMap_Cisco_TrunkByDynamicStatus(t *testing.T) {
 	registry, _ := newVlanTestRegistry(t, 101, "Ethernet1/1")
 	trunk := addVerifiedInterface(registry, 436207616, "Ethernet1/2")

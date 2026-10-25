@@ -193,7 +193,8 @@ func (m *VlanMapper) PostMap(
 }
 
 // applyInfos classifies each port, applies the result to its interface, and
-// returns how many ports with a discovered interface got a mode.
+// returns how many source ports with a discovered interface got a mode, before
+// applyClassifications merges ports onto their switchport.
 func (m *VlanMapper) applyInfos(
 	registry *EntityRegistry,
 	infos map[int]*qbridge.SwitchportInfo,
