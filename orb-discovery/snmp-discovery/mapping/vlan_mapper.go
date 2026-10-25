@@ -105,6 +105,8 @@ func (m *VlanMapper) PostMap(
 	// log the same refusal twice per target, and the map is shared with the
 	// SVI resolver, which has to see the same keying this mapper does.
 	gen := m.buildGenericRows(allObjectIDs)
+	cisco := m.buildCiscoRows(allObjectIDs)
+	cisco.IfAdminStatus = gen.IfAdminStatus
 	if len(gen.BasePortToIfIndex) == 0 {
 		// No bridge port table — refuse Interface mutation. Still emit
 		// VLAN entities below from the static table; they don't need
@@ -131,6 +133,14 @@ func (m *VlanMapper) PostMap(
 			m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
 			return vlanEntities
 		}
+		// Cisco's vmMembershipTable is indexed by ifIndex, and the default
+		// context's bridge table is empty when no port is in VLAN 1.
+		if len(cisco.MembershipAccessVlan) > 0 {
+			infos := map[int]*qbridge.SwitchportInfo{}
+			qbridge.ApplyCisco(infos, cisco)
+			m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults))
+			return vlanEntities
+		}
 		if hasVLANSignal(allObjectIDs) {
 			m.logger.Warn("vlan: missing dot1dBasePortIfIndex; skipping interface mutations",
 				"reason", "bridge-port-translation-unavailable")
@@ -146,7 +156,6 @@ func (m *VlanMapper) PostMap(
 		m.logger.Warn("vlan: ExtractGeneric failed", "error", err)
 		return m.emitVLANs(allObjectIDs, defaults)
 	}
-	cisco := m.buildCiscoRows(allObjectIDs)
 	// Defense in depth: ApplyCisco is a no-op when both Cisco-overlay maps
 	// are empty (the runner only walks vendor-scoped OIDs on a Cisco-matched
 	// host, so on generic-only hosts we never reach this branch's payload).
@@ -176,12 +185,22 @@ func (m *VlanMapper) PostMap(
 	// Mutate interfaces in place. The registry holds *diode.Interface
 	// instances InterfaceMapper produced; we look them up by ifIndex
 	// using string-form ifIndex as ObjectIDIndex.
+	m.applyInfos(registry, infos, allObjectIDs, ensureVLAN)
+	return vlanEntities
+}
+
+// applyInfos classifies each port and applies the result to its interface.
+func (m *VlanMapper) applyInfos(
+	registry *EntityRegistry,
+	infos map[int]*qbridge.SwitchportInfo,
+	allObjectIDs ObjectIDValueMap,
+	ensureVLAN func(int) *diode.VLAN,
+) {
 	classifications := make(map[int]qbridge.Classification, len(infos))
 	for ifIndex, info := range infos {
 		classifications[ifIndex] = qbridge.Classify(*info)
 	}
 	m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
-	return vlanEntities
 }
 
 // vlanIndex indexes the emitted VLAN entities by VID and returns the

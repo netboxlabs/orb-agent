@@ -1893,3 +1893,87 @@ func TestVlanMapper_BuildGenericRows_DisjointTimeMarksAreNotPaired(t *testing.T)
 		t.Errorf("both masks come from the newest shared mark: got %x", got)
 	}
 }
+
+// ciscoOmittedAccessPort adds a port that Cisco's default-context BRIDGE-MIB
+// leaves out, because it is an access port outside VLAN 1, with its
+// vmMembershipTable row, admin status and ifType.
+func ciscoOmittedAccessPort(rows ObjectIDValueMap, ifIndex, vid int) {
+	idx := strconv.Itoa(ifIndex)
+	rows[".1.3.6.1.4.1.9.9.68.1.2.2.1.2."+idx] = Value{Value: strconv.Itoa(vid), Type: Integer}
+	rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
+	rows[".1.3.6.1.2.1.2.2.1.3."+idx] = Value{Value: "6", Type: Integer}
+}
+
+func addVerifiedInterface(registry *EntityRegistry, ifIndex int, name string) *diode.Interface {
+	iface := &diode.Interface{Name: StringPtr(name)}
+	registry.entities[InterfaceEntityType][ObjectIDIndex(strconv.Itoa(ifIndex))] = iface
+	registry.MarkInterfaceVerified(iface)
+	return iface
+}
+
+func emittedVid(entities []diode.Entity, vid int) bool {
+	for _, e := range entities {
+		if v, ok := e.(*diode.VLAN); ok && v.Vid != nil && *v.Vid == int64(vid) {
+			return true
+		}
+	}
+	return false
+}
+
+// Cisco instances BRIDGE-MIB per VLAN, so the default context lists only the
+// VLAN 1 ports. An access port in another VLAN still takes its vmVlan.
+func TestVlanMapper_PostMap_Cisco_AccessPortOutsideTheBridgeTable(t *testing.T) {
+	registry, bridged := newVlanTestRegistry(t, 101, "Ethernet1/1")
+	omitted := addVerifiedInterface(registry, 436207616, "Ethernet1/24")
+	rows := buildAccessPortFixture(101, 1)
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+
+	entities := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if omitted.Mode == nil || *omitted.Mode != "access" {
+		t.Fatalf("Ethernet1/24 Mode: got %v, want access", omitted.Mode)
+	}
+	if omitted.UntaggedVlan == nil || omitted.UntaggedVlan.Vid == nil || *omitted.UntaggedVlan.Vid != 300 {
+		t.Fatalf("Ethernet1/24 UntaggedVlan: got %+v, want VID 300", omitted.UntaggedVlan)
+	}
+	if !emittedVid(entities, 300) {
+		t.Error("VLAN 300 not emitted")
+	}
+	if bridged.UntaggedVlan == nil || *bridged.UntaggedVlan.Vid != 1 {
+		t.Errorf("bridged port: got %+v, want VLAN 1 as before", bridged.UntaggedVlan)
+	}
+}
+
+// With no port in VLAN 1 the default-context bridge table can be empty; the
+// vmVlan rows still apply.
+func TestVlanMapper_PostMap_Cisco_AccessPortsWithNoBridgeTable(t *testing.T) {
+	registry, omitted := newVlanTestRegistry(t, 436207616, "Ethernet1/24")
+	rows := ObjectIDValueMap{}
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+
+	entities := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if omitted.Mode == nil || *omitted.Mode != "access" ||
+		omitted.UntaggedVlan == nil || omitted.UntaggedVlan.Vid == nil || *omitted.UntaggedVlan.Vid != 300 {
+		t.Fatalf("Ethernet1/24: got mode=%v untagged=%+v, want access on 300", omitted.Mode, omitted.UntaggedVlan)
+	}
+	if !emittedVid(entities, 300) {
+		t.Error("VLAN 300 not emitted")
+	}
+}
+
+// A vmVlan row for an interface discovery did not keep adds no VLAN.
+func TestVlanMapper_PostMap_Cisco_RowForAnUndiscoveredInterface(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 101, "Ethernet1/1")
+	rows := buildAccessPortFixture(101, 1)
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+
+	entities := NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if emittedVid(entities, 300) {
+		t.Error("VLAN 300 emitted for an interface discovery did not keep")
+	}
+}

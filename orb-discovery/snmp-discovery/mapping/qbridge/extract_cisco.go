@@ -1,8 +1,7 @@
 package qbridge
 
 // CiscoRows is the per-host bundle of Cisco-overlay SNMP rows that
-// VlanMapper passes to ApplyCisco. All maps are keyed by ifIndex (after
-// bridge-port translation).
+// VlanMapper passes to ApplyCisco. All maps are keyed by ifIndex.
 //
 // Scope per spec rev. 3: this overlay covers only ACCESS-VLAN refinement
 // on non-trunk ports + VOICE-VLAN promotion. It does NOT fill the trunk
@@ -18,6 +17,9 @@ type CiscoRows struct {
 	// Sentinel values: 0 = none, 4095 = dot1p-only, 4096 = untagged.
 	// Only valid VIDs in [1, 4094] are forwarded onto SwitchportInfo.
 	VoiceVlanByIfIndex map[int]int
+
+	// IfAdminStatus from IF-MIB, for ports the bridge-port table omits.
+	IfAdminStatus map[int]int
 }
 
 // ApplyCisco mutates a per-ifIndex SwitchportInfo map in place,
@@ -30,23 +32,28 @@ type CiscoRows struct {
 //     Trunk ports are left untouched — vmMembership is non-trunk-only by spec.
 //   - VoiceVlan: parsed via CoerceVid so sentinels (0/4095/4096) drop out.
 //     Promotion logic lives in Classify, not here.
-//
-// Unknown ifIndex (in CiscoRows but not in infos) is ignored — defense
-// against drift between Q-BRIDGE and Cisco-overlay walks.
+//   - A port with a vmVlan row but no entry in infos is added as an access
+//     port. Cisco instances BRIDGE-MIB per VLAN, so the default context lists
+//     only the ports in VLAN 1, while vmMembershipTable is indexed by ifIndex
+//     and has rows only for switchports. A voice row alone adds no port.
 func ApplyCisco(infos map[int]*SwitchportInfo, rows CiscoRows) {
 	for ifIndex, vlan := range rows.MembershipAccessVlan {
+		vid := CoerceVid(vlan)
+		if vid == nil {
+			continue
+		}
 		info, ok := infos[ifIndex]
 		if !ok {
-			continue
+			info = &SwitchportInfo{
+				Enabled:           rows.IfAdminStatus[ifIndex] == 1,
+				BridgePortPresent: true,
+			}
+			infos[ifIndex] = info
 		}
 		if info.AdminMode == AdminTrunk && !info.TrunkFromOneTaggedVlan {
 			// vmMembership is non-trunk-only by spec; if extract_generic
 			// already classified this as trunk from membership in several
 			// VLANs, that wins over the Cisco overlay.
-			continue
-		}
-		vid := CoerceVid(vlan)
-		if vid == nil {
 			continue
 		}
 		if info.TrunkFromOneTaggedVlan {

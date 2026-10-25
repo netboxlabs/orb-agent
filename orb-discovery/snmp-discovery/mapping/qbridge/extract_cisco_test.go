@@ -121,3 +121,88 @@ func TestApplyCisco_AccessRowOverridesATrunkInferredFromOneTaggedVlan(t *testing
 		t.Errorf("trunk in two VLANs with an access row: got %+v, want trunk tagged [10 20]", c)
 	}
 }
+
+// Cisco instances BRIDGE-MIB per VLAN, so the default context lists only the
+// ports in VLAN 1. vmMembershipTable is indexed by ifIndex and needs no bridge
+// port, so an access port in another VLAN still classifies from its row.
+func TestApplyCisco_AddsAnAccessPortTheBridgeTableOmits(t *testing.T) {
+	infos := map[int]*SwitchportInfo{}
+	rows := CiscoRows{
+		MembershipAccessVlan: map[int]int{436207616: 300},
+		IfAdminStatus:        map[int]int{436207616: 1},
+	}
+	ApplyCisco(infos, rows)
+
+	info, ok := infos[436207616]
+	if !ok {
+		t.Fatal("no entry for the port the bridge table omits")
+	}
+	got := Classify(*info)
+	if got.Mode != ModeAccess || got.Untagged == nil || *got.Untagged != 300 {
+		t.Errorf("Classify: got %+v, want access on 300", got)
+	}
+}
+
+// An omitted port follows the rule bridged ports follow: administratively
+// down, it is not classified.
+func TestApplyCisco_OmittedPortThatIsDownIsNotClassified(t *testing.T) {
+	infos := map[int]*SwitchportInfo{}
+	rows := CiscoRows{
+		MembershipAccessVlan: map[int]int{436207616: 300},
+		IfAdminStatus:        map[int]int{436207616: 2},
+	}
+	ApplyCisco(infos, rows)
+
+	if info, ok := infos[436207616]; ok {
+		if got := Classify(*info); got.Mode != ModeUnknown {
+			t.Errorf("Classify: got %+v, want unknown for a port that is down", got)
+		}
+	}
+}
+
+// A row naming no valid VLAN is no evidence, so it adds no port.
+func TestApplyCisco_OmittedPortWithoutAValidVlanIsNotAdded(t *testing.T) {
+	for _, vid := range []int{0, 4095, 5000} {
+		infos := map[int]*SwitchportInfo{}
+		ApplyCisco(infos, CiscoRows{
+			MembershipAccessVlan: map[int]int{436207616: vid},
+			IfAdminStatus:        map[int]int{436207616: 1},
+		})
+		if _, ok := infos[436207616]; ok {
+			t.Errorf("vid %d: added a port from a row naming no VLAN", vid)
+		}
+	}
+}
+
+// The voice VLAN applies to a port added from its access row, as it does to
+// a bridged one.
+func TestApplyCisco_VoiceVlanOnAnOmittedAccessPort(t *testing.T) {
+	infos := map[int]*SwitchportInfo{}
+	ApplyCisco(infos, CiscoRows{
+		MembershipAccessVlan: map[int]int{436207616: 30},
+		VoiceVlanByIfIndex:   map[int]int{436207616: 100},
+		IfAdminStatus:        map[int]int{436207616: 1},
+	})
+
+	info, ok := infos[436207616]
+	if !ok {
+		t.Fatal("no entry for the port the bridge table omits")
+	}
+	got := Classify(*info)
+	if got.Mode != ModeTrunk || got.Untagged == nil || *got.Untagged != 30 || len(got.Tagged) != 1 || got.Tagged[0] != 100 {
+		t.Errorf("Classify: got %+v, want untagged 30 tagged [100]", got)
+	}
+}
+
+// A voice row alone says nothing about the port's access VLAN, so it adds no
+// port.
+func TestApplyCisco_VoiceRowAloneAddsNoPort(t *testing.T) {
+	infos := map[int]*SwitchportInfo{}
+	ApplyCisco(infos, CiscoRows{
+		VoiceVlanByIfIndex: map[int]int{436207616: 100},
+		IfAdminStatus:      map[int]int{436207616: 1},
+	})
+	if _, ok := infos[436207616]; ok {
+		t.Error("added a port from a voice row alone")
+	}
+}
