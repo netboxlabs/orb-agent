@@ -94,7 +94,9 @@ An on-demand backend is not listed in the agent's capabilities until it has star
         grpc: "grpc://otel-collector:4317"
 ```
 
-The image's default configuration declares `snmp_telemetry` and `gnmi_telemetry` on demand, so a telemetry policy starts its backend and an agent without one runs nothing extra.
+The image's default configuration declares `snmp_telemetry`, `gnmi_telemetry` and `pktvisor` on demand, so a telemetry or pktvisor policy starts its backend and an agent without one runs nothing extra.
+
+A backend listening on loopback, the default, is given a free port each time it starts unless its entry sets `port`, so several agents can share one host network; see [Backend keys](./docs/configs/agent_yaml.md#backend-keys).
 
 #### Discovery Backends
 Only the `network_discovery`, `device_discovery`, `worker`, `snmp_discovery` and `gnmi_discovery` backends are currently supported. They do not require any special configuration.

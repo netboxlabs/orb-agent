@@ -10,7 +10,7 @@ orb:
   backends:
     opentelemetry_infinity:
       host: 192.168.5.11 # default localhost
-      port: 9000 # default 10222 
+      port: 9000 # default: a free port on a loopback host, 10222 otherwise
     common:
       otlp:
         grpc: http://0.0.0.0:4319

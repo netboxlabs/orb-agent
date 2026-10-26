@@ -17,8 +17,8 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     worker:
-      host: 192.168.5.11 # default 0.0.0.0
-      port: 8857 # default 8071
+      host: 192.168.5.11 # default localhost
+      port: 8857 # default: a free port on a loopback host, 8071 otherwise
 
 ```
 

@@ -26,7 +26,7 @@ orb:
         agent_name: agent01
     gnmi_discovery:
       host: 192.168.5.11 # default localhost
-      port: 8076 # default 8075
+      port: 8076 # default: a free port on a loopback host, 8075 otherwise
       log_level: ERROR # default INFO
       log_format: JSON # default TEXT
       profiles_dir: /opt/orb/gnmi-profiles # optional: directory of gNMI profile overrides
@@ -36,7 +36,7 @@ orb:
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
 | host | str | no | REST API host (default `localhost`) |
-| port | int | no | REST API port (default `8075`) |
+| port | int | no | REST API port (default: a free port at each start on a loopback `host`, `8075` otherwise; see [Backend keys](../configs/agent_yaml.md#backend-keys)) |
 | log_level | str | no | Log level: `DEBUG`/`INFO`/`WARN`/`ERROR` (default `INFO`) |
 | log_format | str | no | Log format: `TEXT` or `JSON` (default `TEXT`) |
 | profiles_dir | str | no | Directory of gNMI profile overrides (empty = embedded profiles only) |

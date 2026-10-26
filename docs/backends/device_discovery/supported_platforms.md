@@ -365,9 +365,9 @@ Drivers that implement the optional `get_interfaces_vlan_id()` getter report the
 
 ## Querying supported drivers at runtime
 
-device-discovery exposes its effective driver list via its capabilities endpoint:
+device-discovery exposes its effective driver list via its capabilities endpoint, on the port in the agent's `device-discovery startup` log line (`--port`), or the `port` you set on the backend:
 
 ```sh
-curl http://<agent-host>:8072/api/v1/capabilities
+curl http://<agent-host>:<port>/api/v1/capabilities
 # => {"supported_drivers": ["eos", "ios", "junos", ...]}
 ```

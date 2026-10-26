@@ -150,16 +150,20 @@ Optional OpenTelemetry export for backend metrics.
 
 Each backend key enables that backend. An empty value (no sub-keys) uses all defaults. All discovery backends, `snmp_telemetry` and `gnmi_telemetry` accept optional `host` and `port` overrides.
 
-Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own, which happens when two agents share a host network (`network_mode: host`) with the same backend ports, or when a backend process from an earlier run of the agent is still alive. Give each agent its own ports in the first case; end the leftover process in the second.
+A backend left without a `port` on a loopback `host` (`localhost`, the default, `127.0.0.1` or `::1`) is given a port that is free on every address of that host, picked again each time it starts, so several agents can share one host network (`network_mode: host`). The agent logs the port in the backend's startup line: `--port`, or `-p` for `pktvisor` and `--server_port` for `opentelemetry_infinity`. A backend whose `host` is not loopback, such as `0.0.0.0`, keeps the fixed port in the table below, since whatever reaches it there has to know the port. Set `port` to fix the port in either case.
 
-| Key | Backend | Default port | Notes |
+Under the fleet config manager, the OTLP bridge the backends export to follows the same rule: while `otlp_bridge_bind_host` is loopback (the default), `otlp_bridge_grpc_port` and `otlp_bridge_http_port` default to free ports, kept for as long as the agent runs, and to 4317 and 4318 when the bind host exposes the bridge.
+
+Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own, which happens when two agents share a host network with the same fixed backend ports, or when a backend process from an earlier run of the agent is still alive. Give each agent its own ports in the first case; end the leftover process in the second.
+
+| Key | Backend | Fixed port | Notes |
 |-----|---------|-------------|-------|
 | `device_discovery` | NAPALM-based device discovery | 8072 | Optional `host`/`port` overrides |
 | `snmp_discovery` | SNMP-based discovery | 8070 | Optional `host`/`port` overrides |
 | `network_discovery` | Network/port scan discovery | 8073 | Optional `host`/`port` overrides |
 | `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
-| `pktvisor` | pktvisor packet analytics | — | See [pktvisor docs](../backends/pktvisor/README.md) |
-| `opentelemetry_infinity` | OpenTelemetry Infinity | — | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
+| `pktvisor` | pktvisor packet analytics | 10853 | See [pktvisor docs](../backends/pktvisor/README.md) |
+| `opentelemetry_infinity` | OpenTelemetry Infinity | 10222 | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |
 | `snmp_telemetry` | SNMP metrics and traps | 8078 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [SNMP Telemetry docs](../backends/snmp_telemetry.md) |
 | `gnmi_telemetry` | gNMI streaming telemetry metrics | 8079 | Optional `host`/`port` overrides; requires `common.otlp.grpc`. See [gNMI Telemetry docs](../backends/gnmi_telemetry.md) |
 
