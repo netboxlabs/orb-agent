@@ -522,11 +522,13 @@ When a driver implements stack-member discovery and the target reports 2+ member
 
 **Emission shape** (in order):
 1. **Master `Device`** — plain (no `vc_position`, no `virtual_chassis` ref). Named from the member-name template (below); by default `<hostname>-<id>`, where `<hostname>` is the management hostname and `<id>` is the master's stack-member id.
-2. **`VirtualChassis`** — named `<hostname>`, with `master` set to the inline matcher block of the master Device.
-3. **N − 1 member `Device` entities** — each carries `vc_position = <member id>` and an inline `virtual_chassis` ref pointing to the same matcher block.
+2. **`VirtualChassis`** — named `<hostname>`, with `master` set to an inline matcher block of the master Device that carries `vc_position = <master's member id>`.
+3. **N − 1 member `Device` entities** — each carries `vc_position = <member id>` and an inline `virtual_chassis` ref pointing to the master's matcher block, without the position.
 4. **Interface / IPAddress entities** — routed to the member device whose id matches the interface name prefix. Logical interfaces with no parseable member id (`Vlan*`, `Loopback*`, `Port-channel*`, etc.) land on the master.
 
 **Member naming.** Every member device name — master and non-master — is rendered from `defaults.stack_member_name_template`. The template supports two placeholders: `{name}` (the stack name, i.e. the management hostname) and `{id}` (the device-reported member id). The default `{name}-{id}` reproduces the historical names (`core-sw-1`, `core-sw-2`), so existing deployments are unaffected. Set a custom template when you pre-create member devices under a different convention — e.g. `{name}-css{id}` to match hand-created `core-sw-css1` / `core-sw-css2` — so discovery **updates** those records instead of creating new ones. NetBox matches a member by `name` + `site` (+ `tenant`) ahead of `virtual_chassis` + `vc_position`, so an aligned name only lands on the pre-created device when its site (and tenant) already match; the template does not offer a zero-based offset, so the device-reported ids must equal your numbering (`css1`/`css2` ↔ ids `1`/`2`). An empty, malformed, or otherwise unusable template is ignored with a `WARNING` and the default is used — a bad config never rejects the policy or aborts discovery.
+
+**Master position.** The master sits at its member id, as every member does: position 0 on a stack numbered from 0 (Huawei iStack, Juniper Virtual Chassis), position 1 on one numbered from 1. NetBox puts a new chassis master at position 1, and the plugin then applies the position the master block carries; without it, member 1 of a stack numbered from 0 would be refused for taking the master's position.
 
 **Master pinning.** The logical master sent to Diode is always the **lowest stack-member id present**, regardless of live role. This is required because the NetBox Diode plugin resolves an existing `VirtualChassis` via its `unique_master` matcher — pinning to the lowest id keeps the master Device stable across StackWise role failovers so re-runs upsert the existing VC instead of creating a new one. The other matcher fields used for VC re-identification (asset_tag, primary_ip4/6, name+site+tenant, and `metadata.source_match`) are carried consistently on both the rich master Device and the inline VC `master` ref so the plugin's matcher cascade resolves through the same record on every cycle.
 
@@ -743,6 +745,7 @@ Only emitted when the driver implements `get_chassis_members()` and the target r
 |-------|--------|-------|
 | `VirtualChassis.name` | `device.hostname` | The management hostname becomes the VC name |
 | `VirtualChassis.master` | Lowest member id present | Pinned to lowest id (not live role) so the master Device is stable across StackWise role failovers |
+| Master `Device.vc_position` | Master's member id | Sent on the `VirtualChassis` master block, so a stack numbered from 0 keeps its master at 0 |
 | `VirtualChassis.domain` | Driver-supplied (when available) | Optional; only some platforms surface a VC domain id |
 | Member `Device.name` | `stack_member_name_template` | Default `{name}-{id}` → e.g. `core-sw-1`, `core-sw-2`. Configurable — see [Member naming](#switch-stacks--virtual-chassis) |
 | Member `Device.serial` | Per-member from driver | Required — members without a serial are dropped |
