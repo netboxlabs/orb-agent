@@ -42,6 +42,16 @@ are not polled and keep being exported at every check while a policy holds
 them. A poll whose export still fails after the OTLP exporter's own retries is
 not sent again by a later one.
 
+Every target polls as soon as its policy starts (applied, edited, or after a
+restart), then every `metrics_interval`, so a policy's first values leave
+within one export period plus the poll time, and a large policy's last target
+up to 10 seconds after that. First polls are 10ms apart, closer when needed to
+fit a policy of more than 1,000 targets into 10 seconds and every policy into
+one interval, and each target keeps its offset afterwards. An edit reaches the
+backend as a removal followed by an apply: the devices it keeps poll again
+within 10 seconds and miss no sample. Removing a policy cancels any poll still
+in flight rather than waiting out `snmp_timeout`.
+
 `--otel-endpoint` accepts either a bare `host:port` (e.g. `localhost:4317`)
 or a full URL with a scheme (e.g. `grpc://collector:4317`,
 `https://collector.example.com:4317`). Both forms dial the given address.

@@ -48,7 +48,23 @@ const (
 	// that depends on all three fields and the sequence is only reached
 	// against a device that never answers.
 	maxPolicyRetries = 10
+	// firstPollStep and firstPollSpread bound how a policy's first polls are
+	// spread; see firstPollOffset.
+	firstPollStep   = 10 * time.Millisecond
+	firstPollSpread = 10 * time.Second
 )
+
+// firstPollOffset is how long after a policy starts the target at index i of n
+// first polls. The first target polls at once, so a policy's first values leave
+// one export period after it is applied or edited rather than one interval
+// later. The rest follow 10ms apart, closer when needed to fit a policy of more
+// than 1,000 targets into 10 seconds and every policy into one interval, so a
+// large policy does not open every session in the same instant. A target keeps
+// its offset afterwards: gocron schedules each later run from the one before.
+func firstPollOffset(i, n int, interval time.Duration) time.Duration {
+	window := min(time.Duration(n)*firstPollStep, firstPollSpread, interval)
+	return window * time.Duration(i) / time.Duration(n)
+}
 
 // Collector is the slice of the metrics collector a runner drives. Naming it
 // here keeps the runner's dependency narrow and the policy lifecycle testable.
@@ -243,10 +259,10 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 	// Schedule a metrics job for each expanded target
 	if polls {
-		for _, t := range expanded {
-			metricsTask := gocron.NewTask(runner.runMetrics, t)
-			if _, err := s.NewJob(gocron.DurationJob(runner.metricsInterval), metricsTask,
-				gocron.WithSingletonMode(gocron.LimitModeReschedule)); err != nil {
+		start := time.Now()
+		for i, t := range expanded {
+			first := start.Add(firstPollOffset(i, len(expanded), runner.metricsInterval))
+			if err := runner.scheduleMetrics(s, t, first); err != nil {
 				return nil, fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
 			}
 		}
@@ -254,6 +270,25 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 	built = true
 	return runner, nil
+}
+
+// scheduleMetrics adds the target's polling job, first run at first. gocron
+// refuses a first run that is already past by the time it reads the clock,
+// which a near-zero offset can be, so such a job starts immediately instead.
+func (r *Runner) scheduleMetrics(s gocron.Scheduler, t config.Target, first time.Time) error {
+	add := func(start gocron.StartAtOption) error {
+		_, err := s.NewJob(gocron.DurationJob(r.metricsInterval), gocron.NewTask(r.runMetrics, t),
+			gocron.WithSingletonMode(gocron.LimitModeReschedule), gocron.WithStartAt(start))
+		return err
+	}
+	if !first.After(time.Now()) {
+		return add(gocron.WithStartImmediately())
+	}
+	err := add(gocron.WithStartDateTime(first))
+	if errors.Is(err, gocron.ErrWithStartDateTimePast) {
+		return add(gocron.WithStartImmediately())
+	}
+	return err
 }
 
 // expandTargets expands the policy's scope into the devices this runner polls,
