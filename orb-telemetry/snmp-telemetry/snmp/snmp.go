@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 	"time"
 
@@ -66,6 +67,30 @@ type Client struct {
 	// walks of a collection read sysObjectID and sysDescr, which is how the
 	// profile that decides this is chosen.
 	bulkWalk bool
+	// stopCancelWatch ends the watch Connect starts on the collection's
+	// context; nil before Connect.
+	stopCancelWatch func() bool
+}
+
+// Connect implements the Walker interface by dialing the device.
+//
+// gosnmp consults the context only between request attempts, so a cancelled
+// collection still waits out the attempt in flight, up to snmp_timeout, and so
+// does a policy stop or edit waiting for that collection. Closing the
+// connection on cancellation ends the attempt at once. A deadline is left to
+// gosnmp, which already clamps each attempt to it and reports the timeout.
+func (c *Client) Connect() error {
+	if err := c.GoSNMP.Connect(); err != nil {
+		return err
+	}
+	if ctx, conn := c.Context, c.Conn; ctx != nil && conn != nil {
+		c.stopCancelWatch = context.AfterFunc(ctx, func() {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				_ = conn.Close()
+			}
+		})
+	}
+	return nil
 }
 
 // SetBulkWalk implements the Walker interface by arming or disarming GETBULK.
@@ -123,12 +148,19 @@ func (c *Client) redactError(err error) error {
 	return errors.New(redacted)
 }
 
-// Close implements the Walker interface by closing the SNMP connection
+// Close implements the Walker interface by closing the SNMP connection.
+// Once the cancellation watch has fired it may already have closed the
+// connection, which is not an error to report.
 func (c *Client) Close() error {
-	if c.Conn != nil {
-		return c.Conn.Close()
+	fired := c.stopCancelWatch != nil && !c.stopCancelWatch()
+	if c.Conn == nil {
+		return nil
 	}
-	return nil
+	err := c.Conn.Close()
+	if fired && errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 // Walk implements the Walker interface by walking the SNMP tree.
