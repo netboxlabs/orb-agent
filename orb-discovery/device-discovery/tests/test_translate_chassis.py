@@ -121,6 +121,9 @@ def test_two_members_emits_master_plain_then_vc_then_member():
     assert vc.master.name == "core-sw-1"
     assert vc.master.serial == "FOC2401L0AB"
     assert not vc.master.HasField("virtual_chassis")
+    # The master's position is its member id, as the members' are.
+    assert vc.master.HasField("vc_position")
+    assert vc.master.vc_position == 1
 
     # Non-master member Device carries vc_position + virtual_chassis ref
     # whose master also does not recurse.
@@ -801,3 +804,50 @@ def test_stack_follows_emit_prefixes_and_ip_addresses(emit):
     kinds = [e.WhichOneof("entity") for e in translate_data(data)]
     assert ("ip_address" in kinds) is emit
     assert ("prefix" in kinds) is emit
+
+
+def _zero_based_payload():
+    return {
+        "members": [
+            {"id": 0, "serial": "2102000000000001", "model": "S5735-L48T4X-A1",
+             "role": "active", "priority": 200, "mac": None, "state": "Master"},
+            {"id": 1, "serial": "2102000000000002", "model": "S5735-L48T4X-A1",
+             "role": "member", "priority": 180, "mac": None, "state": "Slave"},
+            {"id": 2, "serial": "2102000000000003", "model": "S5735-L48T4X-A1",
+             "role": "standby", "priority": 160, "mac": None, "state": "Standby"},
+        ],
+        "domain": None,
+    }
+
+
+def test_zero_based_stack_master_takes_its_own_position():
+    """
+    A stack numbered from 0 sends its master at position 0.
+
+    NetBox sets a new chassis master's position to 1 unless the master says
+    otherwise, which is the position the member numbered 1 also claims; that
+    member is then refused by the (virtual_chassis, vc_position) uniqueness rule.
+    """
+    data = _base_data(_zero_based_payload())
+    entities = list(translate_data(data))
+
+    vc = next(e.virtual_chassis for e in entities if e.HasField("virtual_chassis"))
+    assert vc.master.HasField("vc_position")
+    assert vc.master.vc_position == 0
+
+    positions = sorted(
+        e.device.vc_position for e in entities
+        if e.HasField("device") and e.device.HasField("virtual_chassis")
+    )
+    assert positions == [1, 2]
+
+    master = next(e.device for e in entities if e.HasField("device"))
+    assert not master.HasField("vc_position")
+    assert not master.HasField("virtual_chassis")
+
+    # Only the chassis' own master ref carries the position; the members' refs
+    # to their chassis master stay matcher-only.
+    for e in entities:
+        if e.HasField("device") and e.device.HasField("virtual_chassis"):
+            assert not e.device.virtual_chassis.master.HasField("vc_position")
+

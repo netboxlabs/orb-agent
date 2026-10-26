@@ -352,7 +352,8 @@ def translate_as_stack(
 
     Emission order, top-down:
       1. Master Device — PLAIN (no vc_position, no virtual_chassis ref).
-      2. Top-level VirtualChassis with inline master ref.
+      2. Top-level VirtualChassis with inline master ref, carrying the
+         master's position (its member id).
       3. Non-master member Devices.
       4. Module / ModuleBay entities (when ``discover_modules`` is on)
          attached per-member to their owning Device.
@@ -469,8 +470,13 @@ def translate_as_stack(
     # 1) Master Device — PLAIN (no vc_position, no virtual_chassis ref).
     entities.append(Entity(device=master_dev))
 
-    # 2) Top-level VirtualChassis with inline master ref.
+    # 2) Top-level VirtualChassis with inline master ref. The ref carries the
+    # master's position, its member id: NetBox otherwise sets a new chassis
+    # master to position 1, which on a stack numbered from 0 is the position
+    # member 1 claims, and that member is refused. The plugin re-asserts the
+    # position after NetBox's signal runs.
     vc = pb.VirtualChassis(name=vc_name, master=vc_master_ref)
+    vc.master.vc_position = master_id
     domain = (data.get("chassis_members") or {}).get("domain")
     if domain:
         vc.domain = str(domain)
