@@ -227,21 +227,30 @@ func PickListenPort(t testing.TB, port string) *[]string {
 	return &hosts
 }
 
-// APIStandIn starts a server standing in for a backend process's API on
-// loopback and returns its host and port. Every path answers one JSON object
-// carrying the version under each shape the backends read it in, so any
-// backend's readiness check and Version pass against it.
-func APIStandIn(t testing.TB) (host, port string) {
+// APIStandIn starts a server standing in for a backend process's API on the
+// loopback address given, an IP literal such as 127.0.0.1 or ::1, and returns
+// its host and port; it skips the test on a host without that address. Every
+// path answers one JSON object carrying the version under each shape the
+// backends read it in, so any backend's readiness check and Version pass
+// against it.
+func APIStandIn(t testing.TB, loopback string) (host, port string) {
 	t.Helper()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	l, err := net.Listen("tcp", net.JoinHostPort(loopback, "0"))
+	if err != nil {
+		t.Skipf("no %s loopback to stand a server on: %v", loopback, err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"version": "1.0.0",
 			"app":     map[string]any{"version": "1.0.0"},
 		})
 	}))
+	_ = server.Listener.Close()
+	server.Listener = l
+	server.Start()
 	t.Cleanup(server.Close)
-	host, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	host, port, err = net.SplitHostPort(server.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("stand-in address: %v", err)
 	}

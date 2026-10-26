@@ -350,32 +350,37 @@ func TestSnmpTelemetryBackendStartHonoursACancelledContext(t *testing.T) {
 }
 
 // A backend left without a port is given one at each start: its process is
-// told the port, the probe guards it and the API calls reach it there.
+// told the port, the probe guards it and the API calls reach it there, on
+// the IPv6 loopback as on the IPv4 one, whose URLs bracket the host.
 func TestSnmpTelemetryBackendStartPicksAPortWhenUnset(t *testing.T) {
-	host, port := mocks.APIStandIn(t)
-	mockCmd := &mocks.MockCmd{}
-	mocks.SetupSuccessfulProcess(mockCmd, 12399)
-	var args []string
-	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, _ string, a []string) { args = a })
-	picked := mocks.PickListenPort(t, port)
-	probed := mocks.CaptureListenAddr(t)
+	for _, loopback := range []string{"127.0.0.1", "::1"} {
+		t.Run(loopback, func(t *testing.T) {
+			host, port := mocks.APIStandIn(t, loopback)
+			mockCmd := &mocks.MockCmd{}
+			mocks.SetupSuccessfulProcess(mockCmd, 12399)
+			var args []string
+			overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, _ string, a []string) { args = a })
+			picked := mocks.PickListenPort(t, port)
+			probed := mocks.CaptureListenAddr(t)
 
-	require.True(t, snmptelemetry.Register())
-	be := backend.GetBackend("snmp_telemetry")
-	repo, err := policies.NewMemRepo()
-	require.NoError(t, err)
-	commons := config.BackendCommons{}
-	commons.Otlp.Grpc = "collector:4317"
-	require.NoError(t, be.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{"host": host}, commons, nil))
+			require.True(t, snmptelemetry.Register())
+			be := backend.GetBackend("snmp_telemetry")
+			repo, err := policies.NewMemRepo()
+			require.NoError(t, err)
+			commons := config.BackendCommons{}
+			commons.Otlp.Grpc = "collector:4317"
+			require.NoError(t, be.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{"host": host}, commons, nil))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	require.NoError(t, be.Start(ctx, cancel))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			require.NoError(t, be.Start(ctx, cancel))
 
-	assert.Equal(t, []string{host}, *picked, "the port is picked on the host the backend listens on")
-	assert.Equal(t, port, mocks.FlagValue(args, "--port"), "the process is told the picked port")
-	assert.Equal(t, net.JoinHostPort(host, port), *probed, "the probe guards the picked port")
-	version, err := be.Version()
-	require.NoError(t, err)
-	assert.Equal(t, "1.0.0", version, "the API calls reach the process on the picked port")
+			assert.Equal(t, []string{host}, *picked, "the port is picked on the host the backend listens on")
+			assert.Equal(t, port, mocks.FlagValue(args, "--port"), "the process is told the picked port")
+			assert.Equal(t, net.JoinHostPort(host, port), *probed, "the probe guards the picked port")
+			version, err := be.Version()
+			require.NoError(t, err)
+			assert.Equal(t, "1.0.0", version, "the API calls reach the process on the picked port")
+		})
+	}
 }

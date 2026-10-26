@@ -128,7 +128,7 @@ func (d *gnmiDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 // Version returns the running gnmi-discovery version from its REST status endpoint.
 func (d *gnmiDiscoveryBackend) Version() (string, error) {
 	var info info
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/status", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort.Get()))
 	err := backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &info, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
@@ -286,7 +286,7 @@ func (d *gnmiDiscoveryBackend) GetStartTime() time.Time {
 // GetCapabilities returns the backend's capabilities from its REST endpoint.
 func (d *gnmiDiscoveryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
-	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/capabilities", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort.Get()))
 	err := backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &caps, http.MethodGet,
 		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
@@ -347,7 +347,7 @@ func (d *gnmiDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.apiProtocol, d.apiHost, d.apiPort.Get(), "policies")
+	url := fmt.Sprintf("%s://%s/api/v1/%s", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort.Get()), "policies")
 	err = backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
@@ -372,7 +372,7 @@ func (d *gnmiDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort.Get(), segment)
+	url := fmt.Sprintf("%s://%s/api/v1/policies/%s", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort.Get()), segment)
 	err = backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
@@ -425,7 +425,7 @@ func runTargets(targets []string, target string) []string {
 // normalizing each run's singular target into the shared Targets slice.
 func (d *gnmiDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp gnmiStatusResponse
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/status", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort.Get()))
 	err := backend.CommonRequest("gnmi-discovery", d.proc, d.logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", statusTimeout, "detail")
 	if err != nil {

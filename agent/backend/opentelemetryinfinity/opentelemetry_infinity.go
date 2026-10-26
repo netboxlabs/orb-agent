@@ -85,7 +85,7 @@ func (o *openTelemetryBackend) GetInitialState() backend.RunningStatus {
 
 func (o *openTelemetryBackend) Version() (string, error) {
 	var info info
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", o.apiProtocol, o.apiHost, o.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/status", o.apiProtocol, net.JoinHostPort(o.apiHost, o.apiPort.Get()))
 	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &info, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "message")
 	if err != nil {
@@ -178,7 +178,7 @@ func (o *openTelemetryBackend) GetStartTime() time.Time {
 // GetCapabilities this will only print a default backend config
 func (o *openTelemetryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
-	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", o.apiProtocol, o.apiHost, o.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/capabilities", o.apiProtocol, net.JoinHostPort(o.apiHost, o.apiPort.Get()))
 	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &caps, http.MethodGet,
 		http.NoBody, "application/json", capabilitiesTimeout, "message")
 	if err != nil {
@@ -225,7 +225,7 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", o.apiProtocol, o.apiHost, o.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/policies", o.apiProtocol, net.JoinHostPort(o.apiHost, o.apiPort.Get()))
 	err = backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "message")
 	if err != nil {
@@ -250,7 +250,7 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", o.apiProtocol, o.apiHost, o.apiPort.Get(), segment)
+	url := fmt.Sprintf("%s://%s/api/v1/policies/%s", o.apiProtocol, net.JoinHostPort(o.apiHost, o.apiPort.Get()), segment)
 	err = backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "message")
 	if err != nil {
@@ -261,7 +261,7 @@ func (o *openTelemetryBackend) RemovePolicy(data policies.PolicyData) error {
 
 func (o *openTelemetryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp backend.StatusResponse
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", o.apiProtocol, o.apiHost, o.apiPort.Get())
+	url := fmt.Sprintf("%s://%s/api/v1/status", o.apiProtocol, net.JoinHostPort(o.apiHost, o.apiPort.Get()))
 	err := backend.CommonRequest("opentelemetry-infinity", o.proc, o.logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", statusTimeout, "message")
 	if err != nil {
