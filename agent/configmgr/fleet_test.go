@@ -1886,8 +1886,8 @@ func TestStartOTLPBridge_PicksAroundAConfiguredPort(t *testing.T) {
 	assert.Empty(t, picks)
 }
 
-// stubBridgePick hands each pick pick's answer for its call number, from 1,
-// and counts the picks.
+// stubBridgePick answers the nth pick with pick(n), counting from 1, and
+// returns the number of picks made.
 func stubBridgePick(t *testing.T, pick func(call int) (string, error)) *int {
 	t.Helper()
 	var calls int
