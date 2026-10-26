@@ -1861,7 +1861,20 @@ func TestStartOTLPBridge_PicksAroundAConfiguredPort(t *testing.T) {
 	mockPMgr.On("GetRepo").Return(nil)
 	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
 
-	grpcPort := findAvailablePort(t)
+	grpcPort, otherPort := findAvailablePort(t), findAvailablePort(t)
+	require.NotEqual(t, grpcPort, otherPort)
+	// The first pick hands back the configured port, as a released port can
+	// be handed back.
+	picks := []string{strconv.Itoa(grpcPort), strconv.Itoa(otherPort)}
+	orig := backend.PickListenPort
+	backend.PickListenPort = func(context.Context, string) (string, error) {
+		require.NotEmpty(t, picks, "more picks than expected")
+		picked := picks[0]
+		picks = picks[1:]
+		return picked, nil
+	}
+	t.Cleanup(func() { backend.PickListenPort = orig })
+
 	var cfg config.Config
 	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &grpcPort
 	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
@@ -1869,8 +1882,8 @@ func TestStartOTLPBridge_PicksAroundAConfiguredPort(t *testing.T) {
 
 	gotGRPC, gotHTTP := fm.OTLPBridgePorts()
 	assert.Equal(t, grpcPort, gotGRPC)
-	assert.NotZero(t, gotHTTP)
-	assert.NotEqual(t, grpcPort, gotHTTP)
+	assert.Equal(t, otherPort, gotHTTP, "the pick that matched the configured port is passed over")
+	assert.Empty(t, picks)
 }
 
 func TestStartOTLPBridge_BindHost(t *testing.T) {

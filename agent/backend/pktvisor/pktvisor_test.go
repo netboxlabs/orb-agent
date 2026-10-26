@@ -348,3 +348,40 @@ func TestPktvisorBackendStartPicksAPortWhenUnset(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1.0.0", version, "the API calls reach the process on the picked port")
 }
+
+// The image declares pktvisor on demand, so every agent configures it at
+// boot: configuring writes nothing, and the start writes the config file it
+// hands pktvisord.
+func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	host, port := mocks.APIStandIn(t)
+	createExecutable(t, "pktvisord")
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12398)
+	var args []string
+	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, _ string, a []string) { args = a })
+
+	require.True(t, pktvisor.Register())
+	be := backend.GetBackend("pktvisor")
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, be.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{
+		"host": host,
+		"port": port,
+		"taps": map[string]any{"default_pcap": map[string]any{"input_type": "pcap"}},
+	}, config.BackendCommons{}, nil))
+
+	written, err := os.ReadDir(tmp)
+	require.NoError(t, err)
+	assert.Empty(t, written, "configuring writes no file")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, be.Start(ctx, cancel))
+	first := mocks.FlagValue(args, "--config")
+	require.NotEmpty(t, first)
+	content, err := os.ReadFile(first)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "default_pcap")
+}

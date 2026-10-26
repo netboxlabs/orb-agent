@@ -166,7 +166,6 @@ func (d *networkDiscoveryBackend) Start(ctx context.Context, cancelFunc context.
 	d.ctx = ctx
 
 	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
-		d.logger.Error("network-discovery cannot start", "error", err)
 		return fmt.Errorf("network-discovery: %w", err)
 	}
 

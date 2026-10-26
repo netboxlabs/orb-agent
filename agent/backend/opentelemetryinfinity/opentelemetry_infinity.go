@@ -100,7 +100,6 @@ func (o *openTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	o.ctx = ctx
 
 	if _, err := o.apiPort.ForStart(ctx, o.apiHost); err != nil {
-		o.logger.Error("opentelemetry infinity cannot start", "error", err)
 		return fmt.Errorf("opentelemetry infinity: %w", err)
 	}
 

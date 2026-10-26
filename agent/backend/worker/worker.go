@@ -152,7 +152,6 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.ctx = ctx
 
 	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
-		d.logger.Error("worker cannot start", "error", err)
 		return fmt.Errorf("worker: %w", err)
 	}
 

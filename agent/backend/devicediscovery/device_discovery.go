@@ -184,7 +184,6 @@ func (d *deviceDiscoveryBackend) Start(ctx context.Context, cancelFunc context.C
 	d.ctx = ctx
 
 	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
-		d.logger.Error("device-discovery cannot start", "error", err)
 		return fmt.Errorf("device-discovery: %w", err)
 	}
 

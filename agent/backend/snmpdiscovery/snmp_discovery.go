@@ -209,7 +209,6 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.ctx = ctx
 
 	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
-		d.logger.Error("snmp-discovery cannot start", "error", err)
 		return fmt.Errorf("snmp-discovery: %w", err)
 	}
 

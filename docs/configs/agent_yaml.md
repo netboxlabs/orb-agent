@@ -154,7 +154,7 @@ A backend left without a `port` on a loopback `host` (`localhost`, the default, 
 
 Under the fleet config manager, the OTLP bridge the backends export to follows the same rule: while `otlp_bridge_bind_host` is loopback (the default), `otlp_bridge_grpc_port` and `otlp_bridge_http_port` default to free ports, kept for as long as the agent runs, and to 4317 and 4318 when the bind host exposes the bridge.
 
-Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own, which happens when two agents share a host network with the same fixed backend ports, or when a backend process from an earlier run of the agent is still alive. Give each agent its own ports in the first case; end the leftover process in the second.
+Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refused before it is spawned when another process already holds the `host`:`port` it would listen on, with an error naming the address. Its readiness check asks that address and would otherwise take the other process's answer as its own. With a fixed port, that happens when two agents share a host network with the same backend ports, or when a backend process from an earlier run of the agent still holds its port. Give each agent its own ports in the first case; end the leftover process in the second. A backend on a picked port starts beside such a leftover process instead of being refused, so the leftover keeps running until it is ended.
 
 | Key | Backend | Fixed port | Notes |
 |-----|---------|-------------|-------|

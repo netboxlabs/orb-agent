@@ -3,6 +3,7 @@ package pktvisor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -46,6 +47,7 @@ type AppInfo struct {
 type pktvisorBackend struct {
 	logger          *slog.Logger
 	binary          string
+	visorConfig     []byte // the config file Configure prepared, written at each start
 	configFile      string
 	pktvisorVersion string
 	proc            backend.Commander
@@ -115,15 +117,15 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	port, err := p.adminAPIPort.ForStart(ctx, p.adminAPIHost)
 	if err != nil {
-		p.logger.Error("pktvisor cannot start", "error", err)
 		return fmt.Errorf("pktvisor: %w", err)
 	}
 
-	// -p wins over the port in the config file, so it carries a picked port.
-	pvOptions := []string{"--admin-api", "-p", port}
-	if len(p.configFile) > 0 {
-		pvOptions = append(pvOptions, "--config", p.configFile)
+	if err := p.writeConfigFile(); err != nil {
+		return err
 	}
+
+	// -p wins over the port in the config file, so it carries a picked port.
+	pvOptions := []string{"--admin-api", "-p", port, "--config", p.configFile}
 
 	if p.otelReceiverHost != "" && p.otelReceiverPort != 0 {
 		pvOptions = append(pvOptions, "--otel")
@@ -156,6 +158,36 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 			return appMetrics.App.Version, err
 		},
 	})
+}
+
+// writeConfigFile writes the configuration Configure prepared to a new temp
+// file for the process about to start, and removes the previous start's. It
+// runs at start rather than at configure time, so a backend declared on
+// demand and never started writes nothing.
+func (p *pktvisorBackend) writeConfigFile() error {
+	if p.configFile != "" {
+		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
+			p.logger.Warn("failed to remove old pktvisor temp config file",
+				"file", p.configFile,
+				"error", err)
+		}
+		p.configFile = ""
+	}
+
+	tmpFile, err := os.CreateTemp(os.TempDir(), "pktvisor-*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
+	}
+	_, werr := tmpFile.Write(p.visorConfig)
+	if err := errors.Join(werr, tmpFile.Close()); err != nil {
+		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
+			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
+				"error", rerr)
+		}
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	p.configFile = tmpFile.Name()
+	return nil
 }
 
 // logLineAdapter routes a streamed stdout/stderr line to the pktvisor output
@@ -278,22 +310,6 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	p.adminAPIHost = defaultAPIHost
 	p.agentLabels = common.Otlp.AgentLabels
 
-	// Clean up old temp config file if it exists
-	if p.configFile != "" {
-		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
-			p.logger.Warn("failed to remove old pktvisor temp config file",
-				"file", p.configFile,
-				"error", err)
-		}
-	}
-
-	// Create temp config file
-	tmpDir := os.TempDir()
-	tmpFile, err := os.CreateTemp(tmpDir, "pktvisor-*.yaml")
-	if err != nil {
-		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
-	}
-
 	// Prepare the visor configuration structure
 	visorConfig := make(map[string]any)
 	configSection := make(map[string]any)
@@ -327,21 +343,9 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 	yamlData, err := yaml.Marshal(fullConfig)
 	if err != nil {
-		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
-				"error", rerr)
-		}
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
-		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
-				"error", rerr)
-		}
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	p.configFile = tmpFile.Name()
+	p.visorConfig = yamlData
 
 	if common.Otlp.HTTP != "" {
 		uri, err := neturl.Parse(common.Otlp.HTTP)

@@ -359,8 +359,6 @@ func (a *orbAgent) Stop(ctx context.Context) {
 	}()
 }
 
-// fleetBridgePort resolves a configured bridge port (nil means the default)
-// and rejects values outside 1-65535, since backends dial the port verbatim.
 // otlpBridgeStarter is the fleet config manager's OTLP bridge, which the
 // agent starts before its backends so the URLs they are handed carry the
 // ports it bound.
@@ -369,6 +367,11 @@ type otlpBridgeStarter interface {
 	StopOTLPBridge(ctx context.Context) error
 	OTLPBridgePorts() (grpcPort, httpPort int)
 }
+
+// The fleet config manager must keep satisfying otlpBridgeStarter: Start
+// finds the bridge through it, and without it the backends would be handed
+// default ports the bridge does not listen on.
+var _ otlpBridgeStarter = (*configmgr.FleetConfigManager)(nil)
 
 // handBackendsOTLPBridge points every backend's OTLP export at the bridge
 // listening on localhost on the given ports. A missing "common" block, an
@@ -403,6 +406,8 @@ func (a *orbAgent) handBackendsOTLPBridge(grpcPort, httpPort int) {
 	a.logger.Info("auto-configured OTLP URLs for fleet config manager", "grpc", otlpBridgeEndpoint, "http", otlpBridgeHTTPEndpoint)
 }
 
+// fleetBridgePort resolves a configured bridge port (nil means the default)
+// and rejects values outside 1-65535, since backends dial the port verbatim.
 func fleetBridgePort(configured *int, def int, setting string) (int, error) {
 	if configured == nil {
 		return def, nil
