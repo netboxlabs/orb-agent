@@ -18,7 +18,7 @@ Orb writes a temporary pktvisor configuration file each time it starts `pktvisor
 | Parameter | Type | Required | Default | Description |
 |:---------:|:----:|:--------:|:-------:|-------------|
 | `host` | string | no | `localhost` | Admin API host. Written to `visor.config.host`, which is the address the `pktvisord` the agent starts binds its admin API to, and the address the agent uses to reach it. Change it only to alter that bind address. |
-| `port` | string | no | free port | Admin API port, passed to `pktvisord` with `-p`. Unset, a loopback `host` gets a port free at each start and any other `host` gets `10853`; see [Backend keys](../../configs/agent_yaml.md#backend-keys). |
+| `port` | string | no | free port | Admin API port, written to `visor.config.port` and passed to `pktvisord` with `-p`. Unset, a loopback `host` gets a port free at each start and any other `host` gets `10853`; see [Backend keys](../../configs/agent_yaml.md#backend-keys). |
 | `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not validated as required, but an agent with no taps has nothing for a policy to analyse. |
 | *other keys* | any | no | – | Added verbatim under `visor.config` (for example `log_level`, crashpad options, or storage paths). |
 

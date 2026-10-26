@@ -13,24 +13,45 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 )
 
+// The file carries the configured settings and taps with the port the start
+// settled, whatever port the configuration named.
+func TestRenderConfigFileCarriesTheStartsPort(t *testing.T) {
+	p := &pktvisorBackend{
+		visorSettings: map[string]any{"host": "localhost", "log_level": "debug"},
+		visorTaps:     map[string]any{"default_pcap": map[string]any{"input_type": "pcap"}},
+	}
+
+	data, err := p.renderConfigFile("40001")
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "port: 40001")
+	assert.Contains(t, string(data), "log_level: debug")
+	assert.Contains(t, string(data), "default_pcap")
+	assert.NotContains(t, p.visorSettings, "port", "the port is not kept for the next start")
+
+	data, err = p.renderConfigFile("")
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "port:")
+}
+
 // Each start writes a new config file and removes the previous start's, so
 // restarts leave one file behind, not one per restart.
 func TestWriteConfigFileReplacesThePreviousStarts(t *testing.T) {
 	t.Setenv("TMPDIR", t.TempDir())
-	p := &pktvisorBackend{logger: slog.New(slog.DiscardHandler), visorConfig: []byte("visor: {}\n")}
+	p := &pktvisorBackend{logger: slog.New(slog.DiscardHandler)}
 
-	require.NoError(t, p.writeConfigFile())
+	require.NoError(t, p.writeConfigFile("40001"))
 	first := p.configFile
 	content, err := os.ReadFile(first)
 	require.NoError(t, err)
-	assert.Equal(t, "visor: {}\n", string(content))
+	assert.Contains(t, string(content), "port: 40001")
 
-	require.NoError(t, p.writeConfigFile())
+	require.NoError(t, p.writeConfigFile("40002"))
 	assert.NotEqual(t, first, p.configFile)
 	_, err = os.Stat(first)
 	assert.True(t, os.IsNotExist(err), "the previous start's file is removed")
-	_, err = os.Stat(p.configFile)
-	assert.NoError(t, err)
+	content, err = os.ReadFile(p.configFile)
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "port: 40002")
 }
 
 // A config file that cannot be written fails the start before anything is
@@ -53,10 +74,9 @@ func TestStartFailsWhenTheConfigFileCannotBeWritten(t *testing.T) {
 	t.Cleanup(func() { backend.NewCmdOptions = orig })
 
 	p := &pktvisorBackend{
-		logger:      slog.New(slog.DiscardHandler),
-		binary:      defaultBinary,
-		visorConfig: []byte("visor: {}\n"),
-		configFile:  previous,
+		logger:     slog.New(slog.DiscardHandler),
+		binary:     defaultBinary,
+		configFile: previous,
 	}
 	p.adminAPIPort.Configure("10853", "localhost", defaultAPIPort)
 	ctx, cancel := context.WithCancel(context.Background())

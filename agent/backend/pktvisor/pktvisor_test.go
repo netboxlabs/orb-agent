@@ -319,7 +319,7 @@ func overrideNewCmdOptions(t *testing.T, cmd backend.Commander, assertFn func(op
 
 // A backend left without a port is given one at each start: its process is
 // told the port, the probe guards it and the API calls reach it there, on
-// the IPv6 loopback as on the IPv4 one, whose URLs bracket the host.
+// the IPv6 loopback, whose URLs bracket the host, as on the IPv4 one.
 func TestPktvisorBackendStartPicksAPortWhenUnset(t *testing.T) {
 	for _, loopback := range []string{"127.0.0.1", "::1"} {
 		t.Run(loopback, func(t *testing.T) {
@@ -356,7 +356,7 @@ func TestPktvisorBackendStartPicksAPortWhenUnset(t *testing.T) {
 
 // The image declares pktvisor on demand, so every agent configures it at
 // boot: configuring writes nothing, and the start writes the config file it
-// hands pktvisord.
+// hands pktvisord, carrying the port the start settled, the one -p carries.
 func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
@@ -366,6 +366,7 @@ func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
 	mocks.SetupSuccessfulProcess(mockCmd, 12398)
 	var args []string
 	overrideNewCmdOptions(t, mockCmd, func(_ backend.CmdOptions, _ string, a []string) { args = a })
+	mocks.PickListenPort(t, port)
 
 	require.True(t, pktvisor.Register())
 	be := backend.GetBackend("pktvisor")
@@ -373,7 +374,6 @@ func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, be.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{
 		"host": host,
-		"port": port,
 		"taps": map[string]any{"default_pcap": map[string]any{"input_type": "pcap"}},
 	}, config.BackendCommons{}, nil))
 
@@ -389,4 +389,6 @@ func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
 	content, err := os.ReadFile(configFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "default_pcap")
+	assert.Contains(t, string(content), "port: "+port, "the file carries the picked port, the same one -p does")
+	assert.Equal(t, port, mocks.FlagValue(args, "-p"))
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -47,7 +48,8 @@ type AppInfo struct {
 type pktvisorBackend struct {
 	logger          *slog.Logger
 	binary          string
-	visorConfig     []byte // the config file Configure prepared, written at each start
+	visorSettings   map[string]any // visor.config as Configure read it, without the port
+	visorTaps       any            // visor.taps as Configure read it
 	configFile      string
 	pktvisorVersion string
 	proc            backend.Commander
@@ -120,11 +122,12 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		return fmt.Errorf("pktvisor: %w", err)
 	}
 
-	if err := p.writeConfigFile(); err != nil {
+	if err := p.writeConfigFile(port); err != nil {
 		return err
 	}
 
-	// -p wins over the port in the config file, so it carries a picked port.
+	// The port goes in the config file and in -p, which wins over it, so
+	// pktvisord binds it whichever it reads.
 	pvOptions := []string{"--admin-api", "-p", port, "--config", p.configFile}
 
 	if p.otelReceiverHost != "" && p.otelReceiverPort != 0 {
@@ -160,11 +163,41 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	})
 }
 
-// writeConfigFile writes the configuration Configure prepared to a new temp
-// file for the process about to start, and removes the previous start's. It
-// runs at start rather than at configure time, so a backend declared on
-// demand and never started writes nothing.
-func (p *pktvisorBackend) writeConfigFile() error {
+// renderConfigFile is the config file for a process told port, from what
+// Configure read; an empty port leaves visor.config.port out.
+func (p *pktvisorBackend) renderConfigFile(port string) ([]byte, error) {
+	settings := make(map[string]any, len(p.visorSettings)+1)
+	maps.Copy(settings, p.visorSettings)
+	if port != "" {
+		if n, err := strconv.Atoi(port); err == nil {
+			settings["port"] = n
+		} else {
+			settings["port"] = port
+		}
+	}
+	visor := map[string]any{}
+	if len(settings) > 0 {
+		visor["config"] = settings
+	}
+	if p.visorTaps != nil {
+		visor["taps"] = p.visorTaps
+	}
+	data, err := yaml.Marshal(map[string]any{"visor": visor})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config: %w", err)
+	}
+	return data, nil
+}
+
+// writeConfigFile writes the config file for a process told port to a new
+// temp file, and removes the previous start's. It runs at start rather than
+// at configure time, so a backend declared on demand and never started
+// writes nothing.
+func (p *pktvisorBackend) writeConfigFile(port string) error {
+	data, err := p.renderConfigFile(port)
+	if err != nil {
+		return err
+	}
 	if p.configFile != "" {
 		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
 			p.logger.Warn("failed to remove old pktvisor temp config file",
@@ -178,7 +211,7 @@ func (p *pktvisorBackend) writeConfigFile() error {
 	if err != nil {
 		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
 	}
-	_, werr := tmpFile.Write(p.visorConfig)
+	_, werr := tmpFile.Write(data)
 	if err := errors.Join(werr, tmpFile.Close()); err != nil {
 		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
 			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
@@ -310,9 +343,10 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 	p.adminAPIHost = defaultAPIHost
 	p.agentLabels = common.Otlp.AgentLabels
 
-	// Prepare the visor configuration structure
-	visorConfig := make(map[string]any)
+	// Prepare the visor configuration structure. The port is left out: each
+	// start writes the one it settles, so the file and -p always agree.
 	configSection := make(map[string]any)
+	var taps any
 
 	// Process all config entries
 	for key, value := range config {
@@ -323,9 +357,8 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 			}
 			configSection[key] = value
 		case "port":
-			configSection[key] = value
 		case "taps":
-			visorConfig["taps"] = value
+			taps = value
 		default:
 			configSection[key] = value
 		}
@@ -333,19 +366,11 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 	p.adminAPIPort.Configure(backend.ConfiguredPort(config), p.adminAPIHost, defaultAPIPort)
 
-	if len(configSection) > 0 {
-		visorConfig["config"] = configSection
+	p.visorSettings = configSection
+	p.visorTaps = taps
+	if _, err := p.renderConfigFile(""); err != nil {
+		return err
 	}
-
-	fullConfig := map[string]any{
-		"visor": visorConfig,
-	}
-
-	yamlData, err := yaml.Marshal(fullConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-	p.visorConfig = yamlData
 
 	if common.Otlp.HTTP != "" {
 		uri, err := neturl.Parse(common.Otlp.HTTP)
