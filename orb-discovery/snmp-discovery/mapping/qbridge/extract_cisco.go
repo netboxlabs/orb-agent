@@ -18,6 +18,11 @@ type CiscoRows struct {
 	// Only valid VIDs in [1, 4094] are forwarded onto SwitchportInfo.
 	VoiceVlanByIfIndex map[int]int
 
+	// TrunkDynamicState from CISCO-VTP-MIB vlanTrunkPortDynamicState
+	// (1.3.6.1.4.1.9.9.46.1.6.1.1.13): the configured mode. on(1) and
+	// onNoNegotiate(5) are configured trunks, whatever the link is doing.
+	TrunkDynamicState map[int]int
+
 	// TrunkStatus from CISCO-VTP-MIB vlanTrunkPortDynamicStatus
 	// (1.3.6.1.4.1.9.9.46.1.6.1.1.14): trunking(1) or notTrunking(2).
 	TrunkStatus map[int]int
@@ -33,18 +38,23 @@ type CiscoRows struct {
 }
 
 const (
-	trunkStatusTrunking    = 1
-	trunkStatusNotTrunking = 2
-	encapNotApplicable     = 6
+	trunkStateOn            = 1
+	trunkStateOnNoNegotiate = 5
+	trunkStatusTrunking     = 1
+	trunkStatusNotTrunking  = 2
+	encapNotApplicable      = 6
 )
 
-// trunking reports whether either column says the port trunks, and whether
-// either gave a verdict. The dynamic status is operational, so a configured
-// trunk that is down reads notTrunking; the encapsulation alone still marks it.
+// trunking reports whether any column says the port trunks, and whether the
+// operational columns gave a verdict. The dynamic status is operational, so a
+// configured trunk that is down reads notTrunking; the configured mode, or on
+// NX-OS the encapsulation, still marks it.
 func (r CiscoRows) trunking(ifIndex int) (trunks, known bool) {
+	state := r.TrunkDynamicState[ifIndex]
 	status, hasStatus := r.TrunkStatus[ifIndex]
 	encap, hasEncap := r.TrunkEncapsulation[ifIndex]
-	if status == trunkStatusTrunking || (hasEncap && encap != encapNotApplicable) {
+	if state == trunkStateOn || state == trunkStateOnNoNegotiate ||
+		status == trunkStatusTrunking || (hasEncap && encap != encapNotApplicable) {
 		return true, true
 	}
 	return false, (hasStatus && status == trunkStatusNotTrunking) || hasEncap

@@ -2020,6 +2020,24 @@ func TestVlanMapper_PostMap_Cisco_TrunkByDynamicStatus(t *testing.T) {
 	}
 }
 
+// The mapper reads the configured mode too: a port configured as a trunk is
+// left alone even while both operational columns say it does not trunk.
+func TestVlanMapper_PostMap_Cisco_ConfiguredTrunkThatIsDown(t *testing.T) {
+	registry, _ := newVlanTestRegistry(t, 101, "Ethernet1/1")
+	trunk := addVerifiedInterface(registry, 436207616, "Ethernet1/2")
+	rows := buildAccessPortFixture(101, 1)
+	ciscoOmittedAccessPort(rows, 436207616, 300)
+	rows[".1.3.6.1.4.1.9.9.46.1.6.1.1.13.436207616"] = Value{Value: "1", Type: Integer}
+	rows[".1.3.6.1.4.1.9.9.46.1.6.1.1.14.436207616"] = Value{Value: "2", Type: Integer}
+
+	NewVlanMapper(slog.New(slog.NewTextHandler(os.Stderr, nil)), config.Options{}).
+		PostMap(rows, registry, &config.Defaults{VLAN: config.VLANDefaults{Status: "active"}})
+
+	if trunk.Mode != nil || trunk.UntaggedVlan != nil {
+		t.Fatalf("configured trunk made access: mode=%v untagged=%+v", trunk.Mode, trunk.UntaggedVlan)
+	}
+}
+
 // With no bridge table, a vmVlan row that ends up applied to no interface keeps
 // the warning that the bridge table is missing.
 func TestVlanMapper_PostMap_Cisco_NoBridgeTableWarnsWhenNothingApplies(t *testing.T) {

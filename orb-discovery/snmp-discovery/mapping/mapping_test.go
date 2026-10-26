@@ -2226,7 +2226,11 @@ func TestMappingYAML_CiscoWalksTheTrunkTableColumns(t *testing.T) {
 		t.Fatalf("NewConfig: %v", err)
 	}
 	cisco := cfg.VendorObjectIDs("cisco")
-	for _, oid := range []string{".1.3.6.1.4.1.9.9.46.1.6.1.1.14", ".1.3.6.1.4.1.9.9.46.1.6.1.1.16"} {
+	for _, oid := range []string{
+		".1.3.6.1.4.1.9.9.46.1.6.1.1.13",
+		".1.3.6.1.4.1.9.9.46.1.6.1.1.14",
+		".1.3.6.1.4.1.9.9.46.1.6.1.1.16",
+	} {
 		if _, ok := cisco[oid]; !ok {
 			t.Errorf("cisco walk set missing %s", oid)
 		}

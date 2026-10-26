@@ -200,6 +200,43 @@ func TestApplyCisco_EitherColumnSayingTrunkingWins(t *testing.T) {
 	}
 }
 
+// The dynamic state is the configured mode. A port configured as a trunk
+// (on, or onNoNegotiate) trunks whatever its link is doing: down, it reads
+// notTrunking and, on a device following the MIB, notApplicable as well.
+func TestApplyCisco_ConfiguredTrunkThatIsDownIsNotAdded(t *testing.T) {
+	for _, state := range []int{trunkStateOn, trunkStateOnNoNegotiate} {
+		infos := map[int]*SwitchportInfo{}
+		ApplyCisco(infos, CiscoRows{
+			MembershipAccessVlan: map[int]int{436207616: 300},
+			TrunkDynamicState:    map[int]int{436207616: state},
+			TrunkStatus:          map[int]int{436207616: trunkStatusNotTrunking},
+			TrunkEncapsulation:   map[int]int{436207616: encapNotApplicable},
+			IfAdminStatus:        map[int]int{436207616: 1},
+		})
+		if _, ok := infos[436207616]; ok {
+			t.Errorf("state %d: added a configured trunk as an access port", state)
+		}
+	}
+}
+
+// Configured access, or a negotiating mode that is not trunking, is added as
+// before.
+func TestApplyCisco_PortNotConfiguredAsATrunkIsAdded(t *testing.T) {
+	for _, state := range []int{2, 3, 4} {
+		infos := map[int]*SwitchportInfo{}
+		ApplyCisco(infos, CiscoRows{
+			MembershipAccessVlan: map[int]int{436207616: 300},
+			TrunkDynamicState:    map[int]int{436207616: state},
+			TrunkStatus:          map[int]int{436207616: trunkStatusNotTrunking},
+			TrunkEncapsulation:   map[int]int{436207616: encapNotApplicable},
+			IfAdminStatus:        map[int]int{436207616: 1},
+		})
+		if _, ok := infos[436207616]; !ok {
+			t.Errorf("state %d: port not configured as a trunk was not added", state)
+		}
+	}
+}
+
 // A dynamic status that is neither trunking nor notTrunking says nothing, so
 // without an encapsulation row the port is not added.
 func TestApplyCisco_UnexpectedDynamicStatusIsNoAnswer(t *testing.T) {

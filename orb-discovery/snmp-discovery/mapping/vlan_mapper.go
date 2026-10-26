@@ -43,8 +43,9 @@ const (
 	oidIfName  = ".1.3.6.1.2.1.31.1.1.1.1."
 	// Cisco overlay
 	oidCiscoVMVlan = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
-	// CISCO-VTP-MIB vlanTrunkPortDynamicStatus and
-	// vlanTrunkPortEncapsulationOperType, keyed by ifIndex.
+	// CISCO-VTP-MIB vlanTrunkPortDynamicState, vlanTrunkPortDynamicStatus
+	// and vlanTrunkPortEncapsulationOperType, keyed by ifIndex.
+	oidCiscoTrunkPortDynamicState  = ".1.3.6.1.4.1.9.9.46.1.6.1.1.13."
 	oidCiscoTrunkPortDynamicStatus = ".1.3.6.1.4.1.9.9.46.1.6.1.1.14."
 	oidCiscoTrunkPortEncapsulation = ".1.3.6.1.4.1.9.9.46.1.6.1.1.16."
 	oidCiscoVMVoiceVlanID          = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
@@ -861,6 +862,7 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	rows := qbridge.CiscoRows{
 		MembershipAccessVlan: map[int]int{},
 		VoiceVlanByIfIndex:   map[int]int{},
+		TrunkDynamicState:    map[int]int{},
 		TrunkStatus:          map[int]int{},
 		TrunkEncapsulation:   map[int]int{},
 	}
@@ -877,6 +879,12 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 			vid, ok2 := atoi(v.Value)
 			if ok1 && ok2 {
 				rows.VoiceVlanByIfIndex[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortDynamicState):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortDynamicState))
+			state, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.TrunkDynamicState[ifx] = state
 			}
 		case strings.HasPrefix(oid, oidCiscoTrunkPortDynamicStatus):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortDynamicStatus))
