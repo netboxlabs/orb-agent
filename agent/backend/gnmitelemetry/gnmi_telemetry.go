@@ -68,7 +68,7 @@ type gnmiTelemetryBackend struct {
 	exec       string
 
 	apiHost     string
-	apiPort     string
+	apiPort     backend.APIPort
 	apiProtocol string
 
 	otelEndpoint string
@@ -126,12 +126,13 @@ func readHost(cfg map[string]any) (string, error) {
 }
 
 // readPort reads the API port as the binary's integer flag takes it. Absent,
-// null or empty keeps the default; anything the flag would reject is refused
-// here rather than at the binary's startup, which the agent would repeat.
+// null or empty reads as empty, which leaves the port to backend.APIPort;
+// anything the flag would reject is refused here rather than at the binary's
+// startup, which the agent would repeat.
 func readPort(cfg map[string]any) (string, error) {
 	v, prs := cfg["port"]
 	if !prs || v == nil || v == "" {
-		return defaultAPIPort, nil
+		return "", nil
 	}
 	var n int
 	switch val := v.(type) {
@@ -277,7 +278,7 @@ func (d *gnmiTelemetryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.logger = logger.With("backend", "gnmi_telemetry")
 	d.policyRepo = repo
 	d.apiHost = st.apiHost
-	d.apiPort = st.apiPort
+	d.apiPort.Configure(st.apiPort, st.apiHost, defaultAPIPort)
 	d.otelEndpoint = st.otelEndpoint
 	d.otelExportPeriod = st.otelExportPeriod
 	d.logLevel = st.logLevel
@@ -353,7 +354,7 @@ func readSettings(cfg map[string]any, common config.BackendCommons) (settings, e
 // apiURL joins the API address the way the binary binds it, so an IPv6 host
 // is bracketed.
 func (d *gnmiTelemetryBackend) apiURL(path string) string {
-	return fmt.Sprintf("%s://%s/api/v1/%s", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort), path)
+	return fmt.Sprintf("%s://%s/api/v1/%s", d.apiProtocol, net.JoinHostPort(d.apiHost, d.apiPort.Get()), path)
 }
 
 func (d *gnmiTelemetryBackend) Version() (string, error) {
@@ -372,7 +373,7 @@ func (d *gnmiTelemetryBackend) Version() (string, error) {
 func (d *gnmiTelemetryBackend) buildArgs() []string {
 	args := []string{
 		"--host", d.apiHost,
-		"--port", d.apiPort,
+		"--port", d.apiPort.Get(),
 		"--otel-endpoint", d.otelEndpoint,
 	}
 	optional := []struct{ flag, value string }{
@@ -402,6 +403,11 @@ func (d *gnmiTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
+	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
+		d.logger.Error("gnmi-telemetry cannot start", "error", err)
+		return fmt.Errorf("gnmi-telemetry: %w", err)
+	}
+
 	args := d.buildArgs()
 
 	d.logger.Info("gnmi-telemetry startup", "arguments", redact.Args(args))
@@ -413,7 +419,7 @@ func (d *gnmiTelemetryBackend) Start(ctx context.Context, cancelFunc context.Can
 		NameUnderscore: "gnmi_telemetry",
 		Exec:           d.exec,
 		Args:           args,
-		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort.Get()),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p

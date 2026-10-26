@@ -26,3 +26,13 @@ func ConfigValueOrDefault[T any](config map[string]any, name string, fallback T)
 	}
 	return fallback
 }
+
+// ConfiguredPort reads a backend's "port" setting as a string, the way
+// ConfigValueOrDefault reads one, and empty when it is absent, null or empty:
+// the backend then gets the port APIPort gives a backend left without one.
+func ConfiguredPort(config map[string]any) string {
+	if value, present := config["port"]; !present || value == nil {
+		return ""
+	}
+	return ConfigValueOrDefault(config, "port", "")
+}

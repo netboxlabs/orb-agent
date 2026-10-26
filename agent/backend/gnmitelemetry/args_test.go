@@ -48,7 +48,13 @@ func TestConfigureBuildsArgs(t *testing.T) {
 			name:    "defaults pass only host, port and the endpoint",
 			cfg:     map[string]any{},
 			commons: commonsWithOTLP("grpc://collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "grpc://collector:4317"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "grpc://collector:4317"},
+		},
+		{
+			name:    "a host beyond loopback keeps the default port",
+			cfg:     map[string]any{"host": "0.0.0.0"},
+			commons: commonsWithOTLP("grpc://collector:4317"),
+			want:    []string{"--host", "0.0.0.0", "--port", "8079", "--otel-endpoint", "grpc://collector:4317"},
 		},
 		{
 			name: "every key is forwarded as its flag",
@@ -74,68 +80,68 @@ func TestConfigureBuildsArgs(t *testing.T) {
 			name:    "policy_env_vars as a list is joined with commas",
 			cfg:     map[string]any{"policy_env_vars": []any{"A", "B"}},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--policy-env-vars", "A,B"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--policy-env-vars", "A,B"},
 		},
 		{
 			name:    "empty strings are unset",
 			cfg:     map[string]any{"log_format": "", "policy_env_vars": "", "profiles_root": "", "profiles_dir": ""},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317"},
 		},
 		{
 			name:    "debug true selects DEBUG",
 			cfg:     map[string]any{"debug": true},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
 		},
 		{
 			name:    "the agent's debug flag selects DEBUG",
 			cfg:     map[string]any{},
 			commons: debugCommons("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
 		},
 		{
 			name:    "a debug-enabled logger alone does not select DEBUG",
 			cfg:     map[string]any{},
 			commons: commonsWithOTLP("collector:4317"),
 			logger:  quietLogger(slog.LevelDebug),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317"},
 		},
 		{
 			name:    "an explicit log_level wins over debug",
 			cfg:     map[string]any{"debug": true, "log_level": "ERROR"},
 			commons: debugCommons("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--log-level", "ERROR"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--log-level", "ERROR"},
 		},
 		{
 			name:    "export period accepts a whole float",
 			cfg:     map[string]any{"otel_export_period": 15.0},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--otel-export-period", "15"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--otel-export-period", "15"},
 		},
 		{
 			name:    "export period accepts a numeric string",
 			cfg:     map[string]any{"otel_export_period": "20"},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--otel-export-period", "20"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--otel-export-period", "20"},
 		},
 		{
 			name:    "a nil map, the documented bare gnmi_telemetry key, uses the defaults",
 			cfg:     nil,
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317"},
 		},
 		{
 			name:    "an empty host or port stays on the default rather than binding everywhere",
 			cfg:     map[string]any{"host": "", "port": ""},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317"},
 		},
 		{
 			name:    "a null host or port, a key left blank in YAML, keeps the default",
 			cfg:     map[string]any{"host": nil, "port": nil},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317"},
 		},
 		{
 			name:    "port accepts a whole float and a numeric string",
@@ -183,7 +189,7 @@ func TestConfigureBuildsArgs(t *testing.T) {
 			name:    "policy_env_vars entries are trimmed and joined",
 			cfg:     map[string]any{"policy_env_vars": "A, B"},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--policy-env-vars", "A,B"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--policy-env-vars", "A,B"},
 		},
 		{
 			name:    "a resolved secret in policy_env_vars is refused",
@@ -195,7 +201,7 @@ func TestConfigureBuildsArgs(t *testing.T) {
 			name:    "an empty log_level still follows the debug rule",
 			cfg:     map[string]any{"log_level": "", "debug": true},
 			commons: commonsWithOTLP("collector:4317"),
-			want:    []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
+			want:    []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317", "--log-level", "DEBUG"},
 		},
 		{
 			name:    "a non-string log_level is refused",
@@ -279,6 +285,10 @@ func TestConfigureBuildsArgs(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			// A loopback host left without a port is given one at each start.
+			mocks.PickListenPort(t, "40000")
+			_, err = b.apiPort.ForStart(context.Background(), b.apiHost)
+			require.NoError(t, err)
 			assert.Equal(t, tc.want, b.buildArgs())
 		})
 	}
@@ -294,7 +304,10 @@ func TestConfigureResetsOptionalFlags(t *testing.T) {
 		"policy_env_vars": "A", "profiles_root": "/r", "profiles_dir": "/d",
 	}, commonsWithOTLP("collector:4317"), nil))
 	require.NoError(t, b.Configure(logger, nil, map[string]any{}, commonsWithOTLP("collector:4317"), nil))
-	assert.Equal(t, []string{"--host", "localhost", "--port", "8079", "--otel-endpoint", "collector:4317"}, b.buildArgs())
+	mocks.PickListenPort(t, "40000")
+	_, err := b.apiPort.ForStart(context.Background(), b.apiHost)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--host", "localhost", "--port", "40000", "--otel-endpoint", "collector:4317"}, b.buildArgs())
 }
 
 // The binary sizes its shutdown, subscriptions closed and then the final
@@ -365,7 +378,7 @@ func TestConfigureFailureLeavesTheBackendUnchanged(t *testing.T) {
 // when it dials, or readiness never passes.
 func TestAPIURLBracketsAnIPv6Host(t *testing.T) {
 	b := &gnmiTelemetryBackend{apiProtocol: "http", exec: defaultExec}
-	require.NoError(t, b.Configure(quietLogger(slog.LevelInfo), nil, map[string]any{"host": "::1"}, commonsWithOTLP("collector:4317"), nil))
+	require.NoError(t, b.Configure(quietLogger(slog.LevelInfo), nil, map[string]any{"host": "::1", "port": 8079}, commonsWithOTLP("collector:4317"), nil))
 	assert.Equal(t, "http://[::1]:8079/api/v1/status", b.apiURL("status"))
 	assert.Equal(t, "http://[::1]:8079/api/v1/policies/a%20b", b.apiURL("policies/a%20b"))
 }

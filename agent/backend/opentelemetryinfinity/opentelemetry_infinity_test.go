@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -12,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
@@ -201,4 +203,41 @@ func TestOpenTelemetryBackendCompleted(t *testing.T) {
 	err = be.Start(ctx, cancel)
 
 	assert.Error(t, err)
+}
+
+// A backend left without a port is given one at each start: its process is
+// told the port, the probe guards it and the API calls reach it there.
+func TestOpenTelemetryInfinityBackendStartPicksAPortWhenUnset(t *testing.T) {
+	host, port := mocks.APIStandIn(t)
+	mockCmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(mockCmd, 12399)
+	var args []string
+	mocks.AllowHeldListenAddr(t)
+	originalNewCmdOptions := backend.NewCmdOptions
+	t.Cleanup(func() { backend.NewCmdOptions = originalNewCmdOptions })
+	backend.NewCmdOptions = func(_ backend.CmdOptions, _ string, a ...string) backend.Commander {
+		args = a
+		return mockCmd
+	}
+	picked := mocks.PickListenPort(t, port)
+	probed := mocks.CaptureListenAddr(t)
+
+	require.True(t, opentelemetryinfinity.Register())
+	be := backend.GetBackend("opentelemetry_infinity")
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = "collector:4317"
+	require.NoError(t, be.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{"host": host}, commons, nil))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, be.Start(ctx, cancel))
+
+	assert.Equal(t, []string{host}, *picked, "the port is picked on the host the backend listens on")
+	assert.Equal(t, port, mocks.FlagValue(args, "--server_port"), "the process is told the picked port")
+	assert.Equal(t, net.JoinHostPort(host, port), *probed, "the probe guards the picked port")
+	version, err := be.Version()
+	require.NoError(t, err)
+	assert.Equal(t, "1.0.0", version, "the API calls reach the process on the picked port")
 }

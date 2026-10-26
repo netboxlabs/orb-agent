@@ -70,3 +70,24 @@ func TestConfigValueOrDefault_PortIntOrString(t *testing.T) {
 		t.Errorf("absent port = %q; want %q", got, "8080")
 	}
 }
+
+func TestConfiguredPort(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		config map[string]any
+		want   string
+	}{
+		"absent":  {map[string]any{}, ""},
+		"null":    {map[string]any{"port": nil}, ""},
+		"empty":   {map[string]any{"port": ""}, ""},
+		"string":  {map[string]any{"port": "9000"}, "9000"},
+		"integer": {map[string]any{"port": 9000}, "9000"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := ConfiguredPort(tc.config); got != tc.want {
+				t.Errorf("ConfiguredPort(%v) = %q; want %q", tc.config, got, tc.want)
+			}
+		})
+	}
+}

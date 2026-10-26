@@ -40,7 +40,7 @@ type snmpDiscoveryBackend struct {
 	exec       string
 
 	apiHost     string
-	apiPort     string
+	apiPort     backend.APIPort
 	apiProtocol string
 
 	diodeTarget          string
@@ -113,7 +113,7 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 	d.diodeTargetFromOtel = false
 
 	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
-	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
+	d.apiPort.Configure(backend.ConfiguredPort(config), d.apiHost, defaultAPIPort)
 
 	d.ingestBufferSize = defaultIngestBufferSize
 	if v, prs := config["ingest_buffer_size"]; prs {
@@ -154,7 +154,7 @@ func (d *snmpDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Poli
 
 func (d *snmpDiscoveryBackend) Version() (string, error) {
 	var info info
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err := backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &info, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
@@ -167,7 +167,7 @@ func (d *snmpDiscoveryBackend) buildArgs() []string {
 	dOptions := []string{
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		"--host", d.apiHost,
-		"--port", d.apiPort,
+		"--port", d.apiPort.Get(),
 		"--ingest-buffer-size", fmt.Sprintf("%d", d.ingestBufferSize),
 	}
 	if d.diodeDryRun {
@@ -208,6 +208,11 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
+	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
+		d.logger.Error("snmp-discovery cannot start", "error", err)
+		return fmt.Errorf("snmp-discovery: %w", err)
+	}
+
 	args := d.buildArgs()
 
 	d.logger.Info("snmp-discovery startup", "arguments", redact.Args(args))
@@ -219,7 +224,7 @@ func (d *snmpDiscoveryBackend) Start(ctx context.Context, cancelFunc context.Can
 		NameUnderscore: "snmp_discovery",
 		Exec:           d.exec,
 		Args:           args,
-		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort.Get()),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p
@@ -291,7 +296,7 @@ func (d *snmpDiscoveryBackend) GetStartTime() time.Time {
 
 func (d *snmpDiscoveryBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
-	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err := backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &caps, http.MethodGet,
 		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
@@ -343,7 +348,7 @@ func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.apiProtocol, d.apiHost, d.apiPort, "policies")
+	url := fmt.Sprintf("%s://%s:%s/api/v1/%s", d.apiProtocol, d.apiHost, d.apiPort.Get(), "policies")
 	err = backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
@@ -366,7 +371,7 @@ func (d *snmpDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, segment)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort.Get(), segment)
 	err = backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
@@ -377,7 +382,7 @@ func (d *snmpDiscoveryBackend) RemovePolicy(data policies.PolicyData) error {
 
 func (d *snmpDiscoveryBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp backend.StatusResponse
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err := backend.CommonRequest("snmp-discovery", d.proc, d.logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", statusTimeout, "detail")
 	if err != nil {

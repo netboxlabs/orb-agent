@@ -49,7 +49,7 @@ type workerBackend struct {
 	lastResolveExecWarning string
 
 	apiHost     string
-	apiPort     string
+	apiPort     backend.APIPort
 	apiProtocol string
 
 	diodeTarget          string
@@ -113,7 +113,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 	d.debug = common.Debug
 
 	d.apiHost = backend.ConfigValueOrDefault(config, "host", defaultAPIHost)
-	d.apiPort = backend.ConfigValueOrDefault(config, "port", defaultAPIPort)
+	d.apiPort.Configure(backend.ConfiguredPort(config), d.apiHost, defaultAPIPort)
 
 	d.diodeTarget = backend.ConfigValueOrDefault(config, "target", common.Diode.Target)
 	d.diodeClientID = backend.ConfigValueOrDefault(config, "client_id", common.Diode.ClientID)
@@ -137,7 +137,7 @@ func (d *workerBackend) Configure(logger *slog.Logger, repo policies.PolicyRepo,
 
 func (d *workerBackend) Version() (string, error) {
 	var info info
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err := backend.CommonRequest("worker", d.proc, d.logger, url, &info, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "detail")
 	if err != nil {
@@ -151,10 +151,15 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 	d.cancelFunc = cancelFunc
 	d.ctx = ctx
 
+	if _, err := d.apiPort.ForStart(ctx, d.apiHost); err != nil {
+		d.logger.Error("worker cannot start", "error", err)
+		return fmt.Errorf("worker: %w", err)
+	}
+
 	dOptions := []string{
 		"--diode-app-name-prefix", d.diodeAppNamePrefix,
 		"--host", d.apiHost,
-		"--port", d.apiPort,
+		"--port", d.apiPort.Get(),
 	}
 
 	// Add debug flag if enabled and worker supports it
@@ -195,7 +200,7 @@ func (d *workerBackend) Start(ctx context.Context, cancelFunc context.CancelFunc
 		NameUnderscore: "worker",
 		Exec:           d.resolveExecPath(),
 		Args:           dOptions,
-		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort),
+		ListenAddr:     net.JoinHostPort(d.apiHost, d.apiPort.Get()),
 		LogLine:        d.logLineAdapter,
 		SetProc: func(p backend.Commander, ch <-chan backend.CmdStatus) {
 			d.proc = p
@@ -270,7 +275,7 @@ func (d *workerBackend) logWorkerOutput(line string, fallback slog.Level) {
 
 func (d *workerBackend) GetCapabilities() (map[string]any, error) {
 	caps := make(map[string]any)
-	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/capabilities", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err := backend.CommonRequest("worker", d.proc, d.logger, url, &caps, http.MethodGet,
 		http.NoBody, "application/json", capabilitiesTimeout, "detail")
 	if err != nil {
@@ -353,7 +358,7 @@ func (d *workerBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool)
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err = backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "detail")
 	if err != nil {
@@ -378,7 +383,7 @@ func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort, segment)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", d.apiProtocol, d.apiHost, d.apiPort.Get(), segment)
 	err = backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "detail")
 	if err != nil {
@@ -389,7 +394,7 @@ func (d *workerBackend) RemovePolicy(data policies.PolicyData) error {
 
 func (d *workerBackend) GetPolicyStatus() ([]backend.PolicyStatus, error) {
 	var resp backend.StatusResponse
-	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort)
+	url := fmt.Sprintf("%s://%s:%s/api/v1/status", d.apiProtocol, d.apiHost, d.apiPort.Get())
 	err := backend.CommonRequest("worker", d.proc, d.logger, url, &resp, http.MethodGet,
 		http.NoBody, "application/json", statusTimeout, "detail")
 	if err != nil {
