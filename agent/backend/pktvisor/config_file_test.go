@@ -34,21 +34,30 @@ func TestWriteConfigFileReplacesThePreviousStarts(t *testing.T) {
 }
 
 // A config file that cannot be written fails the start before anything is
-// spawned, and leaves no file named for the next start to remove.
+// spawned. The previous start's file is still removed, and none is left
+// named for the next start.
 func TestStartFailsWhenTheConfigFileCannotBeWritten(t *testing.T) {
-	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
-	bin := t.TempDir()
-	t.Setenv("PATH", bin)
+	dir := t.TempDir()
+	previous := filepath.Join(dir, "pktvisor-previous.yaml")
+	require.NoError(t, os.WriteFile(previous, []byte("visor: {}\n"), 0o600))
+	bin := filepath.Join(dir, "bin")
+	require.NoError(t, os.Mkdir(bin, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(bin, defaultBinary), []byte("#!/bin/sh\n"), 0o755))
-	spawned := false
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("TMPDIR", filepath.Join(dir, "missing"))
 	orig := backend.NewCmdOptions
 	backend.NewCmdOptions = func(backend.CmdOptions, string, ...string) backend.Commander {
-		spawned = true
+		t.Fatal("nothing is spawned without its config file")
 		return nil
 	}
 	t.Cleanup(func() { backend.NewCmdOptions = orig })
 
-	p := &pktvisorBackend{logger: slog.New(slog.DiscardHandler), binary: defaultBinary, visorConfig: []byte("visor: {}\n")}
+	p := &pktvisorBackend{
+		logger:      slog.New(slog.DiscardHandler),
+		binary:      defaultBinary,
+		visorConfig: []byte("visor: {}\n"),
+		configFile:  previous,
+	}
 	p.adminAPIPort.Configure("10853", "localhost", defaultAPIPort)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -56,6 +65,7 @@ func TestStartFailsWhenTheConfigFileCannotBeWritten(t *testing.T) {
 	err := p.Start(ctx, cancel)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config file")
-	assert.False(t, spawned, "nothing is spawned without its config file")
+	_, statErr := os.Stat(previous)
+	assert.True(t, os.IsNotExist(statErr), "the previous start's file is removed")
 	assert.Empty(t, p.configFile)
 }

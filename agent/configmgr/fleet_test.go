@@ -1886,32 +1886,38 @@ func TestStartOTLPBridge_PicksAroundAConfiguredPort(t *testing.T) {
 	assert.Empty(t, picks)
 }
 
-func stubBridgePick(t *testing.T, pick func() (string, error)) *int {
+// stubBridgePick hands each pick pick's answer for its call number, from 1,
+// and counts the picks.
+func stubBridgePick(t *testing.T, pick func(call int) (string, error)) *int {
 	t.Helper()
 	var calls int
 	orig := backend.PickListenPort
 	backend.PickListenPort = func(context.Context, string) (string, error) {
 		calls++
-		return pick()
+		return pick(calls)
 	}
 	t.Cleanup(func() { backend.PickListenPort = orig })
 	return &calls
 }
 
 // A pick that fails fails the bridge start, binding nothing and remembering
-// no ports for a later start.
+// no ports for a later start, not even the one picked before it.
 func TestStartOTLPBridge_PickFailureStartsNothing(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}
 	mockPMgr.On("GetRepo").Return(nil)
 	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
-	stubBridgePick(t, func() (string, error) {
+	calls := stubBridgePick(t, func(call int) (string, error) {
+		if call == 1 {
+			return "40001", nil
+		}
 		return "", fmt.Errorf("%w: nothing free", backend.ErrListenAddrInUse)
 	})
 
 	err := fm.StartOTLPBridge(context.Background(), config.Config{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, backend.ErrListenAddrInUse)
+	assert.Equal(t, 2, *calls, "the gRPC pick succeeded and the HTTP pick failed")
 	assert.Nil(t, fm.otlpBridge)
 	grpcPort, httpPort := fm.OTLPBridgePorts()
 	assert.Zero(t, grpcPort)
@@ -1919,7 +1925,7 @@ func TestStartOTLPBridge_PickFailureStartsNothing(t *testing.T) {
 }
 
 func TestPickOTLPBridgePort_GivesUpWhenEveryPickIsTaken(t *testing.T) {
-	calls := stubBridgePick(t, func() (string, error) { return "40001", nil })
+	calls := stubBridgePick(t, func(int) (string, error) { return "40001", nil })
 
 	_, err := pickOTLPBridgePort(context.Background(), 40001)
 	require.Error(t, err)

@@ -94,7 +94,7 @@ An on-demand backend is not listed in the agent's capabilities until it has star
         grpc: "grpc://otel-collector:4317"
 ```
 
-The image's default configuration declares `snmp_telemetry`, `gnmi_telemetry` and `pktvisor` on demand, so a telemetry or pktvisor policy starts its backend and an agent without one runs nothing extra. A pktvisor policy still needs the taps it names declared on the agent; see [Taps](./docs/backends/pktvisor/README.md#taps).
+The image's default configuration declares `snmp_telemetry`, `gnmi_telemetry` and `pktvisor` on demand, so a telemetry or pktvisor policy starts its backend and an agent without one runs nothing extra. A pktvisor policy still needs the taps it uses declared on the agent; see [Taps](./docs/backends/pktvisor/README.md#taps).
 
 A backend listening on loopback, the default, is given a free port each time it starts unless its entry sets `port`, so several agents can share one host network; see [Backend keys](./docs/configs/agent_yaml.md#backend-keys).
 
