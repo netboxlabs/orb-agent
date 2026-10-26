@@ -109,11 +109,10 @@ func TestApplyDeviceNameEmission_VirtualChassis(t *testing.T) {
 		return &diode.Device{Name: StringPtr("stack-sysname"), Metadata: diode.Metadata{"source_match": diode.Metadata{"netbox_id": 7}}}
 	}
 	master := &diode.Device{Name: StringPtr("stack-sysname"), Metadata: diode.Metadata{"source_match": diode.Metadata{"netbox_id": 7}}}
-	// Real emission shares ONE masterRef across the VC entity and every
-	// member; here we give the VC entity and the member DISTINCT refs so
-	// each clearing branch (VirtualChassis and Device.VirtualChassis) is
-	// exercised independently — a shared ref would let one branch mask the
-	// other. Both mirror buildMasterRef: a matcher ref that pointer-copies
+	// Real emission gives the VC entity its own copy of the master ref and
+	// the members a shared one; here the VC entity and the member have
+	// DISTINCT refs too, so each clearing branch (VirtualChassis and
+	// Device.VirtualChassis) is exercised independently. Both mirror buildMasterRef: a matcher ref that pointer-copies
 	// the name into its own field and carries source_match.
 	vcRef := newRef()
 	memberRef := newRef()

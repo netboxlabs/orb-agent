@@ -266,9 +266,10 @@ func TestTrimSNMPString(t *testing.T) {
 	}
 }
 
-func TestExtractInventory_JunosFPC_TrailingIntFromName(t *testing.T) {
-	logger := slog.Default()
-	oids := ObjectIDValueMap{
+// junosThreeFPCRows is a three-member Junos Virtual Chassis: FPC 0, 1 and 2,
+// numbered from 0.
+func junosThreeFPCRows() ObjectIDValueMap {
+	return ObjectIDValueMap{
 		// 3 FPC members with parentRelPos=0 (Junos doesn't populate it).
 		// IDs must come from "FPC 0", "FPC 1", "FPC 2" trailing-int parse.
 		".1.3.6.1.2.1.47.1.1.1.1.4.10":  {Value: "0"},
@@ -284,6 +285,11 @@ func TestExtractInventory_JunosFPC_TrailingIntFromName(t *testing.T) {
 		".1.3.6.1.2.1.47.1.1.1.1.7.30":  {Value: "FPC 2"},
 		".1.3.6.1.2.1.47.1.1.1.1.11.30": {Value: "BR0003"},
 	}
+}
+
+func TestExtractInventory_JunosFPC_TrailingIntFromName(t *testing.T) {
+	logger := slog.Default()
+	oids := junosThreeFPCRows()
 	inv := extractInventory(oids, logger)
 	assert.Len(t, inv.Members, 3)
 	assert.Equal(t, 0, inv.Members[0].ID, "FPC 0 -> id 0")
@@ -624,6 +630,10 @@ func TestTranslateAsStack_TwoMemberStackEmitsVCAndMember(t *testing.T) {
 	assert.Nil(t, master.VirtualChassis)
 	assert.Equal(t, "FCW2147L0K3", *master.Serial,
 		"master Serial set from chassis row 1")
+
+	// The chassis' master ref carries the master's position, its member id.
+	require.NotNil(t, vc.Master.VcPosition)
+	assert.Equal(t, int64(1), *vc.Master.VcPosition)
 
 	// Interface routing: Gi1/0/1 -> master; Gi2/0/1 -> member.
 	assert.Equal(t, master, ifaceM1.Device, "Gi1/0/1 stays on master")
@@ -2678,4 +2688,38 @@ func TestTranslateAsStack_StackPinnedModelWins(t *testing.T) {
 
 	assert.Equal(t, []string{"vendorProductName48", "vendorProductName48"}, deviceModels(out))
 	assert.Equal(t, "vendorProductName48", *master.DeviceType.Model)
+}
+
+// A stack numbered from 0 sends its master at position 0. NetBox puts a new
+// chassis master at position 1, the position member 1 also claims, and that
+// member is then refused by the (virtual_chassis, vc_position) uniqueness rule
+// unless the plugin applies the position the master ref carries.
+func TestTranslateAsStack_ZeroBasedStackMasterTakesItsOwnPosition(t *testing.T) {
+	master := &diode.Device{Name: strPtr("vc-a"), Site: &diode.Site{Name: strPtr("lab")}}
+
+	out := TranslateAsStack([]diode.Entity{master}, junosThreeFPCRows(), map[*diode.Interface]int{}, nil, "", ModelNotPinned, slog.Default())
+
+	var vc *diode.VirtualChassis
+	var positions []int64
+	for _, e := range out {
+		switch v := e.(type) {
+		case *diode.VirtualChassis:
+			vc = v
+		case *diode.Device:
+			if v == master {
+				continue
+			}
+			require.NotNil(t, v.VcPosition)
+			positions = append(positions, *v.VcPosition)
+			require.NotNil(t, v.VirtualChassis)
+			assert.Nil(t, v.VirtualChassis.Master.VcPosition,
+				"a member's ref to its chassis master stays matcher-only")
+		}
+	}
+	require.NotNil(t, vc)
+	require.NotNil(t, vc.Master.VcPosition)
+	assert.Equal(t, int64(0), *vc.Master.VcPosition)
+	assert.ElementsMatch(t, []int64{1, 2}, positions)
+	assert.Nil(t, master.VcPosition)
+	assert.Nil(t, master.VirtualChassis)
 }
