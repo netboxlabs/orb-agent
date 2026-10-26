@@ -43,6 +43,11 @@ type FleetConfigManager struct {
 	backends         map[string]backend.Backend
 	labels           map[string]string
 	configYaml       string
+	// otlpBridgeGRPCPort and otlpBridgeHTTPPort are the ports the bridge
+	// bound on its first start; a later start binds them again, since the
+	// backends were handed them.
+	otlpBridgeGRPCPort int
+	otlpBridgeHTTPPort int
 	// connMu guards connectionDetails, which is written by refreshAndReconnect and read
 	// concurrently by the reset goroutine and the reconnect worker.
 	connMu            sync.RWMutex
@@ -88,12 +93,75 @@ func newFleetConfigManagerWithConnection(logger *slog.Logger, pMgr policymgr.Pol
 	}
 }
 
-func fleetOTLPGRPCPort(cfg config.Config) int {
-	grpcPort := 4317
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort != nil {
-		grpcPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort
+// The OTLP ports, which a bridge exposed beyond loopback keeps when the
+// configuration names none.
+const (
+	defaultOTLPBridgeGRPCPort = 4317
+	defaultOTLPBridgeHTTPPort = 4318
+)
+
+// fleetOTLPBridgePort returns the port one bridge listener binds: the
+// configured one; for listeners exposed beyond loopback, fallback, since
+// senders elsewhere have to know it; otherwise 0, for a port picked free when
+// the bridge first starts, since only this agent's backends dial it.
+func fleetOTLPBridgePort(configured *int, bindHost string, fallback int) int {
+	if configured != nil {
+		return *configured
 	}
-	return grpcPort
+	if backend.LoopbackHost(bindHost) {
+		return 0
+	}
+	return fallback
+}
+
+// pickOTLPBridgePort picks a port free on every address localhost resolves
+// to, the name backends dial the bridge by, other than taken, the port the
+// other listener binds.
+func pickOTLPBridgePort(ctx context.Context, taken int) (int, error) {
+	for range 3 {
+		picked, err := backend.PickListenPort(ctx, "localhost")
+		if err != nil {
+			return 0, err
+		}
+		port, err := strconv.Atoi(picked)
+		if err != nil {
+			return 0, err
+		}
+		if port != taken {
+			return port, nil
+		}
+	}
+	return 0, fmt.Errorf("no free port other than %d", taken)
+}
+
+// otlpBridgePorts returns the ports the bridge listeners bind: those bound
+// on its first start, which the backends were handed, or else the
+// configured ones, with a free port picked for each the configuration
+// leaves to the agent.
+func (fleetManager *FleetConfigManager) otlpBridgePorts(ctx context.Context, cfg config.Config, bindHost string) (grpcPort, httpPort int, err error) {
+	if fleetManager.otlpBridgeGRPCPort != 0 {
+		return fleetManager.otlpBridgeGRPCPort, fleetManager.otlpBridgeHTTPPort, nil
+	}
+	fleetCfg := cfg.OrbAgent.ConfigManager.Sources.Fleet
+	grpcPort = fleetOTLPBridgePort(fleetCfg.OTLPBridgeGRPCPort, bindHost, defaultOTLPBridgeGRPCPort)
+	httpPort = fleetOTLPBridgePort(fleetCfg.OTLPBridgeHTTPPort, bindHost, defaultOTLPBridgeHTTPPort)
+	if grpcPort == 0 {
+		if grpcPort, err = pickOTLPBridgePort(ctx, httpPort); err != nil {
+			return 0, 0, fmt.Errorf("pick a port for the OTLP bridge gRPC listener: %w", err)
+		}
+	}
+	if httpPort == 0 {
+		if httpPort, err = pickOTLPBridgePort(ctx, grpcPort); err != nil {
+			return 0, 0, fmt.Errorf("pick a port for the OTLP bridge HTTP listener: %w", err)
+		}
+	}
+	return grpcPort, httpPort, nil
+}
+
+// OTLPBridgePorts returns the ports the bridge listeners bound, zero before
+// the bridge first starts.
+func (fleetManager *FleetConfigManager) OTLPBridgePorts() (grpcPort, httpPort int) {
+	return fleetManager.otlpBridgeGRPCPort, fleetManager.otlpBridgeHTTPPort
 }
 
 // defaultOTLPBridgeBindHost keeps both unauthenticated bridge listeners off the
@@ -143,14 +211,6 @@ func fleetOTLPBindHost(cfg config.Config) (string, error) {
 		return host, nil
 	}
 	return "", fmt.Errorf("otlp_bridge_bind_host %q must be empty, an unspecified address (0.0.0.0, ::), 127.0.0.1 or ::1: backends always dial localhost", host)
-}
-
-func fleetOTLPHTTPPort(cfg config.Config) int {
-	httpPort := 4318
-	if cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort != nil {
-		httpPort = *cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort
-	}
-	return httpPort
 }
 
 // Bounds on the bridge's size settings. The cap has a floor under which a
@@ -217,13 +277,15 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		return nil
 	}
 
-	grpcPort := fleetOTLPGRPCPort(cfg)
-	httpPort := fleetOTLPHTTPPort(cfg)
 	bindHost, err := fleetOTLPBindHost(cfg)
 	if err != nil {
 		return err
 	}
 	messageBytes, pendingBytes, err := fleetOTLPBridgeLimits(cfg)
+	if err != nil {
+		return err
+	}
+	grpcPort, httpPort, err := fleetManager.otlpBridgePorts(ctx, cfg, bindHost)
 	if err != nil {
 		return err
 	}
@@ -238,6 +300,7 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		fleetManager.otlpBridge = nil
 		return fmt.Errorf("failed to start OTLP bridge (grpc port %d, http port %d): %w", grpcPort, httpPort, err)
 	}
+	fleetManager.otlpBridgeGRPCPort, fleetManager.otlpBridgeHTTPPort = grpcPort, httpPort
 	fleetManager.logger.Info("OTLP bridge bound for fleet config manager", slog.Int("grpc_port", grpcPort), slog.Int("http_port", httpPort), slog.String("bind_host", bindHost))
 	for name, addr := range map[string]string{"grpc": fleetManager.otlpBridge.ListenAddr(), "http": fleetManager.otlpBridge.HTTPListenAddr()} {
 		if err := checkBridgeReachable(ctx, addr); err != nil {

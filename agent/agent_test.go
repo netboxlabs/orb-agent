@@ -1129,6 +1129,62 @@ func TestStart_NonFleetConfig_DoesNotModifyConfig(t *testing.T) {
 	assert.Empty(t, orbAgent.backendsCommon.Otlp.HTTP, "http URL should not be injected for non-fleet config")
 }
 
+// bridgeConfigManager is a config manager running an OTLP bridge that
+// reports the ports it bound.
+type bridgeConfigManager struct {
+	mockConfigManager
+	grpcPort, httpPort int
+	started            bool
+}
+
+func (m *bridgeConfigManager) StartOTLPBridge(context.Context, config.Config) error {
+	m.started = true
+	return nil
+}
+
+func (m *bridgeConfigManager) StopOTLPBridge(context.Context) error { return nil }
+
+func (m *bridgeConfigManager) OTLPBridgePorts() (int, int) {
+	if !m.started {
+		return 0, 0
+	}
+	return m.grpcPort, m.httpPort
+}
+
+// The backends are handed the ports the bridge bound, which it picks free
+// when the configuration leaves them to the agent, so the bridge starts
+// before the URLs are written.
+func TestStart_FleetConfig_HandsBackendsTheBridgePorts(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+
+	cfg := config.Config{
+		OrbAgent: config.OrbAgent{
+			Backends:       map[string]any{},
+			ConfigManager:  config.ManagerConfig{Active: "fleet"},
+			SecretsManager: config.ManagerSecrets{Active: ""},
+		},
+	}
+
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &mockSecretsManager{}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &bridgeConfigManager{grpcPort: 41001, httpPort: 41002}
+	orbAgent.filesManager = &mockFilesManager{}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	require.NoError(t, orbAgent.Start(ctx, cancel))
+
+	assert.Equal(t, "grpc://localhost:41001", orbAgent.backendsCommon.Otlp.Grpc)
+	assert.Equal(t, "http://localhost:41002", orbAgent.backendsCommon.Otlp.HTTP)
+}
+
 func TestStart_FleetConfig_UsesConfiguredGRPCPort(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	repo, err := policies.NewMemRepo()

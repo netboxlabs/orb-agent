@@ -246,49 +246,22 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		return err
 	}
 
+	// The bridge ports the configuration names are checked before anything
+	// starts. They are what the backends are handed when no bridge reports
+	// the ports it bound.
+	var grpcPort, httpPort int
 	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		// The bridge ports are handed to backends as fixed localhost URLs, so
-		// they must be real ports: 0 would bind an ephemeral listener whose
-		// number never reaches the backends (pktvisor then silently starts
-		// without --otel), and anything out of range cannot be bound at all.
-		grpcPort, err := fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort, 4317, "otlp_bridge_grpc_port")
-		if err != nil {
+		// A configured port must be a real one: 0 would bind an ephemeral
+		// listener whose number never reaches the backends (pktvisor then
+		// silently starts without --otel), and anything out of range cannot
+		// be bound at all. The HTTP listener is the one pktvisor
+		// (OTLP/HTTP only) uses.
+		if grpcPort, err = fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort, 4317, "otlp_bridge_grpc_port"); err != nil {
 			return err
 		}
-		// Same for the HTTP listener, which pktvisor (OTLP/HTTP only) uses.
-		httpPort, err := fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort, 4318, "otlp_bridge_http_port")
-		if err != nil {
+		if httpPort, err = fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort, 4318, "otlp_bridge_http_port"); err != nil {
 			return err
 		}
-		otlpBridgeEndpoint := fmt.Sprintf("grpc://localhost:%d", grpcPort)
-		otlpBridgeHTTPEndpoint := fmt.Sprintf("http://localhost:%d", httpPort)
-
-		// A missing "common" block, an empty one (`common:` with no value, which
-		// yaml.v3 stores as nil) or a non-map value are all treated the same:
-		// replaced by a map that carries the bridge endpoints. The same applies
-		// to the nested "otlp" section.
-		if a.config.OrbAgent.Backends == nil {
-			a.config.OrbAgent.Backends = map[string]any{}
-		}
-		commonMap, ok := a.config.OrbAgent.Backends["common"].(map[string]any)
-		if !ok || commonMap == nil {
-			commonMap = map[string]any{}
-			a.config.OrbAgent.Backends["common"] = commonMap
-		}
-		otlpSection, ok := commonMap["otlp"].(map[string]any)
-		if !ok || otlpSection == nil {
-			otlpSection = map[string]any{}
-			commonMap["otlp"] = otlpSection
-		}
-		if grpcURL, _ := otlpSection["grpc"].(string); grpcURL != "" && grpcURL != otlpBridgeEndpoint {
-			a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", grpcURL)
-		}
-		if httpURL, _ := otlpSection["http"].(string); httpURL != "" && httpURL != otlpBridgeHTTPEndpoint {
-			a.logger.Warn("Overriding OTLP HTTP URL for fleet config manager", "url", httpURL)
-		}
-		otlpSection["grpc"] = otlpBridgeEndpoint
-		otlpSection["http"] = otlpBridgeHTTPEndpoint
-		a.logger.Info("auto-configured OTLP URLs for fleet config manager", "grpc", otlpBridgeEndpoint, "http", otlpBridgeHTTPEndpoint)
 	}
 
 	if a.filesManager != nil {
@@ -297,20 +270,21 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		}
 	}
 
-	var fleetCM *configmgr.FleetConfigManager
 	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		var ok bool
-		fleetCM, ok = a.configManager.(*configmgr.FleetConfigManager)
-		if ok {
-			if err = fleetCM.StartOTLPBridge(ctx, a.config); err != nil {
+		// The bridge starts before the backends, so the URLs they are handed
+		// carry the ports it bound, a port it picked free among them.
+		if bridge, ok := a.configManager.(otlpBridgeStarter); ok {
+			if err = bridge.StartOTLPBridge(ctx, a.config); err != nil {
 				return err
 			}
 			defer func() {
 				if err != nil {
-					_ = fleetCM.StopOTLPBridge(context.Background())
+					_ = bridge.StopOTLPBridge(context.Background())
 				}
 			}()
+			grpcPort, httpPort = bridge.OTLPBridgePorts()
 		}
+		a.handBackendsOTLPBridge(grpcPort, httpPort)
 	}
 
 	if err = a.startBackends(agentCtx, a.config.OrbAgent.Backends, a.config.OrbAgent.Labels); err != nil {
@@ -387,12 +361,54 @@ func (a *orbAgent) Stop(ctx context.Context) {
 
 // fleetBridgePort resolves a configured bridge port (nil means the default)
 // and rejects values outside 1-65535, since backends dial the port verbatim.
+// otlpBridgeStarter is the fleet config manager's OTLP bridge, which the
+// agent starts before its backends so the URLs they are handed carry the
+// ports it bound.
+type otlpBridgeStarter interface {
+	StartOTLPBridge(ctx context.Context, cfg config.Config) error
+	StopOTLPBridge(ctx context.Context) error
+	OTLPBridgePorts() (grpcPort, httpPort int)
+}
+
+// handBackendsOTLPBridge points every backend's OTLP export at the bridge
+// listening on localhost on the given ports. A missing "common" block, an
+// empty one (`common:` with no value, which yaml.v3 stores as nil) or a
+// non-map value are all treated the same: replaced by a map that carries the
+// bridge endpoints. The same applies to the nested "otlp" section.
+func (a *orbAgent) handBackendsOTLPBridge(grpcPort, httpPort int) {
+	otlpBridgeEndpoint := fmt.Sprintf("grpc://localhost:%d", grpcPort)
+	otlpBridgeHTTPEndpoint := fmt.Sprintf("http://localhost:%d", httpPort)
+
+	if a.config.OrbAgent.Backends == nil {
+		a.config.OrbAgent.Backends = map[string]any{}
+	}
+	commonMap, ok := a.config.OrbAgent.Backends["common"].(map[string]any)
+	if !ok || commonMap == nil {
+		commonMap = map[string]any{}
+		a.config.OrbAgent.Backends["common"] = commonMap
+	}
+	otlpSection, ok := commonMap["otlp"].(map[string]any)
+	if !ok || otlpSection == nil {
+		otlpSection = map[string]any{}
+		commonMap["otlp"] = otlpSection
+	}
+	if grpcURL, _ := otlpSection["grpc"].(string); grpcURL != "" && grpcURL != otlpBridgeEndpoint {
+		a.logger.Warn("Overriding OTLP gRPC URL for fleet config manager", "url", grpcURL)
+	}
+	if httpURL, _ := otlpSection["http"].(string); httpURL != "" && httpURL != otlpBridgeHTTPEndpoint {
+		a.logger.Warn("Overriding OTLP HTTP URL for fleet config manager", "url", httpURL)
+	}
+	otlpSection["grpc"] = otlpBridgeEndpoint
+	otlpSection["http"] = otlpBridgeHTTPEndpoint
+	a.logger.Info("auto-configured OTLP URLs for fleet config manager", "grpc", otlpBridgeEndpoint, "http", otlpBridgeHTTPEndpoint)
+}
+
 func fleetBridgePort(configured *int, def int, setting string) (int, error) {
 	if configured == nil {
 		return def, nil
 	}
 	if *configured < 1 || *configured > 65535 {
-		return 0, fmt.Errorf("%s must be between 1 and 65535, got %d (backends dial this port on localhost, so an ephemeral port cannot be used)", setting, *configured)
+		return 0, fmt.Errorf("%s must be between 1 and 65535, got %d (leave it unset to have the agent pick a free port for a loopback bridge)", setting, *configured)
 	}
 	return *configured, nil
 }

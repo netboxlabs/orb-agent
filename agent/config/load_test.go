@@ -72,8 +72,8 @@ func decodeLegacy(t *testing.T, files ...string) Config {
 }
 
 // GOLDEN: file-only Load of the REAL shipped default_config.yaml must equal the
-// legacy yaml decode (exercises files_manager empty-struct, otlp_bridge port int,
-// multi-backend nil maps, and ${FLEET_*} literals).
+// legacy yaml decode (exercises files_manager empty-struct, multi-backend nil
+// maps, start_mode entries, and ${FLEET_*} literals).
 func TestLoad_FileOnly_MatchesLegacy_DefaultConfig(t *testing.T) {
 	t.Parallel()
 	const p = "../docker/default_config.yaml"
@@ -87,6 +87,33 @@ func TestLoad_FileOnly_MatchesLegacy_DefaultConfig(t *testing.T) {
 
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Load != legacy decode of default_config.yaml\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// GOLDEN: the fleet bridge's integer port settings round-trip identically.
+func TestLoad_FileOnly_MatchesLegacy_FleetBridgePorts(t *testing.T) {
+	t.Parallel()
+	const body = `
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      fleet:
+        otlp_bridge_grpc_port: 4337
+        otlp_bridge_http_port: 4338
+`
+	p := writeTempConfig(t, body)
+	got, err := loadWithEnv([]string{p}, nil, emptyEnviron)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := decodeLegacy(t, p)
+	want.OrbAgent.ConfigFile = p
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Load != legacy decode (fleet bridge ports)\n got: %#v\nwant: %#v", got, want)
+	}
+	if port := got.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort; port == nil || *port != 4337 {
+		t.Errorf("otlp_bridge_grpc_port = %v; want 4337", port)
 	}
 }
 
