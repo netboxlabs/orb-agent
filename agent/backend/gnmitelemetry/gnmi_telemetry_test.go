@@ -354,7 +354,7 @@ func TestGnmiTelemetryBackendStartHonoursACancelledContext(t *testing.T) {
 
 // A backend left without a port is given one at each start: its process is
 // told the port, the probe guards it and the API calls reach it there, on
-// the IPv6 loopback as on the IPv4 one, whose URLs bracket the host.
+// the IPv6 loopback, whose URLs bracket the host, as on the IPv4 one.
 func TestGnmiTelemetryBackendStartPicksAPortWhenUnset(t *testing.T) {
 	for _, loopback := range []string{"127.0.0.1", "::1"} {
 		t.Run(loopback, func(t *testing.T) {
