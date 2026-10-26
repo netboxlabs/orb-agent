@@ -379,9 +379,9 @@ func TestPktvisorBackendWritesItsConfigFileAtStart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	require.NoError(t, be.Start(ctx, cancel))
-	first := mocks.FlagValue(args, "--config")
-	require.NotEmpty(t, first)
-	content, err := os.ReadFile(first)
+	configFile := mocks.FlagValue(args, "--config")
+	require.NotEmpty(t, configFile)
+	content, err := os.ReadFile(configFile)
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "default_pcap")
 }

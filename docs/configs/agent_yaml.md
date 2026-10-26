@@ -161,6 +161,7 @@ Every backend, these and `pktvisor` and `opentelemetry_infinity` alike, is refus
 | `device_discovery` | NAPALM-based device discovery | 8072 | Optional `host`/`port` overrides |
 | `snmp_discovery` | SNMP-based discovery | 8070 | Optional `host`/`port` overrides |
 | `network_discovery` | Network/port scan discovery | 8073 | Optional `host`/`port` overrides |
+| `gnmi_discovery` | gNMI-based discovery | 8075 | Optional `host`/`port` overrides. See [gNMI Discovery docs](../backends/gnmi_discovery.md) |
 | `worker` | Custom worker backend | 8071 | Optional `host`/`port` overrides |
 | `pktvisor` | pktvisor packet analytics | 10853 | See [pktvisor docs](../backends/pktvisor/README.md) |
 | `opentelemetry_infinity` | OpenTelemetry Infinity | 10222 | See [OTel Infinity docs](../backends/opentelemetry_infinity.md) |

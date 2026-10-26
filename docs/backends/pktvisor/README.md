@@ -12,7 +12,7 @@ The two sections of a policy have a folder each.
 | [Metrics](metrics.md) | The metrics each handler produces. The `input_resources` metrics are on [its own page](handlers/input_resources.md). |
 
 ## Configuration
-Orb writes a temporary pktvisor configuration file on startup based on the `orb.backends.pktvisor` block. Any key that is not handled explicitly is forwarded to `visor.config` in the generated file, so you can pass through native pktvisor options such as logging, crashpad, or custom data paths when needed.
+Orb writes a temporary pktvisor configuration file each time it starts `pktvisord`, based on the `orb.backends.pktvisor` block; a pktvisor declared on demand that never starts writes none. Any key that is not handled explicitly is forwarded to `visor.config` in the generated file, so you can pass through native pktvisor options such as logging, crashpad, or custom data paths when needed.
 
 ### Backend settings
 | Parameter | Type | Required | Default | Description |

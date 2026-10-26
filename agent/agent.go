@@ -251,11 +251,10 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	// the ports it bound.
 	var grpcPort, httpPort int
 	if a.config.OrbAgent.ConfigManager.Active == "fleet" {
-		// A configured port must be a real one: 0 would bind an ephemeral
-		// listener whose number never reaches the backends (pktvisor then
-		// silently starts without --otel), and anything out of range cannot
-		// be bound at all. The HTTP listener is the one pktvisor
-		// (OTLP/HTTP only) uses.
+		// A configured port must be a real one: anything out of range cannot
+		// be bound, and 0 is refused rather than read as "pick one", which
+		// is what leaving the setting unset asks for on a loopback bridge.
+		// The HTTP listener is the one pktvisor (OTLP/HTTP only) uses.
 		if grpcPort, err = fleetBridgePort(a.config.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort, 4317, "otlp_bridge_grpc_port"); err != nil {
 			return err
 		}

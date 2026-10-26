@@ -1886,6 +1886,46 @@ func TestStartOTLPBridge_PicksAroundAConfiguredPort(t *testing.T) {
 	assert.Empty(t, picks)
 }
 
+func stubBridgePick(t *testing.T, pick func() (string, error)) *int {
+	t.Helper()
+	var calls int
+	orig := backend.PickListenPort
+	backend.PickListenPort = func(context.Context, string) (string, error) {
+		calls++
+		return pick()
+	}
+	t.Cleanup(func() { backend.PickListenPort = orig })
+	return &calls
+}
+
+// A pick that fails fails the bridge start, binding nothing and remembering
+// no ports for a later start.
+func TestStartOTLPBridge_PickFailureStartsNothing(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+	stubBridgePick(t, func() (string, error) {
+		return "", fmt.Errorf("%w: nothing free", backend.ErrListenAddrInUse)
+	})
+
+	err := fm.StartOTLPBridge(context.Background(), config.Config{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, backend.ErrListenAddrInUse)
+	assert.Nil(t, fm.otlpBridge)
+	grpcPort, httpPort := fm.OTLPBridgePorts()
+	assert.Zero(t, grpcPort)
+	assert.Zero(t, httpPort)
+}
+
+func TestPickOTLPBridgePort_GivesUpWhenEveryPickIsTaken(t *testing.T) {
+	calls := stubBridgePick(t, func() (string, error) { return "40001", nil })
+
+	_, err := pickOTLPBridgePort(context.Background(), 40001)
+	require.Error(t, err)
+	assert.Equal(t, 3, *calls)
+}
+
 func TestStartOTLPBridge_BindHost(t *testing.T) {
 	for name, bindHost := range map[string]string{"default is loopback": "", "explicit loopback with spaces": " 127.0.0.1 "} {
 		bindHost := bindHost
