@@ -46,19 +46,18 @@ func ApplyDeviceNameEmission(entities []diode.Entity, dev *diode.Device, emit bo
 	clearVirtualChassisMasterName(entities)
 }
 
-// clearVirtualChassisMasterName clears Name on the shared
-// VirtualChassis.Master matcher ref. buildMasterRef pointer-copies the
-// master's name into a separate field, so clearing the master device does
-// not reach it; leaving it would recreate the name divergence buildMasterRef
-// forbids. The ref still carries source_match / asset_tag, so it stays
-// matchable. Called only after the master's name has been suppressed. The
-// ref is shared across the top-level VirtualChassis entity and every
-// member's VirtualChassis.Master, so clearing via any path clears it
-// everywhere; iterating both shapes is idempotent and defensive.
+// clearVirtualChassisMasterName clears Name on the VirtualChassis.Master
+// matcher refs. buildMasterRef pointer-copies the master's name into a
+// separate field, so clearing the master device does not reach it; leaving it
+// would recreate the name divergence buildMasterRef forbids. The refs still
+// carry source_match / asset_tag, so they stay matchable. Called only after
+// the master's name has been suppressed. The top-level VirtualChassis entity
+// carries its own copy of the ref (with the master's position), separate from
+// the ref the members share, so both shapes below are needed.
 //
-// snmp-discovery emits exactly one master (and one shared master ref) per
-// walk, so clearing every ref in the batch unconditionally is correct: the
-// only master ref present is the one for the master the guard just cleared.
+// snmp-discovery emits exactly one master per walk, so clearing every master
+// ref in the batch unconditionally is correct: the only master refs present
+// are the ones for the master the guard just cleared.
 func clearVirtualChassisMasterName(entities []diode.Entity) {
 	for _, e := range entities {
 		switch v := e.(type) {

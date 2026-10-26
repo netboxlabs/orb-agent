@@ -244,8 +244,9 @@ func ChassisInventoryFromOIDs(oids ObjectIDValueMap, logger *slog.Logger) *Chass
 }
 
 // buildMasterRef returns a non-recursive matcher-only Device for use
-// as VirtualChassis.Master on the top-level VC entity AND on each
-// non-master member Device's VirtualChassis.Master.
+// as VirtualChassis.Master on each non-master member Device; the
+// top-level VC entity carries a copy of it with the master's position
+// (see chassisMasterRef).
 //
 // Carries the matcher fields the rich master Device carries below the
 // primary-IP rungs — divergence breaks the Diode plugin's matcher
@@ -254,9 +255,9 @@ func ChassisInventoryFromOIDs(oids ObjectIDValueMap, logger *slog.Logger) *Chass
 // virtual_chassis+vc_position) and creates ghost VCs.
 //
 // MUST NOT carry VirtualChassis (non-recursion — dodges the plugin's
-// "Unable to resolve circular reference in entities" error) or
-// VcPosition (would only feed matcher #8 which is unreachable behind
-// the higher-precedence matchers above).
+// "Unable to resolve circular reference in entities" error). The shared
+// ref carries no VcPosition either; only the top-level VC entity's copy
+// does, see chassisMasterRef.
 //
 // MUST NOT carry primary_ip4/6 either. dcim.device.primary_ip is a
 // circular reference the reconciler resolves only within a SINGLE
@@ -282,6 +283,21 @@ func buildMasterRef(master *diode.Device) *diode.Device {
 		ref.Metadata = diode.Metadata{"source_match": sm}
 	}
 	return ref
+}
+
+// chassisMasterRef copies masterRef for the top-level VirtualChassis entity
+// and gives it the master's position, its member id. NetBox puts a new chassis
+// master at position 1, which on a stack numbered from 0 is the position
+// member 1 claims, and that member is refused; the plugin then applies the
+// position this ref carries. Members keep the shared ref.
+func chassisMasterRef(masterRef *diode.Device, masterID int) *diode.Device {
+	if masterRef == nil {
+		return nil
+	}
+	ref := *masterRef
+	pos := int64(masterID)
+	ref.VcPosition = &pos
+	return &ref
 }
 
 // buildMemberDevice constructs a non-master member Device proto.
@@ -1338,7 +1354,7 @@ func TranslateAsStack(
 	out = append(out, master)
 	out = append(out, &diode.VirtualChassis{
 		Name:   &vcName,
-		Master: masterRef,
+		Master: chassisMasterRef(masterRef, lowest.ID),
 	})
 	for _, d := range memberDevices {
 		out = append(out, d)

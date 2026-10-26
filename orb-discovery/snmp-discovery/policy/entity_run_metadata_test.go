@@ -266,3 +266,41 @@ func int64Ptr(v int64) *int64 {
 func stringPtr(v string) *string {
 	return &v
 }
+
+// On a stack the chassis' own master ref carries a position but no chassis, and
+// still needs source_match for unique_master to resolve it; members, which
+// carry both, are left alone so they do not collapse onto the master's row.
+func TestAnnotateDeviceWithSourceMatch_stack(t *testing.T) {
+	pos0, pos1 := int64(0), int64(1)
+	name := "vc-a"
+	shared := &diode.Device{Name: &name}
+	chassisRef := &diode.Device{Name: &name, VcPosition: &pos0}
+	master := &diode.Device{Name: &name}
+	member := &diode.Device{Name: &name, VcPosition: &pos1, VirtualChassis: &diode.VirtualChassis{Name: &name, Master: shared}}
+	vc := &diode.VirtualChassis{Name: &name, Master: chassisRef}
+
+	annotateDeviceWithSourceMatch([]diode.Entity{master, vc, member}, 42)
+
+	for label, d := range map[string]*diode.Device{"master": master, "chassis ref": chassisRef, "member ref": shared} {
+		if _, ok := d.Metadata["source_match"]; !ok {
+			t.Errorf("%s: missing source_match", label)
+		}
+	}
+	if _, ok := member.Metadata["source_match"]; ok {
+		t.Error("member stamped with the master's source_match")
+	}
+}
+
+// A member's ref to its chassis master is a separate Device from the VC
+// entity's own master ref, and carries run_id like every other nested Device.
+func TestAnnotateEntitiesWithRunID_memberChassisMasterRef(t *testing.T) {
+	pos := int64(1)
+	ref := &diode.Device{Name: stringPtr("vc-a")}
+	member := &diode.Device{
+		Name:           stringPtr("vc-a-1"),
+		VcPosition:     &pos,
+		VirtualChassis: &diode.VirtualChassis{Name: stringPtr("vc-a"), Master: ref},
+	}
+	annotateEntitiesWithRunID([]diode.Entity{member}, "run-1")
+	assert.Equal(t, "run-1", ref.Metadata["run_id"])
+}

@@ -35,9 +35,10 @@ func annotateDeviceWithSourceMatch(entities []diode.Entity, netboxID int) {
 			}
 		case *diode.VirtualChassis:
 			// Top-level VC carries the master ref that needs source_match
-			// for unique_master matcher resolution.
-			if v != nil {
-				setDeviceSourceMatch(v.Master, netboxID, seen)
+			// for unique_master matcher resolution. That ref carries the
+			// master's VcPosition, so it is stamped without the member check.
+			if v != nil && v.Master != nil {
+				stampSourceMatch(v.Master, netboxID, seen)
 			}
 		}
 	}
@@ -54,6 +55,11 @@ func setDeviceSourceMatch(d *diode.Device, netboxID int, seen map[unsafe.Pointer
 	if d.VcPosition != nil {
 		return
 	}
+	stampSourceMatch(d, netboxID, seen)
+}
+
+// stampSourceMatch sets source_match on d once per batch.
+func stampSourceMatch(d *diode.Device, netboxID int, seen map[unsafe.Pointer]struct{}) {
 	p := unsafe.Pointer(d)
 	if _, ok := seen[p]; ok {
 		return
@@ -73,6 +79,11 @@ func annotateEntitiesWithRunID(entities []diode.Entity, runID string) {
 		switch v := e.(type) {
 		case *diode.Device:
 			annotateDevice(v, runID, seen)
+			// A member's ref to its chassis master is not the VC entity's
+			// own master ref, so it is annotated here.
+			if v.VirtualChassis != nil && v.VirtualChassis.Master != nil {
+				annotateDevice(v.VirtualChassis.Master, runID, seen)
+			}
 		case *diode.Interface:
 			annotateInterface(v, runID, seen)
 		case *diode.IPAddress:
