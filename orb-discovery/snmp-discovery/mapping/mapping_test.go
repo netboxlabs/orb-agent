@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -2192,6 +2193,7 @@ func TestMappingYAML_CiscoOverlayEntriesPresent(t *testing.T) {
 	wanted := map[string]bool{
 		".1.3.6.1.4.1.9.9.68.1.2.2.1": false, // vmMembershipTable
 		".1.3.6.1.4.1.9.9.68.1.5.1":   false, // vmVoiceVlanTable
+		".1.3.6.1.4.1.9.9.46.1.6.1.1": false, // vlanTrunkPortTable
 	}
 	for _, e := range doc.Entries {
 		if e.Vendor != "cisco" {
@@ -2204,6 +2206,33 @@ func TestMappingYAML_CiscoOverlayEntriesPresent(t *testing.T) {
 	for oid, found := range wanted {
 		if !found {
 			t.Errorf("mapping.yaml missing cisco-scoped OID %s", oid)
+		}
+	}
+}
+
+// The trunk table's two columns decide whether a Cisco access port missing from
+// the bridge table is added; without them the overlay quietly adds none.
+func TestMappingYAML_CiscoWalksTheTrunkTableColumns(t *testing.T) {
+	body, err := os.ReadFile("../policy/mapping.yaml")
+	if err != nil {
+		t.Fatalf("read mapping.yaml: %v", err)
+	}
+	var doc config.Mapping
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("yaml: %v", err)
+	}
+	cfg, err := mapping.NewConfig(doc.Entries, slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil, &config.Defaults{}, config.Options{})
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	cisco := cfg.VendorObjectIDs("cisco")
+	for _, oid := range []string{
+		".1.3.6.1.4.1.9.9.46.1.6.1.1.13",
+		".1.3.6.1.4.1.9.9.46.1.6.1.1.14",
+		".1.3.6.1.4.1.9.9.46.1.6.1.1.16",
+	} {
+		if _, ok := cisco[oid]; !ok {
+			t.Errorf("cisco walk set missing %s", oid)
 		}
 	}
 }

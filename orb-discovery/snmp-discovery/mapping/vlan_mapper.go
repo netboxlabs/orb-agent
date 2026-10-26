@@ -42,8 +42,13 @@ const (
 	oidIfDescr = ".1.3.6.1.2.1.2.2.1.2."
 	oidIfName  = ".1.3.6.1.2.1.31.1.1.1.1."
 	// Cisco overlay
-	oidCiscoVMVlan        = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
-	oidCiscoVMVoiceVlanID = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
+	oidCiscoVMVlan = ".1.3.6.1.4.1.9.9.68.1.2.2.1.2."
+	// CISCO-VTP-MIB vlanTrunkPortDynamicState, vlanTrunkPortDynamicStatus
+	// and vlanTrunkPortEncapsulationOperType, keyed by ifIndex.
+	oidCiscoTrunkPortDynamicState  = ".1.3.6.1.4.1.9.9.46.1.6.1.1.13."
+	oidCiscoTrunkPortDynamicStatus = ".1.3.6.1.4.1.9.9.46.1.6.1.1.14."
+	oidCiscoTrunkPortEncapsulation = ".1.3.6.1.4.1.9.9.46.1.6.1.1.16."
+	oidCiscoVMVoiceVlanID          = ".1.3.6.1.4.1.9.9.68.1.5.1.1."
 	// CISCOSB overlay (Cisco small-business: Catalyst 1200/1300, CBS/SG).
 	// All are indexed by ifIndex, not by bridge port.
 	oidCiscoSBPortMode        = ".1.3.6.1.4.1.9.6.1.101.48.22.1.1."
@@ -105,6 +110,8 @@ func (m *VlanMapper) PostMap(
 	// log the same refusal twice per target, and the map is shared with the
 	// SVI resolver, which has to see the same keying this mapper does.
 	gen := m.buildGenericRows(allObjectIDs)
+	cisco := m.buildCiscoRows(allObjectIDs)
+	cisco.IfAdminStatus = gen.IfAdminStatus
 	if len(gen.BasePortToIfIndex) == 0 {
 		// No bridge port table — refuse Interface mutation. Still emit
 		// VLAN entities below from the static table; they don't need
@@ -131,6 +138,13 @@ func (m *VlanMapper) PostMap(
 			m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
 			return vlanEntities
 		}
+		// Cisco's vmMembershipTable is indexed by ifIndex, and the default
+		// context's bridge table is empty when no port is in VLAN 1.
+		infos := map[int]*qbridge.SwitchportInfo{}
+		qbridge.ApplyCisco(infos, cisco)
+		if m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults)) > 0 {
+			return vlanEntities
+		}
 		if hasVLANSignal(allObjectIDs) {
 			m.logger.Warn("vlan: missing dot1dBasePortIfIndex; skipping interface mutations",
 				"reason", "bridge-port-translation-unavailable")
@@ -146,7 +160,6 @@ func (m *VlanMapper) PostMap(
 		m.logger.Warn("vlan: ExtractGeneric failed", "error", err)
 		return m.emitVLANs(allObjectIDs, defaults)
 	}
-	cisco := m.buildCiscoRows(allObjectIDs)
 	// Defense in depth: ApplyCisco is a no-op when both Cisco-overlay maps
 	// are empty (the runner only walks vendor-scoped OIDs on a Cisco-matched
 	// host, so on generic-only hosts we never reach this branch's payload).
@@ -176,12 +189,30 @@ func (m *VlanMapper) PostMap(
 	// Mutate interfaces in place. The registry holds *diode.Interface
 	// instances InterfaceMapper produced; we look them up by ifIndex
 	// using string-form ifIndex as ObjectIDIndex.
+	m.applyInfos(registry, infos, allObjectIDs, ensureVLAN)
+	return vlanEntities
+}
+
+// applyInfos classifies each port, applies the result to its interface, and
+// returns how many source ports with a discovered interface got a mode, before
+// applyClassifications merges ports onto their switchport.
+func (m *VlanMapper) applyInfos(
+	registry *EntityRegistry,
+	infos map[int]*qbridge.SwitchportInfo,
+	allObjectIDs ObjectIDValueMap,
+	ensureVLAN func(int) *diode.VLAN,
+) int {
 	classifications := make(map[int]qbridge.Classification, len(infos))
+	applied := 0
 	for ifIndex, info := range infos {
-		classifications[ifIndex] = qbridge.Classify(*info)
+		c := qbridge.Classify(*info)
+		classifications[ifIndex] = c
+		if classificationToNetboxMode(c.Mode) != "" && verifiedInterface(registry, ifIndex) != nil {
+			applied++
+		}
 	}
 	m.applyClassifications(registry, classifications, walkedIfTypes(allObjectIDs), ensureVLAN)
-	return vlanEntities
+	return applied
 }
 
 // vlanIndex indexes the emitted VLAN entities by VID and returns the
@@ -195,8 +226,9 @@ func (m *VlanMapper) PostMap(
 // classic Cisco IOS exposes vmVlan/dot1qPvid VIDs without advertising them
 // via dot1qVlanStaticName, so ports classify as access but the index is
 // empty — the stub ensures NetBox never receives mode=access with a nil
-// untagged_vlan reference. Stubs are appended to *vlanEntities so the
-// caller's returned slice carries them.
+// untagged_vlan reference. With create_unknown_vlans off no stub is made and
+// such a port keeps mode=access with no VLAN. Stubs are appended to
+// *vlanEntities so the caller's returned slice carries them.
 func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults) func(int) *diode.VLAN {
 	vlanByVid := make(map[int]*diode.VLAN, len(*vlanEntities))
 	for _, e := range *vlanEntities {
@@ -830,6 +862,9 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	rows := qbridge.CiscoRows{
 		MembershipAccessVlan: map[int]int{},
 		VoiceVlanByIfIndex:   map[int]int{},
+		TrunkDynamicState:    map[int]int{},
+		TrunkStatus:          map[int]int{},
+		TrunkEncapsulation:   map[int]int{},
 	}
 	for oid, v := range all {
 		switch {
@@ -844,6 +879,24 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 			vid, ok2 := atoi(v.Value)
 			if ok1 && ok2 {
 				rows.VoiceVlanByIfIndex[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortDynamicState):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortDynamicState))
+			state, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.TrunkDynamicState[ifx] = state
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortDynamicStatus):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortDynamicStatus))
+			status, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.TrunkStatus[ifx] = status
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortEncapsulation):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortEncapsulation))
+			encap, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.TrunkEncapsulation[ifx] = encap
 			}
 		}
 	}

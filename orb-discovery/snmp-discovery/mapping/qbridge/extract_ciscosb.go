@@ -89,8 +89,9 @@ func (r CiscoSBRows) IfIndexes() []int {
 // ApplyCiscoSB overlays the CISCOSB private-MIB columns onto the generic
 // result.
 //
-// Only ifIndices already present in infos are touched, matching ApplyCisco, so
-// a stale row cannot conjure a port out of nothing.
+// Only ifIndices already present in infos are touched, so a stale row cannot
+// conjure a port out of nothing. Unlike ApplyCisco, which adds the access
+// ports Cisco's per-VLAN bridge table leaves out, this overlay never adds one.
 //
 // A port the device calls access or trunk is described by that mode's columns
 // alone, replacing what the standard tables gave. A port in another mode, or on
