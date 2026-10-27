@@ -90,3 +90,26 @@ vulnerabilities:
       pip during an operator-initiated driver or worker install. The agent's own
       dependencies resolve urllib3 to 2.8.0.
     expired_at: 2026-11-18
+
+  - id: CVE-2026-114613
+    statement: >-
+      msgpack reported at 1.1.2 from pip 26.2.2's vendor.txt, the same vendored
+      copy as GHSA-6v7p-g79w-8964. The leak is in the C extension,
+      msgpack._cmsgpack, and pip vendors only the pure-Python fallback:
+      pip/_vendor/msgpack holds no compiled module, so the vulnerable code is
+      not in the image. The advisory notes the fallback checks the key before
+      decoding the value and does not leak. pip 26.2.2 is the current latest
+      release and still pins this version, so there is no upgrade that clears
+      it.
+    expired_at: 2026-11-18
+
+  - id: GHSA-xmj3-9gf7-h52w
+    statement: >-
+      setuptools reported at 70.3.0 from pip 26.2.2's vendor.txt, the same
+      source as CVE-2025-47273 above and absent for the same reason: the flaw is
+      in setuptools/wheel.py, and pip ships no _vendor/setuptools, only
+      _vendor/pkg_resources. It also only escapes the destination directory on
+      Windows, and the image is Linux. The finding is vendor.txt metadata
+      rather than reachable code. pip 26.2.2 is the current latest release and
+      still pins this version, so there is no upgrade that clears it.
+    expired_at: 2026-11-18
