@@ -1,6 +1,7 @@
 package pktvisor
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -126,10 +127,18 @@ func (p *pktvisorBackend) apiURL(path string) string {
 // policy list does not mention. Failures are logged and leave the taps for
 // the next removal.
 func (p *pktvisorBackend) removeUnusedTaps() {
-	var taps map[string]tapInfo
-	if err := backend.CommonRequest("pktvisor", p.proc, p.logger, p.apiURL("/api/v1/taps"), &taps,
+	// Fetch raw and decode here: CommonRequest's YAML fallback can report
+	// success for a body that does not fit the target, which for the policy
+	// list would read as "no policy uses any tap".
+	var rawTaps json.RawMessage
+	if err := backend.CommonRequest("pktvisor", p.proc, p.logger, p.apiURL("/api/v1/taps"), &rawTaps,
 		http.MethodGet, http.NoBody, "application/json", tapsTimeout, "error"); err != nil {
 		p.logger.Warn("pktvisor tap cleanup: listing taps failed", "error", err)
+		return
+	}
+	var taps map[string]tapInfo // null, which pktvisor answers when it has no taps, leaves it empty
+	if err := json.Unmarshal(rawTaps, &taps); err != nil {
+		p.logger.Warn("pktvisor tap cleanup: tap list did not decode", "error", err)
 		return
 	}
 	var candidates []string
@@ -143,12 +152,20 @@ func (p *pktvisorBackend) removeUnusedTaps() {
 	}
 	slices.Sort(candidates)
 
+	var rawPols json.RawMessage
+	if err := backend.CommonRequest("pktvisor", p.proc, p.logger, p.apiURL("/api/v1/policies"), &rawPols,
+		http.MethodGet, http.NoBody, "application/json", tapsTimeout, "error"); err != nil {
+		p.logger.Warn("pktvisor tap cleanup: listing policies failed", "error", err)
+		return
+	}
+	// pktvisor always answers an object here, {} when it has no policies, so
+	// null or a body that does not decode must not read as "no policy uses a
+	// tap": the DELETE detaches the tap from every policy.
 	var pols map[string]struct {
 		Taps map[string]any `json:"taps"`
 	}
-	if err := backend.CommonRequest("pktvisor", p.proc, p.logger, p.apiURL("/api/v1/policies"), &pols,
-		http.MethodGet, http.NoBody, "application/json", tapsTimeout, "error"); err != nil {
-		p.logger.Warn("pktvisor tap cleanup: listing policies failed", "error", err)
+	if err := json.Unmarshal(rawPols, &pols); err != nil || pols == nil {
+		p.logger.Warn("pktvisor tap cleanup: policy list did not decode", "error", err)
 		return
 	}
 	used := map[string]bool{}

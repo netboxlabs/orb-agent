@@ -45,9 +45,11 @@ type fakePktvisor struct {
 	taps     map[string]fakeTap
 	policies map[string]fakePolicy
 
-	refusePolicies  bool
-	failTapList     bool
-	failPolicyList  bool
+	refusePolicies bool
+	failTapList    bool
+	failPolicyList bool
+	// policyListBody, when set, replaces the policy list answer.
+	policyListBody  *string
 	stallPolicyPost bool
 
 	// requests logs "METHOD path STATUS" for every request.
@@ -233,6 +235,12 @@ func (f *fakePktvisor) deleteTap(w http.ResponseWriter, r *http.Request, name st
 func (f *fakePktvisor) listPolicies(w http.ResponseWriter, r *http.Request) {
 	if f.failPolicyList {
 		f.fail(w, r, http.StatusInternalServerError, "policy list failed")
+		return
+	}
+	if f.policyListBody != nil {
+		f.requests = append(f.requests, fmt.Sprintf("%s %s %d", r.Method, r.URL.Path, http.StatusOK))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, *f.policyListBody)
 		return
 	}
 	out := map[string]any{}

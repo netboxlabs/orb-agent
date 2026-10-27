@@ -159,3 +159,27 @@ func TestRemoveCleansUpWhenThePolicyIsAlreadyGone(t *testing.T) {
 	assert.Contains(t, f.log(), "DELETE /api/v1/taps/fleet_flow 200")
 	assert.False(t, f.hasTap("fleet_flow"))
 }
+
+func TestRemoveKeepsTapsWhenThePolicyListDoesNotDecode(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"taps is a list", `{"p2": {"taps": ["fleet_netprobe"]}}`},
+		{"not JSON", `plain text`},
+		{"null", `null`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakePktvisor(t)
+			be := startAgainst(t, f)
+			f.addTap("fleet_netprobe", "netprobe", nil, nil)
+			f.addPolicy("p1", "fleet_netprobe")
+			f.addPolicy("p2", "fleet_netprobe")
+			f.with(func() { f.policyListBody = &c.body })
+
+			require.NoError(t, remove(be, "p1"))
+
+			assert.Contains(t, f.log(), "GET /api/v1/policies 200")
+			assert.Empty(t, tapDeletes(f.log()))
+			assert.True(t, f.hasTap("fleet_netprobe"))
+		})
+	}
+}
