@@ -4,12 +4,14 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from custom_napalm import _textfsm
 from custom_napalm.huawei_vrp import (
     VRPDriver,
     _huawei_vrp_get_chassis_members_impl,
     _normalize_vrp_istack_role,
     _parse_huawei_stack,
     _parse_vrp_esn_by_slot,
+    _yunshan_version_facts,
 )
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
@@ -198,3 +200,101 @@ def test_chassis_members_esn_failure_drops_members_logs_warning(caplog):
     warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert any("display esn failed" in r.message for r in warning_records)
     assert any(r.exc_info is not None and r.exc_info[0] is RuntimeError for r in warning_records)
+
+
+# --- YunShan OS display version ----------------------------------------------
+
+_YUNSHAN_HEADER = (
+    "Huawei YunShan OS\n"
+    "Version 1.23.1.1 (S5700 V600R023C10SPC500)\n"
+    "Copyright (C) 2021-2024 Huawei Technologies Co., Ltd.\n"
+    "HUAWEI CloudEngine S5735-L-V2 uptime is 120 days, 3 hours, 15 minutes\n"
+)
+
+
+def test_yunshan_version_facts_reads_version_and_master_board():
+    """YunShan's `Version` line gives os_version; the Master board line, not another member's, gives the model."""
+    text = (
+        _YUNSHAN_HEADER
+        + "\nS5735-L24T4XE-A-V2(Standby) 2 : uptime is  120 days, 3 hours, 13 minutes\n"
+        + "\nS5735-L48T4XE-A-V2(Master) 1 : uptime is  120 days, 3 hours, 14 minutes\n"
+    )
+    assert _yunshan_version_facts(text) == {"os_version": "1.23.1.1", "model": "S5735-L48T4XE-A-V2"}
+
+
+def test_yunshan_version_facts_without_master_board_leaves_model_alone():
+    """No Master board line: only os_version is returned, so the template's headline model stays."""
+    assert _yunshan_version_facts(_YUNSHAN_HEADER) == {"os_version": "1.23.1.1"}
+
+
+def test_yunshan_version_facts_ignores_a_control_board_named_master():
+    """On a modular chassis the Master line names the control board (`MPU`), not a model of the headline series."""
+    text = (
+        "Huawei YunShan OS\n"
+        "Version 1.22.0.1 (S12700E V600R022C10SPC100)\n"
+        "HUAWEI S12700E-8 uptime is 30 days, 1 hour, 5 minutes\n"
+        "\nMPU(Master) 9 : uptime is 30 days, 1 hour, 4 minutes\n"
+    )
+    assert _yunshan_version_facts(text) == {"os_version": "1.22.0.1"}
+
+
+def test_yunshan_version_facts_reads_the_series_after_the_vendor_name():
+    """The series is the product word after `HUAWEI`, so a trailing `Routing Switch` does not hide it."""
+    text = (
+        "Huawei YunShan OS\n"
+        "Version 1.23.1.1 (S5700 V600R023C10SPC500)\n"
+        "HUAWEI S5735-L48T4X-A1 Routing Switch uptime is 2 days, 1 hour, 5 minutes\n"
+        "\nS5735-L48T4X-A1(Master) 1 : uptime is 2 days, 1 hour, 4 minutes\n"
+    )
+    assert _yunshan_version_facts(text) == {"os_version": "1.23.1.1", "model": "S5735-L48T4X-A1"}
+
+
+def test_yunshan_version_facts_without_headline_leaves_model_alone():
+    """Without the uptime headline there is no series to check the board against, so no model is taken."""
+    text = "Huawei YunShan OS\nVersion 1.23.1.1 (S5700 V600R023C10SPC500)\n\nS5735-L48T4XE-A-V2(Master) 1 : uptime is 1 day\n"
+    assert _yunshan_version_facts(text) == {"os_version": "1.23.1.1"}
+
+
+def _yunshan_driver(getter_dir: str) -> VRPDriver:
+    driver = object.__new__(VRPDriver)
+    driver.hostname = "192.0.2.20"
+    driver.device = FakeCLIDevice(Path(__file__).parent / "mock_data" / getter_dir / "yunshan")
+    return driver
+
+
+def test_get_facts_warning_names_the_device(monkeypatch, caplog):
+    """Skipped YunShan lines are logged against the device's host, so a policy with many targets stays traceable."""
+    monkeypatch.setattr(_textfsm, "_warned", set())
+
+    with caplog.at_level(logging.WARNING, logger="custom_napalm.huawei_vrp"):
+        _yunshan_driver("test_get_facts").get_facts()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 2
+    assert all("192.0.2.20" in m for m in messages)
+
+
+def test_get_interfaces_warning_names_the_device(monkeypatch, caplog):
+    """`display interface` skips are logged against the device's host too."""
+    monkeypatch.setattr(_textfsm, "_warned", set())
+
+    with caplog.at_level(logging.WARNING, logger="custom_napalm.huawei_vrp"):
+        _yunshan_driver("test_get_interfaces").get_interfaces()
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1
+    assert "192.0.2.20" in messages[0]
+    assert "skipped 2 lines" in messages[0]
+
+
+def test_yunshan_version_facts_ignores_vrp_output():
+    """VRP output without the YunShan banner is left to the template, even with lookalike lines."""
+    text = (
+        "Huawei Versatile Routing Platform Software\n"
+        "VRP (R) software, Version 5.170 (S5735 V200R022C00SPC500)\n"
+        "HUAWEI S5735-L48T4X-A1 Routing Switch uptime is 10 weeks, 1 day, 2 hours, 3 minutes\n"
+        "\n"
+        "Version 9.9.9 (lookalike)\n"
+        "S5735-L48T4X-A1(Master) 0 : uptime is 10 weeks\n"
+    )
+    assert _yunshan_version_facts(text) == {}

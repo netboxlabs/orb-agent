@@ -1,0 +1,24 @@
+GigabitEthernet0/0/1 current state : UP
+Line protocol current state : UP
+Description:Uplink to core
+Switch Port, PVID :    1, TPID : 8100(Hex), The Maximum Frame Length is 9216
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 00e0-fc00-0101
+Media type: twisted pair, Link type: auto negotiation
+Speed : 1000, Loopback: NONE
+Duplex: FULL, Negotiation: ENABLE
+
+GigabitEthernet0/0/2 current state : DOWN
+Line protocol current state : DOWN
+Description:
+Switch Port, PVID :    1, TPID : 8100(Hex), The Maximum Frame Length is 9216
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 00e0-fc00-0102
+Media type: twisted pair, Link type: auto negotiation
+Speed : 1000, Loopback: NONE
+Duplex: FULL, Negotiation: ENABLE
+
+Vlanif1 current state : UP
+Line protocol current state : UP
+Description:
+Route Port,The Maximum Transmit Unit is 1500
+Internet Address is 192.0.2.1/24
+IP Sending Frames' Format is PKTFMT_ETHNT_2, Hardware address is 00e0-fc00-0100

@@ -1,0 +1,16 @@
+Huawei YunShan OS
+Version 1.23.1.1 (S5700 V600R023C10SPC500)
+Copyright (C) 2021-2024 Huawei Technologies Co., Ltd.
+HUAWEI CloudEngine S5735-L-V2 uptime is 120 days, 3 hours, 15 minutes
+Patch Version: V600R023SPH100
+
+S5735-L48T4XE-A-V2(Master) 1 : uptime is  120 days, 3 hours, 14 minutes
+        StartupTime 2026/06/28   09:12:44
+Memory      Size    : 2048 M bytes
+Flash       Size    : 1024 M bytes
+S5735-L48T4XE-A-V2 version information:
+1.PCB       Version : PCB0000000001 VER A
+2.MAB       Version : 2
+3.Board     Type    : S5735-L48T4XE-A-V2
+4.BIOS      Version : 1250
+5.CPLD      Version : 257

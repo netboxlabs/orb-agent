@@ -1,0 +1,16 @@
+PHY: Physical
+*down: administratively down
+^down: standby
+-down: link flap down
+(l): loopback
+(s): spoofing
+(b): BFD down
+(e): ETHOAM down
+(d): Dampening Suppressed
+InUti/OutUti: input utility/output utility
+Interface                   PHY   Protocol  InUti OutUti   inErrors  outErrors
+GigabitEthernet0/0/1        up    up        0.01%  0.01%          0          0
+GigabitEthernet0/0/2        down  down         0%     0%          0          0
+MEth0/0/1                   up    up           0%     0%          0          0
+NULL0                       up    up(s)        0%     0%          0          0
+Vlanif1                     up    up           0%     0%          0          0

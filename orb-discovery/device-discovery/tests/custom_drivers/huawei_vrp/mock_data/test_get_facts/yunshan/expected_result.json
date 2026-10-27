@@ -1,0 +1,10 @@
+{
+  "uptime": 10379700,
+  "vendor": "Huawei",
+  "os_version": "1.23.1.1",
+  "serial_number": "2102350000000000001",
+  "model": "S5735-L48T4XE-A-V2",
+  "hostname": "HUAWEI-LAB-SW-1",
+  "fqdn": "Unknown",
+  "interface_list": ["GigabitEthernet0/0/1", "GigabitEthernet0/0/2", "MEth0/0/1", "NULL0", "Vlanif1"]
+}
