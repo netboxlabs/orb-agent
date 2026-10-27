@@ -2389,11 +2389,10 @@ func TestMappingYAML_VendorSerialScalarsPresent(t *testing.T) {
 	}
 }
 
-// The VTP VLAN catalog exists to corroborate SVI-derived prefix VLANs, so
-// with emit_prefix_vlan off it must not be walked at all: a stock Cisco
-// switch has to emit exactly the VLAN entities it emitted before the
-// option existed, reserved VIDs 1002-1005 included. The sibling
-// Cisco-overlay tables are unrelated and must keep being walked either way.
+// The full VTP VLAN catalog is gated by prefix-VLAN discovery, but its
+// name column is always walked for Cisco interface VLAN references.
+// Lookup-only names must not expand the standalone VLAN inventory when
+// prefix discovery is off. Other Cisco overlays remain independently walked.
 func TestVtpWalkGating(t *testing.T) {
 	body, err := os.ReadFile("../policy/mapping.yaml")
 	if err != nil {
@@ -2415,10 +2414,10 @@ func TestVtpWalkGating(t *testing.T) {
 		t.Fatalf("NewConfig: %v", err)
 	}
 	vendorOff := off.VendorObjectIDs("cisco")
-	assert.NotContains(t, vendorOff, vtpNameOID,
-		"the VTP VLAN name column must not be walked with emit_prefix_vlan off")
-	assert.NotContains(t, off.ObjectIDs(), vtpNameOID,
-		"the VTP VLAN name column must be absent from the full walk plan too")
+	assert.Contains(t, vendorOff, vtpNameOID,
+		"VTP names must remain available for interface references with prefix VLANs off")
+	assert.Contains(t, off.ObjectIDs(), vtpNameOID,
+		"the full walk plan must include lookup-only VTP names")
 	assert.Contains(t, vendorOff, vmMembershipOID,
 		"the unrelated Cisco access-VLAN overlay must still be walked")
 
@@ -2431,18 +2430,16 @@ func TestVtpWalkGating(t *testing.T) {
 	assert.Contains(t, on.VendorObjectIDs("cisco"), vtpNameOID,
 		"the VTP VLAN name column must be walked with emit_prefix_vlan svi-name")
 
-	// With prefix emission off there is no prefix to associate, so the option
-	// is inert. emitVLANs reads these same rows for VLAN names, so walking them
-	// anyway would let an option that cannot function change the target's
-	// emitted VLAN inventory.
+	// Disabling prefix emission must not disable VTP name lookups.
+// Inventory gating happens in emitVLANs, not by suppressing name collection.
 	noPrefixes := false
 	inert, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
 		config.Options{EmitPrefixVlan: &sviName, EmitPrefixes: &noPrefixes})
 	if err != nil {
 		t.Fatalf("NewConfig: %v", err)
 	}
-	assert.NotContains(t, inert.VendorObjectIDs("cisco"), vtpNameOID,
-		"the VTP VLAN name column must not be walked when no prefixes are emitted")
+	assert.Contains(t, inert.VendorObjectIDs("cisco"), vtpNameOID,
+		"VTP names must remain available when prefix emission is disabled")
 	assert.Contains(t, inert.VendorObjectIDs("cisco"), vmMembershipOID,
 		"the unrelated Cisco access-VLAN overlay must still be walked")
 }

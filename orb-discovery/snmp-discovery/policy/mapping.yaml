@@ -328,6 +328,15 @@ entries:
     vendor: "cisco"
     description: "CISCO-VTP-MIB vlanTrunkPortTable (trunking state per port)"
     mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.5"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortNativeVlan"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.30"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansActiveFirst2k"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.31"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansActiveSecond2k"
       - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.13"
         entity: "interface_vlan"
         field: "vlanTrunkPortDynamicState"
@@ -374,6 +383,16 @@ entries:
       - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
         entity: "vtp_vlan"
         field: "vtpVlanName"
+
+  # Cisco VTP VLAN names for interface VLAN references. Unlike the
+  # vtp_vlan catalog above, this column is walked regardless of prefix mode.
+  # Names alone must not expand the standalone VLAN inventory.
+  - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+    entity: "interface_vlan"
+    field: "vtpVlanName"
+    identifier_size: 2
+    vendor: "cisco"
+    description: "CISCO-VTP-MIB VLAN names for interface references"
 
   # CISCOSB private vlan group — Cisco small-business switches (Catalyst
   # 1200/1300, CBS/SG). On these, dot1qPvid is not merely absent but wrong: it

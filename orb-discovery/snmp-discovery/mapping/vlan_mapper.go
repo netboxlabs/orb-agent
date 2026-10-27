@@ -130,7 +130,7 @@ func (m *VlanMapper) PostMap(
 		// is applied here instead.
 		vlanEntities := m.emitVLANs(allObjectIDs, defaults)
 		if membership := vendorTaggedMembership(allObjectIDs, m.logger); len(membership) > 0 {
-			ensureVLAN := m.vlanIndex(&vlanEntities, defaults)
+			ensureVLAN := m.vlanIndex(&vlanEntities, defaults, vlanNamesByVid(allObjectIDs))
 			classifications := make(map[int]qbridge.Classification, len(membership))
 			for ifIndex, vids := range membership {
 				classifications[ifIndex] = qbridge.Classification{Mode: qbridge.ModeTrunk, Tagged: vids}
@@ -142,7 +142,8 @@ func (m *VlanMapper) PostMap(
 		// context's bridge table is empty when no port is in VLAN 1.
 		infos := map[int]*qbridge.SwitchportInfo{}
 		qbridge.ApplyCisco(infos, cisco)
-		if m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults)) > 0 {
+		qbridge.ApplyCiscoTrunks(infos, cisco)
+		if m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults, vlanNamesByVid(allObjectIDs))) > 0 {
 			return vlanEntities
 		}
 		if hasVLANSignal(allObjectIDs) {
@@ -182,9 +183,12 @@ func (m *VlanMapper) PostMap(
 		qbridge.ApplyCiscoSB(infos, ciscosb)
 	}
 
+	// Apply complete Cisco VTP active trunk membership after vendor overlays.
+	qbridge.ApplyCiscoTrunks(infos, cisco)
+
 	// Build VLAN entities first — interface refs link to them by VID.
 	vlanEntities := m.emitVLANs(allObjectIDs, defaults)
-	ensureVLAN := m.vlanIndex(&vlanEntities, defaults)
+	ensureVLAN := m.vlanIndex(&vlanEntities, defaults, vlanNamesByVid(allObjectIDs))
 
 	// Mutate interfaces in place. The registry holds *diode.Interface
 	// instances InterfaceMapper produced; we look them up by ifIndex
@@ -229,7 +233,7 @@ func (m *VlanMapper) applyInfos(
 // untagged_vlan reference. With create_unknown_vlans off no stub is made and
 // such a port keeps mode=access with no VLAN. Stubs are appended to
 // *vlanEntities so the caller's returned slice carries them.
-func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults) func(int) *diode.VLAN {
+func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults, names map[int]string) func(int) *diode.VLAN {
 	vlanByVid := make(map[int]*diode.VLAN, len(*vlanEntities))
 	for _, e := range *vlanEntities {
 		v, ok := e.(*diode.VLAN)
@@ -248,13 +252,21 @@ func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.De
 		}
 		stub := &diode.VLAN{
 			Vid:  int64Ptr(int64(vid)),
-			Name: StringPtr("VLAN" + strconv.Itoa(vid)),
+			Name: StringPtr(vlanReferenceName(vid, names)),
 		}
 		applyVLANDefaults(stub, defaults)
 		vlanByVid[vid] = stub
 		*vlanEntities = append(*vlanEntities, stub)
 		return stub
 	}
+}
+
+// vlanReferenceName prefers a discovered name over the generic fallback.
+func vlanReferenceName(vid int, names map[int]string) string {
+	if name := names[vid]; name != "" {
+		return name
+	}
+	return "VLAN" + strconv.Itoa(vid)
 }
 
 // verifiedInterface returns the walked *diode.Interface for ifIndex, or
@@ -857,6 +869,12 @@ func (m *VlanMapper) buildCiscoSBRows(all ObjectIDValueMap) qbridge.CiscoSBRows 
 	return rows
 }
 
+const (
+	oidCiscoTrunkPortNativeVlan     = ".1.3.6.1.4.1.9.9.46.1.6.1.1.5."
+	oidCiscoTrunkPortActiveFirst2k  = ".1.3.6.1.4.1.9.9.46.1.6.1.1.30."
+	oidCiscoTrunkPortActiveSecond2k = ".1.3.6.1.4.1.9.9.46.1.6.1.1.31."
+)
+
 // buildCiscoRows extracts Cisco overlay rows.
 func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	rows := qbridge.CiscoRows{
@@ -865,6 +883,9 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 		TrunkDynamicState:    map[int]int{},
 		TrunkStatus:          map[int]int{},
 		TrunkEncapsulation:   map[int]int{},
+		NativeVlan:           map[int]int{},
+		ActiveFirst2k:        map[int][]byte{},
+		ActiveSecond2k:       map[int][]byte{},
 	}
 	for oid, v := range all {
 		switch {
@@ -879,6 +900,20 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 			vid, ok2 := atoi(v.Value)
 			if ok1 && ok2 {
 				rows.VoiceVlanByIfIndex[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortNativeVlan):
+			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortNativeVlan))
+			vid, ok2 := atoi(v.Value)
+			if ok1 && ok2 {
+				rows.NativeVlan[ifx] = vid
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortActiveFirst2k):
+			if ifx, ok := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortActiveFirst2k)); ok {
+				rows.ActiveFirst2k[ifx] = []byte(v.Value)
+			}
+		case strings.HasPrefix(oid, oidCiscoTrunkPortActiveSecond2k):
+			if ifx, ok := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortActiveSecond2k)); ok {
+				rows.ActiveSecond2k[ifx] = []byte(v.Value)
 			}
 		case strings.HasPrefix(oid, oidCiscoTrunkPortDynamicState):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoTrunkPortDynamicState))
@@ -1127,13 +1162,28 @@ func preferVtpRow(heldName, heldOID, name, oid string) bool {
 // vendor catalog row. It is the set emitVLANs emits from; a VID only an
 // interface's membership references is not among them.
 func deviceVlanVids(all ObjectIDValueMap) map[int]struct{} {
+	return deviceVlanVidsWithVTP(all, true)
+}
+
+// deviceVlanVidsWithVTP excludes lookup-only VTP names from VLAN existence
+// evidence when includeVTP is false. Names remain available for labeling.
+func deviceVlanVidsWithVTP(all ObjectIDValueMap, includeVTP bool) map[int]struct{} {
 	vids := map[int]struct{}{}
 	add := func(vid int) {
 		if vid >= 1 && vid <= 4094 {
 			vids[vid] = struct{}{}
 		}
 	}
-	for vid := range vlanNamesByVid(all) {
+	namesForInventory := all
+	if !includeVTP {
+		namesForInventory = make(ObjectIDValueMap, len(all))
+		for oid, value := range all {
+			if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+				namesForInventory[oid] = value
+			}
+		}
+	}
+	for vid := range vlanNamesByVid(namesForInventory) {
 		add(vid)
 	}
 	for vid := range vendorVlanCatalog(all).Vids { // every catalog row registers its VID
@@ -1187,7 +1237,9 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 	// it carries no name and no status: the index row alone is what says the
 	// VLAN exists.
 	byVid := map[int]*pending{}
-	for vid := range deviceVlanVids(all) {
+	includeVTP := m.options.PrefixVlanMode() != "off" &&
+		m.options.PrefixEmissionEnabled()
+	for vid := range deviceVlanVidsWithVTP(all, includeVTP) {
 		byVid[vid] = &pending{}
 	}
 	for vid, name := range vlanNamesByVid(all) {

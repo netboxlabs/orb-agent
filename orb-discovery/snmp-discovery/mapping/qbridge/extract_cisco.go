@@ -33,6 +33,15 @@ type CiscoRows struct {
 	// the configuration, so a trunk that is down still reads dot1Q.
 	TrunkEncapsulation map[int]int
 
+	// NativeVlan from CISCO-VTP-MIB vlanTrunkPortNativeVlan (.5).
+	NativeVlan map[int]int
+
+	// Active VLAN membership from CISCO-VTP-MIB (.30 and .31).
+	// These bitmaps are indexed by VLAN ID, not bridge-port number.
+	// First2k covers VLANs 0-2047; Second2k covers 2048-4095.
+	ActiveFirst2k  map[int][]byte
+	ActiveSecond2k map[int][]byte
+
 	// IfAdminStatus from IF-MIB, for ports the bridge-port table omits.
 	IfAdminStatus map[int]int
 }
