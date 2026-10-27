@@ -420,3 +420,18 @@ func TestEditSwitchesTheManagedTapType(t *testing.T) {
 	assert.False(t, f.hasTap("fleet_netprobe"))
 	assert.True(t, f.hasTap("fleet_flow"))
 }
+
+// Fleet is shown the taps a policy can name, not the ones the agent manages.
+func TestCapabilitiesLeaveOutManagedTaps(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.addTap("edge", "pcap", nil, nil)
+	f.addTap("fleet_netprobe", "netprobe", nil, nil)
+
+	caps, err := be.GetCapabilities()
+	require.NoError(t, err)
+	taps, ok := caps["taps"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, taps, "edge")
+	assert.NotContains(t, taps, "fleet_netprobe")
+}

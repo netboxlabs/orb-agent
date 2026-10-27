@@ -368,6 +368,13 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 			configSection[key] = value
 		case "port":
 		case "taps":
+			if local, ok := value.(map[string]any); ok {
+				for name := range local {
+					if strings.HasPrefix(name, managedTapPrefix) {
+						return fmt.Errorf("pktvisor tap %q: names starting with %q are reserved for taps the agent manages", name, managedTapPrefix)
+					}
+				}
+			}
 			taps = value
 		default:
 			configSection[key] = value
@@ -401,12 +408,19 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 }
 
 func (p *pktvisorBackend) GetCapabilities() (map[string]any, error) {
-	var taps any
+	var taps map[string]any
 	url := fmt.Sprintf("%s://%s/api/v1/taps", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()))
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &taps, http.MethodGet,
 		http.NoBody, "application/json", tapsTimeout, "error")
 	if err != nil {
 		return nil, err
+	}
+	// Fleet sees the taps a policy can name, not the agent's own. A null
+	// answer leaves taps nil, which still reports as null.
+	for name := range taps {
+		if strings.HasPrefix(name, managedTapPrefix) {
+			delete(taps, name)
+		}
 	}
 	jsonBody := make(map[string]any)
 	jsonBody["taps"] = taps

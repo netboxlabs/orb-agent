@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/policies"
 )
 
 // The file carries the configured settings and taps with the port the start
@@ -88,4 +90,24 @@ func TestStartFailsWhenTheConfigFileCannotBeWritten(t *testing.T) {
 	_, statErr := os.Stat(previous)
 	assert.True(t, os.IsNotExist(statErr), "the previous start's file is removed")
 	assert.Empty(t, p.configFile)
+}
+
+// Names starting with fleet_ belong to the taps the agent manages, so a local
+// tap cannot take one.
+func TestConfigureRefusesAReservedTapName(t *testing.T) {
+	configure := func(taps map[string]any) error {
+		p := &pktvisorBackend{}
+		repo, err := policies.NewMemRepo()
+		require.NoError(t, err)
+		return p.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{
+			"taps": taps,
+		}, config.BackendCommons{}, nil)
+	}
+
+	err := configure(map[string]any{"fleet_x": map[string]any{"input_type": "pcap"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "reserved")
+	assert.Contains(t, err.Error(), "fleet_x")
+
+	require.NoError(t, configure(map[string]any{"edge": map[string]any{"input_type": "pcap"}}))
 }
