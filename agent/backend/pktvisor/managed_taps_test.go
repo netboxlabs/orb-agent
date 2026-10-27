@@ -183,3 +183,240 @@ func TestRemoveKeepsTapsWhenThePolicyListDoesNotDecode(t *testing.T) {
 		})
 	}
 }
+
+func netprobeBody(targets ...string) map[string]any {
+	return map[string]any{
+		"kind": "collection",
+		"input": map[string]any{
+			"input_type": "netprobe",
+			"config":     map[string]any{"targets": targets},
+		},
+		"handlers": map[string]any{"modules": map[string]any{}},
+	}
+}
+
+func flowBody() map[string]any {
+	return map[string]any{
+		"kind":     "collection",
+		"input":    map[string]any{"input_type": "flow"},
+		"handlers": map[string]any{"modules": map[string]any{}},
+	}
+}
+
+func apply(be interface {
+	ApplyPolicy(policies.PolicyData, bool) error
+}, name string, body any, update bool,
+) error {
+	return be.ApplyPolicy(policies.PolicyData{ID: "id-" + name, Name: name, Data: body}, update)
+}
+
+func TestApplyCreatesTheManagedTapAndNamesIt(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+
+	require.NoError(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+
+	assert.Equal(t, []string{"POST /api/v1/taps 201", "POST /api/v1/policies 201"}, f.log())
+	tap, ok := f.tapNamed("fleet_netprobe")
+	require.True(t, ok)
+	assert.Equal(t, "netprobe", tap.inputType)
+	assert.Empty(t, tap.config)
+	pol, ok := f.policyNamed("p1")
+	require.True(t, ok)
+	input, _ := pol.body["input"].(map[string]any)
+	assert.Equal(t, "fleet_netprobe", input["tap"])
+	assert.Equal(t, map[string]any{"targets": []any{"192.0.2.1"}}, input["config"])
+}
+
+func TestApplyReusesItsManagedTap(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	require.NoError(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+	f.clearLog()
+
+	require.NoError(t, apply(be, "p2", netprobeBody("192.0.2.2"), false))
+
+	assert.Equal(t, []string{
+		"POST /api/v1/taps 409",
+		"GET /api/v1/taps/fleet_netprobe 200",
+		"POST /api/v1/policies 201",
+	}, f.log())
+	f.with(func() { assert.Len(t, f.taps, 1) })
+}
+
+func TestApplyDropsANullTapSelector(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	body := netprobeBody("192.0.2.1")
+	body["input"].(map[string]any)["tap_selector"] = nil
+
+	require.NoError(t, apply(be, "p1", body, false))
+
+	pol, ok := f.policyNamed("p1")
+	require.True(t, ok)
+	input, _ := pol.body["input"].(map[string]any)
+	assert.Equal(t, "fleet_netprobe", input["tap"])
+	assert.NotContains(t, input, "tap_selector")
+}
+
+func TestApplyRefusesAFleetNamedTapItDidNotCreate(t *testing.T) {
+	cases := []struct {
+		name      string
+		inputType string
+		config    map[string]any
+	}{
+		{"other input type", "pcap", nil},
+		{"with config", "netprobe", map[string]any{"targets": []any{"192.0.2.1"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFakePktvisor(t)
+			be := startAgainst(t, f)
+			f.addTap("fleet_netprobe", c.inputType, c.config, nil)
+
+			err := apply(be, "p1", netprobeBody("192.0.2.1"), false)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "not one the agent manages")
+			assert.NotContains(t, f.log(), "POST /api/v1/policies 201")
+			_, ok := f.policyNamed("p1")
+			assert.False(t, ok)
+		})
+	}
+}
+
+func TestApplyLeavesTheStoredBodyUntouched(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	body := netprobeBody("192.0.2.1")
+
+	require.NoError(t, apply(be, "p1", body, false))
+
+	pol, ok := f.policyNamed("p1")
+	require.True(t, ok)
+	posted, _ := pol.body["input"].(map[string]any)
+	assert.Equal(t, "fleet_netprobe", posted["tap"])
+	assert.NotContains(t, body["input"], "tap")
+}
+
+func TestApplyLeavesNoTapWhenPktvisorRefusesThePolicy(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.with(func() { f.refusePolicies = true })
+
+	require.Error(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+
+	assert.Equal(t, []string{
+		"POST /api/v1/taps 201",
+		"POST /api/v1/policies 500",
+		"GET /api/v1/taps 200",
+		"GET /api/v1/policies 200",
+		"DELETE /api/v1/taps/fleet_netprobe 200",
+	}, f.log())
+	assert.False(t, f.hasTap("fleet_netprobe"))
+}
+
+func TestApplyKeepsTheTapWhenThePolicyPostTimesOut(t *testing.T) {
+	pktvisor.SetApplyPolicyTimeout(t, 1)
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.with(func() { f.stallPolicyPost = true })
+
+	require.Error(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+
+	assert.Equal(t, []string{"POST /api/v1/taps 201", "POST /api/v1/policies stalled"}, f.log())
+	f.clearLog()
+
+	require.Error(t, remove(be, "p2")) // an unrelated policy: pktvisor answers 404
+	assert.Empty(t, tapDeletes(f.log()))
+	assert.True(t, f.hasTap("fleet_netprobe"))
+	f.clearLog()
+
+	require.Error(t, apply(be, "p1", flowBody(), true))
+	assert.Contains(t, f.log(), "DELETE /api/v1/policies/p1 404")
+	assert.Empty(t, tapDeletes(f.log()))
+	assert.True(t, f.hasTap("fleet_netprobe"))
+	assert.True(t, f.hasTap("fleet_flow"))
+}
+
+func TestApplyPassesANamedTapThrough(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.addTap("edge", "pcap", nil, nil)
+	body := map[string]any{
+		"kind":     "collection",
+		"input":    map[string]any{"input_type": "pcap", "tap": "edge"},
+		"handlers": map[string]any{"modules": map[string]any{}},
+	}
+
+	require.NoError(t, apply(be, "p1", body, false))
+
+	assert.Equal(t, []string{"POST /api/v1/policies 201"}, f.log())
+	pol, ok := f.policyNamed("p1")
+	require.True(t, ok)
+	assert.Equal(t, body, pol.body)
+}
+
+func TestApplyRefusesABadNameBeforeCallingPktvisor(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+
+	err := apply(be, "Edge ping", netprobeBody("192.0.2.1"), false)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must match")
+
+	err = apply(be, "Edge ping", netprobeBody("192.0.2.1"), true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must match")
+
+	f.addPolicy("p1", "elsewhere")
+	pcapNoTap := map[string]any{"input": map[string]any{"input_type": "pcap"}}
+	err = apply(be, "p1", pcapNoTap, true)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "must name a tap")
+
+	assert.Empty(t, f.log())
+	_, ok := f.policyNamed("p1")
+	assert.True(t, ok, "a refused edit leaves the running policy alone")
+}
+
+func TestApplyRecreatesTheTapAfterARestart(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+
+	require.NoError(t, apply(be, "p1", netprobeBody("192.0.2.1"), true))
+
+	assert.Equal(t, []string{
+		"DELETE /api/v1/policies/p1 404",
+		"GET /api/v1/taps 200",
+		"POST /api/v1/taps 201",
+		"POST /api/v1/policies 201",
+	}, f.log())
+}
+
+func TestEditMovesAPolicyOffItsManagedTap(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	f.addTap("edge", "netprobe", nil, nil)
+	require.NoError(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+	body := netprobeBody("192.0.2.1")
+	body["input"].(map[string]any)["tap"] = "edge"
+
+	require.NoError(t, apply(be, "p1", body, true))
+
+	assert.False(t, f.hasTap("fleet_netprobe"))
+	pol, ok := f.policyNamed("p1")
+	require.True(t, ok)
+	assert.Equal(t, "edge", pol.tap)
+}
+
+func TestEditSwitchesTheManagedTapType(t *testing.T) {
+	f := newFakePktvisor(t)
+	be := startAgainst(t, f)
+	require.NoError(t, apply(be, "p1", netprobeBody("192.0.2.1"), false))
+
+	require.NoError(t, apply(be, "p1", flowBody(), true))
+
+	assert.False(t, f.hasTap("fleet_netprobe"))
+	assert.True(t, f.hasTap("fleet_flow"))
+}

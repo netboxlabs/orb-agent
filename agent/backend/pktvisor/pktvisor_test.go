@@ -124,17 +124,22 @@ func TestPktvisorBackendStart(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "1.2.3", version, "Expected version to match response")
 
+	pcapBody := map[string]any{
+		"kind":     "collection",
+		"input":    map[string]any{"input_type": "pcap", "tap": "default_pcap"},
+		"handlers": map[string]any{"modules": map[string]any{}},
+	}
 	data := policies.PolicyData{
 		ID:   "dummy-policy-id",
 		Name: "dummy-policy-name",
-		Data: map[string]any{"key": "value"},
+		Data: pcapBody,
 	}
 	require.NoError(t, be.ApplyPolicy(data, false))
 
 	updatedData := policies.PolicyData{
 		ID:   data.ID,
 		Name: "dummy-policy-updated",
-		Data: map[string]any{"key": "value"},
+		Data: pcapBody,
 		PreviousPolicyData: &policies.PolicyData{
 			Name: data.Name,
 		},

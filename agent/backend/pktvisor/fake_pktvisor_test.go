@@ -110,6 +110,22 @@ func (f *fakePktvisor) hasTap(name string) bool {
 	return ok
 }
 
+// tapNamed returns the fake's tap of that name.
+func (f *fakePktvisor) tapNamed(name string) (fakeTap, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	t, ok := f.taps[name]
+	return t, ok
+}
+
+// policyNamed returns the fake's policy of that name.
+func (f *fakePktvisor) policyNamed(name string) (fakePolicy, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p, ok := f.policies[name]
+	return p, ok
+}
+
 // tapDeletes returns the logged tap DELETE entries.
 func tapDeletes(log []string) []string {
 	var out []string

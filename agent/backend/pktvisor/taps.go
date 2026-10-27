@@ -1,14 +1,18 @@
 package pktvisor
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"regexp"
 	"slices"
 	"strings"
+
+	"go.yaml.in/yaml/v3"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 )
@@ -120,6 +124,70 @@ func (p *pktvisorBackend) clearKeptTaps() {
 // apiURL returns the admin API address for a path.
 func (p *pktvisorBackend) apiURL(path string) string {
 	return fmt.Sprintf("%s://%s%s", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()), path)
+}
+
+// withTap returns a copy of the policy body that names the tap. It copies only
+// what it changes, the body and its input section, and drops a null
+// tap_selector: pktvisor counts a null key as present and refuses the policy.
+func withTap(body map[string]any, tap string) map[string]any {
+	out := maps.Clone(body)
+	input, _ := body["input"].(map[string]any)
+	newInput := maps.Clone(input)
+	newInput["tap"] = tap
+	if sel, present := newInput["tap_selector"]; present && sel == nil {
+		delete(newInput, "tap_selector")
+	}
+	out["input"] = newInput
+	return out
+}
+
+// ensureTap creates the managed tap for an input type, or accepts the one
+// already there when it is the agent's own.
+func (p *pktvisorBackend) ensureTap(inputType string) error {
+	name := managedTapName(inputType)
+	doc, err := yaml.Marshal(map[string]any{
+		"version": "1.0",
+		"visor": map[string]any{
+			"taps": map[string]any{
+				name: map[string]any{"input_type": inputType},
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	var created any
+	err = backend.CommonRequest("pktvisor", p.proc, p.logger, p.apiURL("/api/v1/taps"), &created,
+		http.MethodPost, bytes.NewBuffer(doc), "application/x-yaml", tapsTimeout, "error")
+	if err == nil {
+		return nil
+	}
+	var httpErr *backend.HTTPError
+	if !errors.As(err, &httpErr) || httpErr.StatusCode != http.StatusConflict {
+		return fmt.Errorf("creating tap %q: %w", name, err)
+	}
+
+	// The name is taken. Fetch raw and decode strictly: CommonRequest's YAML
+	// fallback can report success for a body that does not fit the target.
+	var raw json.RawMessage
+	if err := backend.CommonRequest("pktvisor", p.proc, p.logger, p.apiURL("/api/v1/taps/"+name), &raw,
+		http.MethodGet, http.NoBody, "application/json", tapsTimeout, "error"); err != nil {
+		return fmt.Errorf("reading tap %q: %w", name, err)
+	}
+	var taps map[string]tapInfo
+	if err := json.Unmarshal(raw, &taps); err != nil {
+		return fmt.Errorf("reading tap %q: reply did not decode: %w", name, err)
+	}
+	info, ok := taps[name]
+	if !ok {
+		return fmt.Errorf("reading tap %q: reply does not hold it", name)
+	}
+	if !ownManagedTap(name, info) {
+		return fmt.Errorf("tap %q exists but is not one the agent manages (input_type %q, config set: %t)",
+			name, info.InputType, len(info.Config) > 0)
+	}
+	return nil
 }
 
 // removeUnusedTaps deletes the managed taps no policy uses. pktvisor's tap

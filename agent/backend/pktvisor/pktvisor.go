@@ -27,10 +27,13 @@ import (
 
 var _ backend.Backend = (*pktvisorBackend)(nil)
 
+// applyPolicyTimeout is the policy POST timeout in seconds. It is a variable
+// so tests can shorten it.
+var applyPolicyTimeout int32 = 10
+
 const (
 	defaultBinary       = "pktvisord"
 	readinessTimeout    = 10
-	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	versionTimeout      = 2
 	tapsTimeout         = 5
@@ -439,6 +442,16 @@ func Register() bool {
 }
 
 func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
+	// Check before the update removes the running policy: a refused edit
+	// leaves it alone.
+	if err := checkPolicyName(data.Name); err != nil {
+		return err
+	}
+	tapType, err := managedTapType(data.Data)
+	if err != nil {
+		return err
+	}
+
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := p.RemovePolicy(data); err != nil {
@@ -449,11 +462,21 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 
 	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "data", data.Data)
 
+	body := data.Data
+	if tapType != "" {
+		if err := p.ensureTap(tapType); err != nil {
+			return err
+		}
+		// managedTapType accepted the body, so it is a map.
+		doc, _ := data.Data.(map[string]any)
+		body = withTap(doc, managedTapName(tapType))
+	}
+
 	fullPolicy := map[string]any{
 		"version": "1.0",
 		"visor": map[string]any{
 			"policies": map[string]any{
-				data.Name: data.Data,
+				data.Name: body,
 			},
 		},
 	}
@@ -470,6 +493,17 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "error")
 	if err != nil {
 		p.logger.Warn("yaml policy application failure", "policy_id", data.ID, "policy_name", data.Name)
+		if tapType != "" {
+			var httpErr *backend.HTTPError
+			if errors.As(err, &httpErr) {
+				// pktvisor answered and refused, so it holds no policy on the tap.
+				p.removeUnusedTaps()
+			} else {
+				// After a timeout or transport failure it is unknown whether
+				// pktvisor went on to create the policy: leave the tap alone.
+				p.keepTap(managedTapName(tapType))
+			}
+		}
 		return err
 	}
 
