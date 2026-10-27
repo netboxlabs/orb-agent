@@ -1,0 +1,29 @@
+{
+  "GigabitEthernet0/0/1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "Uplink to core",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 1000.0,
+    "mac_address": "00:E0:FC:00:01:01"
+  },
+  "GigabitEthernet0/0/2": {
+    "is_up": false,
+    "is_enabled": false,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 9216,
+    "speed": 1000.0,
+    "mac_address": "00:E0:FC:00:01:02"
+  },
+  "Vlanif1": {
+    "is_up": true,
+    "is_enabled": true,
+    "description": "",
+    "last_flapped": -1.0,
+    "mtu": 1500,
+    "speed": -1.0,
+    "mac_address": "00:E0:FC:00:01:00"
+  }
+}

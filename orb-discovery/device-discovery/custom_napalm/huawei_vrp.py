@@ -8,16 +8,23 @@ Implements only the methods used by device-discovery:
 
 Uses ntc-templates 9.x for structured parsing wherever templates are available;
 falls back to regex for commands without templates (serial number, IPv6).
+YunShan OS (VRP V600) prints lines the templates reject, so the getters that
+must not fail skip unknown lines, and the version and model are read from
+YunShan's own `display version` layout.
 """
 
 import logging
+import os
 import re
 
 import napalm.base as _napalm_base
+import ntc_templates.parse
 from napalm.base import models
 from napalm.base.helpers import mac as normalize_mac
 from napalm.base.netmiko_helpers import netmiko_args
 from ntc_templates.parse import parse_output
+from textfsm import TextFSM, clitable
+from textfsm.parser import TextFSMError
 
 from custom_napalm._chassis import ChassisMember, normalize_role, to_payload
 from custom_napalm._modules import (
@@ -154,6 +161,118 @@ def _parse_uptime(uptime_str: str) -> int:
             seconds += int(m.group(1)) * factor
 
     return seconds
+
+
+# --- lenient TextFSM parsing ---
+# The huawei_vrp templates end each state with a catch-all `^. -> Error`, so a
+# line YunShan adds fails the getter. _parse_output_lenient parses strictly
+# first and, only on TextFSMError, parses again with those catch-all rules
+# turned into skips that record the line.
+_CATCH_ALL_MATCHES = frozenset({"^.", "^.*", "^.+", "^.*$$"})
+_SKIP_SAMPLE_LINES = 3
+# (host, platform, command) already warned about; repeats log at DEBUG.
+_skip_warned: set[tuple[str, str, str]] = set()
+
+
+class _SkippingFSM(TextFSM):
+    """TextFSM whose catch-all ``Error`` rules skip the line and record it instead of raising."""
+
+    def __init__(self, template):
+        """Build the FSM, then turn every catch-all ``Error`` rule into a plain skip."""
+        super().__init__(template)
+        self.skipped: list[str] = []
+        self._skip_rules = set()
+        for rules in self.states.values():
+            for rule in rules:
+                if rule.line_op == "Error" and rule.match.strip() in _CATCH_ALL_MATCHES:
+                    rule.line_op = ""
+                    rule.new_state = ""
+                    self._skip_rules.add(rule)
+
+    def _CheckRule(self, rule, line):
+        matched = super()._CheckRule(rule, line)
+        # ``^.*`` catch-alls also consume blank lines, which are not unknown content.
+        if matched and rule in self._skip_rules and line.strip():
+            self.skipped.append(line)
+        return matched
+
+
+def _ntc_template_dir() -> str:
+    """Return the template directory ``parse_output`` reads, honouring ``NTC_TEMPLATES_DIR``."""
+    template_dir = os.environ.get("NTC_TEMPLATES_DIR")
+    if template_dir is None:
+        template_dir = os.path.join(os.path.dirname(ntc_templates.parse.__file__), "templates")
+    return template_dir
+
+
+def _skipping_fsm(platform: str, command: str) -> _SkippingFSM | None:
+    """Build the command's template with skipping catch-alls; None when the index merges several templates."""
+    template_dir = _ntc_template_dir()
+    index = clitable.CliTable("index", template_dir).index
+    row = index.GetRowMatch({"Platform": platform, "Command": command})
+    names = index.index[row]["Template"].split(":")
+    if len(names) != 1:
+        return None
+    with open(os.path.join(template_dir, names[0]), encoding="utf-8") as template:
+        return _SkippingFSM(template)
+
+
+def _parse_output_lenient(platform: str, command: str, data: str, *, host: str) -> list[dict]:
+    """
+    Parse like ``parse_output``, skipping lines the template's catch-all rules reject.
+
+    Logs how many lines were skipped and the first few distinct ones, at WARNING
+    the first time for a host and command and at DEBUG after that. A template's
+    targeted ``Error`` rules still raise.
+    """
+    try:
+        return parse_output(platform=platform, command=command, data=data)
+    except TextFSMError:
+        fsm = _skipping_fsm(platform, command)
+        if fsm is None:
+            raise
+    records = fsm.ParseText(data)
+
+    key = (host, platform, command)
+    level = logging.DEBUG if key in _skip_warned else logging.WARNING
+    _skip_warned.add(key)
+    sample = list(dict.fromkeys(line.strip() for line in fsm.skipped))[:_SKIP_SAMPLE_LINES]
+    count = len(fsm.skipped)
+    logger.log(
+        level,
+        "%s: %s template for %r skipped %d %s it does not know, e.g. %s",
+        host, platform, command, count, "line" if count == 1 else "lines", sample,
+    )
+
+    header = [name.lower() for name in fsm.header]
+    return [dict(zip(header, record)) for record in records]
+
+
+# YunShan OS (VRP V600) opens `display version` with its own banner and a bare
+# `Version` line, and names the series on the uptime headline (`CloudEngine
+# S5735-L-V2`); the exact model is on the Master board's uptime line.
+_YUNSHAN_BANNER_RE = re.compile(r"^\s*Huawei\s+YunShan\s+OS\s*$", re.MULTILINE | re.IGNORECASE)
+_YUNSHAN_VERSION_RE = re.compile(r"^\s*Version\s+(\S+)\s+\(", re.MULTILINE)
+_YUNSHAN_SERIES_RE = re.compile(
+    r"^\s*HUAWEI\s+(?:CloudEngine\s+)?(\S+)\s+(?:.*\s)?uptime\s+is\b", re.MULTILINE | re.IGNORECASE
+)
+_YUNSHAN_MASTER_BOARD_RE = re.compile(r"^\s*(\S+)\(Master\)\s+\d+\s*:\s*uptime\s+is\b", re.MULTILINE)
+
+
+def _yunshan_version_facts(text: str) -> dict[str, str]:
+    """Return the os_version and model YunShan's `display version` reports; empty for VRP."""
+    if not _YUNSHAN_BANNER_RE.search(text):
+        return {}
+    facts = {}
+    if m := _YUNSHAN_VERSION_RE.search(text):
+        facts["os_version"] = m.group(1)
+    # On a modular chassis the Master line names the control board (`MPU`), so
+    # the board is the model only when it belongs to the headline's series.
+    board = _YUNSHAN_MASTER_BOARD_RE.search(text)
+    series = _YUNSHAN_SERIES_RE.search(text)
+    if board and series and board.group(1).startswith(series.group(1).split("-")[0]):
+        facts["model"] = board.group(1)
+    return facts
 
 
 def _separate_section(separator: str, content: str) -> list[str]:
@@ -552,12 +671,15 @@ class VRPDriver(_napalm_base.NetworkDriver):
 
         # --- version / model / uptime ---
         ver_output = self.device.send_command("display version")
-        parsed_ver = parse_output(platform="huawei_vrp", command="display version", data=ver_output)
+        parsed_ver = _parse_output_lenient("huawei_vrp", "display version", ver_output, host=self.hostname)
         if parsed_ver:
             row = parsed_ver[0]
             os_version = row.get("vrp_version", "Unknown")
             model = row.get("model", "Unknown").strip() or "Unknown"
             uptime = _parse_uptime(row.get("uptime", ""))
+        yunshan = _yunshan_version_facts(ver_output)
+        os_version = yunshan.get("os_version", os_version)
+        model = yunshan.get("model", model)
 
         # --- hostname (no template: just grep sysname) ---
         sysname_out = self.device.send_command("display current-configuration | inc sysname")
@@ -576,9 +698,7 @@ class VRPDriver(_napalm_base.NetworkDriver):
 
         # --- interface list ---
         brief_out = self.device.send_command("display interface brief")
-        parsed_brief = parse_output(
-            platform="huawei_vrp", command="display interface brief", data=brief_out
-        )
+        parsed_brief = _parse_output_lenient("huawei_vrp", "display interface brief", brief_out, host=self.hostname)
         interface_list = [row["interface"] for row in parsed_brief if row.get("interface")]
 
         return {
@@ -598,7 +718,7 @@ class VRPDriver(_napalm_base.NetworkDriver):
         if not output:
             return {}
 
-        parsed = parse_output(platform="huawei_vrp", command="display interface", data=output)
+        parsed = _parse_output_lenient("huawei_vrp", "display interface", output, host=self.hostname)
         interfaces = {}
         for row in parsed:
             intf = row.get("interface", "")

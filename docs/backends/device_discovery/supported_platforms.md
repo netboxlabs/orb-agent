@@ -60,7 +60,7 @@ These drivers are bundled with device-discovery. They are **not** tried during a
 | `hp_comware` | HPE / H3C | Comware |
 | `hp_procurve` | HPE | ProCurve (legacy) |
 | `huawei_smartax` | Huawei | SmartAX (OLT) |
-| `huawei_vrp` | Huawei | VRP |
+| `huawei_vrp` | Huawei | VRP, including YunShan OS (VRP V600) |
 | `mellanox_mlnxos` | NVIDIA / Mellanox | MLNX-OS |
 | `mikrotik_routeros` | MikroTik | RouterOS |
 | `nokia_srl` | Nokia | SR Linux |
