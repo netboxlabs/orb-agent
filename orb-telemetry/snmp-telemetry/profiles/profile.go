@@ -363,11 +363,38 @@ func (s *Symbol) UnmarshalYAML(value *yaml.Node) error {
 // A tag renames the metric rather than dimensioning it. Upstream reads the
 // field the same way, and a profile giving two symbols one tag is declaring
 // that both report the same thing under one name.
+//
+// A load average tagged `CPU` is the exception, and keeps its own name
+// (loadAverageTaggedCPU).
 func (s *Symbol) ExportName() string {
-	if s.Tag != "" {
+	if s.Tag != "" && !s.loadAverageTaggedCPU() {
 		return s.Tag
 	}
 	return s.Name
+}
+
+// ucdLoadTable is UCD-SNMP-MIB's laTable: the 1, 5 and 15 minute load
+// averages, as text (laLoad), multiplied by 100 as an integer (laLoadInt) and
+// as a float (laLoadFloat).
+const ucdLoadTable = "1.3.6.1.4.1.2021.10"
+
+// loadAverageTaggedCPU reports whether s reads UCD-SNMP-MIB's laTable under a
+// `CPU` tag, in any case. A load average is the number of processes running or
+// waiting to run, and on Linux of those waiting on I/O too, not a share of CPU
+// time: a load of 1.25, which laLoadInt reports as 125, can come with a host's
+// CPUs all but idle. Yet
+// `_general/ucd-mib.yml` and four vendor files tag the 1-minute laLoadInt
+// `CPU`, so the bundled profiles that inherit it, `_general/net-snmp.yml`
+// among them, would export a host's load as `snmp.cpu`, the name the other
+// profiles give a CPU percentage. The files are vendored and stay as they
+// are, so the tag is set aside here, the one place the exported name is
+// decided.
+func (s *Symbol) loadAverageTaggedCPU() bool {
+	if !strings.EqualFold(s.Tag, "CPU") {
+		return false
+	}
+	oid := strings.TrimPrefix(s.OID, ".")
+	return oid == ucdLoadTable || strings.HasPrefix(oid, ucdLoadTable+".")
 }
 
 // metricNamePrefix namespaces every metric the collector exports from a profile.

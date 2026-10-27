@@ -93,7 +93,7 @@ func TestResolve_OwnSymbolBeatsInheritedOneOfTheSameName(t *testing.T) {
 	writeYAML(t, dir, "base.yml", `
 metrics:
   - MIB: UCD-SNMP-MIB
-    symbol: {name: laLoadInt1Min, OID: 1.3.6.1.4.1.2021.10.1.5.1, tag: CPU}
+    symbol: {name: ssCpuUser, OID: 1.3.6.1.4.1.2021.11.9.0, tag: CPU}
 `)
 	writeYAML(t, dir, "device.yml", `
 extends: [base.yml]
@@ -275,7 +275,7 @@ func TestResolve_InheritanceReadsTheMergedParent(t *testing.T) {
 	writeYAML(t, dir, "grandparent.yml", `
 metrics:
   - MIB: TEST-MIB
-    symbol: {name: fromGrandparent, OID: 1.3.6.1.4.1.2021.10.1.5.1.99, tag: CPU}
+    symbol: {name: fromGrandparent, OID: 1.3.6.1.4.1.2021.11.9.0.99, tag: CPU}
 `)
 	writeYAML(t, dir, "parent.yml", `
 extends: [grandparent.yml]
@@ -308,8 +308,8 @@ sysobjectid: 1.3.6.1.4.1.9.1.46
 }
 
 // AllResolved returns the profiles the Matcher indexes, so it has to hand back
-// the deduplicated ones. The bundled Cisco ISE profile inherits laLoadInt1Min
-// tagged CPU from the UCD base profile and declares hrProcessorLoadCombined
+// the deduplicated ones. The bundled Cisco ISE profile inherits memTotalReal
+// tagged MemoryTotal from the UCD base profile and declares hrStorageSizeRAM
 // under the same tag.
 func TestAllResolved_ReturnsDeduplicatedProfiles(t *testing.T) {
 	l, err := LoadProfiles("", silentLogger)
@@ -325,14 +325,14 @@ func TestAllResolved_ReturnsDeduplicatedProfiles(t *testing.T) {
 	}
 	require.NotNil(t, ise)
 
-	var cpu []string
+	var memory []string
 	for _, n := range declaredNames(ise) {
-		if n == "laLoadInt1Min" || n == "hrProcessorLoadCombined" {
-			cpu = append(cpu, n)
+		if n == "memTotalReal" || n == "hrStorageSizeRAM" {
+			memory = append(memory, n)
 		}
 	}
-	assert.Equal(t, []string{"hrProcessorLoadCombined"}, cpu,
-		"the inherited symbol lost the CPU name to the profile's own")
+	assert.Equal(t, []string{"hrStorageSizeRAM"}, memory,
+		"the inherited symbol lost the MemoryTotal name to the profile's own")
 }
 
 // An entry that lost every symbol is dropped whole. What is left of it names
@@ -428,7 +428,7 @@ func TestResolve_ADroppedSymbolIsLogged(t *testing.T) {
 	writeYAML(t, dir, "base.yml", `
 metrics:
   - MIB: UCD-SNMP-MIB
-    symbol: {name: laLoadInt1Min, OID: 1.3.6.1.4.1.2021.10.1.5.1, tag: CPU}
+    symbol: {name: ssCpuUser, OID: 1.3.6.1.4.1.2021.11.9.0, tag: CPU}
 `)
 	writeYAML(t, dir, "device.yml", `
 extends: [base.yml]
@@ -451,7 +451,7 @@ metrics:
 	require.Len(t, matched, 1, "logs: %s", logs.String())
 	assert.Contains(t, matched[0], "metric_name=snmp.cpu",
 		"the contested key is the exported metric name, which is what went missing")
-	assert.Contains(t, matched[0], "dropped_symbol=laLoadInt1Min")
+	assert.Contains(t, matched[0], "dropped_symbol=ssCpuUser")
 	assert.Contains(t, matched[0], "kept_symbol=vendorCPU")
 	assert.Contains(t, matched[0], "file=device.yml")
 }

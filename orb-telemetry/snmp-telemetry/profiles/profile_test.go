@@ -1,6 +1,9 @@
 package profiles
 
 import (
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -577,8 +580,69 @@ metrics:
 
 func TestSymbol_ExportName(t *testing.T) {
 	assert.Equal(t, "laLoadInt1Min", (&Symbol{Name: "laLoadInt1Min"}).ExportName())
-	assert.Equal(t, "CPU", (&Symbol{Name: "laLoadInt1Min", Tag: "CPU"}).ExportName())
+	assert.Equal(t, "CPU", (&Symbol{Name: "hrProcessorLoad", OID: "1.3.6.1.2.1.25.3.3.1.2", Tag: "CPU"}).ExportName())
 	assert.Equal(t, "", (&Symbol{}).ExportName())
+}
+
+// A load average is not a CPU percentage, so a `CPU` tag on one of
+// UCD-SNMP-MIB's laTable columns is set aside and the symbol keeps its own
+// name. Any other tag on it still renames it, and a `CPU` tag anywhere else
+// still applies.
+func TestSymbol_ALoadAverageTaggedCPUKeepsItsOwnName(t *testing.T) {
+	for _, tc := range []struct {
+		sym  Symbol
+		want string
+	}{
+		{Symbol{Name: "laLoadInt1Min", OID: "1.3.6.1.4.1.2021.10.1.5.1", Tag: "CPU"}, "laLoadInt1Min"},
+		{Symbol{Name: "laLoadInt", OID: ".1.3.6.1.4.1.2021.10.1.5.1", Tag: "CPU"}, "laLoadInt"},
+		{Symbol{Name: "laLoadInt", OID: "1.3.6.1.4.1.2021.10.1.5", Tag: "cpu"}, "laLoadInt"},
+		{Symbol{Name: "laLoad", OID: "1.3.6.1.4.1.2021.10.1.3.2", Tag: "CPU"}, "laLoad"},
+		{Symbol{Name: "laLoadInt1Min", OID: "1.3.6.1.4.1.2021.10.1.5.1", Tag: "LoadAverage"}, "LoadAverage"},
+		{Symbol{Name: "ssCpuUser", OID: "1.3.6.1.4.1.2021.11.9.0", Tag: "CPU"}, "CPU"},
+		{Symbol{Name: "elsewhere", OID: "1.3.6.1.4.1.2021.100.1", Tag: "CPU"}, "CPU"},
+	} {
+		assert.Equal(t, tc.want, tc.sym.ExportName(), "%s at %s tagged %s", tc.sym.Name, tc.sym.OID, tc.sym.Tag)
+	}
+	load := Symbol{Name: "laLoadInt1Min", OID: "1.3.6.1.4.1.2021.10.1.5.1", Tag: "CPU"}
+	assert.Equal(t, "snmp.laloadint1min", load.MetricName())
+}
+
+// No bundled profile exports a load average as `snmp.cpu`, though every one
+// that inherits `_general/ucd-mib.yml` declares one tagged `CPU`. A Linux host
+// matched by `_general/net-snmp.yml` exports its load under its own name and
+// its CPU use as HOST-RESOURCES-MIB's per-processor load and UCD-SNMP-MIB's
+// tick counters, none of them as `snmp.cpu`.
+func TestResolve_NoBundledProfileExportsALoadAverageAsCPU(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+
+	tagged := 0
+	for _, rel := range slices.Sorted(maps.Keys(l.byFile)) {
+		p, err := l.Resolve(rel)
+		require.NoError(t, err)
+		for _, ref := range symbolRefs(p) {
+			sym := ref.get(p)
+			if sym.loadAverageTaggedCPU() {
+				tagged++
+			}
+			if sym.MetricName() == "snmp.cpu" {
+				assert.False(t, strings.HasPrefix(strings.TrimPrefix(sym.OID, "."), ucdLoadTable+"."),
+					"%s exports %s (%s) as snmp.cpu", rel, sym.Name, sym.OID)
+			}
+		}
+	}
+	assert.Positive(t, tagged, "the sweep has to have met a load average tagged CPU to say anything")
+
+	p, err := l.Resolve("_general/net-snmp.yml")
+	require.NoError(t, err)
+	names := map[string]bool{}
+	for _, ref := range symbolRefs(p) {
+		names[ref.get(p).MetricName()] = true
+	}
+	assert.True(t, names["snmp.laloadint1min"], "the load average, under its own name")
+	assert.True(t, names["snmp.hrprocessorload"], "CPU use per processor")
+	assert.True(t, names["snmp.sscpurawidle"], "CPU ticks, idle among them")
+	assert.False(t, names["snmp.cpu"])
 }
 
 func TestSymbol_AllowDuplicateIsDeserialized(t *testing.T) {
