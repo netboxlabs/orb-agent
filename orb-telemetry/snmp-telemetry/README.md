@@ -546,18 +546,20 @@ inheritance is resolved 156 of the 205 bundled profiles carry at least one:
 export that reading as `snmp.if_operstatus`.
 
 One tag is set aside. UCD-SNMP-MIB's load averages (`laTable`,
-`1.3.6.1.4.1.2021.10`) count the processes running or waiting to run, which is
-not a share of CPU time: on a host with twelve cores, a load of 1.25, which
-`laLoadInt` reports as 125, is about a tenth of its CPU. `_general/ucd-mib.yml`
-and four vendor files tag the 1-minute `laLoadInt` `CPU` all the same, so the
-24 bundled profiles that declare or inherit it, `_general/net-snmp.yml` among
-them, would export a host's load as `snmp.cpu`, the name the other profiles
-give a CPU percentage. A symbol under `laTable` tagged `CPU`, in any case, keeps
-its own name instead: `laLoadInt1Min` is exported as `snmp.laloadint1min`. Those
-profiles then export no `snmp.cpu`. A Linux host's CPU use is
-`snmp.hrprocessorload`, per processor, from HOST-RESOURCES-MIB, or follows from
-UCD-SNMP-MIB's tick counters, `snmp.sscpurawuser`, `snmp.sscpurawidle` and the
-others. Any other tag on a load average still renames it.
+`1.3.6.1.4.1.2021.10`) count the processes running or waiting to run, and on
+Linux those waiting on I/O too, which is not a share of CPU time: a load of
+1.25, which `laLoadInt` reports as 125, can come with a twelve-core host's CPUs
+all but idle, and no number of cores turns it into a percentage of CPU in use.
+`_general/ucd-mib.yml` and four vendor files tag the 1-minute `laLoadInt` `CPU`
+all the same, so the 24 bundled profiles that declare or inherit it,
+`_general/net-snmp.yml` among them, would export a host's load as `snmp.cpu`,
+the name the other profiles give a CPU percentage. A symbol under `laTable`
+tagged `CPU`, in any case, keeps its own name instead: `laLoadInt1Min` is
+exported as `snmp.laloadint1min`. Those profiles then export no `snmp.cpu`. A
+Linux host's CPU use is `snmp.hrprocessorload`, per processor, from
+HOST-RESOURCES-MIB, or follows from UCD-SNMP-MIB's tick counters,
+`snmp.sscpurawuser`, `snmp.sscpurawidle` and the others. Any other tag on a load
+average still renames it.
 
 Where two symbols of a resolved profile resolve to one metric name, only one of
 them is collected. They would otherwise share a series and export whichever

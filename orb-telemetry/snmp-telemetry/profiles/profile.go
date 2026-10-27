@@ -380,8 +380,9 @@ const ucdLoadTable = "1.3.6.1.4.1.2021.10"
 
 // loadAverageTaggedCPU reports whether s reads UCD-SNMP-MIB's laTable under a
 // `CPU` tag, in any case. A load average is the number of processes running or
-// waiting to run, not a share of CPU time: on a host with twelve cores, a load
-// of 1.25, which laLoadInt reports as 125, is about a tenth of its CPU. Yet
+// waiting to run, and on Linux of those waiting on I/O too, not a share of CPU
+// time: a load of 1.25, which laLoadInt reports as 125, can come with a host's
+// CPUs all but idle. Yet
 // `_general/ucd-mib.yml` and four vendor files tag the 1-minute laLoadInt
 // `CPU`, so the bundled profiles that inherit it, `_general/net-snmp.yml`
 // among them, would export a host's load as `snmp.cpu`, the name the other
