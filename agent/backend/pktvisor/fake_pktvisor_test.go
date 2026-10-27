@@ -357,6 +357,13 @@ func (f *fakePktvisor) createPolicies(w http.ResponseWriter, r *http.Request, bo
 // writes across goroutines and hide data races.
 func startAgainst(t *testing.T, f *fakePktvisor) backend.Backend {
 	t.Helper()
+	return startAgainstLogging(t, f, slog.New(slog.DiscardHandler))
+}
+
+// startAgainstLogging is startAgainst with a caller-supplied logger, for the
+// tests that assert on what the backend logs.
+func startAgainstLogging(t *testing.T, f *fakePktvisor, logger *slog.Logger) backend.Backend {
+	t.Helper()
 
 	serverURL, err := url.Parse(f.server.URL)
 	require.NoError(t, err)
@@ -376,7 +383,7 @@ func startAgainst(t *testing.T, f *fakePktvisor) backend.Backend {
 	commons := config.BackendCommons{}
 	commons.Otlp.HTTP = f.server.URL
 
-	require.NoError(t, be.Configure(slog.New(slog.DiscardHandler), repo, map[string]any{
+	require.NoError(t, be.Configure(logger, repo, map[string]any{
 		"host": serverURL.Hostname(),
 		"port": serverURL.Port(),
 	}, commons, nil))

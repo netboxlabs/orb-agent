@@ -204,7 +204,13 @@ func (p *pktvisorBackend) removeUnusedTaps() {
 		p.logger.Warn("pktvisor tap cleanup: listing taps failed", "error", err)
 		return
 	}
-	var taps map[string]tapInfo // null, which pktvisor answers when it has no taps, leaves it empty
+	// pktvisor answers null when it has no taps, which CommonRequest leaves
+	// as an empty raw message. An empty tap list has no candidates, so there
+	// is nothing to clean up and nothing to fail closed about.
+	if len(rawTaps) == 0 {
+		return
+	}
+	var taps map[string]tapInfo
 	if err := json.Unmarshal(rawTaps, &taps); err != nil {
 		p.logger.Warn("pktvisor tap cleanup: tap list did not decode", "error", err)
 		return

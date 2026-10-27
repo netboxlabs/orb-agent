@@ -2,6 +2,9 @@ package pktvisor_test
 
 import (
 	"context"
+	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,6 +13,39 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
+
+// warnRecorder keeps the messages logged at Warn or above.
+type warnRecorder struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (w *warnRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (w *warnRecorder) Handle(_ context.Context, r slog.Record) error {
+	if r.Level >= slog.LevelWarn {
+		w.mu.Lock()
+		w.msgs = append(w.msgs, r.Message)
+		w.mu.Unlock()
+	}
+	return nil
+}
+func (w *warnRecorder) WithAttrs([]slog.Attr) slog.Handler { return w }
+func (w *warnRecorder) WithGroup(string) slog.Handler      { return w }
+
+// cleanupWarnings returns the Warn messages the tap cleanup logged. Other
+// warnings, such as the one for the 404 on a policy that is not there, are not
+// what these tests look at.
+func (w *warnRecorder) cleanupWarnings() []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	var out []string
+	for _, m := range w.msgs {
+		if strings.HasPrefix(m, "pktvisor tap cleanup") {
+			out = append(out, m)
+		}
+	}
+	return out
+}
 
 func remove(be interface {
 	RemovePolicy(policies.PolicyData) error
@@ -182,6 +218,30 @@ func TestRemoveKeepsTapsWhenThePolicyListDoesNotDecode(t *testing.T) {
 			assert.True(t, f.hasTap("fleet_netprobe"))
 		})
 	}
+}
+
+func TestRemoveWarnsWhenThePolicyListDoesNotDecode(t *testing.T) {
+	f := newFakePktvisor(t)
+	rec := &warnRecorder{}
+	be := startAgainstLogging(t, f, slog.New(rec))
+	f.addTap("fleet_netprobe", "netprobe", nil, nil)
+	f.addPolicy("p1", "fleet_netprobe")
+	body := `plain text`
+	f.with(func() { f.policyListBody = &body })
+
+	require.NoError(t, remove(be, "p1"))
+
+	assert.Equal(t, []string{"pktvisor tap cleanup: policy list did not decode"}, rec.cleanupWarnings())
+}
+
+func TestUpdateOnAnEmptyPktvisorLogsNoWarning(t *testing.T) {
+	f := newFakePktvisor(t)
+	rec := &warnRecorder{}
+	be := startAgainstLogging(t, f, slog.New(rec))
+
+	require.NoError(t, apply(be, "p1", netprobeBody("192.0.2.1"), true))
+
+	assert.Empty(t, rec.cleanupWarnings())
 }
 
 func netprobeBody(targets ...string) map[string]any {

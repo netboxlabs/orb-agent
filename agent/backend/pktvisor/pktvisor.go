@@ -541,8 +541,8 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 	url := fmt.Sprintf("%s://%s/api/v1/policies/%s", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()), segment)
 	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "error")
-	// pktvisor answered, so the policy no longer holds a tap even when the
-	// answer was an error such as 404: look for taps nothing uses.
+	// pktvisor answered, even if with an error: cleanup re-reads the policy
+	// list, so a policy that is still there keeps its tap.
 	var httpErr *backend.HTTPError
 	if err == nil || errors.As(err, &httpErr) {
 		p.removeUnusedTaps()
