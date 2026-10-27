@@ -12,13 +12,13 @@ The two sections of a policy have a folder each.
 | [Metrics](metrics.md) | The metrics each handler produces. The `input_resources` metrics are on [its own page](handlers/input_resources.md). |
 
 ## Configuration
-Orb writes a temporary pktvisor configuration file on startup based on the `orb.backends.pktvisor` block. Any key that is not handled explicitly is forwarded to `visor.config` in the generated file, so you can pass through native pktvisor options such as logging, crashpad, or custom data paths when needed.
+Orb writes a temporary pktvisor configuration file each time it starts `pktvisord`, based on the `orb.backends.pktvisor` block; a pktvisor declared on demand that never starts writes none. Any key that is not handled explicitly is forwarded to `visor.config` in the generated file, so you can pass through native pktvisor options such as logging, crashpad, or custom data paths when needed.
 
 ### Backend settings
 | Parameter | Type | Required | Default | Description |
 |:---------:|:----:|:--------:|:-------:|-------------|
 | `host` | string | no | `localhost` | Admin API host. Written to `visor.config.host`, which is the address the `pktvisord` the agent starts binds its admin API to, and the address the agent uses to reach it. Change it only to alter that bind address. |
-| `port` | string | no | `10853` | Admin API port. Written to `visor.config.port`, which is the port `pktvisord` binds its admin API to. |
+| `port` | string | no | free port | Admin API port, written to `visor.config.port` and passed to `pktvisord` with `-p`. Unset, a loopback `host` gets a port free at each start and any other `host` gets `10853`; see [Backend keys](../../configs/agent_yaml.md#backend-keys). |
 | `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not validated as required, but an agent with no taps has nothing for a policy to analyse. |
 | *other keys* | any | no | – | Added verbatim under `visor.config` (for example `log_level`, crashpad options, or storage paths). |
 
@@ -37,6 +37,7 @@ can also go in the tap's `config`, since `pcap` accepts `bpf` there.
 orb:
   backends:
     pktvisor:
+      start_mode: on_demand   # the image declares this backend on demand; see the README's Backends section
       host: 0.0.0.0
       port: "10853"
       taps:

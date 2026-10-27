@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1786,16 +1787,149 @@ func TestFleetConfigManager_ResetHandler_StopAfterResetNoDeadlock(t *testing.T) 
 		"connCtx should be cancelled after Stop() completes")
 }
 
-func TestFleetOTLPPorts_Defaults(t *testing.T) {
-	var cfg config.Config
-	assert.Equal(t, 4317, fleetOTLPGRPCPort(cfg))
-	assert.Equal(t, 4318, fleetOTLPHTTPPort(cfg))
+func TestFleetOTLPBridgePort(t *testing.T) {
+	configured := 4337
+	for name, tc := range map[string]struct {
+		configured *int
+		bindHost   string
+		want       int
+	}{
+		"configured port is kept":                     {&configured, "localhost", 4337},
+		"configured port is kept when exposed":        {&configured, "0.0.0.0", 4337},
+		"loopback bridge picks a port":                {nil, "localhost", 0},
+		"loopback IPv4 bridge picks a port":           {nil, "127.0.0.1", 0},
+		"loopback IPv6 bridge picks a port":           {nil, "::1", 0},
+		"exposed bridge keeps the default":            {nil, "0.0.0.0", 4317},
+		"exposed dual-stack bridge keeps the default": {nil, "::", 4317},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, fleetOTLPBridgePort(tc.configured, tc.bindHost, 4317))
+		})
+	}
+}
 
-	grpcPort, httpPort := 4337, 4338
+// A bridge left without ports on loopback, the default, binds two ports
+// picked free, which it reports for the backends' URLs, so agents sharing a
+// host network do not collide on fixed ones.
+func TestStartOTLPBridge_PicksFreePorts(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+
+	var cfg config.Config
+	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+	t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
+
+	grpcPort, httpPort := fm.OTLPBridgePorts()
+	assert.NotZero(t, grpcPort)
+	assert.NotZero(t, httpPort)
+	assert.NotEqual(t, grpcPort, httpPort)
+	for port, bound := range map[int]string{grpcPort: fm.otlpBridge.ListenAddr(), httpPort: fm.otlpBridge.HTTPListenAddr()} {
+		_, boundPort, err := net.SplitHostPort(bound)
+		require.NoError(t, err)
+		assert.Equal(t, strconv.Itoa(port), boundPort, "the reported port is the one bound")
+		assert.NoError(t, checkBridgeReachable(context.Background(), bound), "backends dial localhost:%d", port)
+	}
+}
+
+// The backends were handed the bridge's ports once, so a bridge started
+// again binds the ports it picked the first time.
+func TestStartOTLPBridge_KeepsPickedPortsAcrossRestart(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+
+	var cfg config.Config
+	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+	grpcPort, httpPort := fm.OTLPBridgePorts()
+	require.NoError(t, fm.StopOTLPBridge(context.Background()))
+
+	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+	t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
+	gotGRPC, gotHTTP := fm.OTLPBridgePorts()
+	assert.Equal(t, grpcPort, gotGRPC)
+	assert.Equal(t, httpPort, gotHTTP)
+}
+
+// A configured port is bound as it is, and the port picked for the other
+// listener is never that one.
+func TestStartOTLPBridge_PicksAroundAConfiguredPort(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+
+	grpcPort, otherPort := findAvailablePort(t), findAvailablePort(t)
+	require.NotEqual(t, grpcPort, otherPort)
+	// The first pick hands back the configured port, as a released port can
+	// be handed back.
+	picks := []string{strconv.Itoa(grpcPort), strconv.Itoa(otherPort)}
+	orig := backend.PickListenPort
+	backend.PickListenPort = func(context.Context, string) (string, error) {
+		require.NotEmpty(t, picks, "more picks than expected")
+		picked := picks[0]
+		picks = picks[1:]
+		return picked, nil
+	}
+	t.Cleanup(func() { backend.PickListenPort = orig })
+
+	var cfg config.Config
 	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &grpcPort
-	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &httpPort
-	assert.Equal(t, 4337, fleetOTLPGRPCPort(cfg))
-	assert.Equal(t, 4338, fleetOTLPHTTPPort(cfg))
+	require.NoError(t, fm.StartOTLPBridge(context.Background(), cfg))
+	t.Cleanup(func() { _ = fm.StopOTLPBridge(context.Background()) })
+
+	gotGRPC, gotHTTP := fm.OTLPBridgePorts()
+	assert.Equal(t, grpcPort, gotGRPC)
+	assert.Equal(t, otherPort, gotHTTP, "the pick that matched the configured port is passed over")
+	assert.Empty(t, picks)
+}
+
+// stubBridgePick answers the nth pick with pick(n), counting from 1, and
+// returns the number of picks made.
+func stubBridgePick(t *testing.T, pick func(call int) (string, error)) *int {
+	t.Helper()
+	var calls int
+	orig := backend.PickListenPort
+	backend.PickListenPort = func(context.Context, string) (string, error) {
+		calls++
+		return pick(calls)
+	}
+	t.Cleanup(func() { backend.PickListenPort = orig })
+	return &calls
+}
+
+// A pick that fails fails the bridge start, binding nothing and remembering
+// no ports for a later start, not even the one picked before it.
+func TestStartOTLPBridge_PickFailureStartsNothing(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	mockPMgr := &mockPolicyManagerForFleet{}
+	mockPMgr.On("GetRepo").Return(nil)
+	fm := newFleetConfigManager(logger, mockPMgr, &mockBackendState{}, nil)
+	calls := stubBridgePick(t, func(call int) (string, error) {
+		if call == 1 {
+			return "40001", nil
+		}
+		return "", fmt.Errorf("%w: nothing free", backend.ErrListenAddrInUse)
+	})
+
+	err := fm.StartOTLPBridge(context.Background(), config.Config{})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, backend.ErrListenAddrInUse)
+	assert.Equal(t, 2, *calls, "the gRPC pick succeeded and the HTTP pick failed")
+	assert.Nil(t, fm.otlpBridge)
+	grpcPort, httpPort := fm.OTLPBridgePorts()
+	assert.Zero(t, grpcPort)
+	assert.Zero(t, httpPort)
+}
+
+func TestPickOTLPBridgePort_GivesUpWhenEveryPickIsTaken(t *testing.T) {
+	calls := stubBridgePick(t, func(int) (string, error) { return "40001", nil })
+
+	_, err := pickOTLPBridgePort(context.Background(), 40001)
+	require.Error(t, err)
+	assert.Equal(t, 3, *calls)
 }
 
 func TestStartOTLPBridge_BindHost(t *testing.T) {

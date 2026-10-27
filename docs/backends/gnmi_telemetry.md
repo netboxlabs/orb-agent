@@ -15,7 +15,7 @@ orb:
     gnmi_telemetry:
       start_mode: on_demand              # the image declares this backend on demand; see the README's Backends section
       host: 127.0.0.1                    # default localhost
-      port: 8079                         # default 8079
+      port: 8079                         # default: a free port on a loopback host, 8079 otherwise
       log_level: INFO                    # default INFO (DEBUG, INFO, WARN, ERROR)
       log_format: TEXT                   # default TEXT (TEXT, JSON)
       otel_export_period: 10             # seconds between checks for new values, default 10
@@ -28,7 +28,7 @@ orb:
 | Parameter | Type | Default | Description |
 |:---------:|:----:|:-------:|:------------|
 | host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control. |
-| port | int | 8079 | Port of the backend's API, 1 to 65535. |
+| port | int | free port | Port of the backend's API, 1 to 65535. Unset, a loopback `host` gets a port free at each start and any other `host` gets 8079; see [Backend keys](../configs/agent_yaml.md#backend-keys). |
 | log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
 | log_format | str | `TEXT` | `TEXT` or `JSON`; any other value is refused. |
 | otel_export_period | int | 10 | Seconds between checks for new values to export, 1 to 31536000: the longest an update waits before it is sent. Each check exports a series' latest value once, so keep it at or below the shortest `metrics_interval` of any policy; see [When metrics are exported](#when-metrics-are-exported). |

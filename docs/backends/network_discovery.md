@@ -41,8 +41,8 @@ orb:
         client_secret: ${DIODE_CLIENT_SECRET}
         agent_name: agent01
     network_discovery:
-      host: 192.168.5.11 # default 0.0.0.0
-      port: 8863 # default 8073
+      host: 192.168.5.11 # default localhost
+      port: 8863 # default: a free port on a loopback host, 8073 otherwise
       log_level: ERROR # default INFO
       log_format: JSON # default TEXT
 

@@ -3,8 +3,10 @@ package pktvisor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	neturl "net/url"
@@ -46,6 +48,8 @@ type AppInfo struct {
 type pktvisorBackend struct {
 	logger          *slog.Logger
 	binary          string
+	visorSettings   map[string]any // visor.config as Configure read it, without the port
+	visorTaps       any            // visor.taps as Configure read it
 	configFile      string
 	pktvisorVersion string
 	proc            backend.Commander
@@ -56,7 +60,7 @@ type pktvisorBackend struct {
 	policyRepo      policies.PolicyRepo
 
 	adminAPIHost     string
-	adminAPIPort     string
+	adminAPIPort     backend.APIPort
 	adminAPIProtocol string
 
 	// added for Strings
@@ -113,10 +117,18 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		return err
 	}
 
-	pvOptions := []string{"--admin-api"}
-	if len(p.configFile) > 0 {
-		pvOptions = append(pvOptions, "--config", p.configFile)
+	port, err := p.adminAPIPort.ForStart(ctx, p.adminAPIHost)
+	if err != nil {
+		return fmt.Errorf("pktvisor: %w", err)
 	}
+
+	if err := p.writeConfigFile(port); err != nil {
+		return err
+	}
+
+	// The port goes in the config file and in -p, which wins over it, so
+	// pktvisord binds it whichever it reads.
+	pvOptions := []string{"--admin-api", "-p", port, "--config", p.configFile}
 
 	if p.otelReceiverHost != "" && p.otelReceiverPort != 0 {
 		pvOptions = append(pvOptions, "--otel")
@@ -133,7 +145,7 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		NameUnderscore: "pktvisor",
 		Exec:           p.binary,
 		Args:           pvOptions,
-		ListenAddr:     net.JoinHostPort(p.adminAPIHost, p.adminAPIPort),
+		ListenAddr:     net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()),
 		LogLine:        p.logLineAdapter,
 		SetProc: func(proc backend.Commander, ch <-chan backend.CmdStatus) {
 			p.proc = proc
@@ -143,12 +155,72 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 		// getAppInfo (which uses versionTimeout=2). Returns the app version.
 		ReadinessCheck: func() (string, error) {
 			var appMetrics AppInfo
-			url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+			url := fmt.Sprintf("%s://%s/api/v1/metrics/app", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()))
 			err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appMetrics, http.MethodGet,
 				http.NoBody, "application/json", readinessTimeout, "error")
 			return appMetrics.App.Version, err
 		},
 	})
+}
+
+// renderConfigFile is the config file for a process told port, from what
+// Configure read; an empty port leaves visor.config.port out.
+func (p *pktvisorBackend) renderConfigFile(port string) ([]byte, error) {
+	settings := make(map[string]any, len(p.visorSettings)+1)
+	maps.Copy(settings, p.visorSettings)
+	if port != "" {
+		if n, err := strconv.Atoi(port); err == nil {
+			settings["port"] = n
+		} else {
+			settings["port"] = port
+		}
+	}
+	visor := map[string]any{}
+	if len(settings) > 0 {
+		visor["config"] = settings
+	}
+	if p.visorTaps != nil {
+		visor["taps"] = p.visorTaps
+	}
+	data, err := yaml.Marshal(map[string]any{"visor": visor})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config: %w", err)
+	}
+	return data, nil
+}
+
+// writeConfigFile writes the config file for a process told port to a new
+// temp file, and removes the previous start's. It runs at start rather than
+// at configure time, so a backend declared on demand and never started
+// writes nothing.
+func (p *pktvisorBackend) writeConfigFile(port string) error {
+	data, err := p.renderConfigFile(port)
+	if err != nil {
+		return err
+	}
+	if p.configFile != "" {
+		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
+			p.logger.Warn("failed to remove old pktvisor temp config file",
+				"file", p.configFile,
+				"error", err)
+		}
+		p.configFile = ""
+	}
+
+	tmpFile, err := os.CreateTemp(os.TempDir(), "pktvisor-*.yaml")
+	if err != nil {
+		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
+	}
+	_, werr := tmpFile.Write(data)
+	if err := errors.Join(werr, tmpFile.Close()); err != nil {
+		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
+			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
+				"error", rerr)
+		}
+		return fmt.Errorf("failed to write config file: %w", err)
+	}
+	p.configFile = tmpFile.Name()
+	return nil
 }
 
 // logLineAdapter routes a streamed stdout/stderr line to the pktvisor output
@@ -269,28 +341,12 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 	p.binary = defaultBinary
 	p.adminAPIHost = defaultAPIHost
-	p.adminAPIPort = defaultAPIPort
 	p.agentLabels = common.Otlp.AgentLabels
 
-	// Clean up old temp config file if it exists
-	if p.configFile != "" {
-		if err := os.Remove(p.configFile); err != nil && !os.IsNotExist(err) {
-			p.logger.Warn("failed to remove old pktvisor temp config file",
-				"file", p.configFile,
-				"error", err)
-		}
-	}
-
-	// Create temp config file
-	tmpDir := os.TempDir()
-	tmpFile, err := os.CreateTemp(tmpDir, "pktvisor-*.yaml")
-	if err != nil {
-		return fmt.Errorf("failed to create pktvisor temp config file: %w", err)
-	}
-
-	// Prepare the visor configuration structure
-	visorConfig := make(map[string]any)
+	// Prepare the visor configuration structure. The port is left out: each
+	// start writes the one it settles, so the file and -p always agree.
 	configSection := make(map[string]any)
+	var taps any
 
 	// Process all config entries
 	for key, value := range config {
@@ -301,40 +357,20 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 			}
 			configSection[key] = value
 		case "port":
-			p.adminAPIPort = fmt.Sprintf("%v", value)
-			configSection[key] = value
 		case "taps":
-			visorConfig["taps"] = value
+			taps = value
 		default:
 			configSection[key] = value
 		}
 	}
 
-	if len(configSection) > 0 {
-		visorConfig["config"] = configSection
-	}
+	p.adminAPIPort.Configure(backend.ConfiguredPort(config), p.adminAPIHost, defaultAPIPort)
 
-	fullConfig := map[string]any{
-		"visor": visorConfig,
+	p.visorSettings = configSection
+	p.visorTaps = taps
+	if _, err := p.renderConfigFile(""); err != nil {
+		return err
 	}
-
-	yamlData, err := yaml.Marshal(fullConfig)
-	if err != nil {
-		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
-				"error", rerr)
-		}
-		return fmt.Errorf("failed to marshal config: %w", err)
-	}
-	if err := os.WriteFile(tmpFile.Name(), yamlData, 0o644); err != nil {
-		if rerr := os.Remove(tmpFile.Name()); rerr != nil {
-			p.logger.Error("failed to remove temp config file", "file", tmpFile.Name(),
-				"error", rerr)
-		}
-		return fmt.Errorf("failed to write config file: %w", err)
-	}
-
-	p.configFile = tmpFile.Name()
 
 	if common.Otlp.HTTP != "" {
 		uri, err := neturl.Parse(common.Otlp.HTTP)
@@ -356,7 +392,7 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 
 func (p *pktvisorBackend) GetCapabilities() (map[string]any, error) {
 	var taps any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/taps", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+	url := fmt.Sprintf("%s://%s/api/v1/taps", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()))
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &taps, http.MethodGet,
 		http.NoBody, "application/json", tapsTimeout, "error")
 	if err != nil {
@@ -422,7 +458,7 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 	}
 
 	var resp map[string]any
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+	url := fmt.Sprintf("%s://%s/api/v1/policies", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()))
 	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodPost,
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "error")
 	if err != nil {
@@ -447,7 +483,7 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 	if err != nil {
 		return err
 	}
-	url := fmt.Sprintf("%s://%s:%s/api/v1/policies/%s", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort, segment)
+	url := fmt.Sprintf("%s://%s/api/v1/policies/%s", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()), segment)
 	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "error")
 	if err != nil {
@@ -458,7 +494,7 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 
 func (p *pktvisorBackend) getAppInfo() (AppInfo, error) {
 	var appInfo AppInfo
-	url := fmt.Sprintf("%s://%s:%s/api/v1/metrics/app", p.adminAPIProtocol, p.adminAPIHost, p.adminAPIPort)
+	url := fmt.Sprintf("%s://%s/api/v1/metrics/app", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()))
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &appInfo, http.MethodGet,
 		http.NoBody, "application/json", versionTimeout, "error")
 	return appInfo, err

@@ -2,7 +2,11 @@ package mocks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -205,4 +209,61 @@ func CaptureListenAddr(t testing.TB) *string {
 	}
 	t.Cleanup(func() { backend.ReserveListenAddr = orig })
 	return &addr
+}
+
+// PickListenPort hands every start that picks its API port the given port,
+// the one a server standing in for the process listens on, and records the
+// hosts the picks were made on, so a test can pin that a backend left
+// without a port asks for one and tells its process the port it got.
+func PickListenPort(t testing.TB, port string) *[]string {
+	t.Helper()
+	var hosts []string
+	orig := backend.PickListenPort
+	backend.PickListenPort = func(_ context.Context, host string) (string, error) {
+		hosts = append(hosts, host)
+		return port, nil
+	}
+	t.Cleanup(func() { backend.PickListenPort = orig })
+	return &hosts
+}
+
+// APIStandIn starts a server standing in for a backend process's API on the
+// loopback address given, an IP literal such as 127.0.0.1 or ::1, and returns
+// its host and port; it skips the test on a host without that address. Every
+// path answers one JSON object carrying the version under each shape the
+// backends read it in, so any backend's readiness check and Version pass
+// against it.
+func APIStandIn(t testing.TB, loopback string) (host, port string) {
+	t.Helper()
+	l, err := net.Listen("tcp", net.JoinHostPort(loopback, "0"))
+	if err != nil {
+		t.Skipf("no %s loopback to stand a server on: %v", loopback, err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"version": "1.0.0",
+			"app":     map[string]any{"version": "1.0.0"},
+		})
+	}))
+	_ = server.Listener.Close()
+	server.Listener = l
+	server.Start()
+	t.Cleanup(server.Close)
+	host, port, err = net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("stand-in address: %v", err)
+	}
+	return host, port
+}
+
+// FlagValue returns the argument that follows flag in args, or empty when
+// flag is absent or last.
+func FlagValue(args []string, flag string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag {
+			return args[i+1]
+		}
+	}
+	return ""
 }

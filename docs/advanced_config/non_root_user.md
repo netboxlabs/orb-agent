@@ -58,5 +58,5 @@ Give private keys to the UID the agent runs as, with mode `600` or `400`. See [S
 ## Features that need root or extra privileges
 
 - **Network discovery.** With no `scan_types` set, nmap runs a TCP connect scan and works unchanged as a non-root user. SYN and other raw scan types, and `os_detection`, need raw sockets and fail. Rootless Podman, where nmap runs as root but without raw sockets, is a different case with its own settings; see [Rootless Podman Deployment](../backends/network_discovery.md#rootless-podman-deployment).
-- **pktvisor.** Packet capture needs privileges that a non-root user does not have. Run the agent as root when pktvisor is configured.
+- **pktvisor.** Packet capture needs privileges that a non-root user does not have. Run the agent as root when it is to run pktvisor policies. The image's default configuration declares pktvisor on demand, so `pktvisord` starts only when a pktvisor policy arrives, and an agent without one never runs it.
 - **SNMP traps on a port below 1024.** In Docker's default bridge network, a non-root process can bind any port inside the container. With `--net=host`, binding a port below 1024, such as the conventional trap port 162, depends on the host's `net.ipv4.ip_unprivileged_port_start`. Listen on a higher port, or keep root, if the host does not allow it.

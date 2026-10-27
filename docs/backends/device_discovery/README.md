@@ -53,7 +53,7 @@ orb:
         agent_name: agent01
     device_discovery:
       host: 192.168.5.11 # default localhost
-      port: 8857 # default 8072
+      port: 8857 # default: a free port on a loopback host, 8072 otherwise
       log_level: ERROR # default INFO
 
 ```
@@ -61,7 +61,7 @@ orb:
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
 | host | str | no | REST API host (default `localhost`) |
-| port | int | no | REST API port (default `8072`) |
+| port | int | no | REST API port (default: a free port at each start on a loopback `host`, `8072` otherwise; see [Backend keys](../../configs/agent_yaml.md#backend-keys)) |
 | log_level | str | no | Log level (default `INFO`) - see [Log level and troubleshooting](#log-level-and-troubleshooting) |
 
 ### Log level and troubleshooting
