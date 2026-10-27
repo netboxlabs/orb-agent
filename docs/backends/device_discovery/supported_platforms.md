@@ -72,8 +72,6 @@ These drivers are bundled with device-discovery. They are **not** tried during a
 | `ubiquiti_edgeswitch` | Ubiquiti | EdgeSwitch |
 | `ubiquiti_unifiswitch` | Ubiquiti | UniFi Switch |
 
-**Huawei YunShan OS (`huawei_vrp`).** YunShan prints lines in `display version`, `display interface brief` and `display interface` that the bundled ntc-templates reject. The driver skips those lines instead of failing the device, and logs a warning with the device, the number of skipped lines and the first few, once per device and command until the agent restarts (repeats log at debug level). A value carried only on a skipped line is not collected, and a row the template does not recognise is left out. The OS version comes from YunShan's `Version` line. The model comes from the Master board's uptime line when that board belongs to the series on the uptime headline, for example `S5735-L48T4XE-A-V2` rather than the `CloudEngine S5735-L-V2` series name. Facts and interfaces have been checked against YunShan output; the VLAN, stack, module and VRF getters have not yet.
-
 The source for the custom drivers is maintained at [orb-discovery/device-discovery/custom_napalm](https://github.com/netboxlabs/orb-agent/tree/develop/orb-discovery/device-discovery/custom_napalm).
 
 ## Interface ↔ VLAN associations
