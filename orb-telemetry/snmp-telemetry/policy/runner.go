@@ -269,16 +269,16 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 }
 
 // scheduleMetrics adds the target's polling job, first run at first. A first
-// run due within one step starts immediately instead: gocron refuses a start
-// time that has passed when the job is added, and newer releases move one that
+// run due within grace starts immediately instead: gocron refuses a start time
+// that has passed when the job is added, and newer releases move one that
 // passes before the scheduler reads it to one interval later.
-func (r *Runner) scheduleMetrics(s gocron.Scheduler, t config.Target, first time.Time) error {
+func (r *Runner) scheduleMetrics(s gocron.Scheduler, t config.Target, first time.Time, grace time.Duration) error {
 	add := func(start gocron.StartAtOption) error {
 		_, err := s.NewJob(gocron.DurationJob(r.metricsInterval), gocron.NewTask(r.runMetrics, t),
 			gocron.WithSingletonMode(gocron.LimitModeReschedule), gocron.WithStartAt(start))
 		return err
 	}
-	if time.Until(first) < firstPollStep {
+	if time.Until(first) < grace {
 		return add(gocron.WithStartImmediately())
 	}
 	err := add(gocron.WithStartDateTime(first))
@@ -479,10 +479,14 @@ func (r *Runner) Start() error {
 		return nil
 	}
 	r.scheduler.Start()
+	// Half the gap between two first polls: a target is pulled forward to start
+	// immediately only when it is that close to due, so it does not land on the
+	// one before it, however closely a large policy packs them.
+	grace := firstPollOffset(1, len(r.targets), r.metricsInterval) / 2
 	start := time.Now()
 	for i, t := range r.targets {
 		first := start.Add(firstPollOffset(i, len(r.targets), r.metricsInterval))
-		if err := r.scheduleMetrics(r.scheduler, t, first); err != nil {
+		if err := r.scheduleMetrics(r.scheduler, t, first, grace); err != nil {
 			return fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
 		}
 	}

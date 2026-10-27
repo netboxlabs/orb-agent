@@ -164,6 +164,28 @@ func TestRunner_SpreadsFirstPollsFromWhenItStarts(t *testing.T) {
 	assert.GreaterOrEqual(t, rec.first(all[49]).Sub(started), 450*time.Millisecond)
 }
 
+// A policy that packs its first polls closer than 10ms still keeps them apart:
+// starting a target immediately must not pull it onto the one before. 250
+// targets at a 2s interval are 8ms apart.
+func TestRunner_KeepsCloselyPackedFirstPollsApart(t *testing.T) {
+	rec := newPollRecorder()
+	all := hosts(250)
+	pol := hourlyPolicy(all...)
+	interval := 2
+	pol.Config.MetricsInterval = &interval
+	pol.Config.SNMPTimeout = 1
+	r, err := NewRunner(context.Background(), testLogger, "p1", pol, rec, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	started := time.Now()
+	require.NoError(t, r.Start())
+
+	require.Eventually(t, func() bool { return rec.count(all[1]) > 0 }, 5*time.Second, time.Millisecond)
+	// A run can start late but never early, so the second target's first poll
+	// cannot come before its 8ms offset.
+	assert.GreaterOrEqual(t, rec.first(all[1]).Sub(started), 8*time.Millisecond)
+}
+
 // Each target keeps its first-poll offset on later polls, because gocron
 // schedules every run from the one before, so the policy's polls stay spread.
 func TestRunner_KeepsTheSpreadOnLaterPolls(t *testing.T) {
