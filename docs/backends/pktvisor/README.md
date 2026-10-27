@@ -63,6 +63,10 @@ orb:
 ### Exporting pktvisor metrics
 `pktvisord` can stream OpenTelemetry HTTP metrics directly to a collector. Configure the shared `backends.common.otlp` section, as in the example above, to point Orb Agent at your collector endpoint.
 
+`pktvisord` summarizes each policy in one-minute windows and pushes each window once, within about 5 seconds of its closing. A policy's first metrics therefore arrive about a minute after it starts, and each later window a minute after the one before; a push carries only the policies with a newly closed window. With [`merge_like_handlers`](handlers/README.md#config-section), a merged window is pushed once every handler in the policy has closed it. A policy whose `window_config` sets `num_periods: 1` never closes a window while it runs, so it pushes its running totals once a minute instead.
+
+When a [`pcap_file`](inputs/README.md#pcap_file) capture ends, its open window counts as closed and is pushed once. A capture shorter than a minute therefore still produces metrics, and one with `num_periods: 1` stops pushing once a minute.
+
 ## Policy structure
 Define pktvisor policies under `orb.policies.pktvisor`. Each entry key becomes the policy name pushed to `pktvisord`, and the agent wraps the body you write in the envelope `pktvisord` expects, so the body is just the four sections below.
 
