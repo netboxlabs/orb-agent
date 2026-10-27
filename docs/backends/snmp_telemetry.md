@@ -124,6 +124,13 @@ Why this way. The backend used to export every `otel_export_period` whatever the
 
 So the backend keeps one periodic export and hands each poll's values to it once.
 
+## When a policy starts or changes
+Every target polls as soon as its policy starts, then every `metrics_interval`. A policy starts when it is applied, when it is edited, and when the agent or the backend restarts, so its first values are exported within one `otel_export_period` (10 seconds by default) plus the time the poll takes, rather than one interval later. In a large policy the last target's first values follow up to 10 seconds after that.
+
+- A large policy spreads its first polls about 10 milliseconds apart, counted from when it starts, closer when needed to fit a policy of more than 1,000 targets into 10 seconds and every policy into one interval. Each target keeps its offset afterwards, so the policy's polls do not all run in the same instant.
+- An edit, even to one device, reaches the backend as a removal followed by an apply. The devices the edit keeps poll again as it applies, so their series miss no sample: the next one comes early, or at most 10 seconds late. Added devices poll at once, and removed devices stop.
+- Removing or editing a policy cancels any poll still in flight at once, so it does not wait out `snmp_timeout` on a device that does not answer.
+
 ## Traps and the container
 The trap socket is the one listener in the backend that must be reachable from the device network. With `--net=host` the port a policy's `listen` names is already exposed. In bridge mode publish it, `-p 162:162/udp` for a policy listening on 162. The container runs as root by default, the image sets no other user, so binding a port below 1024 inside it needs no capability.
 

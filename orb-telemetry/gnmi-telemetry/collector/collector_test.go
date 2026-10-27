@@ -999,6 +999,25 @@ func TestGetRungStopsTheRejectedSubscription(t *testing.T) {
 	})
 }
 
+// The Get rung is the last fallback. Like a subscription, it must poll as soon
+// as the target starts rather than one interval later.
+func TestGetRungPollsAtOnce(t *testing.T) {
+	reader := testReader(t)
+	sess := &gnmi.FakeSession{
+		Caps: &gnmi.CapabilitiesResult{},
+		SubscribeManyFn: func(context.Context, []gnmi.Subscription) (<-chan gnmi.Notification, <-chan error, error) {
+			return nil, nil, status.Error(codes.Unimplemented, "streaming not supported")
+		},
+		GetResult: gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/memory/state/physical", Value: uint64(1)}}},
+	}
+	c := New(&gnmi.FakeDialer{Session: sess}, loadStore(t), nil)
+	defer c.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, c.CollectTarget(ctx, target("h", ""), Options{MetricsInterval: time.Hour, Mode: "auto", PolicyName: "p"}))
+	waitFor(t, 3*time.Second, func() bool { _, ok := collect(t, reader)["gnmi.memory_physical"]; return ok })
+}
+
 // A target without PROTO answers a Get with one update at the container path
 // whose value is a decoded JSON object. Matching needs a path deeper than the
 // subscription's, so the container has to be split into its leaves first.

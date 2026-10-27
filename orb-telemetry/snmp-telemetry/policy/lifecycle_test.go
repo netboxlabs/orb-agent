@@ -426,7 +426,7 @@ func TestRunnerStop_CancelsBeforeWaitingForTheScheduler(t *testing.T) {
 	c.runner = r
 	t.Cleanup(c.unblock)
 
-	r.Start()
+	require.NoError(t, r.Start())
 	jobs := r.scheduler.Jobs()
 	require.Len(t, jobs, 1)
 	// The run bounds itself at metrics_interval, a minute here, so nothing but
@@ -661,13 +661,39 @@ policies:
 // one warns, naming the two periods; one polling at the check period or
 // slower, or a trap-only policy, starts quietly. With export off there is no
 // period to compare against.
+// lockedBuffer is a log sink that a poll can write to while the test reads it.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func (b *lockedBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
 func TestManager_WarnsWhenAPolicyPollsFasterThanTheExportPeriod(t *testing.T) {
-	manager := func(exportPeriod time.Duration) (*Manager, *bytes.Buffer) {
-		var buf bytes.Buffer
-		lg := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	// A started policy polls at once, and a failed poll logs while the test
+	// reads the buffer.
+	manager := func(exportPeriod time.Duration) (*Manager, *lockedBuffer) {
+		buf := &lockedBuffer{}
+		lg := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 		m := NewManager(t.Context(), lg, Options{TrapPool: newSpyPool(), ExportPeriod: exportPeriod})
 		t.Cleanup(func() { _ = m.Stop() })
-		return m, &buf
+		return m, buf
 	}
 	polling := func(intervalSec int) config.Policy {
 		pol := policyWithTargets("10.0.0.1")

@@ -210,6 +210,59 @@ func TestClient_WalkStopsWhenContextIsCancelled(t *testing.T) {
 		"the walk ran on past the cancelled collection")
 }
 
+// gosnmp consults the context only between attempts, so the attempt in flight
+// is what a policy stop or edit would wait on. Cancelling must end it at once
+// rather than after snmp_timeout.
+func TestClient_CancelEndsTheAttemptInFlight(t *testing.T) {
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	port := udpPort(t, silent.LocalAddr())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const perRequest = 5 * time.Second
+	w, err := NewClient(ctx, "127.0.0.1", port, 0, perRequest,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "public"}, clientTestLogger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	_, err = w.Walk("1.3.6.1.2.1.1.1")
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), perRequest/2, "the walk waited out the attempt after the collection was cancelled")
+	// The collector logs a failed Close, so the connection the cancellation
+	// already closed must not be reported as one.
+	assert.NoError(t, w.Close())
+}
+
+// A collection that reaches its deadline is not cancelled: gosnmp ends the
+// attempt at the deadline and reports it, which is the error the policy status
+// shows for a device that does not answer, not a closed connection.
+func TestClient_DeadlineStillReportsTheDeadline(t *testing.T) {
+	silent, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = silent.Close() }()
+	port := udpPort(t, silent.LocalAddr())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	w, err := NewClient(ctx, "127.0.0.1", port, 0, 5*time.Second,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "public"}, clientTestLogger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+	defer func() { _ = w.Close() }()
+
+	_, err = w.Walk("1.3.6.1.2.1.1.1")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotContains(t, err.Error(), "closed")
+}
+
 // ---------------------------------------------------------------------------
 // GETBULK
 // ---------------------------------------------------------------------------
