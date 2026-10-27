@@ -29,6 +29,10 @@ orb:
             netprobe: true
 ```
 
+A netprobe policy needs no tap on the agent. A policy that sets neither `input.tap` nor
+`input.tap_selector` runs on the `fleet_netprobe` tap the agent manages, with its
+settings in `input.config`. See [Policies from Fleet](../README.md#policies-from-fleet).
+
 ## Test types
 
 `test_type` is required and selects which probe runs. It also decides which of
@@ -190,9 +194,13 @@ orb:
                 ip_version: 4
 ```
 
-Sending ICMP requires the agent to have permission to use raw sockets. See the
+Sending ICMP over IPv4 and IPv6 requires root or the `CAP_NET_RAW` capability. See the
 agent's [running instructions](../../../../README.md#running-the-agent) for the
-container options that grant it.
+container options that grant it. The image runs as root.
+
+Without them, IPv4 ping depends on the host's `net.ipv4.ping_group_range`. Docker sets
+it wide for a container. Kubernetes does not by default, so grant `CAP_NET_RAW` to the
+pod. See [Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
 
 ## TCP probes (`test_type: tcp`)
 

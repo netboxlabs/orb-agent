@@ -425,6 +425,52 @@ orb:
 	}
 }
 
+// Pktvisor taps defined through the environment replace the image's whole
+// pktvisor entry, so the start_mode the image declares is lost unless the
+// variables set it too.
+func TestLoad_PktvisorTapsFromEnv(t *testing.T) {
+	t.Parallel()
+	const p = "../docker/default_config.yaml"
+	tapEnv := map[string]string{
+		"ORB_BACKENDS__PKTVISOR__TAPS__EDGE__INPUT_TYPE":    "pcap",
+		"ORB_BACKENDS__PKTVISOR__TAPS__EDGE__CONFIG__IFACE": "eth0",
+	}
+	wantTaps := map[string]any{
+		"edge": map[string]any{
+			"input_type": "pcap",
+			"config":     map[string]any{"iface": "eth0"},
+		},
+	}
+
+	t.Run("with start_mode keeps on_demand", func(t *testing.T) {
+		t.Parallel()
+		env := map[string]string{"ORB_BACKENDS__PKTVISOR__START_MODE": "on_demand"}
+		for k, v := range tapEnv {
+			env[k] = v
+		}
+		got, err := loadWithEnv([]string{p}, nil, envFromMap(env))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		want := map[string]any{"start_mode": "on_demand", "taps": wantTaps}
+		if !reflect.DeepEqual(got.OrbAgent.Backends["pktvisor"], want) {
+			t.Errorf("pktvisor entry\n got: %#v\nwant: %#v", got.OrbAgent.Backends["pktvisor"], want)
+		}
+	})
+
+	t.Run("without start_mode the entry has none", func(t *testing.T) {
+		t.Parallel()
+		got, err := loadWithEnv([]string{p}, nil, envFromMap(tapEnv))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		want := map[string]any{"taps": wantTaps}
+		if !reflect.DeepEqual(got.OrbAgent.Backends["pktvisor"], want) {
+			t.Errorf("pktvisor entry\n got: %#v\nwant: %#v", got.OrbAgent.Backends["pktvisor"], want)
+		}
+	})
+}
+
 // A malformed generic value on a known key fails the load (fail-fast, not
 // silently ignored) — a deliberate override must not be swallowed.
 func TestLoad_MalformedOverlayValue_Errors(t *testing.T) {
