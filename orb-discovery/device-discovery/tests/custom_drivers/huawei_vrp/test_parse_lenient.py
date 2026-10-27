@@ -1,4 +1,4 @@
-"""Unit tests for custom_napalm._textfsm.parse_output_lenient."""
+"""Unit tests for custom_napalm.huawei_vrp._parse_output_lenient."""
 
 import logging
 
@@ -6,21 +6,21 @@ import pytest
 from ntc_templates.parse import ParsingException, parse_output
 from textfsm.parser import TextFSMError
 
-from custom_napalm import _textfsm
-from custom_napalm._textfsm import parse_output_lenient
+from custom_napalm import huawei_vrp
+from custom_napalm.huawei_vrp import _parse_output_lenient
 
-_LOGGER = "test.custom_napalm.textfsm"
+_LOGGER = "custom_napalm.huawei_vrp"
 _HOST = "192.0.2.10"
 
 
 @pytest.fixture(autouse=True)
 def _fresh_warning_state(monkeypatch):
     """Each test starts with no host/command already warned about."""
-    monkeypatch.setattr(_textfsm, "_warned", set())
+    monkeypatch.setattr(huawei_vrp, "_skip_warned", set())
 
 
 def _parse(platform, command, data, host=_HOST):
-    return parse_output_lenient(platform, command, data, host=host, logger=logging.getLogger(_LOGGER))
+    return _parse_output_lenient(platform, command, data, host=host)
 
 _BRIEF_KNOWN = """\
 PHY: Physical

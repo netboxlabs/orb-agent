@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from custom_napalm import _textfsm
+from custom_napalm import huawei_vrp
 from custom_napalm.huawei_vrp import (
     VRPDriver,
     _huawei_vrp_get_chassis_members_impl,
@@ -264,7 +264,7 @@ def _yunshan_driver(getter_dir: str) -> VRPDriver:
 
 def test_get_facts_warning_names_the_device(monkeypatch, caplog):
     """Skipped YunShan lines are logged against the device's host, so a policy with many targets stays traceable."""
-    monkeypatch.setattr(_textfsm, "_warned", set())
+    monkeypatch.setattr(huawei_vrp, "_skip_warned", set())
 
     with caplog.at_level(logging.WARNING, logger="custom_napalm.huawei_vrp"):
         _yunshan_driver("test_get_facts").get_facts()
@@ -276,7 +276,7 @@ def test_get_facts_warning_names_the_device(monkeypatch, caplog):
 
 def test_get_interfaces_warning_names_the_device(monkeypatch, caplog):
     """`display interface` skips are logged against the device's host too."""
-    monkeypatch.setattr(_textfsm, "_warned", set())
+    monkeypatch.setattr(huawei_vrp, "_skip_warned", set())
 
     with caplog.at_level(logging.WARNING, logger="custom_napalm.huawei_vrp"):
         _yunshan_driver("test_get_interfaces").get_interfaces()

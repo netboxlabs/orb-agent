@@ -717,13 +717,6 @@ unrecognised line (e.g. `paloalto_panos_show_interface_management.textfsm`). Onl
 that match a template rule in the corresponding mock file. Always test parsing with real or
 carefully crafted sample output before writing mock data.
 
-When a firmware release adds lines a template does not know and the getter must not fail,
-call `parse_output_lenient()` from `custom_napalm/_textfsm.py` instead of `parse_output()`
-(see `huawei_vrp.py`). It parses strictly first and, only on `TextFSMError`, parses again with
-the template's catch-all rules (`^.`, `^.*`, `^.+`, `^.*$$` followed by `-> Error`) turned into
-skips, and logs the skipped lines per host and command. A template's targeted `Error` rules still
-raise, and commands the index parses with several merged templates are not retried.
-
 ---
 
 ## Approach B — Protocol client (XML API, RESTCONF, NETCONF, …)
