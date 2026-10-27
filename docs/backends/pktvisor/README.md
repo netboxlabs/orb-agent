@@ -19,7 +19,7 @@ Orb writes a temporary pktvisor configuration file each time it starts `pktvisor
 |:---------:|:----:|:--------:|:-------:|-------------|
 | `host` | string | no | `localhost` | Admin API host. Written to `visor.config.host`, which is the address the `pktvisord` the agent starts binds its admin API to, and the address the agent uses to reach it. Change it only to alter that bind address. |
 | `port` | string | no | free port | Admin API port, written to `visor.config.port` and passed to `pktvisord` with `-p`. Unset, a loopback `host` gets a port free at each start and any other `host` gets `10853`; see [Backend keys](../../configs/agent_yaml.md#backend-keys). |
-| `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not validated as required, but an agent with no taps has nothing for a policy to analyse. |
+| `taps` | map | no | – | Declarative tap definitions copied into `visor.taps`. Each tap sets the data source (`input_type`, `config`, and optional `tags`). Not required: `netprobe` and `flow` policies can run on taps the agent manages. Tap names that start with `fleet_` are refused here. |
 | *other keys* | any | no | – | Added verbatim under `visor.config` (for example `log_level`, crashpad options, or storage paths). |
 
 Pktvisor ships with the Orb agent container image. If you run Orb on a bare host, ensure the `pktvisord` binary is in `$PATH` or adjust your deployment accordingly.
@@ -213,10 +213,14 @@ So when the agent refuses an edit:
   the edit is fixed or the policy is removed.
 - The next `pktvisord` restart drops the old version.
 
+Two failures come after the old version is removed: the agent cannot create the tap, or
+`pktvisord` refuses the new version. Then the old version is already gone, and the policy
+runs nothing until the edit is fixed.
+
 ### Policies that are refused
 The agent refuses a policy with a bad name, or one that names no tap and has an input
-type other than `netprobe` or `flow`. It still starts `pktvisord` on demand first, as it already does for a name with a
-slash.
+type other than `netprobe` or `flow`. It still starts `pktvisord` on demand first, as it
+already does for a name with a slash.
 
 If `pktvisord` takes longer than the 10 second apply timeout to accept a policy on a
 managed tap, the agent keeps that tap until it next starts `pktvisord`, even after the
