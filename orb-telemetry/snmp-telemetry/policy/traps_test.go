@@ -94,7 +94,7 @@ func TestRunner_TrapOnlySchedulesNothing(t *testing.T) {
 	assert.Nil(t, r.scheduler, "a trap-only runner has no scheduler")
 	assert.Len(t, pool.devices["edge"], 2)
 
-	assert.NotPanics(t, r.Start)
+	assert.NotPanics(t, func() { assert.NoError(t, r.Start()) })
 	time.Sleep(50 * time.Millisecond)
 	assert.Empty(t, spy.dialed(), "nothing was polled")
 

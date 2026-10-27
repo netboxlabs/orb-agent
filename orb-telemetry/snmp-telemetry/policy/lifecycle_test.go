@@ -426,7 +426,7 @@ func TestRunnerStop_CancelsBeforeWaitingForTheScheduler(t *testing.T) {
 	c.runner = r
 	t.Cleanup(c.unblock)
 
-	r.Start()
+	require.NoError(t, r.Start())
 	jobs := r.scheduler.Jobs()
 	require.Len(t, jobs, 1)
 	// The run bounds itself at metrics_interval, a minute here, so nothing but

@@ -101,7 +101,7 @@ func TestRunner_PollsEveryTargetWhenItStarts(t *testing.T) {
 	all := hosts(3)
 	r, err := NewRunner(context.Background(), testLogger, "p1", hourlyPolicy(all...), rec, nil)
 	require.NoError(t, err)
-	r.Start()
+	require.NoError(t, r.Start())
 	t.Cleanup(func() { _ = r.Stop() })
 
 	require.Eventually(t, func() bool {
@@ -120,7 +120,7 @@ func TestRunner_SpreadsFirstPolls(t *testing.T) {
 	started := time.Now()
 	r, err := NewRunner(context.Background(), testLogger, "p1", hourlyPolicy(all...), rec, nil)
 	require.NoError(t, err)
-	r.Start()
+	require.NoError(t, r.Start())
 	t.Cleanup(func() { _ = r.Stop() })
 
 	require.Eventually(t, func() bool {
@@ -138,6 +138,32 @@ func TestRunner_SpreadsFirstPolls(t *testing.T) {
 	assert.GreaterOrEqual(t, rec.first(all[49]).Sub(started), 450*time.Millisecond)
 }
 
+// The spread starts when the runner does, not when it was built. Offsets that
+// passed in between would otherwise all poll at once, or, with newer gocron
+// releases, one interval late.
+func TestRunner_SpreadsFirstPollsFromWhenItStarts(t *testing.T) {
+	rec := newPollRecorder()
+	all := hosts(50)
+	r, err := NewRunner(context.Background(), testLogger, "p1", hourlyPolicy(all...), rec, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Stop() })
+	// Longer than the 490ms spread, so every offset would have passed.
+	time.Sleep(600 * time.Millisecond)
+	started := time.Now()
+	require.NoError(t, r.Start())
+
+	require.Eventually(t, func() bool {
+		for _, h := range all {
+			if rec.count(h) == 0 {
+				return false
+			}
+		}
+		return true
+	}, 5*time.Second, 10*time.Millisecond, "every target must poll when the policy starts")
+	assert.Less(t, rec.first(all[0]).Sub(started), 2*time.Second)
+	assert.GreaterOrEqual(t, rec.first(all[49]).Sub(started), 450*time.Millisecond)
+}
+
 // Each target keeps its first-poll offset on later polls, because gocron
 // schedules every run from the one before, so the policy's polls stay spread.
 func TestRunner_KeepsTheSpreadOnLaterPolls(t *testing.T) {
@@ -149,7 +175,7 @@ func TestRunner_KeepsTheSpreadOnLaterPolls(t *testing.T) {
 	pol.Config.SNMPTimeout = 1
 	r, err := NewRunner(context.Background(), testLogger, "p1", pol, rec, nil)
 	require.NoError(t, err)
-	r.Start()
+	require.NoError(t, r.Start())
 	t.Cleanup(func() { _ = r.Stop() })
 
 	require.Eventually(t, func() bool { return rec.count(all[0]) >= 2 && rec.count(all[49]) >= 2 }, 10*time.Second, 10*time.Millisecond)

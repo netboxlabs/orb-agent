@@ -45,7 +45,7 @@ not sent again by a later one.
 Every target polls as soon as its policy starts (applied, edited, or after a
 restart), then every `metrics_interval`, so a policy's first values leave
 within one export period plus the poll time, and a large policy's last target
-up to 10 seconds after that. First polls are 10ms apart, closer when needed to
+up to 10 seconds after that. First polls are about 10ms apart, closer when needed to
 fit a policy of more than 1,000 targets into 10 seconds and every policy into
 one interval, and each target keeps its offset afterwards. An edit reaches the
 backend as a removal followed by an apply: the devices it keeps poll again

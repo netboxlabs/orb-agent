@@ -471,7 +471,9 @@ func (m *Manager) StartPolicyHandle(name string, policy config.Policy) (Handle, 
 			"policy", config.SanitizeLogValue(name), "metrics_interval", r.metricsInterval, "export_period", m.exportPeriod)
 	}
 
-	r.Start()
+	if err := r.Start(); err != nil {
+		return Handle{}, errors.Join(err, r.Stop())
+	}
 	m.policies[name] = r
 	m.policyDirs[name] = profilesDir
 	started = true

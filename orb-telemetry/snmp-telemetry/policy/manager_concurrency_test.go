@@ -112,7 +112,7 @@ func TestStopPolicy_HoldsTheNameUntilTheRunnerHasStopped(t *testing.T) {
 
 	r, err := NewRunner(m.ctx, testLogger, "p1", minimalPolicy(v2cAuth()), gate, nil)
 	require.NoError(t, err)
-	r.Start()
+	require.NoError(t, r.Start())
 	m.policies["p1"] = r
 
 	stopped := make(chan error, 1)
@@ -190,7 +190,7 @@ func TestStopPolicy_DoesNotBlockOtherNames(t *testing.T) {
 	t.Cleanup(gate.unblock)
 	r, err := NewRunner(m.ctx, testLogger, "slow", minimalPolicy(v2cAuth()), gate, nil)
 	require.NoError(t, err)
-	r.Start()
+	require.NoError(t, r.Start())
 	m.policies["slow"] = r
 
 	stopped := make(chan error, 1)
@@ -284,7 +284,7 @@ func TestStopPolicy_SameNameReplacementEndsRegistered(t *testing.T) {
 
 	r, err := NewRunner(m.ctx, testLogger, "p1", withTraps(minimalPolicy(v2cAuth()), ":162"), gate, reg)
 	require.NoError(t, err)
-	r.Start()
+	require.NoError(t, r.Start())
 	m.policies["p1"] = r
 	require.Equal(t, []string{"acquire:p1"}, reg.callSequence())
 

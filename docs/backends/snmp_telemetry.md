@@ -127,7 +127,7 @@ So the backend keeps one periodic export and hands each poll's values to it once
 ## When a policy starts or changes
 Every target polls as soon as its policy starts, then every `metrics_interval`. A policy starts when it is applied, when it is edited, and when the agent or the backend restarts, so its first values are exported within one `otel_export_period` (10 seconds by default) plus the time the poll takes, rather than one interval later. In a large policy the last target's first values follow up to 10 seconds after that.
 
-- A large policy spreads its first polls 10 milliseconds apart, closer when needed to fit a policy of more than 1,000 targets into 10 seconds and every policy into one interval. Each target keeps its offset afterwards, so the policy's polls do not all run in the same instant.
+- A large policy spreads its first polls about 10 milliseconds apart, counted from when it starts, closer when needed to fit a policy of more than 1,000 targets into 10 seconds and every policy into one interval. Each target keeps its offset afterwards, so the policy's polls do not all run in the same instant.
 - An edit, even to one device, reaches the backend as a removal followed by an apply. The devices the edit keeps poll again as it applies, so their series miss no sample: the next one comes early, or at most 10 seconds late. Added devices poll at once, and removed devices stop.
 - Removing or editing a policy cancels any poll still in flight at once, so it does not wait out `snmp_timeout` on a device that does not answer.
 

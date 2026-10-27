@@ -63,6 +63,7 @@ func TestNewRunner_AcceptsExpandableTargets(t *testing.T) {
 			r, err := NewRunner(context.Background(), testLogger, "p1", policyWithTargets(host), &spyCollector{}, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = r.Stop() })
+			require.NoError(t, r.Start())
 			assert.NotEmpty(t, r.scheduler.Jobs(), "an accepted target must schedule at least one job")
 		})
 	}
@@ -184,6 +185,7 @@ func TestNewRunner_SchedulesOneJobPerIdentity(t *testing.T) {
 		policyWithTargets("10.0.0.0/30", "10.0.0.1"), &spyCollector{}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
+	require.NoError(t, r.Start())
 	assert.Len(t, r.scheduler.Jobs(), 2, "the repeated address must not get a second job")
 }
 
@@ -243,5 +245,6 @@ func TestNewRunner_SchedulesBothTargetsACollidingKeyWouldMerge(t *testing.T) {
 	r, err := NewRunner(context.Background(), testLogger, "p1", pol, &spyCollector{}, nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
+	require.NoError(t, r.Start())
 	assert.Len(t, r.scheduler.Jobs(), 2, "a target was collapsed into another and is never polled")
 }

@@ -98,6 +98,8 @@ type Runner struct {
 	lastErr          error
 	lastErrAt        time.Time
 	targetErrs       map[targetKey]error // keyed by newTargetKey; initialized in NewRunner
+	// targets are the devices Start schedules a metrics job for.
+	targets []config.Target
 }
 
 // NewRunner returns a new policy runner.
@@ -257,31 +259,26 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		runner.trapLease = lease
 	}
 
-	// Schedule a metrics job for each expanded target
+	// Each target gets its metrics job in Start, once the scheduler runs.
 	if polls {
-		start := time.Now()
-		for i, t := range expanded {
-			first := start.Add(firstPollOffset(i, len(expanded), runner.metricsInterval))
-			if err := runner.scheduleMetrics(s, t, first); err != nil {
-				return nil, fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
-			}
-		}
+		runner.targets = expanded
 	}
 
 	built = true
 	return runner, nil
 }
 
-// scheduleMetrics adds the target's polling job, first run at first. gocron
-// refuses a first run that is already past by the time it reads the clock,
-// which a near-zero offset can be, so such a job starts immediately instead.
+// scheduleMetrics adds the target's polling job, first run at first. A first
+// run due within one step starts immediately instead: gocron refuses a start
+// time that has passed when the job is added, and newer releases move one that
+// passes before the scheduler reads it to one interval later.
 func (r *Runner) scheduleMetrics(s gocron.Scheduler, t config.Target, first time.Time) error {
 	add := func(start gocron.StartAtOption) error {
 		_, err := s.NewJob(gocron.DurationJob(r.metricsInterval), gocron.NewTask(r.runMetrics, t),
 			gocron.WithSingletonMode(gocron.LimitModeReschedule), gocron.WithStartAt(start))
 		return err
 	}
-	if !first.After(time.Now()) {
+	if time.Until(first) < firstPollStep {
 		return add(gocron.WithStartImmediately())
 	}
 	err := add(gocron.WithStartDateTime(first))
@@ -471,12 +468,25 @@ func (r *Runner) buildCombinedError() error {
 	return fmt.Errorf("metrics collection failed: %s", strings.Join(msgs, "; "))
 }
 
-// Start starts the policy runner
-func (r *Runner) Start() {
+// Start starts the policy runner. Each target's first poll is set from the
+// moment the scheduler starts rather than from when the runner was built:
+// building a large policy takes long enough for those times to pass, and newer
+// gocron releases move a start time that has passed to one interval later. An
+// error leaves the runner for the caller to Stop.
+func (r *Runner) Start() error {
 	r.logger.Info("Starting policy runner", "policy", config.SanitizeLogValue(r.name), "polls", r.scheduler != nil)
-	if r.scheduler != nil {
-		r.scheduler.Start()
+	if r.scheduler == nil {
+		return nil
 	}
+	r.scheduler.Start()
+	start := time.Now()
+	for i, t := range r.targets {
+		first := start.Add(firstPollOffset(i, len(r.targets), r.metricsInterval))
+		if err := r.scheduleMetrics(r.scheduler, t, first); err != nil {
+			return fmt.Errorf("scheduling metrics job for %s: %w", t.Host, err)
+		}
+	}
+	return nil
 }
 
 // Stop stops the policy runner and drops the collector state it owns, so a
