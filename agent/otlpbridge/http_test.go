@@ -265,7 +265,7 @@ func TestHTTP_QueueFull_Returns429WithRetryAfter(t *testing.T) {
 	require.NoError(t, err)
 	resp := postBody(t, base+"/v1/metrics", "application/x-protobuf", body)
 	assert.Equal(t, http.StatusTooManyRequests, resp.status)
-	assert.NotEmpty(t, resp.retryAfter)
+	assert.Equal(t, "5", resp.retryAfter, "the same delay a gRPC refusal's RetryInfo asks for")
 	assert.Contains(t, string(resp.body), "queue is full")
 }
 
