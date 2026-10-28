@@ -35,12 +35,16 @@ with each poll from the reading it kept, so every series of a device has one
 sample per poll. A run that fails or is cut short exports nothing, rather than
 its device's previous values again. A check that finds no policy's values to
 send, only the process's own counters (trap datagrams and drops, UTF-8
-repairs), sends an export at most once a minute; the counters are cumulative,
-so the next export carries their totals, and the export made at shutdown is
-sent whatever it carries, so they leave with their final totals. Trap counts
-are not polled and keep being exported at every check while a policy holds
-them. A poll whose export still fails after the OTLP exporter's own retries is
-not sent again by a later one.
+repairs, failed exports), sends an export at most once a minute; the counters
+are cumulative, so the next export carries their totals, and the export made
+at shutdown is sent whatever it carries, so they leave with their final
+totals. Trap counts are not polled and keep being exported at every check
+while a policy holds them. A poll whose export still fails after the OTLP
+exporter's own retries is not sent again by a later one; `snmp.exports_failed`
+counts such exports, and leaves with the next export that gets through. When
+the agent's OTLP bridge has no room for an export, it asks the exporter to
+send it again after 5 seconds, which the exporter does once within its 10
+second export timeout.
 
 Every target polls as soon as its policy starts (applied, edited, or after a
 restart), then every `metrics_interval`, so a policy's first values leave

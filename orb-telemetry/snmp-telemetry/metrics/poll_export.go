@@ -13,6 +13,12 @@ import (
 // series is sent.
 const IdleExportInterval = time.Minute
 
+// ExportsFailedName counts the exports that still failed after the OTLP
+// exporter's own retries. Each poll's values are sent once, so the polls such
+// an export carried are lost, and this is where that shows: the count leaves
+// with the next export that gets through.
+const ExportsFailedName = "snmp.exports_failed"
+
 // pollExporter sends an export that carries a policy's series as it comes,
 // and one carrying only the process's own series (the trap receiver's datagram
 // and drop counts, the UTF-8 repairs) at most once per IdleExportInterval.
@@ -44,11 +50,18 @@ func newPollExporter(next sdkmetric.Exporter) *pollExporter {
 
 // Export hands rm on when it carries a policy's series, when no export has
 // been sent for IdleExportInterval, or after sendAll, and otherwise drops it.
+// An export that fails is counted in ExportsFailedName.
 func (e *pollExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
 	if !e.sends(rm) {
 		return nil
 	}
-	return e.Exporter.Export(ctx, rm)
+	err := e.Exporter.Export(ctx, rm)
+	if err != nil {
+		if failed := GetCounter(ExportsFailedName, "Exports that failed after the OTLP exporter's retries, so the polls they carried were lost"); failed != nil {
+			failed.Add(ctx, 1)
+		}
+	}
+	return err
 }
 
 // sendAll lifts the idle bound: every export from here on is sent.
