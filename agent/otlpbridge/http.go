@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -102,7 +104,7 @@ func (s *BridgeServer) serveExport(w http.ResponseWriter, r *http.Request, signa
 	if err != nil {
 		switch status.Code(err) {
 		case codes.ResourceExhausted:
-			w.Header().Set("Retry-After", "5")
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(s.retryAfter)))
 			http.Error(w, err.Error(), http.StatusTooManyRequests)
 			return
 		case codes.InvalidArgument:
@@ -162,4 +164,10 @@ func readOTLPBody(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 		return body, nil
 	}
 	return io.ReadAll(reader)
+}
+
+// retryAfterSeconds is d as a Retry-After value, in whole seconds: rounded
+// up, and at least 1, so a client never reads it as "send again now".
+func retryAfterSeconds(d time.Duration) int {
+	return max(1, int(math.Ceil(d.Seconds())))
 }

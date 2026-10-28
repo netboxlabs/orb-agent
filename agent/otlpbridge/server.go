@@ -15,9 +15,11 @@ import (
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/netboxlabs/orb-agent/agent/policies"
 )
@@ -27,6 +29,10 @@ const (
 	initialRetryBackoff    = 2 * time.Second
 	maxRetryBackoff        = 30 * time.Second
 	maxPublishRetries      = 10
+	// queueFullRetryAfter is how long a client is told to wait before it
+	// sends again an export the full queue refused: RetryInfo on gRPC,
+	// Retry-After on HTTP.
+	queueFullRetryAfter = 5 * time.Second
 )
 
 // pendingPublish holds a marshaled OTLP payload queued for publishing.
@@ -93,6 +99,9 @@ type BridgeServer struct {
 	// initialBackoff is the starting retry delay used by the writer goroutine.
 	// Defaults to initialRetryBackoff; tests override it for speed.
 	initialBackoff time.Duration
+	// retryAfter is the delay a refusal for a full queue asks the client to
+	// wait. Defaults to queueFullRetryAfter; tests override it for speed.
+	retryAfter time.Duration
 }
 
 // NewBridgeServer builds a BridgeServer and starts its writer goroutine.
@@ -133,6 +142,7 @@ func NewBridgeServer(cfg BridgeConfig, policyRepo policies.PolicyRepo, logger *s
 		maxMessageBytes: maxMessageBytes,
 		dropped:         newDroppedCounter(),
 		initialBackoff:  initialRetryBackoff,
+		retryAfter:      queueFullRetryAfter,
 	}
 	go s.writer()
 	return s, nil
@@ -262,8 +272,8 @@ func (s *BridgeServer) publishWithRetry(msg pendingPublish) {
 }
 
 // Enqueue adds one marshaled OTLP payload to the publish queue. Returns
-// ResourceExhausted if the queue is full, providing backpressure to the
-// OTLP client.
+// ResourceExhausted, with a retry delay, if the queue is full, providing
+// backpressure to the OTLP client.
 func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byte, contentType string) error {
 	return s.enqueue(ctx, "", isIngest, [][]byte{payload}, contentType)
 }
@@ -271,7 +281,9 @@ func (s *BridgeServer) Enqueue(ctx context.Context, isIngest bool, payload []byt
 // enqueue adds an export's payloads to the publish queue, all of them or
 // none: an export split into several messages is not half sent and then
 // retried whole by its client. It returns ResourceExhausted when the queue
-// has no room for them, in messages or in bytes, so the client backs off.
+// has no room for them, in messages or in bytes, with a RetryInfo of
+// retryAfter (queueFullError), so the client backs off and sends the export
+// again.
 // An export larger than the whole queue could never be admitted, so it is
 // dropped and counted instead, with InvalidArgument, which the client does
 // not retry.
@@ -290,7 +302,7 @@ func (s *BridgeServer) enqueue(_ context.Context, signal string, isIngest bool, 
 	s.queueMu.Lock()
 	defer s.queueMu.Unlock()
 	if s.pending+len(payloads) > cap(s.msgCh) || s.pendingBytes+bytes > s.maxPendingBytes {
-		return status.Error(codes.ResourceExhausted, "OTLP pending queue is full")
+		return s.queueFullError()
 	}
 	s.pending += len(payloads)
 	s.pendingBytes += bytes
@@ -298,6 +310,19 @@ func (s *BridgeServer) enqueue(_ context.Context, signal string, isIngest bool, 
 		s.msgCh <- pendingPublish{signal: signal, isIngest: isIngest, payload: p, contentType: contentType}
 	}
 	return nil
+}
+
+// queueFullError is the refusal of an export the queue has no room for:
+// ResourceExhausted, with a RetryInfo asking the client to wait retryAfter.
+// The OTLP exporters retry ResourceExhausted only when it carries a
+// RetryInfo; without one, an export refused once is lost.
+func (s *BridgeServer) queueFullError() error {
+	refused := status.New(codes.ResourceExhausted, "OTLP pending queue is full")
+	withDelay, err := refused.WithDetails(&errdetails.RetryInfo{RetryDelay: durationpb.New(s.retryAfter)})
+	if err != nil {
+		return refused.Err()
+	}
+	return withDelay.Err()
 }
 
 // release returns a payload's room to the queue as the writer takes it.

@@ -44,7 +44,7 @@ type BridgeConfig struct {
 	// maximum packet size lowers the cap when it is smaller.
 	MaxMessageBytes int
 	// MaxPendingBytes bounds the payload bytes the pending queue holds; 0 =
-	// default (64 MiB). Past it an export is refused with ResourceExhausted,
-	// as past MaxPendingQueue.
+	// default (64 MiB). Past it an export is refused with ResourceExhausted
+	// and a retry delay, as past MaxPendingQueue.
 	MaxPendingBytes int64
 }
