@@ -434,7 +434,7 @@ Eight metrics describe the backend itself rather than a device:
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
 | `gnmi.mode_fallback_total` | counter | none | Delivery-mode downgrades, one per step down the ladder. |
 | `gnmi.profile_fallback_total` | counter | none | Dial attempts whose NOS or vendor matched no overlay and used `_base`. One target counts once per attempt, so a device that reconnects counts again. |
-| `gnmi.exports_failed_total` | counter | none | Exports that still failed after the OTLP exporter's own retries. The updates they carried are not sent again, so this is where their loss shows; the count leaves with the next export that gets through. |
+| `gnmi.exports_failed_total` | counter | none | Exports that still failed after the OTLP exporter's own retries. The updates they carried are not sent again, so this is where their loss shows; the count leaves with the next export that gets through. An export the receiver took in part (an OTLP partial success) is not counted. |
 
 `unmatched_path` is expected in small numbers: a subscription is to a subtree,
 so a device that serves more leaves under it than the profile names counts one

@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,16 +47,45 @@ func newPollExporter(next sdkmetric.Exporter) *pollExporter {
 
 // Export hands rm on when it carries a policy's series, when no export has
 // been sent for IdleExportInterval, or after sendAll, and otherwise drops it.
-// An export that fails is counted in gnmi.exports_failed_total.
+// An export that fails is counted in gnmi.exports_failed_total; one the
+// receiver took in part, an OTLP partial success, is not.
 func (e *pollExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
 	if !e.sends(rm) {
 		return nil
 	}
 	err := e.Exporter.Export(ctx, rm)
-	if err != nil {
+	if err != nil && !onlyPartialSuccess(err) {
 		GetExportsFailed().Add(ctx, 1)
 	}
 	return err
+}
+
+// partialSuccessPrefix starts the error the OTLP exporter returns for a
+// receiver's partial-success answer. The error's type is internal to the
+// exporter, so it is told by its text; should the text change, such an export
+// is counted as failed, never missed.
+const partialSuccessPrefix = "OTLP partial success:"
+
+// onlyPartialSuccess reports whether err holds nothing but partial-success
+// answers: the receiver got the export, and only warned or rejected some of
+// its points, yet the exporter returns an error.
+func onlyPartialSuccess(err error) bool {
+	switch e := err.(type) {
+	case nil:
+		return false
+	case interface{ Unwrap() []error }:
+		errs := e.Unwrap()
+		for _, inner := range errs {
+			if !onlyPartialSuccess(inner) {
+				return false
+			}
+		}
+		return len(errs) > 0
+	case interface{ Unwrap() error }:
+		return onlyPartialSuccess(e.Unwrap())
+	default:
+		return strings.HasPrefix(err.Error(), partialSuccessPrefix)
+	}
 }
 
 // sendAll lifts the idle bound: every export from here on is sent.
