@@ -194,6 +194,28 @@ func TestShutdown_SendsTheFinalCollection(t *testing.T) {
 	assert.Equal(t, int64(2), sumOf(t, receive(t, srv), "snmp.test.final"), "the final total left with the shutdown")
 }
 
+// An export the collector refuses for good is counted, and the count leaves
+// with the next export that gets through: the poll it carried is lost, and
+// this is where that shows.
+func TestSetupMetricsExport_CountsAnExportThatFailed(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	addr, srv := startOTLPServer(t)
+	srv.refusals.Store(1)
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), addr, 3600))
+	t.Cleanup(func() { _ = Shutdown(context.Background()) })
+	ctx := context.Background()
+
+	g, err := PolicyMeter("core").Int64Gauge("snmp.cpuutil")
+	require.NoError(t, err)
+	g.Record(ctx, 7)
+	require.Error(t, meterProvider.ForceFlush(ctx), "the collector refused the poll's export")
+
+	g.Record(ctx, 8)
+	require.NoError(t, meterProvider.ForceFlush(ctx))
+	assert.Equal(t, int64(1), sumOf(t, receive(t, srv), ExportsFailedName))
+}
+
 // sumOf is the value of the one data point of the sum named name in req.
 func sumOf(t *testing.T, req *collectormetricspb.ExportMetricsServiceRequest, name string) int64 {
 	t.Helper()

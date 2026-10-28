@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -22,19 +23,26 @@ import (
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // badMAC is an ifPhysAddress read as text: binary, and not valid UTF-8.
 const badMAC = "\x00\x1b!\xbb\xe6\xf0"
 
 // otlpServer is an OTLP metrics collector on loopback that keeps every
-// request it receives.
+// request it receives, but for the first refusals ones, which it refuses for
+// good.
 type otlpServer struct {
 	collectormetricspb.UnimplementedMetricsServiceServer
 	requests chan *collectormetricspb.ExportMetricsServiceRequest
+	refusals atomic.Int32
 }
 
 func (s *otlpServer) Export(_ context.Context, req *collectormetricspb.ExportMetricsServiceRequest) (*collectormetricspb.ExportMetricsServiceResponse, error) {
+	if s.refusals.Add(-1) >= 0 {
+		return nil, status.Error(codes.InvalidArgument, "refused")
+	}
 	s.requests <- req
 	return &collectormetricspb.ExportMetricsServiceResponse{}, nil
 }
