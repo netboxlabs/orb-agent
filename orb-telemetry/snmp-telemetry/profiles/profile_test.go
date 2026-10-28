@@ -645,6 +645,27 @@ func TestResolve_NoBundledProfileExportsALoadAverageAsCPU(t *testing.T) {
 	assert.False(t, names["snmp.cpu"])
 }
 
+// A Linux host matched by `_general/net-snmp.yml` exports its memory under the
+// names the other bundled profiles use: total and free memory, and the buffers
+// and page cache that its free memory leaves out, so used memory can be read
+// without them.
+func TestResolve_NetSNMPExportsItsMemoryUnderTheSharedNames(t *testing.T) {
+	l, err := LoadProfiles("", silentLogger)
+	require.NoError(t, err)
+	p, err := l.Resolve("_general/net-snmp.yml")
+	require.NoError(t, err)
+
+	byOID := map[string]string{}
+	for _, ref := range symbolRefs(p) {
+		sym := ref.get(p)
+		byOID[strings.TrimPrefix(sym.OID, ".")] = sym.MetricName()
+	}
+	assert.Equal(t, "snmp.memorytotal", byOID["1.3.6.1.4.1.2021.4.5.0"], "memTotalReal")
+	assert.Equal(t, "snmp.memoryfree", byOID["1.3.6.1.4.1.2021.4.6.0"], "memAvailReal")
+	assert.Equal(t, "snmp.memorybuffer", byOID["1.3.6.1.4.1.2021.4.14.0"], "memBuffer")
+	assert.Equal(t, "snmp.memorycache", byOID["1.3.6.1.4.1.2021.4.15.0"], "memCached")
+}
+
 func TestSymbol_AllowDuplicateIsDeserialized(t *testing.T) {
 	const doc = `
 metrics:

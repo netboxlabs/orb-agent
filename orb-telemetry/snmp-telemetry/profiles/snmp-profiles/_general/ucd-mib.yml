@@ -63,16 +63,24 @@ metrics:
       OID: 1.3.6.1.4.1.2021.4.13.0
 
   # The total amount of real or virtual memory currently allocated for use as memory buffers.
+  # memAvailReal leaves it out, though the kernel gives it back on demand.
+  # Polled at 60s, as memTotalReal and memAvailReal are, and tagged as the vendor profiles tag it.
   - MIB: UCD-SNMP-MIB
     symbol:
       name: memBuffer
       OID: 1.3.6.1.4.1.2021.4.14.0
+      poll_time_sec: 60
+      tag: MemoryBuffer
 
   # The total amount of real or virtual memory currently allocated for use as cached memory.
+  # memAvailReal leaves it out, though the kernel gives it back on demand.
+  # Polled at 60s, as memTotalReal and memAvailReal are, and tagged as the vendor profiles tag it.
   - MIB: UCD-SNMP-MIB
     symbol:
       name: memCached
       OID: 1.3.6.1.4.1.2021.4.15.0
+      poll_time_sec: 60
+      tag: MemoryCache
 
   # Disk watching information. Partions to be watched are configured by the snmpd.conf file of the agent.
   - MIB: UCD-SNMP-MIB
