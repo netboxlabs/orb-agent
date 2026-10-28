@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.yaml.in/yaml/v3"
@@ -26,10 +27,13 @@ import (
 
 var _ backend.Backend = (*pktvisorBackend)(nil)
 
+// applyPolicyTimeout is the policy POST timeout in seconds. It is a variable
+// so tests can shorten it.
+var applyPolicyTimeout int32 = 10
+
 const (
 	defaultBinary       = "pktvisord"
 	readinessTimeout    = 10
-	applyPolicyTimeout  = 10
 	removePolicyTimeout = 20
 	versionTimeout      = 2
 	tapsTimeout         = 5
@@ -56,7 +60,6 @@ type pktvisorBackend struct {
 	statusChan      <-chan backend.CmdStatus
 	startTime       time.Time
 	cancelFunc      context.CancelFunc
-	ctx             context.Context
 	policyRepo      policies.PolicyRepo
 
 	adminAPIHost     string
@@ -69,6 +72,12 @@ type pktvisorBackend struct {
 	// OpenTelemetry management
 	otelReceiverHost string
 	otelReceiverPort int
+
+	// keptTaps marks managed taps that cleanup must leave alone. It has its
+	// own lock: a health restart runs Configure and Start without the policy
+	// manager's apply lock while a removal can run.
+	keptMu   sync.Mutex
+	keptTaps map[string]bool
 }
 
 func (p *pktvisorBackend) GetStartTime() time.Time {
@@ -109,7 +118,6 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 	// because it is used by the automatic restart system for last attempt
 	p.startTime = time.Now()
 	p.cancelFunc = cancelFunc
-	p.ctx = ctx
 
 	_, err := exec.LookPath(p.binary)
 	if err != nil {
@@ -138,15 +146,22 @@ func (p *pktvisorBackend) Start(ctx context.Context, cancelFunc context.CancelFu
 
 	p.logger.Info("pktvisor startup", "arguments", pvOptions)
 
+	// A fresh pktvisor is loading nothing, so no tap needs protecting.
+	p.clearKeptTaps()
+
 	return backend.StartProcess(backend.StartSpec{
 		Logger:         p.logger,
-		Ctx:            p.ctx,
+		Ctx:            ctx,
 		NameDisplay:    "pktvisor",
 		NameUnderscore: "pktvisor",
 		Exec:           p.binary,
 		Args:           pvOptions,
 		ListenAddr:     net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()),
-		LogLine:        p.logLineAdapter,
+		// The closure holds this start's ctx, so a restart cannot change what
+		// the previous process's log goroutine reads.
+		LogLine: func(line string, isStderr bool) {
+			p.logLineAdapter(ctx, line, isStderr)
+		},
 		SetProc: func(proc backend.Commander, ch <-chan backend.CmdStatus) {
 			p.proc = proc
 			p.statusChan = ch
@@ -225,15 +240,15 @@ func (p *pktvisorBackend) writeConfigFile(port string) error {
 
 // logLineAdapter routes a streamed stdout/stderr line to the pktvisor output
 // normalizer with the level matching the source stream.
-func (p *pktvisorBackend) logLineAdapter(line string, isStderr bool) {
+func (p *pktvisorBackend) logLineAdapter(ctx context.Context, line string, isStderr bool) {
 	level := slog.LevelInfo
 	if isStderr {
 		level = slog.LevelError
 	}
-	p.logPktvisorOutput(line, level)
+	p.logPktvisorOutput(ctx, line, level)
 }
 
-func (p *pktvisorBackend) logPktvisorOutput(line string, level slog.Level) {
+func (p *pktvisorBackend) logPktvisorOutput(ctx context.Context, line string, level slog.Level) {
 	if strings.TrimSpace(line) == "" {
 		return
 	}
@@ -241,11 +256,6 @@ func (p *pktvisorBackend) logPktvisorOutput(line string, level slog.Level) {
 	msg, attrs := normalizePktvisorLine(line)
 	if msg == "" {
 		msg = line
-	}
-
-	ctx := p.ctx
-	if ctx == nil {
-		ctx = context.Background()
 	}
 
 	p.logger.LogAttrs(ctx, level, msg, attrs...)
@@ -358,6 +368,13 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 			configSection[key] = value
 		case "port":
 		case "taps":
+			if local, ok := value.(map[string]any); ok {
+				for name := range local {
+					if strings.HasPrefix(name, managedTapPrefix) {
+						return fmt.Errorf("pktvisor tap %q: names starting with %q are reserved for taps the agent manages", name, managedTapPrefix)
+					}
+				}
+			}
 			taps = value
 		default:
 			configSection[key] = value
@@ -391,12 +408,19 @@ func (p *pktvisorBackend) Configure(logger *slog.Logger, repo policies.PolicyRep
 }
 
 func (p *pktvisorBackend) GetCapabilities() (map[string]any, error) {
-	var taps any
+	var taps map[string]any
 	url := fmt.Sprintf("%s://%s/api/v1/taps", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()))
 	err := backend.CommonRequest("pktvisor", p.proc, p.logger, url, &taps, http.MethodGet,
 		http.NoBody, "application/json", tapsTimeout, "error")
 	if err != nil {
 		return nil, err
+	}
+	// Fleet sees the taps a policy can name, not the agent's own. A null
+	// answer leaves taps nil, which still reports as null.
+	for name := range taps {
+		if strings.HasPrefix(name, managedTapPrefix) {
+			delete(taps, name)
+		}
 	}
 	jsonBody := make(map[string]any)
 	jsonBody["taps"] = taps
@@ -432,6 +456,16 @@ func Register() bool {
 }
 
 func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy bool) error {
+	// Check before the update removes the running policy: a refused edit
+	// leaves it alone.
+	if err := checkPolicyName(data.Name); err != nil {
+		return err
+	}
+	tapType, err := managedTapType(data.Data)
+	if err != nil {
+		return err
+	}
+
 	if updatePolicy {
 		// To update a policy it's necessary first remove it and then apply a new version
 		if err := p.RemovePolicy(data); err != nil {
@@ -442,11 +476,21 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 
 	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "data", data.Data)
 
+	body := data.Data
+	if tapType != "" {
+		if err := p.ensureTap(tapType); err != nil {
+			return err
+		}
+		// managedTapType accepted the body, so it is a map.
+		doc, _ := data.Data.(map[string]any)
+		body = withTap(doc, managedTapName(tapType))
+	}
+
 	fullPolicy := map[string]any{
 		"version": "1.0",
 		"visor": map[string]any{
 			"policies": map[string]any{
-				data.Name: data.Data,
+				data.Name: body,
 			},
 		},
 	}
@@ -463,6 +507,17 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 		bytes.NewBuffer(policyYaml), "application/x-yaml", applyPolicyTimeout, "error")
 	if err != nil {
 		p.logger.Warn("yaml policy application failure", "policy_id", data.ID, "policy_name", data.Name)
+		if tapType != "" {
+			var httpErr *backend.HTTPError
+			if errors.As(err, &httpErr) {
+				// pktvisor answered and refused, so it holds no policy on the tap.
+				p.removeUnusedTaps()
+			} else {
+				// After a timeout or transport failure it is unknown whether
+				// pktvisor went on to create the policy: leave the tap alone.
+				p.keepTap(managedTapName(tapType))
+			}
+		}
 		return err
 	}
 
@@ -486,10 +541,13 @@ func (p *pktvisorBackend) RemovePolicy(data policies.PolicyData) error {
 	url := fmt.Sprintf("%s://%s/api/v1/policies/%s", p.adminAPIProtocol, net.JoinHostPort(p.adminAPIHost, p.adminAPIPort.Get()), segment)
 	err = backend.CommonRequest("pktvisor", p.proc, p.logger, url, &resp, http.MethodDelete,
 		http.NoBody, "application/json", removePolicyTimeout, "error")
-	if err != nil {
-		return err
+	// pktvisor answered, even if with an error: cleanup re-reads the policy
+	// list, so a policy that is still there keeps its tap.
+	var httpErr *backend.HTTPError
+	if err == nil || errors.As(err, &httpErr) {
+		p.removeUnusedTaps()
 	}
-	return nil
+	return err
 }
 
 func (p *pktvisorBackend) getAppInfo() (AppInfo, error) {

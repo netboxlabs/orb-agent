@@ -30,8 +30,17 @@ selected by `tap` or `tap_selector`; if they disagree, the policy fails.
 
 `tap` - the name of a tap declared under `orb.backends.pktvisor.taps`, or
 `tap_selector` - tags to match against the declared taps. Exactly one of the two
-must be set. A selector uses either `any` or `all`, not both, and a selector that
-matches no tap is an error.
+must be set, except for `netprobe` and `flow` policies, which may set neither. A
+selector uses either `any` or `all`, not both, and a selector that matches no tap
+is an error.
+
+A `netprobe` or `flow` policy that sets neither runs on a tap the agent manages,
+`fleet_netprobe` or `fleet_flow`. Its settings then go in `config`, since the managed
+tap carries none. A `flow` policy without `pcap_file` must set both `port` and `bind`.
+Any other input type must name a tap. See
+[Taps the agent manages](../README.md#taps-the-agent-manages) and
+[Policies from Fleet](../README.md#policies-from-fleet). Names starting with `fleet_`
+are reserved, so `tap` cannot be set to one.
 
 **Optional**
 
