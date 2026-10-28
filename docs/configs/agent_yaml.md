@@ -50,7 +50,7 @@ Controls how the agent loads policies. Exactly one source is active at a time.
 ```yaml
 orb:
   config_manager:
-    active: local   # or: git
+    active: local   # or: git, fleet
     sources:
       local: ...
       git: ...
@@ -58,7 +58,7 @@ orb:
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `active` | string | Yes | Which source to use: `local` or `git` |
+| `active` | string | Yes | Which source to use: `local`, `git` or `fleet` |
 
 ### `local`
 
@@ -101,6 +101,44 @@ orb:
 | `github_app.client_id` | string | With `github_app` | GitHub App Client ID (preferred) or numeric App ID |
 | `github_app.installation_id` | string | With `github_app` | Numeric id of the app's installation on the repo owner |
 | `github_app.private_key` | string | With `github_app` | Path to the app's `.pem` key, or the PEM content itself |
+
+### `fleet`
+
+Policies come from Fleet, the NetBox Labs cloud, as in the agent image's default configuration. The agent also runs a local OTLP bridge: the telemetry backends export their metrics, logs and traces to it, and it publishes them to Fleet over MQTT.
+
+```yaml
+orb:
+  config_manager:
+    active: fleet
+    sources:
+      fleet:
+        token_url: ${FLEET_AUTH_URL}
+        client_id: ${FLEET_CLIENT_ID}
+        client_secret: ${FLEET_CLIENT_SECRET}
+        otlp_bridge_max_message_bytes: 4194304   # optional, the default
+```
+
+The bridge's settings:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `otlp_bridge_bind_host` | string | No | Host both bridge listeners bind to (default: `localhost`). See [Backend keys](#backend-keys) for its ports |
+| `otlp_bridge_grpc_port` | int | No | OTLP/gRPC port (default: a free port on a loopback bind host, 4317 otherwise) |
+| `otlp_bridge_http_port` | int | No | OTLP/HTTP port (default: a free port on a loopback bind host, 4318 otherwise) |
+| `otlp_bridge_max_message_bytes` | int | No | Most payload bytes in one published message (default: 4 MiB, 4194304; from 64 KiB, 65536, to 64 MiB, 67108864) |
+| `otlp_bridge_max_pending_bytes` | int | No | Most payload bytes waiting to be published (default: 64 MiB, 67108864). It has to hold one message at the cap: at least `otlp_bridge_max_message_bytes`, or 4 MiB when that is unset |
+
+#### The OTLP bridge
+
+**Message size.** Each published message carries at most `otlp_bridge_max_message_bytes` of payload, or less when the MQTT broker's maximum packet size, from its CONNACK, leaves less room; the agent logs that size when it connects to a broker that sets one (`MQTT broker maximum packet size`). Sizes are counted in the encoding published: metrics bound for telemetry go out as protobuf, while logs, traces and Diode data go out as JSON, two to three times their protobuf size.
+
+**Metrics are split.** A metrics export over the cap is sent as several messages under it, cut by resource, then scope, then metric, then data point. Each message keeps the resource and the scope, with its `policy_name`, of every point it carries, so the platform attributes each message as it would the whole export. A single data point that does not fit under the cap on its own is dropped, logged at WARN (`OTLP metric data point exceeds the message cap on its own, dropping it`) and counted.
+
+**Logs and traces are not split.** An export over the cap is dropped whole, logged and counted, and refused with `InvalidArgument`, which the OTLP exporters do not retry. Logs go out as JSON, so a low cap with debug logging on drops many of them.
+
+**The pending queue.** Messages wait to be published while the agent connects and while the broker is slow, at most 1000 messages and `otlp_bridge_max_pending_bytes` bytes. An export the queue has no room for is refused with a retry delay of 5 seconds, gRPC `ResourceExhausted` with a `RetryInfo` and HTTP 429 with `Retry-After: 5`; the OTLP gRPC exporters the telemetry backends use send it again after that delay. An export larger than the whole queue could never fit, so it is dropped and counted instead. A publish that fails is retried with a backoff from 2 to 30 seconds, and the message is dropped and counted after 10 failures, or at once when the broker refuses it outright.
+
+**Counting drops.** `orb_agent_otlp_bridge_dropped_total{signal, reason}` counts what the bridge dropped since it started: `signal` is `metrics`, `logs` or `traces`, and `reason` is `too_large` (over the cap, the broker's limit or the whole queue) or `publish_failed`. An export is counted once however many points it held, a data point once. The counter appears once something has been dropped, and rides with the agent's metrics in a resource of its own (`service.name` `orb-agent`) whose scope names no policy, so the platform keeps it as the agent's own telemetry rather than as any policy's data.
 
 ---
 
