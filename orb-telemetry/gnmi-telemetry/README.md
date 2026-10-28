@@ -369,7 +369,10 @@ only the process's health counters, sends an export at most once a minute; the
 counters are cumulative, so the next export carries their totals, and the
 export made at shutdown is sent whatever it carries, so they leave with their
 final totals. An update whose export still fails after the OTLP exporter's own
-retries is not sent again by a later one. The device timestamp is not
+retries is not sent again by a later one; `gnmi.exports_failed_total` counts
+such exports. When the agent's OTLP bridge has no room for an export, it asks
+the exporter to send it again after 5 seconds, which the exporter does once
+within its 10 second export timeout. The device timestamp is not
 exported, because the SDK stamps an observation at collection time.
 
 Staleness is what keeps a quiet device from reporting a stale value as current.
@@ -420,7 +423,7 @@ counted, not exported. `gnmi.target_up` draws on the same allowance, one series
 per target, so a target refused a slot keeps collecting and its up point alone
 stands down until a slot frees.
 
-Seven metrics describe the backend itself rather than a device:
+Eight metrics describe the backend itself rather than a device:
 
 | Metric | Kind | Attributes | Meaning |
 | --- | --- | --- | --- |
@@ -431,6 +434,7 @@ Seven metrics describe the backend itself rather than a device:
 | `gnmi.updates_dropped_total` | counter | `reason` | Updates that produced no series: `unmatched_path` for a path no profile metric claims, `unconvertible_value` for a value the metric's type cannot take, `series_limit` for one refused by the cardinality bound, `schema_conflict` for one whose metric name is already exported with another kind or unit. |
 | `gnmi.mode_fallback_total` | counter | none | Delivery-mode downgrades, one per step down the ladder. |
 | `gnmi.profile_fallback_total` | counter | none | Dial attempts whose NOS or vendor matched no overlay and used `_base`. One target counts once per attempt, so a device that reconnects counts again. |
+| `gnmi.exports_failed_total` | counter | none | Exports that still failed after the OTLP exporter's own retries. The updates they carried are not sent again, so this is where their loss shows; the count leaves with the next export that gets through. |
 
 `unmatched_path` is expected in small numbers: a subscription is to a subtree,
 so a device that serves more leaves under it than the profile names counts one
@@ -507,7 +511,8 @@ subscriptions:
   one of the health metric names the backend registers for itself
   (`targets_active`, `target_up`, `subscription_reconnects_total`,
   `notifications_total`, `updates_dropped_total`, `mode_fallback_total`,
-  `profile_fallback_total`), because the backend exports each of those itself.
+  `profile_fallback_total`, `exports_failed_total`), because the backend
+  exports each of those itself.
 - `type` is `counter` or `gauge`. `unit` is a UCUM string handed to the
   instrument. `enum` and `bool` map non-numeric values and are valid on gauges
   only.

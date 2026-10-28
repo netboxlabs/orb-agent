@@ -397,6 +397,7 @@ func TestHealthNamesAreTheInstrumentsThisPackageRegisters(t *testing.T) {
 	GetUpdatesDropped().Add(ctx, 1)
 	GetModeFallbacks().Add(ctx, 1)
 	GetProfileFallbacks().Add(ctx, 1)
+	GetExportsFailed().Add(ctx, 1)
 
 	reserved := HealthNames()
 	assert.Contains(t, reserved, TargetUp, "the collector's own gauge is reserved with them")

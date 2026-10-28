@@ -46,11 +46,16 @@ func newPollExporter(next sdkmetric.Exporter) *pollExporter {
 
 // Export hands rm on when it carries a policy's series, when no export has
 // been sent for IdleExportInterval, or after sendAll, and otherwise drops it.
+// An export that fails is counted in gnmi.exports_failed_total.
 func (e *pollExporter) Export(ctx context.Context, rm *metricdata.ResourceMetrics) error {
 	if !e.sends(rm) {
 		return nil
 	}
-	return e.Exporter.Export(ctx, rm)
+	err := e.Exporter.Export(ctx, rm)
+	if err != nil {
+		GetExportsFailed().Add(ctx, 1)
+	}
+	return err
 }
 
 // sendAll lifts the idle bound: every export from here on is sent.

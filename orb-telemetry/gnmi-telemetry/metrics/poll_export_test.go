@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // countingExporter counts the exports handed to it.
@@ -134,13 +137,18 @@ func TestPollExporter_SendsNothingForAnEmptyCollection(t *testing.T) {
 }
 
 // otlpServer is an OTLP metrics collector on loopback that keeps every
-// request it receives.
+// request it receives, but for the first refusals ones, which it refuses for
+// good.
 type otlpServer struct {
 	collectormetricspb.UnimplementedMetricsServiceServer
 	requests chan *collectormetricspb.ExportMetricsServiceRequest
+	refusals atomic.Int32
 }
 
 func (s *otlpServer) Export(_ context.Context, req *collectormetricspb.ExportMetricsServiceRequest) (*collectormetricspb.ExportMetricsServiceResponse, error) {
+	if s.refusals.Add(-1) >= 0 {
+		return nil, status.Error(codes.InvalidArgument, "refused")
+	}
 	s.requests <- req
 	return &collectormetricspb.ExportMetricsServiceResponse{}, nil
 }
@@ -219,6 +227,28 @@ func TestShutdown_SendsTheFinalCollection(t *testing.T) {
 	processCounter.Add(ctx, 1)
 	require.NoError(t, Shutdown(ctx))
 	assert.Equal(t, int64(2), sumOf(t, receive(t, srv), "gnmi.test.final"), "the final total left with the shutdown")
+}
+
+// An export the collector refuses for good is counted, and the count leaves
+// with the next export that gets through: the update it carried is lost, and
+// this is where that shows.
+func TestSetupMetricsExport_CountsAnExportThatFailed(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	addr, srv := startOTLPServer(t)
+	srv.refusals.Store(1)
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), addr, 3600))
+	t.Cleanup(func() { _ = Shutdown(context.Background()) })
+	ctx := context.Background()
+
+	g, err := PolicyMeter("core").Float64Gauge("gnmi.cpu")
+	require.NoError(t, err)
+	g.Record(ctx, 7)
+	require.Error(t, meterProvider.ForceFlush(ctx), "the collector refused the update's export")
+
+	g.Record(ctx, 8)
+	require.NoError(t, meterProvider.ForceFlush(ctx))
+	assert.Equal(t, int64(1), sumOf(t, receive(t, srv), "gnmi.exports_failed_total"))
 }
 
 // sumOf is the value of the one data point of the sum named name in req.

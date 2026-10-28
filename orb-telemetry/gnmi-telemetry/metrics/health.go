@@ -26,6 +26,7 @@ const (
 	updatesDropped   = "updates_dropped_total"
 	modeFallbacks    = "mode_fallback_total"
 	profileFallbacks = "profile_fallback_total"
+	exportsFailed    = "exports_failed_total"
 )
 
 // healthNames is every health metric name, the list HealthNames hands out.
@@ -37,6 +38,7 @@ var healthNames = []string{
 	updatesDropped,
 	modeFallbacks,
 	profileFallbacks,
+	exportsFailed,
 }
 
 // HealthNames returns the metric names the backend owns for its own health,
@@ -91,6 +93,14 @@ func GetUpdatesDropped() metric.Int64Counter {
 // GetModeFallbacks counts delivery-mode downgrades.
 func GetModeFallbacks() metric.Int64Counter {
 	return counter(prefixed(modeFallbacks), "Total delivery-mode fallbacks")
+}
+
+// GetExportsFailed counts the exports that still failed after the OTLP
+// exporter's own retries. Each update is sent once, so the updates such an
+// export carried are lost, and this is where that shows: the count leaves with
+// the next export that gets through.
+func GetExportsFailed() metric.Int64Counter {
+	return counter(prefixed(exportsFailed), "Exports that failed after the OTLP exporter's retries, so the updates they carried were lost")
 }
 
 // GetProfileFallbacks counts targets that used the _base profile.
