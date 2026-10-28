@@ -2,7 +2,10 @@ package metrics
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +17,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	collectormetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // countingExporter counts the exports handed to it.
@@ -134,13 +139,25 @@ func TestPollExporter_SendsNothingForAnEmptyCollection(t *testing.T) {
 }
 
 // otlpServer is an OTLP metrics collector on loopback that keeps every
-// request it receives.
+// request it receives, but for the first refusals ones, which it refuses for
+// good. Before any of that, it answers an export with each partial success
+// queued in partials, keeping nothing.
 type otlpServer struct {
 	collectormetricspb.UnimplementedMetricsServiceServer
 	requests chan *collectormetricspb.ExportMetricsServiceRequest
+	refusals atomic.Int32
+	partials chan *collectormetricspb.ExportMetricsPartialSuccess
 }
 
 func (s *otlpServer) Export(_ context.Context, req *collectormetricspb.ExportMetricsServiceRequest) (*collectormetricspb.ExportMetricsServiceResponse, error) {
+	select {
+	case partial := <-s.partials:
+		return &collectormetricspb.ExportMetricsServiceResponse{PartialSuccess: partial}, nil
+	default:
+	}
+	if s.refusals.Add(-1) >= 0 {
+		return nil, status.Error(codes.InvalidArgument, "refused")
+	}
 	s.requests <- req
 	return &collectormetricspb.ExportMetricsServiceResponse{}, nil
 }
@@ -149,7 +166,10 @@ func startOTLPServer(t *testing.T) (string, *otlpServer) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	srv := &otlpServer{requests: make(chan *collectormetricspb.ExportMetricsServiceRequest, 16)}
+	srv := &otlpServer{
+		requests: make(chan *collectormetricspb.ExportMetricsServiceRequest, 16),
+		partials: make(chan *collectormetricspb.ExportMetricsPartialSuccess, 4),
+	}
 	gs := grpc.NewServer()
 	collectormetricspb.RegisterMetricsServiceServer(gs, srv)
 	go func() { _ = gs.Serve(ln) }()
@@ -219,6 +239,70 @@ func TestShutdown_SendsTheFinalCollection(t *testing.T) {
 	processCounter.Add(ctx, 1)
 	require.NoError(t, Shutdown(ctx))
 	assert.Equal(t, int64(2), sumOf(t, receive(t, srv), "gnmi.test.final"), "the final total left with the shutdown")
+}
+
+// An export the collector refuses for good is counted, and the count leaves
+// with the next export that gets through: the update it carried is lost, and
+// this is where that shows.
+func TestSetupMetricsExport_CountsAnExportThatFailed(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	addr, srv := startOTLPServer(t)
+	srv.refusals.Store(1)
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), addr, 3600))
+	t.Cleanup(func() { _ = Shutdown(context.Background()) })
+	ctx := context.Background()
+
+	g, err := PolicyMeter("core").Float64Gauge("gnmi.cpu")
+	require.NoError(t, err)
+	g.Record(ctx, 7)
+	require.Error(t, meterProvider.ForceFlush(ctx), "the collector refused the update's export")
+
+	g.Record(ctx, 8)
+	require.NoError(t, meterProvider.ForceFlush(ctx))
+	assert.Equal(t, int64(1), sumOf(t, receive(t, srv), "gnmi.exports_failed_total"))
+}
+
+// An export the collector takes in part, an OTLP partial success, is not a
+// failed export, though the exporter returns an error for it: whether the
+// collector only warns or rejects some of its points, it got the export.
+func TestSetupMetricsExport_DoesNotCountAPartialSuccess(t *testing.T) {
+	ResetMeter()
+	t.Cleanup(ResetMeter)
+	addr, srv := startOTLPServer(t)
+	srv.partials <- &collectormetricspb.ExportMetricsPartialSuccess{ErrorMessage: "a warning"}
+	srv.partials <- &collectormetricspb.ExportMetricsPartialSuccess{RejectedDataPoints: 1, ErrorMessage: "one point rejected"}
+	srv.refusals.Store(1)
+	require.NoError(t, SetupMetricsExport(context.Background(), testLogger(), addr, 3600))
+	t.Cleanup(func() { _ = Shutdown(context.Background()) })
+	ctx := context.Background()
+
+	g, err := PolicyMeter("core").Float64Gauge("gnmi.cpu")
+	require.NoError(t, err)
+	g.Record(ctx, 7)
+	require.Error(t, meterProvider.ForceFlush(ctx), "the exporter returns the warning as an error")
+	g.Record(ctx, 8)
+	require.Error(t, meterProvider.ForceFlush(ctx), "the exporter returns the rejected point as an error")
+	g.Record(ctx, 9)
+	require.Error(t, meterProvider.ForceFlush(ctx), "the collector refused the update's export")
+
+	g.Record(ctx, 10)
+	require.NoError(t, meterProvider.ForceFlush(ctx))
+	assert.Equal(t, int64(1), sumOf(t, receive(t, srv), "gnmi.exports_failed_total"), "only the refused export")
+}
+
+// Only an error made of partial-success answers alone is one: wrapped or
+// joined, as the exporter returns them, but not beside another failure.
+func TestOnlyPartialSuccess(t *testing.T) {
+	partial := errors.New("OTLP partial success: a warning (0 metric data points rejected)")
+	refused := status.Error(codes.InvalidArgument, "refused")
+
+	assert.True(t, onlyPartialSuccess(partial))
+	assert.True(t, onlyPartialSuccess(fmt.Errorf("failed to upload metrics: %w", errors.Join(partial))))
+	assert.False(t, onlyPartialSuccess(nil))
+	assert.False(t, onlyPartialSuccess(refused))
+	assert.False(t, onlyPartialSuccess(fmt.Errorf("failed to upload metrics: %w", errors.Join(partial, refused))))
+	assert.False(t, onlyPartialSuccess(fmt.Errorf("failed to upload incomplete metrics (%w): %w", errors.New("unknown aggregation"), partial)))
 }
 
 // sumOf is the value of the one data point of the sum named name in req.
