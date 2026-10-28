@@ -875,6 +875,13 @@ const (
 	oidCiscoTrunkPortActiveSecond2k = ".1.3.6.1.4.1.9.9.46.1.6.1.1.31."
 )
 
+var oidCiscoTrunkPortConfigured = [4]string{
+	".1.3.6.1.4.1.9.9.46.1.6.1.1.4.",
+	".1.3.6.1.4.1.9.9.46.1.6.1.1.17.",
+	".1.3.6.1.4.1.9.9.46.1.6.1.1.18.",
+	".1.3.6.1.4.1.9.9.46.1.6.1.1.19.",
+}
+
 // buildCiscoRows extracts Cisco overlay rows.
 func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 	rows := qbridge.CiscoRows{
@@ -884,10 +891,19 @@ func (m *VlanMapper) buildCiscoRows(all ObjectIDValueMap) qbridge.CiscoRows {
 		TrunkStatus:          map[int]int{},
 		TrunkEncapsulation:   map[int]int{},
 		NativeVlan:           map[int]int{},
+		ConfiguredVlans:      [4]map[int][]byte{{}, {}, {}, {}},
 		ActiveFirst2k:        map[int][]byte{},
 		ActiveSecond2k:       map[int][]byte{},
 	}
 	for oid, v := range all {
+		for segment, prefix := range oidCiscoTrunkPortConfigured {
+			if strings.HasPrefix(oid, prefix) {
+				if ifx, ok := atoi(strings.TrimPrefix(oid, prefix)); ok {
+					rows.ConfiguredVlans[segment][ifx] = []byte(v.Value)
+				}
+				break
+			}
+		}
 		switch {
 		case strings.HasPrefix(oid, oidCiscoVMVlan):
 			ifx, ok1 := atoi(strings.TrimPrefix(oid, oidCiscoVMVlan))
@@ -1159,31 +1175,16 @@ func preferVtpRow(heldName, heldOID, name, oid string) bool {
 
 // deviceVlanVids returns every VID in 1..4094 the device's own VLAN tables
 // report: a name row, named or not, a dot1qVlanStaticTable row status, or a
-// vendor catalog row. It is the set emitVLANs emits from; a VID only an
+// vendor catalog row. It is the candidate inventory for emitVLANs; a VID only an
 // interface's membership references is not among them.
 func deviceVlanVids(all ObjectIDValueMap) map[int]struct{} {
-	return deviceVlanVidsWithVTP(all, true)
-}
-
-// deviceVlanVidsWithVTP excludes lookup-only VTP names from VLAN existence
-// evidence when includeVTP is false. Names remain available for labeling.
-func deviceVlanVidsWithVTP(all ObjectIDValueMap, includeVTP bool) map[int]struct{} {
 	vids := map[int]struct{}{}
 	add := func(vid int) {
 		if vid >= 1 && vid <= 4094 {
 			vids[vid] = struct{}{}
 		}
 	}
-	namesForInventory := all
-	if !includeVTP {
-		namesForInventory = make(ObjectIDValueMap, len(all))
-		for oid, value := range all {
-			if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
-				namesForInventory[oid] = value
-			}
-		}
-	}
-	for vid := range vlanNamesByVid(namesForInventory) {
+	for vid := range vlanNamesByVid(all) {
 		add(vid)
 	}
 	for vid := range vendorVlanCatalog(all).Vids { // every catalog row registers its VID
@@ -1223,23 +1224,20 @@ func deviceVlanVidsWithVTP(all ObjectIDValueMap, includeVTP bool) map[int]struct
 // true (matches device-discovery PR #378's _ensure_vlan default and is
 // the value Manager.applyDefaults installs when the policy YAML omits
 // the options block). When the option is explicitly set to false, VIDs
-// whose dot1qVlanStaticName row is absent (or empty) are skipped here
-// — only VLANs with a real name from the device are emitted. The same
+// without a nonempty device-provided name are skipped here
+// — named VLANs from standard, VTP, or vendor tables are emitted. The same
 // gate also suppresses stub creation in ensureVLAN (see below).
 func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) []diode.Entity {
 	type pending struct {
 		name      string
 		rowStatus int
 	}
-	// The VIDs come from deviceVlanVids alone, so the association that reads
-	// it can never disagree with what is emitted; names and statuses are
-	// attributes of those VIDs. A VID the catalog lists is emitted even when
-	// it carries no name and no status: the index row alone is what says the
-	// VLAN exists.
+	// Build emission candidates from the device VLAN inventory.
+	// Names and statuses are attributes of those VIDs. A vendor catalog
+	// row establishes inventory presence even without a name or status,
+	// but create_unknown_vlans may suppress its emitted VLAN entity.
 	byVid := map[int]*pending{}
-	includeVTP := m.options.PrefixVlanMode() != "off" &&
-		m.options.PrefixEmissionEnabled()
-	for vid := range deviceVlanVidsWithVTP(all, includeVTP) {
+	for vid := range deviceVlanVids(all) {
 		byVid[vid] = &pending{}
 	}
 	for vid, name := range vlanNamesByVid(all) {
@@ -1272,7 +1270,7 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 	out := make([]diode.Entity, 0, len(byVid))
 	for vid, p := range byVid {
 		// When create_unknown_vlans is false, skip VIDs that have no
-		// dot1qVlanStaticName row (name == ""). A status-only row with
+		// device-provided name (name == ""). A status-only row with
 		// no name is treated as "unknown" and suppressed.
 		createUnknown := m.options.CreateUnknownVlans == nil || *m.options.CreateUnknownVlans
 		if !createUnknown && p.name == "" {

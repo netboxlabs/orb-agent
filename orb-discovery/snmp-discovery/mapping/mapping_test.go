@@ -2237,11 +2237,8 @@ func TestMappingYAML_CiscoWalksTheTrunkTableColumns(t *testing.T) {
 	}
 }
 
-// CISCO-VTP-MIB is the only place Cisco IOS/IOS-XE devices expose a VLAN
-// name, since they don't implement dot1qVlanStaticName. Walking it
-// unconditionally (no vendor gate) would cost every non-Cisco host in a
-// fleet a pointless GETNEXT round-trip per scan, so it must live under
-// the same cisco vendor gate as the other CISCO-SMI-arc VLAN overlays.
+// Cisco VTP VLAN names must be walked exactly once, under the Cisco vendor
+// gate, and independently of emit_prefix_vlan.
 func TestMappingYAML_VtpEntryPresent(t *testing.T) {
 	body, err := os.ReadFile("../policy/mapping.yaml")
 	if err != nil {
@@ -2251,29 +2248,28 @@ func TestMappingYAML_VtpEntryPresent(t *testing.T) {
 	if err := yaml.Unmarshal(body, &doc); err != nil {
 		t.Fatalf("yaml: %v", err)
 	}
-	const vtpEntryOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1"  // vtpVlanEntry
-	const vtpNameOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4" // vtpVlanName column
-	found := false
+
+	const vtpNameOID = ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+	count := 0
 	for _, e := range doc.Entries {
-		if e.OID != vtpEntryOID {
-			continue
-		}
-		found = true
-		if e.Vendor != "cisco" {
-			t.Errorf("%s: vendor = %q, want cisco (IOS/IOS-XE report sysObjectIDs under ciscoProducts)", e.OID, e.Vendor)
-		}
-		gotName := false
-		for _, c := range e.MappingEntries {
-			if c.OID == vtpNameOID {
-				gotName = true
+		if e.OID == vtpNameOID {
+			count++
+			if e.Vendor != "cisco" {
+				t.Errorf("VTP vendor = %q, want cisco", e.Vendor)
+			}
+			if e.Entity != "interface_vlan" {
+				t.Errorf("VTP entity = %q, want interface_vlan", e.Entity)
 			}
 		}
-		if !gotName {
-			t.Errorf("%s: missing child mapping entry for vtpVlanName column %s", e.OID, vtpNameOID)
+		for _, child := range e.MappingEntries {
+			if child.OID == vtpNameOID {
+				count++
+				t.Errorf("duplicate VTP name column under parent %s", e.OID)
+			}
 		}
 	}
-	if !found {
-		t.Errorf("mapping.yaml missing cisco-scoped OID %s", vtpEntryOID)
+	if count != 1 {
+		t.Errorf("VTP name column mapping count = %d, want 1", count)
 	}
 }
 
@@ -2431,7 +2427,7 @@ func TestVtpWalkGating(t *testing.T) {
 		"the VTP VLAN name column must be walked with emit_prefix_vlan svi-name")
 
 	// Disabling prefix emission must not disable VTP name lookups.
-// Inventory gating happens in emitVLANs, not by suppressing name collection.
+	// Inventory gating happens in emitVLANs, not by suppressing name collection.
 	noPrefixes := false
 	inert, err := mapping.NewConfig(doc.Entries, logger, nil, nil, nil,
 		config.Options{EmitPrefixVlan: &sviName, EmitPrefixes: &noPrefixes})

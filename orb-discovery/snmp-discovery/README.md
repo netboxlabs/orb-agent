@@ -394,6 +394,16 @@ This means subinterfaces **always** receive the "virtual" type, even if:
 - Speed-based detection would assign a different type
 
 
+### VLAN Discovery
+
+SNMP discovery uses Q-BRIDGE-MIB and vendor-specific overlays to discover VLANs and switchport membership.
+
+On Cisco platforms publishing CISCO-VTP-MIB trunk tables, configured allowed VLANs are intersected with active VLANs to determine trunk membership. Ports configured to allow all VLANs (1–4094) use `tagged-all`; native VLANs are assigned only when carried. Missing or empty active membership data does not overwrite existing switchport configuration.
+
+Cisco VTP VLAN names also contribute to VLAN inventory. With `create_unknown_vlans: false`, named VLANs are still emitted, while unnamed VLANs are not created as placeholders.
+
+See [Interface ↔ VLAN associations](../../../docs/backends/snmp_discovery/supported_platforms.md#interface--vlan-associations) for platform-specific behavior and limitations.
+
 ### Module / ModuleBay Discovery
 
 Opt-in emission of NetBox `Module` and `ModuleBay` entities on modular chassis, sourced from the standard ENTITY-MIB `entPhysicalTable`. Vendor-neutral — works on any device that populates the MIB (Cisco IOS / IOS-XE / NX-OS, Juniper, Arista, Aruba CX, Nokia SROS, and others).
