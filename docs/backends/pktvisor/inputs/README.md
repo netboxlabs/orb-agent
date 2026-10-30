@@ -311,9 +311,11 @@ exporter.
 together. `bind` must be an IPv4 or IPv6 address, such as `0.0.0.0` or `::`,
 written without brackets; a hostname such as `localhost` is refused. Any port
 from 1 to 65535 is accepted, so an exporter sending to a different one simply
-needs that number here. A port that another listener already holds fails the
-input with `unable to bind flow UDP server on <bind>:<port>: address already in
-use`. Other bind failures end with their own reason, such as `permission denied`
+needs that number here. A `bind` and `port` that overlap another listener fail
+the input with `unable to bind flow UDP server on <bind>:<port>: address already
+in use`. They overlap when the port is the same and so is the address, or either
+side is a wildcard such as `0.0.0.0` or `::`; two different specific addresses
+can share a port. Other bind failures end with their own reason, such as `permission denied`
 for a port below 1024 when `pktvisord` runs as a non-root user with `--net=host`;
 see [Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
 
@@ -455,7 +457,7 @@ a missing-file error.
 
 Type: *str*
 
-The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now). A port that another listener already holds fails the input with `unable to listen with dnstap server on <ip>:<port>: address already in use`.
+The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now). An address and port that overlap another listener, as for [flow](#choosing-a-port-and-flow-type), fail the input with `unable to listen with dnstap server on <ip>:<port>: address already in use`.
 
 ```yaml
 tcp: ip:port
