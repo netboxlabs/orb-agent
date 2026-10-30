@@ -116,8 +116,9 @@ is absent or null. Two related cases:
 Policies on the same tap with an identical input config share one input stream. For `flow`,
 `pktvisord` refuses any other input whose `bind` and `port` overlap a listener that is already
 running, including the same config on another tap. They overlap when the port is the same and
-so is the address, or either side is a wildcard such as `0.0.0.0` or `::`; two different
-specific addresses can share a port. The policy fails to apply, and its error ends with
+so is the address, or a wildcard covers the other's address; two different specific addresses
+can share a port. See [Choosing a port and flow type](inputs/README.md#choosing-a-port-and-flow-type)
+for the details, including `::`. The policy fails to apply, and its error ends with
 `unable to bind flow UDP server on <bind>:<port>: address already in use`. So an edit that
 changes the config or the tap of a flow policy that shares its listener with another policy,
 and still overlaps that listener, fails the same way. The old version has already been removed

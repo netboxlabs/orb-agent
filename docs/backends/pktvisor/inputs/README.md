@@ -314,20 +314,23 @@ from 1 to 65535 is accepted, so an exporter sending to a different one simply
 needs that number here. A `bind` and `port` that overlap another listener fail
 the input with `unable to bind flow UDP server on <bind>:<port>: address already
 in use`. They overlap when the port is the same and so is the address, or either
-side is a wildcard such as `0.0.0.0` or `::`; two different specific addresses
-can share a port. Other bind failures end with their own reason, such as `permission denied`
-for a port below 1024 when `pktvisord` runs as a non-root user with `--net=host`;
-see [Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
+side is the wildcard of the other's family: `0.0.0.0` for IPv4, `::` for IPv6.
+Two different specific addresses can share a port. A dual-stack `::`, described
+below, also overlaps IPv4 listeners on its port. Other bind failures end with
+their own reason, such as `permission denied` for a port below 1024 when
+`pktvisord` runs as a non-root user with `--net=host`; see
+[Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
 
 Unless the host sets `net.ipv6.bindv6only=1`, `::` also receives IPv4
 datagrams. A Netflow or IPFIX exporter that sends over IPv4 to a `::` bind is
 then identified by its IPv4-mapped address, such as `::ffff:192.0.2.10`, so its
 [`device_map`](../handlers/flow.md#device_map) and
 [`only_device_interfaces`](../handlers/flow.md#only_device_interfaces) entries
-must use that form. Bind `0.0.0.0` for IPv4 exporters. A `0.0.0.0` input and a
-`::` input cannot share a port, so to receive IPv4 and IPv6 exporters on one
-port, bind `::` and key the IPv4 ones by their mapped form. sFlow is not
-affected, since its device is the agent address inside each datagram.
+must use that form. Bind `0.0.0.0` for IPv4 exporters. A dual-stack `::` input
+and a `0.0.0.0` input cannot share a port, so to receive IPv4 and IPv6 exporters
+on one port, bind `::` and key the IPv4 ones by their mapped form. With
+`net.ipv6.bindv6only=1`, the two can share it. sFlow is not affected, since its
+device is the agent address inside each datagram.
 
 ### flow configuration
 
