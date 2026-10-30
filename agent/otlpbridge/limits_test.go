@@ -70,8 +70,14 @@ func quietLogger() *slog.Logger {
 // and pub bound to both topics.
 func limitedBridge(t *testing.T, cfg BridgeConfig, pub Publisher) *BridgeServer {
 	t.Helper()
+	return limitedBridgeLogging(t, cfg, pub, quietLogger())
+}
+
+// limitedBridgeLogging is limitedBridge logging to logger.
+func limitedBridgeLogging(t *testing.T, cfg BridgeConfig, pub Publisher, logger *slog.Logger) *BridgeServer {
+	t.Helper()
 	cfg.Encoding, cfg.MetricsEncoding = "json", "protobuf"
-	bridge, err := NewBridgeServer(cfg, nil, quietLogger())
+	bridge, err := NewBridgeServer(cfg, nil, logger)
 	require.NoError(t, err)
 	bridge.initialBackoff = time.Millisecond
 	bridge.SetPublisher(pub)
