@@ -113,6 +113,13 @@ func ResolveSviVlans(
 	logger *slog.Logger,
 ) map[int]*diode.VLAN {
 	configured := deviceVlanVids(oids)
+	// VTP names corroborate an existing VLAN for SVI association, but
+	// must not establish VLAN inventory for emission.
+	for oid := range oids {
+		if vid, ok := vtpVidFromOID(oid); ok {
+			configured[vid] = struct{}{}
+		}
+	}
 	nameConflicts := vlanNameConflicts(oids)
 	eligible := map[int]*diode.VLAN{}
 	for _, e := range entities {

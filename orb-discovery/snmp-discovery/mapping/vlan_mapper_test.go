@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping/qbridge"
 )
 
 func ptrBool(b bool) *bool { return &b }
@@ -103,6 +104,40 @@ func buildAccessPortFixture(ifIndex, vid int) ObjectIDValueMap {
 	// ifType.<ifIndex> = 6 (ethernetCsmacd)
 	put(".1.3.6.1.2.1.2.2.1.3."+strconv.Itoa(ifIndex), "6", Integer)
 	return out
+}
+
+// A non-Cisco device using standard Q-BRIDGE tables must retain its
+// ordinary VLAN classification without Cisco-specific SNMP rows.
+func TestVlanMapper_PostMap_NonCiscoGenericQBridge(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	registry := NewEntityRegistry(logger)
+
+	iface := &diode.Interface{Name: StringPtr("ge-0/0/0")}
+	registry.entities[InterfaceEntityType] = map[ObjectIDIndex]diode.Entity{
+		"101": iface,
+	}
+	registry.MarkInterfaceVerified(iface)
+
+	rows := buildAccessPortFixture(101, 10)
+	vm := NewVlanMapper(logger, config.Options{})
+	emitted := vm.PostMap(rows, registry, &config.Defaults{
+		VLAN: config.VLANDefaults{Status: "active"},
+	})
+
+	require.NotNil(t, iface.Mode)
+	assert.Equal(t, "access", *iface.Mode)
+	require.NotNil(t, iface.UntaggedVlan)
+	require.NotNil(t, iface.UntaggedVlan.Vid)
+	assert.EqualValues(t, 10, *iface.UntaggedVlan.Vid)
+	assert.Empty(t, iface.TaggedVlans)
+
+	vids := make([]int64, 0)
+	for _, entity := range emitted {
+		if vlan, ok := entity.(*diode.VLAN); ok && vlan.Vid != nil {
+			vids = append(vids, *vlan.Vid)
+		}
+	}
+	assert.Equal(t, []int64{10}, vids)
 }
 
 func TestVlanMapper_PostMap_BridgePortIfIndexTranslation(t *testing.T) {
@@ -632,6 +667,41 @@ func TestVlanMapper_PostMap_CiscoSB_OverridesWrongPvid(t *testing.T) {
 	}
 }
 
+// CISCOSB private-MIB classification takes precedence even if Cisco VTP
+// trunk rows are present for the same interface.
+func TestVlanMapper_PostMap_CiscoSB_ExcludesVtpTrunkOverlay(t *testing.T) {
+	const ifIndex = 2
+	registry, iface := newVlanTestRegistry(t, ifIndex, "gi2")
+	rows := buildCiscoSBFixture(ifIndex, 30)
+
+	base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+	idx := strconv.Itoa(ifIndex)
+	rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"4."+idx] = Value{Value: ciscoNexusBitmap(0, []int{10, 20})[:128]}
+	rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"18."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"19."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"30."+idx] = Value{Value: ciscoNexusBitmap(0, []int{10, 20})}
+	rows[base+"31."+idx] = Value{Value: string(make([]byte, 256))}
+
+	emitted := NewVlanMapper(
+		slog.New(slog.NewTextHandler(io.Discard, nil)),
+		config.Options{},
+	).PostMap(rows, registry, &config.Defaults{
+		VLAN: config.VLANDefaults{Status: "active"},
+	})
+
+	require.NotNil(t, iface.Mode)
+	assert.Equal(t, "access", *iface.Mode)
+	require.NotNil(t, iface.UntaggedVlan)
+	require.NotNil(t, iface.UntaggedVlan.Vid)
+	assert.EqualValues(t, 30, *iface.UntaggedVlan.Vid)
+	assert.Empty(t, iface.TaggedVlans)
+	assert.False(t, emittedVid(emitted, 10))
+	assert.False(t, emittedVid(emitted, 20))
+}
+
 // Non-CISCOSB Cisco gear is walked for these OIDs too, so a host that does not
 // answer them must classify exactly as before.
 func TestVlanMapper_PostMap_CiscoSB_AbsentLeavesGenericBehaviour(t *testing.T) {
@@ -826,6 +896,36 @@ func TestVlanMapper_PostMap_CiscoSB_PortModeAndTrunkLists(t *testing.T) {
 	assert.Equal(t, []int64{10, 20}, vids(channel.TaggedVlans))
 }
 
+func TestVtpVidFromOID(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		oid  string
+		vid  int
+		ok   bool
+	}{
+		{"valid domain 1", oidCiscoVtpVlanName + "1.2500", 2500, true},
+		{"valid domain 2", oidCiscoVtpVlanName + "2.3500", 3500, true},
+		{"lowest valid VID", oidCiscoVtpVlanName + "1.1", 1, true},
+		{"highest valid VID", oidCiscoVtpVlanName + "1.4094", 4094, true},
+		{"missing domain", oidCiscoVtpVlanName + "2500", 0, false},
+		{"zero domain", oidCiscoVtpVlanName + "0.2500", 0, false},
+		{"nonnumeric domain", oidCiscoVtpVlanName + "x.2500", 0, false},
+		{"extra index", oidCiscoVtpVlanName + "1.2.2500", 0, false},
+		{"zero VID", oidCiscoVtpVlanName + "1.0", 0, false},
+		{"reserved VID", oidCiscoVtpVlanName + "1.4095", 0, false},
+		{"nonnumeric VID", oidCiscoVtpVlanName + "1.xyz", 0, false},
+		{"wrong OID prefix", oidDot1qVlanStaticName + "1.2500", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vid, ok := vtpVidFromOID(tc.oid)
+			assert.Equal(t, tc.ok, ok)
+			if ok {
+				assert.Equal(t, tc.vid, vid)
+			}
+		})
+	}
+}
+
 func TestEmitVLANs_ReadsVtpVlanNameWhenDot1qAbsent(t *testing.T) {
 	// A device that publishes its VLAN database only through CISCO-VTP-MIB.
 	oids := ObjectIDValueMap{
@@ -836,7 +936,12 @@ func TestEmitVLANs_ReadsVtpVlanNameWhenDot1qAbsent(t *testing.T) {
 		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.4095": {Value: "too-high"},
 		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.0":    {Value: "too-low"},
 	}
-	m := NewVlanMapper(slog.Default(), config.Options{})
+	prefixMode := "svi-name"
+	emitPrefixes := true
+	m := NewVlanMapper(slog.Default(), config.Options{
+		EmitPrefixVlan: &prefixMode,
+		EmitPrefixes:   &emitPrefixes,
+	})
 	got := map[int]string{}
 	for _, e := range m.emitVLANs(oids, nil) {
 		v, ok := e.(*diode.VLAN)
@@ -845,6 +950,31 @@ func TestEmitVLANs_ReadsVtpVlanNameWhenDot1qAbsent(t *testing.T) {
 	}
 	assert.Equal(t, map[int]string{10: "office", 20: "voice", 999: "engineering"}, got,
 		"VTP names produce VLAN entities; 4095 and 0 are outside 1..4094 and must be dropped")
+}
+
+// With prefix emission off, VTP-only rows supply names but not inventory.
+// Explicitly disabling unknown VLAN creation must not change that.
+func TestEmitVLANs_VtpNamesLookupOnlyWithPrefixOff(t *testing.T) {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.10": {Value: "users"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.20": {Value: "voice"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.30":     {Value: "1"},
+	}
+	prefixMode := "off"
+	createUnknown := false
+	m := NewVlanMapper(slog.Default(), config.Options{
+		EmitPrefixVlan:     &prefixMode,
+		CreateUnknownVlans: &createUnknown,
+	})
+	got := map[int]string{}
+	for _, entity := range m.emitVLANs(oids, nil) {
+		vlan, ok := entity.(*diode.VLAN)
+		require.True(t, ok)
+		got[int(*vlan.Vid)] = *vlan.Name
+	}
+	assert.Empty(t, got, "VTP-only rows and unnamed status-only rows must not create VLANs")
+	assert.Equal(t, "users", vlanReferenceName(10, vlanNamesByVid(oids)))
+	assert.Equal(t, "VLAN610", vlanReferenceName(610, vlanNamesByVid(oids)))
 }
 
 // mergeVLANNames takes an ordered slice precisely so its precedence can be
@@ -1614,9 +1744,9 @@ func TestVlanCatalogPresent_RequiresARowThatNamesAVlan(t *testing.T) {
 		{"a suffix that will not parse", ObjectIDValueMap{
 			oidDot1qVlanStaticName + "notanumber": {Value: "USERS"},
 		}, false},
-		{"a VTP name, whose id is the last element", ObjectIDValueMap{
+		{"a VTP name alone does not establish catalog presence", ObjectIDValueMap{
 			oidCiscoVtpVlanName + "1.20": {Value: "VOICE"},
-		}, true},
+		}, false},
 		{"a VTP row for a reserved id", ObjectIDValueMap{
 			oidCiscoVtpVlanName + "1.4095": {Value: "RESERVED"},
 		}, false},
@@ -1833,7 +1963,7 @@ func TestVlanMapper_VlanCatalogPresent_ChecksTheWholeIndex(t *testing.T) {
 		{"current, three components", oidDot1qVlanCurrentEgressPorts + "0.10.1", mask, false},
 		{"current, id out of range", oidDot1qVlanCurrentEgressPorts + "0.4095", mask, false},
 		// The VTP catalog is (domain, vlan).
-		{"vtp, well formed", oidCiscoVtpVlanName + "1.10", "voice", true},
+		{"vtp, well formed but names only", oidCiscoVtpVlanName + "1.10", "voice", false},
 		{"vtp, three components", oidCiscoVtpVlanName + "1.10.1", "voice", false},
 		// The VLAN-keyed tables carry one component.
 		{"static name, well formed", oidDot1qVlanStaticName + "10", "voice", true},
@@ -2000,6 +2130,267 @@ func TestVlanMapper_PostMap_Cisco_TrunkOutsideTheBridgeTable(t *testing.T) {
 
 	if trunk.Mode != nil || trunk.UntaggedVlan != nil {
 		t.Fatalf("trunk made access: mode=%v untagged=%+v", trunk.Mode, trunk.UntaggedVlan)
+	}
+}
+
+// ciscoNexusBitmap encodes MSB-first VTP active VLAN membership for tests.
+func ciscoNexusBitmap(offset int, vids []int) string {
+	bitmap := make([]byte, 256)
+	for _, vid := range vids {
+		position := vid - offset
+		if position < 0 || position >= 2048 {
+			panic("VLAN outside bitmap range")
+		}
+		bitmap[position/8] |= byte(0x80 >> uint(position%8))
+	}
+	return string(bitmap)
+}
+
+// A bridge-port mapping without dot1qPvid can make generic extraction
+// infer routed. Cisco's trunk bitmap must override that inference.
+func TestVlanMapper_PostMap_CiscoTrunkWithoutPvid(t *testing.T) {
+	const ifIndex = 101
+	registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
+	rows := ObjectIDValueMap{
+		// Bridge port 1 maps to ifIndex 101; deliberately no dot1qPvid.
+		".1.3.6.1.2.1.17.1.4.1.2.1":      {Value: "101", Type: Integer},
+		".1.3.6.1.2.1.2.2.1.7.101":       {Value: "1", Type: Integer},
+		".1.3.6.1.2.1.2.2.1.3.101":       {Value: "6", Type: Integer},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10": {Value: "users"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.20": {Value: "voice"},
+	}
+	base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+	idx := strconv.Itoa(ifIndex)
+	rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"4."+idx] = Value{Value: ciscoNexusBitmap(0, []int{10, 20})[:128]}
+	rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"18."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"19."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"30."+idx] = Value{Value: ciscoNexusBitmap(0, []int{10, 20})}
+	rows[base+"31."+idx] = Value{Value: string(make([]byte, 256))}
+
+	mapper := NewVlanMapper(slog.Default(), config.Options{})
+	generic, err := qbridge.ExtractGeneric(mapper.buildGenericRows(rows))
+	require.NoError(t, err)
+	require.Contains(t, generic, ifIndex)
+	assert.Equal(t, qbridge.OperRouted, generic[ifIndex].OperMode,
+		"missing PVID must reproduce the generic routed inference")
+
+	mapper.PostMap(rows, registry, &config.Defaults{})
+
+	require.NotNil(t, trunk.Mode)
+	assert.Equal(t, "tagged", *trunk.Mode)
+	assert.Equal(t, []int64{10, 20}, vids(trunk.TaggedVlans))
+	assert.Nil(t, trunk.UntaggedVlan)
+}
+
+func TestVlanMapper_PostMap_NexusActiveTrunkAndVtpNames(t *testing.T) {
+	const ifIndex = 101
+
+	for _, tc := range []struct {
+		name          string
+		createUnknown bool
+		want          []int64
+	}{
+		{"create unknown VLANs", true, []int64{10, 20, 2500, 3500}},
+		{"only device-named VLANs", false, []int64{2500}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
+			first := []int{10, 20}
+			second := []int{2500, 3500}
+			rows := ObjectIDValueMap{}
+			idx := strconv.Itoa(ifIndex)
+			base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+			rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"4."+idx] = Value{Value: ciscoNexusBitmap(0, []int{10, 20})[:128]}
+			rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
+			rows[base+"18."+idx] = Value{Value: ciscoNexusBitmap(2048, []int{2500})[:128]}
+			rows[base+"19."+idx] = Value{Value: ciscoNexusBitmap(3072, []int{3500})[:128]}
+			rows[base+"30."+idx] = Value{Value: ciscoNexusBitmap(0, first)}
+			rows[base+"31."+idx] = Value{Value: ciscoNexusBitmap(2048, second)}
+			rows[".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.2500"] = Value{Value: "synthetic-backbone"}
+			rows[".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.999"] = Value{Value: "unreferenced"}
+
+			entities := NewVlanMapper(slog.Default(), config.Options{
+				CreateUnknownVlans: ptrBool(tc.createUnknown),
+			}).PostMap(rows, registry, &config.Defaults{})
+
+			require.NotNil(t, trunk.Mode)
+			assert.Equal(t, "tagged", *trunk.Mode)
+			assert.Equal(t, tc.want, vids(trunk.TaggedVlans))
+			assert.Nil(t, trunk.UntaggedVlan, "native VLAN 1 is not carried")
+
+			for _, vid := range []int{10, 20, 2500, 3500} {
+				expected := tc.createUnknown || vid == 2500
+				assert.Equal(t, expected, emittedVid(entities, vid),
+					"unexpected inventory emission for VLAN %d", vid)
+			}
+			assert.False(t, emittedVid(entities, 999),
+				"VTP-only VLAN must not create inventory")
+
+			require.Len(t, trunk.TaggedVlans, len(tc.want))
+			for _, vlan := range trunk.TaggedVlans {
+				if vlan.Vid != nil && *vlan.Vid == 2500 {
+					require.NotNil(t, vlan.Name)
+					assert.Equal(t, "synthetic-backbone", *vlan.Name)
+				}
+			}
+		})
+	}
+}
+
+// A tagged-all trunk must not create VLAN inventory from its allowed range,
+// even when VTP reports a literal VLAN name matching our fallback format.
+func TestVlanMapper_PostMap_CiscoTaggedAllDoesNotEmitVtpVlans(t *testing.T) {
+	const ifIndex = 101
+
+	for _, tc := range []struct {
+		name          string
+		createUnknown bool
+		withAccess    bool
+	}{
+		{"wildcard only, create unknown", true, false},
+		{"wildcard only, named VLANs", false, false},
+		{"wildcard and access, create unknown", true, true},
+		{"wildcard and access, named VLANs", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
+			const accessIfIndex = 102
+			var access *diode.Interface
+			if tc.withAccess {
+				access = addVerifiedInterface(registry, accessIfIndex, "Ethernet1/2")
+			}
+			rows := ObjectIDValueMap{}
+			idx := strconv.Itoa(ifIndex)
+			base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+
+			rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+
+			// All 4094 valid VLANs are configured on the trunk.
+			for segment := 0; segment < 4; segment++ {
+				bitmap := make([]byte, 128)
+				for vid := 1; vid <= 4094; vid++ {
+					if vid/1024 != segment {
+						continue
+					}
+					position := vid - segment*1024
+					bitmap[position/8] |= 0x80 >> uint(position%8)
+				}
+				column := []string{"4", "17", "18", "19"}[segment]
+				rows[base+column+"."+idx] = Value{Value: string(bitmap)}
+			}
+
+			// Only a small subset is active.
+			rows[base+"30."+idx] = Value{
+				Value: ciscoNexusBitmap(0, []int{110}),
+			}
+			rows[base+"31."+idx] = Value{
+				Value: ciscoNexusBitmap(2048, []int{3500}),
+			}
+
+			// VLAN3500 is the literal name returned by the switch via VTP.
+			// It is NOT a name generated by vlanReferenceName().
+			rows[oidCiscoVtpVlanName+"1.3500"] = Value{Value: "VLAN3500"}
+			if tc.withAccess {
+				ciscoOmittedAccessPort(rows, accessIfIndex, 3500)
+			}
+
+			entities := NewVlanMapper(slog.Default(), config.Options{
+				CreateUnknownVlans: ptrBool(tc.createUnknown),
+			}).PostMap(rows, registry, &config.Defaults{})
+
+			require.NotNil(t, trunk.Mode)
+			assert.Equal(t, "tagged-all", *trunk.Mode)
+			assert.Empty(t, trunk.TaggedVlans)
+			assert.Nil(t, trunk.UntaggedVlan)
+			assert.Equal(t, tc.withAccess, emittedVid(entities, 3500),
+				"tagged-all must not create or suppress VLAN inventory")
+
+			if tc.withAccess {
+				require.NotNil(t, access)
+				require.NotNil(t, access.Mode)
+				assert.Equal(t, "access", *access.Mode)
+				require.NotNil(t, access.UntaggedVlan)
+				require.NotNil(t, access.UntaggedVlan.Vid)
+				assert.Equal(t, int64(3500), *access.UntaggedVlan.Vid)
+				require.NotNil(t, access.UntaggedVlan.Name)
+				assert.Equal(t, "VLAN3500", *access.UntaggedVlan.Name)
+			}
+
+			count := 0
+			for _, entity := range entities {
+				if vlan, ok := entity.(*diode.VLAN); ok &&
+					vlan.Vid != nil && *vlan.Vid == 3500 {
+					count++
+				}
+			}
+			if tc.withAccess {
+				assert.Equal(t, 1, count, "VLAN 3500 must be emitted exactly once")
+			} else {
+				assert.Zero(t, count, "wildcard alone must not emit VLAN 3500")
+			}
+		})
+	}
+}
+
+// Cisco access VLANs can use VTP names without Q-BRIDGE inventory.
+// An unnamed access VLAN still follows create_unknown_vlans.
+func TestVlanMapper_PostMap_CiscoAccessVtpNames(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		createUnknown bool
+	}{
+		{"create unknown VLANs", true},
+		{"only device-named VLANs", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const namedIfIndex = 101
+			const unnamedIfIndex = 102
+
+			registry, named := newVlanTestRegistry(t, namedIfIndex, "Ethernet1/1")
+			unnamed := addVerifiedInterface(registry, unnamedIfIndex, "Ethernet1/2")
+
+			rows := ObjectIDValueMap{
+				oidCiscoVtpVlanName + "1.2500": {Value: "synthetic-access"},
+				oidCiscoVtpVlanName + "1.999":  {Value: "unreferenced"},
+			}
+			ciscoOmittedAccessPort(rows, namedIfIndex, 2500)
+			ciscoOmittedAccessPort(rows, unnamedIfIndex, 3500)
+
+			entities := NewVlanMapper(slog.Default(), config.Options{
+				CreateUnknownVlans: ptrBool(tc.createUnknown),
+			}).PostMap(rows, registry, &config.Defaults{})
+
+			require.NotNil(t, named.Mode)
+			assert.Equal(t, "access", *named.Mode)
+			require.NotNil(t, named.UntaggedVlan)
+			require.NotNil(t, named.UntaggedVlan.Vid)
+			assert.Equal(t, int64(2500), *named.UntaggedVlan.Vid)
+			require.NotNil(t, named.UntaggedVlan.Name)
+			assert.Equal(t, "synthetic-access", *named.UntaggedVlan.Name)
+			assert.True(t, emittedVid(entities, 2500))
+
+			require.NotNil(t, unnamed.Mode)
+			assert.Equal(t, "access", *unnamed.Mode)
+			assert.Equal(t, tc.createUnknown, emittedVid(entities, 3500))
+			if tc.createUnknown {
+				require.NotNil(t, unnamed.UntaggedVlan)
+				require.NotNil(t, unnamed.UntaggedVlan.Vid)
+				assert.Equal(t, int64(3500), *unnamed.UntaggedVlan.Vid)
+			} else {
+				assert.Nil(t, unnamed.UntaggedVlan)
+			}
+
+			assert.False(t, emittedVid(entities, 999),
+				"VTP-only VLAN must not create inventory")
+		})
 	}
 }
 

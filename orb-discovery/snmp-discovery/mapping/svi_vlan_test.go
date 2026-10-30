@@ -400,3 +400,30 @@ func TestDeviceVlanVids_MatchesEmitVLANs(t *testing.T) {
 	assert.Equal(t, map[int]struct{}{10: {}, 11: {}, 12: {}, 13: {}, 14: {}, 15: {}}, vids,
 		"VIDs outside 1..4094 are not VLANs NetBox accepts")
 }
+
+// Standard VLAN inventory must not depend on Cisco VTP or prefix emission.
+func TestEmitVLANs_NonCiscoInventoryWithPrefixOff(t *testing.T) {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.10": {Value: "users"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.1.20": {Value: "voice"},
+		".1.3.6.1.2.1.17.7.1.4.3.1.5.30": {Value: "1"},
+	}
+
+	prefixMode := "off"
+	createUnknown := false
+	m := NewVlanMapper(slog.Default(), config.Options{
+		EmitPrefixVlan:     &prefixMode,
+		CreateUnknownVlans: &createUnknown,
+	})
+
+	got := map[int]string{}
+	for _, entity := range m.emitVLANs(oids, nil) {
+		vlan := entity.(*diode.VLAN)
+		got[int(*vlan.Vid)] = *vlan.Name
+	}
+
+	assert.Equal(t, map[int]string{10: "users", 20: "voice"}, got)
+	assert.Equal(t, map[int]struct{}{10: {}, 20: {}, 30: {}},
+		deviceVlanVids(oids),
+		"inventory still recognizes unnamed VLANs even when emission suppresses them")
+}
