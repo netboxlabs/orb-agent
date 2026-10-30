@@ -222,7 +222,9 @@ Labels include `device`, `device_interface` (enriched from NetBox when enabled),
 - **`asn="Unknown"`:** mount a `GeoLite2-ASN.mmdb` and set `geo_asn`.
 - **orb-agent crashes with `qemu-x86_64 … ld-linux`:** you're on an old image — pull a
   current `netboxlabs/orb-agent:latest` (multi-arch, native arm64).
-- **Enrichment shows a raw IP:** the `device_map` key must equal the exporter's source IP;
+- **Enrichment shows a raw IP:** the `device_map` key must be the device's address: the
+  exporter's source IP for NetFlow and IPFIX, the agent address inside the datagrams for
+  sFlow (see [device keys](../backends/pktvisor/handlers/flow.md#only_device_interfaces));
   restart after editing.
 
 ## Uninstall

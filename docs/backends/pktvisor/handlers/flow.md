@@ -148,6 +148,8 @@ Input: FLOW
 
 The difference between `only_device_interfaces` and `only_ips` is that `only_ips` filters based on the IPs observed *inside* the flows, while `only_device_interfaces` filters based on the device and interface *sending* the flows.
 
+A device is keyed by its IP address: for Netflow and IPFIX, the address the datagrams come from; for sFlow, the agent address inside them. When that address is IPv4, the key is the IPv4 address, even when the datagrams reach a [dual-stack `::` listener](../inputs/README.md#choosing-a-port-and-flow-type) or the sFlow agent address is carried in IPv4-mapped form. A key written in that form, such as `::ffff:192.0.2.10`, matches the same device as `192.0.2.10`. If both are present, the `192.0.2.10` entry is used. Other IPv6 keys must be written as pktvisor prints them: lowercase, without leading zeros in a group, and with the longest run of two or more zero groups shortened to `::`, such as `2001:db8::1`.
+
 The `only_device_interfaces` filter usage syntax is:
 
 ```yaml
@@ -302,6 +304,8 @@ enrichment: false
 ### device_map
 
 This configuration allows the user to assign a custom name to devices and interfaces, and it applies only while [enrichment](#enrichment) is on, which it is unless `enrichment: false` is set.
+
+Devices are keyed by IP address as in [`only_device_interfaces`](#only_device_interfaces), including keys written in IPv4-mapped form.
 
 The `device_map` configuration usage syntax is:
 

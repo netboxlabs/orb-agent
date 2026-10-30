@@ -321,16 +321,18 @@ their own reason, such as `permission denied` for a port below 1024 when
 `pktvisord` runs as a non-root user with `--net=host`; see
 [Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
 
-Unless the host sets `net.ipv6.bindv6only=1`, `::` also receives IPv4
-datagrams. A Netflow or IPFIX exporter that sends over IPv4 to a `::` bind is
-then identified by its IPv4-mapped address, such as `::ffff:192.0.2.10`, so its
+Unless `net.ipv6.bindv6only=1` is set where `pktvisord` runs, `::` also receives
+IPv4 datagrams. With `--net=host` that is the host's setting; a bridge-mode
+container has its own, which `docker run --sysctl net.ipv6.bindv6only=1` sets. A
+Netflow or IPFIX exporter that sends over IPv4 to a `::` bind is identified by
+its IPv4 address, as it would be on `0.0.0.0`, so key its
 [`device_map`](../handlers/flow.md#device_map) and
 [`only_device_interfaces`](../handlers/flow.md#only_device_interfaces) entries
-must use that form. Bind `0.0.0.0` for IPv4 exporters. A dual-stack `::` input
-and a `0.0.0.0` input cannot share a port, so to receive IPv4 and IPv6 exporters
-on one port, bind `::` and key the IPv4 ones by their mapped form. With
-`net.ipv6.bindv6only=1`, the two can share it. sFlow is not affected, since its
-device is the agent address inside each datagram.
+by that address; entries written in IPv4-mapped form, such as
+`::ffff:192.0.2.10`, still match. A dual-stack `::` input and a `0.0.0.0` input
+cannot share a port, so to receive IPv4 and IPv6 exporters on one port, bind
+`::`. With `net.ipv6.bindv6only=1`, the two can share it. For sFlow, the device
+is the agent address inside each datagram, whatever the bind.
 
 ### flow configuration
 
