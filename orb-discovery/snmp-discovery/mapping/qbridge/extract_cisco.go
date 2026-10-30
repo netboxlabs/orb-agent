@@ -244,8 +244,7 @@ func ciscoTrunkMembership(configured, active []int) (carried []int, taggedAll bo
 // membership must be nonempty. Carried VLANs are configured intersected with
 // active; a full configured range uses tagged-all. Native VLAN is retained
 // only when carried. Incomplete or empty active data leaves the port unchanged.
-func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows, logger *slog.Logger) map[int][]int {
-	accepted := make(map[int][]int)
+func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows, logger *slog.Logger) {
 	for ifIndex, first := range rows.ActiveFirst2k {
 		trunks, _ := rows.trunking(ifIndex)
 		if !trunks {
@@ -286,28 +285,31 @@ func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows, logger *slo
 			infos[ifIndex] = info
 		}
 
-		accepted[ifIndex] = carried
 		info.AdminMode = AdminTrunk
 		info.OperMode = OperTrunk
+		info.AccessVlan = nil
 		info.TrunkFromOneTaggedVlan = false
 		info.AllowedVlans = AllowedVlans{
 			Vids:       carried,
 			IsWildcard: taggedAll,
 		}
 
-		// A configured native VLAN is only valid when it is actually
-		// carried. Clear any stale native inferred by generic discovery.
-		info.NativeVlan = nil
-		if native, ok := rows.NativeVlan[ifIndex]; ok {
-			if vid := CoerceVid(native); vid != nil {
-				for _, carriedVID := range carried {
-					if carriedVID == *vid {
-						info.NativeVlan = vid
-						break
-					}
+		// An explicitly reported Cisco native VLAN supersedes Q-BRIDGE.
+		// Otherwise, retain the generic native only if Cisco carries it.
+		if native, reported := rows.NativeVlan[ifIndex]; reported {
+			info.NativeVlan = CoerceVid(native)
+		}
+		if info.NativeVlan != nil {
+			carriedNative := false
+			for _, vid := range carried {
+				if vid == *info.NativeVlan {
+					carriedNative = true
+					break
 				}
+			}
+			if !carriedNative {
+				info.NativeVlan = nil
 			}
 		}
 	}
-	return accepted
 }

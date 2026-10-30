@@ -369,16 +369,13 @@ func TestDecodeCiscoActiveVlans(t *testing.T) {
 		wantOK    bool
 	}{
 		{
-			name:  "Nexus Ethernet1/48 active VLANs",
-			first: ciscoTestBitmap(0, 110, 120),
-			second: ciscoTestBitmap(2048,
-				3440, 3458, 3461, 3500, 3504, 3533, 3560, 3640, 3747, 3854, 3871, 3879, 3901),
+			name:      "active VLANs across bitmap ranges",
+			first:     ciscoTestBitmap(0, 101, 202),
+			second:    ciscoTestBitmap(2048, 2101, 2202, 2500, 3001, 4001),
 			hasFirst:  true,
 			hasSecond: true,
-			want: []int{
-				110, 120, 3440, 3458, 3461, 3500, 3504, 3533, 3560, 3640, 3747, 3854, 3871, 3879, 3901,
-			},
-			wantOK: true,
+			want:      []int{101, 202, 2101, 2202, 2500, 3001, 4001},
+			wantOK:    true,
 		},
 		{
 			name:      "bitmap boundaries",
@@ -530,6 +527,112 @@ func TestCiscoTrunkMembership(t *testing.T) {
 	})
 }
 
+func TestApplyCiscoTrunksOverlaysQBridge(t *testing.T) {
+	generic := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 100},
+		PortPvid:          map[int]int{100: 0},
+		VlanEgressPorts: map[int][]byte{
+			48:  {0x80},
+			791: {0x80},
+		},
+		IfAdminStatus: map[int]int{100: 1},
+	}
+	infos, err := ExtractGeneric(generic)
+	if err != nil {
+		t.Fatalf("ExtractGeneric: %v", err)
+	}
+	original := infos[100]
+	if original == nil {
+		t.Fatal("generic switchport missing")
+	}
+	before := Classify(*original)
+	if before.Mode != ModeTrunk || !reflect.DeepEqual(before.Tagged, []int{48, 791}) {
+		t.Fatalf("generic classification = %+v, want trunk tagged [48 791]", before)
+	}
+
+	cisco := CiscoRows{
+		TrunkDynamicState: map[int]int{100: 5},
+		IfAdminStatus:     map[int]int{100: 1},
+		ConfiguredVlans: [4]map[int][]byte{
+			{100: ciscoTestBitmap(0, 110, 120)},
+			{100: {}},
+			{100: {}},
+			{100: {}},
+		},
+		ActiveFirst2k:  map[int][]byte{100: ciscoTestBitmap(0, 110, 120)},
+		ActiveSecond2k: map[int][]byte{100: {}},
+	}
+
+	ApplyCiscoTrunks(infos, cisco, slog.Default())
+
+	if infos[100] != original {
+		t.Fatal("Cisco overlay replaced the existing Q-BRIDGE switchport")
+	}
+	after := Classify(*infos[100])
+	if after.Mode != ModeTrunk || !reflect.DeepEqual(after.Tagged, []int{110, 120}) {
+		t.Fatalf("Cisco classification = %+v, want trunk tagged [110 120]", after)
+	}
+}
+
+func TestApplyCiscoTrunksOverlaysQBridgeAccess(t *testing.T) {
+	generic := GenericRows{
+		BasePortToIfIndex: map[int]int{1: 100},
+		PortPvid:          map[int]int{100: 3500},
+		VlanEgressPorts: map[int][]byte{
+			3500: {0x80},
+		},
+		VlanUntaggedPorts: map[int][]byte{
+			3500: {0x80},
+		},
+		IfAdminStatus: map[int]int{100: 1},
+	}
+
+	infos, err := ExtractGeneric(generic)
+	if err != nil {
+		t.Fatalf("ExtractGeneric: %v", err)
+	}
+
+	original := infos[100]
+	if original == nil {
+		t.Fatal("generic switchport missing")
+	}
+
+	before := Classify(*original)
+	if before.Mode != ModeAccess || before.Untagged == nil || *before.Untagged != 3500 {
+		t.Fatalf("generic classification = %+v, want access VLAN 3500", before)
+	}
+
+	cisco := CiscoRows{
+		TrunkDynamicState: map[int]int{100: 5},
+		IfAdminStatus:     map[int]int{100: 1},
+		ConfiguredVlans: [4]map[int][]byte{
+			{100: ciscoTestBitmap(0, 110, 120)},
+			{100: {}},
+			{100: {}},
+			{100: {}},
+		},
+		ActiveFirst2k:  map[int][]byte{100: ciscoTestBitmap(0, 110, 120)},
+		ActiveSecond2k: map[int][]byte{100: {}},
+	}
+
+	ApplyCiscoTrunks(infos, cisco, slog.Default())
+
+	if infos[100] != original {
+		t.Fatal("Cisco overlay replaced the existing Q-BRIDGE switchport")
+	}
+
+	after := Classify(*infos[100])
+	if after.Mode != ModeTrunk ||
+		!reflect.DeepEqual(after.Tagged, []int{110, 120}) ||
+		after.Untagged != nil {
+		t.Errorf("Cisco classification = %+v, want trunk tagged [110 120] with no native VLAN", after)
+	}
+
+	if infos[100].AccessVlan != nil {
+		t.Errorf("stale generic access VLAN retained: %d", *infos[100].AccessVlan)
+	}
+}
+
 func TestApplyCiscoTrunks(t *testing.T) {
 	t.Run("complete trunk with native VLAN", func(t *testing.T) {
 		infos := map[int]*SwitchportInfo{}
@@ -581,11 +684,7 @@ func TestApplyCiscoTrunks(t *testing.T) {
 			ActiveSecond2k: map[int][]byte{100: {}},
 		}
 
-		accepted := ApplyCiscoTrunks(infos, rows, slog.Default())
-
-		if len(accepted) != 0 {
-			t.Fatalf("disjoint trunk was accepted: %v", accepted)
-		}
+		ApplyCiscoTrunks(infos, rows, slog.Default())
 		if infos[100] != info {
 			t.Fatal("existing switchport was replaced")
 		}
@@ -609,10 +708,12 @@ func TestApplyCiscoTrunks(t *testing.T) {
 			ActiveFirst2k:     map[int][]byte{100: ciscoTestBitmap(0, 110)},
 		}
 
+		before := *infos[100]
 		ApplyCiscoTrunks(infos, rows, slog.Default())
 
-		if !reflect.DeepEqual(infos[100].AllowedVlans.Vids, []int{48, 791}) {
-			t.Errorf("generic membership overwritten: %v", infos[100].AllowedVlans.Vids)
+		if !reflect.DeepEqual(*infos[100], before) {
+			t.Errorf("incomplete Cisco bitmap changed generic switchport:\n got %+v\nwant %+v",
+				*infos[100], before)
 		}
 	})
 
@@ -632,8 +733,8 @@ func TestApplyCiscoTrunks(t *testing.T) {
 			ConfiguredVlans: [4]map[int][]byte{
 				{100: ciscoTestBitmap(0, 110)},
 				{100: {}},
-				{100: ciscoTestBitmap(2048, 3500)},
 				{100: {}},
+				{100: ciscoTestBitmap(3072, 3500)},
 			},
 		}
 
@@ -654,8 +755,8 @@ func TestApplyCiscoTrunks(t *testing.T) {
 			ConfiguredVlans: [4]map[int][]byte{
 				{100: ciscoTestBitmap(0, 110)},
 				{100: {}},
-				{100: ciscoTestBitmap(2048, 3500)},
 				{100: {}},
+				{100: ciscoTestBitmap(3072, 3500)},
 			},
 		}
 
@@ -743,6 +844,52 @@ func TestApplyCiscoTrunksTaggedAll(t *testing.T) {
 	}
 	if got.Untagged == nil || *got.Untagged != 1 {
 		t.Fatalf("native = %v, want VLAN 1", got.Untagged)
+	}
+}
+
+// Without a Cisco native-VLAN row, retain a generic native VLAN only when
+// Cisco's authoritative configured and active membership carries it.
+func TestApplyCiscoTrunksMissingNativeVlan(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured []int
+		wantNative *int
+	}{
+		{"generic native carried", []int{20, 63, 110}, intPtr(63)},
+		{"generic native not carried", []int{20, 110}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			infos := map[int]*SwitchportInfo{
+				100: {
+					Enabled:           true,
+					BridgePortPresent: true,
+					AdminMode:         AdminTrunk,
+					NativeVlan:        intPtr(63),
+					AllowedVlans:      AllowedVlans{Vids: []int{20, 63, 110}},
+				},
+			}
+			rows := CiscoRows{
+				TrunkDynamicState: map[int]int{100: 5},
+				ConfiguredVlans: [4]map[int][]byte{
+					{100: ciscoTestBitmap(0, tc.configured...)},
+					{100: {}},
+					{100: {}},
+					{100: {}},
+				},
+				ActiveFirst2k:  map[int][]byte{100: ciscoTestBitmap(0, 20, 63, 110)},
+				ActiveSecond2k: map[int][]byte{100: {}},
+			}
+
+			ApplyCiscoTrunks(infos, rows, slog.Default())
+
+			got := Classify(*infos[100])
+			if got.Mode != ModeTrunk {
+				t.Fatalf("mode = %v, want trunk", got.Mode)
+			}
+			if !reflect.DeepEqual(got.Untagged, tc.wantNative) {
+				t.Errorf("native = %v, want %v", got.Untagged, tc.wantNative)
+			}
+		})
 	}
 }
 

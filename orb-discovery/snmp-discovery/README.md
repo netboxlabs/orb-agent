@@ -400,7 +400,7 @@ SNMP discovery uses Q-BRIDGE-MIB and vendor-specific overlays to discover VLANs 
 
 On Cisco platforms publishing CISCO-VTP-MIB trunk tables, configured allowed VLANs are intersected with active VLANs to determine trunk membership. Ports configured to allow all VLANs (1–4094) use `tagged-all`; native VLANs are assigned only when carried. Missing or empty active membership data does not overwrite existing switchport configuration.
 
-Cisco VTP VLAN names also contribute to VLAN inventory. With `create_unknown_vlans: false`, named VLANs are still emitted, while unnamed VLANs are not created as placeholders.
+Cisco VTP VLAN names are used for VLANs discovered through qualifying interface membership. A VTP name alone does not create a VLAN entity. With `create_unknown_vlans: false`, interface-referenced VLANs with device-reported names are still emitted, but unnamed VLANs are not created as placeholders. `tagged-all` trunks do not generate individual VLAN entities from their allowed-VLAN bitmaps.
 
 See [Interface ↔ VLAN associations](../../../docs/backends/snmp_discovery/supported_platforms.md#interface--vlan-associations) for platform-specific behavior and limitations.
 

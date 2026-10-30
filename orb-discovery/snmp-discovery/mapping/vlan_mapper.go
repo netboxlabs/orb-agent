@@ -143,12 +143,10 @@ func (m *VlanMapper) PostMap(
 		// context's bridge table is empty when no port is in VLAN 1.
 		infos := map[int]*qbridge.SwitchportInfo{}
 		qbridge.ApplyCisco(infos, cisco)
-		var accepted map[int][]int
 		if !ciscosb.HasData() {
-			accepted = qbridge.ApplyCiscoTrunks(infos, cisco, m.logger)
+			qbridge.ApplyCiscoTrunks(infos, cisco, m.logger)
 		}
 		names := vlanNamesByVid(allObjectIDs)
-		addCiscoTrunkVLANs(&vlanEntities, accepted, registry, defaults, names)
 		if m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults, names)) > 0 {
 			return vlanEntities
 		}
@@ -190,15 +188,13 @@ func (m *VlanMapper) PostMap(
 	}
 
 	// Apply complete Cisco VTP active trunk membership after vendor overlays.
-	var accepted map[int][]int
 	if !ciscosb.HasData() {
-		accepted = qbridge.ApplyCiscoTrunks(infos, cisco, m.logger)
+		qbridge.ApplyCiscoTrunks(infos, cisco, m.logger)
 	}
 
 	// Build VLAN entities first — interface refs link to them by VID.
 	vlanEntities := m.emitVLANs(allObjectIDs, defaults)
 	names := vlanNamesByVid(allObjectIDs)
-	addCiscoTrunkVLANs(&vlanEntities, accepted, registry, defaults, names)
 	ensureVLAN := m.vlanIndex(&vlanEntities, defaults, names)
 
 	// Mutate interfaces in place. The registry holds *diode.Interface
@@ -230,58 +226,22 @@ func (m *VlanMapper) applyInfos(
 	return applied
 }
 
-// addCiscoTrunkVLANs emits VLANs carried by accepted Cisco trunks on verified
-// interfaces. These are discovered memberships, not unknown VLAN guesses.
-func addCiscoTrunkVLANs(
-	entities *[]diode.Entity,
-	accepted map[int][]int,
-	registry *EntityRegistry,
-	defaults *config.Defaults,
-	names map[int]string,
-) {
-	existing := make(map[int]struct{}, len(*entities))
-	for _, entity := range *entities {
-		if vlan, ok := entity.(*diode.VLAN); ok && vlan.Vid != nil {
-			existing[int(*vlan.Vid)] = struct{}{}
-		}
-	}
-
-	for ifIndex, vids := range accepted {
-		if verifiedInterface(registry, ifIndex) == nil {
-			continue
-		}
-		for _, vid := range vids {
-			if vid < 1 || vid > 4094 {
-				continue
-			}
-			if _, found := existing[vid]; found {
-				continue
-			}
-			vlan := &diode.VLAN{
-				Vid:  int64Ptr(int64(vid)),
-				Name: StringPtr(vlanReferenceName(vid, names)),
-			}
-			applyVLANDefaults(vlan, defaults)
-			*entities = append(*entities, vlan)
-			existing[vid] = struct{}{}
-		}
-	}
-}
-
 // vlanIndex indexes the emitted VLAN entities by VID and returns the
-// ensureVLAN lookup interface mutation uses.
+// ensureVLAN lookup used during interface mutation.
 //
-// ensureVLAN returns the *diode.VLAN for vid, creating a stub when:
-//   - no static-name entry exists for vid, AND
-//   - options.CreateUnknownVlans is true.
+// ensureVLAN reuses an existing VLAN or creates one when an interface
+// references its VID and either:
+//   - the device reported a nonempty VLAN name (for example via VTP or
+//     Q-BRIDGE), or
+//   - options.CreateUnknownVlans is enabled (including its nil default).
 //
-// This mirrors device-discovery PR #378's translate._ensure_vlan behavior:
-// classic Cisco IOS exposes vmVlan/dot1qPvid VIDs without advertising them
-// via dot1qVlanStaticName, so ports classify as access but the index is
-// empty — the stub ensures NetBox never receives mode=access with a nil
-// untagged_vlan reference. With create_unknown_vlans off no stub is made and
-// such a port keeps mode=access with no VLAN. Stubs are appended to
-// *vlanEntities so the caller's returned slice carries them.
+// A device-reported name such as "VLAN2500" counts as known; the locally
+// generated "VLAN" fallback does not. Names alone do not create VLANs:
+// the VID must be referenced by a qualifying interface.
+//
+// When unknown-VLAN creation is disabled, an unnamed VID has no VLAN
+// reference. Newly created VLANs are appended to *vlanEntities so they
+// are included in the caller's returned inventory.
 func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.Defaults, names map[int]string) func(int) *diode.VLAN {
 	vlanByVid := make(map[int]*diode.VLAN, len(*vlanEntities))
 	for _, e := range *vlanEntities {
@@ -296,7 +256,7 @@ func (m *VlanMapper) vlanIndex(vlanEntities *[]diode.Entity, defaults *config.De
 			return existing
 		}
 		createUnknown := m.options.CreateUnknownVlans == nil || *m.options.CreateUnknownVlans
-		if !createUnknown {
+		if !createUnknown && names[vid] == "" {
 			return nil
 		}
 		stub := &diode.VLAN{
@@ -1164,15 +1124,25 @@ func mergeVLANNames(rows []vlanNameRow, vendorNames map[int]string) map[int]stri
 	return out
 }
 
-// vtpVidFromOID pulls the VID out of a vtpVlanName OID. The index is
-// domain.vlan, so the VID is the trailing element.
+// vtpVidFromOID validates the domain.vlan index of a vtpVlanName OID
+// and returns the VLAN ID.
 func vtpVidFromOID(oid string) (int, bool) {
-	suffix := strings.TrimPrefix(oid, oidCiscoVtpVlanName)
-	last := suffix
-	if i := strings.LastIndex(suffix, "."); i >= 0 {
-		last = suffix[i+1:]
+	if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+		return 0, false
 	}
-	return atoi(last)
+	parts := strings.Split(strings.TrimPrefix(oid, oidCiscoVtpVlanName), ".")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	domain, ok := atoi(parts[0])
+	if !ok || domain < 1 {
+		return 0, false
+	}
+	vid, ok := atoi(parts[1])
+	if !ok || vid < 1 || vid > 4094 {
+		return 0, false
+	}
+	return vid, true
 }
 
 // vlanNameConflicts reports VIDs whose VTP rows carry different non-empty
@@ -1301,18 +1271,7 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 	// Otherwise VTP rows only name independently eligible VLANs.
 	if m.options.PrefixEmissionEnabled() && m.options.PrefixVlanMode() == "svi-name" {
 		for oid := range all {
-			if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
-				continue
-			}
-			suffix := strings.TrimPrefix(oid, oidCiscoVtpVlanName)
-			parts := strings.Split(suffix, ".")
-			if len(parts) != 2 {
-				continue
-			}
-			if domain, ok := atoi(parts[0]); !ok || domain < 1 {
-				continue
-			}
-			if vid, ok := atoi(parts[1]); ok && vid >= 1 && vid <= 4094 {
+			if vid, ok := vtpVidFromOID(oid); ok {
 				if _, exists := byVid[vid]; !exists {
 					byVid[vid] = &pending{}
 				}
