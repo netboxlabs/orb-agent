@@ -113,8 +113,13 @@ is absent or null. Two related cases:
 - A policy that sets `input.tap` to a name starting with `fleet_` is refused. Leave
   `input.tap` out to use the managed tap.
 
-Policies with an identical input config share one input stream. For `flow`, `pktvisor`
-refuses a different config on a UDP port that is already in use.
+Policies on the same tap with an identical input config share one input stream. For `flow`,
+`pktvisord` refuses any other input on a UDP port that is already in use, including the same
+config on another tap: the policy fails to apply, and its error ends with `unable to bind flow
+UDP server on <bind>:<port>: address already in use`. So an edit that changes the config or
+the tap of a flow policy that shares its listener with another policy, and still listens on
+that port, fails the same way. The old version has already been removed by then, so the policy
+runs nothing until the edit is fixed; see [Edits](#edits).
 
 `pktvisord` puts the tap name in its handler names, so moving a policy between a managed
 tap and a local one starts new metric series.

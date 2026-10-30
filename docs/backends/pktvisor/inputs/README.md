@@ -308,8 +308,24 @@ configured to send to. The conventional ports differ by format:
 exporter.
 
 `bind` is the local address to receive on, and both it and `port` must be set
-together. Nothing about the port is enforced, so an exporter sending to a
-different one simply needs that number here.
+together. `bind` must be an IPv4 or IPv6 address, such as `0.0.0.0` or `::`,
+written without brackets; a hostname such as `localhost` is refused. Any port
+from 1 to 65535 is accepted, so an exporter sending to a different one simply
+needs that number here. A port that another listener already holds fails the
+input with `unable to bind flow UDP server on <bind>:<port>: address already in
+use`. Other bind failures end with their own reason, such as `permission denied`
+for a port below 1024 when `pktvisord` runs as a non-root user with `--net=host`;
+see [Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
+
+Unless the host sets `net.ipv6.bindv6only=1`, `::` also receives IPv4
+datagrams. A Netflow or IPFIX exporter that sends over IPv4 to a `::` bind is
+then identified by its IPv4-mapped address, such as `::ffff:192.0.2.10`, so its
+[`device_map`](../handlers/flow.md#device_map) and
+[`only_device_interfaces`](../handlers/flow.md#only_device_interfaces) entries
+must use that form. Bind `0.0.0.0` for IPv4 exporters. A `0.0.0.0` input and a
+`::` input cannot share a port, so to receive IPv4 and IPv6 exporters on one
+port, bind `::` and key the IPv4 ones by their mapped form. sFlow is not
+affected, since its device is the agent address inside each datagram.
 
 ### flow configuration
 
@@ -340,7 +356,8 @@ pcap_file: /path/to/flows.pcap
 Type: *int* and **bind**: *str*
 
 Receives flow records on a UDP socket. Both must be set together; only UDP bind
-is supported.
+is supported. `bind` is an IPv4 or IPv6 address and `port` is 1 to 65535; see
+[Choosing a port and flow type](#choosing-a-port-and-flow-type).
 
 ```yaml
 port: int
@@ -410,17 +427,35 @@ dnstap_file: path/to/file
 
 Type: *str*
 
-Path to socket file containing port and ip to bind
+Path of the Unix socket that pktvisor listens on, and that the DNS server sends
+its dnstap stream to.
 
 ```yaml
 socket: path/to/file.sock
 ```
 
+When the input starts, a socket at that path that no server listens on, such
+as one left by a pktvisor that crashed or was killed, is replaced. The input
+fails to start instead, with an error that includes `unable to bind dnstap
+server on <path>:` followed by the reason, and leaves the file in place, when:
+
+- a server already listens on the socket: `address already in use`;
+- the path exists and is not a socket: `the path exists and is not a socket`;
+- no server listens on the socket, but pktvisor cannot remove it: `unable to
+  remove the stale socket there`, followed by the reason;
+- pktvisor cannot tell whether a server listens on it: `unable to tell whether a
+  server listens on the socket there`, followed by the reason. A socket left by
+  a pktvisor that ran as root is one case, because a non-root pktvisor cannot
+  connect to it. Remove the file if nothing uses it.
+
+A path whose directory does not exist fails with `permission denied`, not with
+a missing-file error.
+
 ### tcp
 
 Type: *str*
 
-The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now).
+The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now). A port that another listener already holds fails the input with `unable to listen with dnstap server on <ip>:<port>: address already in use`.
 
 ```yaml
 tcp: ip:port
