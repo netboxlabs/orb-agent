@@ -113,8 +113,16 @@ is absent or null. Two related cases:
 - A policy that sets `input.tap` to a name starting with `fleet_` is refused. Leave
   `input.tap` out to use the managed tap.
 
-Policies with an identical input config share one input stream. For `flow`, `pktvisor`
-refuses a different config on a UDP port that is already in use.
+Policies on the same tap with an identical input config share one input stream. For `flow`,
+`pktvisord` refuses any other input whose `bind` and `port` overlap a listener that is already
+running, including the same config on another tap. They overlap when the port is the same and
+so is the address, or a wildcard covers the other's address; two different specific addresses
+can share a port. See [Choosing a port and flow type](inputs/README.md#choosing-a-port-and-flow-type)
+for the details, including `::`. The policy fails to apply, and its error ends with
+`unable to bind flow UDP server on <bind>:<port>: address already in use`. So an edit that
+changes the config or the tap of a flow policy that shares its listener with another policy,
+and still overlaps that listener, fails the same way. The old version has already been removed
+by then, so the policy runs nothing until the edit is fixed; see [Edits](#edits).
 
 `pktvisord` puts the tap name in its handler names, so moving a policy between a managed
 tap and a local one starts new metric series.
@@ -203,7 +211,7 @@ the 10 second apply timeout.
 
 ### Edits
 An edit is a remove followed by an apply. A flow listener closes briefly when the edited
-policy is the last one on its port.
+policy is the last one on its listener.
 
 The agent checks the policy name and the tap before an edit removes the running policy.
 So when the agent refuses an edit:

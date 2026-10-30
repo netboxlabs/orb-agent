@@ -95,7 +95,7 @@ These apply to every test type unless noted.
 | Config | Type | Default | Description |
 |:--|:--|:--|:--|
 | [`interval_msec`](#interval_msec) | int | 5000 | How often each test runs. |
-| [`timeout_msec`](#timeout_msec) | int | 2000 | How long a single test may take. Must not exceed `interval_msec`. Enforced by the probe for `http` and `doh` only. |
+| [`timeout_msec`](#timeout_msec) | int | 2000 | How long a single test may take. Must not exceed `interval_msec`. The `http` and `doh` probes apply it as the request timeout; for `tcp` and `ping`, see below. |
 | [`packets_per_test`](#packets_per_test) | int | 1 | `ping` only. Packets sent per test. Must be greater than 0. |
 | [`packets_interval_msec`](#packets_interval_msec) | int | 25 | `ping` only. Gap between those packets. |
 | [`packet_payload_size`](#packet_payload_size) | int | 48 | `ping` only. Payload bytes per packet. Maximum 65500. |
@@ -114,12 +114,28 @@ second constraint and reported against a `packets_per_test` it never set,
 because the default pacing of one packet every 25ms no longer fits the
 interval.
 
-How `timeout_msec` takes effect depends on the test type. For `http` and `doh`
-it is the request timeout and the probe applies it directly. For `ping` and
-`tcp` the probe does not enforce it at all; it is passed to the netprobe
-handler as the transaction time to live, so an unanswered test is counted as
-timed out once it elapses. A handler that sets its own [`xact_ttl_ms` or
-`xact_ttl_secs`](../handlers/netprobe.md#configurations) takes precedence over it.
+How `timeout_msec` takes effect depends on the test type:
+
+- **`http` and `doh`:** it is the request timeout, and the probe applies it
+  directly.
+- **`tcp`:** a connection still being attempted when the next test is due is
+  closed and counted in `netprobe_packets_timeout`, so a target that never
+  answers is reported once per interval. If the next test comes sooner than
+  `timeout_msec` after the attempt started, for example because a DNS lookup on
+  the same input, for this target or another, held the probe up, the test waits
+  until the attempt has run that long. A connection that completes, but later
+  than `timeout_msec`, is counted as timed out by the handler, as for `ping`.
+  With an `interval_msec` longer than the kernel's own connect timeout, about two
+  minutes on Linux, the kernel gives up first and the attempt counts in
+  `netprobe_connect_failures` instead.
+- **`ping`:** the probe does not enforce it. It is passed to the netprobe handler
+  as the transaction time to live: a reply that comes later than that is counted
+  in `netprobe_packets_timeout`, and a request that gets no reply at all shows
+  only as an attempt without a success.
+
+Where the handler decides, a handler that sets its own [`xact_ttl_ms` or
+`xact_ttl_secs`](../handlers/netprobe.md#configurations) takes precedence over
+`timeout_msec`.
 
 ### interval_msec
 
@@ -131,8 +147,8 @@ interval_msec: 5000
 
 ### timeout_msec
 
-How long a single test may take before it is treated as failed, in
-milliseconds.
+How long a single test may take, in milliseconds. What happens to a test that
+takes longer depends on the test type; see [Timing](#timing).
 
 ```yaml
 timeout_msec: 2000

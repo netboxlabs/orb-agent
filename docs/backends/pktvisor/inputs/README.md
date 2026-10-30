@@ -308,8 +308,31 @@ configured to send to. The conventional ports differ by format:
 exporter.
 
 `bind` is the local address to receive on, and both it and `port` must be set
-together. Nothing about the port is enforced, so an exporter sending to a
-different one simply needs that number here.
+together. `bind` must be an IPv4 or IPv6 address, such as `0.0.0.0` or `::`,
+written without brackets; a hostname such as `localhost` is refused. Any port
+from 1 to 65535 is accepted, so an exporter sending to a different one simply
+needs that number here. A `bind` and `port` that overlap another listener fail
+the input with `unable to bind flow UDP server on <bind>:<port>: address already
+in use`. They overlap when the port is the same and so is the address, or either
+side is the wildcard of the other's family: `0.0.0.0` for IPv4, `::` for IPv6.
+Two different specific addresses can share a port. A dual-stack `::`, described
+below, also overlaps IPv4 listeners on its port. Other bind failures end with
+their own reason, such as `permission denied` for a port below 1024 when
+`pktvisord` runs as a non-root user with `--net=host`; see
+[Running as a non-root user](../../../advanced_config/non_root_user.md#features-that-need-root-or-extra-privileges).
+
+Unless `net.ipv6.bindv6only=1` is set where `pktvisord` runs, `::` also receives
+IPv4 datagrams. With `--net=host` that is the host's setting; a bridge-mode
+container has its own, which `docker run --sysctl net.ipv6.bindv6only=1` sets. A
+Netflow or IPFIX exporter that sends over IPv4 to a `::` bind is identified by
+its IPv4 address, as it would be on `0.0.0.0`, so key its
+[`device_map`](../handlers/flow.md#device_map) and
+[`only_device_interfaces`](../handlers/flow.md#only_device_interfaces) entries
+by that address; entries written in IPv4-mapped form, such as
+`::ffff:192.0.2.10`, still match. A dual-stack `::` input and a `0.0.0.0` input
+cannot share a port, so to receive IPv4 and IPv6 exporters on one port, bind
+`::`. With `net.ipv6.bindv6only=1`, the two can share it. For sFlow, the device
+is the agent address inside each datagram, whatever the bind.
 
 ### flow configuration
 
@@ -340,7 +363,8 @@ pcap_file: /path/to/flows.pcap
 Type: *int* and **bind**: *str*
 
 Receives flow records on a UDP socket. Both must be set together; only UDP bind
-is supported.
+is supported. `bind` is an IPv4 or IPv6 address and `port` is 1 to 65535; see
+[Choosing a port and flow type](#choosing-a-port-and-flow-type).
 
 ```yaml
 port: int
@@ -410,17 +434,35 @@ dnstap_file: path/to/file
 
 Type: *str*
 
-Path to socket file containing port and ip to bind
+Path of the Unix socket that pktvisor listens on, and that the DNS server sends
+its dnstap stream to.
 
 ```yaml
 socket: path/to/file.sock
 ```
 
+When the input starts, a socket at that path that no server listens on, such
+as one left by a pktvisor that crashed or was killed, is replaced. The input
+fails to start instead, with an error that includes `unable to bind dnstap
+server on <path>:` followed by the reason, and leaves the file in place, when:
+
+- a server already listens on the socket: `address already in use`;
+- the path exists and is not a socket: `the path exists and is not a socket`;
+- no server listens on the socket, but pktvisor cannot remove it: `unable to
+  remove the stale socket there`, followed by the reason;
+- pktvisor cannot tell whether a server listens on it: `unable to tell whether a
+  server listens on the socket there`, followed by the reason. A socket left by
+  a pktvisor that ran as root is one case, because a non-root pktvisor cannot
+  connect to it. Remove the file if nothing uses it.
+
+A path whose directory does not exist fails with `permission denied`, not with
+a missing-file error.
+
 ### tcp
 
 Type: *str*
 
-The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now).
+The other way to inform the ip and port to be monitored is through the 'tcp' configuration. Usage syntax is a string with ip:port (only ipv4 is supported for now). An address and port that overlap another listener, as for [flow](#choosing-a-port-and-flow-type), fail the input with `unable to listen with dnstap server on <ip>:<port>: address already in use`.
 
 ```yaml
 tcp: ip:port
