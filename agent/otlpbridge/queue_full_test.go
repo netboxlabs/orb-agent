@@ -2,6 +2,7 @@ package otlpbridge
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"sync"
 	"testing"
@@ -89,6 +90,166 @@ func TestGRPCExport_TheExporterSendsAgainAnExportTheFullQueueRefused(t *testing.
 	assert.Contains(t, string(pub.published()[2]), "sent again")
 }
 
+// A full queue logs its refusals by the spell: a WARN when it first refuses
+// an export, saying how full it is, and an INFO when it admits an export after
+// a quiet period with no refusal, saying how many it refused and when. An
+// export admitted sooner, between refusals, ends nothing, so a queue that is
+// full one moment and has room the next does not log each change. Nothing is
+// logged while the queue's lock is held.
+func TestEnqueue_AFullQueueLogsWhenItStartsAndStopsRefusing(t *testing.T) {
+	bridge, pub, logs, clock := fullQueue(t)
+	logs.checkUnlocked(&bridge.queueMu)
+
+	// Three refusals over a minute and a half: the spell is older than the
+	// quiet period, its latest refusal is not.
+	for b := byte(3); b <= 5; b++ {
+		refuseOne(t, bridge, b)
+		clock.Advance(30 * time.Second)
+	}
+	warns := logs.at(slog.LevelWarn)
+	require.Len(t, warns, 1, "three refusals log once")
+	assert.Equal(t, "OTLP pending queue is full, refusing exports until it has room", warns[0].msg)
+	assert.Equal(t, map[string]any{
+		"signal":               signalMetrics,
+		"messages":             int64(1),
+		"bytes":                int64(1),
+		"pending_messages":     int64(1),
+		"pending_bytes":        int64(1),
+		"max_pending_messages": int64(1),
+		"max_pending_bytes":    int64(defaultMaxPendingBytes),
+		"retry_after":          "5s",
+		"spell":                int64(1),
+		"refusals":             int64(1),
+		"first_refusal":        "2026-10-30T12:00:00Z",
+	}, warns[0].attrs)
+
+	// The writer publishes the first message and takes the second, which
+	// leaves room for one: admitted within the quiet period after the latest
+	// refusal, though not after the first, then full again.
+	pub.next()
+	<-pub.entered
+	admitOne(t, bridge, 6)
+	refuseOne(t, bridge, 7)
+	assert.Len(t, logs.at(slog.LevelWarn), 1, "a refusal soon after an admission is the same spell")
+	assert.Empty(t, logs.at(slog.LevelInfo), "an admission within the quiet period ends nothing")
+
+	// The first export admitted a quiet period after the latest refusal ends
+	// the spell.
+	clock.Advance(queueFullQuiet)
+	pub.next()
+	<-pub.entered
+	admitOne(t, bridge, 8)
+	infos := logs.at(slog.LevelInfo)
+	require.Len(t, infos, 1)
+	assert.Equal(t, "OTLP pending queue has room again, accepting exports", infos[0].msg)
+	assert.Equal(t, map[string]any{
+		"spell":         int64(1),
+		"refusals":      int64(4),
+		"first_refusal": "2026-10-30T12:00:00Z",
+		"last_refusal":  "2026-10-30T12:01:30Z",
+	}, infos[0].attrs)
+
+	// The next refusal starts another spell.
+	refuseOne(t, bridge, 9)
+	warns = logs.at(slog.LevelWarn)
+	require.Len(t, warns, 2)
+	assert.Equal(t, int64(2), warns[1].attrs["spell"])
+	assert.Equal(t, int64(1), warns[1].attrs["refusals"])
+	assert.False(t, logs.loggedUnderLock(), "a line was logged while the queue's lock was held")
+}
+
+// A spell of refusals that goes on is logged again every queueFullRemind,
+// with the refusals so far and when the first was, so a recent stretch of
+// the log still shows it.
+func TestEnqueue_ASpellThatGoesOnIsLoggedAgain(t *testing.T) {
+	bridge, _, logs, clock := fullQueue(t)
+
+	refuseOne(t, bridge, 3)
+	clock.Advance(queueFullRemind - time.Second)
+	refuseOne(t, bridge, 4)
+	assert.Len(t, logs.at(slog.LevelWarn), 1)
+	clock.Advance(time.Second)
+	refuseOne(t, bridge, 5)
+	clock.Advance(time.Minute)
+	refuseOne(t, bridge, 6)
+
+	warns := logs.at(slog.LevelWarn)
+	require.Len(t, warns, 2)
+	assert.Equal(t, int64(1), warns[1].attrs["spell"])
+	assert.Equal(t, int64(3), warns[1].attrs["refusals"])
+	assert.Equal(t, "2026-10-30T12:00:00Z", warns[1].attrs["first_refusal"])
+	assert.Empty(t, logs.at(slog.LevelInfo))
+}
+
+// An export with nothing to queue, as when every point of a metrics export
+// was dropped, ends no spell while the queue is still full.
+func TestEnqueue_AnEmptyExportEndsNoSpell(t *testing.T) {
+	bridge, _, logs, clock := fullQueue(t)
+
+	refuseOne(t, bridge, 3)
+	clock.Advance(queueFullQuiet)
+	require.NoError(t, bridge.enqueue(context.Background(), signalMetrics, false, nil, ContentTypeProtobuf))
+	assert.Empty(t, logs.at(slog.LevelInfo))
+	refuseOne(t, bridge, 4)
+	assert.Len(t, logs.at(slog.LevelWarn), 1, "the spell goes on")
+}
+
+// The byte bound refuses with the queue's messages well under theirs, and the
+// WARN tells the queue's numbers apart from the refused export's.
+func TestEnqueue_AQueueFullInBytesLogsItsNumbers(t *testing.T) {
+	pub := &steppedPublisher{entered: make(chan struct{}, 8), step: make(chan struct{})}
+	logs := &recordedLogs{}
+	bridge := limitedBridgeLogging(t, BridgeConfig{MaxPendingBytes: 1050}, pub, slog.New(logs))
+	logs.checkUnlocked(&bridge.queueMu)
+	bridge.now = (&fakeClock{now: queueStart}).Now
+	ctx := context.Background()
+	require.NoError(t, bridge.enqueue(ctx, signalMetrics, false, [][]byte{make([]byte, 100)}, ContentTypeProtobuf))
+	<-pub.entered
+	require.NoError(t, bridge.enqueue(ctx, signalMetrics, false,
+		[][]byte{make([]byte, 200), make([]byte, 200), make([]byte, 200)}, ContentTypeProtobuf))
+
+	err := bridge.enqueue(ctx, signalLogs, false, [][]byte{make([]byte, 250), make([]byte, 250)}, ContentTypeJSON)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+
+	warns := logs.at(slog.LevelWarn)
+	require.Len(t, warns, 1)
+	assert.Equal(t, map[string]any{
+		"signal":               signalLogs,
+		"messages":             int64(2),
+		"bytes":                int64(500),
+		"pending_messages":     int64(3),
+		"pending_bytes":        int64(600),
+		"max_pending_messages": int64(defaultMaxPendingQueue),
+		"max_pending_bytes":    int64(1050),
+		"retry_after":          "5s",
+		"spell":                int64(1),
+		"refusals":             int64(1),
+		"first_refusal":        "2026-10-30T12:00:00Z",
+	}, warns[0].attrs)
+	assert.False(t, logs.loggedUnderLock(), "a line was logged while the queue's lock was held")
+}
+
+// Exports refused at the same moment, by concurrent exporters, start one
+// spell and log one WARN.
+func TestEnqueue_ConcurrentRefusalsLogOnce(t *testing.T) {
+	bridge, _, logs, _ := fullQueue(t)
+	ctx := context.Background()
+
+	begin := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			<-begin
+			err := bridge.enqueue(ctx, signalLogs, false, [][]byte{{3}}, ContentTypeJSON)
+			assert.Equal(t, codes.ResourceExhausted, status.Code(err))
+		})
+	}
+	close(begin)
+	wg.Wait()
+
+	assert.Len(t, logs.at(slog.LevelWarn), 1)
+}
+
 // Retry-After is whole seconds, rounded up, and never 0, which a client
 // would read as "send again now".
 func TestRetryAfterSeconds(t *testing.T) {
@@ -169,4 +330,146 @@ func (p *gatedPublisher) published() [][]byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([][]byte(nil), p.payloads...)
+}
+
+// queueStart is when the fake clock of fullQueue starts.
+var queueStart = time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+
+// fullQueue is a bridge with a queue of one message, full: the writer holds a
+// first message in Publish and a second waits. It logs to logs, and its clock
+// starts at queueStart.
+func fullQueue(t *testing.T) (*BridgeServer, *steppedPublisher, *recordedLogs, *fakeClock) {
+	t.Helper()
+	pub := &steppedPublisher{entered: make(chan struct{}, 8), step: make(chan struct{})}
+	logs := &recordedLogs{}
+	bridge := limitedBridgeLogging(t, BridgeConfig{MaxPendingQueue: 1}, pub, slog.New(logs))
+	clock := &fakeClock{now: queueStart}
+	bridge.now = clock.Now
+	admitOne(t, bridge, 1)
+	<-pub.entered
+	admitOne(t, bridge, 2)
+	return bridge, pub, logs, clock
+}
+
+// admitOne sends a one-byte metrics export the queue admits.
+func admitOne(t *testing.T, bridge *BridgeServer, b byte) {
+	t.Helper()
+	require.NoError(t, bridge.enqueue(context.Background(), signalMetrics, false, [][]byte{{b}}, ContentTypeProtobuf))
+}
+
+// refuseOne sends a one-byte metrics export the full queue refuses.
+func refuseOne(t *testing.T, bridge *BridgeServer, b byte) {
+	t.Helper()
+	err := bridge.enqueue(context.Background(), signalMetrics, false, [][]byte{{b}}, ContentTypeProtobuf)
+	require.Equal(t, codes.ResourceExhausted, status.Code(err))
+}
+
+// steppedPublisher signals entered as each publish begins and holds it until
+// the test lets it through with next.
+type steppedPublisher struct {
+	entered chan struct{}
+	step    chan struct{}
+}
+
+func (p *steppedPublisher) Publish(ctx context.Context, _ string, _ []byte, _ string) error {
+	select {
+	case p.entered <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case <-p.step:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *steppedPublisher) next() { p.step <- struct{}{} }
+
+// recordedLogs is a slog.Handler that keeps every record, for tests of what
+// the bridge logs. With a lock to check, it also notes a record logged while
+// that lock was held.
+type recordedLogs struct {
+	mu        sync.Mutex
+	records   []loggedRecord
+	lock      *sync.Mutex
+	underLock bool
+}
+
+// checkUnlocked has every later record checked against lock.
+func (h *recordedLogs) checkUnlocked(lock *sync.Mutex) {
+	h.mu.Lock()
+	h.lock = lock
+	h.mu.Unlock()
+}
+
+// loggedUnderLock reports whether a record was logged while the checked lock
+// was held.
+func (h *recordedLogs) loggedUnderLock() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.underLock
+}
+
+type loggedRecord struct {
+	level slog.Level
+	msg   string
+	attrs map[string]any
+}
+
+func (h *recordedLogs) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordedLogs) Handle(_ context.Context, r slog.Record) error {
+	attrs := map[string]any{}
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.lock != nil {
+		if h.lock.TryLock() {
+			h.lock.Unlock()
+		} else {
+			h.underLock = true
+		}
+	}
+	h.records = append(h.records, loggedRecord{level: r.Level, msg: r.Message, attrs: attrs})
+	return nil
+}
+
+func (h *recordedLogs) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h *recordedLogs) WithGroup(string) slog.Handler { return h }
+
+// at returns the records logged at level.
+func (h *recordedLogs) at(level slog.Level) []loggedRecord {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var out []loggedRecord
+	for _, r := range h.records {
+		if r.level == level {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// fakeClock is a clock the test moves by hand.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
 }
