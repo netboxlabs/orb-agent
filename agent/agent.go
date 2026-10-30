@@ -145,7 +145,7 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	switch {
 	case a.backendsCommon.Otlp.Grpc == "":
 	case !a.exportsOwnLog():
-		a.logger.Info("not exporting the agent's log through the OTLP bridge, as the platform keeps no logs: set otlp_bridge_forward_logs to export it")
+		a.logger.Debug("not sending the agent's logs to Fleet: set otlp_bridge_forward_logs to send them")
 	default:
 		a.logger, otlpShutdown, err = telemetry.BuildOTLPLogExporter(agentCtx, a.logger, a.backendsCommon)
 		if err != nil {
