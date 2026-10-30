@@ -40,31 +40,73 @@ type traceServer struct {
 	collectortrace.UnimplementedTraceServiceServer
 }
 
-func (s *traceServer) Export(ctx context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
+// Export takes a traces export and publishes nothing: no pipeline on the
+// platform reads traces, as orb-pro's telemetry enricher drops them from the
+// telemetry topic and its OTLP Bridge reads the ingest topic as logs only.
+func (s *traceServer) Export(_ context.Context, req *collectortrace.ExportTraceServiceRequest) (*collectortrace.ExportTraceServiceResponse, error) {
 	resources := make([]*resourcev1.Resource, 0, len(req.ResourceSpans))
 	for _, rs := range req.ResourceSpans {
 		if rs != nil {
 			resources = append(resources, rs.Resource)
 		}
 	}
-
-	if err := s.bridge.exportWhole(ctx, signalTraces, isIngestRequest(resources), req); err != nil {
-		return nil, err
-	}
+	s.bridge.discardUnread(signalTraces, resources)
 	return &collectortrace.ExportTraceServiceResponse{}, nil
 }
 
-// exportWhole publishes a logs or traces export as one message in the ingest
-// encoding. One over the message cap is dropped and counted, and the client
-// is told with InvalidArgument, which the OTLP exporters do not retry: the
-// same export would be over the cap again.
+// discardUnread takes a logs export that is not Diode data, or any traces
+// export, and publishes nothing: the platform keeps none (orb-pro's
+// telemetry enricher acknowledges logs and traces and drops them), so
+// queueing one would only take room and bandwidth from metrics. The export
+// is answered as accepted, so no exporter retries it or logs an error each
+// time; it is counted as no_pipeline, and the first of each signal is logged
+// at INFO with the service that sent it.
+func (s *BridgeServer) discardUnread(signal string, resources []*resourcev1.Resource) {
+	s.dropped.add(signal, reasonNoPipeline, 1)
+	once, msg := &s.unreadTraces, "not publishing OTLP traces: the platform keeps none"
+	if signal == signalLogs {
+		once, msg = &s.unreadLogs, "not publishing OTLP logs that are not Diode data: the platform keeps none; set otlp_bridge_forward_logs to publish them"
+	}
+	once.Do(func() {
+		s.logger.Info(msg, "signal", signal, "service_name", serviceName(resources))
+	})
+}
+
+// serviceName is the service.name of the first resource that has one.
+func serviceName(resources []*resourcev1.Resource) string {
+	for _, r := range resources {
+		if r == nil {
+			continue
+		}
+		for _, attr := range r.Attributes {
+			if attr != nil && attr.Key == "service.name" && attr.Value != nil {
+				return attr.Value.GetStringValue()
+			}
+		}
+	}
+	return ""
+}
+
+// exportWhole publishes a logs export as one message in the ingest encoding.
+// One over the most a message may carry, the message cap or, for Diode data,
+// what the broker and the pending queue take (ingestCap), is dropped and
+// counted, and the client is told with InvalidArgument, which the OTLP
+// exporters do not retry: the same export would be over it again.
 func (s *BridgeServer) exportWhole(ctx context.Context, signal string, isIngest bool, req ProtoMessage) error {
 	payload, err := s.enc.Marshal(req)
 	if err != nil {
 		return err
 	}
 	contentType := s.enc.ContentType()
-	if limit := s.messageCap(s.topicFor(isIngest), contentType); len(payload) > limit {
+	topic := s.topicFor(isIngest)
+	if isIngest {
+		if limit := s.ingestCap(topic, contentType); len(payload) > limit {
+			s.dropped.add(signal, reasonTooLarge, 1)
+			s.logger.Warn("OTLP export of Diode data exceeds what the broker and the pending queue take, dropping it",
+				"signal", signal, "bytes", len(payload), "limit", limit)
+			return status.Errorf(codes.InvalidArgument, "%s export of Diode data of %d bytes exceeds the %d bytes the broker and the bridge's pending queue take; dropped", signal, len(payload), limit)
+		}
+	} else if limit := s.messageCap(topic, contentType); len(payload) > limit {
 		s.dropped.add(signal, reasonTooLarge, 1)
 		s.logger.Warn("OTLP export exceeds the message cap, dropping it", "signal", signal, "bytes", len(payload), "cap", limit)
 		return status.Errorf(codes.InvalidArgument, "%s export of %d bytes exceeds the bridge's message cap of %d bytes; dropped", signal, len(payload), limit)
@@ -154,6 +196,16 @@ type logsServer struct {
 
 func (s *logsServer) Export(ctx context.Context, req *collectorlogs.ExportLogsServiceRequest) (*collectorlogs.ExportLogsServiceResponse, error) {
 	isIngest := s.isIngestRequest(req)
+	if !isIngest && !s.bridge.cfg.ForwardLogs {
+		resources := make([]*resourcev1.Resource, 0, len(req.ResourceLogs))
+		for _, rl := range req.ResourceLogs {
+			if rl != nil {
+				resources = append(resources, rl.Resource)
+			}
+		}
+		s.bridge.discardUnread(signalLogs, resources)
+		return &collectorlogs.ExportLogsServiceResponse{}, nil
+	}
 	if isIngest {
 		repo := s.bridge.GetPolicyRepo()
 		enrichLogsWithDatasets(req, repo)

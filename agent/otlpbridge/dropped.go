@@ -35,6 +35,10 @@ const (
 	// reasonPublishFailed: the broker refused the publish for good, or the
 	// retries ran out.
 	reasonPublishFailed = "publish_failed"
+	// reasonNoPipeline: a logs export that is not Diode data (unless
+	// BridgeConfig.ForwardLogs), or any traces export, which the platform
+	// keeps none of, so the bridge does not publish it.
+	reasonNoPipeline = "no_pipeline"
 )
 
 // droppedCounter counts what the bridge dropped, by signal and reason, as a

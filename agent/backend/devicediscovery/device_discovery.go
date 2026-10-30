@@ -93,22 +93,13 @@ func (d *deviceDiscoveryBackend) Configure(logger *slog.Logger, repo policies.Po
 	// itself running in debug mode. A non-string log_level (YAML
 	// `log_level: 3`) falls through the type assertion and cannot panic.
 	//
-	// The third branch deliberately reads common.Debug rather than
-	// logger.Enabled(ctx, slog.LevelDebug), which is what the other three
-	// discovery backends currently do. logger.Enabled is not a reliable proxy
-	// for debug mode here: when orb.backends.common.otlp.grpc is set,
-	// agent.go:165-166 replaces the agent logger with a telemetry.multiHandler
-	// wrapping both the console handler and the otelslog handler. multiHandler
-	// ORs Enabled across its handlers (telemetry/logs.go:52-59) and the
-	// otelslog handler applies no level filter, so Enabled(Debug) is true
-	// whenever OTLP log export is enabled -- with or without -d. That would
-	// silently start device-discovery at DEBUG and export the full traceback
-	// plus napalm/netmiko/paramiko/ncclient chatter to the collector.
-	//
-	// common.Debug is the explicit state: agent.go:160 sets it from a.debug,
-	// which cmd/main.go:95 derives as debugFlag || cfg.OrbAgent.Debug.Enable.
-	// The same fix is owed to networkdiscovery, snmpdiscovery and
-	// gnmidiscovery; tracked separately.
+	// The third branch reads common.Debug, the explicit state: agent.go sets
+	// it from a.debug, which cmd/main.go derives as debugFlag ||
+	// cfg.OrbAgent.Debug.Enable. The other three discovery backends read
+	// logger.Enabled(ctx, slog.LevelDebug), which agrees with it now that the
+	// agent's OTLP log export follows the console's level (telemetry/logs.go,
+	// levelGated); before that, an exported log turned Enabled(Debug) on with
+	// or without -d.
 	if logLevel, prs := config["log_level"].(string); prs {
 		d.diodeLogLevel = logLevel
 	} else if debug, prs := config["debug"].(bool); prs && debug {

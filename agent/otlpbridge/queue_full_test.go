@@ -45,7 +45,7 @@ func TestEnqueue_AFullQueueRefusalCarriesARetryDelay(t *testing.T) {
 // first refusal and the export is lost.
 func TestGRPCExport_TheExporterSendsAgainAnExportTheFullQueueRefused(t *testing.T) {
 	pub := &gatedPublisher{entered: make(chan struct{}, 1), open: make(chan struct{})}
-	bridge := limitedBridge(t, BridgeConfig{MaxPendingQueue: 1}, pub)
+	bridge := limitedBridge(t, BridgeConfig{MaxPendingQueue: 1, ForwardLogs: true}, pub)
 	bridge.retryAfter = 20 * time.Millisecond
 	var openOnce sync.Once
 	open := func() { openOnce.Do(func() { close(pub.open) }) }

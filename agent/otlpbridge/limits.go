@@ -7,7 +7,7 @@ import (
 const (
 	// DefaultMaxMessageBytes caps one published payload when
 	// BridgeConfig.MaxMessageBytes is unset. An export over it is split
-	// (metrics) or dropped (logs, traces). Four MiB keeps every message well
+	// (metrics) or dropped (forwarded logs). Four MiB keeps every message well
 	// under RabbitMQ's 16 MiB default maximum and gives the telemetry
 	// enricher bodies it can hold several of at once. Exported so the agent's
 	// configuration checks its queue bound against the cap the bridge will
@@ -81,4 +81,23 @@ func (s *BridgeServer) messageCap(topic, contentType string) int {
 		return broker
 	}
 	return limit
+}
+
+// defaultIngestCap bounds a Diode export's packet before the broker's limit
+// is known: RabbitMQ's default maximum packet size, the platform's broker.
+const defaultIngestCap = 16 << 20
+
+// ingestCap is the most payload bytes one logs export of Diode data may
+// carry: the broker's limit once its CONNACK has set one, and before that
+// RabbitMQ's default, or the configured cap when it is larger; never more
+// than the pending queue holds, as an export goes into it whole. Not the
+// configured cap itself, which sizes what the telemetry enricher receives:
+// orb-pro's OTLP Bridge reads the ingest topic, and the bridge's JSON makes a
+// discovery chunk 1.4 to 2.6 times the size its backend chunked it to.
+func (s *BridgeServer) ingestCap(topic, contentType string) int {
+	limit := max(defaultIngestCap-mqttPublishOverhead(topic, contentType), s.maxMessageBytes)
+	if broker, limited := s.broker.payloadCap(topic, contentType); limited {
+		limit = broker
+	}
+	return int(min(int64(limit), s.maxPendingBytes))
 }

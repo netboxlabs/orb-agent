@@ -246,11 +246,12 @@ func TestMetricsExport_TheDropCountStaysOffTheIngestTopic(t *testing.T) {
 	assert.NotContains(t, string(msg.payload), droppedMetricName)
 }
 
-// A logs export over the cap is dropped and counted, and the client told
-// with a status it does not retry: over gRPC InvalidArgument, over HTTP 400.
+// A forwarded logs export over the cap is dropped and counted, and the
+// client told with a status it does not retry: over gRPC InvalidArgument,
+// over HTTP 400.
 func TestLogsExport_OverTheCapIsRefusedAndCounted(t *testing.T) {
 	pub := &scriptedPublisher{}
-	bridge := limitedBridge(t, BridgeConfig{MaxMessageBytes: 1 << 10, HTTPListenAddr: "127.0.0.1:0", ListenAddr: "127.0.0.1:0"}, pub)
+	bridge := limitedBridge(t, BridgeConfig{MaxMessageBytes: 1 << 10, HTTPListenAddr: "127.0.0.1:0", ListenAddr: "127.0.0.1:0", ForwardLogs: true}, pub)
 	require.NoError(t, bridge.Start(context.Background()))
 	req := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{ScopeLogs: []*logsv1.ScopeLogs{{
 		LogRecords: []*logsv1.LogRecord{{SeverityText: strings.Repeat("x", 4<<10)}},
