@@ -67,6 +67,7 @@ type FleetManager struct {
 	OTLPBridgeBindHost        string `yaml:"otlp_bridge_bind_host,omitempty"`         // Host both bridge listeners bind to (default: localhost; set 0.0.0.0 or :: to expose them)
 	OTLPBridgeMaxMessageBytes *int   `yaml:"otlp_bridge_max_message_bytes,omitempty"` // Cap on one published MQTT payload; larger metrics exports are split (default: 4 MiB)
 	OTLPBridgeMaxPendingBytes *int   `yaml:"otlp_bridge_max_pending_bytes,omitempty"` // Bound on the payload bytes the bridge queues before MQTT is ready (default: 64 MiB)
+	SendAgentLogs             bool   `yaml:"send_agent_logs,omitempty"`               // Send the agent's logs to Fleet (default: false, as the platform keeps no logs today)
 }
 
 // Sources represents the configuration for manager sources, including cloud, local and git.

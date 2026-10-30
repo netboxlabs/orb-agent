@@ -125,7 +125,8 @@ func BuildOTLPLogExporter(ctx context.Context, logger *slog.Logger, commons conf
 
 	var resultingLogger *slog.Logger
 	if logger != nil {
-		if combined := newMultiHandler(logger.Handler(), handler); combined != nil {
+		console := logger.Handler()
+		if combined := newMultiHandler(console, levelGated{Handler: handler, gate: console}); combined != nil {
 			*logger = *slog.New(combined)
 		}
 		resultingLogger = logger
@@ -322,4 +323,26 @@ func (r *resilientLogExporter) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	return exp.Shutdown(ctx)
+}
+
+// levelGated is a handler that takes a record only at a level gate takes
+// too. Gated on the agent's console, the OTLP handler follows its level,
+// which -d raises: the SDK's batch processor takes records at every level,
+// so ungated it would export DEBUG, and enable it for the whole agent, all
+// the time.
+type levelGated struct {
+	slog.Handler
+	gate slog.Handler
+}
+
+func (g levelGated) Enabled(ctx context.Context, level slog.Level) bool {
+	return g.gate.Enabled(ctx, level) && g.Handler.Enabled(ctx, level)
+}
+
+func (g levelGated) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return levelGated{Handler: g.Handler.WithAttrs(attrs), gate: g.gate}
+}
+
+func (g levelGated) WithGroup(name string) slog.Handler {
+	return levelGated{Handler: g.Handler.WithGroup(name), gate: g.gate}
 }

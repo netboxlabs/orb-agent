@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -910,6 +911,86 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 	// Verify the OTLP URLs were overridden before backends started
 	assert.Equal(t, "grpc://localhost:4317", orbAgent.backendsCommon.Otlp.Grpc)
 	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP)
+}
+
+// lockedBuffer is a buffer the agent's goroutines can log into.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// startFleetAgent starts an agent in fleet mode, its managers mocked, whose
+// console logs at level into the returned buffer, with
+// send_agent_logs as given.
+func startFleetAgent(t *testing.T, forwardLogs bool, level slog.Level) (*orbAgent, *lockedBuffer) {
+	t.Helper()
+	console := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(console, &slog.HandlerOptions{Level: level}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends: map[string]any{},
+		ConfigManager: config.ManagerConfig{
+			Active:  "fleet",
+			Sources: config.Sources{Fleet: config.FleetManager{SendAgentLogs: forwardLogs}},
+		},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &mockSecretsManager{}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	orbAgent.configManager = &mockConfigManager{}
+	orbAgent.filesManager = &mockFilesManager{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, orbAgent.Start(ctx, cancel))
+	t.Cleanup(orbAgent.shutdownOTLP)
+	return orbAgent, console
+}
+
+// In fleet mode the agent does not export its own log by default: the bridge
+// would carry it to a platform that keeps none. At Info its console says
+// nothing about it, and DEBUG stays off, which the exporter used to turn on
+// at every level, running the discovery backends at debug too.
+func TestStart_FleetConfig_DoesNotExportItsOwnLogByDefault(t *testing.T) {
+	orbAgent, console := startFleetAgent(t, false, slog.LevelInfo)
+
+	assert.Nil(t, orbAgent.otlpShutdown, "no OTLP log exporter")
+	assert.False(t, orbAgent.logger.Enabled(context.Background(), slog.LevelDebug))
+	assert.NotContains(t, console.String(), "send_agent_logs", "not at every start")
+}
+
+// At DEBUG the agent says its log is not sent to Fleet, and how to send it;
+// not when it is sent.
+func TestStart_FleetConfig_SaysAtDebugWhenItsLogIsNotSent(t *testing.T) {
+	_, console := startFleetAgent(t, false, slog.LevelDebug)
+	assert.Contains(t, console.String(), "not sending the agent's logs to Fleet: set send_agent_logs to send them")
+
+	_, console = startFleetAgent(t, true, slog.LevelDebug)
+	assert.NotContains(t, console.String(), "not sending the agent's logs to Fleet")
+}
+
+// With send_agent_logs on, the agent exports its own log through the
+// bridge, at the console's level: DEBUG only with -d.
+func TestStart_FleetConfig_ExportsItsOwnLogAtTheConsolesLevelWhenForwarded(t *testing.T) {
+	orbAgent, _ := startFleetAgent(t, true, slog.LevelInfo)
+
+	assert.NotNil(t, orbAgent.otlpShutdown, "an OTLP log exporter")
+	assert.True(t, orbAgent.logger.Enabled(context.Background(), slog.LevelInfo))
+	assert.False(t, orbAgent.logger.Enabled(context.Background(), slog.LevelDebug))
 }
 
 func TestStart_FleetConfig_CreatesOTLPSectionWhenMissing(t *testing.T) {

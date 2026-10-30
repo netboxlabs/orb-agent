@@ -113,6 +113,9 @@ type BridgeServer struct {
 	// dropped counts what the bridge could not publish, and is published
 	// with the agent's metrics.
 	dropped *droppedCounter
+	// unreadLogs and unreadTraces log the first export of each signal the
+	// bridge does not publish (discardUnread).
+	unreadLogs, unreadTraces sync.Once
 
 	// initialBackoff is the starting retry delay used by the writer goroutine.
 	// Defaults to initialRetryBackoff; tests override it for speed.

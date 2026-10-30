@@ -83,35 +83,26 @@ func newBridgeWithTopics(_ Encoder) (*BridgeServer, *fakePublisher) {
 // Trace handler
 // ---------------------------------------------------------------------------
 
-func TestTraceHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
-	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	defer func() { _ = bridge.Stop(context.Background()) }()
-	s := &traceServer{bridge: bridge}
-	_, err := s.Export(context.Background(), &collectortrace.ExportTraceServiceRequest{})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	require.Eventually(t, func() bool {
-		return fp.getTopic() == "telemetry"
-	}, time.Second, time.Millisecond)
-}
+// Traces, of agent telemetry or of Diode data, are counted and not
+// published: no pipeline on the platform reads them.
+func TestTraceHandler_Export_IsCountedNotPublished(t *testing.T) {
+	for name, req := range map[string]*collectortrace.ExportTraceServiceRequest{
+		"agent telemetry": {},
+		"Diode data":      {ResourceSpans: []*tracev1.ResourceSpans{{Resource: diodeResource()}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
+			defer func() { _ = bridge.Stop(context.Background()) }()
+			_, err := (&traceServer{bridge: bridge}).Export(context.Background(), req)
+			require.NoError(t, err)
+			assert.Equal(t, int64(1), bridge.dropped.total(signalTraces, reasonNoPipeline))
 
-func TestTraceHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
-	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
-	defer func() { _ = bridge.Stop(context.Background()) }()
-	s := &traceServer{bridge: bridge}
-	req := &collectortrace.ExportTraceServiceRequest{
-		ResourceSpans: []*tracev1.ResourceSpans{
-			{Resource: diodeResource()},
-		},
+			// A metrics export after it is the only one published.
+			_, err = (&metricsServer{bridge: bridge}).Export(context.Background(), &collectormetrics.ExportMetricsServiceRequest{})
+			require.NoError(t, err)
+			require.Eventually(t, func() bool { return fp.getTopic() == "telemetry" }, time.Second, time.Millisecond)
+		})
 	}
-	_, err := s.Export(context.Background(), req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	require.Eventually(t, func() bool {
-		return fp.getTopic() == "ingest"
-	}, time.Second, time.Millisecond)
 }
 
 // ---------------------------------------------------------------------------
@@ -153,9 +144,11 @@ func TestMetricsHandler_Export_DiodeData_PublishesToIngest(t *testing.T) {
 // Logs handler
 // ---------------------------------------------------------------------------
 
-func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetry(t *testing.T) {
+// Forwarded, logs that are not Diode data go to the telemetry topic.
+func TestLogsHandler_Export_AgentTelemetry_PublishesToTelemetryWhenForwarded(t *testing.T) {
 	bridge, fp := newBridgeWithTopics(ProtobufEncoder{})
 	defer func() { _ = bridge.Stop(context.Background()) }()
+	bridge.cfg.ForwardLogs = true
 	s := &logsServer{bridge: bridge}
 	_, err := s.Export(context.Background(), &collectorlogs.ExportLogsServiceRequest{})
 	if err != nil {

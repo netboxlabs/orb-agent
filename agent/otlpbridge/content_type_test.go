@@ -10,10 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 	collectorlogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	collectormetrics "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
-	collectortrace "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	logsv1 "go.opentelemetry.io/proto/otlp/logs/v1"
 	metricsv1 "go.opentelemetry.io/proto/otlp/metrics/v1"
-	tracev1 "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -63,27 +61,17 @@ func TestFleetBridge_TelemetryMetricsArePublishedAsProtobuf(t *testing.T) {
 	assert.Equal(t, "application/x-protobuf", fp.getContentType())
 }
 
-// The enricher tells JSON logs and traces apart from metrics by reading their
-// first key; protobuf would make it decode them as metrics. They stay JSON.
-func TestFleetBridge_LogsAndTracesStayJSON(t *testing.T) {
-	t.Run("logs", func(t *testing.T) {
-		bridge, fp := newFleetEncodedBridge(t)
-		req := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{}}}
-		_, err := (&logsServer{bridge: bridge}).Export(context.Background(), req)
-		require.NoError(t, err)
-		awaitPublish(t, fp, "telemetry")
-		assert.Equal(t, "application/json", fp.getContentType())
-		require.NoError(t, protojson.Unmarshal(fp.getPayload(), &collectorlogs.ExportLogsServiceRequest{}))
-	})
-	t.Run("traces", func(t *testing.T) {
-		bridge, fp := newFleetEncodedBridge(t)
-		req := &collectortrace.ExportTraceServiceRequest{ResourceSpans: []*tracev1.ResourceSpans{{}}}
-		_, err := (&traceServer{bridge: bridge}).Export(context.Background(), req)
-		require.NoError(t, err)
-		awaitPublish(t, fp, "telemetry")
-		assert.Equal(t, "application/json", fp.getContentType())
-		require.NoError(t, protojson.Unmarshal(fp.getPayload(), &collectortrace.ExportTraceServiceRequest{}))
-	})
+// The enricher tells JSON logs apart from metrics by reading their first key;
+// protobuf would make it decode them as metrics. Forwarded logs stay JSON.
+func TestFleetBridge_ForwardedLogsStayJSON(t *testing.T) {
+	bridge, fp := newFleetEncodedBridge(t)
+	bridge.cfg.ForwardLogs = true
+	req := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{}}}
+	_, err := (&logsServer{bridge: bridge}).Export(context.Background(), req)
+	require.NoError(t, err)
+	awaitPublish(t, fp, "telemetry")
+	assert.Equal(t, "application/json", fp.getContentType())
+	require.NoError(t, protojson.Unmarshal(fp.getPayload(), &collectorlogs.ExportLogsServiceRequest{}))
 }
 
 // The ingest topic's consumer, orb-pro's OTLP Bridge service, reads JSON, so

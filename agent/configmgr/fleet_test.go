@@ -2038,9 +2038,11 @@ func TestFleetOTLPBridgeLimits(t *testing.T) {
 	require.NoError(t, err, "exactly one message at the default cap is enough")
 	assert.Equal(t, int64(otlpbridge.DefaultMaxMessageBytes), pending)
 
-	cfg := fleetOTLPBridgeConfig("localhost", 4317, 4318, 2<<20, 32<<20)
+	cfg := fleetOTLPBridgeConfig("localhost", 4317, 4318, 2<<20, 32<<20, false)
 	assert.Equal(t, 2<<20, cfg.MaxMessageBytes)
 	assert.Equal(t, int64(32<<20), cfg.MaxPendingBytes)
+	assert.False(t, cfg.ForwardLogs)
+	assert.True(t, fleetOTLPBridgeConfig("localhost", 4317, 4318, 2<<20, 32<<20, true).ForwardLogs)
 }
 
 // A reconnect signal that is already queued when shutdown begins is dropped:

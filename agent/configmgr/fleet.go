@@ -257,7 +257,7 @@ func fleetOTLPBridgeLimits(cfg config.Config) (messageBytes int, pendingBytes in
 // and everything for the ingest topic stay JSON: the enricher tells a JSON log
 // from metrics by its first key, which protobuf hides, and orb-pro's OTLP
 // Bridge service decodes the ingest topic as JSON only.
-func fleetOTLPBridgeConfig(bindHost string, grpcPort, httpPort, messageBytes int, pendingBytes int64) otlpbridge.BridgeConfig {
+func fleetOTLPBridgeConfig(bindHost string, grpcPort, httpPort, messageBytes int, pendingBytes int64, forwardLogs bool) otlpbridge.BridgeConfig {
 	return otlpbridge.BridgeConfig{
 		ListenAddr:      net.JoinHostPort(bindHost, strconv.Itoa(grpcPort)),
 		HTTPListenAddr:  net.JoinHostPort(bindHost, strconv.Itoa(httpPort)),
@@ -265,6 +265,7 @@ func fleetOTLPBridgeConfig(bindHost string, grpcPort, httpPort, messageBytes int
 		MetricsEncoding: "protobuf",
 		MaxMessageBytes: messageBytes,
 		MaxPendingBytes: pendingBytes,
+		ForwardLogs:     forwardLogs,
 	}
 }
 
@@ -289,7 +290,8 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 	if err != nil {
 		return err
 	}
-	bridgeConfig := fleetOTLPBridgeConfig(bindHost, grpcPort, httpPort, messageBytes, pendingBytes)
+	bridgeConfig := fleetOTLPBridgeConfig(bindHost, grpcPort, httpPort, messageBytes, pendingBytes,
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.SendAgentLogs)
 
 	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
 	if err != nil {

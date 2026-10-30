@@ -166,8 +166,10 @@ func TestHTTP_MetricsWithDiodeAttribute_PublishesToIngest(t *testing.T) {
 	assert.Equal(t, "ingest", fp.getTopic())
 }
 
+// Over HTTP, forwarded logs go to the telemetry topic, and traces are
+// answered 200 and not published.
 func TestHTTP_LogsAndTraces_Accepted(t *testing.T) {
-	_, fp, base := startHTTPBridge(t, "json")
+	bridge, fp, base := startHTTPBridgeConfig(t, BridgeConfig{Encoding: "json", ForwardLogs: true})
 
 	logs := &collectorlogs.ExportLogsServiceRequest{ResourceLogs: []*logsv1.ResourceLogs{{
 		ScopeLogs: []*logsv1.ScopeLogs{{LogRecords: []*logsv1.LogRecord{{}}}},
@@ -184,14 +186,15 @@ func TestHTTP_LogsAndTraces_Accepted(t *testing.T) {
 	fp.mu.Unlock()
 
 	traces := &collectortrace.ExportTraceServiceRequest{ResourceSpans: []*tracev1.ResourceSpans{{
+		Resource:   diodeResource(),
 		ScopeSpans: []*tracev1.ScopeSpans{{Spans: []*tracev1.Span{{Name: "s"}}}},
 	}}}
 	body, err = proto.Marshal(traces)
 	require.NoError(t, err)
 	resp = postBody(t, base+"/v1/traces", "application/x-protobuf", body)
 	assert.Equal(t, http.StatusOK, resp.status)
-	waitForPayload(t, fp)
-	assert.Equal(t, "telemetry", fp.getTopic())
+	assert.Equal(t, int64(1), bridge.dropped.total(signalTraces, reasonNoPipeline))
+	assert.Nil(t, fp.getPayload(), "traces are not published")
 }
 
 func TestHTTP_GzipBodyAccepted(t *testing.T) {

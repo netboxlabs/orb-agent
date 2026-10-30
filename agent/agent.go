@@ -142,7 +142,11 @@ func (a *orbAgent) startBackends(agentCtx context.Context, cfgBackends map[strin
 	delete(cfgBackends, "common")
 
 	var otlpShutdown func(context.Context) error
-	if a.backendsCommon.Otlp.Grpc != "" {
+	switch {
+	case a.backendsCommon.Otlp.Grpc == "":
+	case !a.exportsOwnLog():
+		a.logger.Debug("not sending the agent's logs to Fleet: set send_agent_logs to send them")
+	default:
 		a.logger, otlpShutdown, err = telemetry.BuildOTLPLogExporter(agentCtx, a.logger, a.backendsCommon)
 		if err != nil {
 			a.logger.Error("failed to create OTLP log exporter", "error", err)
@@ -415,6 +419,16 @@ func fleetBridgePort(configured *int, def int, setting string) (int, error) {
 		return 0, fmt.Errorf("%s must be between 1 and 65535, got %d (leave it unset to have the agent pick a free port for a loopback bridge)", setting, *configured)
 	}
 	return *configured, nil
+}
+
+// exportsOwnLog reports whether the agent exports its own log to the
+// backends' OTLP endpoint. In fleet mode that endpoint is the agent's OTLP
+// bridge, which carries the log to Fleet only with send_agent_logs on: the
+// platform keeps no logs today, so by default the log stays on the agent's
+// console.
+func (a *orbAgent) exportsOwnLog() bool {
+	manager := a.config.OrbAgent.ConfigManager
+	return manager.Active != "fleet" || manager.Sources.Fleet.SendAgentLogs
 }
 
 func (a *orbAgent) shutdownOTLP() {

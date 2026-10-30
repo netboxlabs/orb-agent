@@ -35,16 +35,23 @@ type BridgeConfig struct {
 	Encoding       string // "protobuf" | "json"
 	// MetricsEncoding encodes metrics bound for the telemetry topic; empty
 	// uses Encoding. Metrics marked as Diode data go to the ingest topic in
-	// Encoding, like every log and trace.
+	// Encoding, as logs do.
 	MetricsEncoding string // "protobuf" (or "proto") | "json" | ""
 	MaxPendingQueue int    // max queued messages before MQTT is ready; 0 = default (1000)
 	// MaxMessageBytes caps the payload of one published message; 0 = default
 	// (4 MiB). A metrics export over it is split into messages under it; a
-	// logs or traces export over it is dropped and counted. The broker's own
-	// maximum packet size lowers the cap when it is smaller.
+	// forwarded log over it is dropped and counted. The broker's own maximum
+	// packet size lowers the cap when it is smaller. A logs export of Diode
+	// data is held to the broker's limit and MaxPendingBytes instead
+	// (ingestCap).
 	MaxMessageBytes int
 	// MaxPendingBytes bounds the payload bytes the pending queue holds; 0 =
 	// default (64 MiB). Past it an export is refused with ResourceExhausted
 	// and a retry delay, as past MaxPendingQueue.
 	MaxPendingBytes int64
+	// ForwardLogs publishes logs that are not Diode data, such as the agent's
+	// own log, to the telemetry topic. Off, the bridge answers them as
+	// accepted, publishes nothing and counts them as no_pipeline: the
+	// platform keeps no logs today. Traces are never published.
+	ForwardLogs bool
 }

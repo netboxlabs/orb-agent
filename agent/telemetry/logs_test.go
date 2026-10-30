@@ -53,6 +53,64 @@ func TestBuildOTLPExporterInvalidEndpoint(t *testing.T) {
 	}
 }
 
+// The exported log follows the console's level, which -d raises. The SDK's
+// batch processor takes records at every level, so without the console's
+// level DEBUG would be exported, and enabled for the whole agent, all the
+// time.
+func TestBuildOTLPLogExporterFollowsTheConsolesLevel(t *testing.T) {
+	level := new(slog.LevelVar)
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: level}))
+	commons := config.BackendCommons{}
+	commons.Otlp.Grpc = "grpc://127.0.0.1:1"
+
+	resultLogger, shutdown, err := BuildOTLPLogExporter(context.Background(), logger, commons)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+
+	ctx := context.Background()
+	if resultLogger.Enabled(ctx, slog.LevelDebug) {
+		t.Fatalf("DEBUG enabled with the console at Info")
+	}
+	if !resultLogger.Enabled(ctx, slog.LevelInfo) {
+		t.Fatalf("INFO not enabled")
+	}
+	level.Set(slog.LevelDebug)
+	if !resultLogger.Enabled(ctx, slog.LevelDebug) {
+		t.Fatalf("DEBUG not enabled once the console is at Debug")
+	}
+}
+
+// A handler gated on the console takes only the records the console takes,
+// and keeps that gate through WithAttrs and WithGroup.
+func TestLevelGated(t *testing.T) {
+	console := slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo})
+	exported := &captureHandler{enabled: true}
+	gated := levelGated{Handler: exported, gate: console}
+	ctx := context.Background()
+
+	for name, h := range map[string]slog.Handler{
+		"gated":      gated,
+		"with attrs": gated.WithAttrs([]slog.Attr{slog.String("k", "v")}),
+		"with group": gated.WithGroup("g"),
+	} {
+		if h.Enabled(ctx, slog.LevelDebug) {
+			t.Fatalf("%s: DEBUG enabled with the console at Info", name)
+		}
+		if !h.Enabled(ctx, slog.LevelInfo) {
+			t.Fatalf("%s: INFO not enabled", name)
+		}
+	}
+
+	logger := slog.New(newMultiHandler(console, gated))
+	logger.Debug("not exported")
+	logger.Info("exported")
+	if len(exported.records) != 1 || exported.records[0].Message != "exported" {
+		t.Fatalf("expected only the INFO record exported, got %d records", len(exported.records))
+	}
+}
+
 func TestNormalizeEndpoint(t *testing.T) {
 	t.Parallel()
 
