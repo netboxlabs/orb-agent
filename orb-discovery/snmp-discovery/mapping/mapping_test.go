@@ -2389,7 +2389,7 @@ func TestMappingYAML_VendorSerialScalarsPresent(t *testing.T) {
 // name column is always walked for Cisco interface VLAN references.
 // Lookup-only names must not expand the standalone VLAN inventory when
 // prefix discovery is off. Other Cisco overlays remain independently walked.
-func TestVtpWalkGating(t *testing.T) {
+func TestVtpNameWalkAlwaysAvailable(t *testing.T) {
 	body, err := os.ReadFile("../policy/mapping.yaml")
 	if err != nil {
 		t.Fatalf("read mapping.yaml: %v", err)

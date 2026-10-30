@@ -113,6 +113,24 @@ func ResolveSviVlans(
 	logger *slog.Logger,
 ) map[int]*diode.VLAN {
 	configured := deviceVlanVids(oids)
+	// VTP names corroborate an existing VLAN for SVI association, but
+	// must not establish VLAN inventory for emission.
+	for oid := range oids {
+		if !strings.HasPrefix(oid, oidCiscoVtpVlanName) {
+			continue
+		}
+		suffix := strings.TrimPrefix(oid, oidCiscoVtpVlanName)
+		parts := strings.Split(suffix, ".")
+		if len(parts) != 2 {
+			continue
+		}
+		if domain, ok := atoi(parts[0]); !ok || domain < 1 {
+			continue
+		}
+		if vid, ok := atoi(parts[1]); ok && vid >= 1 && vid <= 4094 {
+			configured[vid] = struct{}{}
+		}
+	}
 	nameConflicts := vlanNameConflicts(oids)
 	eligible := map[int]*diode.VLAN{}
 	for _, e := range entities {

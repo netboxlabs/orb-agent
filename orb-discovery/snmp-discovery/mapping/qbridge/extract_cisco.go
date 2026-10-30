@@ -1,5 +1,7 @@
 package qbridge
 
+import "log/slog"
+
 // CiscoRows is the per-host bundle of Cisco-overlay SNMP rows that
 // VlanMapper passes to ApplyCisco and ApplyCiscoTrunks.
 // It covers access and voice VLAN refinement and Cisco trunk membership.
@@ -242,7 +244,8 @@ func ciscoTrunkMembership(configured, active []int) (carried []int, taggedAll bo
 // membership must be nonempty. Carried VLANs are configured intersected with
 // active; a full configured range uses tagged-all. Native VLAN is retained
 // only when carried. Incomplete or empty active data leaves the port unchanged.
-func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows) {
+func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows, logger *slog.Logger) map[int][]int {
+	accepted := make(map[int][]int)
 	for ifIndex, first := range rows.ActiveFirst2k {
 		trunks, _ := rows.trunking(ifIndex)
 		if !trunks {
@@ -252,20 +255,28 @@ func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows) {
 		second, hasSecond := rows.ActiveSecond2k[ifIndex]
 		active, complete := decodeCiscoActiveVlans(first, second, true, hasSecond)
 		if !complete || len(active) == 0 {
+			logger.Debug("vlan: Cisco trunk refused", "ifindex", ifIndex, "reason", "missing-or-empty-active-vlans")
 			continue
 		}
 
 		configured, complete := decodeCiscoConfiguredVlans(rows, ifIndex)
 		if !complete {
+			logger.Debug("vlan: Cisco trunk refused", "ifindex", ifIndex, "reason", "incomplete-configured-vlans")
 			continue
 		}
 
 		carried, taggedAll := ciscoTrunkMembership(configured, active)
 
+		if len(carried) == 0 && !taggedAll {
+			logger.Debug("vlan: Cisco trunk refused", "ifindex", ifIndex, "reason", "no-carried-vlans")
+			continue
+		}
+
 		info, exists := infos[ifIndex]
 		if !exists {
 			adminStatus, hasAdminStatus := rows.IfAdminStatus[ifIndex]
 			if !hasAdminStatus {
+				logger.Debug("vlan: Cisco trunk refused", "ifindex", ifIndex, "reason", "missing-if-admin-status")
 				continue
 			}
 			info = &SwitchportInfo{
@@ -275,6 +286,7 @@ func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows) {
 			infos[ifIndex] = info
 		}
 
+		accepted[ifIndex] = carried
 		info.AdminMode = AdminTrunk
 		info.OperMode = OperTrunk
 		info.TrunkFromOneTaggedVlan = false
@@ -297,4 +309,5 @@ func ApplyCiscoTrunks(infos map[int]*SwitchportInfo, rows CiscoRows) {
 			}
 		}
 	}
+	return accepted
 }
