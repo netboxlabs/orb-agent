@@ -50,7 +50,7 @@ func (c *capturingPublisher) messages() []publishedMessage {
 
 // The bridge the fleet config manager starts publishes metrics for the
 // telemetry topic as protobuf, which the telemetry enricher decodes by its
-// content type, and logs, forwarded with otlp_bridge_forward_logs, as JSON,
+// content type, and logs, forwarded with send_agent_logs, as JSON,
 // which it reads by their first key.
 func TestFleetConfigManager_StartOTLPBridge_PublishesMetricsAsProtobufAndLogsAsJSON(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -62,7 +62,7 @@ func TestFleetConfigManager_StartOTLPBridge_PublishesMetricsAsProtobufAndLogsAsJ
 	cfg := config.Config{}
 	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeGRPCPort = &grpcPort
 	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeHTTPPort = &httpPort
-	cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeForwardLogs = true
+	cfg.OrbAgent.ConfigManager.Sources.Fleet.SendAgentLogs = true
 	ctx := context.Background()
 	require.NoError(t, mgr.StartOTLPBridge(ctx, cfg))
 	t.Cleanup(func() { _ = mgr.StopOTLPBridge(ctx) })

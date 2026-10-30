@@ -117,7 +117,7 @@ orb:
 	}
 }
 
-// otlp_bridge_forward_logs is off unless the file or its ORB_ override sets
+// send_agent_logs is off unless the file or its ORB_ override sets
 // it.
 func TestLoad_FleetBridgeForwardLogs(t *testing.T) {
 	t.Parallel()
@@ -132,7 +132,7 @@ orb:
     active: fleet
     sources:
       fleet:
-        otlp_bridge_forward_logs: true
+        send_agent_logs: true
 `
 	for _, tc := range []struct {
 		name    string
@@ -142,14 +142,14 @@ orb:
 	}{
 		{"unset", unset, emptyEnviron, false},
 		{"set in the file", set, emptyEnviron, true},
-		{"set by its override", unset, envFromMap(map[string]string{"ORB_CONFIG_MANAGER__SOURCES__FLEET__OTLP_BRIDGE_FORWARD_LOGS": "true"}), true},
+		{"set by its override", unset, envFromMap(map[string]string{"ORB_CONFIG_MANAGER__SOURCES__FLEET__SEND_AGENT_LOGS": "true"}), true},
 	} {
 		got, err := loadWithEnv([]string{writeTempConfig(t, tc.body)}, nil, tc.environ)
 		if err != nil {
 			t.Fatalf("%s: Load: %v", tc.name, err)
 		}
-		if forward := got.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeForwardLogs; forward != tc.want {
-			t.Errorf("%s: otlp_bridge_forward_logs = %v; want %v", tc.name, forward, tc.want)
+		if forward := got.OrbAgent.ConfigManager.Sources.Fleet.SendAgentLogs; forward != tc.want {
+			t.Errorf("%s: send_agent_logs = %v; want %v", tc.name, forward, tc.want)
 		}
 	}
 }

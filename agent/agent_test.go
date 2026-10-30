@@ -933,7 +933,7 @@ func (b *lockedBuffer) String() string {
 
 // startFleetAgent starts an agent in fleet mode, its managers mocked, whose
 // console logs at level into the returned buffer, with
-// otlp_bridge_forward_logs as given.
+// send_agent_logs as given.
 func startFleetAgent(t *testing.T, forwardLogs bool, level slog.Level) (*orbAgent, *lockedBuffer) {
 	t.Helper()
 	console := &lockedBuffer{}
@@ -944,7 +944,7 @@ func startFleetAgent(t *testing.T, forwardLogs bool, level slog.Level) (*orbAgen
 		Backends: map[string]any{},
 		ConfigManager: config.ManagerConfig{
 			Active:  "fleet",
-			Sources: config.Sources{Fleet: config.FleetManager{OTLPBridgeForwardLogs: forwardLogs}},
+			Sources: config.Sources{Fleet: config.FleetManager{SendAgentLogs: forwardLogs}},
 		},
 	}}
 	agent, err := New(logger, cfg, false)
@@ -970,20 +970,20 @@ func TestStart_FleetConfig_DoesNotExportItsOwnLogByDefault(t *testing.T) {
 
 	assert.Nil(t, orbAgent.otlpShutdown, "no OTLP log exporter")
 	assert.False(t, orbAgent.logger.Enabled(context.Background(), slog.LevelDebug))
-	assert.NotContains(t, console.String(), "otlp_bridge_forward_logs", "not at every start")
+	assert.NotContains(t, console.String(), "send_agent_logs", "not at every start")
 }
 
 // At DEBUG the agent says its log is not sent to Fleet, and how to send it;
 // not when it is sent.
 func TestStart_FleetConfig_SaysAtDebugWhenItsLogIsNotSent(t *testing.T) {
 	_, console := startFleetAgent(t, false, slog.LevelDebug)
-	assert.Contains(t, console.String(), "not sending the agent's logs to Fleet: set otlp_bridge_forward_logs to send them")
+	assert.Contains(t, console.String(), "not sending the agent's logs to Fleet: set send_agent_logs to send them")
 
 	_, console = startFleetAgent(t, true, slog.LevelDebug)
 	assert.NotContains(t, console.String(), "not sending the agent's logs to Fleet")
 }
 
-// With otlp_bridge_forward_logs on, the agent exports its own log through the
+// With send_agent_logs on, the agent exports its own log through the
 // bridge, at the console's level: DEBUG only with -d.
 func TestStart_FleetConfig_ExportsItsOwnLogAtTheConsolesLevelWhenForwarded(t *testing.T) {
 	orbAgent, _ := startFleetAgent(t, true, slog.LevelInfo)

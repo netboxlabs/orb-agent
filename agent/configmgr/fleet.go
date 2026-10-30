@@ -291,7 +291,7 @@ func (fleetManager *FleetConfigManager) StartOTLPBridge(ctx context.Context, cfg
 		return err
 	}
 	bridgeConfig := fleetOTLPBridgeConfig(bindHost, grpcPort, httpPort, messageBytes, pendingBytes,
-		cfg.OrbAgent.ConfigManager.Sources.Fleet.OTLPBridgeForwardLogs)
+		cfg.OrbAgent.ConfigManager.Sources.Fleet.SendAgentLogs)
 
 	fleetManager.otlpBridge, err = otlpbridge.NewBridgeServer(bridgeConfig, fleetManager.policyManager.GetRepo(), fleetManager.logger)
 	if err != nil {

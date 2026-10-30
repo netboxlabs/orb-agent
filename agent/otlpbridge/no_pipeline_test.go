@@ -66,12 +66,12 @@ func TestLogsExport_NotDiodeDataIsCountedNotPublishedByDefault(t *testing.T) {
 	assert.Equal(t, int64(3), bridge.dropped.total(signalLogs, reasonNoPipeline))
 	infos := logs.at(slog.LevelInfo)
 	require.Len(t, infos, 1, "logged once, not per export")
-	assert.Contains(t, infos[0].msg, "otlp_bridge_forward_logs")
+	assert.Contains(t, infos[0].msg, "send_agent_logs")
 	assert.Equal(t, signalLogs, infos[0].attrs["signal"])
 	assert.Equal(t, "orb-agent", infos[0].attrs["service_name"])
 }
 
-// With otlp_bridge_forward_logs on, logs that are not Diode data are
+// With send_agent_logs on, logs that are not Diode data are
 // published to the telemetry topic, as they were before the setting.
 func TestLogsExport_NotDiodeDataIsPublishedWhenForwardingIsOn(t *testing.T) {
 	pub := &scriptedPublisher{}
@@ -117,7 +117,7 @@ func TestTracesExport_AreNeverPublished(t *testing.T) {
 }
 
 // Logs and traces are logged at INFO once each, not once for both: the logs
-// line is the one that names otlp_bridge_forward_logs.
+// line is the one that names send_agent_logs.
 func TestDiscards_LogOncePerSignal(t *testing.T) {
 	logs := &recordedLogs{}
 	bridge := limitedBridgeLogging(t, BridgeConfig{}, &scriptedPublisher{}, slog.New(logs))
@@ -132,7 +132,7 @@ func TestDiscards_LogOncePerSignal(t *testing.T) {
 	require.Len(t, infos, 2)
 	assert.Equal(t, signalTraces, infos[0].attrs["signal"])
 	assert.Equal(t, signalLogs, infos[1].attrs["signal"])
-	assert.Contains(t, infos[1].msg, "otlp_bridge_forward_logs")
+	assert.Contains(t, infos[1].msg, "send_agent_logs")
 }
 
 // Over HTTP, a logs export that is not Diode data is answered 200 and not

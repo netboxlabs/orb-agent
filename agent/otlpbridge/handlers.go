@@ -65,7 +65,7 @@ func (s *BridgeServer) discardUnread(signal string, resources []*resourcev1.Reso
 	s.dropped.add(signal, reasonNoPipeline, 1)
 	once, msg := &s.unreadTraces, "not publishing OTLP traces: the platform keeps none"
 	if signal == signalLogs {
-		once, msg = &s.unreadLogs, "not publishing OTLP logs that are not Diode data: the platform keeps none; set otlp_bridge_forward_logs to publish them"
+		once, msg = &s.unreadLogs, "not publishing OTLP logs that are not Diode data: the platform keeps none; set send_agent_logs to publish them"
 	}
 	once.Do(func() {
 		s.logger.Info(msg, "signal", signal, "service_name", serviceName(resources))
