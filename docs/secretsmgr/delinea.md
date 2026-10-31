@@ -168,9 +168,9 @@ Delinea Secret Server cannot be run locally, since it requires Windows and MSSQL
      netboxlabs/orb-agent:latest run -c /opt/orb/agent.yaml -d
    ```
 
-4. **Verify auth + lookup:** in the debug log, look for one line per resolved placeholder of the form `Resolved delinea secret ref=path/orb-test/orb-test-credential/password policy_id=…`, followed by the `device_discovery` backend accepting the policy without a `failed to solve secrets` error.
+4. **Verify auth + lookup:** in the debug log, look for one line per distinct reference, the first time it is resolved, of the form `Resolved secret scheme=delinea ref=path/orb-test/orb-test-credential/password policy_id=…`, followed by the `device_discovery` backend accepting the policy without a `failed to solve secrets` error.
 
-5. **Verify rotation:** change the password of `orb-test-credential` in the Delinea UI to `rotated-hunter2`. Within one minute, the agent logs `Detected changed delinea secret ref=path/orb-test/orb-test-credential/password` and re-applies the policy with the new value.
+5. **Verify rotation:** change the password of `orb-test-credential` in the Delinea UI to `rotated-hunter2`. Within one minute, the agent logs `Detected changed secret scheme=delinea ref=path/orb-test/orb-test-credential/password` and re-applies the policy with the new value.
 
 6. **Negative checks:**
    - Wrong service-user password → the first secret fetch fails with a clear authentication error.

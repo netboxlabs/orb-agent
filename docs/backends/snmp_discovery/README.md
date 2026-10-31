@@ -376,7 +376,7 @@ How NetBox and Diode handle a placement:
 
 **Note:** Authentication can be specified at the policy level (under `scope.authentication`) as a fallback, or per-target (under each target's `authentication` field). Targets without authentication use the policy-level authentication — this is a wholesale replacement, not a field-level merge: a target with its own `authentication` block does not inherit any individual field, such as `context_name`, from the policy-level block. Environment variables are supported using `${VAR}` syntax for `community`, `username`, `auth_passphrase`, `priv_passphrase`, and `context_name` fields.
 
-The backend's log carries none of these credentials. At debug level it logs a policy by name and every SNMP packet it sends and receives, with the community shown as `[REDACTED]`, and an error that quotes a malformed reply's bytes has the community taken out of it.
+The backend's log carries no community or passphrase. At debug level it logs a policy by its name, and every SNMP packet it sends and receives with the community shown as `[REDACTED]`. An error that quotes a malformed reply's bytes has the community taken out, at every log level. SNMPv3 user and context names appear as they are.
 
 #### SNMPv3 auth/priv protocols
 Values are case-sensitive and must be passed as one of the strings in the tables below.
