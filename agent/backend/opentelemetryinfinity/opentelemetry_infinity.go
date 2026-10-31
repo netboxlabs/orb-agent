@@ -212,7 +212,9 @@ func (o *openTelemetryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 		}
 	}
 
-	o.logger.Debug("opentelemetry infinity policy apply", "policy_id", data.ID, "data", data.Data)
+	// The body is not logged: it carries the policy's credentials, with any
+	// secret references already resolved.
+	o.logger.Debug("opentelemetry infinity policy apply", "policy_id", data.ID, "policy_name", data.Name)
 
 	fullPolicy := map[string]any{
 		data.Name: data.Data,

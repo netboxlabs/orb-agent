@@ -332,7 +332,9 @@ func (d *snmpDiscoveryBackend) ApplyPolicy(data policies.PolicyData, updatePolic
 		}
 	}
 
-	d.logger.Debug("snmp-discovery policy apply", "policy_id", data.ID, "data", data.Data)
+	// The body is not logged: it carries the policy's credentials, with any
+	// secret references already resolved.
+	d.logger.Debug("snmp-discovery policy apply", "policy_id", data.ID, "policy_name", data.Name)
 
 	fullPolicy := map[string]any{
 		"policies": map[string]any{
