@@ -131,7 +131,7 @@ func (m *VlanMapper) PostMap(
 		// is applied here instead.
 		vlanEntities := m.emitVLANs(allObjectIDs, defaults)
 		if membership := vendorTaggedMembership(allObjectIDs, m.logger); len(membership) > 0 {
-			ensureVLAN := m.vlanIndex(&vlanEntities, defaults, vlanNamesByVid(allObjectIDs))
+			ensureVLAN := m.vlanIndex(&vlanEntities, defaults, unambiguousVlanNamesByVid(allObjectIDs))
 			classifications := make(map[int]qbridge.Classification, len(membership))
 			for ifIndex, vids := range membership {
 				classifications[ifIndex] = qbridge.Classification{Mode: qbridge.ModeTrunk, Tagged: vids}
@@ -146,7 +146,7 @@ func (m *VlanMapper) PostMap(
 		if !ciscosb.HasData() {
 			qbridge.ApplyCiscoTrunks(infos, cisco, m.logger)
 		}
-		names := vlanNamesByVid(allObjectIDs)
+		names := unambiguousVlanNamesByVid(allObjectIDs)
 		if m.applyInfos(registry, infos, allObjectIDs, m.vlanIndex(&vlanEntities, defaults, names)) > 0 {
 			return vlanEntities
 		}
@@ -194,7 +194,7 @@ func (m *VlanMapper) PostMap(
 
 	// Build VLAN entities first — interface refs link to them by VID.
 	vlanEntities := m.emitVLANs(allObjectIDs, defaults)
-	names := vlanNamesByVid(allObjectIDs)
+	names := unambiguousVlanNamesByVid(allObjectIDs)
 	ensureVLAN := m.vlanIndex(&vlanEntities, defaults, names)
 
 	// Mutate interfaces in place. The registry holds *diode.Interface
@@ -1145,6 +1145,21 @@ func vtpVidFromOID(oid string) (int, bool) {
 	return vid, true
 }
 
+// unambiguousVlanNamesByVid excludes conflicting VTP names from VLAN
+// creation and interface references. A nonempty Q-BRIDGE name remains
+// authoritative because it identifies the VID independently of VTP.
+func unambiguousVlanNamesByVid(all ObjectIDValueMap) map[int]string {
+	names := vlanNamesByVid(all)
+	for vid := range vlanNameConflicts(all) {
+		oid := oidDot1qVlanStaticName + strconv.Itoa(vid)
+		if row, ok := all[oid]; ok && trimSNMPString(row.Value) != "" {
+			continue
+		}
+		delete(names, vid)
+	}
+	return names
+}
+
 // vlanNameConflicts reports VIDs whose VTP rows carry different non-empty
 // names. One VID can appear under more than one VTP management domain, and
 // those are different Layer 2 domains: NetBox itself permits one VID in
@@ -1278,7 +1293,7 @@ func (m *VlanMapper) emitVLANs(all ObjectIDValueMap, defaults *config.Defaults) 
 			}
 		}
 	}
-	for vid, name := range vlanNamesByVid(all) {
+	for vid, name := range unambiguousVlanNamesByVid(all) {
 		if p, ok := byVid[vid]; ok {
 			p.name = name
 		}

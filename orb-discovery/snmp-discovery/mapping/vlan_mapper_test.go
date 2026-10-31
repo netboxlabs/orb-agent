@@ -2243,6 +2243,93 @@ func TestVlanMapper_PostMap_NexusActiveTrunkAndVtpNames(t *testing.T) {
 	}
 }
 
+// Conflicting names for one VID in separate VTP domains cannot identify
+// which domain an interface belongs to.
+func TestVlanMapper_PostMap_NexusConflictingVtpNames(t *testing.T) {
+	const ifIndex = 101
+	const vid = 2500
+
+	for _, createUnknown := range []bool{false, true} {
+		t.Run("create_unknown_"+strconv.FormatBool(createUnknown), func(t *testing.T) {
+			registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
+			rows := ObjectIDValueMap{
+				oidCiscoVtpVlanName + "1.2500": {Value: "synthetic-backbone"},
+				oidCiscoVtpVlanName + "2.2500": {Value: "synthetic-guest"},
+			}
+
+			idx := strconv.Itoa(ifIndex)
+			base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+			rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+			rows[base+"4."+idx] = Value{Value: string(make([]byte, 128))}
+			rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
+			rows[base+"19."+idx] = Value{Value: string(make([]byte, 128))}
+			rows[base+"18."+idx] = Value{
+				Value: ciscoNexusBitmap(2048, []int{vid})[:128],
+			}
+			rows[base+"30."+idx] = Value{Value: string(make([]byte, 128))}
+			rows[base+"31."+idx] = Value{
+				Value: ciscoNexusBitmap(2048, []int{vid}),
+			}
+
+			entities := NewVlanMapper(slog.Default(), config.Options{
+				CreateUnknownVlans: ptrBool(createUnknown),
+			}).PostMap(rows, registry, &config.Defaults{})
+
+			assert.Equal(t, createUnknown, emittedVid(entities, vid))
+			if !createUnknown {
+				assert.Empty(t, trunk.TaggedVlans)
+				return
+			}
+
+			require.Len(t, trunk.TaggedVlans, 1)
+			vlan := trunk.TaggedVlans[0]
+			require.NotNil(t, vlan.Vid)
+			assert.Equal(t, int64(vid), *vlan.Vid)
+			require.NotNil(t, vlan.Name)
+			assert.Equal(t, "VLAN2500", *vlan.Name)
+		})
+	}
+}
+
+// An independent Q-BRIDGE name remains usable when VTP domains disagree.
+func TestVlanMapper_PostMap_ConflictingVtpWithQBridgeName(t *testing.T) {
+	const ifIndex = 101
+	const vid = 2500
+
+	registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
+	rows := ObjectIDValueMap{
+		oidCiscoVtpVlanName + "1.2500":  {Value: "synthetic-backbone"},
+		oidCiscoVtpVlanName + "2.2500":  {Value: "synthetic-guest"},
+		oidDot1qVlanStaticName + "2500": {Value: "authoritative-backbone"},
+	}
+
+	idx := strconv.Itoa(ifIndex)
+	base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+	rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+	rows[base+"4."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"18."+idx] = Value{Value: ciscoNexusBitmap(2048, []int{vid})[:128]}
+	rows[base+"19."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"30."+idx] = Value{Value: string(make([]byte, 128))}
+	rows[base+"31."+idx] = Value{Value: ciscoNexusBitmap(2048, []int{vid})}
+
+	entities := NewVlanMapper(slog.Default(), config.Options{
+		CreateUnknownVlans: ptrBool(false),
+	}).PostMap(rows, registry, &config.Defaults{})
+
+	assert.True(t, emittedVid(entities, vid))
+	require.Len(t, trunk.TaggedVlans, 1)
+	vlan := trunk.TaggedVlans[0]
+	require.NotNil(t, vlan.Vid)
+	assert.Equal(t, int64(vid), *vlan.Vid)
+	require.NotNil(t, vlan.Name)
+	assert.Equal(t, "authoritative-backbone", *vlan.Name)
+}
+
 // A tagged-all trunk must not create VLAN inventory from its allowed range,
 // even when VTP reports a literal VLAN name matching our fallback format.
 func TestVlanMapper_PostMap_CiscoTaggedAllDoesNotEmitVtpVlans(t *testing.T) {
