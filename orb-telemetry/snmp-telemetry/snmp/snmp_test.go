@@ -955,3 +955,32 @@ func TestClient_RedactErrorLeavesAddressesAndPortsAlone(t *testing.T) {
 		assert.Same(t, original, c.redactError(original), "community %q", community)
 	}
 }
+
+// At debug level gosnmp also logs the parse error of a malformed reply, which
+// quotes the reply's bytes as hex inside a formatted string rather than as a
+// byte slice, so the debug log needs the same redaction as the error.
+func TestClient_MalformedReplyKeepsTheCommunityOutOfTheDebugLog(t *testing.T) {
+	const (
+		root      = "1.3.6.1.2.1.2.2.1"
+		community = "s3cr3tc0mmun1ty"
+	)
+	agent := newCorruptingAgent(t, interfaceTable(root, 1, 1), overstateCommunityLength)
+	logger, buf := debugLogger()
+	w, err := NewClient(t.Context(), "127.0.0.1", agent.port, 0, 300*time.Millisecond,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: community}, logger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+	t.Cleanup(func() { _ = w.Close() })
+
+	_, err = w.Walk(root)
+	require.Error(t, err, "the corrupt reply has to have failed the walk")
+	logged := buf.String()
+	require.Contains(t, logged, "not enough data for OctetString", "gosnmp has to have logged the parse error")
+	assert.NotContains(t, logged, community)
+	for start := 0; start < len(community); start++ {
+		for end := start + minRecognisableFragment; end <= len(community); end++ {
+			assert.NotContains(t, logged, hex.EncodeToString([]byte(community[start:end])),
+				"bytes %d..%d of the community appeared in hex", start, end)
+		}
+	}
+}

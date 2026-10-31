@@ -34,27 +34,28 @@ type SlogAdapter struct {
 	community string
 }
 
-// redact removes the community from a line gosnmp is about to log.
+// redact removes the community from a line gosnmp is about to log: as text,
+// and from the packet dumps in it (see redactHex), where gosnmp's parse errors
+// quote a malformed reply's bytes.
 func (s *SlogAdapter) redact(line string) string {
 	if s.community == "" {
 		return line
 	}
-	return strings.ReplaceAll(line, s.community, redactedCommunity)
+	return redactHex(strings.ReplaceAll(line, s.community, redactedCommunity), s.community)
 }
 
-// redactBytes replaces each byte slice among a line's arguments with its hex
-// form, the community taken out of it. gosnmp logs every reply it reads as a
-// byte slice ("GET RESPONSE OK: %+v"), which prints as decimal numbers and
-// carries a v1 or v2c reply's community where the text match in redact cannot
-// see it.
-func (s *SlogAdapter) redactBytes(v []any) []any {
+// hexBytes renders each byte slice among a line's arguments as hex, so redact
+// finds it as a dump. gosnmp logs every reply it reads as a byte slice
+// ("GET RESPONSE OK: %+v"), which would print as decimal numbers, carrying a
+// v1 or v2c reply's community in a form neither match sees.
+func (s *SlogAdapter) hexBytes(v []any) []any {
 	if s.community == "" {
 		return v
 	}
 	out := slices.Clone(v)
 	for i, arg := range out {
 		if b, ok := arg.([]byte); ok {
-			out[i] = redactHex(hex.EncodeToString(b), s.community)
+			out[i] = hex.EncodeToString(b)
 		}
 	}
 	return out
@@ -62,12 +63,12 @@ func (s *SlogAdapter) redactBytes(v []any) []any {
 
 // Print implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Print(v ...any) {
-	s.logger.Debug(s.redact(fmt.Sprint(s.redactBytes(v)...)))
+	s.logger.Debug(s.redact(fmt.Sprint(s.hexBytes(v)...)))
 }
 
 // Printf implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Printf(format string, v ...any) {
-	s.logger.Debug(s.redact(fmt.Sprintf(format, s.redactBytes(v)...)))
+	s.logger.Debug(s.redact(fmt.Sprintf(format, s.hexBytes(v)...)))
 }
 
 // hexDump matches a run of lowercase hex long enough to be packet bytes. The
