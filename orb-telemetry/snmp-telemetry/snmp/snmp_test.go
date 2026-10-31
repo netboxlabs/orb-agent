@@ -943,3 +943,15 @@ func TestClient_ErrorWithoutTheCommunityIsReturnedUnchanged(t *testing.T) {
 	original := errors.New("request timeout (after 0 retries)")
 	assert.Same(t, original, c.redactError(original))
 }
+
+// A walk error names the target's address and port, and a one-byte prefix of
+// the community's hex is two digits that occur in them: "70" is the "p" of
+// public, "61" the "a" of a1rport. Only packet dumps are redacted, so the
+// address and port survive and the error is returned as it was.
+func TestClient_RedactErrorLeavesAddressesAndPortsAlone(t *testing.T) {
+	original := errors.New("read udp 127.0.0.1:52036->10.70.1.61:161: i/o timeout")
+	for _, community := range []string{"public", "a1rport"} {
+		c := newTestClient(t, &config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: community})
+		assert.Same(t, original, c.redactError(original), "community %q", community)
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -71,18 +72,30 @@ func (s *SlogAdapter) Printf(format string, v ...any) {
 	s.logger.Debug(s.redact(fmt.Sprintf(format, s.redactBytes(v)...)))
 }
 
-// redactHex removes every prefix of the community's lowercase hex from s, for
-// the reasons redactError gives.
+// hexDump matches a run of lowercase hex long enough to be packet bytes. The
+// shortest dump that ends inside the community, its tag, its length and one
+// byte of it, is six characters. A shorter run is a word or a number of the
+// message, such as an address's octet or a port, where a two-character
+// prefix of the community's hex would otherwise match.
+var hexDump = regexp.MustCompile(`[0-9a-f]{6,}`)
+
+// redactHex removes every prefix of the community's lowercase hex from each
+// packet dump in s, for the reasons redactError gives.
 func redactHex(s, community string) string {
-	// Longest prefix first. Shortest first would replace the leading byte
-	// everywhere, leaving the rest of the community with nothing left to match
-	// it. An empty community, which is what v3 carries, yields no prefixes at
-	// all, so the loop is skipped rather than an empty needle being replaced
-	// between every character.
-	for n := len(community); n > 0; n-- {
-		s = strings.ReplaceAll(s, hex.EncodeToString([]byte(community[:n])), redactedCommunity)
+	// An empty community, which is what v3 carries, yields no prefixes, so
+	// nothing is replaced rather than an empty needle between every character.
+	if community == "" {
+		return s
 	}
-	return s
+	return hexDump.ReplaceAllStringFunc(s, func(dump string) string {
+		// Longest prefix first. Shortest first would replace the leading byte
+		// everywhere, leaving the rest of the community with nothing left to
+		// match it.
+		for n := len(community); n > 0; n-- {
+			dump = strings.ReplaceAll(dump, hex.EncodeToString([]byte(community[:n])), redactedCommunity)
+		}
+		return dump
+	})
 }
 
 // Host is a struct that represents an SNMP host
@@ -274,7 +287,8 @@ func (c *Client) Walk(ctx context.Context, objectIDs string, identifierSize int)
 // level, so the log adapter's redaction, at debug, does not reach them.
 // gosnmp formats packet bytes with %x and nothing else, so lowercase hex is
 // the one encoding to remove, and every prefix of it goes, since a prefix of a
-// credential is still one.
+// credential is still one. Only packet dumps are matched (see hexDump), so the
+// address and port the error names are left alone.
 //
 // This package's walk errors and a context's carry no packet bytes, and
 // callers tell them apart with errors.Is, so they are returned as they are.
