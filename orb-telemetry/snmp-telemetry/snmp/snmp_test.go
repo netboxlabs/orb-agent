@@ -625,9 +625,67 @@ func TestClient_CommunityNeverReachesTheDebugLog(t *testing.T) {
 	logged := buf.String()
 	require.Contains(t, logged, "SENDING PACKET", "the packet logger has to be installed for this to pin anything")
 	require.Contains(t, logged, "Parsed community", "the reply path has to have parsed a community")
+	require.Contains(t, logged, "GET RESPONSE OK", "the reply has to have been dumped")
 	assert.NotContains(t, logged, community, "the community reached the debug log")
+	for _, form := range communityByteForms(community) {
+		assert.NotContains(t, logged, form, "the community reached the debug log in a byte dump")
+	}
 	assert.Contains(t, logged, "Community:"+redactedCommunity, "the packet line keeps its community field, redacted")
 	assert.Contains(t, logged, root, "redaction left the rest of the packet line intact")
+}
+
+// communityByteForms are the ways a dump of packet bytes prints the community:
+// the decimal numbers of a byte slice printed with %v, and lowercase hex.
+func communityByteForms(community string) []string {
+	return []string{
+		decimalBytes(community),
+		hex.EncodeToString([]byte(community)),
+	}
+}
+
+// decimalBytes is the community's bytes as a byte slice prints them with %v,
+// without the brackets.
+func decimalBytes(community string) string {
+	numbers := make([]string, 0, len(community))
+	for _, b := range []byte(community) {
+		numbers = append(numbers, strconv.Itoa(int(b)))
+	}
+	return strings.Join(numbers, " ")
+}
+
+// gosnmp dumps every reply it reads as a byte slice, and a v1 or v2c reply
+// carries the community, which a byte slice prints as decimal numbers.
+func TestSlogAdapter_RedactsTheCommunityFromAReplyDump(t *testing.T) {
+	const community = "n0t-in-the-log"
+	reply, err := (&gosnmp.SnmpPacket{
+		Version:   gosnmp.Version2c,
+		Community: community,
+		PDUType:   gosnmp.GetResponse,
+		RequestID: 42,
+		Variables: []gosnmp.SnmpPDU{{Name: "1.3.6.1.2.1.1.1.0", Type: gosnmp.Null}},
+	}).MarshalMsg()
+	require.NoError(t, err)
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger, community: community}
+
+	adapter.Printf("GET RESPONSE OK: %+v", reply)
+
+	logged := buf.String()
+	for _, form := range communityByteForms(community) {
+		assert.NotContains(t, logged, form, "the community survived the adapter in the dump")
+	}
+	assert.Contains(t, logged, "GET RESPONSE OK: ")
+	assert.Contains(t, logged, redactedCommunity, "the elided span is marked")
+}
+
+// A v3 client carries no community, so its dumps print as gosnmp formats them.
+func TestSlogAdapter_EmptyCommunityLeavesADumpAlone(t *testing.T) {
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger}
+
+	adapter.Printf("GET RESPONSE OK: %+v", []byte{48, 49})
+
+	assert.Contains(t, buf.String(), "GET RESPONSE OK: [48 49]")
 }
 
 // gosnmp's packet format is what discloses the community: SafeString prints it

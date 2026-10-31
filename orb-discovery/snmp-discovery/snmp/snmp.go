@@ -2,10 +2,13 @@ package snmp
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/gosnmp/gosnmp"
@@ -14,19 +17,72 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/mapping"
 )
 
-// SlogAdapter adapts slog.Logger to implement gosnmp.LoggerInterface
+// redactedCommunity stands in for the community in every line gosnmp logs.
+const redactedCommunity = "[REDACTED]"
+
+// SlogAdapter adapts slog.Logger to implement gosnmp.LoggerInterface.
+//
+// gosnmp logs whole packets at debug level, and the community is the
+// credential of a v1 or v2c session: its packet format prints the community
+// verbatim, it prints again the one it parses out of every reply, and it dumps
+// every reply's bytes. The adapter removes the value from every line it
+// forwards, matching on the community itself rather than on the library's
+// format strings, so a gosnmp release that renames or moves a field cannot
+// reopen the disclosure. The agent relays this process's log into its own.
 type SlogAdapter struct {
 	logger *slog.Logger
+	// community is the value to redact. Empty for v3, which carries none.
+	community string
+}
+
+// redact removes the community from a line gosnmp is about to log.
+func (s *SlogAdapter) redact(line string) string {
+	if s.community == "" {
+		return line
+	}
+	return strings.ReplaceAll(line, s.community, redactedCommunity)
+}
+
+// redactBytes replaces each byte slice among a line's arguments with its hex
+// form, the community taken out of it. gosnmp logs every reply it reads as a
+// byte slice ("GET RESPONSE OK: %+v"), which prints as decimal numbers and
+// carries a v1 or v2c reply's community where the text match in redact cannot
+// see it.
+func (s *SlogAdapter) redactBytes(v []any) []any {
+	if s.community == "" {
+		return v
+	}
+	out := slices.Clone(v)
+	for i, arg := range out {
+		if b, ok := arg.([]byte); ok {
+			out[i] = redactHex(hex.EncodeToString(b), s.community)
+		}
+	}
+	return out
 }
 
 // Print implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Print(v ...any) {
-	s.logger.Debug(fmt.Sprint(v...))
+	s.logger.Debug(s.redact(fmt.Sprint(s.redactBytes(v)...)))
 }
 
 // Printf implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Printf(format string, v ...any) {
-	s.logger.Debug(fmt.Sprintf(format, v...))
+	s.logger.Debug(s.redact(fmt.Sprintf(format, s.redactBytes(v)...)))
+}
+
+// redactHex removes every prefix of the community's lowercase hex from s, for
+// the reasons redactError gives.
+func redactHex(s, community string) string {
+	// Longest prefix first. Shortest first would replace the leading byte
+	// everywhere, leaving the rest of the community with nothing left to match
+	// it. An empty community, which is what v3 carries, yields no prefixes at
+	// all, so the loop is skipped rather than an empty needle being replaced
+	// between every character.
+	for n := len(community); n > 0; n-- {
+		s = strings.ReplaceAll(s, hex.EncodeToString([]byte(community[:n])), redactedCommunity)
+	}
+	return s
 }
 
 // Host is a struct that represents an SNMP host
@@ -205,7 +261,37 @@ func (c *Client) Walk(ctx context.Context, objectIDs string, identifierSize int)
 		case <-stop:
 		}
 	}()
-	return collectWalk(ctx, func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
+	rows, err := collectWalk(ctx, func(fn gosnmp.WalkFunc) error { return c.GoSNMP.Walk(objectIDs, fn) }, identifierSize)
+	return rows, c.redactError(err)
+}
+
+// redactError removes the community from an error before it leaves the client.
+//
+// gosnmp reports a malformed reply by quoting the bytes it could not parse,
+// and the community is an octet string near the front of every v1 and v2c
+// message, so such an error carries the credential, whole or, from a reply cut
+// short inside it, a prefix. The runner logs walk errors at warn and error
+// level, so the log adapter's redaction, at debug, does not reach them.
+// gosnmp formats packet bytes with %x and nothing else, so lowercase hex is
+// the one encoding to remove, and every prefix of it goes, since a prefix of a
+// credential is still one.
+//
+// This package's walk errors and a context's carry no packet bytes, and
+// callers tell them apart with errors.Is, so they are returned as they are.
+// Any other redacted error is a new one rather than a wrapper: an Unwrap
+// would hand the original, community and all, to anything that reached for
+// it.
+func (c *Client) redactError(err error) error {
+	if err == nil || errors.Is(err, ErrWalkRepeated) || errors.Is(err, ErrWalkTruncated) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	message := err.Error()
+	redacted := redactHex(message, c.Community)
+	if redacted == message {
+		return err
+	}
+	return errors.New(redacted)
 }
 
 // ErrWalkRepeated is returned with the rows collected when a walk delivered
@@ -299,7 +385,7 @@ func NewClient(host string, port uint16, retries int, timeout time.Duration, aut
 	// Check if debug logging is enabled
 	var gosnmpLogger gosnmp.Logger
 	if logger.Enabled(context.Background(), slog.LevelDebug) {
-		gosnmpLogger = gosnmp.NewLogger(&SlogAdapter{logger})
+		gosnmpLogger = gosnmp.NewLogger(&SlogAdapter{logger: logger, community: authentication.Community})
 	}
 
 	switch authentication.ProtocolVersion {

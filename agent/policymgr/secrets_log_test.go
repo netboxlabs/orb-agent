@@ -20,11 +20,14 @@ import (
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/backend/devicediscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/gnmidiscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/gnmitelemetry"
 	"github.com/netboxlabs/orb-agent/agent/backend/mocks"
 	"github.com/netboxlabs/orb-agent/agent/backend/networkdiscovery"
 	"github.com/netboxlabs/orb-agent/agent/backend/opentelemetryinfinity"
 	"github.com/netboxlabs/orb-agent/agent/backend/pktvisor"
 	"github.com/netboxlabs/orb-agent/agent/backend/snmpdiscovery"
+	"github.com/netboxlabs/orb-agent/agent/backend/snmptelemetry"
 	"github.com/netboxlabs/orb-agent/agent/backend/worker"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
@@ -36,8 +39,8 @@ import (
 // distinctive, so a match in the log can only be the secret.
 const resolvedSecret = "Pl41n-r3solved-credential-7f3a"
 
-// TestManagedPolicySecretsNeverReachTheLog applies, to each backend that
-// takes a policy body, a policy whose credential comes from a secret
+// TestManagedPolicySecretsNeverReachTheLog applies, to every backend the agent
+// sends a policy's body to, a policy whose credential comes from a secret
 // reference, through the policy manager and a real secrets manager. The
 // backend's API must be sent the resolved value, so there was something to
 // leak, and no log record, at any level, may carry it (MON-777: six backends
@@ -61,6 +64,9 @@ func TestManagedPolicySecretsNeverReachTheLog(t *testing.T) {
 		{"device_discovery", "device-discovery", devicediscovery.Register},
 		{"network_discovery", "network-discovery", networkdiscovery.Register},
 		{"snmp_discovery", "snmp-discovery", snmpdiscovery.Register},
+		{"gnmi_discovery", "gnmi-discovery", gnmidiscovery.Register},
+		{"snmp_telemetry", "snmp-telemetry", snmptelemetry.Register},
+		{"gnmi_telemetry", "gnmi-telemetry", gnmitelemetry.Register},
 		{"worker", "orb-worker", worker.Register},
 		{"pktvisor", "pktvisord", pktvisor.Register},
 		{"opentelemetry_infinity", "otlpinf", opentelemetryinfinity.Register},
@@ -188,8 +194,9 @@ func startBackend(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager
 
 	require.True(t, register())
 	be := backend.GetBackend(name)
-	require.NoError(t, be.Configure(logger, mgr.GetRepo(), map[string]any{"host": host, "port": port},
-		config.BackendCommons{}, nil))
+	var commons config.BackendCommons
+	commons.Otlp.Grpc = "127.0.0.1:4317" // the telemetry backends require one
+	require.NoError(t, be.Configure(logger, mgr.GetRepo(), map[string]any{"host": host, "port": port}, commons, nil))
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), config.ContextKey("agent_id"), "agent-1"))
 	t.Cleanup(cancel)
 	require.NoError(t, be.Start(ctx, cancel))

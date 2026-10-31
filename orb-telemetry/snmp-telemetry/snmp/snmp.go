@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,14 +41,46 @@ func (s *SlogAdapter) redact(line string) string {
 	return strings.ReplaceAll(line, s.community, redactedCommunity)
 }
 
+// redactBytes replaces each byte slice among a line's arguments with its hex
+// form, the community taken out of it. gosnmp logs every reply it reads as a
+// byte slice ("GET RESPONSE OK: %+v"), which prints as decimal numbers and
+// carries a v1 or v2c reply's community where the text match in redact cannot
+// see it.
+func (s *SlogAdapter) redactBytes(v []any) []any {
+	if s.community == "" {
+		return v
+	}
+	out := slices.Clone(v)
+	for i, arg := range out {
+		if b, ok := arg.([]byte); ok {
+			out[i] = redactHex(hex.EncodeToString(b), s.community)
+		}
+	}
+	return out
+}
+
 // Print implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Print(v ...any) {
-	s.logger.Debug(s.redact(fmt.Sprint(v...)))
+	s.logger.Debug(s.redact(fmt.Sprint(s.redactBytes(v)...)))
 }
 
 // Printf implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Printf(format string, v ...any) {
-	s.logger.Debug(s.redact(fmt.Sprintf(format, v...)))
+	s.logger.Debug(s.redact(fmt.Sprintf(format, s.redactBytes(v)...)))
+}
+
+// redactHex removes every prefix of the community's lowercase hex from s, for
+// the reasons redactError gives.
+func redactHex(s, community string) string {
+	// Longest prefix first. Shortest first would replace the leading byte
+	// everywhere, leaving the rest of the community with nothing left to match
+	// it. An empty community, which is what v3 carries, yields no prefixes at
+	// all, so the loop is skipped rather than an empty needle being replaced
+	// between every character.
+	for n := len(community); n > 0; n-- {
+		s = strings.ReplaceAll(s, hex.EncodeToString([]byte(community[:n])), redactedCommunity)
+	}
+	return s
 }
 
 // maxRepetitions is the batch size of a GETBULK request.
@@ -133,15 +166,7 @@ func (c *Client) redactError(err error) error {
 		return err
 	}
 	message := err.Error()
-	redacted := message
-	// Longest prefix first. Shortest first would replace the leading byte
-	// everywhere, leaving the rest of the community with nothing left to match
-	// it. An empty community, which is what v3 carries, yields no prefixes at
-	// all, so the loop is skipped rather than an empty needle being replaced
-	// between every character.
-	for n := len(c.Community); n > 0; n-- {
-		redacted = strings.ReplaceAll(redacted, hex.EncodeToString([]byte(c.Community[:n])), redactedCommunity)
-	}
+	redacted := redactHex(message, c.Community)
 	if redacted == message {
 		return err
 	}
