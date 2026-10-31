@@ -660,7 +660,7 @@ orb:
     enable: true   # equivalent to the -d flag; backends inherit debug too
 ```
 
-The debug log names each policy the agent applies by its ID and name, and leaves out its contents, because a policy carries credentials, with any [secret references](./secretsmgr/README.md) already resolved. Device Discovery, Network Discovery, SNMP Discovery, gNMI Discovery and Worker leave policy contents out of their own debug logs too, which the agent includes in its log.
+The debug log names each policy the agent applies by its ID and name, and leaves out its contents, because a policy carries credentials, with any [secret references](./secretsmgr/README.md) already resolved. Device Discovery, Network Discovery, SNMP Discovery, gNMI Discovery and Worker leave policy contents out of their own debug logs too, which the agent includes in its log. SNMP Discovery and SNMP Telemetry log every SNMP packet at debug level, with the community shown as `[REDACTED]`.
 
 ## Exporting OpenTelemetry Metrics
 
