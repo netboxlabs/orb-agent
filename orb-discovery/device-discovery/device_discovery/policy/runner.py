@@ -40,9 +40,10 @@ from jnpr.junos.exception import (
 )
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
-from ncclient import NCClientError
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from ncclient.transport.errors import SSHError as NetconfSSHError
+from ncclient.transport.errors import TransportError as NetconfTransportError
+from ncclient.transport.session import SessionError as NetconfSessionError
 from netmiko.exceptions import NetmikoAuthenticationException
 from paramiko.ssh_exception import SSHException
 
@@ -143,7 +144,7 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     if isinstance(error, _EXPECTED_TARGET_FAILURES):
         return True
     return isinstance(error, JunosConnectError) and isinstance(
-        getattr(error, "_orig", None), (NCClientError, SSHException, EOFError, OSError)
+        getattr(error, "_orig", None), (NetconfTransportError, NetconfSessionError, SSHException, EOFError, OSError)
     )
 
 

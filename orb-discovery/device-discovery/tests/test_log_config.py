@@ -137,9 +137,9 @@ def test_failure_text_is_the_message_when_there_is_one():
 
 
 def test_failure_text_takes_the_first_message_down_the_chain():
-    """Empty or None messages give way to the first one the chain carries."""
+    """Empty or None messages give way to the first one the chain carries, after the outer type."""
     error = _chained(TimeoutError("timed out after 30 s"), RuntimeError(""), ConnectionError(None))
-    assert failure_text(error) == "timed out after 30 s"
+    assert failure_text(error) == "ConnectionError: timed out after 30 s"
 
 
 def test_failure_text_ignores_a_suppressed_context():
@@ -157,3 +157,13 @@ def test_failure_text_ignores_a_suppressed_context():
 def test_failure_text_falls_back_to_the_type():
     """With no message anywhere, the failure is named by its type."""
     assert failure_text(_chained(TimeoutError(), ConnectionError(""))) == "ConnectionError"
+
+
+def test_failure_text_never_raises():
+    """A message that cannot be rendered is skipped, never raised from inside a failure handler."""
+
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("cannot render")
+
+    assert failure_text(_chained(Unprintable(), ConnectionError(None))) == "ConnectionError"

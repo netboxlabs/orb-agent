@@ -294,3 +294,25 @@ def test_other_netconf_transport_failures_are_one_flat_warning(
 
     records = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
     assert [r.levelno for r in records] == [logging.WARNING]
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+def test_the_run_reason_matches_the_log_line(runner, scope, config, entry_point, caplog):
+    """/api/v1/status shows the same failure text as the log, also when the message is empty."""
+
+    def timeout(*args, **kwargs):
+        try:
+            raise JunosConnectTimeoutError(SimpleNamespace(hostname="10.0.0.5", port=830))
+        except JunosConnectTimeoutError as cte:
+            raise ConnectionException(cte.msg) from cte
+
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=timeout),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    (record,) = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
+    (run,) = runner.run_store.get_runs_for_target("test_policy", "10.0.0.5")
+    assert run.reason == "ConnectionException: ConnectTimeoutError(10.0.0.5)"
+    assert record.getMessage().endswith(": " + run.reason)

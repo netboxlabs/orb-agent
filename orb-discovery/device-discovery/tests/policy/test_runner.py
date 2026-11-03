@@ -1540,7 +1540,8 @@ def test_discovery_moves_past_a_driver_whose_facts_collection_would_refuse(polic
     assert scope.driver == "good"
 
 
-def test_a_forgotten_discovered_driver_still_labels_the_failure_metric(policy_runner, run_store):
+@pytest.mark.parametrize("entry_point", ["run", "run_with_parent"])
+def test_a_forgotten_discovered_driver_still_labels_the_failure_metric(policy_runner, run_store, entry_point):
     """The failure metric names the driver that was refused, not the None left after forgetting it."""
 
     class JunkFacts(_FakeNapalmDriver):
@@ -1556,7 +1557,11 @@ def test_a_forgotten_discovered_driver_still_labels_the_failure_metric(policy_ru
         patch("device_discovery.policy.runner.Client"),
         patch("device_discovery.policy.runner.get_metric", return_value=metric),
     ):
-        policy_runner.run("job-1", scope, Config(defaults=Defaults(site="NY"), options=Options()))
+        config = Config(defaults=Defaults(site="NY"), options=Options())
+        if entry_point == "run":
+            policy_runner.run("job-1", scope, config)
+        else:
+            policy_runner.run_with_parent("job-1", scope, config, "192.0.2.0/24")
 
     failed = [c.args[1] for c in metric.record.call_args_list if c.args[1].get("status") == "failed"]
     assert [labels["driver"] for labels in failed] == ["ios"]

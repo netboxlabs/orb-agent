@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
+from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
 from napalm.base.base import NetworkDriver
 from napalm.base.exceptions import ConnectionException
 from napalm.nxapi_plumbing.errors import NXAPIAuthError
@@ -929,3 +930,29 @@ def test_discover_device_driver_does_not_pick_facts_collection_refuses(mock_get_
 
     assert discover_device_driver(_TARGET, drivers=["ios", "first"]) == "ios"
     assert calls == ["ios", "first", "ios"]
+
+
+def test_discover_device_driver_names_an_error_with_an_empty_message(mock_get_network_driver, caplog):
+    """Napalm's junos driver re-raises a PyEZ timeout with no message; the line names the timeout."""
+
+    def timeout():
+        try:
+            raise JunosConnectTimeoutError(SimpleNamespace(hostname="192.0.2.10", port=830))
+        except JunosConnectTimeoutError as cte:
+            raise ConnectionException(cte.msg) from cte
+
+    try:
+        timeout()
+    except ConnectionException as e:
+        failure = e
+
+    calls = []
+    mock_get_network_driver.side_effect = {"junos": _scripted_driver(calls, "junos", [failure])}.__getitem__
+
+    with caplog.at_level(logging.INFO, logger="device_discovery.discovery"):
+        assert discover_device_driver(_TARGET, drivers=["junos"]) is None
+
+    assert any(
+        r.getMessage().endswith("Exception: ConnectionException: ConnectTimeoutError(192.0.2.10)")
+        for r in caplog.records
+    )
