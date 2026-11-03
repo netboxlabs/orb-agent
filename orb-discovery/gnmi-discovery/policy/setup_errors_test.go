@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -377,4 +378,14 @@ func TestGetPollDropsAPathTheTargetRefuses(t *testing.T) {
 			require.Empty(t, st.DegradedReason)
 		})
 	}
+}
+
+// degraded_reason is an additive /status field, left out when empty.
+func TestDegradedReasonInStatusJSON(t *testing.T) {
+	b, err := json.Marshal(TargetStatus{Host: "192.0.2.1:57400", DegradedReason: "reason"})
+	require.NoError(t, err)
+	require.Contains(t, string(b), `"degraded_reason":"reason"`)
+	b, err = json.Marshal(TargetStatus{Host: "192.0.2.1:57400"})
+	require.NoError(t, err)
+	require.NotContains(t, string(b), "degraded_reason")
 }
