@@ -611,7 +611,9 @@ func (m *Manager) HasPolicy(name string) bool {
 
 // StartPolicy starts the policy
 func (m *Manager) StartPolicy(name string, policy config.Policy) error {
-	m.logger.Debug("starting policy", "policy", policy)
+	// The policy is not logged whole: its authentication carries the SNMP
+	// credentials.
+	m.logger.Debug("starting policy", "policy", name, "targets", len(policy.Scope.Targets))
 	if len(policy.Scope.Targets) == 0 {
 		return fmt.Errorf("%s : no targets found in the policy", name)
 	}

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,22 +34,67 @@ type SlogAdapter struct {
 	community string
 }
 
-// redact removes the community from a line gosnmp is about to log.
+// redact removes the community from a line gosnmp is about to log: as text,
+// and from the packet dumps in it (see redactHex), where gosnmp's parse errors
+// quote a malformed reply's bytes.
 func (s *SlogAdapter) redact(line string) string {
 	if s.community == "" {
 		return line
 	}
-	return strings.ReplaceAll(line, s.community, redactedCommunity)
+	return redactHex(strings.ReplaceAll(line, s.community, redactedCommunity), s.community)
+}
+
+// hexBytes renders each byte slice among a line's arguments as hex, so redact
+// finds it as a dump. gosnmp logs every reply it reads as a byte slice
+// ("GET RESPONSE OK: %+v"), which would print as decimal numbers, carrying a
+// v1 or v2c reply's community in a form neither match sees.
+func (s *SlogAdapter) hexBytes(v []any) []any {
+	if s.community == "" {
+		return v
+	}
+	out := slices.Clone(v)
+	for i, arg := range out {
+		if b, ok := arg.([]byte); ok {
+			out[i] = hex.EncodeToString(b)
+		}
+	}
+	return out
 }
 
 // Print implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Print(v ...any) {
-	s.logger.Debug(s.redact(fmt.Sprint(v...)))
+	s.logger.Debug(s.redact(fmt.Sprint(s.hexBytes(v)...)))
 }
 
 // Printf implements gosnmp.LoggerInterface by logging at Debug level
 func (s *SlogAdapter) Printf(format string, v ...any) {
-	s.logger.Debug(s.redact(fmt.Sprintf(format, v...)))
+	s.logger.Debug(s.redact(fmt.Sprintf(format, s.hexBytes(v)...)))
+}
+
+// hexDump matches a run of lowercase hex long enough to be packet bytes. The
+// shortest dump that ends inside the community, its tag, its length and one
+// byte of it, is six characters. A shorter run is a word or a number of the
+// message, such as an address's octet or a port, where a two-character
+// prefix of the community's hex would otherwise match.
+var hexDump = regexp.MustCompile(`[0-9a-f]{6,}`)
+
+// redactHex removes every prefix of the community's lowercase hex from each
+// packet dump in s, for the reasons redactError gives.
+func redactHex(s, community string) string {
+	// An empty community, which is what v3 carries, yields no prefixes, so
+	// nothing is replaced rather than an empty needle between every character.
+	if community == "" {
+		return s
+	}
+	return hexDump.ReplaceAllStringFunc(s, func(dump string) string {
+		// Longest prefix first. Shortest first would replace the leading byte
+		// everywhere, leaving the rest of the community with nothing left to
+		// match it.
+		for n := len(community); n > 0; n-- {
+			dump = strings.ReplaceAll(dump, hex.EncodeToString([]byte(community[:n])), redactedCommunity)
+		}
+		return dump
+	})
 }
 
 // maxRepetitions is the batch size of a GETBULK request.
@@ -115,9 +162,9 @@ func (c *Client) SetBulkWalk(enabled bool) {
 //
 // Lowercase hex is the only encoding to remove. gosnmp formats packet bytes
 // with %x and with nothing else, so the value never reaches an error as text.
-// Leaving the words of the message unmatched is also what keeps a short
+// Only packet dumps are matched (see hexDump), which is what keeps a short
 // community from mangling the diagnostic: a one-character community is two hex
-// characters, which no word can hold.
+// characters, which the octets of an address or a port can hold.
 //
 // Every prefix is removed, not only the whole value, because a dump ending
 // inside the community carries a prefix and a prefix of a credential is still
@@ -133,15 +180,7 @@ func (c *Client) redactError(err error) error {
 		return err
 	}
 	message := err.Error()
-	redacted := message
-	// Longest prefix first. Shortest first would replace the leading byte
-	// everywhere, leaving the rest of the community with nothing left to match
-	// it. An empty community, which is what v3 carries, yields no prefixes at
-	// all, so the loop is skipped rather than an empty needle being replaced
-	// between every character.
-	for n := len(c.Community); n > 0; n-- {
-		redacted = strings.ReplaceAll(redacted, hex.EncodeToString([]byte(c.Community[:n])), redactedCommunity)
-	}
+	redacted := redactHex(message, c.Community)
 	if redacted == message {
 		return err
 	}

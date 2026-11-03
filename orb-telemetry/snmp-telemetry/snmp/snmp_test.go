@@ -625,9 +625,67 @@ func TestClient_CommunityNeverReachesTheDebugLog(t *testing.T) {
 	logged := buf.String()
 	require.Contains(t, logged, "SENDING PACKET", "the packet logger has to be installed for this to pin anything")
 	require.Contains(t, logged, "Parsed community", "the reply path has to have parsed a community")
+	require.Contains(t, logged, "GET RESPONSE OK", "the reply has to have been dumped")
 	assert.NotContains(t, logged, community, "the community reached the debug log")
+	for _, form := range communityByteForms(community) {
+		assert.NotContains(t, logged, form, "the community reached the debug log in a byte dump")
+	}
 	assert.Contains(t, logged, "Community:"+redactedCommunity, "the packet line keeps its community field, redacted")
 	assert.Contains(t, logged, root, "redaction left the rest of the packet line intact")
+}
+
+// communityByteForms are the ways a dump of packet bytes prints the community:
+// the decimal numbers of a byte slice printed with %v, and lowercase hex.
+func communityByteForms(community string) []string {
+	return []string{
+		decimalBytes(community),
+		hex.EncodeToString([]byte(community)),
+	}
+}
+
+// decimalBytes is the community's bytes as a byte slice prints them with %v,
+// without the brackets.
+func decimalBytes(community string) string {
+	numbers := make([]string, 0, len(community))
+	for _, b := range []byte(community) {
+		numbers = append(numbers, strconv.Itoa(int(b)))
+	}
+	return strings.Join(numbers, " ")
+}
+
+// gosnmp dumps every reply it reads as a byte slice, and a v1 or v2c reply
+// carries the community, which a byte slice prints as decimal numbers.
+func TestSlogAdapter_RedactsTheCommunityFromAReplyDump(t *testing.T) {
+	const community = "n0t-in-the-log"
+	reply, err := (&gosnmp.SnmpPacket{
+		Version:   gosnmp.Version2c,
+		Community: community,
+		PDUType:   gosnmp.GetResponse,
+		RequestID: 42,
+		Variables: []gosnmp.SnmpPDU{{Name: "1.3.6.1.2.1.1.1.0", Type: gosnmp.Null}},
+	}).MarshalMsg()
+	require.NoError(t, err)
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger, community: community}
+
+	adapter.Printf("GET RESPONSE OK: %+v", reply)
+
+	logged := buf.String()
+	for _, form := range communityByteForms(community) {
+		assert.NotContains(t, logged, form, "the community survived the adapter in the dump")
+	}
+	assert.Contains(t, logged, "GET RESPONSE OK: ")
+	assert.Contains(t, logged, redactedCommunity, "the elided span is marked")
+}
+
+// A v3 client carries no community, so its dumps print as gosnmp formats them.
+func TestSlogAdapter_EmptyCommunityLeavesADumpAlone(t *testing.T) {
+	logger, buf := debugLogger()
+	adapter := &SlogAdapter{logger: logger}
+
+	adapter.Printf("GET RESPONSE OK: %+v", []byte{48, 49})
+
+	assert.Contains(t, buf.String(), "GET RESPONSE OK: [48 49]")
 }
 
 // gosnmp's packet format is what discloses the community: SafeString prints it
@@ -884,4 +942,45 @@ func TestClient_ErrorWithoutTheCommunityIsReturnedUnchanged(t *testing.T) {
 	c := newTestClient(t, &config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: "s3cr3tc0mmun1ty"})
 	original := errors.New("request timeout (after 0 retries)")
 	assert.Same(t, original, c.redactError(original))
+}
+
+// A walk error names the target's address and port, and a one-byte prefix of
+// the community's hex is two digits that occur in them: "70" is the "p" of
+// public, "61" the "a" of a1rport. Only packet dumps are redacted, so the
+// address and port survive and the error is returned as it was.
+func TestClient_RedactErrorLeavesAddressesAndPortsAlone(t *testing.T) {
+	original := errors.New("read udp 127.0.0.1:52036->10.70.1.61:161: i/o timeout")
+	for _, community := range []string{"public", "a1rport"} {
+		c := newTestClient(t, &config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: community})
+		assert.Same(t, original, c.redactError(original), "community %q", community)
+	}
+}
+
+// At debug level gosnmp also logs the parse error of a malformed reply, which
+// quotes the reply's bytes as hex inside a formatted string rather than as a
+// byte slice, so the debug log needs the same redaction as the error.
+func TestClient_MalformedReplyKeepsTheCommunityOutOfTheDebugLog(t *testing.T) {
+	const (
+		root      = "1.3.6.1.2.1.2.2.1"
+		community = "s3cr3tc0mmun1ty"
+	)
+	agent := newCorruptingAgent(t, interfaceTable(root, 1, 1), overstateCommunityLength)
+	logger, buf := debugLogger()
+	w, err := NewClient(t.Context(), "127.0.0.1", agent.port, 0, 300*time.Millisecond,
+		&config.Authentication{ProtocolVersion: ProtocolVersion2c, Community: community}, logger)
+	require.NoError(t, err)
+	require.NoError(t, w.Connect())
+	t.Cleanup(func() { _ = w.Close() })
+
+	_, err = w.Walk(root)
+	require.Error(t, err, "the corrupt reply has to have failed the walk")
+	logged := buf.String()
+	require.Contains(t, logged, "not enough data for OctetString", "gosnmp has to have logged the parse error")
+	assert.NotContains(t, logged, community)
+	for start := 0; start < len(community); start++ {
+		for end := start + minRecognisableFragment; end <= len(community); end++ {
+			assert.NotContains(t, logged, hex.EncodeToString([]byte(community[start:end])),
+				"bytes %d..%d of the community appeared in hex", start, end)
+		}
+	}
 }

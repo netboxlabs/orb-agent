@@ -178,7 +178,9 @@ func (s *Server) createPolicy(c *gin.Context) {
 
 	rPolicies := []string{}
 	for name, policy := range policies {
-		s.logger.Debug("starting policy", "policy", policy)
+		// The policy is not logged whole: its authentication carries the SNMP
+		// credentials.
+		s.logger.Debug("starting policy", "policy", name, "targets", len(policy.Scope.Targets))
 		if s.manager.HasPolicy(name) {
 			for _, p := range rPolicies {
 				if err = s.manager.StopPolicy(p); err != nil {

@@ -474,7 +474,9 @@ func (p *pktvisorBackend) ApplyPolicy(data policies.PolicyData, updatePolicy boo
 		}
 	}
 
-	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "data", data.Data)
+	// The body is not logged: it carries the policy's credentials, with any
+	// secret references already resolved.
+	p.logger.Debug("pktvisor policy apply", "policy_id", data.ID, "policy_name", data.Name)
 
 	body := data.Data
 	if tapType != "" {

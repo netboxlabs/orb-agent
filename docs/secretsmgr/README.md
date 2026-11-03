@@ -43,6 +43,11 @@ The provider and its settings can also be chosen entirely from the environment,
 without editing the YAML, which suits injecting them at deploy time. See
 [Environment-Driven Configuration](../advanced_config/env_config.md).
 
+The agent logs a policy it applies by its ID and name only, at every log level,
+so its own lines carry no resolved values. With debug logging on, the provider
+logs the references it resolves, never the values. See
+[Debug Logging](../config_samples.md#debug-logging).
+
 ## Rotation
 
 Every provider takes an optional `schedule`, a cron expression for re-fetching

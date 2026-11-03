@@ -29,7 +29,7 @@ orb:
 |:---------:|:----:|:-------:|:------------|
 | host | str | `localhost` | Address the backend's API binds. The agent reaches it on loopback; the API has no authentication, so widen it only behind your own access control. |
 | port | int | free port | Port of the backend's API, 1 to 65535. Unset, a loopback `host` gets a port free at each start and any other `host` gets 8078; see [Backend keys](../configs/agent_yaml.md#backend-keys). |
-| log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. |
+| log_level | str | `INFO` | `DEBUG`, `INFO`, `WARN` or `ERROR`; any other value is refused. The agent passes `DEBUG` when the backend has `debug: true` or the agent runs with its debug flag. At `DEBUG` it logs every SNMP request it sends and reply it receives, with the community shown as `[REDACTED]`. |
 | log_format | str | `TEXT` | `TEXT` or `JSON`; any other value is refused. |
 | otel_export_period | int | 10 | Seconds between checks for newly polled values to export, 1 to 31536000: the longest a poll's values wait before they are sent. Each check exports a device's latest poll once, so keep it at or below the shortest `metrics_interval` of any policy; see [When metrics are exported](#when-metrics-are-exported). |
 | policy_env_vars | str or list | unset | Environment variable names a policy may read through `${NAME}` in `community`, `username`, `auth_passphrase` or `priv_passphrase`. A comma-separated string or a list of names, never `${...}` references. Unset refuses every reference. |

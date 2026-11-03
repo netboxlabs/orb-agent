@@ -3,13 +3,20 @@ package server_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
@@ -225,6 +232,120 @@ func TestServerCreateDeletePolicy(t *testing.T) {
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.Contains(t, w.Body.String(), `policy not found`)
+}
+
+// TestServerCreatePolicyLogsNoCredentials pins that a policy's SNMP
+// credentials, at the scope and on a target, stay out of the log at DEBUG,
+// from the policy's start through a poll of the target. The agent relays this
+// process's log into its own, so a credential logged here reaches the agent's
+// console and, when the agent sends its log to Fleet, the platform (MON-777).
+func TestServerCreatePolicyLogsNoCredentials(t *testing.T) {
+	var logs syncBuffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	policyManager, err := policy.NewManager(context.Background(), logger, new(MockClient), nil)
+	require.NoError(t, err)
+	srv := server.NewServer("localhost", 8081, logger, policyManager, "1.0.0")
+	require.NoError(t, setupTestMeter(t))
+
+	body := []byte(fmt.Sprintf(`
+    policies:
+      secret-policy:
+        config:
+          lookup_extensions_dir: /tmp/lookup_extensions
+        scope:
+          targets:
+            - host: 192.0.2.10
+            - host: 127.0.0.1
+              port: %d
+              authentication:
+                protocol_version: SNMPv2c
+                community: c0mmunity-7f3a
+          authentication:
+            protocol_version: SNMPv3
+            security_level: authPriv
+            username: orb
+            auth_protocol: SHA
+            auth_passphrase: 4uth-pass-7f3a
+            priv_protocol: AES
+            priv_passphrase: pr1v-pass-7f3a
+    `, snmpResponder(t)))
+	w := httptest.NewRecorder()
+	request, _ := http.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-yaml")
+	srv.Router().ServeHTTP(w, request)
+	require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+
+	// gosnmp logs every packet of a poll at DEBUG, the community's most
+	// frequent way into the log, so the check waits for a reply to be parsed.
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "Parsed community") },
+		10*time.Second, 20*time.Millisecond, "the target has to have been polled for the log to hold its packets")
+
+	w = httptest.NewRecorder()
+	request, _ = http.NewRequest(http.MethodDelete, "/api/v1/policies/secret-policy", nil)
+	srv.Router().ServeHTTP(w, request)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	out := logs.String()
+	require.Contains(t, out, `"msg":"starting policy"`, "the start is logged at DEBUG")
+	for _, credential := range []string{"c0mmunity-7f3a", "4uth-pass-7f3a", "pr1v-pass-7f3a"} {
+		assert.NotContains(t, out, credential)
+	}
+}
+
+// snmpResponder answers every SNMP request on a local port with endOfMibView,
+// enough for a poll to send packets and parse the replies, and returns the
+// port.
+func snmpResponder(t *testing.T) uint16 {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	go func() {
+		codec := &gosnmp.GoSNMP{Version: gosnmp.Version2c, MaxOids: gosnmp.MaxOids}
+		buf := make([]byte, 4096)
+		for {
+			n, addr, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			req, err := codec.SnmpDecodePacket(buf[:n])
+			if err != nil || len(req.Variables) == 0 {
+				continue
+			}
+			codec.Version = req.Version
+			codec.Community = req.Community
+			// The encoder stamps the next value of its own counter, so seeding
+			// it one below the request's ID makes the reply carry that ID.
+			codec.SetRequestID(req.RequestID - 1)
+			out, err := codec.SnmpEncodePacket(gosnmp.GetResponse,
+				[]gosnmp.SnmpPDU{{Name: req.Variables[0].Name, Type: gosnmp.EndOfMibView}}, 0, 0)
+			if err == nil {
+				_, _ = conn.WriteTo(out, addr)
+			}
+		}
+	}()
+	port, err := strconv.ParseUint(strings.TrimPrefix(conn.LocalAddr().String(), "127.0.0.1:"), 10, 16)
+	require.NoError(t, err)
+	return uint16(port)
+}
+
+// syncBuffer lets the test read what the server and the policy's goroutines
+// logged.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // setupTestMeter creates a no-op meter provider for testing
