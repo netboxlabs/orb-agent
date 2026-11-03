@@ -1,0 +1,66 @@
+{
+  "blue": {
+    "name": "blue",
+    "type": "L3VRF",
+    "state": {
+      "route_distinguisher": "65000:1"
+    },
+    "interfaces": {
+      "interface": {
+        "Vlan110": {},
+        "Vlan111": {},
+        "Port-channel20": {}
+      }
+    }
+  },
+  "default": {
+    "name": "default",
+    "type": "DEFAULT_INSTANCE",
+    "state": {
+      "route_distinguisher": "0:0"
+    },
+    "interfaces": {
+      "interface": {
+        "Loopback0": {},
+        "Vlan1": {}
+      }
+    }
+  },
+  "green": {
+    "name": "green",
+    "type": "L3VRF",
+    "state": {
+      "route_distinguisher": "0:0"
+    },
+    "interfaces": {
+      "interface": {
+        "Vlan130": {}
+      }
+    }
+  },
+  "management": {
+    "name": "management",
+    "type": "L3VRF",
+    "state": {
+      "route_distinguisher": "0:0"
+    },
+    "interfaces": {
+      "interface": {
+        "Management0": {}
+      }
+    }
+  },
+  "red": {
+    "name": "red",
+    "type": "L3VRF",
+    "state": {
+      "route_distinguisher": "65000:2"
+    },
+    "interfaces": {
+      "interface": {
+        "Vlan120": {},
+        "Ethernet1/1": {}
+      }
+    }
+  }
+}

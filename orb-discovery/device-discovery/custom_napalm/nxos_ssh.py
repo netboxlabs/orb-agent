@@ -2,7 +2,8 @@
 """
 Cisco NX-OS-SSH NAPALM driver subclass adding ``get_interfaces_vlans()`` and ``get_modules()``.
 
-It also keys napalm's ``get_interfaces_ip()`` and ``get_network_instances()``
+It skips any lines NX-OS prints ahead of a ``| json`` reply before napalm parses
+it, and keys napalm's ``get_interfaces_ip()`` and ``get_network_instances()``
 by the canonical names ``get_interfaces()`` reports: NX-OS prints
 ``loopback0``, ``mgmt0`` and ``port-channel10`` where napalm's interface list
 has ``Loopback0``, ``Management0`` and ``Port-channel10``.
@@ -14,6 +15,7 @@ keyed by the names this driver's ``get_interfaces()`` reports.
 ``get_modules()`` adds Module / module-bay discovery for Nexus modular chassis via SSH + ntc-templates.
 """
 
+import json
 import logging
 import re
 
@@ -565,6 +567,42 @@ def nxos_row_to_switchport_info(row: dict) -> SwitchportInfo:
     )
 
 
+# Hosts and commands already warned about lines ahead of a ``| json`` reply.
+_preamble_warned: set[tuple[str, str]] = set()
+_PREAMBLE_SAMPLE_CHARS = 200
+
+
+def _json_document(reply: str, command: str, host: str) -> str:
+    """
+    Return *reply* from its first line that opens a JSON document.
+
+    NX-OS can print lines of its own ahead of a ``| json`` reply: seen on a Nexus
+    3064 with NX-OS 9.3(9), where every reply over the discovery SSH session opens
+    with ``SB: Permission denied. ... drbg_instantiate failed``. The JSON on the
+    next line is intact, but napalm hands the whole reply to ``json.loads`` and
+    fails at the first character. Skipped lines with text are logged at WARNING
+    the first time for a host and command, at DEBUG after that; blank lines, which
+    ``json.loads`` always accepted, are dropped without a word. A reply with no
+    JSON line comes back unchanged, so it fails as before.
+    """
+    lines = reply.splitlines()
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith(("{", "[")):
+            skipped = [skipped_line.strip() for skipped_line in lines[:index] if skipped_line.strip()]
+            if skipped:
+                key = (host, command)
+                level = logging.DEBUG if key in _preamble_warned else logging.WARNING
+                _preamble_warned.add(key)
+                logger.log(
+                    level,
+                    "%s: %r reply opens with %d %s before the JSON, skipped: %s",
+                    host, command, len(skipped), "line" if len(skipped) == 1 else "lines",
+                    " ".join(skipped)[:_PREAMBLE_SAMPLE_CHARS],
+                )
+            return "\n".join(lines[index:])
+    return reply
+
+
 class NXOSSSHDriver(NapalmNXOSSSHDriver):
     """Cisco NX-OS-SSH NAPALM driver with VLAN-interface association support."""
 
@@ -594,6 +632,13 @@ class NXOSSSHDriver(NapalmNXOSSSHDriver):
             # names match when VLANs are attached to interfaces.
             result[canonical_interface_name(ifname)] = classify_switchport(info)
         return result
+
+    def _get_command_table(self, command: str, table_name: str, row_name: str) -> list:
+        """Return the rows of a ``| json`` reply, skipping any lines NX-OS prints ahead of the JSON."""
+        reply = self._send_command(command)
+        if isinstance(reply, str) and reply:
+            reply = json.loads(_json_document(reply, command, self.hostname))
+        return self._get_reply_table(reply, table_name, row_name)
 
     def get_interfaces_ip(self) -> dict:
         """Return napalm's addresses, keyed by the names get_interfaces() reports."""

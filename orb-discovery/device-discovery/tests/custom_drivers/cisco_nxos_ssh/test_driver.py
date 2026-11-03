@@ -1,10 +1,13 @@
 """Tests for the NXOSSSHDriver subclass — VLAN-association coverage only."""
 
+import json
+import logging
 from pathlib import Path
 
 import pytest
 
-from custom_napalm.nxos_ssh import NXOSSSHDriver, classify_module_type_nexus_ssh
+from custom_napalm import nxos_ssh
+from custom_napalm.nxos_ssh import NXOSSSHDriver, _json_document, classify_module_type_nexus_ssh
 from tests.custom_drivers.base_test import BaseDriverTest
 from tests.custom_drivers.mock_device import FakeCLIDevice
 
@@ -43,10 +46,6 @@ class TestNXOSSSHDriver(BaseDriverTest):
         pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
 
     def test_get_config_sanitized(self, scenario):
-        """Skip: inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver."""
-        pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
-
-    def test_get_vlans(self, scenario):
         """Skip: inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver."""
         pytest.skip("inherited from napalm.nxos_ssh.nxos_ssh.NXOSSSHDriver")
 
@@ -98,3 +97,49 @@ class TestNXOSSSHDriver(BaseDriverTest):
         """get_modules() must exist on NXOSSSHDriver after this batch lands."""
         assert hasattr(NXOSSSHDriver, "get_modules")
         assert callable(getattr(NXOSSSHDriver, "get_modules"))
+
+
+def test_json_preamble_is_warned_once_per_host_and_command(monkeypatch, caplog) -> None:
+    """The lines NX-OS prints ahead of a ``| json`` reply are logged at WARNING once, then at DEBUG."""
+    monkeypatch.setattr(nxos_ssh, "_preamble_warned", set())
+    scenario = Path(__file__).parent / "mock_data" / "test_get_vlans" / "reply_with_preamble"
+    driver = TestNXOSSSHDriver()._build_driver(scenario)
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.nxos_ssh"):
+        driver.get_vlans()
+        driver.get_vlans()
+
+    records = [record for record in caplog.records if "before the JSON" in record.getMessage()]
+    assert [record.levelno for record in records] == [logging.WARNING, logging.DEBUG]
+    assert "drbg_instantiate failed" in records[0].getMessage()
+
+
+def test_reply_without_json_is_left_to_fail() -> None:
+    """A reply with no JSON line is passed on unchanged, so napalm fails on it as before."""
+    reply = "% Invalid command at '^' marker."
+    assert _json_document(reply, "show vlan brief | json", "test-host") == reply
+
+
+def test_reply_opening_with_a_blank_line_is_not_reported(monkeypatch, caplog) -> None:
+    """A blank line ahead of the JSON is dropped without a word: ``json.loads`` always accepted it."""
+    monkeypatch.setattr(nxos_ssh, "_preamble_warned", set())
+    reply = '\n{"TABLE_vrf": {"ROW_vrf": []}}\n'
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.nxos_ssh"):
+        document = _json_document(reply, "show vrf detail | json", "test-host")
+
+    assert json.loads(document) == {"TABLE_vrf": {"ROW_vrf": []}}
+    assert [record for record in caplog.records if "before the JSON" in record.getMessage()] == []
+
+
+def test_blank_lines_around_the_device_line_are_not_counted(monkeypatch, caplog) -> None:
+    """Only skipped lines with text are counted and quoted in the warning."""
+    monkeypatch.setattr(nxos_ssh, "_preamble_warned", set())
+    reply = '\nSB: Permission denied. drbg_instantiate failed\n\n{"TABLE_vrf": {"ROW_vrf": []}}\n'
+
+    with caplog.at_level(logging.DEBUG, logger="custom_napalm.nxos_ssh"):
+        _json_document(reply, "show vrf detail | json", "test-host")
+
+    [record] = [record for record in caplog.records if "before the JSON" in record.getMessage()]
+    assert record.levelno == logging.WARNING
+    assert "opens with 1 line before the JSON, skipped: SB: Permission denied. drbg_instantiate failed" in record.getMessage()
