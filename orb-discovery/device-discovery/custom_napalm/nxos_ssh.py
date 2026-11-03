@@ -580,22 +580,24 @@ def _json_document(reply: str, command: str, host: str) -> str:
     3064 with NX-OS 9.3(9), where every reply over the discovery SSH session opens
     with ``SB: Permission denied. ... drbg_instantiate failed``. The JSON on the
     next line is intact, but napalm hands the whole reply to ``json.loads`` and
-    fails at the first character. The skipped lines are logged at WARNING the first
-    time for a host and command, at DEBUG after that. A reply with no JSON line
-    comes back unchanged, so it fails as before.
+    fails at the first character. Skipped lines with text are logged at WARNING
+    the first time for a host and command, at DEBUG after that; blank lines, which
+    ``json.loads`` always accepted, are dropped without a word. A reply with no
+    JSON line comes back unchanged, so it fails as before.
     """
     lines = reply.splitlines()
     for index, line in enumerate(lines):
         if line.lstrip().startswith(("{", "[")):
-            if index:
+            skipped = [skipped_line.strip() for skipped_line in lines[:index] if skipped_line.strip()]
+            if skipped:
                 key = (host, command)
                 level = logging.DEBUG if key in _preamble_warned else logging.WARNING
                 _preamble_warned.add(key)
-                skipped = " ".join(skipped_line.strip() for skipped_line in lines[:index])
                 logger.log(
                     level,
                     "%s: %r reply opens with %d %s before the JSON, skipped: %s",
-                    host, command, index, "line" if index == 1 else "lines", skipped[:_PREAMBLE_SAMPLE_CHARS],
+                    host, command, len(skipped), "line" if len(skipped) == 1 else "lines",
+                    " ".join(skipped)[:_PREAMBLE_SAMPLE_CHARS],
                 )
             return "\n".join(lines[index:])
     return reply
