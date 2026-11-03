@@ -62,6 +62,10 @@ type FleetConfigManager struct {
 	connCancel   context.CancelFunc
 	connected    atomic.Bool    // true only after connection.Connect() succeeds
 	goroutinesWg sync.WaitGroup // tracks goroutines started in Start(); Wait()ed in Stop() before Disconnect
+	// credentialsRefused is true while Fleet's token endpoint refuses the
+	// agent's credentials (401/403). The reconnect worker sets it, and retries
+	// at its own pace; the token expiry monitor stays quiet meanwhile.
+	credentialsRefused atomic.Bool
 }
 
 func newFleetConfigManager(logger *slog.Logger, pMgr policymgr.PolicyManager, backendState backend.StateRetriever, fm filesmgr.Manager) *FleetConfigManager {
@@ -464,7 +468,7 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 	fleetManager.goroutinesWg.Add(1)
 	go func() {
 		defer fleetManager.goroutinesWg.Done()
-		fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second)
+		fleetManager.runReconnectWorker(fleetManager.monitorCtx, timeout, 5, 5*time.Second, 2*time.Minute, 30*time.Second, 5*time.Minute)
 	}()
 
 	// Start background goroutine to monitor token expiry and trigger proactive reconnection
@@ -606,20 +610,33 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 // sees the agent as Offline rather than Stale, then schedules a fast re-signal (Fix 3) so recovery
 // does not have to wait for the next full monitor tick. Timing parameters are injected so tests can
 // use millisecond-scale values without slowing the test suite.
-func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, timeout time.Duration, maxRetries int, baseBackoff, maxBackoff, retryDelay time.Duration) {
+//
+// Fleet refusing the credentials (an *fleet.AuthError, HTTP 401/403) ends the attempts at once,
+// since retrying cannot fix them: the worker logs one ERROR naming the refusal, disconnects when the
+// refusal begins, and retries every refusedRetryDelay without waiting for a signal, so credentials
+// restored in Fleet reconnect the agent.
+func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, timeout time.Duration, maxRetries int, baseBackoff, maxBackoff, retryDelay, refusedRetryDelay time.Duration) {
+	retryNow := false
 	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-fleetManager.reconnectChan:
+		if !retryNow {
+			select {
+			case <-ctx.Done():
+				return
+			case <-fleetManager.reconnectChan:
+			}
 		}
+		retryNow = false
 		fleetManager.logger.Debug("JWT refresh and reconnection requested")
 
 		backoff := baseBackoff
 		var lastErr error
+		var authErr *fleet.AuthError
 
 		for attempt := 1; attempt <= maxRetries; attempt++ {
 			if lastErr = fleetManager.refreshAndReconnect(ctx, timeout); lastErr == nil {
+				break
+			}
+			if errors.As(lastErr, &authErr) {
 				break
 			}
 			fleetManager.logger.Error("refresh and reconnect attempt failed",
@@ -639,23 +656,38 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			}
 		}
 
+		if authErr != nil {
+			fleetManager.logger.Error("Fleet refused the agent's credentials: the agent was deleted or its credentials were rotated",
+				"status_code", authErr.StatusCode,
+				"hint", "set client_id and client_secret to the agent's current credentials",
+				"retry_in", refusedRetryDelay)
+			// Disconnect once: a refused retry finds the agent disconnected already.
+			if !fleetManager.credentialsRefused.Swap(true) {
+				if err := fleetManager.disconnectAfterFailedRefresh(timeout); err != nil {
+					fleetManager.logger.Error("failed to disconnect after Fleet refused the credentials", "error", err)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(refusedRetryDelay):
+			}
+			// A signal sent during the wait asked for this same retry.
+			select {
+			case <-fleetManager.reconnectChan:
+			default:
+			}
+			retryNow = true
+			continue
+		}
+		fleetManager.credentialsRefused.Store(false)
+
 		if lastErr != nil {
 			fleetManager.logger.Error("all refresh and reconnect attempts exhausted, disconnecting agent",
 				"error", lastErr)
-			// Use connCtx (not the worker's monitorCtx-derived ctx) as the timeout
-			// parent so the disconnect isn't dead-on-arrival if Stop() has already
-			// cancelled monitorCtx concurrently.
-			fleetManager.connMu.RLock()
-			heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
-			fleetManager.connMu.RUnlock()
-			if fleetManager.otlpBridge != nil {
-				fleetManager.otlpBridge.ClearPublisher()
-			}
-			disconnectCtx, disconnectCancel := context.WithTimeout(fleetManager.connCtx, timeout)
-			if err := fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic); err != nil {
+			if err := fleetManager.disconnectAfterFailedRefresh(timeout); err != nil {
 				fleetManager.logger.Error("failed to disconnect after exhausted retries", "error", err)
 			}
-			disconnectCancel()
 			time.AfterFunc(retryDelay, func() {
 				if ctx.Err() != nil {
 					return
@@ -668,6 +700,23 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			})
 		}
 	}
+}
+
+// disconnectAfterFailedRefresh disconnects the agent once refreshing its token
+// has failed, so Fleet sees it Offline rather than Stale. connCtx (not the
+// worker's monitorCtx-derived ctx) is the timeout parent so the disconnect
+// isn't dead-on-arrival if Stop() has already cancelled monitorCtx
+// concurrently.
+func (fleetManager *FleetConfigManager) disconnectAfterFailedRefresh(timeout time.Duration) error {
+	fleetManager.connMu.RLock()
+	heartbeatTopic := fleetManager.connectionDetails.Topics.Heartbeat
+	fleetManager.connMu.RUnlock()
+	if fleetManager.otlpBridge != nil {
+		fleetManager.otlpBridge.ClearPublisher()
+	}
+	disconnectCtx, disconnectCancel := context.WithTimeout(fleetManager.connCtx, timeout)
+	defer disconnectCancel()
+	return fleetManager.connection.Disconnect(disconnectCtx, heartbeatTopic)
 }
 
 // BindSecretsManager binds a fleet secrets manager to the MQTT connection
@@ -866,35 +915,46 @@ func (fleetManager *FleetConfigManager) monitorTokenExpiry() {
 			fleetManager.logger.Info("token expiry monitor stopped")
 			return
 		case <-ticker.C:
-			// Check if token is expired or expiring soon
-			if fleetManager.authTokenManager.IsTokenExpired() {
-				fleetManager.logger.Warn("JWT token has expired, triggering reconnection",
-					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime())
-				select {
-				case fleetManager.reconnectChan <- struct{}{}:
-					fleetManager.logger.Debug("reconnection signal sent due to expired token")
-				default:
-					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
-				}
-			} else if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
-				fleetManager.logger.Warn("JWT token expiring soon, triggering proactive reconnection",
-					"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
-					"reconnect_buffer", reconnectBuffer)
-				select {
-				case fleetManager.reconnectChan <- struct{}{}:
-					fleetManager.logger.Debug("reconnection signal sent due to imminent token expiry")
-				default:
-					fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
-				}
-			} else {
-				expiryTime := fleetManager.authTokenManager.GetTokenExpiryTime()
-				if !expiryTime.IsZero() {
-					timeUntilExpiry := time.Until(expiryTime)
-					fleetManager.logger.Debug("token expiry check passed",
-						"expiry_time", expiryTime,
-						"time_until_expiry", timeUntilExpiry)
-				}
-			}
+			fleetManager.checkTokenExpiry(reconnectBuffer)
+		}
+	}
+}
+
+// checkTokenExpiry is one tick of the token expiry monitor: it signals the
+// reconnect worker when the token has expired or expires within reconnectBuffer.
+// While Fleet refuses the credentials it does neither: the worker has reported
+// the refusal and retries at its own pace, and a WARN every tick would bury it.
+func (fleetManager *FleetConfigManager) checkTokenExpiry(reconnectBuffer time.Duration) {
+	if fleetManager.credentialsRefused.Load() {
+		fleetManager.logger.Debug("token expiry check skipped while Fleet refuses the agent's credentials")
+		return
+	}
+	if fleetManager.authTokenManager.IsTokenExpired() {
+		fleetManager.logger.Warn("JWT token has expired, triggering reconnection",
+			"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime())
+		select {
+		case fleetManager.reconnectChan <- struct{}{}:
+			fleetManager.logger.Debug("reconnection signal sent due to expired token")
+		default:
+			fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+		}
+	} else if fleetManager.authTokenManager.IsTokenExpiringSoon(reconnectBuffer) {
+		fleetManager.logger.Warn("JWT token expiring soon, triggering proactive reconnection",
+			"expiry_time", fleetManager.authTokenManager.GetTokenExpiryTime(),
+			"reconnect_buffer", reconnectBuffer)
+		select {
+		case fleetManager.reconnectChan <- struct{}{}:
+			fleetManager.logger.Debug("reconnection signal sent due to imminent token expiry")
+		default:
+			fleetManager.logger.Debug("reconnection already in progress, skipping duplicate trigger")
+		}
+	} else {
+		expiryTime := fleetManager.authTokenManager.GetTokenExpiryTime()
+		if !expiryTime.IsZero() {
+			timeUntilExpiry := time.Until(expiryTime)
+			fleetManager.logger.Debug("token expiry check passed",
+				"expiry_time", expiryTime,
+				"time_until_expiry", timeUntilExpiry)
 		}
 	}
 }
