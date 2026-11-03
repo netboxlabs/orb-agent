@@ -1431,10 +1431,18 @@ def test_translate_interface_drops_mac_that_does_not_parse(sample_device_info, s
     assert not interface.HasField("primary_mac_address")
     assert interface.description == "MGMT: firewall uplink"
 
-@pytest.mark.parametrize("mac", ["80:13:BE:B6:E6:F8", "80:13:be:b6:e6:f8", "8013.beb6.e6f8"])
+
+@pytest.mark.parametrize(
+    "mac",
+    ["00:00:5E:00:53:01", "00:00:5e:00:53:01", "0000.5e00.5301", " 00:00:5e:00:53:01 ", "00 00 5e 00 53 01"],
+)
 def test_translate_interface_sends_parseable_mac_normalized(sample_device_info, sample_defaults, mac):
-    """A MAC that parses is sent in the form napalm's drivers report: colon-separated upper case."""
+    """
+    A MAC that parses is sent as colon-separated upper case, spaces removed first as NetBox does.
+
+    The MACs are from the documentation range of RFC 7042.
+    """
     device = translate_device(sample_device_info, sample_defaults, config_info=None, options=None)
     interface = translate_interface(device, "ae1", {"is_enabled": True, "mac_address": mac}, sample_defaults)
-    assert interface.primary_mac_address.mac_address == "80:13:BE:B6:E6:F8"
+    assert interface.primary_mac_address.mac_address == "00:00:5E:00:53:01"
 

@@ -235,13 +235,16 @@ def _resolve_non_subinterface_type(
 
 def _parseable_mac(value: object, if_name: str) -> str | None:
     """
-    Return the driver's MAC unchanged, or ``None`` when it is blank or does not parse.
+    Return the driver's MAC normalized, or ``None`` when it is blank or does not parse.
 
-    napalm's junos driver stringifies a missing MAC, so every interface without
-    one reports ``"None"``: logical units (``ae1.300``, ``lo0.0``) and pseudo
-    interfaces (``dsc``, ``esi``, ``fti0``). The Diode plugin rejects the whole
-    interface over such a value ("Invalid MAC address format"),
-    and the interface is then never created or updated on any run;
+    A parseable MAC goes out as colon-separated upper case: the form NetBox stores and
+    most drivers already report. Spaces are removed before parsing, as NetBox does, so
+    ``" 00:00:5e:00:53:01 "`` and ``"00 00 5e 00 53 01"`` are kept.
+
+    napalm's junos driver stringifies a missing MAC, so every interface without one
+    reports ``"None"``: logical units (``ae1.300``, ``lo0.0``) and pseudo interfaces
+    (``dsc``, ``esi``, ``fti0``). The Diode plugin rejects the whole interface over such
+    a value ("Invalid MAC address format"), so none of its changes reach NetBox;
     omitting the field is what a missing MAC means. Logged at DEBUG: on Junos it
     happens for those interfaces on every run.
     """
@@ -249,9 +252,9 @@ def _parseable_mac(value: object, if_name: str) -> str | None:
     if not value:
         return None
     try:
-        return normalize_mac(str(value))
+        return normalize_mac(str(value).replace(" ", ""))
     except Exception:
-        logger.debug(f"{if_name}: dropping MAC {value} - not a MAC address")
+        logger.debug("%s: dropping MAC %s - not a MAC address", if_name, value)
         return None
 
 
