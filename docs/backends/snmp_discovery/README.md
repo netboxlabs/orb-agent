@@ -221,6 +221,8 @@ defaults:
 
 Only one `scope_*` may be set; a map with none behaves like the bare name. Rack and cluster scopes are not supported.
 
+**The group's VID ranges must cover every VID the devices report.** NetBox refuses a VLAN whose VID is outside them, and Diode then rejects every interface change that references that VLAN. VLAN 1 is the usual case: most switches report it on many ports, so with ranges starting at 2 those interfaces are never created or updated. Widen the ranges in NetBox.
+
 ### Scope Section
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
