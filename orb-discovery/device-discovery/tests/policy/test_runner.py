@@ -191,6 +191,87 @@ def test_setup_policy_runner_expands_hostname_ranges_one_shot(
     assert isinstance(date_trigger_arg, DateTrigger)
 
 
+def _scheduled(policy_runner, run_store, scopes):
+    """Set the policy up and return what it schedules: range hosts by range, and single targets."""
+    with (
+        patch.object(policy_runner.scheduler, "start"),
+        patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
+    ):
+        policy_runner.setup("policy1", Config(), scopes, run_store)
+    ranges, singles = {}, []
+    for scheduled in mock_add_job.call_args_list:
+        if scheduled[0][0] == policy_runner.run_scan:
+            hostnames, _, scope, _ = scheduled[1]["args"]
+            ranges[scope.hostname] = hostnames
+        elif scheduled[0][0] == policy_runner.run:
+            singles.append(scheduled[1]["args"][1].hostname)
+    return ranges, singles
+
+
+def _entry(hostname, **kwargs):
+    return Napalm(hostname=hostname, username="admin", password="invalid", **kwargs)
+
+
+@pytest.mark.parametrize("own_entry", ["192.0.2.2", "192.0.2.2/32", "192.0.2.2-2"])
+def test_setup_leaves_an_address_with_its_own_entry_out_of_a_range(
+    policy_runner, run_store, own_entry
+):
+    """A device listed on its own gets one job, from its own entry, not a second from the range."""
+    ranges, singles = _scheduled(
+        policy_runner, run_store, [_entry("192.0.2.0/29"), _entry(own_entry, driver="ios")]
+    )
+
+    assert "192.0.2.2" not in ranges["192.0.2.0/29"]
+    assert len(ranges["192.0.2.0/29"]) == 5
+    assert ranges.get(own_entry) == ["192.0.2.2"] or singles == ["192.0.2.2"]
+
+
+def test_setup_keeps_a_range_host_whose_own_entry_uses_another_port(policy_runner, run_store):
+    """An entry on another port reaches a different service, so the range keeps the host."""
+    ranges, singles = _scheduled(
+        policy_runner,
+        run_store,
+        [_entry("192.0.2.0/29"), _entry("192.0.2.2", optional_args={"port": 2222})],
+    )
+
+    assert "192.0.2.2" in ranges["192.0.2.0/29"]
+    assert singles == ["192.0.2.2"]
+
+
+def test_setup_leaves_out_a_host_listed_on_the_range_port(policy_runner, run_store):
+    """A range and an entry on the same port reach the same service, so the range leaves the host out."""
+    port = {"optional_args": {"port": 2222}}
+    ranges, _ = _scheduled(
+        policy_runner, run_store, [_entry("192.0.2.0/29", **port), _entry("192.0.2.2", **port)]
+    )
+
+    assert "192.0.2.2" not in ranges["192.0.2.0/29"]
+
+
+def test_setup_keeps_overlapping_ranges_independent(policy_runner, run_store):
+    """Overlapping ranges are how a policy tries several accounts, so neither takes hosts from the other."""
+    ranges, _ = _scheduled(
+        policy_runner, run_store, [_entry("192.0.2.0/30"), _entry("192.0.2.1-192.0.2.2")]
+    )
+
+    assert ranges == {
+        "192.0.2.0/30": ["192.0.2.1", "192.0.2.2"],
+        "192.0.2.1-192.0.2.2": ["192.0.2.1", "192.0.2.2"],
+    }
+
+
+def test_setup_skips_a_range_whose_addresses_all_have_their_own_entries(policy_runner, run_store):
+    """A range left with nothing to scan schedules no scan."""
+    ranges, singles = _scheduled(
+        policy_runner,
+        run_store,
+        [_entry("192.0.2.0/30"), _entry("192.0.2.1"), _entry("192.0.2.2")],
+    )
+
+    assert ranges == {}
+    assert singles == ["192.0.2.1", "192.0.2.2"]
+
+
 def test_setup_with_unsupported_driver_raises_error(
     policy_runner, sample_scopes, run_store
 ):

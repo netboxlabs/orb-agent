@@ -925,16 +925,20 @@ def _asset_tag(override: Defaults, defaults: Defaults | None) -> str | None:
     return None
 
 
-def _endpoint(entry: Napalm) -> str | None:
+def scope_endpoint(entry: Napalm) -> str | None:
     """The one device a target reaches, as its normalised address or name and any port; None for a range."""
     if count_hostnames(entry.hostname) != 1:
         return None
-    host = expand_hostnames(entry.hostname)[0][0]
+    return host_endpoint(expand_hostnames(entry.hostname)[0][0], entry.optional_args)
+
+
+def host_endpoint(host: str, optional_args: dict[str, Any] | None) -> str:
+    """One host as a target with these optional_args reaches it: normalised address or name, and any port."""
     try:
         host = str(ipaddress.ip_address(host))
     except ValueError:
         host = host.lower()
-    port = (entry.optional_args or {}).get("port")
+    port = (optional_args or {}).get("port")
     return host if port is None else f"{host} port {port}"
 
 
@@ -951,7 +955,7 @@ def _device_ids(entry: Napalm, override: Defaults, defaults: Defaults | None) ->
     tag = _asset_tag(override, defaults)
     if tag is not None:
         ids.append(("asset_tag", tag))
-    endpoint = _endpoint(entry)
+    endpoint = scope_endpoint(entry)
     if endpoint is not None:
         ids.append(("host", endpoint))
     return ids

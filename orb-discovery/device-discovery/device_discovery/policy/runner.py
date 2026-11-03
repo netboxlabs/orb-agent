@@ -28,7 +28,9 @@ from device_discovery.policy.models import (
     Napalm,
     Options,
     Status,
+    host_endpoint,
     merge_override_defaults,
+    scope_endpoint,
 )
 from device_discovery.policy.portscan import (
     expand_hostnames,
@@ -147,6 +149,10 @@ class PolicyRunner:
         self.scheduler.start()
         self._validate_discovery_drivers()
 
+        # A device with its own entry is discovered from that entry alone, so
+        # the policy's ranges leave it out rather than reach it a second time.
+        own_entries = {e for e in map(scope_endpoint, scopes) if e is not None}
+
         set_telemetry = True
         for scope in scopes:
             sanitized_hostname = scope.hostname.replace("\r\n", "").replace("\n", "")
@@ -168,6 +174,12 @@ class PolicyRunner:
                 )
                 trigger = DateTrigger(run_date=datetime.now() + timedelta(seconds=1))
 
+            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
+            if parsed_as_range and len(hostnames) > 1:
+                hostnames = self._without_own_entries(hostnames, scope, own_entries, sanitized_hostname)
+                if not hostnames:
+                    continue
+
             id = str(uuid.uuid4())
             self.scopes[id] = scope
 
@@ -176,7 +188,6 @@ class PolicyRunner:
                 config.defaults = merge_override_defaults(
                     config.defaults, scope.override_defaults
                 )
-            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
 
             if parsed_as_range:
                 logger.info(
@@ -209,6 +220,22 @@ class PolicyRunner:
         active_policies = get_metric("active_policies")
         if active_policies:
             active_policies.add(1, {"policy": self.name})
+
+    def _without_own_entries(
+        self, hostnames: list[str], scope: Napalm, own_entries: set[str], sanitized_hostname: str
+    ) -> list[str]:
+        """A range's addresses, less those the policy also lists as targets of their own."""
+        if not own_entries:
+            return hostnames
+        listed = {h for h in hostnames if host_endpoint(h, scope.optional_args) in own_entries}
+        if not listed:
+            return hostnames
+        kept = [h for h in hostnames if h not in listed]
+        logger.info(
+            f"Policy {self.name}, Hostname {sanitized_hostname}: Leaving out "
+            f"{', '.join(h for h in hostnames if h in listed)}, discovered from their own scope entries"
+        )
+        return kept
 
     def telemetry(self):
         """Telemetry job."""
