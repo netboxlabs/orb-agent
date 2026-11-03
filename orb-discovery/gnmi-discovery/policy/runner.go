@@ -556,10 +556,9 @@ func (r *Runner) streamLoop(host string, profile *mapping.Profile, pruneEvery ti
 	// logic is shared by the errs-case and the notes-closed drain below.
 	earlyFailureErr := func(e error) error {
 		if !productive {
-			// Preserve the underlying stream error text (why ON_CHANGE/SAMPLE was
-			// rejected) while wrapping the sentinel so errors.Is still matches and
-			// the auto ladder can downgrade.
-			return fmt.Errorf("subscription failed before any data: %w: %v", errEarlyStreamFailure, e)
+			// Wrap both, so errors.Is still matches the sentinel for the auto
+			// ladder and status.Code reads the code the target refused with.
+			return fmt.Errorf("subscription failed before any data: %w: %w", errEarlyStreamFailure, e)
 		}
 		return e
 	}
