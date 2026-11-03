@@ -60,7 +60,8 @@ type Runner struct {
 	runStore *RunStore
 	wg       sync.WaitGroup
 
-	backoffBase time.Duration // initial reconnect backoff; tests shorten it
+	backoffBase  time.Duration // initial reconnect backoff; tests shorten it
+	setupTimeout time.Duration // bounds Capabilities; tests shorten it
 
 	mu     sync.Mutex
 	states map[string]*targetState // by host
@@ -79,7 +80,18 @@ type targetState struct {
 	LastSync       time.Time // last completed initial-sync / snapshot boundary
 	LastFlush      time.Time // last successful Diode ingest
 	LastError      string
+	DegradedReason string // why the session runs degraded; cleared by a clean setup
 	lastProfile    string // last profile selected for this host; gates the selection log
+}
+
+// capsAttempts is how many consecutive transient Capabilities failures a target
+// redials through before it goes on with the _base profile.
+const capsAttempts = 3
+
+// setupHistory is what a target's earlier connections said about their setup.
+// It lives as long as the target loop, and only that goroutine touches it.
+type setupHistory struct {
+	capsFailures int // consecutive transient Capabilities failures
 }
 
 // NewRunner creates a runner for a policy.
@@ -90,10 +102,11 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	return &Runner{
 		ctx: rctx, cancel: cancel, logger: logger, name: name, policy: policy,
 		client: client, dialer: dialer, store: store,
-		runStore:    NewRunStore(),
-		backoffBase: time.Second,
-		states:      map[string]*targetState{},
-		subscribed:  map[string]struct{}{},
+		runStore:     NewRunStore(),
+		backoffBase:  time.Second,
+		setupTimeout: gnmi.SetupTimeout,
+		states:       map[string]*targetState{},
+		subscribed:   map[string]struct{}{},
 	}, nil
 }
 
@@ -126,6 +139,16 @@ func (r *Runner) setState(host string, fn func(*targetState)) {
 	if s, ok := r.states[host]; ok {
 		fn(s)
 	}
+}
+
+// lastSync is the target's last completed sync, zero before the first.
+func (r *Runner) lastSync(host string) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.states[host]; ok {
+		return s.LastSync
+	}
+	return time.Time{}
 }
 
 // targetLoop owns the per-target in-memory model and debouncer for the whole
@@ -163,6 +186,7 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 
 	backoff := r.backoffBase
 	first := true
+	var hist setupHistory
 	for {
 		if r.ctx.Err() != nil {
 			return
@@ -171,9 +195,15 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 			metrics.GetReconnects().Add(r.ctx, 1)
 		}
 		first = false
-		err := r.runOnce(t, model, deb, retry)
+		syncedBefore := r.lastSync(t.Host)
+		err := r.runOnce(t, model, deb, retry, &hist)
 		if r.ctx.Err() != nil {
 			return
+		}
+		if hist.capsFailures >= capsAttempts && !r.lastSync(t.Host).After(syncedBefore) {
+			// A connection on _base that never synced earns no shortcut: the
+			// next ones go through Capabilities again before giving up on it.
+			hist.capsFailures = 0
 		}
 		if err != nil {
 			r.logger.Warn("gnmi target loop error", "policy", r.name, "host", t.Host, "error", err)
@@ -197,7 +227,7 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 // and re-attempts the preferred mode — a transient ON_CHANGE drop never
 // permanently demotes the target. Explicit on_change/sample modes never
 // auto-downgrade; they return the error to reconnect at the same mode.
-func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer) error {
+func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer, hist *setupHistory) error {
 	tls := t.ResolvedTLS()
 	sess, err := r.dialer.Dial(r.ctx, gnmi.TargetSpec{
 		Host: t.Host, Username: t.ResolvedUsername(), Password: t.ResolvedPassword(),
@@ -209,14 +239,43 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	}
 	defer func() { _ = sess.Close() }()
 
-	// M-6: do not swallow Capabilities errors — they usually mean auth/TLS/model
-	// detection failed. Log, surface in status, count, then fall back to _base
-	// (matcher already does that) so discovery still attempts standard OpenConfig.
-	caps, capErr := sess.Capabilities(r.ctx)
+	// Why this connection runs with less than the device offers: recorded in
+	// status as it is found, and cleared once a clean setup completes.
+	var degraded []string
+	setupDone := func() {
+		joined := strings.Join(degraded, "; ")
+		r.setState(t.Host, func(s *targetState) { s.DegradedReason = joined })
+	}
+	addDegraded := func(reason string) {
+		degraded = append(degraded, reason)
+		setupDone()
+	}
+
+	// Capabilities picks the profile and the encodings for the whole connection,
+	// so a transient failure redials rather than settling for _base. After
+	// capsAttempts in a row the target goes on with _base, as a device that
+	// never answers Capabilities but serves Subscribe needs. Any other error is
+	// the device's answer and falls back to _base at once.
+	capCtx, cancelCaps := context.WithTimeout(r.ctx, r.setupTimeout)
+	caps, capErr := sess.Capabilities(capCtx)
+	cancelCaps()
 	if capErr != nil {
+		if r.ctx.Err() != nil {
+			return nil
+		}
+		metrics.GetCapabilityErrors().Add(r.ctx, 1)
+		if gnmi.Transient(capErr) {
+			hist.capsFailures++
+			if hist.capsFailures < capsAttempts {
+				return fmt.Errorf("capabilities: %w", capErr)
+			}
+			addDegraded(fmt.Sprintf("capabilities failed on %d consecutive attempts, using the _base profile: %v",
+				hist.capsFailures, capErr))
+		}
 		r.logger.Warn("gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
 		r.setState(t.Host, func(s *targetState) { s.LastError = "capabilities: " + capErr.Error() })
-		metrics.GetCapabilityErrors().Add(r.ctx, 1)
+	} else {
+		hist.capsFailures = 0
 	}
 	profile := r.selectProfile(t, caps)
 	defaults := config.MergeDefaults(&r.policy.Config.Defaults, t.OverrideDefaults)
@@ -401,6 +460,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 
 	switch mode {
 	case config.ModeGet:
+		setupDone()
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get" })
 		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
 	case config.ModeSample:
@@ -408,6 +468,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if serr != nil {
 			return serr
 		}
+		setupDone()
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "sample" })
 		return r.runOpenStream(t.Host, profile, sampleEvery, notes, errs, model, deb, flush)
 	case config.ModeOnChange:
@@ -415,6 +476,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if serr != nil {
 			return serr // explicit on_change: surface failure, do not degrade
 		}
+		setupDone()
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
 		return r.runOpenStream(t.Host, profile, 0, notes, errs, model, deb, flush)
 	default: // auto — walk the ladder on subscribe rejection OR early stream failure
@@ -431,6 +493,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.OnChange, profile.SubscribePaths(), 0)
 		var ocReason string
 		if serr == nil {
+			setupDone()
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
 			err := r.runOpenStream(t.Host, profile, 0, notes, errs, model, deb, flush)
 			// A non-early error (productive flap, or ctx-cancel returning nil) goes
@@ -450,6 +513,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		notes, errs, s2 := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if s2 == nil {
+			setupDone()
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "sample"; s.FallbackReason = ocReason })
 			err := r.runOpenStream(t.Host, profile, sampleEvery, notes, errs, model, deb, flush)
 			if !errors.Is(err, errEarlyStreamFailure) {
@@ -468,6 +532,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// producer/gRPC stream would keep retrying in the background for the entire
 		// GET fallback.
 		sess.StopSubscribe()
+		setupDone()
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get"; s.FallbackReason = s2.Error() })
 		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
 	}
@@ -762,6 +827,9 @@ type TargetStatus struct {
 	// LastError carries the most recent error of any kind for the target —
 	// dial/TLS, Capabilities, stream, or ingest — so it is named generically.
 	LastError string `json:"last_error,omitempty"`
+	// DegradedReason says why the current session runs with less than the
+	// device offers. A clean connection setup clears it; a flush does not.
+	DegradedReason string `json:"degraded_reason,omitempty"`
 }
 
 // TargetStatuses returns a snapshot of all target states.
@@ -773,6 +841,7 @@ func (r *Runner) TargetStatuses() []TargetStatus {
 		out = append(out, TargetStatus{
 			Host: host, ActiveMode: s.ActiveMode, FallbackReason: s.FallbackReason,
 			LastSync: s.LastSync, LastFlush: s.LastFlush, LastError: s.LastError,
+			DegradedReason: s.DegradedReason,
 		})
 	}
 	return out

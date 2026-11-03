@@ -40,10 +40,14 @@ type gnmiTarget struct {
 	mu      sync.Mutex
 	subEncs []gnmiproto.Encoding
 	subReqs [][]string
+	events  strings.Builder // C per Capabilities, S per Subscribe
 }
 
 func (s *gnmiTarget) Capabilities(ctx context.Context, _ *gnmiproto.CapabilityRequest) (*gnmiproto.CapabilityResponse, error) {
 	n := s.caps.Add(1)
+	s.mu.Lock()
+	s.events.WriteString("C")
+	s.mu.Unlock()
 	if s.capsHang {
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -86,6 +90,7 @@ func (s *gnmiTarget) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	}
 	paths := requestPaths(reqPaths)
 	s.mu.Lock()
+	s.events.WriteString("S")
 	s.subEncs = append(s.subEncs, req.GetSubscribe().GetEncoding())
 	s.subReqs = append(s.subReqs, paths)
 	s.mu.Unlock()
@@ -132,6 +137,18 @@ func (s *gnmiTarget) device(paths []string) []*gnmiproto.Update {
 		}
 	}
 	return out
+}
+
+func (s *gnmiTarget) subscribeEncodings() []gnmiproto.Encoding {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]gnmiproto.Encoding(nil), s.subEncs...)
+}
+
+func (s *gnmiTarget) eventLog() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.events.String()
 }
 
 func targetLeaf(names []string, keys map[int]map[string]string, v string) *gnmiproto.Update {
