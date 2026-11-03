@@ -23,7 +23,7 @@ func TestWarnUnscopedVLANsLogsOncePerRunner(t *testing.T) {
 	r := &Runner{logger: slog.New(slog.NewTextHandler(&buf, nil))}
 
 	for range 3 {
-		r.warnUnscopedVLANs(unscopedEntities(), "p1", "h1")
+		r.warnUnscopedVLANs(r.logger, unscopedEntities())
 	}
 
 	require.Equal(t, 1, strings.Count(buf.String(), "level=WARN"),
@@ -35,10 +35,10 @@ func TestWarnUnscopedVLANsStaysSilentWithNothingToReport(t *testing.T) {
 	var buf bytes.Buffer
 	r := &Runner{logger: slog.New(slog.NewTextHandler(&buf, nil))}
 
-	r.warnUnscopedVLANs(nil, "p1", "h1")
+	r.warnUnscopedVLANs(r.logger, nil)
 	require.Empty(t, buf.String(), "a target with nothing to report must not burn the Once")
 
-	r.warnUnscopedVLANs(unscopedEntities(), "p1", "h1")
+	r.warnUnscopedVLANs(r.logger, unscopedEntities())
 	require.Contains(t, buf.String(), "level=WARN")
 	require.Contains(t, buf.String(), "set BOTH defaults.site and defaults.vlan.group")
 }

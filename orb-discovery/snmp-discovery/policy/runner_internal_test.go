@@ -1386,8 +1386,8 @@ func TestAssetTagClaimer_Semantics(t *testing.T) {
 		assetTagOwners: map[string]string{},
 	}
 
-	claimA := r.assetTagClaimer("host-A")
-	claimB := r.assetTagClaimer("host-B")
+	claimA := r.assetTagClaimer("host-A", r.logger)
+	claimB := r.assetTagClaimer("host-B", r.logger)
 
 	// First claim by host-A: must succeed.
 	assert.True(t, claimA("TAG-001"), "first claim must be allowed")
@@ -1422,8 +1422,8 @@ func TestAssetTagClaimer_PortDistinguishesTargets(t *testing.T) {
 		assetTagOwners: map[string]string{},
 	}
 
-	claim161 := r.assetTagClaimer("10.0.0.1:161")
-	claim1161 := r.assetTagClaimer("10.0.0.1:1161")
+	claim161 := r.assetTagClaimer("10.0.0.1:161", r.logger)
+	claim1161 := r.assetTagClaimer("10.0.0.1:1161", r.logger)
 
 	assert.True(t, claim161("CLONED"), "first port claims the tag")
 	assert.False(t, claim1161("CLONED"),
@@ -1436,11 +1436,11 @@ func TestAssetTagClaimer_PortDistinguishesTargets(t *testing.T) {
 func TestAssetTagClaimer_NilMapLazyInit(t *testing.T) {
 	r := &Runner{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
-	claim := r.assetTagClaimer("10.0.0.1:161")
+	claim := r.assetTagClaimer("10.0.0.1:161", r.logger)
 	assert.NotPanics(t, func() {
 		assert.True(t, claim("TAG-001"), "first claim on lazily-initialized map must succeed")
 	})
-	assert.False(t, r.assetTagClaimer("10.0.0.2:161")("TAG-001"),
+	assert.False(t, r.assetTagClaimer("10.0.0.2:161", r.logger)("TAG-001"),
 		"ownership recorded in the lazily-created map must suppress cross-target claims")
 }
 

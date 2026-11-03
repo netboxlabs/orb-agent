@@ -1,0 +1,226 @@
+package policy
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/go-co-op/gocron/v2"
+	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
+)
+
+// panickingWalker panics on its first walk while armed, then answers as the
+// agent at its host does.
+type panickingWalker struct {
+	rowWalker
+	armed *atomic.Bool
+}
+
+func (w *panickingWalker) Walk(ctx context.Context, oid string, identifierSize int) (map[string]snmp.PDU, error) {
+	if w.armed.CompareAndSwap(true, false) {
+		panic("walk failure")
+	}
+	return w.rowWalker.Walk(ctx, oid, identifierSize)
+}
+
+// panickingClient panics on its first ingest while armed.
+type panickingClient struct {
+	recordingClient
+	armed *atomic.Bool
+}
+
+func (c *panickingClient) Ingest(ctx context.Context, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	if c.armed.CompareAndSwap(true, false) {
+		panic("ingest failure")
+	}
+	return c.recordingClient.Ingest(ctx, entities, opts...)
+}
+
+// panickingScheduler panics when asked to schedule a job.
+type panickingScheduler struct {
+	gocron.Scheduler
+}
+
+func (panickingScheduler) NewJob(gocron.JobDefinition, gocron.Task, ...gocron.JobOption) (gocron.Job, error) {
+	panic("scheduler failure")
+}
+
+func errorRecords(t *testing.T, logs *lockedBuffer) []map[string]any {
+	t.Helper()
+	var errs []map[string]any
+	for _, record := range logRecords(t, logs.String()) {
+		if record["level"] == "ERROR" {
+			errs = append(errs, record)
+		}
+	}
+	return errs
+}
+
+const singleTargetPolicy = `
+policies:
+  p1:
+    config:
+      timeout: 10
+      snmp_timeout: 3
+      snmp_probe_timeout: 1
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: example-community
+      targets:
+        - host: 192.0.2.1
+`
+
+// A crawl that panics, in its walk or in the job itself, fails its run and
+// logs one error with the stack; the process and the policy carry on.
+func TestCrawlPanicFailsItsRun(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		inWalk       bool
+		wantInReason string
+	}{
+		{name: "in the walk", inWalk: true, wantInReason: "walk failure"},
+		{name: "in the job", inWalk: false, wantInReason: "ingest failure"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			walkArmed, ingestArmed := &atomic.Bool{}, &atomic.Bool{}
+			walkArmed.Store(tc.inWalk)
+			ingestArmed.Store(!tc.inWalk)
+			factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+				return &panickingWalker{rowWalker: rowWalker{rows: agentRows(host)}, armed: walkArmed}, nil
+			}
+			client := &panickingClient{armed: ingestArmed}
+			r, store := newPolicyRunner(t, singleTargetPolicy, factory, client, jsonLogger(logs))
+			logs.Reset()
+
+			r.Start()
+			require.Eventually(t, func() bool {
+				runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
+				return len(runs) == 1 && runs[0].Status != RunStatusRunning
+			}, 10*time.Second, 20*time.Millisecond)
+
+			run := store.GetRunsForTarget("p1", "192.0.2.1", 161)[0]
+			assert.Equal(t, RunStatusFailed, run.Status)
+			assert.True(t, strings.HasPrefix(run.Reason, "panic: "), run.Reason)
+			assert.Contains(t, run.Reason, tc.wantInReason)
+			m := &Manager{runStore: store, policies: map[string]*Runner{"p1": r}}
+			require.Len(t, m.GetPolicyStatuses(), 1)
+			assert.Equal(t, string(RunStatusFailed), m.GetPolicyStatuses()[0].Status, "not stuck at running")
+
+			errs := errorRecords(t, logs)
+			require.Len(t, errs, 1, "one error record")
+			assert.Equal(t, "p1", errs[0]["policy"])
+			assert.Equal(t, "192.0.2.1", errs[0]["host"])
+			assert.Contains(t, errs[0]["stack"], "goroutine")
+
+			// The policy is still usable: its next crawl completes.
+			r.runWithMetadata(config.Target{Host: "192.0.2.1", Port: 161}, "")
+			runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
+			require.Len(t, runs, 2)
+			assert.Equal(t, RunStatusCompleted, runs[1].Status)
+		})
+	}
+}
+
+// A scan that panics fails its run and logs one error with the stack.
+func TestScanPanicFailsItsRun(t *testing.T) {
+	logs := &lockedBuffer{}
+	agents := newFakeAgents(time.Second)
+	r, store := newPolicyRunner(t, `
+policies:
+  p1:
+    config:
+      timeout: 10
+      snmp_timeout: 3
+      snmp_probe_timeout: 1
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: example-community
+      targets:
+        - host: 192.0.2.0/30
+`, agents.dial, &recordingClient{}, jsonLogger(logs))
+	r.scheduler = panickingScheduler{Scheduler: r.scheduler}
+	logs.Reset()
+
+	r.runScanWithOriginal([]config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}}, "192.0.2.0/30")
+
+	runs := store.GetRunsForTarget("p1", "192.0.2.0/30", 161)
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusFailed, runs[0].Status)
+	assert.Equal(t, "panic: scheduler failure", runs[0].Reason)
+	m := &Manager{runStore: store, policies: map[string]*Runner{"p1": r}}
+	assert.Equal(t, string(RunStatusFailed), m.GetPolicyStatuses()[0].Status)
+
+	errs := errorRecords(t, logs)
+	require.Len(t, errs, 1, "one error record")
+	assert.Equal(t, "p1", errs[0]["policy"])
+	assert.Equal(t, "192.0.2.0/30", errs[0]["target"])
+	assert.Contains(t, errs[0]["stack"], "goroutine")
+}
+
+// A probe that panics counts as no answer, and its worker goes on probing the
+// rest of the range.
+func TestProbePanicKeepsTheWorker(t *testing.T) {
+	var targets []config.Target
+	for i := 1; i <= 254; i++ {
+		targets = append(targets, config.Target{Host: fmt.Sprintf("192.0.2.%d", i), Port: 161})
+	}
+	for i := 1; i <= 46; i++ {
+		targets = append(targets, config.Target{Host: fmt.Sprintf("198.51.100.%d", i), Port: 161})
+	}
+	last := targets[len(targets)-1].Host
+	factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		if host != last {
+			panic("probe failure")
+		}
+		return &rowWalker{rows: agentRows(host)}, nil
+	}
+	scheduler, err := gocron.NewScheduler()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = scheduler.Shutdown() })
+	r := scanRunner(t, scheduler, factory, nil)
+	logs := &lockedBuffer{}
+	r.logger = jsonLogger(logs)
+
+	r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+
+	assert.Len(t, scheduler.Jobs(), 1, "the one host that answered, after 256 workers each hit a panic")
+	runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusCompleted, runs[0].Status)
+	assert.Len(t, errorRecords(t, logs), len(targets)-1, "one error per address whose probe panicked")
+}
+
+// A panic outside any run is still recovered by the scheduler, and logged.
+func TestJobPanicOutsideARunIsLogged(t *testing.T) {
+	logs := &lockedBuffer{}
+	r, _ := newPolicyRunner(t, singleTargetPolicy, newFakeAgents(time.Second).dial, &recordingClient{}, jsonLogger(logs))
+	_, err := r.scheduler.NewJob(gocron.OneTimeJob(gocron.OneTimeJobStartImmediately()),
+		gocron.NewTask(func() { panic("job failure") }))
+	require.NoError(t, err)
+	logs.Reset()
+
+	r.Start()
+	require.Eventually(t, func() bool {
+		for _, record := range errorRecords(t, logs) {
+			if strings.Contains(fmt.Sprint(record["error"]), "panic: job failure") {
+				assert.Equal(t, "p1", record["policy"])
+				assert.Contains(t, record["stack"], "goroutine")
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 20*time.Millisecond)
+}

@@ -179,7 +179,7 @@ func TestIngestSendsEveryChunk(t *testing.T) {
 	client := &chunkRecordingClient{}
 	entities := describedInterfaces(40, 1000)
 
-	resp, err := chunkRunner(client).ingest("192.0.2.10", entities)
+	resp, err := chunkRunner(client).ingest(discardLogger(), entities)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -192,7 +192,7 @@ func TestIngestStopsAtTheFirstFailedRequest(t *testing.T) {
 	client := &chunkRecordingClient{failOn: 2}
 	entities := describedInterfaces(40, 1000)
 
-	_, err := chunkRunner(client).ingest("192.0.2.10", entities)
+	_, err := chunkRunner(client).ingest(discardLogger(), entities)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request 2 of")
@@ -209,7 +209,7 @@ func TestIngestSendsEveryChunkAndCollectsTheirErrors(t *testing.T) {
 	client := &chunkRecordingClient{errorsOn: map[int]bool{1: true, 3: true}}
 	entities := describedInterfaces(40, 1000)
 
-	resp, err := chunkRunner(client).ingest("192.0.2.10", entities)
+	resp, err := chunkRunner(client).ingest(discardLogger(), entities)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp)
@@ -223,7 +223,7 @@ func TestIngestFailureKeepsTheErrorsOfEarlierRequests(t *testing.T) {
 	withChunkLimit(t, 10_000)
 	client := &chunkRecordingClient{errorsOn: map[int]bool{1: true}, failOn: 3}
 
-	_, err := chunkRunner(client).ingest("192.0.2.10", describedInterfaces(40, 1000))
+	_, err := chunkRunner(client).ingest(discardLogger(), describedInterfaces(40, 1000))
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "request 3 of")
@@ -278,7 +278,7 @@ func TestIngestEntitySizeCoversTheOTLPLogRecord(t *testing.T) {
 	receiver, client := startOTLPReceiver(t)
 	entities := append(describedInterfaces(3, 0), &diode.IPAddress{Address: diode.String("192.0.2.1/24")}, &diode.VLAN{Vid: diode.Int64(10)})
 
-	_, err := chunkRunner(client).ingest("192.0.2.10", entities)
+	_, err := chunkRunner(client).ingest(discardLogger(), entities)
 
 	require.NoError(t, err)
 	require.Len(t, receiver.recordSizes, len(entities))
@@ -293,7 +293,7 @@ func TestIngestStaysUnderTheOTLPReceiverLimit(t *testing.T) {
 	receiver, client := startOTLPReceiver(t)
 	entities := trunkPayload(2000, 40)
 
-	resp, err := chunkRunner(client).ingest("192.0.2.10", entities, diode.WithIngestMetadata(diode.Metadata{"policy_name": "p"}))
+	resp, err := chunkRunner(client).ingest(discardLogger(), entities, diode.WithIngestMetadata(diode.Metadata{"policy_name": "p"}))
 
 	require.NoError(t, err)
 	assert.Empty(t, resp.Errors)
