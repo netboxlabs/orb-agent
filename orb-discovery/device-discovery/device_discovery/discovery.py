@@ -201,6 +201,37 @@ _FAILED = "failed"
 _LOGIN_REFUSED = (AuthenticationException, ConnectAuthError)
 
 
+class DriverMismatchError(Exception):
+    """A driver's facts show it does not fit the device it logged in to."""
+
+
+def _cli_error_in_name(facts: dict) -> bool:
+    """Whether the hostname or fqdn holds CLI error output instead of a name."""
+    return any(
+        marker in str(field)
+        for marker in _DRIVER_MISMATCH_MARKERS
+        for field in (facts.get("hostname") or "", facts.get("fqdn") or "")
+    )
+
+
+def _unknown(value: object) -> bool:
+    return not value or str(value).strip().lower() == "unknown"
+
+
+def facts_mismatch(facts: dict) -> str | None:
+    """
+    Why a set driver's facts cannot be a real device, or None when they can.
+
+    Narrower than auto-discovery, which also refuses a missing serial number:
+    virtual devices often have none, and a set driver has always ingested them.
+    """
+    if _cli_error_in_name(facts):
+        return "its hostname holds CLI error output"
+    if _unknown(facts.get("hostname")) and _unknown(facts.get("serial_number")):
+        return "it reported no hostname and no serial number"
+    return None
+
+
 def _try_driver(info: Any, driver: str) -> str:
     """Try one driver: a match, logged in to another platform, refused, or failed otherwise."""
     logged_in = False
@@ -218,13 +249,8 @@ def _try_driver(info: Any, driver: str) -> str:
         ) as device:
             logged_in = True
             device_info = device.get_facts()
-            if device_info.get("serial_number", "Unknown").lower() == "unknown":
-                logger.info("Hostname %s: '%s' driver did not work", info.hostname, driver)
-                return _LOGGED_IN
-            if any(
-                marker in field
-                for marker in _DRIVER_MISMATCH_MARKERS
-                for field in (device_info.get("hostname", ""), device_info.get("fqdn", ""))
+            if device_info.get("serial_number", "Unknown").lower() == "unknown" or _cli_error_in_name(
+                device_info
             ):
                 logger.info("Hostname %s: '%s' driver did not work", info.hostname, driver)
                 return _LOGGED_IN

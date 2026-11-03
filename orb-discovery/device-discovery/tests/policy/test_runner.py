@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Policy Manager Unit Tests."""
 
+import logging
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, call, patch
 
@@ -305,7 +306,7 @@ def test_run_device_with_discovered_driver(
         mock_get_driver.return_value.return_value.__enter__.return_value = (
             mock_driver_instance
         )
-        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {"eth0": "up"}
         mock_driver_instance.get_interfaces_ip.return_value = {"eth0": "192.168.1.1"}
 
@@ -330,7 +331,7 @@ def test_run_device_with_discovered_driver(
         assert kwargs["run_id"] == run.id
         assert run.driver == "ios"
         assert data["driver"] == "ios"
-        assert data["device"] == {"model": "SampleModel"}
+        assert data["device"] == {"hostname": "router1", "model": "SampleModel"}
         assert data["interface"] == {"eth0": "up"}
         assert data["interface_ip"] == {"eth0": "192.168.1.1"}
 
@@ -1083,7 +1084,7 @@ def test_collect_device_data_includes_interfaces_vlans(
     ):
         mock_driver_instance = MagicMock()
         mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
-        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {}
         mock_driver_instance.get_interfaces_ip.return_value = {}
         mock_driver_instance.get_vlans.return_value = {"10": {"name": "DATA", "interfaces": []}}
@@ -1115,7 +1116,7 @@ def test_collect_device_data_handles_interfaces_vlans_failure(
     ):
         mock_driver_instance = MagicMock()
         mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
-        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {}
         mock_driver_instance.get_interfaces_ip.return_value = {}
         mock_driver_instance.get_vlans.return_value = {}
@@ -1146,7 +1147,7 @@ def test_collect_device_data_no_get_interfaces_vlans_method(
             "get_facts", "get_interfaces", "get_interfaces_ip", "get_vlans",
         ])
         mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
-        mock_driver_instance.get_facts.return_value = {"model": "SampleModel"}
+        mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {}
         mock_driver_instance.get_interfaces_ip.return_value = {}
         mock_driver_instance.get_vlans.return_value = {}
@@ -1225,3 +1226,65 @@ def test_collect_device_data_closes_the_session_before_ingest(policy_runner):
         assert policy_runner._collect_device_data(scope, "router1", config, "run-1") == 3
 
     assert events == ["open", "close", "ingest"]
+
+
+def _run_with_facts(policy_runner, run_store, facts):
+    """Run one target with a set driver whose device reports these facts; return the run and the ingest mock."""
+    scope = Napalm(driver="ios", hostname="192.0.2.10", username="admin", password="invalid")
+    config = Config(defaults=Defaults(site="NY"), options=Options())
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+
+    fake_device = MagicMock()
+    fake_device.get_facts.return_value = facts
+    fake_device.get_interfaces.return_value = {}
+    fake_device.get_interfaces_ip.return_value = {}
+    fake_device.get_vlans.return_value = {}
+    fake_device.__enter__ = MagicMock(return_value=fake_device)
+    fake_device.__exit__ = MagicMock(return_value=False)
+
+    with (
+        patch(
+            "device_discovery.policy.runner.get_network_driver",
+            return_value=MagicMock(return_value=fake_device),
+        ),
+        patch("device_discovery.policy.runner.Client") as mock_client_cls,
+    ):
+        mock_client_cls.return_value.ingest.return_value = 4
+        policy_runner.run("job-1", scope, config)
+
+    (run,) = run_store.get_runs_for_target("policy1", "192.0.2.10")
+    return run, mock_client_cls.return_value.ingest
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {"hostname": "Unknown", "serial_number": "Unknown", "fqdn": "Unknown"},
+        {"hostname": "", "serial_number": "", "fqdn": ""},
+        {"hostname": "% Invalid input detected at '^' marker.", "serial_number": "ABC123"},
+    ],
+)
+def test_run_refuses_facts_that_show_the_set_driver_does_not_fit(
+    policy_runner, run_store, caplog, facts
+):
+    """A set driver whose facts carry a CLI error, or no name and no serial, ingests nothing."""
+    with caplog.at_level(logging.WARNING):
+        run, ingest = _run_with_facts(policy_runner, run_store, facts)
+
+    assert run.status.value == "failed"
+    assert "'ios' driver does not fit this device" in run.reason
+    ingest.assert_not_called()
+    (record,) = [r for r in caplog.records if "does not fit" in r.getMessage()]
+    assert record.levelno == logging.WARNING
+    assert record.exc_info is None
+
+
+def test_run_ingests_a_device_with_a_name_and_no_serial(policy_runner, run_store):
+    """Devices that report no serial, such as virtual ones, still ingest under a set driver."""
+    run, ingest = _run_with_facts(
+        policy_runner, run_store, {"hostname": "sw1", "serial_number": "Unknown", "fqdn": "sw1"}
+    )
+
+    assert run.status.value == "completed"
+    ingest.assert_called_once()

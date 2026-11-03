@@ -16,6 +16,7 @@ from napalm.base.exceptions import (
 )
 from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
 
+from device_discovery.discovery import DriverMismatchError
 from device_discovery.policy.runner import (
     _EXPECTED_TARGET_FAILURES,
     _is_expected_target_failure,
@@ -32,6 +33,7 @@ def test_tuple_membership_is_a_conscious_choice():
     assert _EXPECTED_TARGET_FAILURES == (
         ConnectionException,
         NetmikoAuthenticationException,
+        DriverMismatchError,
     )
 
 

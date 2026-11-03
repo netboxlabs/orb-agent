@@ -19,7 +19,12 @@ from napalm.base.exceptions import ConnectionException
 from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.client import Client
-from device_discovery.discovery import discover_device_driver, supported_drivers
+from device_discovery.discovery import (
+    DriverMismatchError,
+    discover_device_driver,
+    facts_mismatch,
+    supported_drivers,
+)
 from device_discovery.log_config import configure_default_logging, flatten_message
 from device_discovery.metrics import get_metric
 from device_discovery.policy.models import (
@@ -65,7 +70,11 @@ logger = logging.getLogger(__name__)
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
 # send the operator hunting devices while ingestion is down.
-_EXPECTED_TARGET_FAILURES = (ConnectionException, NetmikoAuthenticationException)
+_EXPECTED_TARGET_FAILURES = (
+    ConnectionException,
+    NetmikoAuthenticationException,
+    DriverMismatchError,
+)
 
 
 def _is_expected_target_failure(error: BaseException) -> bool:
@@ -324,7 +333,7 @@ class PolicyRunner:
 
             data = {
                 "driver": scope.driver,
-                "device": device.get_facts(),
+                "device": self._checked_facts(device, scope.driver),
                 "interface": device.get_interfaces(),
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
@@ -387,6 +396,15 @@ class PolicyRunner:
         if discovery_success:
             discovery_success.add(1, {"policy": self.name})
         return entity_count
+
+    @staticmethod
+    def _checked_facts(device: Any, driver: str) -> dict:
+        """The device's facts, refused when they show the driver does not fit the device."""
+        facts = device.get_facts()
+        mismatch = facts_mismatch(facts)
+        if mismatch:
+            raise DriverMismatchError(f"'{driver}' driver does not fit this device: {mismatch}")
+        return facts
 
     def _collect_interfaces_vlan_id(
         self,
