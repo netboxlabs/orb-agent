@@ -10,9 +10,10 @@ from importlib.metadata import packages_distributions
 from pkgutil import walk_packages
 from typing import Any
 
+from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
 from napalm import get_network_driver
 from napalm.base.base import NetworkDriver
-from napalm.base.exceptions import ConnectAuthError
+from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from paramiko.ssh_exception import AuthenticationException
 
 from device_discovery.log_config import configure_default_logging, flatten_message
@@ -169,22 +170,23 @@ def discover_device_driver(
     try:
         driver_list = drivers if drivers is not None else _default_discovery_drivers
         refused = []
-        logged_in = False
+        credentials_work = False
         for driver in driver_list:
             outcome = _try_driver(info, driver, prefix)
             if outcome == _MATCH:
                 return driver
             if outcome == _REFUSED:
                 refused.append(driver)
-            elif outcome == _LOGGED_IN:
-                logged_in = True
-        # A refusal followed by a login with the same credentials was
-        # transient, so each refused driver gets one more try.
-        if logged_in:
+            elif outcome == _READ_FACTS:
+                credentials_work = True
+        # Facts read with the same credentials show a refusal was transient,
+        # so each refused driver gets one more try. Only facts count: some
+        # drivers open a session without logging in.
+        if credentials_work:
             for driver in refused:
                 logger.info(
-                    "%s: retrying '%s' driver, its login was refused "
-                    "but the same credentials logged in later",
+                    "%s: retrying '%s' driver, its login was refused but another "
+                    "driver read the device with the same credentials",
                     prefix,
                     driver,
                 )
@@ -196,13 +198,15 @@ def discover_device_driver(
 
 
 _MATCH = "match"
-_LOGGED_IN = "logged in"
+_READ_FACTS = "read facts"
 _REFUSED = "refused"
 _FAILED = "failed"
 
 # What a refused login raises: netmiko's exception subclasses paramiko's, and
-# napalm raises ConnectAuthError from drivers that check credentials themselves.
-_LOGIN_REFUSED = (AuthenticationException, ConnectAuthError)
+# PyEZ (junos) and ncclient (NETCONF drivers) raise their own. Drivers that
+# report a refusal as a plain connection error, such as nxos and eos, are not
+# told apart from an unreachable device.
+_LOGIN_REFUSED = (AuthenticationException, JunosConnectAuthError, NetconfAuthenticationError)
 
 
 class DriverMismatchError(Exception):
@@ -237,8 +241,7 @@ def facts_mismatch(facts: dict) -> str | None:
 
 
 def _try_driver(info: Any, driver: str, prefix: str) -> str:
-    """Try one driver: a match, logged in to another platform, refused, or failed otherwise."""
-    logged_in = False
+    """Try one driver: a match, facts from another platform, a refused login, or another failure."""
     try:
         logger.info("%s: Trying '%s' driver", prefix, driver)
         np_driver = get_network_driver(driver)
@@ -251,19 +254,16 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
             info.timeout,
             copy.deepcopy(info.optional_args),
         ) as device:
-            logged_in = True
             device_info = device.get_facts()
             if device_info.get("serial_number", "Unknown").lower() == "unknown" or _cli_error_in_name(
                 device_info
             ):
                 logger.info("%s: '%s' driver did not work", prefix, driver)
-                return _LOGGED_IN
+                return _READ_FACTS
             return _MATCH
     except Exception as e:
         # One line: netmiko's messages span ten, and the agent splits stderr per line.
         logger.info(
             "%s: '%s' driver did not work. Exception: %s", prefix, driver, flatten_message(e)
         )
-        if isinstance(e, _LOGIN_REFUSED):
-            return _REFUSED
-        return _LOGGED_IN if logged_in else _FAILED
+        return _REFUSED if isinstance(e, _LOGIN_REFUSED) else _FAILED

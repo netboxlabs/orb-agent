@@ -7,6 +7,8 @@ import logging
 import time
 import traceback
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -75,6 +77,39 @@ _EXPECTED_TARGET_FAILURES = (
     NetmikoAuthenticationException,
     DriverMismatchError,
 )
+
+
+# How many left-out addresses the log line names before it counts the rest.
+_LISTED_NAMED = 10
+
+
+def _sanitize(hostname: str) -> str:
+    """A scope hostname without the line breaks a log line or job name cannot carry."""
+    return hostname.replace("\r\n", "").replace("\n", "")
+
+
+@contextmanager
+def _session(device: Any, prefix: str) -> Iterator[Any]:
+    """
+    Open a driver session and always close it.
+
+    NAPALM's own context manager prints a bug-report request to stdout for any
+    exception it does not define, and a close that fails there would lose data
+    already read. Here a failed close is one WARNING line.
+    """
+    try:
+        device.open()
+    except Exception:
+        with suppress(Exception):
+            device.close()
+        raise
+    try:
+        yield device
+    finally:
+        try:
+            device.close()
+        except Exception as e:
+            logger.warning(f"{prefix}: Error closing the session: {flatten_message(e)}")
 
 
 def _is_expected_target_failure(error: BaseException) -> bool:
@@ -160,11 +195,18 @@ class PolicyRunner:
 
         # A device with its own entry is discovered from that entry alone, so
         # the policy's ranges leave it out rather than reach it a second time.
-        own_entries = {e for e in map(scope_endpoint, scopes) if e is not None}
+        own_entries = {
+            e
+            for e in (
+                scope_endpoint(s.model_copy(update={"hostname": _sanitize(s.hostname)}))
+                for s in scopes
+            )
+            if e is not None
+        }
 
         set_telemetry = True
         for scope in scopes:
-            sanitized_hostname = scope.hostname.replace("\r\n", "").replace("\n", "")
+            sanitized_hostname = _sanitize(scope.hostname)
             if scope.driver and scope.driver not in supported_drivers:
                 self.scheduler.shutdown()
                 raise Exception(
@@ -224,6 +266,7 @@ class PolicyRunner:
                 self.scheduler.add_job(
                     self.telemetry,
                     id=str(uuid.uuid4()),
+                    name=f"Policy {self.name}, telemetry",
                     trigger=trigger,
                 )
             self.status = Status.RUNNING
@@ -242,9 +285,11 @@ class PolicyRunner:
         if not listed:
             return hostnames
         kept = [h for h in hostnames if h not in listed]
+        named = [h for h in hostnames if h in listed][:_LISTED_NAMED]
+        more = f" and {len(listed) - len(named)} more" if len(listed) > len(named) else ""
         logger.info(
             f"Policy {self.name}, Hostname {sanitized_hostname}: Leaving out "
-            f"{', '.join(h for h in hostnames if h in listed)}, discovered from their own scope entries"
+            f"{', '.join(named)}{more}, discovered from their own scope entries"
         )
         return kept
 
@@ -314,12 +359,15 @@ class PolicyRunner:
         connection_start_time = time.perf_counter()
         # A copy, as drivers pop keys from optional_args and the next run
         # needs them.
-        with np_driver(
-            scope.hostname,
-            scope.username,
-            scope.password,
-            scope.timeout,
-            copy.deepcopy(scope.optional_args),
+        with _session(
+            np_driver(
+                scope.hostname,
+                scope.username,
+                scope.password,
+                scope.timeout,
+                copy.deepcopy(scope.optional_args),
+            ),
+            f"Policy {self.name}, Hostname {sanitized_hostname}",
         ) as device:
             connection_duration = (time.perf_counter() - connection_start_time) * 1000
             device_connection_latency = get_metric("device_connection_latency")
@@ -353,13 +401,15 @@ class PolicyRunner:
                     data["config"] = device.get_config(sanitized=sanitized)
                 except Exception as e:
                     logger.warning(
-                        f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting config: {e}. Continuing without config data."
+                        f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting config: "
+                        f"{flatten_message(e)}. Continuing without config data."
                     )
             try:
                 data["vlan"] = device.get_vlans()
             except Exception as e:
                 logger.warning(
-                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: "
+                    f"{flatten_message(e)}. Continuing without VLAN data."
                 )
             get_iface_vlans = getattr(device, "get_interfaces_vlans", None)
             if callable(get_iface_vlans):
@@ -368,7 +418,7 @@ class PolicyRunner:
                 except Exception as e:
                     logger.warning(
                         f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                        f"Error getting interface VLANs: {e}. "
+                        f"Error getting interface VLANs: {flatten_message(e)}. "
                         "Continuing without interface-VLAN data."
                     )
             self._collect_lag_membership(config, device, data, sanitized_hostname)
@@ -380,7 +430,7 @@ class PolicyRunner:
                 except Exception as e:
                     logger.warning(
                         f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                        f"Error getting chassis members: {e}. "
+                        f"Error getting chassis members: {flatten_message(e)}. "
                         "Continuing without chassis data."
                     )
             self._collect_modules(config, device, data, sanitized_hostname)
@@ -434,7 +484,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting interface VLAN IDs: {e}. "
+                f"Error getting interface VLAN IDs: {flatten_message(e)}. "
                 "Continuing with SVI-name VLANs only."
             )
 
@@ -461,7 +511,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting LAG membership: {e}. "
+                f"Error getting LAG membership: {flatten_message(e)}. "
                 "Continuing without LAG membership."
             )
 
@@ -492,7 +542,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting modules: {e}. "
+                f"Error getting modules: {flatten_message(e)}. "
                 "Continuing without module data."
             )
             data["modules"] = None
@@ -522,7 +572,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting network instances: {e}. "
+                f"Error getting network instances: {flatten_message(e)}. "
                 "Continuing without VRF data."
             )
 

@@ -10,6 +10,7 @@ import pytest
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from napalm.base.base import NetworkDriver
 
 from device_discovery.policy.models import (
     Config,
@@ -303,9 +304,7 @@ def test_run_device_with_discovered_driver(
 
         # Mock the network driver instance
         mock_driver_instance = MagicMock()
-        mock_get_driver.return_value.return_value.__enter__.return_value = (
-            mock_driver_instance
-        )
+        mock_get_driver.return_value.return_value = mock_driver_instance
         mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {"eth0": "up"}
         mock_driver_instance.get_interfaces_ip.return_value = {"eth0": "192.168.1.1"}
@@ -1083,7 +1082,7 @@ def test_collect_device_data_includes_interfaces_vlans(
         patch("device_discovery.client.Client.ingest") as mock_ingest,
     ):
         mock_driver_instance = MagicMock()
-        mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
+        mock_get_driver.return_value.return_value = mock_driver_instance
         mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {}
         mock_driver_instance.get_interfaces_ip.return_value = {}
@@ -1115,7 +1114,7 @@ def test_collect_device_data_handles_interfaces_vlans_failure(
         caplog.at_level(logging.WARNING),
     ):
         mock_driver_instance = MagicMock()
-        mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
+        mock_get_driver.return_value.return_value = mock_driver_instance
         mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {}
         mock_driver_instance.get_interfaces_ip.return_value = {}
@@ -1144,9 +1143,9 @@ def test_collect_device_data_no_get_interfaces_vlans_method(
     ):
         # Spec only the methods the runner actually calls — no get_interfaces_vlans.
         mock_driver_instance = MagicMock(spec=[
-            "get_facts", "get_interfaces", "get_interfaces_ip", "get_vlans",
+            "open", "close", "get_facts", "get_interfaces", "get_interfaces_ip", "get_vlans",
         ])
-        mock_get_driver.return_value.return_value.__enter__.return_value = mock_driver_instance
+        mock_get_driver.return_value.return_value = mock_driver_instance
         mock_driver_instance.get_facts.return_value = {"hostname": "router1", "model": "SampleModel"}
         mock_driver_instance.get_interfaces.return_value = {}
         mock_driver_instance.get_interfaces_ip.return_value = {}
@@ -1212,8 +1211,8 @@ def test_collect_device_data_closes_the_session_before_ingest(policy_runner):
     fake_device.get_interfaces.return_value = {}
     fake_device.get_interfaces_ip.return_value = {}
     fake_device.get_vlans.return_value = {}
-    fake_device.__enter__ = MagicMock(side_effect=lambda: events.append("open") or fake_device)
-    fake_device.__exit__ = MagicMock(side_effect=lambda *exc: events.append("close") or False)
+    fake_device.open.side_effect = lambda: events.append("open")
+    fake_device.close.side_effect = lambda: events.append("close")
 
     with (
         patch(
@@ -1280,11 +1279,16 @@ def test_run_refuses_facts_that_show_the_set_driver_does_not_fit(
     assert record.exc_info is None
 
 
-def test_run_ingests_a_device_with_a_name_and_no_serial(policy_runner, run_store):
-    """Devices that report no serial, such as virtual ones, still ingest under a set driver."""
-    run, ingest = _run_with_facts(
-        policy_runner, run_store, {"hostname": "sw1", "serial_number": "Unknown", "fqdn": "sw1"}
-    )
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {"hostname": "sw1", "serial_number": "Unknown", "fqdn": "sw1"},
+        {"hostname": "Unknown", "serial_number": "ABC123", "fqdn": ""},
+    ],
+)
+def test_run_ingests_a_device_with_a_name_or_a_serial(policy_runner, run_store, facts):
+    """A set driver still ingests a device that reports only a name, such as a virtual one, or only a serial."""
+    run, ingest = _run_with_facts(policy_runner, run_store, facts)
 
     assert run.status.value == "completed"
     ingest.assert_called_once()
@@ -1303,6 +1307,7 @@ def test_jobs_are_named_after_the_policy_and_target(policy_runner, run_store):
     names = [c[1].get("name") for c in mock_add_job.call_args_list]
     assert "Policy policy1, Hostname 192.0.2.10" in names
     assert "Policy policy1, Hostname 192.0.2.0/30" in names
+    assert "Policy policy1, telemetry" in names
 
 
 def test_run_scan_names_a_host_job_after_the_policy_and_host():
@@ -1320,3 +1325,99 @@ def test_run_scan_names_a_host_job_after_the_policy_and_host():
         runner.run_scan(["192.0.2.1"], MagicMock(spec=BaseTrigger), scope, config)
 
     assert runner.scheduler.add_job.call_args[1]["name"] == "Policy policy1, Hostname 192.0.2.1"
+
+
+def test_setup_matches_a_listed_device_after_removing_line_breaks(policy_runner, run_store):
+    """A line break in a listed device's hostname must not let the range reach it as well."""
+    ranges, _ = _scheduled(
+        policy_runner, run_store, [_entry("192.0.2.0/29"), _entry("192.0.2.\r\n2/32")]
+    )
+
+    assert "192.0.2.2" not in ranges["192.0.2.0/29"]
+
+
+def test_setup_names_at_most_ten_left_out_addresses(policy_runner, run_store, caplog):
+    """A range that leaves out many listed devices logs a bounded line."""
+    singles = [_entry(f"192.0.2.{n}") for n in range(1, 16)]
+
+    with caplog.at_level(logging.INFO, logger="device_discovery.policy.runner"):
+        _scheduled(policy_runner, run_store, [_entry("192.0.2.0/24"), *singles])
+
+    (line,) = [r.getMessage() for r in caplog.records if "Leaving out" in r.getMessage()]
+    assert "Leaving out 192.0.2.1, 192.0.2.2," in line
+    assert "192.0.2.10 and 5 more," in line
+    assert "192.0.2.11" not in line
+
+
+class _FakeNapalmDriver(NetworkDriver):
+    """A real NAPALM driver class, so its own context manager would apply if the runner used it."""
+
+    facts = {"hostname": "sw1", "serial_number": "ABC123", "fqdn": "sw1"}
+    close_error = None
+
+    def __init__(self, hostname, username, password, timeout=60, optional_args=None):
+        pass
+
+    def open(self):
+        pass
+
+    def close(self):
+        if self.close_error is not None:
+            raise self.close_error
+
+    def get_facts(self):
+        return self.facts
+
+    def get_interfaces(self):
+        return {}
+
+    def get_interfaces_ip(self):
+        return {}
+
+    def get_vlans(self):
+        return {}
+
+
+def _run_napalm_driver(policy_runner, run_store, driver_class):
+    scope = Napalm(driver="ios", hostname="192.0.2.10", username="admin", password="invalid")
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+    with (
+        patch("device_discovery.policy.runner.get_network_driver", return_value=driver_class),
+        patch("device_discovery.policy.runner.Client") as mock_client_cls,
+    ):
+        mock_client_cls.return_value.ingest.return_value = 3
+        policy_runner.run("job-1", scope, Config(defaults=Defaults(site="NY"), options=Options()))
+    (run,) = run_store.get_runs_for_target("policy1", "192.0.2.10")
+    return run, mock_client_cls.return_value.ingest
+
+
+def test_a_refused_set_driver_prints_nothing_to_stdout(policy_runner, run_store, capsys):
+    """NAPALM's context manager prints a bug-report request for unknown exceptions; the runner must not use it."""
+
+    class JunkFacts(_FakeNapalmDriver):
+        facts = {"hostname": "Unknown", "serial_number": "Unknown", "fqdn": "Unknown"}
+
+    run, ingest = _run_napalm_driver(policy_runner, run_store, JunkFacts)
+
+    assert run.status.value == "failed"
+    ingest.assert_not_called()
+    assert capsys.readouterr().out == ""
+
+
+def test_a_failing_close_keeps_what_was_read(policy_runner, run_store, caplog):
+    """A session that fails to close still ingests what it read, and logs the close error on one line."""
+
+    class CloseFails(_FakeNapalmDriver):
+        close_error = RuntimeError("close-session timed out\nafter 30 seconds")
+
+    with caplog.at_level(logging.WARNING, logger="device_discovery.policy.runner"):
+        run, ingest = _run_napalm_driver(policy_runner, run_store, CloseFails)
+
+    assert run.status.value == "completed"
+    ingest.assert_called_once()
+    (line,) = [r.getMessage() for r in caplog.records if "Error closing the session" in r.getMessage()]
+    assert line == (
+        "Policy policy1, Hostname 192.0.2.10: Error closing the session: "
+        "close-session timed out after 30 seconds"
+    )

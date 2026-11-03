@@ -315,7 +315,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10.  |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| driver | string | no  | If defined, connect using the specified NAPALM driver. Facts that show the driver does not fit the device, a hostname holding CLI error output or neither a hostname nor a serial number, fail the run and nothing is ingested. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured), in order, until one identifies the device. A driver whose login is refused is tried once more when a later driver logs in with the same credentials. |
+| driver | string | no  | If defined, connect using the specified NAPALM driver. Facts that show the driver does not fit the device, a hostname or FQDN holding CLI error output or neither a hostname nor a serial number, fail the run and nothing is ingested. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured), in order, until one identifies the device. When a driver's login is refused and another driver reads the device's facts with the same credentials, the refused driver is tried once more. This covers SSH drivers, `junos` and NETCONF drivers; drivers that report a refusal as a plain connection error, such as `nxos` and `eos`, are not retried. |
 | timeout | integer | no | Seconds the driver waits on the device, 60 by default. Used by most drivers that talk to an API or NETCONF, such as `nxos`, `eos` over eAPI and `junos`, and as the per-command wait by `iosxr`. The other SSH drivers ignore it: see [Timeouts](./optional_args.md#timeouts). |
 | optional_args | map | no  | Arguments for the driver and its SSH connection, such as `ssh_config_file` for jumphosts or `read_timeout_override` for devices that are slow to answer. See [Optional Arguments](./optional_args.md). |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope. Fields merge with the policy's, except that a VLAN group the override sets, and a tenant or VRF it names differently, replace the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
@@ -331,7 +331,8 @@ wrote `0` and `255` meant them, so `10.0.0.0-255` is 256.
 
 A subnet or range also leaves out every address the policy lists as an entry of
 its own (the address written as itself, a `/32` or a one-address range, on the
-same `optional_args.port`). That device is discovered once, with its own entry's
+same `optional_args.port`; an entry without a `port` does not match one with
+`port: 22`). That device is discovered once, with its own entry's
 credentials, `driver` and `override_defaults`. One entry can therefore sweep a
 mixed range with one account while the devices that need another account,
 driver or role are listed beside it:

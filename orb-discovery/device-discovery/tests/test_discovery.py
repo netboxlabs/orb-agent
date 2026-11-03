@@ -7,8 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
+from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
 from napalm.base.base import NetworkDriver
-from napalm.base.exceptions import ConnectAuthError
+from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.discovery import (
@@ -620,7 +621,11 @@ _TARGET = SimpleNamespace(
 
 @pytest.mark.parametrize(
     "refusal",
-    [NetmikoAuthenticationException("Authentication to device failed."), ConnectAuthError("refused")],
+    [
+        NetmikoAuthenticationException("Authentication to device failed."),
+        JunosConnectAuthError(SimpleNamespace(hostname="192.0.2.10", port=830)),
+        NetconfAuthenticationError("refused"),
+    ],
 )
 def test_discover_device_driver_retries_a_refused_driver_once_the_credentials_work(
     mock_get_network_driver, refusal
@@ -685,3 +690,68 @@ def test_discover_device_driver_names_the_policy_on_one_line_per_record(
     assert len(messages) >= 5
     assert all(m.startswith("Policy policy1, Hostname 192.0.2.10: ") for m in messages)
     assert all("\n" not in m for m in messages)
+
+
+def test_discover_device_driver_counts_facts_read_before_the_refusal(mock_get_network_driver):
+    """Facts read by an earlier driver also show the account works."""
+    calls = []
+    drivers = {
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+        "ios": _scripted_driver(calls, "ios", [NetmikoAuthenticationException("refused"), _IOS_FACTS]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["nxos_ssh", "ios"]) == "ios"
+    assert calls == ["nxos_ssh", "ios", "ios"]
+
+
+def test_discover_device_driver_does_not_count_a_session_that_read_nothing(mock_get_network_driver):
+    """A driver that opens without logging in, then fails to read facts, does not prove the account."""
+
+    class LazyDriver:
+        """Opens without I/O, as paloalto_panos does, and fails on the first request."""
+
+        def __init__(self, *args):
+            calls.append("lazy")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_facts(self):
+            raise RuntimeError("URLError: reason: timed out")
+
+    calls = []
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [NetmikoAuthenticationException("refused")]),
+        "lazy": LazyDriver,
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "lazy"]) is None
+    assert calls == ["ios", "lazy"]
+
+
+def test_discover_device_driver_restores_the_library_log_levels(mock_get_network_driver):
+    """Library loggers are silenced while drivers are tried, then follow the root level again."""
+    loggers = [logging.getLogger(name) for name in ("napalm", "ncclient", "paramiko", "pyeapi")]
+    saved = [lg.level for lg in loggers]
+    root = logging.getLogger()
+    saved_root = root.level
+    root.setLevel(logging.INFO)
+    calls = []
+    mock_get_network_driver.side_effect = {
+        "ios": _scripted_driver(calls, "ios", [_IOS_FACTS]),
+        "eos": _scripted_driver(calls, "eos", [_NOT_THIS_PLATFORM]),
+    }.__getitem__
+    try:
+        discover_device_driver(_TARGET, drivers=["ios"])
+        assert [lg.level for lg in loggers] == [logging.INFO] * 4
+        discover_device_driver(_TARGET, drivers=["eos"])
+        assert [lg.level for lg in loggers] == [logging.INFO] * 4
+    finally:
+        root.setLevel(saved_root)
+        for lg, level in zip(loggers, saved, strict=True):
+            lg.setLevel(level)
