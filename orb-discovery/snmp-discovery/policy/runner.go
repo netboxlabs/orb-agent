@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -152,6 +153,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			continue
 		}
 		// Create scan task for multiple targets with original target
+		runner.warnSlowScan(group)
 		task := gocron.NewTask(runner.runScanWithOriginal, group.targets, group.originalTarget)
 		if policy.Config.Schedule != nil {
 			_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
@@ -183,7 +185,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	defer r.recoverRun(log, originalTarget, port, scanRun.ID)
 
 	log.Info("starting SNMP probe scan", "target_count", len(targets))
-	workerCount := min(256, len(targets))
+	workerCount := min(maxProbeWorkers, len(targets))
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
@@ -191,12 +193,18 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	targetCh := make(chan config.Target)
 	resultsCh := make(chan config.Target, workerCount)
 
+	// Addresses whose probe started before the scan ran out of time.
+	var probed atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
 	for range workerCount {
 		go func() {
 			defer wg.Done()
 			for target := range targetCh {
+				if ctx.Err() != nil {
+					continue
+				}
+				probed.Add(1)
 				if r.probeRecovering(ctx, log, target) {
 					resultsCh <- target
 				}
@@ -240,14 +248,26 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	// runScanWithOriginal invocation for a different range target in the same policy.
 	r.pruneHostJobs(originalTarget+"::", liveIDs)
 
-	// Check if context was canceled or timed out
+	// A scan that ran out of its own time still crawls the hosts it found,
+	// and its run fails saying how far it got. One cut short because the
+	// policy stopped crawls nothing.
+	var timedOut error
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		log.Warn("SNMP probe scan interrupted", "error", ctxErr, "responsive_target_count", len(responsive))
-		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, ctxErr, len(responsive))
-		return
+		if !errors.Is(ctxErr, context.DeadlineExceeded) || r.ctx.Err() != nil {
+			log.Warn("SNMP probe scan interrupted", "error", ctxErr, "responsive_target_count", len(responsive))
+			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, ctxErr, len(responsive))
+			return
+		}
+		timedOut = fmt.Errorf("%w (probed %d of %d addresses, %d responded; raise timeout to probe them all)",
+			ctxErr, probed.Load(), len(targets), len(responsive))
+		log.Warn("SNMP probe scan interrupted", "error", timedOut, "responsive_target_count", len(responsive))
 	}
 
 	if len(responsive) == 0 {
+		if timedOut != nil {
+			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, 0)
+			return
+		}
 		log.Warn("no hosts responded to SNMP probe")
 		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
 			RunStatusFailed, fmt.Errorf("no hosts responded to SNMP probe"), 0)
@@ -284,6 +304,11 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 
 		r.recordHostJob(jobKey, newJob.ID())
 		liveIDs[newJob.ID()] = struct{}{} // keep snapshot current for remaining iterations
+	}
+
+	if timedOut != nil {
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, len(responsive))
+		return
 	}
 
 	// Update scan run status
@@ -999,6 +1024,29 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 		})
 	}
 	return expandedGroups
+}
+
+// maxProbeWorkers is how many addresses a scan probes at once.
+const maxProbeWorkers = 256
+
+// worstScanTime is how long probing addresses takes when none answers: each
+// round of maxProbeWorkers waits out the probe timeout.
+func worstScanTime(addresses int, probeTimeout time.Duration) time.Duration {
+	rounds := (addresses + maxProbeWorkers - 1) / maxProbeWorkers
+	return time.Duration(rounds) * probeTimeout
+}
+
+// warnSlowScan warns when a scan of the range may run out of time before it
+// probes every address. Nothing else changes: the scan still crawls what it
+// finds.
+func (r *Runner) warnSlowScan(group expandedTargetGroup) {
+	worst := worstScanTime(len(group.targets), r.snmpProbeTimeout)
+	if worst <= r.timeout {
+		return
+	}
+	r.logger.Warn("a scan of this target may run out of time before probing every address; raise timeout to probe them all",
+		"target", group.originalTarget, "addresses", len(group.targets),
+		"probe_time", worst.String(), "timeout", r.timeout.String())
 }
 
 // maxLeftOutNamed is how many left-out hosts a range's load line names.
