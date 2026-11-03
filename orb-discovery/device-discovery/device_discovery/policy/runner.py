@@ -347,16 +347,19 @@ class PolicyRunner:
                     )
             self._collect_modules(config, device, data, sanitized_hostname)
             self._collect_network_instances(config, device, data, sanitized_hostname)
-            metadata = {
-                "policy_name": self.name,
-                "policy_instance": self.instance_id,
-                "hostname": sanitized_hostname,
-            }
-            entity_count = Client().ingest(metadata, data, run_id=run_id)
-            discovery_success = get_metric("discovery_success")
-            if discovery_success:
-                discovery_success.add(1, {"policy": self.name})
-            return entity_count
+
+        # Ingest after the session closes: it waits on a lock shared by
+        # every job, and the device should not hold a session meanwhile.
+        metadata = {
+            "policy_name": self.name,
+            "policy_instance": self.instance_id,
+            "hostname": sanitized_hostname,
+        }
+        entity_count = Client().ingest(metadata, data, run_id=run_id)
+        discovery_success = get_metric("discovery_success")
+        if discovery_success:
+            discovery_success.add(1, {"policy": self.name})
+        return entity_count
 
     def _collect_interfaces_vlan_id(
         self,
@@ -607,12 +610,15 @@ class PolicyRunner:
                     )
                     id = str(uuid.uuid4())
                     self.scopes[id] = scope.model_copy(update={"hostname": sanitized_hostname, "netbox_id": None})
+                    # Runs now: the scan's own tick has started, so the trigger
+                    # alone would wait a whole period for the first discovery.
                     self.scheduler.add_job(
                         self.run_with_parent,
                         id=id,
                         trigger=trigger,
                         args=[id, self.scopes[id], config, original_hostname],
                         misfire_grace_time=None,
+                        next_run_time=datetime.now(),
                     )
                     self.active_host_jobs[(original_hostname, sanitized_hostname)] = id
                 else:

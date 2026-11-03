@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Policy Manager Unit Tests."""
 
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -884,6 +885,31 @@ def test_run_scan_stores_completed_run_when_some_hosts_reachable():
     runner.scheduler.add_job.assert_called_once()
 
 
+def test_run_scan_runs_a_found_host_now_under_a_cron_schedule():
+    """A host a scheduled range finds runs right away, not at the tick after the scan."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler.start(paused=True)
+    scope = Napalm(driver="ios", hostname="192.0.2.0/30", username="admin", password="password")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+    trigger = CronTrigger.from_crontab("0 0 1 1 *")
+
+    try:
+        with patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            return_value={"192.0.2.1": True},
+        ):
+            runner.run_scan(["192.0.2.1"], trigger, scope, config)
+
+        (job,) = runner.scheduler.get_jobs()
+        now = datetime.now(job.next_run_time.tzinfo)
+        assert abs(job.next_run_time - now) < timedelta(minutes=1)
+        assert job.trigger is trigger
+    finally:
+        runner.scheduler.shutdown(wait=False)
+
+
 def test_setup_policy_runner_override_defaults_deep_merges_nested_models(
     policy_runner, run_store
 ):
@@ -1091,3 +1117,30 @@ def test_collect_device_data_keeps_the_target_optional_args(policy_runner):
 
     assert received == [original, original]
     assert scope.optional_args == original
+
+
+def test_collect_device_data_closes_the_session_before_ingest(policy_runner):
+    """The device session must be closed before the ingest, which can queue behind other jobs."""
+    scope = Napalm(driver="ios", hostname="router1", username="admin", password="password")
+    config = Config(defaults=Defaults(site="NY"))
+    events = []
+
+    fake_device = MagicMock()
+    fake_device.get_facts.return_value = {"hostname": "router1", "serial_number": "ABC123"}
+    fake_device.get_interfaces.return_value = {}
+    fake_device.get_interfaces_ip.return_value = {}
+    fake_device.get_vlans.return_value = {}
+    fake_device.__enter__ = MagicMock(side_effect=lambda: events.append("open") or fake_device)
+    fake_device.__exit__ = MagicMock(side_effect=lambda *exc: events.append("close") or False)
+
+    with (
+        patch(
+            "device_discovery.policy.runner.get_network_driver",
+            return_value=MagicMock(return_value=fake_device),
+        ),
+        patch("device_discovery.policy.runner.Client") as mock_client_cls,
+    ):
+        mock_client_cls.return_value.ingest.side_effect = lambda *a, **k: events.append("ingest") or 3
+        assert policy_runner._collect_device_data(scope, "router1", config, "run-1") == 3
+
+    assert events == ["open", "close", "ingest"]
