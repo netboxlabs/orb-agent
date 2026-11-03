@@ -205,6 +205,7 @@ class PolicyRunner:
                 self.scheduler.add_job(
                     self.run_scan,
                     id=id,
+                    name=f"Policy {self.name}, Hostname {sanitized_hostname}",
                     trigger=trigger,
                     args=[hostnames, trigger, scope, config],
                     misfire_grace_time=None,
@@ -213,6 +214,7 @@ class PolicyRunner:
                 self.scheduler.add_job(
                     self.run,
                     id=id,
+                    name=f"Policy {self.name}, Hostname {sanitized_hostname}",
                     trigger=trigger,
                     args=[id, scope, config],
                     misfire_grace_time=None,
@@ -272,7 +274,7 @@ class PolicyRunner:
             logger.info(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: Driver not informed, discovering it"
             )
-            scope.driver = discover_device_driver(scope, drivers=discovery_drivers)
+            scope.driver = discover_device_driver(scope, drivers=discovery_drivers, policy=self.name)
             if scope.driver is None:
                 self.status = Status.FAILED
                 logger.warning(
@@ -660,6 +662,7 @@ class PolicyRunner:
                     self.scheduler.add_job(
                         self.run_with_parent,
                         id=id,
+                        name=f"Policy {self.name}, Hostname {sanitized_hostname}",
                         trigger=trigger,
                         args=[id, self.scopes[id], config, original_hostname],
                         misfire_grace_time=None,

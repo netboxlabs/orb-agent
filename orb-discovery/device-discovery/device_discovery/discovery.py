@@ -15,7 +15,7 @@ from napalm.base.base import NetworkDriver
 from napalm.base.exceptions import ConnectAuthError
 from paramiko.ssh_exception import AuthenticationException
 
-from device_discovery.log_config import configure_default_logging
+from device_discovery.log_config import configure_default_logging, flatten_message
 
 _DRIVER_MISMATCH_MARKERS = ["%", "Invalid input", "^"]
 
@@ -141,7 +141,9 @@ def set_napalm_logs_level(level: int):
     logging.getLogger("pyeapi").setLevel(level)
 
 
-def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str | None:
+def discover_device_driver(
+    info: dict, drivers: list[str] | None = None, policy: str | None = None
+) -> str | None:
     """
     Discover the correct NAPALM driver for the given device information.
 
@@ -154,6 +156,7 @@ def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str 
             When provided, only those drivers are attempted. When None,
             only standard NAPALM drivers are tried (custom_napalm drivers
             are excluded from auto-discovery unless explicitly specified).
+        policy (str | None): The policy the device belongs to, named in every log line.
 
     Returns:
     -------
@@ -161,13 +164,14 @@ def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str 
              the device. Returns an empty string if no suitable driver is found.
 
     """
+    prefix = f"Policy {policy}, Hostname {info.hostname}" if policy else f"Hostname {info.hostname}"
     set_napalm_logs_level(logging.CRITICAL)
     try:
         driver_list = drivers if drivers is not None else _default_discovery_drivers
         refused = []
         logged_in = False
         for driver in driver_list:
-            outcome = _try_driver(info, driver)
+            outcome = _try_driver(info, driver, prefix)
             if outcome == _MATCH:
                 return driver
             if outcome == _REFUSED:
@@ -179,12 +183,12 @@ def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str 
         if logged_in:
             for driver in refused:
                 logger.info(
-                    "Hostname %s: retrying '%s' driver, its login was refused "
+                    "%s: retrying '%s' driver, its login was refused "
                     "but the same credentials logged in later",
-                    info.hostname,
+                    prefix,
                     driver,
                 )
-                if _try_driver(info, driver) == _MATCH:
+                if _try_driver(info, driver, prefix) == _MATCH:
                     return driver
         return None
     finally:
@@ -232,11 +236,11 @@ def facts_mismatch(facts: dict) -> str | None:
     return None
 
 
-def _try_driver(info: Any, driver: str) -> str:
+def _try_driver(info: Any, driver: str, prefix: str) -> str:
     """Try one driver: a match, logged in to another platform, refused, or failed otherwise."""
     logged_in = False
     try:
-        logger.info(f"Hostname {info.hostname}: Trying '{driver}' driver")
+        logger.info("%s: Trying '%s' driver", prefix, driver)
         np_driver = get_network_driver(driver)
         # Drivers pop and rename keys in optional_args (iosxr_netconf
         # takes port and ssh_config_file), so each one gets its own copy.
@@ -252,12 +256,13 @@ def _try_driver(info: Any, driver: str) -> str:
             if device_info.get("serial_number", "Unknown").lower() == "unknown" or _cli_error_in_name(
                 device_info
             ):
-                logger.info("Hostname %s: '%s' driver did not work", info.hostname, driver)
+                logger.info("%s: '%s' driver did not work", prefix, driver)
                 return _LOGGED_IN
             return _MATCH
     except Exception as e:
+        # One line: netmiko's messages span ten, and the agent splits stderr per line.
         logger.info(
-            "Hostname %s: '%s' driver did not work. Exception: %s", info.hostname, driver, str(e)
+            "%s: '%s' driver did not work. Exception: %s", prefix, driver, flatten_message(e)
         )
         if isinstance(e, _LOGIN_REFUSED):
             return _REFUSED

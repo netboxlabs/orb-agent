@@ -2,6 +2,7 @@
 # Copyright 2024 NetBox Labs Inc
 """NetBox Labs - Client Unit Tests."""
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -300,3 +301,20 @@ def test_ingest_prunes_nested_refs_after_run_id_annotation(
         assert "run_id" not in iface.device.metadata, (
             "nested Device stub must not carry annotation metadata"
         )
+
+
+def test_ingest_log_names_the_policy(mock_diode_client_class, sample_data, sample_metadata, caplog):
+    """The ingest line names the policy, so two policies reaching one host can be told apart."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_client_class.return_value.ingest.return_value.errors = []
+
+    with caplog.at_level(logging.INFO, logger="device_discovery.client"):
+        client.ingest(sample_metadata, sample_data)
+
+    assert any(
+        r.getMessage().startswith("Policy test-policy, Hostname router1: Successfully ingested")
+        for r in caplog.records
+    )

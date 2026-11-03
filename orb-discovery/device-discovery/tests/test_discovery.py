@@ -661,3 +661,27 @@ def test_discover_device_driver_retries_only_refused_drivers(mock_get_network_dr
 
     assert discover_device_driver(_TARGET, drivers=["nxos", "nxos_ssh"]) is None
     assert calls == ["nxos", "nxos_ssh"]
+
+
+def test_discover_device_driver_names_the_policy_on_one_line_per_record(
+    mock_get_network_driver, caplog
+):
+    """Every discovery record names the policy and stays on one line: the agent splits stderr per line."""
+    calls = []
+    refusal = NetmikoAuthenticationException(
+        "Authentication to device failed.\n\nCommon causes of this problem are:\n"
+        "1. Invalid username and password"
+    )
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [refusal, _IOS_FACTS]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    with caplog.at_level(logging.INFO, logger="device_discovery.discovery"):
+        assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"], policy="policy1") == "ios"
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "device_discovery.discovery"]
+    assert len(messages) >= 5
+    assert all(m.startswith("Policy policy1, Hostname 192.0.2.10: ") for m in messages)
+    assert all("\n" not in m for m in messages)

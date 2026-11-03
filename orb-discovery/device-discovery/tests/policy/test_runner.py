@@ -318,7 +318,7 @@ def test_run_device_with_discovered_driver(
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
         # Verify driver discovery and ingestion
-        mock_discover.assert_called_once_with(sample_scopes[0], drivers=None)
+        mock_discover.assert_called_once_with(sample_scopes[0], drivers=None, policy="test_policy")
         mock_ingest.assert_called_once()
         metadata_arg, data = mock_ingest.call_args[0]
         kwargs = mock_ingest.call_args[1]
@@ -354,7 +354,7 @@ def test_run_discovered_driver_error(
         # Run the device with an error to check error handling
         policy_runner.run("test_id", sample_scopes[0], sample_config)
 
-        mock_discover.assert_called_once_with(sample_scopes[0], drivers=None)
+        mock_discover.assert_called_once_with(sample_scopes[0], drivers=None, policy="test_policy")
         mock_logger_warning.assert_called_once()
         assert "Not able to discover device driver" in mock_logger_warning.call_args[0][0]
         assert policy_runner.status == Status.FAILED
@@ -1288,3 +1288,35 @@ def test_run_ingests_a_device_with_a_name_and_no_serial(policy_runner, run_store
 
     assert run.status.value == "completed"
     ingest.assert_called_once()
+
+
+def test_jobs_are_named_after_the_policy_and_target(policy_runner, run_store):
+    """Scheduler lines name the policy and target instead of PolicyRunner.run."""
+    with (
+        patch.object(policy_runner.scheduler, "start"),
+        patch.object(policy_runner.scheduler, "add_job") as mock_add_job,
+    ):
+        policy_runner.setup(
+            "policy1", Config(), [_entry("192.0.2.10"), _entry("192.0.2.0/30")], run_store
+        )
+
+    names = [c[1].get("name") for c in mock_add_job.call_args_list]
+    assert "Policy policy1, Hostname 192.0.2.10" in names
+    assert "Policy policy1, Hostname 192.0.2.0/30" in names
+
+
+def test_run_scan_names_a_host_job_after_the_policy_and_host():
+    """A host's job from a range names the policy and the host."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    scope = Napalm(driver="ios", hostname="192.0.2.0/30", username="admin", password="invalid")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+
+    with patch(
+        "device_discovery.policy.runner.find_reachable_hosts", return_value={"192.0.2.1": True}
+    ):
+        runner.run_scan(["192.0.2.1"], MagicMock(spec=BaseTrigger), scope, config)
+
+    assert runner.scheduler.add_job.call_args[1]["name"] == "Policy policy1, Hostname 192.0.2.1"
