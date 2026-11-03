@@ -154,6 +154,9 @@ func (s *capsScriptSession) Subscribe(ctx context.Context, mode gnmi.Mode, paths
 type capsScriptDialer struct {
 	script     []error
 	dropStream func(dial int32) bool
+	noOnChange bool // Subscribe(on_change) is refused, so no connection syncs
+	dialErr    func(dial int32) error
+	onDial     func()
 	dials      atomic.Int32
 
 	mu     sync.Mutex
@@ -163,8 +166,16 @@ type capsScriptDialer struct {
 
 func (d *capsScriptDialer) Dial(context.Context, gnmi.TargetSpec) (gnmi.Session, error) {
 	dial := d.dials.Add(1)
+	if d.onDial != nil {
+		d.onDial()
+	}
+	if d.dialErr != nil {
+		if err := d.dialErr(dial); err != nil {
+			return nil, err
+		}
+	}
 	fake := &gnmi.FakeSession{
-		OnChangeSupport: true,
+		OnChangeSupport: !d.noOnChange,
 		OnChangeStream: []gnmi.Notification{
 			{Updates: []gnmi.Update{{Path: "/system/state/hostname", Value: "sw1"}}},
 			{SyncDone: true},
@@ -184,15 +195,26 @@ func (d *capsScriptDialer) eventLog() string {
 
 func capsScriptRunner(t *testing.T, store *mapping.Store, dialer *capsScriptDialer) (*Runner, *recordingClient, *syncBuf) {
 	t.Helper()
+	return capsScriptRunnerWith(t, store, dialer, 5*time.Millisecond, nil)
+}
+
+func capsScriptRunnerWith(t *testing.T, store *mapping.Store, dialer *capsScriptDialer, backoff time.Duration,
+	tune func(*Runner),
+) (*Runner, *recordingClient, *syncBuf) {
+	t.Helper()
 	logs := &syncBuf{}
 	client := &recordingClient{}
 	pol := config.Policy{
 		Config: config.PolicyConfig{Mode: config.ModeOnChange, DebounceMs: 10, Defaults: config.Defaults{Site: "lab", Role: "router"}},
 		Scope:  config.Scope{Targets: []config.Target{{Host: "192.0.2.30:57400"}}},
 	}
-	r, err := NewRunner(context.Background(), slog.New(slog.NewTextHandler(logs, nil)), "p1", pol, client, dialer, store)
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	r, err := NewRunner(context.Background(), logger, "p1", pol, client, dialer, store)
 	require.NoError(t, err)
-	r.backoffBase = 5 * time.Millisecond
+	r.backoffBase = backoff
+	if tune != nil {
+		tune(r)
+	}
 	r.Start()
 	t.Cleanup(func() { _ = r.Stop() })
 	return r, client, logs

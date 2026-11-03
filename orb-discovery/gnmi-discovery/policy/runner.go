@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
@@ -62,6 +63,9 @@ type Runner struct {
 
 	backoffBase  time.Duration // initial reconnect backoff; tests shorten it
 	setupTimeout time.Duration // bounds Capabilities; tests shorten it
+	// backoffCap and credentialBackoffCap cap the reconnect backoff; see
+	// setupHistory.slowBackoff. Tests shorten them.
+	backoffCap, credentialBackoffCap time.Duration
 
 	mu     sync.Mutex
 	states map[string]*targetState // by host
@@ -88,11 +92,76 @@ type targetState struct {
 // redials through before it goes on with the _base profile.
 const capsAttempts = 3
 
+const (
+	// defaultBackoffCap is the longest wait between a target's connection attempts.
+	defaultBackoffCap = 30 * time.Second
+	// defaultCredentialBackoffCap replaces it while the target's credentials
+	// have only ever been refused: retrying every 30 s only repeats the refusal.
+	defaultCredentialBackoffCap = 15 * time.Minute
+)
+
 // setupHistory is what a target's earlier connections said about their setup.
 // It lives as long as the target loop, and only that goroutine touches it.
 type setupHistory struct {
-	capsFailures int // consecutive transient Capabilities failures
+	capsFailures int  // consecutive transient Capabilities failures
+	credsRefused bool // this attempt's Capabilities refused the credentials
+	credsWorked  bool // Capabilities answered, or a connection synced
+	credsWarned  bool // a refusal of credentials that never worked was logged at WARN
 }
+
+// slowBackoff reports whether the attempt that just ended had its credentials
+// refused, and they have never worked.
+func (h *setupHistory) slowBackoff() bool {
+	return h.credsRefused && !h.credsWorked
+}
+
+// logLevel is WARN, except for the repeats of a refusal of credentials that
+// never worked: those say nothing the first one did not.
+func (h *setupHistory) logLevel() slog.Level {
+	if h.slowBackoff() && h.credsWarned {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
+// attemptLogged notes, once an attempt is logged, that a refusal of credentials
+// that never worked has had its one WARN.
+func (h *setupHistory) attemptLogged() {
+	if h.slowBackoff() {
+		h.credsWarned = true
+	}
+}
+
+// credentialRefusal reports whether a Capabilities error is the device
+// refusing the credentials.
+func credentialRefusal(err error) bool {
+	switch status.Code(err) {
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+// reconnectBackoff is a target's delay between connection attempts.
+type reconnectBackoff struct {
+	base, next time.Duration
+}
+
+func newReconnectBackoff(base time.Duration) *reconnectBackoff {
+	return &reconnectBackoff{base: base, next: base}
+}
+
+// delay returns the wait before the next attempt, capped at ceiling, and
+// doubles it for the one after.
+func (b *reconnectBackoff) delay(ceiling time.Duration) time.Duration {
+	d := min(b.next, ceiling)
+	b.next = min(2*d, ceiling)
+	return d
+}
+
+// reset starts the delay again from the base.
+func (b *reconnectBackoff) reset() { b.next = b.base }
 
 // NewRunner creates a runner for a policy.
 func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy,
@@ -102,11 +171,13 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	return &Runner{
 		ctx: rctx, cancel: cancel, logger: logger, name: name, policy: policy,
 		client: client, dialer: dialer, store: store,
-		runStore:     NewRunStore(),
-		backoffBase:  time.Second,
-		setupTimeout: gnmi.SetupTimeout,
-		states:       map[string]*targetState{},
-		subscribed:   map[string]struct{}{},
+		runStore:             NewRunStore(),
+		backoffBase:          time.Second,
+		backoffCap:           defaultBackoffCap,
+		credentialBackoffCap: defaultCredentialBackoffCap,
+		setupTimeout:         gnmi.SetupTimeout,
+		states:               map[string]*targetState{},
+		subscribed:           map[string]struct{}{},
 	}, nil
 }
 
@@ -184,7 +255,7 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 	retry.Stop()
 	defer retry.Stop()
 
-	backoff := r.backoffBase
+	backoff := newReconnectBackoff(r.backoffBase)
 	first := true
 	var hist setupHistory
 	for {
@@ -196,25 +267,34 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 		}
 		first = false
 		syncedBefore := r.lastSync(t.Host)
+		hist.credsRefused = false
 		err := r.runOnce(t, model, deb, retry, &hist)
 		if r.ctx.Err() != nil {
 			return
 		}
-		if hist.capsFailures >= capsAttempts && !r.lastSync(t.Host).After(syncedBefore) {
+		if r.lastSync(t.Host).After(syncedBefore) {
+			// A connection that synced worked, whatever ended it.
+			hist.credsWorked = true
+			backoff.reset()
+		} else if hist.capsFailures >= capsAttempts {
 			// A connection on _base that never synced earns no shortcut: the
 			// next ones go through Capabilities again before giving up on it.
 			hist.capsFailures = 0
 		}
 		if err != nil {
-			r.logger.Warn("gnmi target loop error", "policy", r.name, "host", t.Host, "error", err)
+			r.logger.Log(r.ctx, hist.logLevel(), "gnmi target loop error", "policy", r.name, "host", t.Host, "error", err)
 			r.setState(t.Host, func(s *targetState) { s.LastError = err.Error() })
 		}
+		hist.attemptLogged()
+		ceiling := r.backoffCap
+		if hist.slowBackoff() {
+			ceiling = r.credentialBackoffCap
+		}
 		select {
-		case <-time.After(backoff):
+		case <-time.After(backoff.delay(ceiling)):
 		case <-r.ctx.Done():
 			return
 		}
-		backoff = time.Duration(math.Min(float64(backoff*2), float64(30*time.Second)))
 	}
 }
 
@@ -264,6 +344,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			return nil
 		}
 		metrics.GetCapabilityErrors().Add(r.ctx, 1)
+		hist.credsRefused = credentialRefusal(capErr)
 		if gnmi.Transient(capErr) {
 			hist.capsFailures++
 			if hist.capsFailures < capsAttempts {
@@ -272,10 +353,11 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			addDegraded(fmt.Sprintf("capabilities failed on %d consecutive attempts, using the _base profile: %v",
 				hist.capsFailures, capErr))
 		}
-		r.logger.Warn("gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
+		r.logger.Log(r.ctx, hist.logLevel(), "gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
 		r.setState(t.Host, func(s *targetState) { s.LastError = "capabilities: " + capErr.Error() })
 	} else {
 		hist.capsFailures = 0
+		hist.credsWorked = true
 	}
 	profile := r.selectProfile(t, caps)
 	defaults := config.MergeDefaults(&r.policy.Config.Defaults, t.OverrideDefaults)
