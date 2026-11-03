@@ -977,6 +977,40 @@ func TestEmitVLANs_VtpNamesLookupOnlyWithPrefixOff(t *testing.T) {
 	assert.Equal(t, "VLAN610", vlanReferenceName(610, vlanNamesByVid(oids)))
 }
 
+// In svi-name mode, a VID that two VTP domains name differently takes neither
+// name: it is emitted as VLAN<vid>, or not at all without unknown VLANs.
+func TestEmitVLANs_ConflictingVtpNamesInSviNameMode(t *testing.T) {
+	oids := ObjectIDValueMap{
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.10": {Value: "users"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.1.20": {Value: "core"},
+		".1.3.6.1.4.1.9.9.46.1.3.1.1.4.2.20": {Value: "guest"},
+	}
+	prefixMode := "svi-name"
+	emitPrefixes := true
+	for _, tc := range []struct {
+		createUnknown bool
+		want          map[int]string
+	}{
+		{true, map[int]string{10: "users", 20: "VLAN20"}},
+		{false, map[int]string{10: "users"}},
+	} {
+		t.Run("create_unknown_"+strconv.FormatBool(tc.createUnknown), func(t *testing.T) {
+			m := NewVlanMapper(slog.Default(), config.Options{
+				EmitPrefixVlan:     &prefixMode,
+				EmitPrefixes:       &emitPrefixes,
+				CreateUnknownVlans: ptrBool(tc.createUnknown),
+			})
+			got := map[int]string{}
+			for _, entity := range m.emitVLANs(oids, nil) {
+				vlan, ok := entity.(*diode.VLAN)
+				require.True(t, ok)
+				got[int(*vlan.Vid)] = *vlan.Name
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // mergeVLANNames takes an ordered slice precisely so its precedence can be
 // pinned against every arrival order, rather than against whichever order
 // Go's randomised map iteration happens to produce on the day. Each case is
@@ -2250,47 +2284,65 @@ func TestVlanMapper_PostMap_NexusConflictingVtpNames(t *testing.T) {
 	const vid = 2500
 
 	for _, createUnknown := range []bool{false, true} {
-		t.Run("create_unknown_"+strconv.FormatBool(createUnknown), func(t *testing.T) {
-			registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
-			rows := ObjectIDValueMap{
-				oidCiscoVtpVlanName + "1.2500": {Value: "synthetic-backbone"},
-				oidCiscoVtpVlanName + "2.2500": {Value: "synthetic-guest"},
-			}
+		for _, path := range ciscoPostMapPaths {
+			t.Run("create_unknown_"+strconv.FormatBool(createUnknown)+"/"+path.name, func(t *testing.T) {
+				registry, trunk := newVlanTestRegistry(t, ifIndex, "Ethernet1/1")
+				rows := ObjectIDValueMap{
+					oidCiscoVtpVlanName + "1.2500": {Value: "synthetic-backbone"},
+					oidCiscoVtpVlanName + "2.2500": {Value: "synthetic-guest"},
+				}
+				path.apply(rows)
 
-			idx := strconv.Itoa(ifIndex)
-			base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
-			rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
-			rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
-			rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
-			rows[base+"4."+idx] = Value{Value: string(make([]byte, 128))}
-			rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
-			rows[base+"19."+idx] = Value{Value: string(make([]byte, 128))}
-			rows[base+"18."+idx] = Value{
-				Value: ciscoNexusBitmap(2048, []int{vid})[:128],
-			}
-			rows[base+"30."+idx] = Value{Value: string(make([]byte, 128))}
-			rows[base+"31."+idx] = Value{
-				Value: ciscoNexusBitmap(2048, []int{vid}),
-			}
+				idx := strconv.Itoa(ifIndex)
+				base := ".1.3.6.1.4.1.9.9.46.1.6.1.1."
+				rows[".1.3.6.1.2.1.2.2.1.7."+idx] = Value{Value: "1", Type: Integer}
+				rows[base+"14."+idx] = Value{Value: "1", Type: Integer}
+				rows[base+"5."+idx] = Value{Value: "1", Type: Integer}
+				rows[base+"4."+idx] = Value{Value: string(make([]byte, 128))}
+				rows[base+"17."+idx] = Value{Value: string(make([]byte, 128))}
+				rows[base+"19."+idx] = Value{Value: string(make([]byte, 128))}
+				rows[base+"18."+idx] = Value{
+					Value: ciscoNexusBitmap(2048, []int{vid})[:128],
+				}
+				rows[base+"30."+idx] = Value{Value: string(make([]byte, 128))}
+				rows[base+"31."+idx] = Value{
+					Value: ciscoNexusBitmap(2048, []int{vid}),
+				}
 
-			entities := NewVlanMapper(slog.Default(), config.Options{
-				CreateUnknownVlans: ptrBool(createUnknown),
-			}).PostMap(rows, registry, &config.Defaults{})
+				entities := NewVlanMapper(slog.Default(), config.Options{
+					CreateUnknownVlans: ptrBool(createUnknown),
+				}).PostMap(rows, registry, &config.Defaults{})
 
-			assert.Equal(t, createUnknown, emittedVid(entities, vid))
-			if !createUnknown {
-				assert.Empty(t, trunk.TaggedVlans)
-				return
-			}
+				require.NotNil(t, trunk.Mode)
+				assert.Equal(t, "tagged", *trunk.Mode)
+				assert.Equal(t, createUnknown, emittedVid(entities, vid))
+				if !createUnknown {
+					assert.Empty(t, trunk.TaggedVlans)
+					return
+				}
 
-			require.Len(t, trunk.TaggedVlans, 1)
-			vlan := trunk.TaggedVlans[0]
-			require.NotNil(t, vlan.Vid)
-			assert.Equal(t, int64(vid), *vlan.Vid)
-			require.NotNil(t, vlan.Name)
-			assert.Equal(t, "VLAN2500", *vlan.Name)
-		})
+				require.Len(t, trunk.TaggedVlans, 1)
+				vlan := trunk.TaggedVlans[0]
+				require.NotNil(t, vlan.Vid)
+				assert.Equal(t, int64(vid), *vlan.Vid)
+				require.NotNil(t, vlan.Name)
+				assert.Equal(t, "VLAN2500", *vlan.Name)
+			})
+		}
 	}
+}
+
+// ciscoPostMapPaths are the two branches PostMap takes on a Cisco walk:
+// without a BRIDGE-MIB port table, and with one that lists only a port the
+// test does not inspect.
+var ciscoPostMapPaths = []struct {
+	name  string
+	apply func(ObjectIDValueMap)
+}{
+	{"without bridge ports", func(ObjectIDValueMap) {}},
+	{"with bridge ports", func(rows ObjectIDValueMap) {
+		rows[oidDot1dBasePortIfIndex+"1"] = Value{Value: "103", Type: Integer}
+	}},
 }
 
 // An independent Q-BRIDGE name remains usable when VTP domains disagree.
@@ -2437,47 +2489,50 @@ func TestVlanMapper_PostMap_CiscoAccessVtpNames(t *testing.T) {
 		{"create unknown VLANs", true},
 		{"only device-named VLANs", false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			const namedIfIndex = 101
-			const unnamedIfIndex = 102
+		for _, path := range ciscoPostMapPaths {
+			t.Run(tc.name+"/"+path.name, func(t *testing.T) {
+				const namedIfIndex = 101
+				const unnamedIfIndex = 102
 
-			registry, named := newVlanTestRegistry(t, namedIfIndex, "Ethernet1/1")
-			unnamed := addVerifiedInterface(registry, unnamedIfIndex, "Ethernet1/2")
+				registry, named := newVlanTestRegistry(t, namedIfIndex, "Ethernet1/1")
+				unnamed := addVerifiedInterface(registry, unnamedIfIndex, "Ethernet1/2")
 
-			rows := ObjectIDValueMap{
-				oidCiscoVtpVlanName + "1.2500": {Value: "synthetic-access"},
-				oidCiscoVtpVlanName + "1.999":  {Value: "unreferenced"},
-			}
-			ciscoOmittedAccessPort(rows, namedIfIndex, 2500)
-			ciscoOmittedAccessPort(rows, unnamedIfIndex, 3500)
+				rows := ObjectIDValueMap{
+					oidCiscoVtpVlanName + "1.2500": {Value: "synthetic-access"},
+					oidCiscoVtpVlanName + "1.999":  {Value: "unreferenced"},
+				}
+				ciscoOmittedAccessPort(rows, namedIfIndex, 2500)
+				ciscoOmittedAccessPort(rows, unnamedIfIndex, 3500)
+				path.apply(rows)
 
-			entities := NewVlanMapper(slog.Default(), config.Options{
-				CreateUnknownVlans: ptrBool(tc.createUnknown),
-			}).PostMap(rows, registry, &config.Defaults{})
+				entities := NewVlanMapper(slog.Default(), config.Options{
+					CreateUnknownVlans: ptrBool(tc.createUnknown),
+				}).PostMap(rows, registry, &config.Defaults{})
 
-			require.NotNil(t, named.Mode)
-			assert.Equal(t, "access", *named.Mode)
-			require.NotNil(t, named.UntaggedVlan)
-			require.NotNil(t, named.UntaggedVlan.Vid)
-			assert.Equal(t, int64(2500), *named.UntaggedVlan.Vid)
-			require.NotNil(t, named.UntaggedVlan.Name)
-			assert.Equal(t, "synthetic-access", *named.UntaggedVlan.Name)
-			assert.True(t, emittedVid(entities, 2500))
+				require.NotNil(t, named.Mode)
+				assert.Equal(t, "access", *named.Mode)
+				require.NotNil(t, named.UntaggedVlan)
+				require.NotNil(t, named.UntaggedVlan.Vid)
+				assert.Equal(t, int64(2500), *named.UntaggedVlan.Vid)
+				require.NotNil(t, named.UntaggedVlan.Name)
+				assert.Equal(t, "synthetic-access", *named.UntaggedVlan.Name)
+				assert.True(t, emittedVid(entities, 2500))
 
-			require.NotNil(t, unnamed.Mode)
-			assert.Equal(t, "access", *unnamed.Mode)
-			assert.Equal(t, tc.createUnknown, emittedVid(entities, 3500))
-			if tc.createUnknown {
-				require.NotNil(t, unnamed.UntaggedVlan)
-				require.NotNil(t, unnamed.UntaggedVlan.Vid)
-				assert.Equal(t, int64(3500), *unnamed.UntaggedVlan.Vid)
-			} else {
-				assert.Nil(t, unnamed.UntaggedVlan)
-			}
+				require.NotNil(t, unnamed.Mode)
+				assert.Equal(t, "access", *unnamed.Mode)
+				assert.Equal(t, tc.createUnknown, emittedVid(entities, 3500))
+				if tc.createUnknown {
+					require.NotNil(t, unnamed.UntaggedVlan)
+					require.NotNil(t, unnamed.UntaggedVlan.Vid)
+					assert.Equal(t, int64(3500), *unnamed.UntaggedVlan.Vid)
+				} else {
+					assert.Nil(t, unnamed.UntaggedVlan)
+				}
 
-			assert.False(t, emittedVid(entities, 999),
-				"VTP-only VLAN must not create inventory")
-		})
+				assert.False(t, emittedVid(entities, 999),
+					"VTP-only VLAN must not create inventory")
+			})
+		}
 	}
 }
 

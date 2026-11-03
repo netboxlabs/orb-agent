@@ -295,7 +295,7 @@ func verifiedInterface(registry *EntityRegistry, ifIndex int) *diode.Interface {
 // applyClassification mutates iface to carry the classified VLAN refs.
 // Modes ModeRouted and ModeUnknown are no-ops (matches PR #378).
 // ensureVLAN is called for every referenced VID; it may return nil when
-// options.CreateUnknownVlans is false and the VID has no static name entry.
+// options.CreateUnknownVlans is false and the device does not name the VID.
 func applyClassification(iface *diode.Interface, c qbridge.Classification, ensureVLAN func(int) *diode.VLAN) {
 	mode := classificationToNetboxMode(c.Mode)
 	if mode == "" {
