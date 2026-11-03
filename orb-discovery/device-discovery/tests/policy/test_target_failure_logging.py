@@ -3,10 +3,13 @@
 """NetBox Labs - Per-target failure logging behaviour unit tests."""
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
 from napalm.base.exceptions import ConnectionException
+from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.policy.models import Config, Defaults, Napalm, Status
@@ -67,6 +70,8 @@ ENTRY_POINTS = ["run", "run_with_parent"]
     [
         ConnectionException("Cannot connect to 10.0.0.5"),
         NetmikoAuthenticationException(AUTH_MESSAGE),
+        JunosConnectRefusedError(SimpleNamespace(hostname="10.0.0.5", port=830)),
+        NetconfAuthenticationError("Authentication failed for 10.0.0.5"),
     ],
 )
 def test_expected_failure_is_one_flat_warning(

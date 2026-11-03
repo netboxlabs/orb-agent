@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
 from napalm.base.base import NetworkDriver
+from napalm.base.exceptions import ConnectionException
+from napalm.nxapi_plumbing.errors import NXAPIAuthError
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from netmiko.exceptions import NetmikoAuthenticationException
 
@@ -176,11 +178,11 @@ def _make_driver_mock(mock_get_network_driver, facts: dict):
 
     The call chain in discover_device_driver is:
       np_driver = get_network_driver(name)   → class mock
-      with np_driver(host, ...) as device:   → instance mock used as context manager
-          device_info = device.get_facts()   → device is __enter__'s return value
+      device = np_driver(host, ...)          → instance mock, opened and closed explicitly
+      device_info = device.get_facts()
     """
     mock_class = MagicMock()
-    mock_class.return_value.__enter__.return_value.get_facts.return_value = facts
+    mock_class.return_value.get_facts.return_value = facts
     mock_get_network_driver.return_value = mock_class
 
 
@@ -226,7 +228,7 @@ def test_discover_device_driver_mismatch_marker_falls_through_to_valid_driver(
             facts = {"serial_number": "ABC123", "hostname": "% invalid", "fqdn": ""}
         else:
             facts = {"serial_number": "ABC123", "hostname": "real-device", "fqdn": "real-device.example.com"}
-        mock_class.return_value.__enter__.return_value.get_facts.return_value = facts
+        mock_class.return_value.get_facts.return_value = facts
         return mock_class
 
     mock_get_network_driver.side_effect = side_effect
@@ -556,11 +558,11 @@ def _fake_driver(received, serial, pops=()):
             for key in pops:
                 optional_args.pop(key, None)
 
-        def __enter__(self):
-            return self
+        def open(self):
+            pass
 
-        def __exit__(self, *exc):
-            return False
+        def close(self):
+            pass
 
         def get_facts(self):
             return {"serial_number": serial, "hostname": "sw1", "fqdn": "sw1"}
@@ -598,13 +600,12 @@ def _scripted_driver(calls, name, outcomes):
             calls.append(name)
             self.outcome = outcomes.pop(0)
 
-        def __enter__(self):
+        def open(self):
             if isinstance(self.outcome, BaseException):
                 raise self.outcome
-            return self
 
-        def __exit__(self, *exc):
-            return False
+        def close(self):
+            pass
 
         def get_facts(self):
             return self.outcome
@@ -625,12 +626,13 @@ _TARGET = SimpleNamespace(
         NetmikoAuthenticationException("Authentication to device failed."),
         JunosConnectAuthError(SimpleNamespace(hostname="192.0.2.10", port=830)),
         NetconfAuthenticationError("refused"),
+        NXAPIAuthError("Authentication failed: 401"),
     ],
 )
 def test_discover_device_driver_retries_a_refused_driver_once_the_credentials_work(
     mock_get_network_driver, refusal
 ):
-    """A login refused for a moment is retried once another driver logs in with the same account."""
+    """A login refused for a moment is retried once another driver reads the device with the same account."""
     calls = []
     drivers = {
         "ios": _scripted_driver(calls, "ios", [refusal, _IOS_FACTS]),
@@ -714,11 +716,11 @@ def test_discover_device_driver_does_not_count_a_session_that_read_nothing(mock_
         def __init__(self, *args):
             calls.append("lazy")
 
-        def __enter__(self):
-            return self
+        def open(self):
+            pass
 
-        def __exit__(self, *exc):
-            return False
+        def close(self):
+            pass
 
         def get_facts(self):
             raise RuntimeError("URLError: reason: timed out")
@@ -755,3 +757,98 @@ def test_discover_device_driver_restores_the_library_log_levels(mock_get_network
         root.setLevel(saved_root)
         for lg, level in zip(loggers, saved, strict=True):
             lg.setLevel(level)
+
+
+def test_discover_device_driver_retries_a_refusal_the_driver_wrapped(mock_get_network_driver):
+    """Iosxr and iosxr_netconf wrap a refused login in ConnectionException and fail to close; it still counts."""
+
+    class WrappingDriver:
+        """Raises a wrapped refusal on the first open, as iosxr does, then logs in."""
+
+        attempts = 0
+
+        def __init__(self, *args):
+            calls.append("iosxr")
+
+        def open(self):
+            WrappingDriver.attempts += 1
+            if WrappingDriver.attempts == 1:
+                try:
+                    raise NetmikoAuthenticationException("Authentication to device failed.")
+                except NetmikoAuthenticationException as e:
+                    raise ConnectionException("Cannot connect to 192.0.2.10") from e
+
+        def close(self):
+            if WrappingDriver.attempts == 1:
+                raise AttributeError("'NoneType' object has no attribute 'close_session'")
+
+        def get_facts(self):
+            return _IOS_FACTS
+
+    calls = []
+    drivers = {"iosxr": WrappingDriver, "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM])}
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["iosxr", "nxos_ssh"]) == "iosxr"
+    assert calls == ["iosxr", "nxos_ssh", "iosxr"]
+
+
+class _RefusingNapalmDriver(NetworkDriver):
+    """A real NAPALM driver class whose login is refused, as netmiko reports it."""
+
+    def __init__(self, hostname, username, password, timeout=60, optional_args=None):
+        pass
+
+    def open(self):
+        raise NetmikoAuthenticationException("Authentication to device failed.")
+
+    def close(self):
+        pass
+
+
+def test_discover_device_driver_prints_nothing_to_stdout(mock_get_network_driver, capsys):
+    """NAPALM's context manager prints a bug-report request for a refused login; discovery must not use it."""
+    mock_get_network_driver.return_value = _RefusingNapalmDriver
+
+    assert discover_device_driver(_TARGET, drivers=["ios"]) is None
+    assert capsys.readouterr().out == ""
+
+
+def test_discover_device_driver_keeps_a_match_whose_close_fails(mock_get_network_driver, caplog):
+    """A driver that identified the device is kept when its session fails to close."""
+
+    class CloseFails(NetworkDriver):
+        def __init__(self, hostname, username, password, timeout=60, optional_args=None):
+            pass
+
+        def open(self):
+            pass
+
+        def close(self):
+            raise RuntimeError("close-session timed out")
+
+        def get_facts(self):
+            return _IOS_FACTS
+
+    mock_get_network_driver.return_value = CloseFails
+
+    with caplog.at_level(logging.WARNING, logger="device_discovery.discovery"):
+        assert discover_device_driver(_TARGET, drivers=["ios"], policy="policy1") == "ios"
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
+        "Policy policy1, Hostname 192.0.2.10: Error closing the session: close-session timed out"
+    ]
+
+
+def test_discover_device_driver_names_the_host_without_line_breaks(mock_get_network_driver, caplog):
+    """A line break in the target's hostname must not split a discovery line."""
+    mock_get_network_driver.return_value = _RefusingNapalmDriver
+    target = SimpleNamespace(
+        hostname="192.0.2.\n10", username="admin", password="invalid", timeout=10, optional_args={}
+    )
+
+    with caplog.at_level(logging.INFO, logger="device_discovery.discovery"):
+        discover_device_driver(target, drivers=["ios"], policy="policy1")
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "device_discovery.discovery"]
+    assert messages
+    assert all(m.startswith("Policy policy1, Hostname 192.0.2.10: ") for m in messages)

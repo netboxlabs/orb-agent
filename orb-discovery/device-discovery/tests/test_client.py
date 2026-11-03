@@ -318,3 +318,23 @@ def test_ingest_log_names_the_policy(mock_diode_client_class, sample_data, sampl
         r.getMessage().startswith("Policy test-policy, Hostname router1: Successfully ingested")
         for r in caplog.records
     )
+
+
+def test_chunked_ingest_log_names_the_policy(mock_diode_client_class, sample_data, sample_metadata, caplog):
+    """A payload sent in chunks is logged with its policy too."""
+    client = Client()
+    client.init_client(
+        prefix="", target="https://example.com", client_id="abc", client_secret="def"
+    )
+    mock_diode_client_class.return_value.ingest.return_value.errors = []
+
+    with (
+        patch("device_discovery.client.estimate_message_size", return_value=4 * 1024 * 1024),
+        patch("device_discovery.client.create_message_chunks", side_effect=lambda entities: [entities]),
+        caplog.at_level(logging.INFO, logger="device_discovery.client"),
+    ):
+        client.ingest(sample_metadata, sample_data)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("Policy test-policy, Hostname router1: Message size") for m in messages)
+    assert any(m.startswith("Policy test-policy, Hostname router1: Successfully ingested") for m in messages)

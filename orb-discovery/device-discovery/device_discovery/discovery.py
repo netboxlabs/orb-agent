@@ -5,6 +5,8 @@
 import copy
 import inspect
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from importlib import import_module
 from importlib.metadata import packages_distributions
 from pkgutil import walk_packages
@@ -13,6 +15,7 @@ from typing import Any
 from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
 from napalm import get_network_driver
 from napalm.base.base import NetworkDriver
+from napalm.nxapi_plumbing.errors import NXAPIAuthError
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from paramiko.ssh_exception import AuthenticationException
 
@@ -165,7 +168,8 @@ def discover_device_driver(
              the device. Returns an empty string if no suitable driver is found.
 
     """
-    prefix = f"Policy {policy}, Hostname {info.hostname}" if policy else f"Hostname {info.hostname}"
+    host = str(info.hostname).replace("\r\n", "").replace("\n", "")
+    prefix = f"Policy {policy}, Hostname {host}" if policy else f"Hostname {host}"
     set_napalm_logs_level(logging.CRITICAL)
     try:
         driver_list = drivers if drivers is not None else _default_discovery_drivers
@@ -203,10 +207,51 @@ _REFUSED = "refused"
 _FAILED = "failed"
 
 # What a refused login raises: netmiko's exception subclasses paramiko's, and
-# PyEZ (junos) and ncclient (NETCONF drivers) raise their own. Drivers that
-# report a refusal as a plain connection error, such as nxos and eos, are not
-# told apart from an unreachable device.
-_LOGIN_REFUSED = (AuthenticationException, JunosConnectAuthError, NetconfAuthenticationError)
+# PyEZ (junos), ncclient (NETCONF drivers) and NX-API raise their own. Drivers
+# that wrap one, as iosxr and iosxr_netconf do, keep it as the cause. eos over
+# eAPI reports a refusal as a plain connection error and is not told apart.
+_LOGIN_REFUSED = (
+    AuthenticationException,
+    JunosConnectAuthError,
+    NetconfAuthenticationError,
+    NXAPIAuthError,
+)
+
+
+def _refused(error: BaseException | None) -> bool:
+    """Whether a driver failed on a refused login, also when it wrapped the refusal in another error."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        if isinstance(error, _LOGIN_REFUSED):
+            return True
+        seen.add(id(error))
+        error = error.__cause__ or error.__context__
+    return False
+
+
+@contextmanager
+def driver_session(device: Any, prefix: str) -> Iterator[Any]:
+    """
+    Open a driver session and always close it.
+
+    NAPALM's own context manager prints a bug-report request to stdout for any
+    exception it does not define, and a close that fails there turns a
+    session that read everything into a failure. Here a failed close is one
+    WARNING line.
+    """
+    try:
+        device.open()
+    except Exception:
+        with suppress(Exception):
+            device.close()
+        raise
+    try:
+        yield device
+    finally:
+        try:
+            device.close()
+        except Exception as e:
+            logger.warning(f"{prefix}: Error closing the session: {flatten_message(e)}")
 
 
 class DriverMismatchError(Exception):
@@ -223,7 +268,8 @@ def _cli_error_in_name(facts: dict) -> bool:
 
 
 def _unknown(value: object) -> bool:
-    return not value or str(value).strip().lower() == "unknown"
+    # junos reports facts it could not read as the text "None".
+    return not value or str(value).strip().lower() in ("unknown", "none")
 
 
 def facts_mismatch(facts: dict) -> str | None:
@@ -247,12 +293,15 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
         np_driver = get_network_driver(driver)
         # Drivers pop and rename keys in optional_args (iosxr_netconf
         # takes port and ssh_config_file), so each one gets its own copy.
-        with np_driver(
-            info.hostname,
-            info.username,
-            info.password,
-            info.timeout,
-            copy.deepcopy(info.optional_args),
+        with driver_session(
+            np_driver(
+                info.hostname,
+                info.username,
+                info.password,
+                info.timeout,
+                copy.deepcopy(info.optional_args),
+            ),
+            prefix,
         ) as device:
             device_info = device.get_facts()
             if device_info.get("serial_number", "Unknown").lower() == "unknown" or _cli_error_in_name(
@@ -266,4 +315,4 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
         logger.info(
             "%s: '%s' driver did not work. Exception: %s", prefix, driver, flatten_message(e)
         )
-        return _REFUSED if isinstance(e, _LOGIN_REFUSED) else _FAILED
+        return _REFUSED if _refused(e) else _FAILED

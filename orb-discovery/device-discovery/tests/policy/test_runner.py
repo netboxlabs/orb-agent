@@ -11,6 +11,7 @@ from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from napalm.base.base import NetworkDriver
+from napalm.base.exceptions import ConnectionException
 
 from device_discovery.policy.models import (
     Config,
@@ -1239,8 +1240,6 @@ def _run_with_facts(policy_runner, run_store, facts):
     fake_device.get_interfaces.return_value = {}
     fake_device.get_interfaces_ip.return_value = {}
     fake_device.get_vlans.return_value = {}
-    fake_device.__enter__ = MagicMock(return_value=fake_device)
-    fake_device.__exit__ = MagicMock(return_value=False)
 
     with (
         patch(
@@ -1262,6 +1261,7 @@ def _run_with_facts(policy_runner, run_store, facts):
         {"hostname": "Unknown", "serial_number": "Unknown", "fqdn": "Unknown"},
         {"hostname": "", "serial_number": "", "fqdn": ""},
         {"hostname": "% Invalid input detected at '^' marker.", "serial_number": "ABC123"},
+        {"hostname": "None", "serial_number": "None", "fqdn": "None"},
     ],
 )
 def test_run_refuses_facts_that_show_the_set_driver_does_not_fit(
@@ -1392,7 +1392,7 @@ def _run_napalm_driver(policy_runner, run_store, driver_class):
     return run, mock_client_cls.return_value.ingest
 
 
-def test_a_refused_set_driver_prints_nothing_to_stdout(policy_runner, run_store, capsys):
+def test_a_mismatched_set_driver_prints_nothing_to_stdout(policy_runner, run_store, capsys):
     """NAPALM's context manager prints a bug-report request for unknown exceptions; the runner must not use it."""
 
     class JunkFacts(_FakeNapalmDriver):
@@ -1421,3 +1421,57 @@ def test_a_failing_close_keeps_what_was_read(policy_runner, run_store, caplog):
         "Policy policy1, Hostname 192.0.2.10: Error closing the session: "
         "close-session timed out after 30 seconds"
     )
+
+
+def test_a_failed_open_is_closed_and_reported_as_the_open_error(policy_runner, run_store, caplog):
+    """A session whose open fails is still closed, and its close error never hides the open error."""
+    closed = []
+
+    class OpenFails(_FakeNapalmDriver):
+        def open(self):
+            raise ConnectionException("Cannot connect to 192.0.2.10")
+
+        def close(self):
+            closed.append(True)
+            raise AttributeError("'NoneType' object has no attribute 'close_session'")
+
+    with caplog.at_level(logging.WARNING, logger="device_discovery.policy.runner"):
+        run, ingest = _run_napalm_driver(policy_runner, run_store, OpenFails)
+
+    assert closed == [True]
+    assert run.status.value == "failed"
+    assert "Cannot connect to 192.0.2.10" in run.reason
+    ingest.assert_not_called()
+    (record,) = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING
+    assert record.exc_info is None
+
+
+@pytest.mark.parametrize("getter", ["get_vlans", "get_config"])
+def test_a_getter_error_is_logged_on_one_line(policy_runner, run_store, caplog, getter):
+    """A driver error with line breaks stays one log line: the agent splits backend output per line."""
+
+    class GetterFails(_FakeNapalmDriver):
+        pass
+
+    def fail(self, *args, **kwargs):
+        raise RuntimeError("Pattern not detected\nin output\nafter 90 seconds")
+
+    setattr(GetterFails, getter, fail)
+    policy_runner.config = None
+    scope = Napalm(driver="ios", hostname="192.0.2.10", username="admin", password="invalid")
+    config = Config(
+        defaults=Defaults(site="NY"), options=Options(capture_running_config=True)
+    )
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+    with (
+        patch("device_discovery.policy.runner.get_network_driver", return_value=GetterFails),
+        patch("device_discovery.policy.runner.Client"),
+        caplog.at_level(logging.WARNING, logger="device_discovery.policy.runner"),
+    ):
+        policy_runner.run("job-1", scope, config)
+
+    (line,) = [r.getMessage() for r in caplog.records if "Pattern not detected" in r.getMessage()]
+    assert "Pattern not detected in output after 90 seconds" in line
+    assert "\n" not in line

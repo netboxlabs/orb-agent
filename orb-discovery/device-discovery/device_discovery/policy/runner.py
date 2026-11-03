@@ -7,8 +7,6 @@ import logging
 import time
 import traceback
 import uuid
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -16,14 +14,17 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from jnpr.junos.exception import ConnectError as JunosConnectError
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
+from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.client import Client
 from device_discovery.discovery import (
     DriverMismatchError,
     discover_device_driver,
+    driver_session,
     facts_mismatch,
     supported_drivers,
 )
@@ -66,8 +67,10 @@ logger = logging.getLogger(__name__)
 # reported in #494 ("unable to log into the device with the provided
 # credentials").
 #
-# ConnectionException already subsumes ConnectAuthError, ConnectTimeoutError,
-# ConnectionClosedException and UnsupportedVersion, so they are not listed.
+# ConnectionException already subsumes napalm's ConnectAuthError,
+# ConnectTimeoutError, ConnectionClosedException and UnsupportedVersion, so
+# they are not listed. PyEZ (junos) and ncclient (NETCONF drivers) raise their
+# own classes outside napalm's, so their connection and refused-login errors are.
 # Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
@@ -75,6 +78,8 @@ logger = logging.getLogger(__name__)
 _EXPECTED_TARGET_FAILURES = (
     ConnectionException,
     NetmikoAuthenticationException,
+    JunosConnectError,
+    NetconfAuthenticationError,
     DriverMismatchError,
 )
 
@@ -86,30 +91,6 @@ _LISTED_NAMED = 10
 def _sanitize(hostname: str) -> str:
     """A scope hostname without the line breaks a log line or job name cannot carry."""
     return hostname.replace("\r\n", "").replace("\n", "")
-
-
-@contextmanager
-def _session(device: Any, prefix: str) -> Iterator[Any]:
-    """
-    Open a driver session and always close it.
-
-    NAPALM's own context manager prints a bug-report request to stdout for any
-    exception it does not define, and a close that fails there would lose data
-    already read. Here a failed close is one WARNING line.
-    """
-    try:
-        device.open()
-    except Exception:
-        with suppress(Exception):
-            device.close()
-        raise
-    try:
-        yield device
-    finally:
-        try:
-            device.close()
-        except Exception as e:
-            logger.warning(f"{prefix}: Error closing the session: {flatten_message(e)}")
 
 
 def _is_expected_target_failure(error: BaseException) -> bool:
@@ -359,7 +340,7 @@ class PolicyRunner:
         connection_start_time = time.perf_counter()
         # A copy, as drivers pop keys from optional_args and the next run
         # needs them.
-        with _session(
+        with driver_session(
             np_driver(
                 scope.hostname,
                 scope.username,

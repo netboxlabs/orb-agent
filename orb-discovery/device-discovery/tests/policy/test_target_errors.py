@@ -3,6 +3,7 @@
 """NetBox Labs - Per-target failure classification unit tests."""
 
 import pytest
+from jnpr.junos.exception import ConnectError as JunosConnectError
 from napalm.base.exceptions import (
     CommandErrorException,
     CommandTimeoutException,
@@ -14,6 +15,7 @@ from napalm.base.exceptions import (
     UnsupportedVersion,
     ValidationException,
 )
+from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
 
 from device_discovery.discovery import DriverMismatchError
@@ -33,6 +35,8 @@ def test_tuple_membership_is_a_conscious_choice():
     assert _EXPECTED_TARGET_FAILURES == (
         ConnectionException,
         NetmikoAuthenticationException,
+        JunosConnectError,
+        NetconfAuthenticationError,
         DriverMismatchError,
     )
 
