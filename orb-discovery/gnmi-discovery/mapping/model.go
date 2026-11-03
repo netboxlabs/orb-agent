@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -139,6 +140,24 @@ func (m *DeviceModel) EndCycle(keep int64, prune bool) []string {
 // happens at the matching EndCycle once the new dump has re-stamped survivors.
 func (m *DeviceModel) BeginSync() {
 	m.cycle++
+}
+
+// Retain stamps every entry under the given request paths as seen in the
+// current cycle, so the next EndCycle keeps it. A request path's "*" list key
+// matches any value.
+func (m *DeviceModel) Retain(requestPaths []string) {
+	for _, rp := range requestPaths {
+		pattern := strings.ReplaceAll(regexp.QuoteMeta(rp), `=\*\]`, `=[^\]]*\]`)
+		re, err := regexp.Compile("^" + pattern + "$")
+		if err != nil {
+			continue
+		}
+		for p := range m.values {
+			if re.MatchString(p) {
+				m.lastSeen[p] = m.cycle
+			}
+		}
+	}
 }
 
 // Snapshot returns a copy of the current path→value map.

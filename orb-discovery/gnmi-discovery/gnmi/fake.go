@@ -17,6 +17,7 @@ type FakeSession struct {
 	SampleReplay    time.Duration  // gap between SAMPLE re-sends (default 20ms)
 	StreamErr       error          // if set, sent on the error channel after replay (simulates a mid-stream drop)
 	GetResult       Notification
+	GetPathErrs     map[string]error // returned with GetResult
 	GetErr          error
 	ConfigBytes     []byte // returned by GetConfig
 	ConfigErr       error  // if set, GetConfig returns this error
@@ -85,8 +86,8 @@ func (f *FakeSession) Subscribe(ctx context.Context, mode Mode, _ []string, _ in
 }
 
 // GetOnce returns the scripted Get result.
-func (f *FakeSession) GetOnce(_ context.Context, _ []string) (Notification, error) {
-	return f.GetResult, f.GetErr
+func (f *FakeSession) GetOnce(_ context.Context, _ []string) (Notification, map[string]error, error) {
+	return f.GetResult, f.GetPathErrs, f.GetErr
 }
 
 // GetConfig records the call and returns the scripted config bytes/error.

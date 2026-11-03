@@ -56,8 +56,10 @@ type Session interface {
 	// returns a notifications channel and an errors channel. The channels
 	// close when ctx is cancelled or the stream ends.
 	Subscribe(ctx context.Context, mode Mode, paths []string, sampleIntervalMs int) (<-chan Notification, <-chan error, error)
-	// GetOnce performs a single gNMI Get over paths.
-	GetOnce(ctx context.Context, paths []string) (Notification, error)
+	// GetOnce performs a single gNMI Get over paths. A path the target fails
+	// on is returned in the map with its error, and the rest still answer; the
+	// error is set only when every path failed.
+	GetOnce(ctx context.Context, paths []string) (Notification, map[string]error, error)
 	// GetConfig fetches the target's CONFIG datastore as a serialized JSON_IETF
 	// document: a single Get with DataType=CONFIG over the origin-prefixed root
 	// path "/". Returns the raw JSON bytes. Used only when capture_config is on.

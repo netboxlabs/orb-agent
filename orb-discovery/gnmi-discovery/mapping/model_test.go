@@ -177,3 +177,30 @@ func TestSampleReconnectInitialSyncNeedsKeep1(t *testing.T) {
 	require.Empty(t, keep2.EndCycle(2, true), "keep=2 would leak the departed path (the bug)")
 	require.Contains(t, keep2.Snapshot(), "/b")
 }
+
+// Retain keeps the entries under the given request paths through the next
+// EndCycle; a "*" key matches any value, including one with a slash.
+func TestRetainKeepsEntriesUnderRequestPaths(t *testing.T) {
+	m := NewDeviceModel()
+	m.Apply(gnmi.Notification{Updates: []gnmi.Update{
+		{Path: "/system/state/hostname", Value: "sw1"},
+		{Path: "/interfaces/interface[name=Ethernet1/1]/state/mtu", Value: 9000},
+		{Path: "/interfaces/interface[name=Ethernet2]/state/mtu", Value: 1500},
+		{Path: "/interfaces/interface[name=Ethernet2]/state/description", Value: "uplink"},
+		{Path: "/interfaces/interface[name=Ethernet2]/state/mtu-limit", Value: 9216},
+		{Path: "/components/component[name=chassis1]/state/serial-no", Value: "SN-0001"},
+	}})
+	m.EndCycle(1, true)
+
+	m.Apply(gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/state/hostname", Value: "sw1"}}})
+	m.Retain([]string{"/interfaces/interface[name=*]/state/mtu", "/components/component[name=*]/state/serial-no"})
+	pruned := m.EndCycle(1, true)
+
+	require.Equal(t, []string{
+		"/interfaces/interface[name=Ethernet2]/state/description",
+		"/interfaces/interface[name=Ethernet2]/state/mtu-limit",
+	}, pruned, "only the exact leaves are kept")
+	snap := m.Snapshot()
+	require.Equal(t, 9000, snap["/interfaces/interface[name=Ethernet1/1]/state/mtu"])
+	require.Equal(t, "SN-0001", snap["/components/component[name=chassis1]/state/serial-no"])
+}

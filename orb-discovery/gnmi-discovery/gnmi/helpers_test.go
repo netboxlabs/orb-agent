@@ -548,16 +548,18 @@ func TestFakeSession_CapabilitiesError(t *testing.T) {
 
 func TestFakeSession_GetOnceSuccess(t *testing.T) {
 	result := Notification{Updates: []Update{{Path: "/system/hostname", Value: "leaf1"}}, SyncDone: true}
-	f := &FakeSession{GetResult: result}
-	got, err := f.GetOnce(context.Background(), []string{"/system"})
+	pathErrs := map[string]error{"/components": errors.New("busy")}
+	f := &FakeSession{GetResult: result, GetPathErrs: pathErrs}
+	got, failed, err := f.GetOnce(context.Background(), []string{"/system"})
 	require.NoError(t, err)
 	assert.Equal(t, result, got)
+	assert.Equal(t, pathErrs, failed)
 }
 
 func TestFakeSession_GetOnceError(t *testing.T) {
 	sentinel := errors.New("get failed")
 	f := &FakeSession{GetErr: sentinel}
-	_, err := f.GetOnce(context.Background(), nil)
+	_, _, err := f.GetOnce(context.Background(), nil)
 	assert.ErrorIs(t, err, sentinel)
 }
 

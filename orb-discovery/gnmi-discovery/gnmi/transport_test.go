@@ -199,8 +199,9 @@ func TestGnmicSession_GetOnce_Success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	n, err := sess.GetOnce(ctx, []string{"/system/state/hostname"})
+	n, failed, err := sess.GetOnce(ctx, []string{"/system/state/hostname"})
 	require.NoError(t, err)
+	assert.Empty(t, failed)
 	assert.True(t, n.SyncDone, "GetOnce must always set SyncDone")
 	require.Len(t, n.Updates, 1)
 	assert.Equal(t, "/system/state/hostname", n.Updates[0].Path)
@@ -263,7 +264,7 @@ func TestGnmicSession_GetOnce_ServerError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	_, err := sess.GetOnce(ctx, []string{"/system/state/hostname"})
+	_, _, err := sess.GetOnce(ctx, []string{"/system/state/hostname"})
 	require.Error(t, err, "GetOnce must propagate server-side errors when every path fails")
 	assert.Contains(t, err.Error(), "gnmi get")
 }
@@ -300,8 +301,10 @@ func TestGnmicSession_GetOnce_ToleratesPerPathFailure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	n, err := sess.GetOnce(ctx, []string{"/system/state/hostname", badPath})
+	n, failed, err := sess.GetOnce(ctx, []string{"/system/state/hostname", badPath})
 	require.NoError(t, err, "one unsupported path must not fail the whole GetOnce")
+	require.Len(t, failed, 1, "the failed path is reported with its error")
+	assert.Equal(t, codes.NotFound, status.Code(failed[badPath]))
 	require.Len(t, n.Updates, 1)
 	assert.Equal(t, "/system/state/hostname", n.Updates[0].Path)
 	assert.Equal(t, "spine1", n.Updates[0].Value)
@@ -325,7 +328,7 @@ func TestGnmicSession_GetOnce_OriginPrefix(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = sess.Close() }()
 
-	_, _ = sess.GetOnce(ctx, []string{"/system/state/hostname"})
+	_, _, _ = sess.GetOnce(ctx, []string{"/system/state/hostname"})
 	srv.mu.Lock()
 	req := srv.lastGetReq
 	srv.mu.Unlock()

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/netboxlabs/diode-sdk-go/diode"
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -316,4 +317,64 @@ func TestGetRungDoesNotCarryTheProbe(t *testing.T) {
 	st := targetStatus(t, r)
 	require.Equal(t, "get", st.ActiveMode)
 	require.Empty(t, st.DegradedReason)
+}
+
+// refuseComponents refuses, while on, every Get that asks for a component leaf.
+func refuseComponents(c codes.Code, on *atomic.Bool) func([]string) error {
+	return func(paths []string) error {
+		if !on.Load() {
+			return nil
+		}
+		for _, p := range paths {
+			if strings.HasPrefix(p, "/components/") {
+				return status.Error(c, "refused")
+			}
+		}
+		return nil
+	}
+}
+
+// getPoll runs a GET target, then refuses its component paths with code c and
+// returns the device of a poll made entirely under that refusal. The serial
+// changes on the device meanwhile, so a value carried forward shows as the old one.
+func getPoll(t *testing.T, c codes.Code) (*diode.Device, TargetStatus) {
+	t.Helper()
+	var refusing atomic.Bool
+	srv := &gnmiTarget{getErr: refuseComponents(c, &refusing)}
+	r, client, _, _ := runAgainst(t, srv, config.ModeGet, func(r *Runner) { r.policy.Config.GetIntervalMs = 30 })
+
+	require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, "SN-0001", *ingestedDevice(t, client).Serial)
+
+	srv.serial.Store("SN-0002")
+	refusing.Store(true)
+	n := client.count()
+	require.Eventually(t, func() bool { return client.count() >= n+2 }, 5*time.Second, 10*time.Millisecond)
+	return ingestedDevice(t, client), targetStatus(t, r)
+}
+
+// A path whose Get failed for a reason that says nothing about it keeps what
+// the previous poll found, rather than flipping the device type for a poll.
+func TestGetPollKeepsAPathThatFailedTransiently(t *testing.T) {
+	for _, c := range []codes.Code{codes.Unavailable, codes.ResourceExhausted, codes.PermissionDenied, codes.Internal} {
+		t.Run(c.String(), func(t *testing.T) {
+			dev, st := getPoll(t, c)
+			require.Equal(t, "MODEL-1", *dev.DeviceType.Model)
+			require.NotNil(t, dev.Serial)
+			require.Equal(t, "SN-0001", *dev.Serial, "the previous poll's value, not a fresh one")
+			require.Equal(t, 1, strings.Count(st.DegradedReason, "Get poll"), "said once, however many polls")
+		})
+	}
+}
+
+// A path the target does not model, or holds nothing under, is dropped as before.
+func TestGetPollDropsAPathTheTargetRefuses(t *testing.T) {
+	for _, c := range []codes.Code{codes.InvalidArgument, codes.Unimplemented, codes.NotFound} {
+		t.Run(c.String(), func(t *testing.T) {
+			dev, st := getPoll(t, c)
+			require.Equal(t, "Unknown", *dev.DeviceType.Model)
+			require.Nil(t, dev.Serial)
+			require.Empty(t, st.DegradedReason)
+		})
+	}
 }

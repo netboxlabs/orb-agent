@@ -328,6 +328,9 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		r.setState(t.Host, func(s *targetState) { s.DegradedReason = joined })
 	}
 	addDegraded := func(reason string) {
+		if slices.Contains(degraded, reason) {
+			return
+		}
 		degraded = append(degraded, reason)
 		record(degraded)
 	}
@@ -430,7 +433,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			return
 		}
 		fetch := func(path string) (string, bool) {
-			n, gerr := sess.GetOnce(r.ctx, []string{path})
+			n, _, gerr := sess.GetOnce(r.ctx, []string{path})
 			if gerr != nil {
 				r.logger.Warn("asset_tag reference fetch failed", "policy", r.name, "host", t.Host, "path", path, "error", gerr)
 				return "", false
@@ -554,7 +557,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	case config.ModeGet:
 		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get" })
-		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
+		return r.deliverGet(t.Host, sess, profile, model, deb, flush, addDegraded)
 	case config.ModeSample:
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if serr != nil {
@@ -626,7 +629,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		sess.StopSubscribe()
 		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get"; s.FallbackReason = s2.Error() })
-		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
+		return r.deliverGet(t.Host, sess, profile, model, deb, flush, addDegraded)
 	}
 }
 
@@ -820,19 +823,33 @@ func (r *Runner) filterNotification(n gnmi.Notification, profile *mapping.Profil
 // paths. Each Get is an authoritative full view (keep=1), reconciled into the
 // shared model so a departed path drops out of the ingested snapshot — subject
 // to the same empty-view guard as streaming (a Get that returns no device
-// anchor must not wipe the model).
-func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Profile, model *mapping.DeviceModel, deb *Debouncer, flush func()) error {
+// anchor must not wipe the model). A path whose Get failed for a reason that
+// says nothing about the path keeps the previous poll's entries instead, and
+// the session is reported degraded.
+func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Profile, model *mapping.DeviceModel,
+	deb *Debouncer, flush func(), addDegraded func(string),
+) error {
 	paths := profile.SubscribePaths()
 	anchor := profile.Device.Hostname
 	ticker := time.NewTicker(time.Duration(r.policy.Config.GetIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 	do := func() error {
-		n, err := sess.GetOnce(r.ctx, paths)
+		n, failed, err := sess.GetOnce(r.ctx, paths)
 		if err != nil {
 			return err
 		}
 		metrics.GetNotifications().Add(r.ctx, 1)
 		model.Apply(r.filterNotification(n, profile))
+		var carried []string
+		for p, perr := range failed {
+			if !getPathGone(perr) {
+				carried = append(carried, p)
+			}
+		}
+		if len(carried) > 0 {
+			model.Retain(carried)
+			addDegraded("a Get poll failed on some paths; they keep the previous poll's values")
+		}
 		trustworthy := anchor == "" || model.SeenInCycle(anchor)
 		pruned := model.EndCycle(1, trustworthy)
 		if len(pruned) > 0 {
@@ -863,6 +880,17 @@ func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Pro
 			// outage waited for the next get_interval_ms poll to recover.
 			flush()
 		}
+	}
+}
+
+// getPathGone reports whether a path's Get error is the target's answer about
+// the path: not modelled, not supported, or holding nothing.
+func getPathGone(err error) bool {
+	switch status.Code(err) {
+	case codes.NotFound, codes.InvalidArgument, codes.Unimplemented:
+		return true
+	default:
+		return false
 	}
 }
 

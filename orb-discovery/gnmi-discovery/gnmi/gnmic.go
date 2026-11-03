@@ -491,11 +491,12 @@ func (s *gnmicSession) subscribeRequest(mode Mode, paths []string, sampleInterva
 	return req, nil
 }
 
-// GetOnce performs a single gNMI Get over the given paths.
-func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
+// GetOnce performs a single gNMI Get over the given paths, returning the error
+// of each path that failed.
+func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, map[string]error, error) {
 	// Fast path: one Get for all paths — most targets handle a multi-path Get fine.
 	if n, err := s.getPaths(ctx, paths); err == nil {
-		return n, nil
+		return n, nil, nil
 	}
 	// A multi-path Get can fail ATOMICALLY when the target returns
 	// NotFound/Unimplemented for one optional subtree it doesn't model (e.g.
@@ -508,10 +509,12 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 	result.SyncDone = true
 	got := 0
 	var lastErr error
+	failed := map[string]error{}
 	for _, p := range paths {
 		n, err := s.getPaths(ctx, []string{p})
 		if err != nil {
 			lastErr = err
+			failed[p] = err
 			continue
 		}
 		result.Updates = append(result.Updates, n.Updates...)
@@ -519,9 +522,9 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 		got++
 	}
 	if got == 0 && lastErr != nil {
-		return Notification{}, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
+		return Notification{}, failed, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
 	}
-	return result, nil
+	return result, failed, nil
 }
 
 // getPaths issues a single gNMI Get for the given paths and merges the response
