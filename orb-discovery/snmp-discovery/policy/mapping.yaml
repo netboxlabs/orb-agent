@@ -320,7 +320,8 @@ entries:
 
   # CISCO-VTP-MIB vlanTrunkPortTable — whether each port trunks, per ifIndex.
   # NX-OS publishes vmMembershipTable rows for trunk ports too, so a vmVlan row
-  # alone does not make a port access. Only these three columns are walked.
+  # alone does not make a port access. Collect configured and active VLAN
+  # bitmaps separately to distinguish allowed VLANs from active membership.
   - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1"
     entity: "interface_vlan"
     field: "_id"
@@ -328,6 +329,27 @@ entries:
     vendor: "cisco"
     description: "CISCO-VTP-MIB vlanTrunkPortTable (trunking state per port)"
     mapping_entries:
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.5"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortNativeVlan"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.4"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansEnabled"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.17"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansEnabled2k"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.18"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansEnabled3k"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.19"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansEnabled4k"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.30"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansActiveFirst2k"
+      - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.31"
+        entity: "interface_vlan"
+        field: "vlanTrunkPortVlansActiveSecond2k"
       - oid: ".1.3.6.1.4.1.9.9.46.1.6.1.1.13"
         entity: "interface_vlan"
         field: "vlanTrunkPortDynamicState"
@@ -351,29 +373,15 @@ entries:
         entity: "interface_vlan"
         field: "vmVoiceVlanId"
 
-  # CISCO-VTP-MIB vtpVlanEntry — VLAN catalog for Cisco IOS/IOS-XE
-  # devices, which do not implement dot1qVlanStaticName in the default
-  # SNMP context. Indexed by (managementDomainIndex, vlanIndex).
-  #
-  # Scoped to the existing cisco vendor gate (sysObjectID prefix
-  # .1.3.6.1.4.1.9., see policy/vendor.go), which covers IOS/IOS-XE:
-  # they report sysObjectIDs under ciscoProducts (.1.3.6.1.4.1.9.1.NNNN),
-  # a child of that prefix, so this device family is not missed.
-  #
-  # The vtp_vlan entity is the same VlanMapper post-pass as vlan, under a
-  # distinct type so the walk can be gated: the table is read to corroborate
-  # SVI-derived prefix VLANs, so it is only walked when emit_prefix_vlan is
-  # not off.
-  - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1"
-    entity: "vtp_vlan"
-    field: "_id"
+  # Cisco VTP VLAN names for interface references and VLAN catalog lookup.
+  # Walked regardless of prefix mode; VLAN emission is controlled separately
+  # by VlanMapper.
+  - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
+    entity: "interface_vlan"
+    field: "vtpVlanName"
     identifier_size: 2
     vendor: "cisco"
-    description: "CISCO-VTP-MIB vtpVlanEntry (VLAN catalog for IOS/IOS-XE devices without dot1qVlanStaticName)"
-    mapping_entries:
-      - oid: ".1.3.6.1.4.1.9.9.46.1.3.1.1.4"
-        entity: "vtp_vlan"
-        field: "vtpVlanName"
+    description: "CISCO-VTP-MIB VLAN names for interface references"
 
   # CISCOSB private vlan group — Cisco small-business switches (Catalyst
   # 1200/1300, CBS/SG). On these, dot1qPvid is not merely absent but wrong: it
