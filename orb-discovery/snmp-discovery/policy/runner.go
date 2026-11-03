@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -133,7 +134,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		od.StackMemberNameTemplate = config.NormalizeStackMemberTemplate(od.StackMemberNameTemplate, logger)
 	}
 
-	expandedTargetGroups := runner.leaveOutOwnEntries(runner.expandTargetRanges(runner.scope.Targets))
+	expandedTargetGroups := runner.expandTargetRanges(runner.scope.Targets)
+	runner.warnOverlappingEntries(expandedTargetGroups)
+	expandedTargetGroups = runner.leaveOutOwnEntries(expandedTargetGroups)
 
 	for _, group := range expandedTargetGroups {
 		if !group.several {
@@ -1047,6 +1050,58 @@ func (r *Runner) warnSlowScan(group expandedTargetGroup) {
 	r.logger.Warn("a scan of this target may run out of time before probing every address; raise timeout to probe them all",
 		"target", group.originalTarget, "addresses", len(group.targets),
 		"probe_time", worst.String(), "timeout", r.timeout.String())
+}
+
+// warnOverlappingEntries warns once for each pair of entries that reach the
+// same hosts on the same port: two subnets or ranges that overlap, or one host
+// listed twice. Each entry still discovers its hosts, as it always did.
+func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
+	type span struct {
+		entry       string
+		port        uint16
+		first, last netip.Addr
+	}
+	var spans []span
+	singles := make(map[string]string)
+	for _, group := range groups {
+		if len(group.targets) == 0 {
+			continue
+		}
+		first := group.targets[0]
+		if !group.several {
+			endpoint := endpointKey(first.Host, first.Port)
+			if other, ok := singles[endpoint]; ok {
+				r.logger.Warn("scope lists the same host twice; each entry discovers it",
+					"target", group.originalTarget, "other_target", other)
+				continue
+			}
+			singles[endpoint] = group.originalTarget
+			continue
+		}
+		// An expanded subnet or range runs in order from its first address
+		// to its last.
+		start, err1 := netip.ParseAddr(first.Host)
+		end, err2 := netip.ParseAddr(group.targets[len(group.targets)-1].Host)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		this := span{group.originalTarget, effectivePort(first.Port), start, end}
+		for _, other := range spans {
+			if other.port == this.port && other.first.Compare(this.last) <= 0 && this.first.Compare(other.last) <= 0 {
+				r.logger.Warn("scope entries overlap; each discovers the hosts they share",
+					"target", this.entry, "other_target", other.entry)
+			}
+		}
+		spans = append(spans, this)
+	}
+}
+
+// effectivePort is the port a target is scanned on: an unset port is 161.
+func effectivePort(port uint16) uint16 {
+	if port == 0 {
+		return SNMPDefaultPort
+	}
+	return port
 }
 
 // maxLeftOutNamed is how many left-out hosts a range's load line names.

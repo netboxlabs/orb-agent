@@ -262,8 +262,9 @@ a hostname entry does not take its address out of a range. This applies
 within one policy: two policies covering the same host each discover it. A
 subnet or range whose every address is listed on its own is not scanned. When
 the policy is loaded, the agent logs which hosts each range leaves out.
-Overlapping subnets and ranges are left as they are, so a host two of them
-share is discovered by each.
+Overlapping subnets and ranges, and a host listed twice (`192.0.2.6` and
+`192.0.2.6/32`, say), are left as they are: each entry discovers the hosts it
+reaches. The agent warns about each such pair when the policy is loaded.
 
 **What the probe puts on the wire.** With SNMPv3 the probe presents a
 placeholder user and does not authenticate, so neither the configured user nor
