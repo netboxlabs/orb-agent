@@ -768,43 +768,53 @@ func TestApplyCiscoTrunks(t *testing.T) {
 }
 
 // An inactive trunk must not overwrite an existing generic classification,
-// even when its configured allowed VLANs are present.
+// even when its configured allowed VLANs are present or allow every VLAN.
 func TestApplyCiscoTrunksEmptyActivePreservesExisting(t *testing.T) {
-	infos := map[int]*SwitchportInfo{
-		100: {
-			Enabled:           true,
-			BridgePortPresent: true,
-			AdminMode:         AdminTrunk,
-			AllowedVlans:      AllowedVlans{Vids: []int{9, 41, 431}},
-			NativeVlan:        intPtr(41),
-		},
-	}
-	before := *infos[100]
-
-	rows := CiscoRows{
-		TrunkDynamicState: map[int]int{100: 5},
-		NativeVlan:        map[int]int{100: 1},
-		ActiveFirst2k:     map[int][]byte{100: {}},
-		ActiveSecond2k:    map[int][]byte{100: {}},
-		ConfiguredVlans: [4]map[int][]byte{
+	for _, tc := range []struct {
+		name       string
+		configured [4]map[int][]byte
+	}{
+		{"some VLANs allowed", [4]map[int][]byte{
 			{100: ciscoTestBitmap(0, 9, 41, 431)},
 			{100: {}},
 			{100: {}},
 			{100: {}},
-		},
-	}
+		}},
+		{"all VLANs allowed", ciscoAllVlansConfigured(100)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			infos := map[int]*SwitchportInfo{
+				100: {
+					Enabled:           true,
+					BridgePortPresent: true,
+					AdminMode:         AdminTrunk,
+					AllowedVlans:      AllowedVlans{Vids: []int{9, 41, 431}},
+					NativeVlan:        intPtr(41),
+				},
+			}
+			before := *infos[100]
 
-	ApplyCiscoTrunks(infos, rows, slog.Default())
+			rows := CiscoRows{
+				TrunkDynamicState: map[int]int{100: 5},
+				NativeVlan:        map[int]int{100: 1},
+				ActiveFirst2k:     map[int][]byte{100: {}},
+				ActiveSecond2k:    map[int][]byte{100: {}},
+				ConfiguredVlans:   tc.configured,
+			}
 
-	if !reflect.DeepEqual(*infos[100], before) {
-		t.Fatalf("empty active bitmap changed switchport:\n got %+v\nwant %+v",
-			*infos[100], before)
+			ApplyCiscoTrunks(infos, rows, slog.Default())
+
+			if !reflect.DeepEqual(*infos[100], before) {
+				t.Fatalf("empty active bitmap changed switchport:\n got %+v\nwant %+v",
+					*infos[100], before)
+			}
+		})
 	}
 }
 
-// A trunk allowing every valid VLAN is tagged-all, regardless of how many
-// VLANs are currently active.
-func TestApplyCiscoTrunksTaggedAll(t *testing.T) {
+// ciscoAllVlansConfigured returns configured allowed-VLAN rows for ifIndex
+// that allow every VLAN from 1 to 4094.
+func ciscoAllVlansConfigured(ifIndex int) [4]map[int][]byte {
 	var configured [4]map[int][]byte
 	for segment := range configured {
 		bitmap := make([]byte, 128)
@@ -815,15 +825,20 @@ func TestApplyCiscoTrunksTaggedAll(t *testing.T) {
 			position := vid - segment*1024
 			bitmap[position/8] |= 0x80 >> uint(position%8)
 		}
-		configured[segment] = map[int][]byte{100: bitmap}
+		configured[segment] = map[int][]byte{ifIndex: bitmap}
 	}
+	return configured
+}
 
+// A trunk allowing every valid VLAN is tagged-all, regardless of how many
+// VLANs are currently active.
+func TestApplyCiscoTrunksTaggedAll(t *testing.T) {
 	infos := map[int]*SwitchportInfo{}
 	rows := CiscoRows{
 		TrunkDynamicState: map[int]int{100: 5},
 		IfAdminStatus:     map[int]int{100: 1},
 		NativeVlan:        map[int]int{100: 1},
-		ConfiguredVlans:   configured,
+		ConfiguredVlans:   ciscoAllVlansConfigured(100),
 		ActiveFirst2k:     map[int][]byte{100: ciscoTestBitmap(0, 1, 110)},
 		ActiveSecond2k:    map[int][]byte{100: ciscoTestBitmap(2048, 3500)},
 	}
