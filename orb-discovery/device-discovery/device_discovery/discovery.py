@@ -261,12 +261,12 @@ class DriverMismatchError(Exception):
     """A driver's facts show it does not fit the device it logged in to."""
 
 
-def _cli_error_in_name(facts: dict) -> bool:
-    """Whether the hostname or fqdn holds CLI error output instead of a name."""
+def _cli_error_in(facts: dict, *fields: str) -> bool:
+    """Whether any of these facts holds CLI error output instead of a name."""
     return any(
-        marker in str(field)
+        marker in str(facts.get(field) or "")
         for marker in _DRIVER_MISMATCH_MARKERS
-        for field in (facts.get("hostname") or "", facts.get("fqdn") or "")
+        for field in fields
     )
 
 
@@ -280,10 +280,11 @@ def facts_mismatch(facts: dict) -> str | None:
     Why a driver's facts cannot be a real device, or None when they can.
 
     A missing serial number alone is accepted: virtual devices often have none,
-    and a driver set on the scope entry has always ingested them.
+    and a driver set on the scope entry has always ingested them. The FQDN is
+    not checked: it is never sent as the name while it holds error text.
     """
-    if _cli_error_in_name(facts):
-        return "its hostname or FQDN holds CLI error output"
+    if _cli_error_in(facts, "hostname"):
+        return "its hostname holds CLI error output"
     if _unknown(facts.get("hostname")) and _unknown(facts.get("serial_number")):
         return "it reported no hostname and no serial number"
     return None
@@ -309,8 +310,10 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
             device_info = device.get_facts()
             serial = device_info.get("serial_number", "Unknown")
             # Collection refuses what facts_mismatch names, so discovery must not pick it.
-            if str("Unknown" if serial is None else serial).lower() == "unknown" or facts_mismatch(
-                device_info
+            if (
+                str("Unknown" if serial is None else serial).lower() == "unknown"
+                or _cli_error_in(device_info, "hostname", "fqdn")
+                or facts_mismatch(device_info)
             ):
                 logger.info("%s: '%s' driver did not work", prefix, driver)
                 return _READ_FACTS

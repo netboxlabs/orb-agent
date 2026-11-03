@@ -1589,3 +1589,61 @@ def test_a_port_scan_failure_is_logged_on_one_line(caplog):
     (run,) = runner.run_store.get_runs_for_target("policy1", "192.0.2.0/30")
     assert line.endswith(": Too many open files while probing")
     assert run.reason == "Too many open files while probing"
+
+
+def _run_set_driver(policy_runner, run_store, facts, *, netbox_id=None, asset_tag=None, emit_device_name=True):
+    """Run one target whose driver is set in the policy and whose device reports these facts."""
+
+    class Facts(_FakeNapalmDriver):
+        pass
+
+    Facts.facts = facts
+    scope = Napalm(
+        driver="ios", hostname="192.0.2.10", username="admin", password="invalid", netbox_id=netbox_id
+    )
+    defaults = Defaults(site="NY", device=DeviceParameters(asset_tag=asset_tag) if asset_tag else None)
+    config = Config(defaults=defaults, options=Options(emit_device_name=emit_device_name))
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+    with (
+        patch("device_discovery.policy.runner.get_network_driver", return_value=Facts),
+        patch("device_discovery.policy.runner.Client") as mock_client_cls,
+    ):
+        mock_client_cls.return_value.ingest.return_value = 2
+        policy_runner.run("job-1", scope, config)
+    (run,) = run_store.get_runs_for_target("policy1", "192.0.2.10")
+    return run, mock_client_cls.return_value.ingest
+
+
+_NO_NAME_NO_SERIAL = {"hostname": "Unknown", "serial_number": "Unknown", "fqdn": "Unknown"}
+
+
+@pytest.mark.parametrize("matcher", [{"netbox_id": 1003}, {"asset_tag": "AT-0003"}])
+def test_facts_without_a_name_still_update_a_device_matched_without_one(policy_runner, run_store, matcher):
+    """With emit_device_name off and a netbox_id or asset tag, no name is sent, so the facts are not junk."""
+    run, ingest = _run_set_driver(
+        policy_runner, run_store, _NO_NAME_NO_SERIAL, emit_device_name=False, **matcher
+    )
+
+    assert run.status.value == "completed"
+    ingest.assert_called_once()
+
+
+def test_facts_without_a_name_are_refused_when_the_name_would_be_sent(policy_runner, run_store):
+    """A netbox_id alone does not help: the device would be renamed "Unknown"."""
+    run, ingest = _run_set_driver(policy_runner, run_store, _NO_NAME_NO_SERIAL, netbox_id=1003)
+
+    assert run.status.value == "failed"
+    ingest.assert_not_called()
+
+
+def test_cli_error_text_in_the_fqdn_alone_does_not_refuse_a_set_driver(policy_runner, run_store):
+    """The FQDN is never sent as the name when it holds error text, so it does not decide the fit."""
+    run, ingest = _run_set_driver(
+        policy_runner,
+        run_store,
+        {"hostname": "asa5", "serial_number": "ABC123", "fqdn": "ERROR: % Invalid input detected at '^' marker."},
+    )
+
+    assert run.status.value == "completed"
+    ingest.assert_called_once()

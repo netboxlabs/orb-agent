@@ -130,6 +130,20 @@ def _sanitize(hostname: str) -> str:
     return hostname.replace("\r\n", "").replace("\n", "")
 
 
+def _name_withheld(scope: Napalm, config: Config) -> bool:
+    """
+    Whether the device goes out without a name, so facts that name nothing do no harm.
+
+    Mirrors translate's emit_device_name: the name is withheld only when the
+    device can be matched without it, by netbox_id or asset tag.
+    """
+    if config.options is None or config.options.emit_device_name:
+        return False
+    device = config.defaults.device if config.defaults else None
+    asset_tag = device.asset_tag if device else None
+    return scope.netbox_id is not None or bool(asset_tag and asset_tag.strip())
+
+
 def _is_expected_target_failure(error: BaseException) -> bool:
     """
     Report whether a per-target failure is an expected unreachable/unauthenticated host.
@@ -409,7 +423,7 @@ class PolicyRunner:
 
             data = {
                 "driver": scope.driver,
-                "device": self._checked_facts(device, scope),
+                "device": self._checked_facts(device, scope, config),
                 "interface": device.get_interfaces(),
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
@@ -475,11 +489,11 @@ class PolicyRunner:
             discovery_success.add(1, {"policy": self.name})
         return entity_count
 
-    def _checked_facts(self, device: Any, scope: Napalm) -> dict:
+    def _checked_facts(self, device: Any, scope: Napalm, config: Config) -> dict:
         """The device's facts, refused when they show the driver does not fit the device."""
         facts = device.get_facts()
         mismatch = facts_mismatch(facts)
-        if mismatch:
+        if mismatch and not _name_withheld(scope, config):
             error = DriverMismatchError(f"'{scope.driver}' driver does not fit this device: {mismatch}")
             # A discovered driver is discovered again next run, rather than refused every run.
             if id(scope) in self.discovered_drivers:
