@@ -1565,3 +1565,27 @@ def test_a_forgotten_discovered_driver_still_labels_the_failure_metric(policy_ru
 
     failed = [c.args[1] for c in metric.record.call_args_list if c.args[1].get("status") == "failed"]
     assert [labels["driver"] for labels in failed] == ["ios"]
+
+
+def test_a_port_scan_failure_is_logged_on_one_line(caplog):
+    """A scan error with line breaks stays one log line, with the same text as the run reason."""
+    runner = PolicyRunner()
+    runner.name = "policy1"
+    runner.run_store = RunStore()
+    runner.scheduler = MagicMock()
+    scope = Napalm(hostname="192.0.2.0/30", username="admin", password="invalid")
+    config = Config(options=Options(port_scan_ports=[22], port_scan_timeout=0.1))
+
+    with (
+        patch(
+            "device_discovery.policy.runner.find_reachable_hosts",
+            side_effect=OSError("Too many open files\nwhile probing"),
+        ),
+        caplog.at_level(logging.ERROR, logger="device_discovery.policy.runner"),
+    ):
+        runner.run_scan(["192.0.2.1"], MagicMock(spec=BaseTrigger), scope, config)
+
+    (line,) = [r.getMessage() for r in caplog.records]
+    (run,) = runner.run_store.get_runs_for_target("policy1", "192.0.2.0/30")
+    assert line.endswith(": Too many open files while probing")
+    assert run.reason == "Too many open files while probing"

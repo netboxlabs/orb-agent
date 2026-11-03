@@ -40,10 +40,8 @@ from jnpr.junos.exception import (
 )
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
-from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
-from ncclient.transport.errors import SSHError as NetconfSSHError
+from ncclient.transport.errors import SessionError as NetconfSessionError
 from ncclient.transport.errors import TransportError as NetconfTransportError
-from ncclient.transport.session import SessionError as NetconfSessionError
 from netmiko.exceptions import NetmikoAuthenticationException
 from paramiko.ssh_exception import SSHException
 
@@ -101,7 +99,8 @@ logger = logging.getLogger(__name__)
 # dropped the session: the runner runs no RPC after closing it. PyEZ's base
 # ConnectError also wraps any bug inside connect, so it counts only when the
 # error it kept is a transport one (see _is_expected_target_failure). ncclient's
-# refused login and SSH failure are listed for the NETCONF drivers that raise them raw.
+# transport and session errors, refused logins included, are listed for the
+# NETCONF drivers that raise them raw.
 # Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
@@ -116,8 +115,8 @@ _EXPECTED_TARGET_FAILURES = (
     JunosConnectNotMasterError,
     JunosProbeError,
     JunosConnectClosedError,
-    NetconfAuthenticationError,
-    NetconfSSHError,
+    NetconfTransportError,
+    NetconfSessionError,
     DriverMismatchError,
 )
 
@@ -753,7 +752,7 @@ class PolicyRunner:
                     )
         except Exception as e:
             logger.error(
-                f"Policy {self.name}, Error during port scan for {original_hostname}: {e}"
+                f"Policy {self.name}, Error during port scan for {original_hostname}: {failure_text(e)}"
             )
             # UPDATE SCAN RUN AS FAILED
             self.run_store.update_run(

@@ -83,10 +83,9 @@ WARNING:device_discovery.policy.runner:Policy my_policy, Hostname 10.0.0.5: Cann
 ```
 
 Stable phrases to alert or grep on: `Cannot connect to`, `Authentication to device failed`,
-`driver does not fit this device`, `Could not open socket to` for NETCONF drivers, and
-for `junos` targets `ConnectAuthError(`, `ConnectRefusedError(`, `ConnectTimeoutError(`,
-`ConnectUnknownHostError(`, `ConnectClosedError(`, `ConnectNotMasterError(`, `ProbeError(`
-and, on WARNING lines, `ConnectError(host:`. An ERROR line carrying `ConnectError(host:`
+`driver does not fit this device`, and for `junos` targets `ConnectAuthError(`,
+`ConnectRefusedError(`, `ConnectTimeoutError(`, `ConnectUnknownHostError(`,
+`ConnectClosedError(`, `ProbeError(` and, on WARNING lines, `ConnectError(host:`. An ERROR line carrying `ConnectError(host:`
 is a fault PyEZ wrapped while connecting, and keeps its traceback.
 A sweep over unreachable address space produces one line per host, not one per traceback frame.
 

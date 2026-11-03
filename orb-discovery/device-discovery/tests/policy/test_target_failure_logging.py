@@ -12,9 +12,11 @@ from jnpr.junos.exception import ConnectError as JunosConnectError
 from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
 from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
 from napalm.base.exceptions import ConnectionException
+from ncclient.operations.errors import TimeoutExpiredError as NetconfTimeoutExpiredError
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
+from ncclient.transport.errors import SessionCloseError as NetconfSessionCloseError
+from ncclient.transport.errors import SessionError as NetconfSessionError
 from ncclient.transport.errors import SSHError as NetconfSSHError
-from ncclient.transport.session import SessionError as NetconfSessionError
 from netmiko.exceptions import NetmikoAuthenticationException
 from paramiko.ssh_exception import SSHException
 
@@ -213,6 +215,7 @@ def _pyez_connect_error(original):
     [
         JunosConnectError(SimpleNamespace(hostname="10.0.0.5", port=830)),
         _pyez_connect_error(TypeError("connect() got an unexpected keyword argument 'bind_addr'")),
+        _pyez_connect_error(NetconfTimeoutExpiredError("rpc timed out")),
     ],
 )
 def test_pyez_errors_that_can_hide_bugs_keep_their_traceback(
@@ -279,7 +282,10 @@ def test_an_empty_message_names_the_error_it_wraps(runner, scope, config, entry_
         _pyez_connect_error(NetconfSessionError("Capability exchange timed out")),
         _pyez_connect_error(EOFError()),
         _pyez_connect_error(SSHException("Error reading SSH protocol banner")),
+        _pyez_connect_error(NetconfSessionCloseError("")),
         NetconfSSHError("Could not open socket to 10.0.0.5:830"),
+        NetconfSessionError("Capability exchange timed out"),
+        NetconfSessionCloseError("Unexpected session close"),
     ],
 )
 def test_other_netconf_transport_failures_are_one_flat_warning(
