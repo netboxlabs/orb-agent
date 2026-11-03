@@ -274,13 +274,13 @@ def _unknown(value: object) -> bool:
 
 def facts_mismatch(facts: dict) -> str | None:
     """
-    Why a set driver's facts cannot be a real device, or None when they can.
+    Why a driver's facts cannot be a real device, or None when they can.
 
-    Narrower than auto-discovery, which also refuses a missing serial number:
-    virtual devices often have none, and a set driver has always ingested them.
+    A missing serial number alone is accepted: virtual devices often have none,
+    and a driver set on the scope entry has always ingested them.
     """
     if _cli_error_in_name(facts):
-        return "its hostname holds CLI error output"
+        return "its hostname or FQDN holds CLI error output"
     if _unknown(facts.get("hostname")) and _unknown(facts.get("serial_number")):
         return "it reported no hostname and no serial number"
     return None

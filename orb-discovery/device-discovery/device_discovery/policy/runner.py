@@ -14,7 +14,24 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
-from jnpr.junos.exception import ConnectError as JunosConnectError
+from jnpr.junos.exception import (
+    ConnectAuthError as JunosConnectAuthError,
+)
+from jnpr.junos.exception import (
+    ConnectNotMasterError as JunosConnectNotMasterError,
+)
+from jnpr.junos.exception import (
+    ConnectRefusedError as JunosConnectRefusedError,
+)
+from jnpr.junos.exception import (
+    ConnectTimeoutError as JunosConnectTimeoutError,
+)
+from jnpr.junos.exception import (
+    ConnectUnknownHostError as JunosConnectUnknownHostError,
+)
+from jnpr.junos.exception import (
+    ProbeError as JunosProbeError,
+)
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
@@ -69,8 +86,10 @@ logger = logging.getLogger(__name__)
 #
 # ConnectionException already subsumes napalm's ConnectAuthError,
 # ConnectTimeoutError, ConnectionClosedException and UnsupportedVersion, so
-# they are not listed. PyEZ (junos) and ncclient (NETCONF drivers) raise their
-# own classes outside napalm's, so their connection and refused-login errors are.
+# they are not listed. PyEZ (junos) raises its own connection errors outside
+# napalm's, so they are listed by name: its base ConnectError also wraps any bug
+# inside connect, and ConnectClosedError means an RPC ran without a session.
+# ncclient's refused login is listed for the NETCONF drivers that raise it raw.
 # Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
@@ -78,7 +97,12 @@ logger = logging.getLogger(__name__)
 _EXPECTED_TARGET_FAILURES = (
     ConnectionException,
     NetmikoAuthenticationException,
-    JunosConnectError,
+    JunosConnectAuthError,
+    JunosConnectRefusedError,
+    JunosConnectTimeoutError,
+    JunosConnectUnknownHostError,
+    JunosConnectNotMasterError,
+    JunosProbeError,
     NetconfAuthenticationError,
     DriverMismatchError,
 )
@@ -122,6 +146,8 @@ class PolicyRunner:
         self.scheduler = BackgroundScheduler()
         self.run_store = None
         self.active_host_jobs: dict[tuple[str, str], str] = {}
+        # Scopes whose driver came from discovery rather than the policy.
+        self.discovered_drivers: set[int] = set()
 
     def _validate_discovery_drivers(self):
         """
@@ -195,6 +221,12 @@ class PolicyRunner:
                     f"was not found in the current installed drivers list: {supported_drivers}."
                 )
 
+            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
+            if parsed_as_range and len(hostnames) > 1:
+                hostnames = self._without_own_entries(hostnames, scope, own_entries, sanitized_hostname)
+                if not hostnames:
+                    continue
+
             if self.config.schedule is not None:
                 logger.info(
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Scheduled to run with '{self.config.schedule}'"
@@ -205,12 +237,6 @@ class PolicyRunner:
                     f"Policy {self.name}, Hostname {sanitized_hostname}: One-time run"
                 )
                 trigger = DateTrigger(run_date=datetime.now() + timedelta(seconds=1))
-
-            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
-            if parsed_as_range and len(hostnames) > 1:
-                hostnames = self._without_own_entries(hostnames, scope, own_entries, sanitized_hostname)
-                if not hostnames:
-                    continue
 
             id = str(uuid.uuid4())
             self.scopes[id] = scope
@@ -307,6 +333,7 @@ class PolicyRunner:
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Not able to discover device driver"
                 )
                 return False
+            self.discovered_drivers.add(id(scope))
         return True
 
     def _collect_device_data(
@@ -364,7 +391,7 @@ class PolicyRunner:
 
             data = {
                 "driver": scope.driver,
-                "device": self._checked_facts(device, scope.driver),
+                "device": self._checked_facts(device, scope),
                 "interface": device.get_interfaces(),
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
@@ -430,13 +457,17 @@ class PolicyRunner:
             discovery_success.add(1, {"policy": self.name})
         return entity_count
 
-    @staticmethod
-    def _checked_facts(device: Any, driver: str) -> dict:
+    def _checked_facts(self, device: Any, scope: Napalm) -> dict:
         """The device's facts, refused when they show the driver does not fit the device."""
         facts = device.get_facts()
         mismatch = facts_mismatch(facts)
         if mismatch:
-            raise DriverMismatchError(f"'{driver}' driver does not fit this device: {mismatch}")
+            error = DriverMismatchError(f"'{scope.driver}' driver does not fit this device: {mismatch}")
+            # A discovered driver is discovered again next run, rather than refused every run.
+            if id(scope) in self.discovered_drivers:
+                self.discovered_drivers.discard(id(scope))
+                scope.driver = None
+            raise error
         return facts
 
     def _collect_interfaces_vlan_id(

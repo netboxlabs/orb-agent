@@ -852,3 +852,45 @@ def test_discover_device_driver_names_the_host_without_line_breaks(mock_get_netw
     messages = [r.getMessage() for r in caplog.records if r.name == "device_discovery.discovery"]
     assert messages
     assert all(m.startswith("Policy policy1, Hostname 192.0.2.10: ") for m in messages)
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_discover_device_driver_follows_how_a_driver_chained_the_refusal(mock_get_network_driver, explicit):
+    """Drivers chain a wrapped refusal implicitly, as iosxr, iosxr_netconf and nxos do, or explicitly."""
+
+    def refuse():
+        try:
+            raise NetmikoAuthenticationException("Authentication to device failed.")
+        except NetmikoAuthenticationException as e:
+            if explicit:
+                raise ConnectionException("Cannot connect to 192.0.2.10") from e
+            raise ConnectionException("Cannot connect to 192.0.2.10")  # noqa: B904
+
+    try:
+        refuse()
+    except ConnectionException as wrapped:
+        refusal = wrapped
+
+    calls = []
+    drivers = {
+        "iosxr": _scripted_driver(calls, "iosxr", [refusal, _IOS_FACTS]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["iosxr", "nxos_ssh"]) == "iosxr"
+    assert calls == ["iosxr", "nxos_ssh", "iosxr"]
+
+
+def test_discover_device_driver_counts_cli_errors_as_facts_read(mock_get_network_driver):
+    """nxos_ssh on an IOS device reads the error text as its hostname and no serial: the account still works."""
+    calls = []
+    nxos_ssh_on_ios = {"serial_number": "", "hostname": "% Invalid input detected at '^' marker.", "fqdn": ""}
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [NetmikoAuthenticationException("refused"), _IOS_FACTS]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [nxos_ssh_on_ios]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"]) == "ios"
+    assert calls == ["ios", "nxos_ssh", "ios"]

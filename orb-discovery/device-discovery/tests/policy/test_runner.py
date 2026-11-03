@@ -1475,3 +1475,42 @@ def test_a_getter_error_is_logged_on_one_line(policy_runner, run_store, caplog, 
     (line,) = [r.getMessage() for r in caplog.records if "Pattern not detected" in r.getMessage()]
     assert "Pattern not detected in output after 90 seconds" in line
     assert "\n" not in line
+
+
+@pytest.mark.parametrize("set_in_policy", [False, True])
+def test_a_discovered_driver_is_forgotten_when_collection_refuses_its_facts(
+    policy_runner, run_store, set_in_policy
+):
+    """Facts collection refuses send a discovered driver back to discovery; a policy's driver stays."""
+
+    class JunkFacts(_FakeNapalmDriver):
+        facts = {"hostname": "", "serial_number": "", "fqdn": ""}
+
+    scope = Napalm(
+        driver="ios" if set_in_policy else None,
+        hostname="192.0.2.10",
+        username="admin",
+        password="invalid",
+    )
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+    with (
+        patch("device_discovery.policy.runner.discover_device_driver", return_value="ios"),
+        patch("device_discovery.policy.runner.get_network_driver", return_value=JunkFacts),
+        patch("device_discovery.policy.runner.Client"),
+    ):
+        policy_runner.run("job-1", scope, Config(defaults=Defaults(site="NY"), options=Options()))
+
+    assert scope.driver == ("ios" if set_in_policy else None)
+
+
+def test_a_range_with_nothing_left_logs_no_schedule(policy_runner, run_store, caplog):
+    """A range every address of which has its own entry says why it is skipped, not that it was scheduled."""
+    with caplog.at_level(logging.INFO, logger="device_discovery.policy.runner"):
+        _scheduled(policy_runner, run_store, [_entry("192.0.2.0/30"), _entry("192.0.2.1"), _entry("192.0.2.2")])
+
+    range_lines = [r.getMessage() for r in caplog.records if "Hostname 192.0.2.0/30:" in r.getMessage()]
+    assert range_lines == [
+        "Policy policy1, Hostname 192.0.2.0/30: Leaving out 192.0.2.1, 192.0.2.2, "
+        "discovered from their own scope entries"
+    ]

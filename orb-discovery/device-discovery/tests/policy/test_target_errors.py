@@ -3,7 +3,12 @@
 """NetBox Labs - Per-target failure classification unit tests."""
 
 import pytest
-from jnpr.junos.exception import ConnectError as JunosConnectError
+from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
+from jnpr.junos.exception import ConnectNotMasterError as JunosConnectNotMasterError
+from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
+from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
+from jnpr.junos.exception import ConnectUnknownHostError as JunosConnectUnknownHostError
+from jnpr.junos.exception import ProbeError as JunosProbeError
 from napalm.base.exceptions import (
     CommandErrorException,
     CommandTimeoutException,
@@ -35,7 +40,12 @@ def test_tuple_membership_is_a_conscious_choice():
     assert _EXPECTED_TARGET_FAILURES == (
         ConnectionException,
         NetmikoAuthenticationException,
-        JunosConnectError,
+        JunosConnectAuthError,
+        JunosConnectRefusedError,
+        JunosConnectTimeoutError,
+        JunosConnectUnknownHostError,
+        JunosConnectNotMasterError,
+        JunosProbeError,
         NetconfAuthenticationError,
         DriverMismatchError,
     )

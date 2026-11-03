@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from jnpr.junos.exception import ConnectClosedError as JunosConnectClosedError
+from jnpr.junos.exception import ConnectError as JunosConnectError
 from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
 from napalm.base.exceptions import ConnectionException
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
@@ -190,3 +192,26 @@ def test_driver_discovery_failure_warns_rather_than_errors(runner, scope, config
     assert len(matching) == 1
     assert matching[0].levelno == logging.WARNING
     assert runner.status == Status.FAILED
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+@pytest.mark.parametrize(
+    "error",
+    [
+        JunosConnectError(SimpleNamespace(hostname="10.0.0.5", port=830)),
+        JunosConnectClosedError(SimpleNamespace(hostname="10.0.0.5", port=830)),
+    ],
+)
+def test_pyez_errors_that_can_hide_bugs_keep_their_traceback(
+    runner, scope, config, entry_point, error, caplog
+):
+    """PyEZ's base ConnectError wraps any bug inside connect, so it is not an expected failure."""
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=error),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    errors = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None
