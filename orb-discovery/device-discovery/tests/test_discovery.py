@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from napalm.base.base import NetworkDriver
+from napalm.base.exceptions import ConnectAuthError
+from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.discovery import (
     _DRIVER_MISMATCH_MARKERS,
@@ -585,3 +587,77 @@ def test_discover_device_driver_gives_each_driver_its_own_optional_args(mock_get
     assert discover_device_driver(info, drivers=["first", "second"]) == "second"
     assert second == [original]
     assert info.optional_args == original
+
+
+def _scripted_driver(calls, name, outcomes):
+    """A driver class whose successive logins follow outcomes: an exception to raise, or facts."""
+
+    class ScriptedDriver:
+        def __init__(self, hostname, username, password, timeout, optional_args):
+            calls.append(name)
+            self.outcome = outcomes.pop(0)
+
+        def __enter__(self):
+            if isinstance(self.outcome, BaseException):
+                raise self.outcome
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def get_facts(self):
+            return self.outcome
+
+    return ScriptedDriver
+
+
+_IOS_FACTS = {"serial_number": "ABC123", "hostname": "sw1", "fqdn": "sw1"}
+_NOT_THIS_PLATFORM = {"serial_number": "Unknown", "hostname": "sw1", "fqdn": "sw1"}
+_TARGET = SimpleNamespace(
+    hostname="192.0.2.10", username="admin", password="invalid", timeout=10, optional_args={}
+)
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [NetmikoAuthenticationException("Authentication to device failed."), ConnectAuthError("refused")],
+)
+def test_discover_device_driver_retries_a_refused_driver_once_the_credentials_work(
+    mock_get_network_driver, refusal
+):
+    """A login refused for a moment is retried once another driver logs in with the same account."""
+    calls = []
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [refusal, _IOS_FACTS]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"]) == "ios"
+    assert calls == ["ios", "nxos_ssh", "ios"]
+
+
+def test_discover_device_driver_does_not_retry_when_every_login_is_refused(mock_get_network_driver):
+    """Wrong credentials cost one refused login per driver, never more."""
+    calls = []
+    drivers = {
+        name: _scripted_driver(calls, name, [NetmikoAuthenticationException("refused")])
+        for name in ("ios", "nxos_ssh")
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"]) is None
+    assert calls == ["ios", "nxos_ssh"]
+
+
+def test_discover_device_driver_retries_only_refused_drivers(mock_get_network_driver):
+    """A driver that failed for another reason is not tried again."""
+    calls = []
+    drivers = {
+        "nxos": _scripted_driver(calls, "nxos", [ValueError("Extra data: line 1 column 5")]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["nxos", "nxos_ssh"]) is None
+    assert calls == ["nxos", "nxos_ssh"]

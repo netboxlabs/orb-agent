@@ -12,6 +12,8 @@ from typing import Any
 
 from napalm import get_network_driver
 from napalm.base.base import NetworkDriver
+from napalm.base.exceptions import ConnectAuthError
+from paramiko.ssh_exception import AuthenticationException
 
 from device_discovery.log_config import configure_default_logging
 
@@ -160,40 +162,77 @@ def discover_device_driver(info: dict, drivers: list[str] | None = None) -> str 
 
     """
     set_napalm_logs_level(logging.CRITICAL)
-    driver_list = drivers if drivers is not None else _default_discovery_drivers
-    for driver in driver_list:
-        try:
-            logger.info(f"Hostname {info.hostname}: Trying '{driver}' driver")
-            np_driver = get_network_driver(driver)
-            # Drivers pop and rename keys in optional_args (iosxr_netconf
-            # takes port and ssh_config_file), so each one gets its own copy.
-            with np_driver(
-                info.hostname,
-                info.username,
-                info.password,
-                info.timeout,
-                copy.deepcopy(info.optional_args),
-            ) as device:
-                device_info = device.get_facts()
-                if device_info.get("serial_number", "Unknown").lower() == "unknown":
-                    logger.info(
-                        "Hostname %s: '%s' driver did not work", info.hostname, driver
-                    )
-                    continue
-                if any(
-                    marker in field
-                    for marker in _DRIVER_MISMATCH_MARKERS
-                    for field in (device_info.get("hostname", ""), device_info.get("fqdn", ""))
-                ):
-                    logger.info(
-                        "Hostname %s: '%s' driver did not work", info.hostname, driver
-                    )
-                    continue
-                set_napalm_logs_level(logging.getLogger().getEffectiveLevel())
+    try:
+        driver_list = drivers if drivers is not None else _default_discovery_drivers
+        refused = []
+        logged_in = False
+        for driver in driver_list:
+            outcome = _try_driver(info, driver)
+            if outcome == _MATCH:
                 return driver
-        except Exception as e:
-            logger.info(
-                "Hostname %s: '%s' driver did not work. Exception: %s", info.hostname, driver, str(e)
-            )
-    set_napalm_logs_level(logging.getLogger().getEffectiveLevel())
-    return None
+            if outcome == _REFUSED:
+                refused.append(driver)
+            elif outcome == _LOGGED_IN:
+                logged_in = True
+        # A refusal followed by a login with the same credentials was
+        # transient, so each refused driver gets one more try.
+        if logged_in:
+            for driver in refused:
+                logger.info(
+                    "Hostname %s: retrying '%s' driver, its login was refused "
+                    "but the same credentials logged in later",
+                    info.hostname,
+                    driver,
+                )
+                if _try_driver(info, driver) == _MATCH:
+                    return driver
+        return None
+    finally:
+        set_napalm_logs_level(logging.getLogger().getEffectiveLevel())
+
+
+_MATCH = "match"
+_LOGGED_IN = "logged in"
+_REFUSED = "refused"
+_FAILED = "failed"
+
+# What a refused login raises: netmiko's exception subclasses paramiko's, and
+# napalm raises ConnectAuthError from drivers that check credentials themselves.
+_LOGIN_REFUSED = (AuthenticationException, ConnectAuthError)
+
+
+def _try_driver(info: Any, driver: str) -> str:
+    """Try one driver: a match, logged in to another platform, refused, or failed otherwise."""
+    logged_in = False
+    try:
+        logger.info(f"Hostname {info.hostname}: Trying '{driver}' driver")
+        np_driver = get_network_driver(driver)
+        # Drivers pop and rename keys in optional_args (iosxr_netconf
+        # takes port and ssh_config_file), so each one gets its own copy.
+        with np_driver(
+            info.hostname,
+            info.username,
+            info.password,
+            info.timeout,
+            copy.deepcopy(info.optional_args),
+        ) as device:
+            logged_in = True
+            device_info = device.get_facts()
+            if device_info.get("serial_number", "Unknown").lower() == "unknown":
+                logger.info("Hostname %s: '%s' driver did not work", info.hostname, driver)
+                return _LOGGED_IN
+            if any(
+                marker in field
+                for marker in _DRIVER_MISMATCH_MARKERS
+                for field in (device_info.get("hostname", ""), device_info.get("fqdn", ""))
+            ):
+                logger.info("Hostname %s: '%s' driver did not work", info.hostname, driver)
+                return _LOGGED_IN
+            return _MATCH
+    except Exception as e:
+        logger.info(
+            "Hostname %s: '%s' driver did not work. Exception: %s", info.hostname, driver, str(e)
+        )
+        if isinstance(e, _LOGIN_REFUSED):
+            return _REFUSED
+        return _LOGGED_IN if logged_in else _FAILED
