@@ -177,7 +177,9 @@ func TestFleetConfigManager_ReconnectWorker_RetriesARefusalAtTheRefusalPace(t *t
 // connected, and the refresh is tried again when the token lapses: a refusal
 // that clears by then costs nothing. Refused again, the agent disconnects.
 func TestFleetConfigManager_ReconnectWorker_KeepsTheConnectionWhileItsTokenLasts(t *testing.T) {
-	server, handler := newScriptedTokenServer(t, time.Now().Add(2*time.Second), http.StatusUnauthorized)
+	// exp is in whole seconds: 3 to 4 seconds out, the token lapses a tenth
+	// of that earlier.
+	server, handler := newScriptedTokenServer(t, time.Now().Add(4*time.Second), http.StatusUnauthorized)
 	defer server.Close()
 	mockConn := &fleet.MockMQTTConnection{}
 	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
@@ -339,6 +341,35 @@ func TestFleetConfigManager_ResetHandler_DoesNotReconnectWhileFleetRefusesTheCre
 		5*time.Second, 5*time.Millisecond, "the reset says why it does not reconnect")
 	assert.Equal(t, 2, mockConn.DisconnectCount(), "the refusal's disconnect and the reset's")
 	assert.False(t, mockConn.ConnectCalled(), "no connection with the refused agent's token")
+}
+
+// An agent reset during a refusal while the token is still valid reconnects
+// as any reset does: the agent stays connected while its token lasts.
+func TestFleetConfigManager_ResetHandler_ReconnectsARefusedAgentWhoseTokenLasts(t *testing.T) {
+	server, _ := newRefusingTokenServer(t, 100, http.StatusUnauthorized)
+	defer server.Close()
+	mockConn := &fleet.MockMQTTConnection{}
+	mgr := newReconnectWorkerManager(t, mockConn, server.URL)
+	logs := recordLogs(mgr)
+
+	startReconnectWorker(t, mgr, 5, 50*time.Millisecond, time.Minute)
+	mgr.reconnectChan <- struct{}{}
+	refusals(t, logs, 1)
+
+	mgr.monitorCtx, mgr.monitorCancel = context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		mgr.runResetHandler(10 * time.Second)
+	}()
+	t.Cleanup(func() {
+		mgr.monitorCancel()
+		<-done
+	})
+	mgr.resetChan <- struct{}{}
+
+	require.Eventually(t, mockConn.ConnectCalled, 5*time.Second, 5*time.Millisecond, "the reset reconnects with the still-valid token")
+	assert.Empty(t, logs.matching(slog.LevelInfo, resetSkippedMsg))
 }
 
 // A server error keeps today's fast retries and messages, and leaves the token

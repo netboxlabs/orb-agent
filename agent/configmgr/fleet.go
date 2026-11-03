@@ -593,9 +593,10 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 				fleetManager.logger.Info("reset handler stopped; shutdown began during the reset's disconnect")
 				return
 			}
-			// The stored details carry the refused agent's last token. The
-			// reconnect worker connects again once Fleet accepts the credentials.
-			if fleetManager.credentialsRefused.Load() {
+			// Once it has lapsed, the stored details carry a token the broker
+			// refuses. The reconnect worker connects again once Fleet accepts
+			// the credentials.
+			if fleetManager.credentialsRefused.Load() && fleetManager.authTokenManager.IsTokenExpired() {
 				fleetManager.logger.Info("agent reset: not reconnecting while Fleet refuses the agent's credentials")
 				continue
 			}
@@ -668,9 +669,10 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 		if authErr != nil {
 			fleetManager.credentialsRefused.Store(true)
 			wait := refusedRetryDelay
-			lapsed := fleetManager.authTokenManager.IsTokenExpired()
+			untilLapse := time.Until(fleetManager.authTokenManager.GetTokenExpiryTime())
+			lapsed := untilLapse <= 0
 			if !lapsed {
-				wait = min(wait, time.Until(fleetManager.authTokenManager.GetTokenExpiryTime()))
+				wait = min(wait, untilLapse)
 			}
 			fleetManager.logger.Error("Fleet refused the agent's credentials",
 				"status_code", authErr.StatusCode,
