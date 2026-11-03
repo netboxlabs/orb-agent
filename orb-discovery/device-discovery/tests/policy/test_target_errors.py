@@ -2,9 +2,13 @@
 # Copyright 2026 NetBox Labs Inc
 """NetBox Labs - Per-target failure classification unit tests."""
 
+from unittest.mock import patch
+
 import pytest
+from jnpr.junos import Device
 from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
 from jnpr.junos.exception import ConnectClosedError as JunosConnectClosedError
+from jnpr.junos.exception import ConnectError as JunosConnectError
 from jnpr.junos.exception import ConnectNotMasterError as JunosConnectNotMasterError
 from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
 from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
@@ -121,3 +125,23 @@ def test_the_exception_chain_is_deliberately_not_walked():
     except KeyError as error:
         assert _is_expected_target_failure(error) is False
         assert isinstance(error.__context__, ConnectionException)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (ConnectionResetError(54, "Connection reset by peer"), True),
+        (TypeError("connect() got an unexpected keyword argument 'bind_addr'"), False),
+    ],
+)
+def test_pyez_open_failures_are_judged_by_what_pyez_kept(failure, expected):
+    """Through PyEZ's real Device.open(): a wrapped transport failure is expected, a wrapped bug is not."""
+    device = Device(host="10.0.0.5", user="admin", passwd="invalid", gather_facts=False)
+    with (
+        patch("jnpr.junos.device.netconf_ssh.connect", side_effect=failure),
+        pytest.raises(JunosConnectError) as raised,
+    ):
+        device.open()
+
+    assert type(raised.value) is JunosConnectError
+    assert _is_expected_target_failure(raised.value) is expected

@@ -138,12 +138,12 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     chain is deliberately NOT walked: a driver bug that surfaces while a
     connection error is being handled must stay UNEXPECTED and keep its
     traceback. PyEZ's base ConnectError is judged by the original error it
-    keeps, which is the transport failure or the bug it wrapped.
+    keeps in ``msg``, which is the transport failure or the bug it wrapped.
     """
     if isinstance(error, _EXPECTED_TARGET_FAILURES):
         return True
     return isinstance(error, JunosConnectError) and isinstance(
-        getattr(error, "_orig", None), (NetconfTransportError, NetconfSessionError, SSHException, EOFError, OSError)
+        getattr(error, "msg", None), (NetconfTransportError, NetconfSessionError, SSHException, EOFError, OSError)
     )
 
 

@@ -202,9 +202,7 @@ def test_driver_discovery_failure_warns_rather_than_errors(runner, scope, config
 
 def _pyez_connect_error(original):
     """PyEZ's base ConnectError as Device.open() raises it, keeping what failed inside connect."""
-    error = JunosConnectError(SimpleNamespace(hostname="10.0.0.5", port=830))
-    error._orig = original
-    return error
+    return JunosConnectError(SimpleNamespace(hostname="10.0.0.5", port=830), msg=original)
 
 
 
