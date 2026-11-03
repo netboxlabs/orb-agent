@@ -1342,6 +1342,9 @@ type controlledTokenServer struct {
 	mu           sync.Mutex
 	failForCount int // requests 1..failForCount return failStatus; subsequent requests return a valid token
 	failStatus   int // the status a failing request gets; 500 when zero
+	// script, when set, replaces failForCount: the statuses of the requests
+	// after the priming one, the last repeated; 200 answers a valid token.
+	script       []int
 	requestCount int
 	requestTimes []time.Time
 	validJWT     string
@@ -1354,11 +1357,19 @@ func (s *controlledTokenServer) ServeHTTP(w http.ResponseWriter, _ *http.Request
 	s.requestTimes = append(s.requestTimes, time.Now())
 	count := s.requestCount
 	failStatus := s.failStatus
+	script := s.script
+	validJWT := s.validJWT
 	s.mu.Unlock()
 
 	// Request 1 is the credential-priming GetToken call — always succeed.
 	// Requests 2..failForCount+1 fail; requests failForCount+2 onward succeed again.
-	if count > 1 && count <= s.failForCount+1 {
+	switch {
+	case count > 1 && script != nil:
+		if status := script[min(count-2, len(script)-1)]; status != http.StatusOK {
+			http.Error(w, http.StatusText(status), status)
+			return
+		}
+	case count > 1 && count <= s.failForCount+1:
 		if failStatus == 0 {
 			failStatus = http.StatusInternalServerError
 		}
@@ -1367,7 +1378,7 @@ func (s *controlledTokenServer) ServeHTTP(w http.ResponseWriter, _ *http.Request
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(fleet.TokenResponse{
-		AccessToken: s.validJWT,
+		AccessToken: validJWT,
 		MQTTURL:     s.mqttURL,
 		ExpiresIn:   3600,
 	})

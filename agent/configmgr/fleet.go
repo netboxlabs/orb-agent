@@ -593,6 +593,12 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 				fleetManager.logger.Info("reset handler stopped; shutdown began during the reset's disconnect")
 				return
 			}
+			// The stored details carry the refused agent's last token. The
+			// reconnect worker connects again once Fleet accepts the credentials.
+			if fleetManager.credentialsRefused.Load() {
+				fleetManager.logger.Info("agent reset: not reconnecting while Fleet refuses the agent's credentials")
+				continue
+			}
 
 			// Reconnect: connCtx governs the new connection's lifetime; monitorCtx
 			// bounds the AwaitConnection wait so Stop() isn't blocked if the broker
@@ -612,11 +618,14 @@ func (fleetManager *FleetConfigManager) runResetHandler(timeout time.Duration) {
 // use millisecond-scale values without slowing the test suite.
 //
 // Fleet refusing the credentials (an *fleet.AuthError, HTTP 401/403) ends the attempts at once,
-// since retrying cannot fix them: the worker logs one ERROR naming the refusal, disconnects when the
-// refusal begins, and retries every refusedRetryDelay without waiting for a signal, so credentials
-// restored in Fleet reconnect the agent.
+// since retrying cannot fix them: the worker logs one ERROR naming the refusal and retries without
+// waiting for a signal, so credentials restored in Fleet reconnect the agent. While the connection's
+// token is still valid the agent stays connected and retries when it lapses, so a refusal that
+// clears by then costs nothing; after that it disconnects, once per refusal, and retries every
+// refusedRetryDelay.
 func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, timeout time.Duration, maxRetries int, baseBackoff, maxBackoff, retryDelay, refusedRetryDelay time.Duration) {
 	retryNow := false
+	refusalDisconnected := false
 	for {
 		if !retryNow {
 			select {
@@ -657,12 +666,18 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 		}
 
 		if authErr != nil {
-			fleetManager.logger.Error("Fleet refused the agent's credentials: the agent was deleted or its credentials were rotated",
+			fleetManager.credentialsRefused.Store(true)
+			wait := refusedRetryDelay
+			lapsed := fleetManager.authTokenManager.IsTokenExpired()
+			if !lapsed {
+				wait = min(wait, time.Until(fleetManager.authTokenManager.GetTokenExpiryTime()))
+			}
+			fleetManager.logger.Error("Fleet refused the agent's credentials",
 				"status_code", authErr.StatusCode,
-				"hint", "set client_id and client_secret to the agent's current credentials",
-				"retry_in", refusedRetryDelay)
-			// Disconnect once: a refused retry finds the agent disconnected already.
-			if !fleetManager.credentialsRefused.Swap(true) {
+				"hint", "if the agent was deleted, its organisation removed or its credentials rotated, set client_id and client_secret to valid ones and restart the agent",
+				"retry_in", wait)
+			if lapsed && !refusalDisconnected {
+				refusalDisconnected = true
 				if err := fleetManager.disconnectAfterFailedRefresh(timeout); err != nil {
 					fleetManager.logger.Error("failed to disconnect after Fleet refused the credentials", "error", err)
 				}
@@ -670,7 +685,7 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(refusedRetryDelay):
+			case <-time.After(wait):
 			}
 			// A signal sent during the wait asked for this same retry.
 			select {
@@ -681,6 +696,7 @@ func (fleetManager *FleetConfigManager) runReconnectWorker(ctx context.Context, 
 			continue
 		}
 		fleetManager.credentialsRefused.Store(false)
+		refusalDisconnected = false
 
 		if lastErr != nil {
 			fleetManager.logger.Error("all refresh and reconnect attempts exhausted, disconnecting agent",
