@@ -68,7 +68,7 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 ### Config Section
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| schedule | cron format | no | Cron expression for scheduling (e.g., "*/5 * * * *") |
+| schedule | cron format | no | Cron expression for scheduling (e.g., "*/5 * * * *"). A host a subnet or range scan finds is crawled right after that scan, then on the schedule. |
 | timeout | integer | no | Timeout for whole policy in seconds (defaults to 120) |
 | snmp_timeout | integer | no | Timeout for SNMP operations in seconds for SNMP operations (defaults to 5) |
 | snmp_probe_timeout | integer | no | Timeout for SNMP probe operations in seconds (defaults to 1) |

@@ -274,8 +274,10 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 		task := gocron.NewTask(r.runWithMetadata, target, originalTarget)
 		var newJob gocron.Job
 		if r.config.Schedule != nil {
+			// Crawled right after the scan that found it, then on the schedule.
 			newJob, err = r.scheduler.NewJob(gocron.CronJob(*r.config.Schedule, false), task,
-				gocron.WithSingletonMode(gocron.LimitModeReschedule))
+				gocron.WithSingletonMode(gocron.LimitModeReschedule),
+				gocron.WithStartAt(gocron.WithStartImmediately()))
 		} else {
 			newJob, err = r.scheduler.NewJob(gocron.OneTimeJob(
 				gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
