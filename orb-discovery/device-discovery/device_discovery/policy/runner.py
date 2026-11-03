@@ -40,9 +40,11 @@ from jnpr.junos.exception import (
 )
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
+from ncclient import NCClientError
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
-from ncclient.transport.errors import TransportError as NetconfTransportError
+from ncclient.transport.errors import SSHError as NetconfSSHError
 from netmiko.exceptions import NetmikoAuthenticationException
+from paramiko.ssh_exception import SSHException
 
 from device_discovery.client import Client
 from device_discovery.discovery import (
@@ -52,7 +54,7 @@ from device_discovery.discovery import (
     facts_mismatch,
     supported_drivers,
 )
-from device_discovery.log_config import configure_default_logging, flatten_message
+from device_discovery.log_config import configure_default_logging, failure_text, flatten_message
 from device_discovery.metrics import get_metric
 from device_discovery.policy.models import (
     Config,
@@ -98,7 +100,7 @@ logger = logging.getLogger(__name__)
 # dropped the session: the runner runs no RPC after closing it. PyEZ's base
 # ConnectError also wraps any bug inside connect, so it counts only when the
 # error it kept is a transport one (see _is_expected_target_failure). ncclient's
-# refused login is listed for the NETCONF drivers that raise it raw.
+# refused login and SSH failure are listed for the NETCONF drivers that raise them raw.
 # Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
@@ -114,6 +116,7 @@ _EXPECTED_TARGET_FAILURES = (
     JunosProbeError,
     JunosConnectClosedError,
     NetconfAuthenticationError,
+    NetconfSSHError,
     DriverMismatchError,
 )
 
@@ -140,7 +143,7 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     if isinstance(error, _EXPECTED_TARGET_FAILURES):
         return True
     return isinstance(error, JunosConnectError) and isinstance(
-        getattr(error, "_orig", None), (NetconfTransportError, OSError)
+        getattr(error, "_orig", None), (NCClientError, SSHException, EOFError, OSError)
     )
 
 
@@ -624,12 +627,7 @@ class PolicyRunner:
             error: the exception that reached the per-target catch-all.
 
         """
-        text = flatten_message(error)
-        # napalm's junos driver re-raises a PyEZ timeout with its empty message.
-        wrapped = error.__cause__ or error.__context__
-        if text in ("", "None") and wrapped is not None:
-            text = flatten_message(wrapped)
-        message = f"Policy {self.name}, Hostname {sanitized_hostname}: {text}"
+        message = f"Policy {self.name}, Hostname {sanitized_hostname}: {failure_text(error)}"
 
         if not _is_expected_target_failure(error):
             # exc_info takes the instance, not True, so this helper does not
@@ -806,6 +804,8 @@ class PolicyRunner:
         logger.info(
             f"Policy {self.name}, Hostname {sanitized_hostname}: Get driver '{scope.driver}'"
         )
+        # A refused discovered driver is forgotten, so failure metrics use this copy.
+        driver = scope.driver
 
         try:
             discovery_attempts = get_metric("discovery_attempts")
@@ -864,7 +864,7 @@ class PolicyRunner:
                     {
                         "policy": self.name,
                         "hostname": sanitized_hostname,
-                        "driver": str(scope.driver),
+                        "driver": str(driver),
                         "status": "failed",
                     },
                 )
@@ -914,6 +914,8 @@ class PolicyRunner:
         logger.info(
             f"Policy {self.name}, Hostname {sanitized_hostname}: Get driver '{scope.driver}'"
         )
+        # A refused discovered driver is forgotten, so failure metrics use this copy.
+        driver = scope.driver
 
         try:
             discovery_attempts = get_metric("discovery_attempts")
@@ -972,7 +974,7 @@ class PolicyRunner:
                     {
                         "policy": self.name,
                         "hostname": sanitized_hostname,
-                        "driver": str(scope.driver),
+                        "driver": str(driver),
                         "status": "failed",
                     },
                 )

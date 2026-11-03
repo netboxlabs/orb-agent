@@ -835,7 +835,7 @@ def test_discover_device_driver_keeps_a_match_whose_close_fails(mock_get_network
     with caplog.at_level(logging.WARNING, logger="device_discovery.discovery"):
         assert discover_device_driver(_TARGET, drivers=["ios"], policy="policy1") == "ios"
     assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
-        "Policy policy1, Hostname 192.0.2.10: Error closing the session: close-session timed out"
+        "Policy policy1, Hostname 192.0.2.10: 'ios' driver: Error closing the session: close-session timed out"
     ]
 
 

@@ -84,7 +84,8 @@ WARNING:device_discovery.policy.runner:Policy my_policy, Hostname 10.0.0.5: Cann
 
 Stable phrases to alert or grep on: `Cannot connect to`, `Authentication to device failed`,
 `driver does not fit this device`, and for `junos` targets `ConnectAuthError(`,
-`ConnectRefusedError(`, `ConnectTimeoutError(` and `ConnectUnknownHostError(`.
+`ConnectRefusedError(`, `ConnectTimeoutError(`, `ConnectUnknownHostError(`,
+`ConnectClosedError(` and `ConnectError(host:`.
 A sweep over unreachable address space produces one line per host, not one per traceback frame.
 
 Tracebacks for these expected failures are emitted only at DEBUG, on a single line with

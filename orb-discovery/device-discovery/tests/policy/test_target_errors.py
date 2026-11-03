@@ -22,6 +22,7 @@ from napalm.base.exceptions import (
     ValidationException,
 )
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
+from ncclient.transport.errors import SSHError as NetconfSSHError
 from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
 
 from device_discovery.discovery import DriverMismatchError
@@ -49,6 +50,7 @@ def test_tuple_membership_is_a_conscious_choice():
         JunosProbeError,
         JunosConnectClosedError,
         NetconfAuthenticationError,
+        NetconfSSHError,
         DriverMismatchError,
     )
 

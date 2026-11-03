@@ -62,6 +62,26 @@ def flatten_message(value: object) -> str:
     return " ".join(str(value).split())
 
 
+def failure_text(error: BaseException) -> str:
+    """
+    One line naming a failure: its message, else the first one down its chain, else its type.
+
+    napalm's junos driver re-raises a PyEZ timeout as ConnectionException(None),
+    whose own message says nothing.
+    """
+    seen = set()
+    current = error
+    for _ in range(5):
+        if current is None or id(current) in seen:
+            break
+        seen.add(id(current))
+        text = flatten_message(current)
+        if text not in ("", "None"):
+            return text
+        current = current.__cause__ or (None if current.__suppress_context__ else current.__context__)
+    return type(error).__name__
+
+
 def resolve_log_level(value: object) -> tuple[int, str | None]:
     """
     Resolve a log-level value to a logging level, never raising.

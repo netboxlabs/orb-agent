@@ -1538,3 +1538,25 @@ def test_discovery_moves_past_a_driver_whose_facts_collection_would_refuse(polic
     (run,) = run_store.get_runs_for_target("policy1", "192.0.2.10")
     assert run.status.value == "completed"
     assert scope.driver == "good"
+
+
+def test_a_forgotten_discovered_driver_still_labels_the_failure_metric(policy_runner, run_store):
+    """The failure metric names the driver that was refused, not the None left after forgetting it."""
+
+    class JunkFacts(_FakeNapalmDriver):
+        facts = {"hostname": "", "serial_number": "", "fqdn": ""}
+
+    metric = MagicMock()
+    scope = Napalm(hostname="192.0.2.10", username="admin", password="invalid")
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+    with (
+        patch("device_discovery.policy.runner.discover_device_driver", return_value="ios"),
+        patch("device_discovery.policy.runner.get_network_driver", return_value=JunkFacts),
+        patch("device_discovery.policy.runner.Client"),
+        patch("device_discovery.policy.runner.get_metric", return_value=metric),
+    ):
+        policy_runner.run("job-1", scope, Config(defaults=Defaults(site="NY"), options=Options()))
+
+    failed = [c.args[1] for c in metric.record.call_args_list if c.args[1].get("status") == "failed"]
+    assert [labels["driver"] for labels in failed] == ["ios"]

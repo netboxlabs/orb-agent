@@ -19,7 +19,7 @@ from napalm.nxapi_plumbing.errors import NXAPIAuthError
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from paramiko.ssh_exception import AuthenticationException
 
-from device_discovery.log_config import configure_default_logging, flatten_message
+from device_discovery.log_config import configure_default_logging, failure_text
 
 _DRIVER_MISMATCH_MARKERS = ["%", "Invalid input", "^"]
 
@@ -251,7 +251,7 @@ def driver_session(device: Any, prefix: str) -> Iterator[Any]:
         try:
             device.close()
         except Exception as e:
-            logger.warning(f"{prefix}: Error closing the session: {flatten_message(e)}")
+            logger.warning(f"{prefix}: Error closing the session: {failure_text(e)}")
 
 
 class DriverMismatchError(Exception):
@@ -301,7 +301,7 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
                 info.timeout,
                 copy.deepcopy(info.optional_args),
             ),
-            prefix,
+            f"{prefix}: '{driver}' driver",
         ) as device:
             device_info = device.get_facts()
             serial = device_info.get("serial_number", "Unknown")
@@ -315,6 +315,6 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
     except Exception as e:
         # One line: netmiko's messages span ten, and the agent splits stderr per line.
         logger.info(
-            "%s: '%s' driver did not work. Exception: %s", prefix, driver, flatten_message(e)
+            "%s: '%s' driver did not work. Exception: %s", prefix, driver, failure_text(e)
         )
         return _REFUSED if _refused(e) else _FAILED

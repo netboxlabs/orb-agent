@@ -14,7 +14,9 @@ from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
 from napalm.base.exceptions import ConnectionException
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
 from ncclient.transport.errors import SSHError as NetconfSSHError
+from ncclient.transport.session import SessionError as NetconfSessionError
 from netmiko.exceptions import NetmikoAuthenticationException
+from paramiko.ssh_exception import SSHException
 
 from device_discovery.policy.models import Config, Defaults, Napalm, Status
 from device_discovery.policy.run import RunStatus, RunStore
@@ -268,3 +270,27 @@ def test_an_empty_message_names_the_error_it_wraps(runner, scope, config, entry_
 
     (record,) = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
     assert record.getMessage().endswith(": ConnectTimeoutError(10.0.0.5)")
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+@pytest.mark.parametrize(
+    "error",
+    [
+        _pyez_connect_error(NetconfSessionError("Capability exchange timed out")),
+        _pyez_connect_error(EOFError()),
+        _pyez_connect_error(SSHException("Error reading SSH protocol banner")),
+        NetconfSSHError("Could not open socket to 10.0.0.5:830"),
+    ],
+)
+def test_other_netconf_transport_failures_are_one_flat_warning(
+    runner, scope, config, entry_point, error, caplog
+):
+    """Session timeouts, SSH errors and EOF while connecting, wrapped by PyEZ or raised raw, log one WARNING."""
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=error),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    records = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
+    assert [r.levelno for r in records] == [logging.WARNING]
