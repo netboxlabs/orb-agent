@@ -7,6 +7,7 @@ import logging
 import re
 from collections.abc import Iterable
 
+from napalm.base.helpers import mac as normalize_mac
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Location, Prefix
 
@@ -232,6 +233,31 @@ def _resolve_non_subinterface_type(
     return defaults.if_type
 
 
+def _parseable_mac(value: object, if_name: str) -> str | None:
+    """
+    Return the driver's MAC normalized, or ``None`` when it is blank or does not parse.
+
+    A parseable MAC goes out as colon-separated upper case: the form NetBox stores and
+    most drivers already report. Spaces are removed before parsing, as NetBox does, so
+    ``" 00:00:5e:00:53:01 "`` and ``"00 00 5e 00 53 01"`` are kept.
+
+    napalm's junos driver stringifies a missing MAC, so every interface without one
+    reports ``"None"``: logical units (``ae1.300``, ``lo0.0``) and pseudo interfaces
+    (``dsc``, ``esi``, ``fti0``). The Diode plugin rejects the whole interface over such
+    a value ("Invalid MAC address format"), so none of its changes reach NetBox;
+    omitting the field is what a missing MAC means. Logged at DEBUG: on Junos it
+    happens for those interfaces on every run.
+    """
+    value = blank_to_none(value)
+    if not value:
+        return None
+    try:
+        return normalize_mac(str(value).replace(" ", ""))
+    except Exception:
+        logger.debug("%s: dropping MAC %s - not a MAC address", if_name, value)
+        return None
+
+
 def translate_interface(
     device: Device,
     if_name: str,
@@ -269,7 +295,7 @@ def translate_interface(
     driver_description = blank_to_none(interface_info.get("description"))
     if driver_description is not None:
         description = driver_description
-    mac_address = blank_to_none(interface_info.get("mac_address"))
+    mac_address = _parseable_mac(interface_info.get("mac_address"), if_name)
 
     # Determine interface type by descending priority:
     # 1. Subinterface (has parent) -> "virtual" (structural)
