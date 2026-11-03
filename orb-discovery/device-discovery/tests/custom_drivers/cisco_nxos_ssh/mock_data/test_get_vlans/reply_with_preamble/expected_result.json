@@ -1,0 +1,36 @@
+{
+  "1": {
+    "name": "default",
+    "interfaces": [
+      "Port-channel1",
+      "Ethernet1/2",
+      "Ethernet1/7",
+      "Ethernet1/8"
+    ]
+  },
+  "110": {
+    "name": "servers-blue",
+    "interfaces": [
+      "Port-channel1",
+      "Port-channel20",
+      "Ethernet1/3",
+      "Ethernet1/4"
+    ]
+  },
+  "120": {
+    "name": "servers-red",
+    "interfaces": [
+      "Port-channel1",
+      "Ethernet1/5",
+      "Ethernet1/6"
+    ]
+  },
+  "130": {
+    "name": "lab-green",
+    "interfaces": [
+      "Port-channel1",
+      "Ethernet1/11",
+      "Ethernet1/12"
+    ]
+  }
+}
