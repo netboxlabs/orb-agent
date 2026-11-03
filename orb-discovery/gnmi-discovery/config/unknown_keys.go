@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -52,9 +53,12 @@ var narrowedTypes = map[string]bool{
 	"config.InterfacePattern":  true,
 }
 
+// entryLineRe pulls the line number off a yaml.TypeError entry.
+var entryLineRe = regexp.MustCompile(`^line (\d+): `)
+
 // WarnUnknownPolicyKeys logs one warning per unrecognized key in a policy's
-// config or options block, naming the path the key belongs at when it is a
-// field of the options block one level down.
+// config or options block, naming the policy and, when the key is a field of
+// the options block one level down, the path it belongs at.
 //
 // Decoding happens a second time purely to collect the report; the error is
 // never returned, so an unrecognized key stays non-fatal.
@@ -71,19 +75,81 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 		return
 	}
 	optionKeys := yamlFieldNames(reflect.TypeFor[Options]())
+	owners := policyKeyOwners(data)
+	reported := make(map[string]bool, len(typeErr.Errors))
 	for _, entry := range typeErr.Errors {
 		match := unknownFieldRe.FindStringSubmatch(entry)
-		if match == nil || !narrowedTypes[match[2]] {
+		// An anchored block repeats its entry once per use; owners names each policy.
+		if match == nil || !narrowedTypes[match[2]] || reported[entry] {
 			continue
 		}
+		reported[entry] = true
 		key := match[1]
-		if match[2] == "config.PolicyConfig" && optionKeys[key] {
-			logger.Warn("ignoring unrecognized config key",
-				"key", key, "did_you_mean", "options."+key, "detail", entry)
-			continue
+		policies := owners[keyAt{line: entryLine(entry), key: key}]
+		if len(policies) == 0 {
+			policies = []string{"?"} // still reported when no policy can be named
 		}
-		logger.Warn("ignoring unrecognized policy key", "key", key, "detail", entry)
+		for _, policy := range policies {
+			if match[2] == "config.PolicyConfig" && optionKeys[key] {
+				logger.Warn("ignoring unrecognized config key",
+					"policy", policy, "key", key, "did_you_mean", "options."+key, "detail", entry)
+				continue
+			}
+			logger.Warn("ignoring unrecognized policy key", "policy", policy, "key", key, "detail", entry)
+		}
 	}
+}
+
+// keyAt is a mapping key by the line it is written on, which is how a
+// yaml.TypeError entry names it.
+type keyAt struct {
+	line int
+	key  string
+}
+
+func entryLine(entry string) int {
+	m := entryLineRe.FindStringSubmatch(entry)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// policyKeyOwners maps every key a policy uses, including keys it takes from an
+// anchor or a `<<` merge, to the policies that use it, in document order.
+func policyKeyOwners(data []byte) map[keyAt][]string {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
+		return nil
+	}
+	owners := map[keyAt][]string{}
+	for _, entry := range mapEntries(mapValue(doc.Content[0], "policies"), maxMergeDepth) {
+		name := entry[0].Value
+		// Visited per policy, so a block shared by reference is walked once each.
+		visited := map[*yaml.Node]bool{}
+		var walk func(n *yaml.Node)
+		walk = func(n *yaml.Node) {
+			n = resolveAlias(n)
+			if n == nil || visited[n] {
+				return
+			}
+			visited[n] = true
+			if n.Kind == yaml.MappingNode {
+				for i := 0; i+1 < len(n.Content); i += 2 {
+					k := keyAt{line: n.Content[i].Line, key: n.Content[i].Value}
+					if names := owners[k]; len(names) == 0 || names[len(names)-1] != name {
+						owners[k] = append(names, name)
+					}
+				}
+			}
+			for _, c := range n.Content {
+				walk(c)
+			}
+		}
+		walk(entry[1])
+	}
+	return owners
 }
 
 // yamlFieldNames returns the yaml key each field of a struct accepts.

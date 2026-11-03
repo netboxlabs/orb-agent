@@ -108,7 +108,7 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 		// ${SUBNET} is an opaque string until now: checked earlier it parses as
 		// a hostname and passes every bound, then resolves to a /8 that the
 		// runner enumerates into hundreds of megabytes.
-		if err := validateTargetHosts(&policy, m.logger); err != nil {
+		if err := validateTargetHosts(&policy, m.logger.With("policy", name)); err != nil {
 			return nil, fmt.Errorf("%s : invalid policy : %w", name, err)
 		}
 		// Also after resolution: whether a target keeps its netbox_id depends
