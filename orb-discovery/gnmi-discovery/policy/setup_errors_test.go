@@ -272,3 +272,48 @@ func TestCapabilitiesRefusedOnceSelectsTheProfileFromTheAnswer(t *testing.T) {
 	require.NotContains(t, logs.String(), "profile=_base")
 	require.Equal(t, "Example", *ingestedDevice(t, client).DeviceType.Manufacturer.Name)
 }
+
+// Paths a probe kept without an answer leave the session degraded; the next
+// connection probes them again and, answered, runs clean.
+func TestUnansweredProbeDegradesUntilTheNextConnection(t *testing.T) {
+	var refusing atomic.Bool
+	refusing.Store(true)
+	srv := &gnmiTarget{getErr: func([]string) error {
+		if refusing.Load() {
+			return status.Error(codes.Unauthenticated, "AAA server timeout")
+		}
+		return nil
+	}}
+	r, client, d, _ := runAgainst(t, srv, config.ModeOnChange, nil)
+
+	require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond)
+	require.Contains(t, targetStatus(t, r).DegradedReason, "path probe")
+	require.Equal(t, "SN-0001", *ingestedDevice(t, client).Serial, "every path kept")
+
+	refusing.Store(false)
+	gets := srv.gets.Load()
+	srv.dropStreams()
+	require.Eventually(t, func() bool {
+		return d.dials.Load() >= 2 && client.count() > 1 && targetStatus(t, r).DegradedReason == ""
+	}, 5*time.Second, 10*time.Millisecond)
+	require.Greater(t, srv.gets.Load(), gets, "the new connection probed again")
+}
+
+// GET mode uses no probe, so a probe that got no answer on the way down the
+// auto ladder does not mark the Get session degraded.
+func TestGetRungDoesNotCarryTheProbe(t *testing.T) {
+	srv := &gnmiTarget{subErr: always(codes.Unavailable)}
+	// The probes of both streaming rungs get no answer; the Get polls do.
+	srv.getErr = func([]string) error {
+		if !srv.sawSample.Load() {
+			return status.Error(codes.Unavailable, "busy")
+		}
+		return nil
+	}
+	r, client, d, _ := runAgainst(t, srv, config.ModeAuto, nil)
+
+	requireSettled(t, client, d, 3)
+	st := targetStatus(t, r)
+	require.Equal(t, "get", st.ActiveMode)
+	require.Empty(t, st.DegradedReason)
+}

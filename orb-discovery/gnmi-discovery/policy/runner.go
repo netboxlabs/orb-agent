@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -322,13 +323,22 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	// Why this connection runs with less than the device offers: recorded in
 	// status as it is found, and cleared once a clean setup completes.
 	var degraded []string
-	setupDone := func() {
-		joined := strings.Join(degraded, "; ")
+	record := func(reasons []string) {
+		joined := strings.Join(reasons, "; ")
 		r.setState(t.Host, func(s *targetState) { s.DegradedReason = joined })
 	}
 	addDegraded := func(reason string) {
 		degraded = append(degraded, reason)
-		setupDone()
+		record(degraded)
+	}
+	// setupDone records how setup went once delivery starts. A stream also
+	// carries the paths its probe kept without an answer; Get uses no probe.
+	setupDone := func(streaming bool) {
+		reasons := slices.Clone(degraded)
+		if n := len(sess.InconclusivePaths()); streaming && n > 0 {
+			reasons = append(reasons, fmt.Sprintf("path probe got no answer for %d path(s); subscribed to them unverified", n))
+		}
+		record(reasons)
 	}
 
 	// Capabilities picks the profile and the encodings for the whole connection,
@@ -542,7 +552,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 
 	switch mode {
 	case config.ModeGet:
-		setupDone()
+		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get" })
 		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
 	case config.ModeSample:
@@ -550,7 +560,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if serr != nil {
 			return serr
 		}
-		setupDone()
+		setupDone(true)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "sample" })
 		return r.runOpenStream(t.Host, profile, sampleEvery, notes, errs, model, deb, flush)
 	case config.ModeOnChange:
@@ -558,7 +568,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if serr != nil {
 			return serr // explicit on_change: surface failure, do not degrade
 		}
-		setupDone()
+		setupDone(true)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
 		return r.runOpenStream(t.Host, profile, 0, notes, errs, model, deb, flush)
 	default: // auto — walk the ladder on subscribe rejection OR early stream failure
@@ -575,7 +585,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.OnChange, profile.SubscribePaths(), 0)
 		var ocReason string
 		if serr == nil {
-			setupDone()
+			setupDone(true)
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
 			err := r.runOpenStream(t.Host, profile, 0, notes, errs, model, deb, flush)
 			// A non-early error (productive flap, or ctx-cancel returning nil) goes
@@ -595,7 +605,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		notes, errs, s2 := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if s2 == nil {
-			setupDone()
+			setupDone(true)
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "sample"; s.FallbackReason = ocReason })
 			err := r.runOpenStream(t.Host, profile, sampleEvery, notes, errs, model, deb, flush)
 			if !errors.Is(err, errEarlyStreamFailure) {
@@ -614,7 +624,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// producer/gRPC stream would keep retrying in the background for the entire
 		// GET fallback.
 		sess.StopSubscribe()
-		setupDone()
+		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get"; s.FallbackReason = s2.Error() })
 		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
 	}

@@ -67,6 +67,9 @@ type Session interface {
 	// on the same connection without leaking the prior subscription. No-op if
 	// there is no active subscription; idempotent.
 	StopSubscribe()
+	// InconclusivePaths returns the paths the last Subscribe's probe kept
+	// because the target gave no answer about them, such as a transient error.
+	InconclusivePaths() []string
 	// Close releases the connection.
 	Close() error
 }

@@ -22,7 +22,8 @@ type FakeSession struct {
 	ConfigErr       error  // if set, GetConfig returns this error
 	ConfigGets      int    // count of GetConfig calls (test assertion)
 	Closed          bool
-	StopSubscribes  int // count of StopSubscribe calls (test assertion)
+	StopSubscribes  int      // count of StopSubscribe calls (test assertion)
+	Inconclusive    []string // returned by InconclusivePaths
 }
 
 // Capabilities returns the scripted capabilities.
@@ -96,6 +97,9 @@ func (f *FakeSession) GetConfig(_ context.Context) ([]byte, error) {
 
 // StopSubscribe records the call; the fake has no real subscription to tear down.
 func (f *FakeSession) StopSubscribe() { f.StopSubscribes++ }
+
+// InconclusivePaths returns the scripted paths.
+func (f *FakeSession) InconclusivePaths() []string { return f.Inconclusive }
 
 // Close marks the session closed.
 func (f *FakeSession) Close() error { f.Closed = true; return nil }

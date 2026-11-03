@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	gpath "github.com/openconfig/gnmi/path"
@@ -13,6 +15,8 @@ import (
 	"github.com/openconfig/gnmi/value"
 	gapi "github.com/openconfig/gnmic/pkg/api"
 	"github.com/openconfig/gnmic/pkg/api/target"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // subscriptionName is the gnmic-side name used for this session's single
@@ -104,38 +108,118 @@ type gnmicSession struct {
 	subEncoding string
 	// origin is the gNMI request-path origin (e.g. "openconfig"); "" = origin-less.
 	origin string
-	// accepted caches the subscribe paths the target accepts (probed once per
-	// session); nil until the first Subscribe probes them.
+	// probeTimeout bounds the subscription-path probe; SetupTimeout when zero.
+	probeTimeout time.Duration
+
+	// mu guards the probe results below, which the subscription producer
+	// prunes when it retries without the unverified paths.
+	mu sync.Mutex
+	// accepted caches the subscribe paths the target accepts; nil until a
+	// probe reaches a verdict on every path.
 	accepted []string
+	// unverified are the accepted paths the target did not confirm: NotFound,
+	// or no answer at all.
+	unverified []string
+	// inconclusive are the paths the last probe kept because it got no answer.
+	inconclusive []string
 }
 
 // acceptedPaths returns the subset of paths the target accepts, so one
 // unsupported path can't make a strict target reject the whole atomic
-// subscription. Fast path: a single multi-path Get — if it succeeds, every path
-// is valid. Only on failure does it Get per path to prune the unsupported ones
-// (reusing the same per-path tolerance as GetOnce). Result is cached for the
-// session (the auto ladder re-subscribes on the same session). If probing prunes
-// everything (e.g. a target that rejects Get), it falls back to the full set so
-// behavior is never worse than before.
+// subscription. Fast path: a single multi-path Get; if it succeeds, every path
+// is valid. Otherwise each path is probed alone:
+//   - answered, or NotFound (modelled but empty so far): kept;
+//   - a transient error: kept without a verdict, and nothing is cached, so the
+//     next Subscribe on this session probes again;
+//   - any other error: pruned.
+//
+// The probe runs under one probeDeadline and never fails the subscription. If
+// it prunes everything, the full set is used, so it is never worse than no probe.
 func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []string {
-	if s.accepted != nil {
-		return s.accepted
+	s.mu.Lock()
+	cached := s.accepted
+	s.mu.Unlock()
+	if cached != nil {
+		return cached
 	}
-	if _, err := s.getPaths(ctx, paths); err == nil {
-		s.accepted = paths
+	pctx, cancel := context.WithTimeout(ctx, s.probeDeadline())
+	defer cancel()
+	if _, err := s.getPaths(pctx, paths); err == nil {
+		s.setProbe(paths, nil, nil)
 		return paths
 	}
 	ok := make([]string, 0, len(paths))
+	var unverified, inconclusive []string
 	for _, p := range paths {
-		if _, err := s.getPaths(ctx, []string{p}); err == nil {
+		_, err := s.getPaths(pctx, []string{p})
+		switch {
+		case err == nil:
 			ok = append(ok, p)
+		case status.Code(err) == codes.NotFound:
+			ok = append(ok, p)
+			unverified = append(unverified, p)
+		case Transient(err):
+			ok = append(ok, p)
+			unverified = append(unverified, p)
+			inconclusive = append(inconclusive, p)
 		}
 	}
 	if len(ok) == 0 {
 		ok = paths
 	}
-	s.accepted = ok
+	s.setProbe(ok, unverified, inconclusive)
 	return ok
+}
+
+// setProbe records a probe's result, caching it when every path got a verdict.
+func (s *gnmicSession) setProbe(accepted, unverified, inconclusive []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unverified = unverified
+	s.inconclusive = inconclusive
+	if len(inconclusive) == 0 {
+		s.accepted = accepted
+	}
+}
+
+// probeDeadline is how long the subscription-path probe may take.
+func (s *gnmicSession) probeDeadline() time.Duration {
+	if s.probeTimeout > 0 {
+		return s.probeTimeout
+	}
+	return SetupTimeout
+}
+
+// InconclusivePaths returns the paths the last probe kept without an answer.
+func (s *gnmicSession) InconclusivePaths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.inconclusive)
+}
+
+// unverifiedIn returns the paths of a subscription the target did not confirm.
+func (s *gnmicSession) unverifiedIn(paths []string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, p := range paths {
+		if slices.Contains(s.unverified, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// pruneUnverified drops paths from this session's probe results.
+func (s *gnmicSession) pruneUnverified(paths []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	drop := func(p string) bool { return slices.Contains(paths, p) }
+	if s.accepted != nil {
+		s.accepted = slices.DeleteFunc(slices.Clone(s.accepted), drop)
+	}
+	s.unverified = slices.DeleteFunc(slices.Clone(s.unverified), drop)
+	s.inconclusive = slices.DeleteFunc(slices.Clone(s.inconclusive), drop)
 }
 
 // enc returns the negotiated request encoding, defaulting to json_ietf when
@@ -253,29 +337,15 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	// can't take down the rest.
 	paths = s.acceptedPaths(ctx, paths)
 
-	subOpts := []gapi.GNMIOption{
-		gapi.SubscriptionListModeSTREAM(),
-		gapi.Encoding(s.subEnc()),
-	}
-
-	for _, p := range paths {
-		var pathOpts []gapi.GNMIOption
-		pathOpts = append(pathOpts, gapi.Path(withOrigin(s.origin, p)))
-		switch mode {
-		case OnChange:
-			pathOpts = append(pathOpts, gapi.SubscriptionModeON_CHANGE())
-		default: // Sample
-			pathOpts = append(pathOpts, gapi.SubscriptionModeSAMPLE())
-			if sampleIntervalMs > 0 {
-				pathOpts = append(pathOpts, gapi.SampleInterval(time.Duration(sampleIntervalMs)*time.Millisecond))
-			}
-		}
-		subOpts = append(subOpts, gapi.Subscription(pathOpts...))
-	}
-
-	req, err := gapi.NewSubscribeRequest(subOpts...)
+	req, err := s.subscribeRequest(mode, paths, sampleIntervalMs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
+		return nil, nil, err
+	}
+	// The unverified paths go out on trust. If the target refuses the stream
+	// before answering, they are the likely cause: prune them and retry once.
+	retryWithout := s.unverifiedIn(paths)
+	if len(retryWithout) == len(paths) {
+		retryWithout = nil // nothing would be left to subscribe to
 	}
 
 	// Own context for the producer so Close() can stop it independently of the
@@ -283,7 +353,9 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	subCtx, cancel := context.WithCancel(ctx)
 	s.subCancel = cancel
 
-	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, subscriptionName)
+	// Each attempt runs under its own context so a retry can end the first.
+	attemptCtx, endAttempt := context.WithCancel(subCtx)
+	rawResp, rawErr := s.tg.SubscribeChan(attemptCtx, req, subscriptionName)
 
 	notes := make(chan Notification)
 	errs := make(chan error, 1)
@@ -291,6 +363,8 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	go func() {
 		defer close(notes)
 		defer close(errs)
+		defer func() { endAttempt() }()
+		answered := false
 		for {
 			select {
 			case <-subCtx.Done():
@@ -320,6 +394,7 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 				if resp == nil {
 					continue
 				}
+				answered = true
 				if resp.GetSyncResponse() {
 					select {
 					case notes <- Notification{SyncDone: true}:
@@ -341,11 +416,28 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 					return
 				}
 				// TargetError wraps the underlying error in .Err.
-				if terr != nil && terr.Err != nil {
-					select {
-					case errs <- terr.Err:
-					case <-subCtx.Done():
+				if terr == nil || terr.Err == nil {
+					return
+				}
+				if !answered && len(retryWithout) > 0 && !Transient(terr.Err) {
+					// Wait for the refused attempt to wind down first: its
+					// teardown stops the subscription by name, and would stop
+					// the retry if it ran after it.
+					endAttempt()
+					drainSubscription(rawResp, rawErr)
+					kept := slices.DeleteFunc(slices.Clone(paths), func(p string) bool { return slices.Contains(retryWithout, p) })
+					s.pruneUnverified(retryWithout)
+					retryWithout = nil
+					retry, err := s.subscribeRequest(mode, kept, sampleIntervalMs)
+					if err == nil && subCtx.Err() == nil {
+						attemptCtx, endAttempt = context.WithCancel(subCtx)
+						rawResp, rawErr = s.tg.SubscribeChan(attemptCtx, retry, subscriptionName)
+						continue
 					}
+				}
+				select {
+				case errs <- terr.Err:
+				case <-subCtx.Done():
 				}
 				return
 			}
@@ -353,6 +445,50 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	}()
 
 	return notes, errs, nil
+}
+
+// drainSubscription reads a SubscribeChan's channels until its producer has
+// exited and closed both.
+func drainSubscription(resp <-chan *target.SubscribeResponse, errs <-chan *target.TargetError) {
+	for resp != nil || errs != nil {
+		select {
+		case _, ok := <-resp:
+			if !ok {
+				resp = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		}
+	}
+}
+
+// subscribeRequest builds a STREAM subscription over paths in mode.
+func (s *gnmicSession) subscribeRequest(mode Mode, paths []string, sampleIntervalMs int) (*gnmiproto.SubscribeRequest, error) {
+	subOpts := []gapi.GNMIOption{
+		gapi.SubscriptionListModeSTREAM(),
+		gapi.Encoding(s.subEnc()),
+	}
+	for _, p := range paths {
+		var pathOpts []gapi.GNMIOption
+		pathOpts = append(pathOpts, gapi.Path(withOrigin(s.origin, p)))
+		switch mode {
+		case OnChange:
+			pathOpts = append(pathOpts, gapi.SubscriptionModeON_CHANGE())
+		default: // Sample
+			pathOpts = append(pathOpts, gapi.SubscriptionModeSAMPLE())
+			if sampleIntervalMs > 0 {
+				pathOpts = append(pathOpts, gapi.SampleInterval(time.Duration(sampleIntervalMs)*time.Millisecond))
+			}
+		}
+		subOpts = append(subOpts, gapi.Subscription(pathOpts...))
+	}
+	req, err := gapi.NewSubscribeRequest(subOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
+	}
+	return req, nil
 }
 
 // GetOnce performs a single gNMI Get over the given paths.

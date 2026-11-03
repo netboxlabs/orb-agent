@@ -14,6 +14,8 @@ import (
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
@@ -36,11 +38,13 @@ type gnmiTarget struct {
 	serial atomic.Value
 
 	caps, gets, subs atomic.Int32
+	sawSample        atomic.Bool // a SAMPLE subscription was requested
 
 	mu      sync.Mutex
 	subEncs []gnmiproto.Encoding
 	subReqs [][]string
 	events  strings.Builder // C per Capabilities, S per Subscribe
+	stop    chan struct{}   // closed by dropStreams to end the open streams
 }
 
 func (s *gnmiTarget) Capabilities(ctx context.Context, _ *gnmiproto.CapabilityRequest) (*gnmiproto.CapabilityResponse, error) {
@@ -87,6 +91,9 @@ func (s *gnmiTarget) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	var reqPaths []*gnmiproto.Path
 	for _, sub := range req.GetSubscribe().GetSubscription() {
 		reqPaths = append(reqPaths, sub.GetPath())
+		if sub.GetMode() == gnmiproto.SubscriptionMode_SAMPLE {
+			s.sawSample.Store(true)
+		}
 	}
 	paths := requestPaths(reqPaths)
 	s.mu.Lock()
@@ -107,8 +114,32 @@ func (s *gnmiTarget) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	if err := stream.Send(&gnmiproto.SubscribeResponse{Response: &gnmiproto.SubscribeResponse_SyncResponse{SyncResponse: true}}); err != nil {
 		return err
 	}
-	<-stream.Context().Done()
-	return nil
+	select {
+	case <-stream.Context().Done():
+		return nil
+	case <-s.stopped():
+		return status.Error(codes.Unavailable, "stream reset")
+	}
+}
+
+// stopped is closed when the streams open now are dropped.
+func (s *gnmiTarget) stopped() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stop == nil {
+		s.stop = make(chan struct{})
+	}
+	return s.stop
+}
+
+// dropStreams ends every open stream with Unavailable.
+func (s *gnmiTarget) dropStreams() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stop != nil {
+		close(s.stop)
+	}
+	s.stop = make(chan struct{})
 }
 
 // device returns the leaves under the requested paths: a hostname and one
