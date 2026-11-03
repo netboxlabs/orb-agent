@@ -240,6 +240,11 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	// which is why this is a local and not a Runner field.
 	var unscopedVLANs unscopedVLANWarner
 
+	// Mapper warnings name the policy and host, and each skipped LAG membership
+	// is logged once per connection rather than on every flush.
+	mapLogger := r.logger.With("policy", r.name, "host", t.Host)
+	var lagWarned mapping.LagWarnings
+
 	// Config capture (options.capture_config): fetch the CONFIG datastore once per
 	// connection — on the first flush, which fires right after the initial sync —
 	// redact it, and cache it for subsequent flushes. A fresh runOnce on reconnect
@@ -300,7 +305,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		maybeCaptureConfig()
 		snap := model.Snapshot()
 		resolveAssetTag(snap)
-		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, r.logger)
+		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, mapLogger, &lagWarned)
 		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		dev, _ := entities[0].(*diode.Device) // Translate always emits the Device first
 		// Attach the captured CONFIG datastore (already redacted) to the Device,
