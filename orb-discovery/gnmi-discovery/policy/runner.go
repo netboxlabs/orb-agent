@@ -306,8 +306,14 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		snap := model.Snapshot()
 		resolveAssetTag(snap)
 		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, mapLogger, &lagWarned)
-		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		dev, _ := entities[0].(*diode.Device) // Translate always emits the Device first
+		// A hostname of only whitespace is no name, and is never sent: with a
+		// netbox_id it would rename the matched device. Cleared before
+		// AssignPrimaryIP, which copies the Device into the primary IP.
+		if dev != nil && dev.Name != nil && strings.TrimSpace(*dev.Name) == "" {
+			dev.Name = nil
+		}
+		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		// Attach the captured CONFIG datastore (already redacted) to the Device,
 		// when capture_config is on and the fetch succeeded. Same post-Translate
 		// decoration pattern as AssignPrimaryIP; no-op when configRaw is empty.
@@ -332,7 +338,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// identity, so skip until one is known. MED-1: this is also the symptom of
 		// a hostname-path mismatch for an unknown vendor on _base, which would
 		// otherwise be a permanent silent no-ingest — so count it and warn once.
-		hasName := dev != nil && dev.Name != nil && *dev.Name != ""
+		hasName := dev != nil && dev.Name != nil
 		if !hasName && t.NetboxID == nil {
 			metrics.GetFlushSkippedNoIdentity().Add(r.ctx, 1)
 			if !warnedNoIdentity {

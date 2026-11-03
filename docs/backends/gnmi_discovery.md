@@ -152,7 +152,7 @@ in a range whose contents are not known in advance.
 | mode | str | no | Per-target delivery mode override (`auto`/`on_change`/`sample`/`get`). |
 | profile | str | no | Pin a gNMI profile (auto-detected when omitted). |
 | origin | str | no | gNMI path origin (default `openconfig`); set `""` for origin-less paths. |
-| netbox_id | int | no | Pin discovery to an existing NetBox device ID. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
+| netbox_id | int | no | Pin discovery to an existing NetBox device ID. A device whose hostname is empty or only whitespace is then sent without a name, so the pinned device keeps its own; without `netbox_id` such a device is not sent at all. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
 | override_defaults | map | no | Per-target overrides of the policy `defaults`. Also takes `position` and `face`, which are valid only here (see [Rack placement](#rack-placement)). |
 
 #### Ranges and subnets
