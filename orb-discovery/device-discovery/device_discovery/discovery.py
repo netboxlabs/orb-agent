@@ -304,7 +304,9 @@ def _try_driver(info: Any, driver: str, prefix: str) -> str:
             prefix,
         ) as device:
             device_info = device.get_facts()
-            if device_info.get("serial_number", "Unknown").lower() == "unknown" or _cli_error_in_name(
+            serial = device_info.get("serial_number", "Unknown")
+            # Collection refuses what facts_mismatch names, so discovery must not pick it.
+            if str("Unknown" if serial is None else serial).lower() == "unknown" or facts_mismatch(
                 device_info
             ):
                 logger.info("%s: '%s' driver did not work", prefix, driver)

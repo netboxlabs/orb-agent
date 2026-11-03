@@ -74,8 +74,8 @@ Precedence, highest first: an explicit `log_level`, then `debug: true` on the ba
 then the agent already running at debug (`-d` or `orb.debug.enable`).
 
 **A host that is reachable but not a manageable device logs exactly one record.** When
-a target answers on the scanned port but cannot be logged into, or a driver set on its
-scope entry does not fit it, device-discovery emits a single WARNING per target per run,
+a target answers on the scanned port but cannot be logged into, or its driver does not fit
+it, device-discovery emits a single WARNING per target per run,
 with no traceback:
 
 ```
@@ -318,7 +318,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10.  |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| driver | string | no  | If defined, connect using the specified NAPALM driver. Facts that show the driver does not fit the device, a hostname or FQDN holding CLI error output or neither a hostname nor a serial number, fail the run and nothing is ingested. If not set, the standard NAPALM drivers are tried (or the `discovery_drivers` list if configured), in order, until one identifies the device. When a driver's login is refused and another driver reads the device's facts with the same credentials, the refused driver is tried once more. This covers drivers that log in over SSH or NETCONF (`ios`, `iosxr`, `iosxr_netconf`, `junos`, `nxos_ssh`, `eos` with `transport: ssh`, and SSH or NETCONF drivers listed in `discovery_drivers`) and `nxos` over NX-API. Drivers that log in over another HTTP API, such as `eos` over eAPI, `paloalto_panos`, `aruba_aoscx`, `aruba_osswitch` and `cisco_asa`, report a refusal as a plain connection error and are not retried. |
+| driver | string | no  | If defined, connect using the specified NAPALM driver. Facts that show the driver does not fit the device, a hostname or FQDN holding CLI error output or neither a hostname nor a serial number, fail the run and nothing is ingested. If not set, the standard NAPALM drivers are tried (or the `discovery_drivers` list if configured), in order, until one identifies the device, and a driver picked this way whose facts are later refused is discovered again on the next run. When a driver's login is refused and another driver reads the device's facts with the same credentials, the refused driver is tried once more. This covers drivers that log in over SSH or NETCONF (`ios`, `iosxr`, `iosxr_netconf`, `junos`, `nxos_ssh`, `eos` with `transport: ssh`, and SSH or NETCONF drivers listed in `discovery_drivers`) and `nxos` over NX-API. Drivers that log in over another HTTP API, such as `eos` over eAPI, `paloalto_panos`, `aruba_aoscx`, `aruba_osswitch` and `cisco_asa`, report a refusal as a plain connection error and are not retried. |
 | timeout | integer | no | Seconds the driver waits on the device, 60 by default. Used by most drivers that talk to an API or NETCONF, such as `nxos`, `eos` over eAPI and `junos`, and as the per-command wait by `iosxr`. The other SSH drivers ignore it: see [Timeouts](./optional_args.md#timeouts). |
 | optional_args | map | no  | Arguments for the driver and its SSH connection, such as `ssh_config_file` for jumphosts or `read_timeout_override` for devices that are slow to answer. See [Optional Arguments](./optional_args.md). |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope. Fields merge with the policy's, except that a VLAN group the override sets, and a tenant or VRF it names differently, replace the policy's as a whole (see [VRF tenant](#vrf-tenant)) |

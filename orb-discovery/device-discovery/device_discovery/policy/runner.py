@@ -18,6 +18,12 @@ from jnpr.junos.exception import (
     ConnectAuthError as JunosConnectAuthError,
 )
 from jnpr.junos.exception import (
+    ConnectClosedError as JunosConnectClosedError,
+)
+from jnpr.junos.exception import (
+    ConnectError as JunosConnectError,
+)
+from jnpr.junos.exception import (
     ConnectNotMasterError as JunosConnectNotMasterError,
 )
 from jnpr.junos.exception import (
@@ -35,6 +41,7 @@ from jnpr.junos.exception import (
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
 from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
+from ncclient.transport.errors import TransportError as NetconfTransportError
 from netmiko.exceptions import NetmikoAuthenticationException
 
 from device_discovery.client import Client
@@ -87,9 +94,11 @@ logger = logging.getLogger(__name__)
 # ConnectionException already subsumes napalm's ConnectAuthError,
 # ConnectTimeoutError, ConnectionClosedException and UnsupportedVersion, so
 # they are not listed. PyEZ (junos) raises its own connection errors outside
-# napalm's, so they are listed by name: its base ConnectError also wraps any bug
-# inside connect, and ConnectClosedError means an RPC ran without a session.
-# ncclient's refused login is listed for the NETCONF drivers that raise it raw.
+# napalm's, so they are listed by name. ConnectClosedError means the device
+# dropped the session: the runner runs no RPC after closing it. PyEZ's base
+# ConnectError also wraps any bug inside connect, so it counts only when the
+# error it kept is a transport one (see _is_expected_target_failure). ncclient's
+# refused login is listed for the NETCONF drivers that raise it raw.
 # Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
@@ -103,6 +112,7 @@ _EXPECTED_TARGET_FAILURES = (
     JunosConnectUnknownHostError,
     JunosConnectNotMasterError,
     JunosProbeError,
+    JunosConnectClosedError,
     NetconfAuthenticationError,
     DriverMismatchError,
 )
@@ -124,9 +134,14 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     Evaluated on the raised object only. The ``__cause__`` / ``__context__``
     chain is deliberately NOT walked: a driver bug that surfaces while a
     connection error is being handled must stay UNEXPECTED and keep its
-    traceback.
+    traceback. PyEZ's base ConnectError is judged by the original error it
+    keeps, which is the transport failure or the bug it wrapped.
     """
-    return isinstance(error, _EXPECTED_TARGET_FAILURES)
+    if isinstance(error, _EXPECTED_TARGET_FAILURES):
+        return True
+    return isinstance(error, JunosConnectError) and isinstance(
+        getattr(error, "_orig", None), (NetconfTransportError, OSError)
+    )
 
 
 class PolicyRunner:
@@ -609,10 +624,12 @@ class PolicyRunner:
             error: the exception that reached the per-target catch-all.
 
         """
-        message = (
-            f"Policy {self.name}, Hostname {sanitized_hostname}: "
-            f"{flatten_message(error)}"
-        )
+        text = flatten_message(error)
+        # napalm's junos driver re-raises a PyEZ timeout with its empty message.
+        wrapped = error.__cause__ or error.__context__
+        if text in ("", "None") and wrapped is not None:
+            text = flatten_message(wrapped)
+        message = f"Policy {self.name}, Hostname {sanitized_hostname}: {text}"
 
         if not _is_expected_target_failure(error):
             # exc_info takes the instance, not True, so this helper does not

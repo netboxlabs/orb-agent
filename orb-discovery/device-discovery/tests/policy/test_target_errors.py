@@ -4,6 +4,7 @@
 
 import pytest
 from jnpr.junos.exception import ConnectAuthError as JunosConnectAuthError
+from jnpr.junos.exception import ConnectClosedError as JunosConnectClosedError
 from jnpr.junos.exception import ConnectNotMasterError as JunosConnectNotMasterError
 from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
 from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
@@ -46,6 +47,7 @@ def test_tuple_membership_is_a_conscious_choice():
         JunosConnectUnknownHostError,
         JunosConnectNotMasterError,
         JunosProbeError,
+        JunosConnectClosedError,
         NetconfAuthenticationError,
         DriverMismatchError,
     )

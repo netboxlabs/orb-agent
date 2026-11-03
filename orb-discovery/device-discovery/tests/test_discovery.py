@@ -894,3 +894,38 @@ def test_discover_device_driver_counts_cli_errors_as_facts_read(mock_get_network
 
     assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"]) == "ios"
     assert calls == ["ios", "nxos_ssh", "ios"]
+
+
+def test_discover_device_driver_tries_a_refused_driver_only_once_more(mock_get_network_driver):
+    """A driver refused again on its retry is not tried a third time."""
+    calls = []
+    refused = NetmikoAuthenticationException("refused")
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [refused, refused]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"]) is None
+    assert calls == ["ios", "nxos_ssh", "ios"]
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {"serial_number": None, "hostname": "sw1", "fqdn": "sw1"},
+        {"serial_number": "", "hostname": "", "fqdn": ""},
+        {"serial_number": "None", "hostname": "None", "fqdn": "None"},
+    ],
+)
+def test_discover_device_driver_does_not_pick_facts_collection_refuses(mock_get_network_driver, facts):
+    """Facts with no serial, or no name and no serial, read the device but do not identify it."""
+    calls = []
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [NetmikoAuthenticationException("refused"), _IOS_FACTS]),
+        "first": _scripted_driver(calls, "first", [facts]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "first"]) == "ios"
+    assert calls == ["ios", "first", "ios"]

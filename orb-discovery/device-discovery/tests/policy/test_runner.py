@@ -1514,3 +1514,27 @@ def test_a_range_with_nothing_left_logs_no_schedule(policy_runner, run_store, ca
         "Policy policy1, Hostname 192.0.2.0/30: Leaving out 192.0.2.1, 192.0.2.2, "
         "discovered from their own scope entries"
     ]
+
+
+def test_discovery_moves_past_a_driver_whose_facts_collection_would_refuse(policy_runner, run_store):
+    """With real discovery, a driver reporting no name and no serial is passed over for the next one."""
+
+    class EmptyFacts(_FakeNapalmDriver):
+        facts = {"hostname": "", "serial_number": "", "fqdn": ""}
+
+    drivers = {"first": EmptyFacts, "good": _FakeNapalmDriver}
+    scope = Napalm(hostname="192.0.2.10", username="admin", password="invalid")
+    config = Config(defaults=Defaults(site="NY"), options=Options(discovery_drivers=["first", "good"]))
+    policy_runner.name = "policy1"
+    policy_runner.run_store = run_store
+    with (
+        patch("device_discovery.discovery.get_network_driver", side_effect=drivers.__getitem__),
+        patch("device_discovery.policy.runner.get_network_driver", side_effect=drivers.__getitem__),
+        patch("device_discovery.policy.runner.Client") as mock_client_cls,
+    ):
+        mock_client_cls.return_value.ingest.return_value = 2
+        policy_runner.run("job-1", scope, config)
+
+    (run,) = run_store.get_runs_for_target("policy1", "192.0.2.10")
+    assert run.status.value == "completed"
+    assert scope.driver == "good"
