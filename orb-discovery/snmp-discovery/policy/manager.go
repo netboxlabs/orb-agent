@@ -474,14 +474,19 @@ func endpointOf(target config.Target) (string, bool) {
 	if err != nil || len(hosts) != 1 {
 		return "", false
 	}
-	host := strings.ToLower(hosts[0])
-	if addr, err := netip.ParseAddr(hosts[0]); err == nil {
-		host = addr.String()
+	return endpointKey(hosts[0], target.Port), true
+}
+
+// endpointKey is how endpointOf names one expanded address or name on port.
+func endpointKey(host string, port uint16) string {
+	key := strings.ToLower(host)
+	if addr, err := netip.ParseAddr(host); err == nil {
+		key = addr.String()
 	}
-	if target.Port != 0 && target.Port != SNMPDefaultPort {
-		host += " port " + strconv.Itoa(int(target.Port))
+	if port != 0 && port != SNMPDefaultPort {
+		key += " port " + strconv.Itoa(int(port))
 	}
-	return host, true
+	return key
 }
 
 // pinDevice records what a target sends the device each of ids names.

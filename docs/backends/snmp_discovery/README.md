@@ -251,6 +251,20 @@ subnet: `192.168.1.0-255` is 256 addresses, `.0` and `.255` included.
 Each address is probed for reachability before any discovery job is scheduled,
 and only addresses that answer are discovered.
 
+**A host listed on its own wins over a subnet or range.** When a policy lists
+a host as an entry of its own (the address written as itself, a `/32` or a
+one-address range) and a subnet or range of the same policy covers it on the
+same `port`, the subnet or range leaves it out: the range neither probes nor
+crawls it, and the host is discovered once, with its own entry's
+`authentication`, `override_defaults` and `netbox_id`. An entry without a
+`port` is on 161, so it matches a range on 161. Hostnames are not resolved, so
+a hostname entry does not take its address out of a range. This applies
+within one policy: two policies covering the same host each discover it. A
+subnet or range whose every address is listed on its own is not scanned. When
+the policy is loaded, the agent logs which hosts each range leaves out.
+Overlapping subnets and ranges are left as they are, so a host two of them
+share is discovered by each.
+
 **What the probe puts on the wire.** With SNMPv3 the probe presents a
 placeholder user and does not authenticate, so neither the configured user nor
 any passphrase reaches an address that has not answered. Presence comes from

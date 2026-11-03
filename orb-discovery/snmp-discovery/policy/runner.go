@@ -38,6 +38,9 @@ const (
 type expandedTargetGroup struct {
 	originalTarget string          // Original target string (e.g., "192.168.1.0/24")
 	targets        []config.Target // Expanded targets
+	// several marks an entry that expands to several addresses. Its hosts are
+	// probed before they are crawled, however many are left to scan.
+	several bool
 }
 
 // Runner represents the policy runner
@@ -121,10 +124,10 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		od.StackMemberNameTemplate = config.NormalizeStackMemberTemplate(od.StackMemberNameTemplate, logger)
 	}
 
-	expandedTargetGroups := runner.expandTargetRanges(runner.scope.Targets)
+	expandedTargetGroups := runner.leaveOutOwnEntries(runner.expandTargetRanges(runner.scope.Targets))
 
 	for _, group := range expandedTargetGroups {
-		if len(group.targets) == 1 {
+		if !group.several {
 			// Create scan task for single target
 			task := gocron.NewTask(runner.run, group.targets[0])
 			if policy.Config.Schedule != nil {
@@ -897,9 +900,66 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 		expandedGroups = append(expandedGroups, expandedTargetGroup{
 			originalTarget: originalHost,
 			targets:        expandedTargets,
+			several:        len(ips) > 1,
 		})
 	}
 	return expandedGroups
+}
+
+// maxLeftOutNamed is how many left-out hosts a range's load line names.
+const maxLeftOutNamed = 10
+
+// leaveOutOwnEntries takes out of each subnet or range the hosts the policy
+// also lists as entries of their own, on the same port, so each is crawled
+// once with its own entry's settings. A subnet or range left empty is dropped.
+func (r *Runner) leaveOutOwnEntries(groups []expandedTargetGroup) []expandedTargetGroup {
+	own := make(map[string]bool)
+	for _, target := range r.scope.Targets {
+		if endpoint, ok := endpointOf(target); ok {
+			own[endpoint] = true
+		}
+	}
+	if len(own) == 0 {
+		return groups
+	}
+	kept := make([]expandedTargetGroup, 0, len(groups))
+	for _, group := range groups {
+		if group.several {
+			group.targets = r.withoutOwnEntries(group, own)
+			if len(group.targets) == 0 {
+				continue
+			}
+		}
+		kept = append(kept, group)
+	}
+	return kept
+}
+
+// withoutOwnEntries returns a range's hosts less those in own, and logs the
+// ones it left out. It filters in place, so a large range is not copied.
+func (r *Runner) withoutOwnEntries(group expandedTargetGroup, own map[string]bool) []config.Target {
+	kept := group.targets[:0]
+	var named []string
+	leftOut := 0
+	for _, target := range group.targets {
+		if !own[endpointKey(target.Host, target.Port)] {
+			kept = append(kept, target)
+			continue
+		}
+		leftOut++
+		if len(named) < maxLeftOutNamed {
+			named = append(named, target.Host)
+		}
+	}
+	if leftOut > 0 {
+		list := strings.Join(named, ", ")
+		if more := leftOut - len(named); more > 0 {
+			list += fmt.Sprintf(" and %d more", more)
+		}
+		r.logger.Info("Leaving out "+list+", discovered from their own scope entries",
+			"policy", r.ctx.Value(policyKey), "target", group.originalTarget)
+	}
+	return kept
 }
 
 // Start starts the policy runner
