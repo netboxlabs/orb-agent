@@ -225,7 +225,10 @@ def _refused(error: BaseException | None) -> bool:
         if isinstance(error, _LOGIN_REFUSED):
             return True
         seen.add(id(error))
-        error = error.__cause__ or error.__context__
+        if error.__cause__ is not None:
+            error = error.__cause__
+        else:
+            error = None if error.__suppress_context__ else error.__context__
     return False
 
 

@@ -956,3 +956,28 @@ def test_discover_device_driver_names_an_error_with_an_empty_message(mock_get_ne
         r.getMessage().endswith("Exception: ConnectionException: ConnectTimeoutError(192.0.2.10)")
         for r in caplog.records
     )
+
+
+def test_discover_device_driver_ignores_a_refusal_suppressed_with_from_none(mock_get_network_driver):
+    """A refusal the driver discarded with `from None` is not this failure's cause."""
+
+    def unrelated_failure():
+        try:
+            raise NetmikoAuthenticationException("stale refusal")
+        except NetmikoAuthenticationException:
+            raise ConnectionException("Cannot connect to 192.0.2.10") from None
+
+    try:
+        unrelated_failure()
+    except ConnectionException as e:
+        failure = e
+
+    calls = []
+    drivers = {
+        "ios": _scripted_driver(calls, "ios", [failure]),
+        "nxos_ssh": _scripted_driver(calls, "nxos_ssh", [_NOT_THIS_PLATFORM]),
+    }
+    mock_get_network_driver.side_effect = drivers.__getitem__
+
+    assert discover_device_driver(_TARGET, drivers=["ios", "nxos_ssh"]) is None
+    assert calls == ["ios", "nxos_ssh"]
