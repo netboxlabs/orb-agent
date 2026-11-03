@@ -1409,3 +1409,32 @@ def test_svi_named_interface_is_virtual_by_the_same_predicate(
     )
 
     assert interface.type == "virtual", f"{if_name} must not be typed from its speed"
+
+
+@pytest.mark.parametrize("if_name", ["ae1.300", "dsc"])
+@pytest.mark.parametrize("mac", ["None", "none", "Unspecified", "not-a-mac"])
+def test_translate_interface_drops_mac_that_does_not_parse(sample_device_info, sample_defaults, mac, if_name):
+    """
+    A MAC that does not parse is omitted, and the rest of the interface still goes out.
+
+    napalm's junos driver reports ``"None"`` for every interface without a MAC — logical
+    units and pseudo interfaces alike; sent as is, the Diode plugin rejects the whole
+    interface ("Invalid MAC address format").
+    """
+    device = translate_device(sample_device_info, sample_defaults, config_info=None, options=None)
+    interface = translate_interface(
+        device,
+        if_name,
+        {"is_enabled": True, "mac_address": mac, "description": "MGMT: firewall uplink"},
+        sample_defaults,
+    )
+    assert not interface.HasField("primary_mac_address")
+    assert interface.description == "MGMT: firewall uplink"
+
+@pytest.mark.parametrize("mac", ["80:13:BE:B6:E6:F8", "80:13:be:b6:e6:f8", "8013.beb6.e6f8"])
+def test_translate_interface_sends_parseable_mac_normalized(sample_device_info, sample_defaults, mac):
+    """A MAC that parses is sent in the form napalm's drivers report: colon-separated upper case."""
+    device = translate_device(sample_device_info, sample_defaults, config_info=None, options=None)
+    interface = translate_interface(device, "ae1", {"is_enabled": True, "mac_address": mac}, sample_defaults)
+    assert interface.primary_mac_address.mac_address == "80:13:BE:B6:E6:F8"
+

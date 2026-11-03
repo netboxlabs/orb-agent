@@ -7,6 +7,7 @@ import logging
 import re
 from collections.abc import Iterable
 
+from napalm.base.helpers import mac as normalize_mac
 from netboxlabs.diode.sdk.diode.v1 import ingester_pb2 as pb
 from netboxlabs.diode.sdk.ingester import Device, Entity, Interface, IPAddress, Location, Prefix
 
@@ -232,6 +233,28 @@ def _resolve_non_subinterface_type(
     return defaults.if_type
 
 
+def _parseable_mac(value: object, if_name: str) -> str | None:
+    """
+    Return the driver's MAC unchanged, or ``None`` when it is blank or does not parse.
+
+    napalm's junos driver stringifies a missing MAC, so every interface without
+    one reports ``"None"``: logical units (``ae1.300``, ``lo0.0``) and pseudo
+    interfaces (``dsc``, ``esi``, ``fti0``). The Diode plugin rejects the whole
+    interface over such a value ("Invalid MAC address format"),
+    and the interface is then never created or updated on any run;
+    omitting the field is what a missing MAC means. Logged at DEBUG: on Junos it
+    happens for those interfaces on every run.
+    """
+    value = blank_to_none(value)
+    if not value:
+        return None
+    try:
+        return normalize_mac(str(value))
+    except Exception:
+        logger.debug(f"{if_name}: dropping MAC {value} - not a MAC address")
+        return None
+
+
 def translate_interface(
     device: Device,
     if_name: str,
@@ -269,7 +292,7 @@ def translate_interface(
     driver_description = blank_to_none(interface_info.get("description"))
     if driver_description is not None:
         description = driver_description
-    mac_address = blank_to_none(interface_info.get("mac_address"))
+    mac_address = _parseable_mac(interface_info.get("mac_address"), if_name)
 
     # Determine interface type by descending priority:
     # 1. Subinterface (has parent) -> "virtual" (structural)
