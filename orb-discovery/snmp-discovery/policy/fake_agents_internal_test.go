@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 )
 
@@ -169,9 +170,26 @@ func slogText(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
 
+// builtinLookups are the manufacturer and device lookups a policy gets with
+// no lookup_extensions_dir, loaded once for every test.
+type builtinLookups struct {
+	manufacturers *data.ManufacturerLookup
+	devices       *data.DeviceLookup
+}
+
+var loadBuiltinLookups = sync.OnceValues(func() (builtinLookups, error) {
+	manufacturers, err := data.NewManufacturerLookup()
+	if err != nil {
+		return builtinLookups{}, err
+	}
+	devices, err := data.LoadDeviceLookupExtensions("")
+	return builtinLookups{manufacturers, devices}, err
+})
+
 // newPolicyRunner builds policy p1 from YAML the way the manager does,
-// defaults and validation included, with the embedded mapping, SNMP faked by
-// factory and Diode by client. The runner is stopped when the test ends.
+// defaults and validation included, with the embedded mapping and built-in
+// lookups, SNMP faked by factory and Diode by client. The runner is stopped
+// when the test ends.
 func newPolicyRunner(t *testing.T, policyYAML string, factory snmp.ClientFactory, client diode.Client, logger *slog.Logger) (*Runner, *RunStore) {
 	t.Helper()
 	m, err := NewManager(context.Background(), logger, client, nil)
@@ -180,8 +198,11 @@ func newPolicyRunner(t *testing.T, policyYAML string, factory snmp.ClientFactory
 	require.NoError(t, err)
 	p, ok := policies["p1"]
 	require.True(t, ok)
+	lookups, err := loadBuiltinLookups()
+	require.NoError(t, err)
 	store := NewRunStore()
-	r, err := NewRunner(context.Background(), logger, "p1", p, client, factory, &m.mappingConfig, nil, nil, store)
+	r, err := NewRunner(context.Background(), logger, "p1", p, client, factory, &m.mappingConfig,
+		lookups.manufacturers, lookups.devices, store)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = r.Stop() })
 	return r, store

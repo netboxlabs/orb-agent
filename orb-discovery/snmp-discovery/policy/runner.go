@@ -706,6 +706,16 @@ func (r *Runner) assetTagClaimer(targetID string, log *slog.Logger) func(string)
 	}
 }
 
+// countDiscoveryFailure records a failed discovery and why.
+func (r *Runner) countDiscoveryFailure(policyName, reason string) {
+	if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+		rMetric.Add(r.ctx, 1, metric.WithAttributes(
+			attribute.String("policy", policyName),
+			attribute.String("error", reason),
+		))
+	}
+}
+
 // walkResult is what a walk goroutine sends its crawl.
 type walkResult struct {
 	oids mapping.ObjectIDValueMap
@@ -776,24 +786,18 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	var oids mapping.ObjectIDValueMap
 	select {
 	case <-ctx.Done():
-		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-			rMetric.Add(r.ctx, 1,
-				metric.WithAttributes(
-					attribute.String("policy", policyName),
-					attribute.String("error", ctx.Err().Error()),
-				))
-		}
+		r.countDiscoveryFailure(policyName, ctx.Err().Error())
 		return nil, nil, ctx.Err()
 	case res := <-resultCh:
-		if res.err != nil {
+		var walkPanic *panicError
+		switch {
+		case errors.As(res.err, &walkPanic):
+			// Logged once, with its stack, by the crawl.
+			r.countDiscoveryFailure(policyName, "panic")
+			return nil, nil, res.err
+		case res.err != nil:
 			log.Warn("error crawling host", "error", res.err)
-			if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-				rMetric.Add(r.ctx, 1,
-					metric.WithAttributes(
-						attribute.String("policy", policyName),
-						attribute.String("error", res.err.Error()),
-					))
-			}
+			r.countDiscoveryFailure(policyName, res.err.Error())
 			return nil, nil, res.err
 		}
 		oids = res.oids
@@ -820,19 +824,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				// outermost scope), which fires regardless of how
 				// queryTarget exits, so we deliberately don't record
 				// latency here.
-				if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-					rMetric.Add(r.ctx, 1,
-						metric.WithAttributes(
-							attribute.String("policy", policyName),
-							attribute.String("error", ctx.Err().Error()),
-						))
-				}
+				r.countDiscoveryFailure(policyName, ctx.Err().Error())
 				return nil, nil, ctx.Err()
 			case res := <-vendorCh:
 				var walkPanic *panicError
 				switch {
 				case errors.As(res.err, &walkPanic):
 					// A panic fails the crawl, as one in the first phase does.
+					r.countDiscoveryFailure(policyName, "panic")
 					return nil, nil, res.err
 				case res.err != nil:
 					log.Warn("phase 2 walk failed; continuing with generic only", "vendor", vendor, "error", res.err)
