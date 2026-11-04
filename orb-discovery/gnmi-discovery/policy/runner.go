@@ -375,6 +375,10 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	// capsAttempts in a row the target goes on with _base, as a device that
 	// never answers Capabilities but serves Subscribe needs. Any other error is
 	// the device's answer and falls back to _base at once.
+	// How Capabilities failed when the connection goes on without it; the
+	// reason is worded once the profile in use is known.
+	var capsNote string
+	afterSync := false
 	capCtx, cancelCaps := context.WithTimeout(r.ctx, r.setupTimeout)
 	caps, capErr := sess.Capabilities(capCtx)
 	cancelCaps()
@@ -390,14 +394,13 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 				return fmt.Errorf("capabilities: %w", capErr)
 			}
 			if hist.capsFailures == capsAttempts {
-				setupReason = fmt.Sprintf("capabilities failed on %d attempts in a row; using the _base profile: %v",
-					capsAttempts, capErr)
+				capsNote = fmt.Sprintf("capabilities failed on %d attempts in a row (%v)", capsAttempts, capErr)
 			} else {
-				// An earlier _base connection synced, so this one did not redial.
-				setupReason = fmt.Sprintf("capabilities failed (%v); using the _base profile, "+
-					"as on the earlier connection that synced", capErr)
+				// An earlier connection without Capabilities synced, so this one
+				// did not redial.
+				capsNote = fmt.Sprintf("capabilities failed (%v)", capErr)
+				afterSync = true
 			}
-			record()
 		}
 		r.logger.Log(r.ctx, hist.logLevel(), "gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
 		r.setState(t.Host, func(s *targetState) { s.LastError = "capabilities: " + capErr.Error() })
@@ -406,6 +409,17 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		hist.credsWorked = true
 	}
 	profile := r.selectProfile(t, caps)
+	if capsNote != "" {
+		using := "using the _base profile"
+		if t.Profile != "" && profile.Name == t.Profile {
+			using = "keeping the pinned profile " + profile.Name + ", without negotiated encodings"
+		}
+		setupReason = capsNote + "; " + using
+		if afterSync {
+			setupReason += ", as on the earlier connection that synced"
+		}
+		record()
+	}
 	if profile.Device.Hostname != "" {
 		// The device's identity: no refused subscription is retried without it.
 		sess.PinPaths(profile.Device.Hostname)

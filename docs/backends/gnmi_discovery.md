@@ -313,7 +313,9 @@ clear on its own (`Unauthenticated`, `Unavailable`, `ResourceExhausted`,
 the `_base` profile. After three such failures in a row it goes on with `_base`,
 for devices that never answer `Capabilities` but still stream; once such a
 connection has synced, later connections go on with `_base` at once. Any other
-failure, `Unimplemented` included, uses `_base` at once.
+failure, `Unimplemented` included, uses `_base` at once. A target with a pinned
+`profile` redials the same way but keeps that profile when it goes on; only the
+encodings are not negotiated.
 
 Before subscribing, the agent probes the subscription paths with `Get`, because a
 strict device refuses a whole subscription over one path it does not support.
@@ -360,7 +362,7 @@ instead, and logs the refusal at `WARN` once and at `DEBUG` after that.
 session runs on less than the device offers, and lists each reason that applies:
 
 - `Capabilities` failed with a code that can clear on its own and the connection
-  went on with `_base`;
+  went on without it, with `_base` or the pinned profile;
 - the probe got no answer for some of the paths a stream subscribed to;
 - the last `GET` poll kept values from the poll before, for paths that failed
   with a code that can clear on its own.

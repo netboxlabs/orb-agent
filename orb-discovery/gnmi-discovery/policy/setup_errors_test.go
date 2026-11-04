@@ -84,6 +84,7 @@ func TestCapabilitiesRefusedEveryTimeIngestsOnBaseAfterThreeAttempts(t *testing.
 	require.EqualValues(t, 1, srv.subs.Load(), "only the last attempt went past Capabilities")
 	st := targetStatus(t, r)
 	require.Contains(t, st.DegradedReason, "capabilities failed on 3 attempts in a row")
+	require.Contains(t, st.DegradedReason, "using the _base profile")
 	require.Contains(t, logs.String(), "profile=_base")
 }
 
@@ -648,4 +649,41 @@ func TestConcurrencyLimitedStrictDeviceStreams(t *testing.T) {
 			require.Empty(t, st.DegradedReason, "every path got an answer in the end")
 		})
 	}
+}
+
+// A target pinned to a profile keeps it when Capabilities never answers: the
+// reason names that profile and says the encodings were not negotiated, rather
+// than claiming _base.
+func TestPinnedProfileReasonWhenCapabilitiesNeverAnswers(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "example.yaml"),
+		[]byte("extends: _base\nmatch:\n  vendor: Example\n"), 0o600))
+	store, err := mapping.LoadProfiles(dir)
+	require.NoError(t, err)
+	srv := &gnmiTarget{capsErr: capsRefused(codes.Unavailable, 0)}
+	r, client, d, _ := runAgainst(t, srv, config.ModeAuto, func(r *Runner) {
+		r.store = store
+		r.policy.Scope.Targets[0].Profile = "example"
+	})
+
+	requireSettled(t, client, d, capsAttempts)
+	reason := targetStatus(t, r).DegradedReason
+	require.Contains(t, reason, "capabilities failed on 3 attempts in a row")
+	require.Contains(t, reason, "pinned profile example")
+	require.Contains(t, reason, "encodings")
+	require.NotContains(t, reason, "_base")
+}
+
+// A pinned profile that no longer exists falls back to _base, and the reason
+// says _base.
+func TestMissingPinnedProfileReasonSaysBase(t *testing.T) {
+	srv := &gnmiTarget{capsErr: capsRefused(codes.Unavailable, 0)}
+	r, client, d, _ := runAgainst(t, srv, config.ModeAuto, func(r *Runner) {
+		r.policy.Scope.Targets[0].Profile = "missing"
+	})
+
+	requireSettled(t, client, d, capsAttempts)
+	reason := targetStatus(t, r).DegradedReason
+	require.Contains(t, reason, "using the _base profile")
+	require.NotContains(t, reason, "pinned profile")
 }
