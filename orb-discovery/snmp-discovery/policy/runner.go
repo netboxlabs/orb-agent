@@ -2,12 +2,14 @@ package policy
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1179,13 +1181,18 @@ func probeKeyOf(auth config.Authentication) probeKey {
 	return probeKey{auth.ProtocolVersion, auth.Community}
 }
 
-// overlaps collects the pairs of entries of one kind.
+// overlaps counts the pairs of entries of one kind, keeping only the ones a
+// warning names.
 type overlaps struct {
-	pairs []string
+	named []string
+	count int
 }
 
 func (o *overlaps) add(entry, other string) {
-	o.pairs = append(o.pairs, other+" with "+entry)
+	o.count++
+	if len(o.named) < maxOverlapsNamed {
+		o.named = append(o.named, other+" with "+entry)
+	}
 }
 
 // warnOverlappingEntries warns at load about entries that crawl the same hosts
@@ -1200,7 +1207,9 @@ func (o *overlaps) add(entry, other string) {
 //
 // Subnets or ranges probing with a different version or community are left
 // out: each finds only the hosts that accept its own, which is how a range is
-// scanned with several. Every entry still crawls what it finds.
+// scanned with several. Every entry still crawls what it finds. Hosts listed
+// on their own leave every subnet or range first, so ranges that share only
+// such hosts no longer overlap.
 func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 	type entry struct {
 		name     string
@@ -1208,12 +1217,13 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 	}
 	type span struct {
 		entry
-		probe       probeKey
-		port        uint16
-		first, last netip.Addr
+		probe probeKey
+		port  uint16
+		addrs ipv4Span
 	}
 	var spans []span
 	singles := make(map[string][]entry)
+	listed := listedAddresses(groups)
 	var listedTwice, sameCommunity, v3, differentDefaults overlaps
 	for _, group := range groups {
 		if len(group.targets) == 0 {
@@ -1238,21 +1248,20 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 		// to its last.
 		start, err1 := netip.ParseAddr(first.Host)
 		end, err2 := netip.ParseAddr(group.targets[len(group.targets)-1].Host)
-		if err1 != nil || err2 != nil {
+		if err1 != nil || err2 != nil || !start.Is4() || !end.Is4() {
 			continue
 		}
 		auth := r.scope.Authentication
 		if first.Authentication != nil {
 			auth = *first.Authentication
 		}
-		thisSpan := span{this, probeKeyOf(auth), effectivePort(first.Port), start, end}
+		thisSpan := span{this, probeKeyOf(auth), effectivePort(first.Port), ipv4Span{ipv4Value(start), ipv4Value(end)}}
 		kind := &sameCommunity
 		if auth.ProtocolVersion == snmp.ProtocolVersion3 {
 			kind = &v3
 		}
 		for _, other := range spans {
-			if other.port != thisSpan.port ||
-				other.first.Compare(thisSpan.last) > 0 || thisSpan.first.Compare(other.last) > 0 {
+			if other.port != thisSpan.port || !other.addrs.sharesHost(thisSpan.addrs, listed[thisSpan.port]) {
 				continue
 			}
 			if other.probe == thisSpan.probe {
@@ -1270,13 +1279,61 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 	r.warnOverlaps(differentDefaultsWarning, differentDefaults)
 }
 
+// ipv4Span is the addresses of an expanded subnet or range, first to last.
+type ipv4Span struct {
+	first, last uint32
+}
+
+// sharesHost reports whether two spans still share an address once the hosts
+// listed on their own, sorted in listed, have left them both.
+func (s ipv4Span) sharesHost(o ipv4Span, listed []uint32) bool {
+	lo, hi := max(s.first, o.first), min(s.last, o.last)
+	if lo > hi {
+		return false
+	}
+	from, _ := slices.BinarySearch(listed, lo)
+	to, found := slices.BinarySearch(listed, hi)
+	if found {
+		to++
+	}
+	return uint64(to-from) < uint64(hi-lo)+1
+}
+
+func ipv4Value(addr netip.Addr) uint32 {
+	b := addr.As4()
+	return binary.BigEndian.Uint32(b[:])
+}
+
+// listedAddresses returns, per port, the sorted IPv4 addresses of the hosts
+// the policy lists as entries of their own, which leave every subnet or range
+// as leaveOutOwnEntries takes them out.
+func listedAddresses(groups []expandedTargetGroup) map[uint16][]uint32 {
+	listed := make(map[uint16][]uint32)
+	for _, group := range groups {
+		if group.several || len(group.targets) != 1 {
+			continue
+		}
+		addr, err := netip.ParseAddr(group.targets[0].Host)
+		if err != nil || !addr.Is4() {
+			continue
+		}
+		port := effectivePort(group.targets[0].Port)
+		listed[port] = append(listed[port], ipv4Value(addr))
+	}
+	for port, addrs := range listed {
+		slices.Sort(addrs)
+		listed[port] = slices.Compact(addrs)
+	}
+	return listed
+}
+
 // warnOverlaps logs one warning naming the first pairs and counting the rest.
 func (r *Runner) warnOverlaps(msg string, o overlaps) {
-	if len(o.pairs) == 0 {
+	if o.count == 0 {
 		return
 	}
-	list := strings.Join(o.pairs[:min(len(o.pairs), maxOverlapsNamed)], ", ")
-	if more := len(o.pairs) - maxOverlapsNamed; more > 0 {
+	list := strings.Join(o.named, ", ")
+	if more := o.count - len(o.named); more > 0 {
 		list += fmt.Sprintf(" and %d more", more)
 	}
 	r.logger.Warn(msg, "entries", list)

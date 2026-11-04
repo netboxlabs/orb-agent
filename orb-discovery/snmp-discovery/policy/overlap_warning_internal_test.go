@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -261,4 +262,65 @@ func TestLoadWarnsAboutOverlappingEntriesWithDifferentDefaults(t *testing.T) {
         - host: 192.0.2.1`+site("site-b")+`
 `))
 	})
+}
+
+// Hosts listed on their own leave every range, so ranges that share only
+// such hosts no longer reach the same hosts, and are not warned about.
+func TestOverlapIsJudgedAfterListedHostsLeaveTheRanges(t *testing.T) {
+	site := func(name string) string {
+		return `
+          override_defaults:
+            site: ` + name
+	}
+	t.Run("ranges that share only a listed host", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.1-2`+v2cAuth("SNMPv2c", "community-a")+site("site-a")+`
+        - host: 192.0.2.2-3`+v2cAuth("SNMPv2c", "community-b")+site("site-b")+`
+        - host: 192.0.2.2`+site("site-c")+`
+`))
+	})
+	t.Run("same community, sharing only listed hosts", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.1-3
+        - host: 192.0.2.2-4
+        - host: 192.0.2.2
+        - host: 192.0.2.3/32
+`))
+	})
+	t.Run("SNMPv3, sharing only a listed host", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.1-2`+v3Auth("user-a")+`
+        - host: 192.0.2.2-3`+v3Auth("user-b")+`
+        - host: 192.0.2.2
+`))
+	})
+	t.Run("ranges that still share a host", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{
+			{sameCommunityOverlap, "192.0.2.1-3 with 192.0.2.2-4"},
+			{differentDefaults, "192.0.2.1-3 with 192.0.2.2-4"},
+		}, overlapWarnings(t, `
+        - host: 192.0.2.1-3`+site("site-a")+`
+        - host: 192.0.2.2-4`+site("site-b")+`
+        - host: 192.0.2.2
+`))
+	})
+	t.Run("a host listed on another port stays in the ranges", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{{sameCommunityOverlap, "192.0.2.1-2 with 192.0.2.2-3"}}, overlapWarnings(t, `
+        - host: 192.0.2.1-2
+        - host: 192.0.2.2-3
+        - host: 192.0.2.2
+          port: 1161
+`))
+	})
+}
+
+// An overlap warning keeps the pairs it names, not every pair: a policy with
+// thousands of overlapping entries holds five strings and a count.
+func TestOverlapsKeepOnlyThePairsNamed(t *testing.T) {
+	var o overlaps
+	for i := range maxOverlapsNamed + 3 {
+		o.add(fmt.Sprintf("192.0.2.%d", i), "192.0.2.0/24")
+	}
+	assert.Len(t, o.named, maxOverlapsNamed)
+	assert.Equal(t, maxOverlapsNamed+3, o.count)
 }
