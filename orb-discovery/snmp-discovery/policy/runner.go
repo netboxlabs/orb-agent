@@ -386,12 +386,29 @@ func (e *panicError) Error() string {
 	return fmt.Sprintf("panic: %v", e.value)
 }
 
-// recoverRun is deferred by a job once its run exists. It turns a panic into
+// recoverRun is deferred by a scan once its run exists. It turns a panic into
 // a failed run and one error record, so one target cannot stop the process or
 // leave its policy running.
 func (r *Runner) recoverRun(log *slog.Logger, target string, port uint16, runID string) {
 	if recovered := recover(); recovered != nil {
 		r.failRunOnPanic(log, target, port, runID, &panicError{value: recovered, stack: debug.Stack()})
+	}
+}
+
+// finishCrawl is deferred by a crawl once its run exists. A panic fails the
+// run and counts as a failed discovery. A crawl that walked and mapped its
+// target, and ended without a panic, counts as a successful one.
+func (r *Runner) finishCrawl(log *slog.Logger, host string, port uint16, runID string, discovered *bool) {
+	policyName, _ := r.ctx.Value(policyKey).(string)
+	if recovered := recover(); recovered != nil {
+		r.countDiscoveryFailure(policyName, "panic")
+		r.failRunOnPanic(log, host, port, runID, &panicError{value: recovered, stack: debug.Stack()})
+		return
+	}
+	if *discovered {
+		if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
+			rMetric.Add(r.ctx, 1, metric.WithAttributes(attribute.String("policy", policyName)))
+		}
 	}
 }
 
@@ -580,7 +597,8 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 
 	// Create run at start (includes port)
 	run := r.runStore.CreateRun(policyName, targetHost, targetPort, parentTarget)
-	defer r.recoverRun(log, targetHost, targetPort, run.ID)
+	discovered := false
+	defer r.finishCrawl(log, targetHost, targetPort, run.ID, &discovered)
 
 	// Track policy execution
 	if rMetric := metrics.GetPolicyExecutions(); rMetric != nil {
@@ -615,6 +633,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
 		return
 	}
+	discovered = true
 	log.Info("SNMP crawl complete", "entity_count", len(entities))
 
 	if len(entities) == 0 {
@@ -864,13 +883,6 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		}
 	} else {
 		log.Debug("no vendor matched; generic-only path")
-	}
-
-	// Track successful discovery
-	if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
-		rMetric.Add(r.ctx, 1,
-			metric.WithAttributes(
-				attribute.String("policy", policyName)))
 	}
 
 	// Record discovery latency

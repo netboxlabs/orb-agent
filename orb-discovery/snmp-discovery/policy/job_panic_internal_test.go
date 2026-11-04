@@ -13,14 +13,13 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/gosnmp/gosnmp"
-	"github.com/netboxlabs/diode-sdk-go/diode"
-	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 )
@@ -83,17 +82,37 @@ func (w *panickingWalker) Walk(ctx context.Context, oid string, identifierSize i
 	return w.rowWalker.Walk(ctx, oid, identifierSize)
 }
 
-// panickingClient panics on its first ingest while armed.
-type panickingClient struct {
-	recordingClient
+// panickingManufacturers panics on its first lookup while armed. The mapper
+// looks a manufacturer up on the crawl's own goroutine.
+type panickingManufacturers struct {
+	data.ManufacturerRetriever
 	armed *atomic.Bool
 }
 
-func (c *panickingClient) Ingest(ctx context.Context, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
-	if c.armed.CompareAndSwap(true, false) {
-		panic("ingest failure")
+func (m *panickingManufacturers) GetManufacturer(id string) (string, error) {
+	if m.armed.CompareAndSwap(true, false) {
+		panic("mapping failure")
 	}
-	return c.recordingClient.Ingest(ctx, entities, opts...)
+	return m.ManufacturerRetriever.GetManufacturer(id)
+}
+
+// discoverySuccesses returns how many discoveries were recorded as
+// successful.
+func discoverySuccesses(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+	var n int64
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name == "discovery_success" {
+				for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+					n += dp.Value
+				}
+			}
+		}
+	}
+	return n
 }
 
 // panickingScheduler panics when asked to schedule a job.
@@ -131,8 +150,9 @@ policies:
         - host: 192.0.2.1
 `
 
-// A crawl that panics, in its walk or in the job itself, fails its run and
-// logs one error with the stack; the process and the policy carry on.
+// A crawl that panics, in its walk or on the job's own goroutine while
+// mapping, fails its run, counts as a failed discovery and not a successful
+// one, and logs one error with the stack; the process and the policy carry on.
 func TestCrawlPanicFailsItsRun(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -140,18 +160,20 @@ func TestCrawlPanicFailsItsRun(t *testing.T) {
 		wantInReason string
 	}{
 		{name: "in the walk", inWalk: true, wantInReason: "walk failure"},
-		{name: "in the job", inWalk: false, wantInReason: "ingest failure"},
+		{name: "in the job, while mapping", inWalk: false, wantInReason: "mapping failure"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := &lockedBuffer{}
-			walkArmed, ingestArmed := &atomic.Bool{}, &atomic.Bool{}
+			walkArmed, mappingArmed := &atomic.Bool{}, &atomic.Bool{}
 			walkArmed.Store(tc.inWalk)
-			ingestArmed.Store(!tc.inWalk)
+			mappingArmed.Store(!tc.inWalk)
 			factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
-				return &panickingWalker{rowWalker: rowWalker{rows: agentRows(host)}, armed: walkArmed}, nil
+				rows := agentRows(host)
+				rows[oidSysObjectID] = snmp.PDU{Type: gosnmp.ObjectIdentifier, Value: ".1.3.6.1.4.1.32473.1.1"}
+				return &panickingWalker{rowWalker: rowWalker{rows: rows}, armed: walkArmed}, nil
 			}
-			client := &panickingClient{armed: ingestArmed}
-			r, store := newPolicyRunner(t, singleTargetPolicy, factory, client, jsonLogger(logs))
+			r, store := newPolicyRunner(t, singleTargetPolicy, factory, &recordingClient{}, jsonLogger(logs))
+			r.manufacturers = &panickingManufacturers{ManufacturerRetriever: r.manufacturers, armed: mappingArmed}
 			reader := useTestMeter(t)
 			logs.Reset()
 
@@ -175,15 +197,17 @@ func TestCrawlPanicFailsItsRun(t *testing.T) {
 			assert.Equal(t, "192.0.2.1", errs[0]["host"])
 			assert.Contains(t, errs[0]["stack"], "goroutine")
 			assert.Empty(t, messages(t, logs, "WARN"), "the panic is reported once, by the error")
-			if tc.inWalk {
-				assert.Equal(t, []string{"panic"}, discoveryFailures(t, reader))
-			}
+			assert.Equal(t, []string{"panic"}, discoveryFailures(t, reader))
+			assert.Zero(t, discoverySuccesses(t, reader))
 
-			// The policy is still usable: its next crawl completes.
+			// The policy is still usable: its next crawl completes, and
+			// counts as a success.
 			r.runWithMetadata(config.Target{Host: "192.0.2.1", Port: 161}, "")
 			runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
 			require.Len(t, runs, 2)
 			assert.Equal(t, RunStatusCompleted, runs[1].Status)
+			assert.Equal(t, int64(1), discoverySuccesses(t, reader))
+			assert.Equal(t, []string{"panic"}, discoveryFailures(t, reader))
 		})
 	}
 }
