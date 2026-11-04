@@ -53,7 +53,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | mode | str | no | Delivery mode: `auto` (default), `on_change`, `sample`, or `get`. `auto` negotiates the best mode per target (`ON_CHANGE → SAMPLE → GET`). |
 | debounce_ms | int | no | Flush delay in ms after the last notification before a snapshot is ingested (default `2000`). |
 | sample_interval_ms | int | no | `SAMPLE` subscription interval in ms (default `300000` = 5m). |
-| get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). A path a poll fails on keeps its previous values for that poll, unless the device answers `NotFound`, `InvalidArgument` or `Unimplemented`, which drop it. |
+| get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). A path a poll fails on with a code that can clear on its own (`Unauthenticated`, `Unavailable`, `ResourceExhausted`, `DeadlineExceeded` or `Aborted`) keeps its previous values for that poll; any other code drops it for that poll. |
 | probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
 | rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
 | send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not verify the server. Off by default. See [Credentials and ranges](#credentials-and-ranges). |
@@ -307,21 +307,30 @@ orb:
 ## Connection setup and delivery mode
 
 Each connection starts with the gNMI `Capabilities` call, which picks the profile
-and the encodings. It has 10 seconds to answer. If it fails with a code that can
+and the encodings. It has 30 seconds to answer. If it fails with a code that can
 clear on its own (`Unauthenticated`, `Unavailable`, `ResourceExhausted`,
 `DeadlineExceeded` or `Aborted`), the target reconnects rather than settle for
 the `_base` profile. After three such failures in a row it goes on with `_base`,
-for devices that never answer `Capabilities` but still stream. Any other
+for devices that never answer `Capabilities` but still stream; once such a
+connection has synced, later connections go on with `_base` at once. Any other
 failure, `Unimplemented` included, uses `_base` at once.
 
-Before subscribing, the agent probes the subscription paths with `Get`, within
-10 seconds, because a strict device refuses a whole subscription over one path
-it does not support. A path the device refuses is left out. A path it answers
-`NotFound` for, modelled but empty so far, stays in, and so does one whose probe
-got no answer; the next subscription probes that one again. If the device then
-refuses the subscription before sending anything, with a code other than those
-above, the paths it never confirmed are dropped and the subscription is retried
-once without them.
+Before subscribing, the agent probes the subscription paths with `Get`, because a
+strict device refuses a whole subscription over one path it does not support.
+The probe asks about the paths eight at a time and has 30 seconds in all. A path
+the device refuses is left out. A path it answers `NotFound` for, modelled but
+empty so far, stays in, and so does one whose probe got no answer. When the
+device refuses the login itself (`Unauthenticated`), the paths are not asked
+about one by one and all stay in. The result holds for the rest of the
+connection, and the next connection probes again.
+
+If the device then refuses the subscription before sending anything, with a
+code other than those that can clear on their own, the paths it answered
+`NotFound` for are dropped and the subscription is retried once without them.
+Paths whose probe got no answer, and the profile's hostname path, are never
+dropped. If the retry is served, the dropped paths stay out for the rest of the
+connection; if it is refused too, they were not the cause, so they stay in and
+the original refusal is what the mode step-down below sees.
 
 In `auto` mode the agent tries `ON_CHANGE` first and steps down to `SAMPLE`, then
 `GET`, for devices that do not offer streaming. Many platforms serve `GET` and
@@ -338,15 +347,24 @@ The second line is the one that confirms the target is discovering. After it the
 target stays quiet, since the line is per connection rather than per flush.
 
 A target that loses its connection reconnects after a delay that doubles from
-1 second up to 30 seconds, and starts again from 1 second once a connection has
-synced. A target whose `Capabilities` call refuses the credentials
+1 second up to 30 seconds. The delay starts again from 1 second after a
+connection that stayed up past its first sync for at least 30 seconds, or for the
+current delay if that is longer, so a device that drops right after each sync is
+not redialled every second. A target whose `Capabilities` call refuses the credentials
 (`Unauthenticated` or `PermissionDenied`), and that has not answered
 `Capabilities` or synced since the policy started, waits up to 15 minutes
 instead, and logs the refusal at `WARN` once and at `DEBUG` after that.
 
 `/api/v1/status` reports each target's `active_mode`, `fallback_reason`,
 `last_error` and `degraded_reason`. `degraded_reason` says why the current
-session runs on less than the device offers: `Capabilities` fell back to `_base`
-after repeated failures, subscription paths were kept without an answer, or a
-`GET` poll kept a path's previous values. A connection that sets up cleanly
-clears it; a successful ingest does not.
+session runs on less than the device offers, and lists each reason that applies:
+
+- `Capabilities` failed with a code that can clear on its own and the connection
+  went on with `_base`;
+- the probe got no answer for some of the paths a stream subscribed to;
+- the last `GET` poll kept values from the poll before, for paths that failed
+  with a code that can clear on its own.
+
+The first two hold for the connection and are cleared when the next connection
+sets up cleanly. The last is recomputed on every poll, so a clean poll clears
+it. A successful ingest clears none of them.
