@@ -2,8 +2,10 @@ package policy
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -321,4 +323,106 @@ func TestFlushCountsAsWorkingCredentials(t *testing.T) {
 	for _, g := range gaps[capsAttempts:] {
 		require.Less(t, g, 150*time.Millisecond+100*time.Millisecond, "waited past the usual cap: %v", gaps)
 	}
+}
+
+// A flush counts only for a connection that delivered something. An explicit
+// SAMPLE stream flushes on its prune tick even when the device sent nothing;
+// a device that holds the subscription silently and then refuses the
+// credentials has not shown they work, so it backs off toward the credential
+// ceiling. Scaled down from 30 s and 15 min.
+func TestFlushWithoutDataDoesNotCountAsWorking(t *testing.T) {
+	srv := &gnmiTarget{
+		capsErr: capsRefused(codes.Unauthenticated, 0),
+		getErr:  always(codes.Unauthenticated),
+		subErr: func([]string) error {
+			time.Sleep(250 * time.Millisecond)
+			return status.Error(codes.Unauthenticated, "bad credentials")
+		},
+	}
+	id := 7
+	_, _, d, _ := runAgainst(t, srv, config.ModeSample, func(r *Runner) {
+		r.policy.Scope.Targets[0].NetboxID = &id
+		r.policy.Config.SampleIntervalMs = 50
+		r.backoffCap = 50 * time.Millisecond
+		r.credentialBackoffCap = 5 * time.Second
+	})
+
+	// Without data the delay keeps doubling; counted as working it would stay
+	// at the 250 ms the device holds the stream plus the 50 ms cap.
+	require.Eventually(t, func() bool {
+		return slices.ContainsFunc(d.gaps(), func(g time.Duration) bool { return g >= 500*time.Millisecond })
+	}, 8*time.Second, 20*time.Millisecond, "gaps stayed at the usual cap")
+}
+
+// A flush also starts the backoff-reset clock: a netbox_id target with no
+// hostname leaf never syncs trustworthily, and a stream of its that lasts past
+// the cap resets the backoff from its first flush. Scaled down from 30 s.
+func TestFlushStartsTheBackoffResetClock(t *testing.T) {
+	srv := &gnmiTarget{noHostname: true, dropAfter: 400 * time.Millisecond}
+	id := 7
+	_, client, d, _ := runAgainst(t, srv, config.ModeOnChange, func(r *Runner) {
+		r.policy.Scope.Targets[0].NetboxID = &id
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 300 * time.Millisecond
+	})
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= 6 }, 10*time.Second, 10*time.Millisecond)
+	require.Positive(t, client.count())
+	// Without the reset the fifth gap's backoff is 160 ms, with it 10 ms.
+	require.Less(t, d.gaps()[4], 400*time.Millisecond+120*time.Millisecond, d.gaps())
+}
+
+// A Get answer is a delivery: a netbox_id target with no hostname leaf, polled
+// over GET, counts as working once a poll it flushed came back, even though no
+// poll is a trustworthy sync. Its Gets start failing 300 ms into each
+// connection; it redials at the usual backoff. Scaled down from 30 s and 15 min.
+func TestGetAnswerCountsAsDelivered(t *testing.T) {
+	srv := &gnmiTarget{noHostname: true, capsErr: capsRefused(codes.Unauthenticated, 0)}
+	srv.getErr = func([]string) error {
+		if time.Since(time.Unix(0, srv.lastCaps.Load())) > 300*time.Millisecond {
+			return status.Error(codes.Unavailable, "busy")
+		}
+		return nil
+	}
+	id := 7
+	_, client, d, _ := runAgainst(t, srv, config.ModeGet, func(r *Runner) {
+		r.policy.Scope.Targets[0].NetboxID = &id
+		r.policy.Config.GetIntervalMs = 50
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 50 * time.Millisecond
+		r.credentialBackoffCap = 2 * time.Second
+	})
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= 9 }, 10*time.Second, 10*time.Millisecond)
+	require.Positive(t, client.count())
+	gaps := d.gaps()
+	for _, g := range gaps[capsAttempts:] {
+		require.Less(t, g, 300*time.Millisecond+150*time.Millisecond, "waited past the usual cap: %v", gaps)
+	}
+}
+
+// What a connection delivered is its own: a later connection that delivers
+// nothing, and only flushes on its SAMPLE tick, does not reset the backoff
+// however long it stays up. Scaled down from 30 s.
+func TestDeliveryIsPerConnection(t *testing.T) {
+	var subs atomic.Int32
+	srv := &gnmiTarget{dropAfter: 100 * time.Millisecond}
+	srv.subErr = func([]string) error {
+		if subs.Add(1) == 1 {
+			return nil // the first connection streams, then drops
+		}
+		time.Sleep(400 * time.Millisecond) // later ones hold silently, then fail
+		return status.Error(codes.Unavailable, "busy")
+	}
+	_, _, d, _ := runAgainst(t, srv, config.ModeSample, func(r *Runner) {
+		r.policy.Config.SampleIntervalMs = 50
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 300 * time.Millisecond
+	})
+
+	// Without a delivery the delay grows to the cap: some gap reaches the 400 ms
+	// hold plus most of the cap, where a reset would keep it near 410 ms.
+	require.Eventually(t, func() bool {
+		return slices.ContainsFunc(d.gaps(), func(g time.Duration) bool { return g >= 400*time.Millisecond+200*time.Millisecond })
+	}, 10*time.Second, 20*time.Millisecond, "the backoff kept resetting")
 }

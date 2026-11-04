@@ -87,6 +87,7 @@ type targetState struct {
 	DegradedReason string    // why the session runs degraded; cleared by a clean setup
 	lastProfile    string    // last profile selected for this host; gates the selection log
 	connWorked     time.Time // when the current connection first synced or flushed
+	connDelivered  bool      // the current connection got a notification or a Get answer
 }
 
 // capsAttempts is how many consecutive transient Capabilities failures a target
@@ -237,11 +238,18 @@ func (r *Runner) markSynced(host string) {
 	})
 }
 
-// markWorking records that host's current connection delivered: a flush
-// counts, so a target with no hostname leaf that ingests by netbox_id does.
+// markDelivered records that host's current connection got something from
+// the device: a stream notification or a Get answer.
+func (r *Runner) markDelivered(host string) {
+	r.setState(host, func(s *targetState) { s.connDelivered = true })
+}
+
+// markWorking records that host's current connection flushed what the device
+// delivered, so a target with no hostname leaf that ingests by netbox_id
+// counts as working. A flush of nothing, as a SAMPLE tick makes, does not.
 func (r *Runner) markWorking(host string) {
 	r.setState(host, func(s *targetState) {
-		if s.connWorked.IsZero() {
+		if s.connDelivered && s.connWorked.IsZero() {
 			s.connWorked = time.Now()
 		}
 	})
@@ -258,6 +266,7 @@ func (r *Runner) connWorkedAt(host string) time.Time {
 	}
 	at := s.connWorked
 	s.connWorked = time.Time{}
+	s.connDelivered = false
 	return at
 }
 
@@ -829,7 +838,10 @@ func (r *Runner) streamLoop(host string, profile *mapping.Profile, pruneEvery ti
 				}
 				return nil
 			}
-			productive = true
+			if !productive {
+				productive = true
+				r.markDelivered(host)
+			}
 			notif.Add(r.ctx, 1)
 			n = r.filterNotification(n, profile) // B-1/M-2: drop non-curated updates and out-of-scope deletes
 			if len(n.Deletes) > 0 {
@@ -913,6 +925,7 @@ func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Pro
 		if err != nil {
 			return err
 		}
+		r.markDelivered(host)
 		metrics.GetNotifications().Add(r.ctx, 1)
 		model.Apply(r.filterNotification(n, profile))
 		var carried []string
