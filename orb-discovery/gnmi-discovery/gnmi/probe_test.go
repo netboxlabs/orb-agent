@@ -218,6 +218,7 @@ func TestProbePrunesARefusedPath(t *testing.T) {
 
 			subscribeAndRead(t, sess)
 			assert.Equal(t, sorted(probeHostname, probeSerial), pt.lastSubscription(t))
+			assert.EqualValues(t, 1+len(probePaths), pt.gets.Load(), "a refused path is not asked again")
 		})
 	}
 }

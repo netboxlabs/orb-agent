@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -530,8 +531,8 @@ func TestUnansweredProbeIsNotRepeatedPerRung(t *testing.T) {
 
 	requireSettled(t, client, d, 1)
 	require.Equal(t, "sample", targetStatus(t, r).ActiveMode)
-	require.EqualValues(t, 1+len(base.SubscribePaths()), srv.gets.Load(),
-		"one multi-path Get and one per path, for the on_change rung only")
+	require.EqualValues(t, 1+2*len(base.SubscribePaths()), srv.gets.Load(),
+		"one multi-path Get, then each path concurrently and once more alone, for the on_change rung only")
 }
 
 // Wrong credentials cost few RPCs: the attempts that redial through
@@ -607,4 +608,44 @@ func TestBaseReasonAfterASyncedBaseConnection(t *testing.T) {
 	reason := targetStatus(t, r).DegradedReason
 	require.Contains(t, reason, "as on the earlier connection that synced")
 	require.NotContains(t, reason, "in a row")
+}
+
+// A strict device that answers ResourceExhausted to Gets past a small
+// concurrency limit still streams: the paths the concurrent probe left without
+// an answer are asked again one at a time, so its unsupported subtree is found
+// and pruned before the subscription.
+func TestConcurrencyLimitedStrictDeviceStreams(t *testing.T) {
+	for _, limit := range []int32{1, 2, 4} {
+		t.Run(fmt.Sprintf("limit %d", limit), func(t *testing.T) {
+			var inflight atomic.Int32
+			unmodelled := func(paths []string) bool {
+				return slices.ContainsFunc(paths, func(p string) bool { return strings.Contains(p, "/vlans/vlan/") })
+			}
+			srv := &gnmiTarget{
+				getErr: func(paths []string) error {
+					defer inflight.Add(-1)
+					if inflight.Add(1) > limit {
+						return status.Error(codes.ResourceExhausted, "too many concurrent RPCs")
+					}
+					time.Sleep(30 * time.Millisecond)
+					if unmodelled(paths) {
+						return status.Error(codes.InvalidArgument, "unknown path")
+					}
+					return nil
+				},
+				subErr: func(paths []string) error {
+					if unmodelled(paths) {
+						return status.Error(codes.InvalidArgument, "unknown path in subscription")
+					}
+					return nil
+				},
+			}
+			r, client, d, _ := runAgainst(t, srv, config.ModeAuto, nil)
+
+			requireSettled(t, client, d, 1)
+			st := targetStatus(t, r)
+			require.Equal(t, "on_change", st.ActiveMode)
+			require.Empty(t, st.DegradedReason, "every path got an answer in the end")
+		})
+	}
 }
