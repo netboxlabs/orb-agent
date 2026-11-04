@@ -251,7 +251,7 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 		return &testWalker{walkErr: errors.New("no response")}, nil
 	}
 
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "good-1", Port: 161},
 		{Host: "bad-1", Port: 161},
 		{Host: "good-2", Port: 161},
@@ -662,14 +662,14 @@ func TestRunScanWithOriginal_SkipsDuplicateCrawlJob(t *testing.T) {
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runStore:  runStore,
 		activeHostJobs: map[string]uuid.UUID{
-			"192.168.1.0/24::192.168.1.1:161": existingJobID,
+			"0::192.168.1.0/24::192.168.1.1:161": existingJobID,
 		},
 	}
 	runner.ClientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return &testWalker{}, nil
 	}
 
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "192.168.1.1", Port: 161},
 	}, "192.168.1.0/24")
 
@@ -695,7 +695,7 @@ func TestRunScanWithOriginal_FailsWhenNoResponsiveHosts(t *testing.T) {
 		return &testWalker{walkErr: errors.New("no response")}, nil
 	}
 
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "192.168.1.1", Port: 161},
 		{Host: "192.168.1.2", Port: 161},
 	}, "192.168.1.0/24")
@@ -725,7 +725,7 @@ func TestRunScanWithOriginal_NoDuplicateForRepeatedResponsiveHost(t *testing.T) 
 	}
 
 	// Same host appears twice in the targets list (simulates misconfigured overlapping range)
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "192.168.1.1", Port: 161},
 		{Host: "192.168.1.1", Port: 161},
 	}, "192.168.1.0/24")

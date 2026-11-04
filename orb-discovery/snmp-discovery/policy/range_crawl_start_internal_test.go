@@ -60,7 +60,7 @@ func TestRangeHostCrawledRightAfterScan(t *testing.T) {
 	r := scanRunner(t, scheduler, agents.dial, &schedule)
 	scheduler.Start()
 
-	r.runScanWithOriginal([]config.Target{{Host: "192.0.2.1", Port: 161}}, "192.0.2.0/30")
+	r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.1", Port: 161}}, "192.0.2.0/30")
 
 	require.Eventually(t, func() bool { return agents.crawlCount("192.0.2.1", 161) == 1 }, 5*time.Second, 10*time.Millisecond,
 		"crawled before 10:00:05 (the clock has not moved)")
@@ -88,10 +88,10 @@ func TestRangeHostWithActiveJobNotCrawledAgain(t *testing.T) {
 	r := scanRunner(t, scheduler, agents.dial, &schedule)
 	scheduler.Start()
 
-	r.runScanWithOriginal([]config.Target{{Host: "192.0.2.1", Port: 161}}, "192.0.2.0/30")
+	r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.1", Port: 161}}, "192.0.2.0/30")
 	require.Eventually(t, func() bool { return agents.crawlCount("192.0.2.1", 161) == 1 }, 5*time.Second, 10*time.Millisecond)
 
-	r.runScanWithOriginal([]config.Target{{Host: "192.0.2.1", Port: 161}}, "192.0.2.0/30")
+	r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.1", Port: 161}}, "192.0.2.0/30")
 	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, 1, agents.crawlCount("192.0.2.1", 161))
 	assert.Len(t, scheduler.Jobs(), 1)

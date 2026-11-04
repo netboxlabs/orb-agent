@@ -289,7 +289,7 @@ policies:
 	r.scheduler = panickingScheduler{Scheduler: r.scheduler}
 	logs.Reset()
 
-	r.runScanWithOriginal([]config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}}, "192.0.2.0/30")
+	r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}}, "192.0.2.0/30")
 
 	runs := store.GetRunsForTarget("p1", "192.0.2.0/30", 161)
 	require.Len(t, runs, 1)
@@ -340,7 +340,7 @@ func TestProbePanicKeepsTheWorker(t *testing.T) {
 	logs := &lockedBuffer{}
 	r.logger = jsonLogger(logs)
 
-	r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+	r.runScanWithOriginal(0, targets, "192.0.2.1-198.51.100.46")
 
 	assert.Len(t, scheduler.Jobs(), 1, "the one host that answered, after 256 workers each hit a panic")
 	runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
@@ -415,7 +415,7 @@ func TestProbePanicsCountedWhenTheScanFails(t *testing.T) {
 			logs := &lockedBuffer{}
 			r.logger = jsonLogger(logs)
 
-			r.runScanWithOriginal(targets, "192.0.2.1-3")
+			r.runScanWithOriginal(0, targets, "192.0.2.1-3")
 
 			runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-3", 161)
 			require.Len(t, runs, 1)

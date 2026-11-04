@@ -42,6 +42,7 @@ const (
 type expandedTargetGroup struct {
 	originalTarget string          // Original target string (e.g., "192.168.1.0/24")
 	targets        []config.Target // Expanded targets
+	entry          int             // The entry's index in the policy's scope targets
 	// several marks an entry that expands to several addresses. Its hosts are
 	// probed before they are crawled, however many are left to scan.
 	several bool
@@ -157,7 +158,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 		}
 		// Create scan task for multiple targets with original target
 		runner.warnSlowScan(group)
-		task := gocron.NewTask(runner.runScanWithOriginal, group.targets, group.originalTarget)
+		task := gocron.NewTask(runner.runScanWithOriginal, group.entry, group.targets, group.originalTarget)
 		if policy.Config.Schedule != nil {
 			_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
 				gocron.WithSingletonMode(gocron.LimitModeReschedule))
@@ -173,7 +174,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	return runner, nil
 }
 
-func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget string) {
+func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, originalTarget string) {
 	policyName := r.ctx.Value(policyKey).(string)
 	log := r.logger.With("target", originalTarget)
 
@@ -247,10 +248,12 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 		liveIDs[j.ID()] = struct{}{}
 	}
 
-	// Prune stale host->job mappings for this originalTarget only.
-	// Scoped to the current range to avoid deleting entries freshly added by a concurrent
-	// runScanWithOriginal invocation for a different range target in the same policy.
-	r.pruneHostJobs(originalTarget+"::", liveIDs)
+	// Crawl jobs are keyed by scope entry, so each entry crawls every host its
+	// own probe finds, with its own credentials, even when two entries are
+	// written identically. Stale ones are pruned for this entry only, so a
+	// concurrent scan of another entry keeps the jobs it just added.
+	keyPrefix := fmt.Sprintf("%d::%s::", entry, originalTarget)
+	r.pruneHostJobs(keyPrefix, liveIDs)
 
 	// Probe panics past the first are only counted. The count goes once on
 	// the scan's last line, and in its reason when it fails.
@@ -296,7 +299,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 
 	var err error
 	for _, target := range responsive {
-		jobKey := fmt.Sprintf("%s::%s:%d", originalTarget, target.Host, target.Port)
+		jobKey := fmt.Sprintf("%s%s:%d", keyPrefix, target.Host, target.Port)
 
 		// Checked and recorded apart from scheduling, so the mutex is never
 		// held across the scheduler's internal locks.
@@ -336,9 +339,8 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	log.Info("SNMP probe scan complete", withPanics("responsive_target_count", len(responsive))...)
 }
 
-// pruneHostJobs forgets the crawl jobs under keyPrefix that are no longer
-// scheduled. Scoped to one range, so a concurrent scan of another range of the
-// policy keeps the entries it just added.
+// pruneHostJobs forgets the crawl jobs under keyPrefix, one scope entry's,
+// that are no longer scheduled.
 func (r *Runner) pruneHostJobs(keyPrefix string, liveIDs map[uuid.UUID]struct{}) {
 	r.activeHostJobsMu.Lock()
 	defer r.activeHostJobsMu.Unlock()
@@ -1086,7 +1088,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {
 	expandedGroups := make([]expandedTargetGroup, 0, len(configuredTargets))
-	for _, target := range configuredTargets {
+	for entry, target := range configuredTargets {
 		originalHost := target.Host // Preserve original target string
 		ips, err := targets.Expand(target.Host)
 		if err != nil {
@@ -1109,6 +1111,7 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 		expandedGroups = append(expandedGroups, expandedTargetGroup{
 			originalTarget: originalHost,
 			targets:        expandedTargets,
+			entry:          entry,
 			several:        len(ips) > 1,
 		})
 	}

@@ -198,7 +198,7 @@ policies:
 `, factory, &recordingClient{}, jsonLogger(logs))
 	logs.Reset()
 
-	r.runScanWithOriginal([]config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}}, "192.0.2.0/30")
+	r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}}, "192.0.2.0/30")
 
 	records := logRecords(t, logs.String())
 	require.NotEmpty(t, records)

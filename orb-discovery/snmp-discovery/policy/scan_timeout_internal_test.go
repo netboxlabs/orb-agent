@@ -68,7 +68,7 @@ func TestTimedOutScanCrawlsWhatItFound(t *testing.T) {
 	r := scanRunner(t, scheduler, factory, nil)
 	r.timeout = 300 * time.Millisecond
 
-	r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+	r.runScanWithOriginal(0, targets, "192.0.2.1-198.51.100.46")
 
 	assert.Len(t, scheduler.Jobs(), 1, "the host that answered is crawled")
 	runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
@@ -100,7 +100,7 @@ func TestTimedOutScanWithNoAnswer(t *testing.T) {
 	r := scanRunner(t, scheduler, factory, nil)
 	r.timeout = 300 * time.Millisecond
 
-	r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+	r.runScanWithOriginal(0, targets, "192.0.2.1-198.51.100.46")
 
 	assert.Empty(t, scheduler.Jobs())
 	runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
@@ -123,7 +123,7 @@ func TestStoppedPolicyScanSchedulesNothing(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+			r.runScanWithOriginal(0, targets, "192.0.2.1-198.51.100.46")
 		}()
 		<-answered
 		time.Sleep(50 * time.Millisecond)
@@ -144,7 +144,7 @@ func TestStoppedPolicyScanSchedulesNothing(t *testing.T) {
 		t.Cleanup(cancel)
 		r.ctx = ctx
 
-		r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+		r.runScanWithOriginal(0, targets, "192.0.2.1-198.51.100.46")
 
 		assert.Empty(t, scheduler.Jobs())
 		runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
