@@ -497,3 +497,51 @@ func lineContaining(out, s string) string {
 	}
 	return ""
 }
+
+// The owner is found by the key's line, not its name alone: a key that is
+// wrong in one policy and right in another names only the first.
+func TestUnknownKeyIsMatchedByItsLine(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      site: lab
+    scope:
+      targets:
+        - host: 192.0.2.1
+  p2:
+    config:
+      defaults:
+        site: lab
+    scope:
+      targets:
+        - host: 192.0.2.2
+`)
+	assert.Contains(t, lineContaining(out, "key=site"), "policy=p1")
+	assert.NotContains(t, out, "policy=p2")
+}
+
+// A key written as an alias is reported under the name it resolves to.
+func TestUnknownKeyWrittenAsAnAliasNamesThePolicy(t *testing.T) {
+	out := captureWarnings(t, `
+names:
+  k: &k usernme
+policies:
+  p1:
+    scope:
+      *k : admin
+      targets:
+        - host: 192.0.2.1
+`)
+	assert.Contains(t, lineContaining(out, "key=usernme"), "policy=p1")
+	assert.NotContains(t, out, "policy=?")
+}
+
+// A key no policy can be matched to is still reported.
+func TestUnknownKeyWithNoOwnerIsStillReported(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	reportUnknownKeys(logger, []string{"line 99: field bogus not found in type config.PolicyConfig"}, nil)
+	assert.Contains(t, buf.String(), "key=bogus")
+	assert.Contains(t, buf.String(), "policy=?")
+}

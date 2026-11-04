@@ -74,10 +74,15 @@ func WarnUnknownPolicyKeys(data []byte, logger *slog.Logger) {
 		// No unknown fields, or a syntax error the permissive decode reports.
 		return
 	}
+	reportUnknownKeys(logger, typeErr.Errors, policyKeyOwners(data))
+}
+
+// reportUnknownKeys logs each entry of a strict decode's TypeError, once per
+// policy that wrote the key.
+func reportUnknownKeys(logger *slog.Logger, entries []string, owners map[keyAt][]string) {
 	optionKeys := yamlFieldNames(reflect.TypeFor[Options]())
-	owners := policyKeyOwners(data)
-	reported := make(map[string]bool, len(typeErr.Errors))
-	for _, entry := range typeErr.Errors {
+	reported := make(map[string]bool, len(entries))
+	for _, entry := range entries {
 		match := unknownFieldRe.FindStringSubmatch(entry)
 		// An anchored block repeats its entry once per use; owners names each policy.
 		if match == nil || !narrowedTypes[match[2]] || reported[entry] {
@@ -118,6 +123,11 @@ func entryLine(entry string) int {
 
 // policyKeyOwners maps every key a policy uses, including keys it takes from an
 // anchor or a `<<` merge, to the policies that use it, in document order.
+//
+// It does not know which block type each key sits in, so an anchor reused in
+// different blocks can name a policy whose own use of it is valid. That needs
+// shared anchors in a payload posted to the backend API directly; the agent
+// sends one policy per request.
 func policyKeyOwners(data []byte) map[keyAt][]string {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
@@ -125,7 +135,7 @@ func policyKeyOwners(data []byte) map[keyAt][]string {
 	}
 	owners := map[keyAt][]string{}
 	for _, entry := range mapEntries(mapValue(doc.Content[0], "policies"), maxMergeDepth) {
-		name := entry[0].Value
+		policy := entry[0].Value
 		// Visited per policy, so a block shared by reference is walked once each.
 		visited := map[*yaml.Node]bool{}
 		var walk func(n *yaml.Node)
@@ -137,9 +147,16 @@ func policyKeyOwners(data []byte) map[keyAt][]string {
 			visited[n] = true
 			if n.Kind == yaml.MappingNode {
 				for i := 0; i+1 < len(n.Content); i += 2 {
-					k := keyAt{line: n.Content[i].Line, key: n.Content[i].Value}
-					if names := owners[k]; len(names) == 0 || names[len(names)-1] != name {
-						owners[k] = append(names, name)
+					// A key written as an alias is decoded, and reported, under
+					// the name it resolves to, on the alias's own line.
+					key := n.Content[i]
+					keyName := key.Value
+					if r := resolveAlias(key); r != nil {
+						keyName = r.Value
+					}
+					k := keyAt{line: key.Line, key: keyName}
+					if names := owners[k]; len(names) == 0 || names[len(names)-1] != policy {
+						owners[k] = append(names, policy)
 					}
 				}
 			}
