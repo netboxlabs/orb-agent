@@ -63,8 +63,8 @@ func v3Auth(user string) string {
 const (
 	sameCommunityOverlap = "subnets or ranges probe the same hosts with the same community; " +
 		"each crawls every host that answers"
-	v3Overlap = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes cannot tell users apart, " +
-		"so each crawls every host that answers, and a crawl with a user the host does not know fails; " +
+	v3Overlap = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes do not present the entry's user, " +
+		"so each crawls every host that answers, and a crawl with credentials the host does not accept fails; " +
 		"list such hosts on entries of their own, or use disjoint ranges"
 	hostListedTwice = "a host is listed on several entries; each crawls it, " +
 		"and a crawl with credentials the host does not accept fails"
