@@ -761,11 +761,64 @@ type walkResult struct {
 	err  error
 }
 
-// sendWalkPanic is deferred by a walk goroutine. It sends a panic to the crawl
-// as the walk's error, so the crawl fails at once instead of at the timeout.
-func sendWalkPanic(ch chan<- walkResult) {
+// walkHandoff carries a walk goroutine's one result to its crawl. Once the
+// crawl stops waiting, a panic the walk reports is logged here, with its
+// stack, rather than lost in a channel nobody reads.
+type walkHandoff struct {
+	ch        chan walkResult
+	log       *slog.Logger
+	mu        sync.Mutex
+	abandoned bool
+}
+
+func newWalkHandoff(log *slog.Logger) *walkHandoff {
+	// Buffered, so the walk can always hand its result over and exit.
+	return &walkHandoff{ch: make(chan walkResult, 1), log: log}
+}
+
+// deliver hands res to the crawl without blocking, or logs it if it is a
+// panic the crawl will not read.
+func (h *walkHandoff) deliver(res walkResult) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.abandoned {
+		h.logUnread(res)
+		return
+	}
+	select {
+	case h.ch <- res:
+	default:
+		h.logUnread(res)
+	}
+}
+
+// abandon records that the crawl stopped waiting, and logs a panic already
+// handed over that the crawl did not read.
+func (h *walkHandoff) abandon() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.abandoned = true
+	select {
+	case res := <-h.ch:
+		h.logUnread(res)
+	default:
+	}
+}
+
+func (h *walkHandoff) logUnread(res walkResult) {
+	var walkPanic *panicError
+	if errors.As(res.err, &walkPanic) {
+		h.log.Error("recovered from a panic in a walk the crawl had stopped waiting for",
+			"error", walkPanic, "stack", string(walkPanic.stack))
+	}
+}
+
+// sendWalkPanic is deferred by a walk goroutine. It hands a panic to the
+// crawl as the walk's error, so the crawl fails at once instead of at the
+// timeout.
+func sendWalkPanic(h *walkHandoff) {
 	if recovered := recover(); recovered != nil {
-		ch <- walkResult{err: &panicError{value: recovered, stack: debug.Stack()}}
+		h.deliver(walkResult{err: &panicError{value: recovered, stack: debug.Stack()}})
 	}
 }
 
@@ -812,22 +865,23 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	log.Info("querying target", "object_count", len(genericOIDs))
 	log.Debug("phase 1 walk", "oid_count", len(genericOIDs))
 
-	// The buffered channel ensures the goroutine can always send its result and exit,
+	// The handoff lets the goroutine always hand its result over and exit,
 	// even if we have already returned due to context cancellation. The goroutine is
 	// bounded by snmpTimeout (set on the SNMP client), so it is not a permanent leak.
-	resultCh := make(chan walkResult, 1)
+	generic := newWalkHandoff(log)
 	go func() {
-		defer sendWalkPanic(resultCh)
+		defer sendWalkPanic(generic)
 		oids, err := host.Walk(ctx, genericOIDs)
-		resultCh <- walkResult{oids, err}
+		generic.deliver(walkResult{oids, err})
 	}()
 
 	var oids mapping.ObjectIDValueMap
 	select {
 	case <-ctx.Done():
+		generic.abandon()
 		r.countDiscoveryFailure(policyName, ctx.Err().Error())
 		return nil, nil, ctx.Err()
-	case res := <-resultCh:
+	case res := <-generic.ch:
 		var walkPanic *panicError
 		switch {
 		case errors.As(res.err, &walkPanic):
@@ -849,14 +903,15 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		vendorOIDs := mappingConfig.VendorObjectIDs(vendor)
 		if len(vendorOIDs) > 0 {
 			log.Debug("phase 2 walk", "vendor", vendor, "oid_count", len(vendorOIDs))
-			vendorCh := make(chan walkResult, 1)
+			vendorWalk := newWalkHandoff(log)
 			go func() {
-				defer sendWalkPanic(vendorCh)
+				defer sendWalkPanic(vendorWalk)
 				out, err := host.Walk(ctx, vendorOIDs)
-				vendorCh <- walkResult{out, err}
+				vendorWalk.deliver(walkResult{out, err})
 			}()
 			select {
 			case <-ctx.Done():
+				vendorWalk.abandon()
 				// Mirror the phase-1 ctx.Done() handling: record the
 				// failure metric and return. Latency on the failure
 				// path is captured by runWithMetadata's defer (the
@@ -865,7 +920,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 				// latency here.
 				r.countDiscoveryFailure(policyName, ctx.Err().Error())
 				return nil, nil, ctx.Err()
-			case res := <-vendorCh:
+			case res := <-vendorWalk.ch:
 				var walkPanic *panicError
 				switch {
 				case errors.As(res.err, &walkPanic):

@@ -2,6 +2,7 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -452,4 +453,107 @@ func TestJobPanicOutsideARunIsLogged(t *testing.T) {
 		}
 		return false
 	}, 5*time.Second, 20*time.Millisecond)
+}
+
+// stalledPanickingWalker holds its walk until released, then panics: a walk
+// that outlives the crawl waiting for it.
+type stalledPanickingWalker struct {
+	failingWalker
+	release <-chan struct{}
+}
+
+func (w stalledPanickingWalker) Walk(context.Context, string, int) (map[string]snmp.PDU, error) {
+	<-w.release
+	panic("late walk failure")
+}
+
+// A walk that panics after its crawl stopped waiting is still logged, with
+// its stack, rather than lost in a channel nobody reads.
+func TestLateWalkPanicIsLogged(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		vendor bool
+	}{
+		{name: "the first walk"},
+		{name: "the vendor walk", vendor: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			release := make(chan struct{})
+			var sessions atomic.Int32
+			stalledSession := int32(1)
+			if tc.vendor {
+				stalledSession = 2
+			}
+			var sysObjectID string
+			factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+				if sessions.Add(1) == stalledSession {
+					return stalledPanickingWalker{release: release}, nil
+				}
+				rows := agentRows(host)
+				rows[oidSysObjectID] = snmp.PDU{Type: gosnmp.ObjectIdentifier, Value: sysObjectID}
+				return &rowWalker{rows: rows}, nil
+			}
+			r, _ := newPolicyRunner(t, singleTargetPolicy, factory, &recordingClient{}, jsonLogger(logs))
+			sysObjectID = withExampleVendor(t, r)
+			logs.Reset()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			_, _, err := r.queryTarget(ctx, config.Target{Host: "192.0.2.1", Port: 161})
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			close(release)
+
+			require.Eventually(t, func() bool { return len(errorRecords(t, logs)) > 0 }, 5*time.Second, 10*time.Millisecond)
+			time.Sleep(50 * time.Millisecond)
+			errs := errorRecords(t, logs)
+			require.Len(t, errs, 1)
+			assert.Equal(t, "panic: late walk failure", errs[0]["error"])
+			assert.Equal(t, "192.0.2.1", errs[0]["host"])
+			assert.Equal(t, "p1", errs[0]["policy"])
+			assert.Contains(t, errs[0]["stack"], "goroutine")
+		})
+	}
+}
+
+// Whichever of the walk and the crawl moves first, a panic is either read by
+// the crawl or logged by the handoff, once, and nothing else is logged.
+func TestWalkHandoffLogsOnlyUnreadPanics(t *testing.T) {
+	walkPanic := walkResult{err: &panicError{value: "walk failure", stack: []byte("goroutine 1 [running]:")}}
+	for _, tc := range []struct {
+		name      string
+		run       func(h *walkHandoff)
+		wantError bool
+	}{
+		{"a panic handed over just before the crawl gives up", func(h *walkHandoff) {
+			h.deliver(walkPanic)
+			h.abandon()
+		}, true},
+		{"a panic after the crawl gave up", func(h *walkHandoff) {
+			h.abandon()
+			h.deliver(walkPanic)
+		}, true},
+		{"a panic the crawl reads", func(h *walkHandoff) {
+			h.deliver(walkPanic)
+			<-h.ch
+			h.abandon()
+		}, false},
+		{"a result nobody reads", func(h *walkHandoff) {
+			h.deliver(walkResult{err: errors.New("request timeout")})
+			h.abandon()
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			tc.run(newWalkHandoff(jsonLogger(logs)))
+			errs := errorRecords(t, logs)
+			if !tc.wantError {
+				assert.Empty(t, errs)
+				return
+			}
+			require.Len(t, errs, 1)
+			assert.Equal(t, "panic: walk failure", errs[0]["error"])
+			assert.Equal(t, "goroutine 1 [running]:", errs[0]["stack"])
+		})
+	}
 }
