@@ -32,13 +32,16 @@ type gnmiTarget struct {
 	capsHang bool
 	getErr   func(paths []string) error
 	subErr   func(paths []string) error
+	// dropAfter, when set, ends each stream that long after its sync.
+	dropAfter time.Duration
 	// encodings the device advertises; JSON_IETF when empty.
 	encodings []gnmiproto.Encoding
 	// serial is the chassis serial number the device reports.
 	serial atomic.Value
 
 	caps, gets, subs atomic.Int32
-	sawSample        atomic.Bool // a SAMPLE subscription was requested
+	lastCaps         atomic.Int64 // when Capabilities was last called, in Unix ns
+	sawSample        atomic.Bool  // a SAMPLE subscription was requested
 
 	mu      sync.Mutex
 	subEncs []gnmiproto.Encoding
@@ -49,6 +52,7 @@ type gnmiTarget struct {
 
 func (s *gnmiTarget) Capabilities(ctx context.Context, _ *gnmiproto.CapabilityRequest) (*gnmiproto.CapabilityResponse, error) {
 	n := s.caps.Add(1)
+	s.lastCaps.Store(time.Now().UnixNano())
 	s.mu.Lock()
 	s.events.WriteString("C")
 	s.mu.Unlock()
@@ -117,10 +121,16 @@ func (s *gnmiTarget) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error {
 	if err := stream.Send(&gnmiproto.SubscribeResponse{Response: &gnmiproto.SubscribeResponse_SyncResponse{SyncResponse: true}}); err != nil {
 		return err
 	}
+	var dropped <-chan time.Time
+	if s.dropAfter > 0 {
+		dropped = time.After(s.dropAfter)
+	}
 	select {
 	case <-stream.Context().Done():
 		return nil
 	case <-s.stopped():
+		return status.Error(codes.Unavailable, "stream reset")
+	case <-dropped:
 		return status.Error(codes.Unavailable, "stream reset")
 	}
 }
@@ -230,15 +240,33 @@ func startGNMITarget(t *testing.T, s *gnmiTarget) string {
 	return lis.Addr().String()
 }
 
-// countingGnmicDialer is the real dialer, counting its dials.
+// countingGnmicDialer is the real dialer, counting its dials and when each
+// happened.
 type countingGnmicDialer struct {
 	gnmi.GnmicDialer
 	dials atomic.Int32
+
+	mu sync.Mutex
+	at []time.Time
 }
 
 func (d *countingGnmicDialer) Dial(ctx context.Context, spec gnmi.TargetSpec) (gnmi.Session, error) {
 	d.dials.Add(1)
+	d.mu.Lock()
+	d.at = append(d.at, time.Now())
+	d.mu.Unlock()
 	return d.GnmicDialer.Dial(ctx, spec)
+}
+
+// gaps returns the time between consecutive dials.
+func (d *countingGnmicDialer) gaps() []time.Duration {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []time.Duration
+	for i := 1; i < len(d.at); i++ {
+		out = append(out, d.at[i].Sub(d.at[i-1]))
+	}
+	return out
 }
 
 // runAgainst starts a one-target runner against srv in mode, with quick

@@ -187,26 +187,86 @@ func TestCredentialsThatWorkedWarnAgain(t *testing.T) {
 	require.Equal(t, "WARN", h.logLevel().String())
 }
 
-// A connection that synced resets the backoff, so a target whose stream drops
-// now and then reconnects at the base delay rather than at the delay its
-// first failures built up.
-func TestBackoffResetsAfterASync(t *testing.T) {
-	store, err := mapping.LoadProfiles("")
-	require.NoError(t, err)
-	dialer := &capsScriptDialer{dropStream: func(int32) bool { return true }}
-	var mu sync.Mutex
-	var at []time.Time
-	dialer.onDial = func() {
-		mu.Lock()
-		at = append(at, time.Now())
-		mu.Unlock()
-	}
-	const base = 40 * time.Millisecond
-	capsScriptRunnerWith(t, store, dialer, base, nil)
+// A connection that stayed up past its sync for longer than the backoff cap
+// resets the backoff, so a stream that drops now and then reconnects at the
+// base delay rather than at the delay earlier failures built up. Scaled down
+// from a 30 s cap.
+func TestBackoffResetsAfterAConnectionThatLasted(t *testing.T) {
+	srv := &gnmiTarget{dropAfter: 400 * time.Millisecond}
+	_, _, d, _ := runAgainst(t, srv, config.ModeOnChange, func(r *Runner) {
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 300 * time.Millisecond
+	})
 
-	require.Eventually(t, func() bool { return dialer.dials.Load() >= 6 }, 5*time.Second, 5*time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	// Without the reset the fifth gap is sixteen times the base.
-	require.Less(t, at[5].Sub(at[4]), 4*base)
+	require.Eventually(t, func() bool { return d.dials.Load() >= 6 }, 10*time.Second, 10*time.Millisecond)
+	// Each gap is the 400 ms the stream lasted plus the backoff: without the
+	// reset the fifth gap's backoff is 160 ms, with it 10 ms.
+	require.Less(t, d.gaps()[4], 400*time.Millisecond+120*time.Millisecond, d.gaps())
+}
+
+// A device that syncs and then drops at once is not redialled in a tight
+// loop: a connection that did not last past the cap does not reset the
+// backoff, which settles at the cap.
+func TestBackoffSettlesAtTheCapWhenStreamsDropAfterSync(t *testing.T) {
+	srv := &gnmiTarget{dropAfter: 30 * time.Millisecond}
+	_, _, d, _ := runAgainst(t, srv, config.ModeOnChange, func(r *Runner) {
+		r.backoffBase = 5 * time.Millisecond
+		r.backoffCap = 150 * time.Millisecond
+	})
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= 8 }, 10*time.Second, 10*time.Millisecond)
+	gaps := d.gaps()
+	for _, g := range gaps[5:] {
+		require.GreaterOrEqual(t, g, 150*time.Millisecond, "redialled before the capped backoff: %v", gaps)
+	}
+}
+
+// The time a connection lasted is counted from its first sync, not its last:
+// a GET target syncs on every poll, and one that polled for longer than the
+// cap still resets the backoff when its Gets start failing.
+func TestBackoffCountsFromTheFirstSync(t *testing.T) {
+	srv := &gnmiTarget{}
+	srv.getErr = func([]string) error {
+		if time.Since(time.Unix(0, srv.lastCaps.Load())) > 400*time.Millisecond {
+			return status.Error(codes.Unavailable, "busy")
+		}
+		return nil
+	}
+	_, _, d, _ := runAgainst(t, srv, config.ModeGet, func(r *Runner) {
+		r.policy.Config.GetIntervalMs = 50
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 300 * time.Millisecond
+	})
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= 6 }, 10*time.Second, 10*time.Millisecond)
+	require.Less(t, d.gaps()[4], 400*time.Millisecond+120*time.Millisecond, d.gaps())
+}
+
+// A connection must outlast the delay its failures built up, not only the cap,
+// before it resets the backoff. Credentials refused for six attempts build a
+// delay past the cap; the connection that then works lasts longer than the cap
+// but not that delay, so the next wait is the cap rather than the base.
+func TestBackoffResetNeedsTheCurrentDelayToo(t *testing.T) {
+	const working = 7 // the first attempt whose credentials are accepted
+	srv := &gnmiTarget{dropAfter: 300 * time.Millisecond}
+	refused := func() error {
+		if srv.caps.Load() < working {
+			return status.Error(codes.Unauthenticated, "bad credentials")
+		}
+		return nil
+	}
+	srv.capsErr = func(int32) error { return refused() }
+	srv.getErr = func([]string) error { return refused() }
+	srv.subErr = func([]string) error { return refused() }
+	_, client, d, _ := runAgainst(t, srv, config.ModeOnChange, func(r *Runner) {
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 100 * time.Millisecond
+		r.credentialBackoffCap = 2 * time.Second
+	})
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= working+1 }, 10*time.Second, 10*time.Millisecond)
+	require.Positive(t, client.count(), "the working connection ingested")
+	// The working connection lasted about 300 ms; then the capped 100 ms wait,
+	// where a reset would wait 10 ms.
+	require.GreaterOrEqual(t, d.gaps()[working-1], 300*time.Millisecond+80*time.Millisecond, d.gaps())
 }

@@ -84,8 +84,9 @@ type targetState struct {
 	LastSync       time.Time // last completed initial-sync / snapshot boundary
 	LastFlush      time.Time // last successful Diode ingest
 	LastError      string
-	DegradedReason string // why the session runs degraded; cleared by a clean setup
-	lastProfile    string // last profile selected for this host; gates the selection log
+	DegradedReason string    // why the session runs degraded; cleared by a clean setup
+	lastProfile    string    // last profile selected for this host; gates the selection log
+	connSynced     time.Time // the current connection's first sync, zero before it
 }
 
 // capsAttempts is how many consecutive transient Capabilities failures a target
@@ -212,14 +213,28 @@ func (r *Runner) setState(host string, fn func(*targetState)) {
 	}
 }
 
-// lastSync is the target's last completed sync, zero before the first.
-func (r *Runner) lastSync(host string) time.Time {
+// markSynced records a completed sync of host's current connection.
+func (r *Runner) markSynced(host string) {
+	r.setState(host, func(s *targetState) {
+		s.LastSync = time.Now()
+		if s.connSynced.IsZero() {
+			s.connSynced = s.LastSync
+		}
+	})
+}
+
+// connSyncedAt returns when host's connection first synced and starts the
+// next connection's record; zero if it never synced.
+func (r *Runner) connSyncedAt(host string) time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if s, ok := r.states[host]; ok {
-		return s.LastSync
+	s, ok := r.states[host]
+	if !ok {
+		return time.Time{}
 	}
-	return time.Time{}
+	at := s.connSynced
+	s.connSynced = time.Time{}
+	return at
 }
 
 // targetLoop owns the per-target in-memory model and debouncer for the whole
@@ -266,16 +281,19 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 			metrics.GetReconnects().Add(r.ctx, 1)
 		}
 		first = false
-		syncedBefore := r.lastSync(t.Host)
 		hist.credsRefused = false
 		err := r.runOnce(t, model, deb, retry, &hist)
 		if r.ctx.Err() != nil {
 			return
 		}
-		if r.lastSync(t.Host).After(syncedBefore) {
-			// A connection that synced worked, whatever ended it.
+		if syncedAt := r.connSyncedAt(t.Host); !syncedAt.IsZero() {
+			// A connection that synced worked, whatever ended it. It resets the
+			// backoff only if it then lasted, or a device that drops right
+			// after each sync would be redialled at the base delay for ever.
 			hist.credsWorked = true
-			backoff.reset()
+			if time.Since(syncedAt) >= max(r.backoffCap, backoff.next) {
+				backoff.reset()
+			}
 		} else if hist.capsFailures >= capsAttempts {
 			// A connection on _base that never synced earns no shortcut: the
 			// next ones go through Capabilities again before giving up on it.
@@ -718,7 +736,7 @@ func (r *Runner) streamLoop(host string, profile *mapping.Profile, pruneEvery ti
 			metrics.GetRemovalsBlocked().Add(r.ctx, int64(len(pruned)))
 		}
 		if trustworthy {
-			r.setState(host, func(s *targetState) { s.LastSync = time.Now() })
+			r.markSynced(host)
 		}
 		synced = true // initial dump complete — debounced flushes may proceed
 		deb.Trigger()
@@ -865,7 +883,7 @@ func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Pro
 			metrics.GetRemovalsBlocked().Add(r.ctx, int64(len(pruned)))
 		}
 		if trustworthy {
-			r.setState(host, func(s *targetState) { s.LastSync = time.Now() })
+			r.markSynced(host)
 		}
 		flush()
 		return nil
