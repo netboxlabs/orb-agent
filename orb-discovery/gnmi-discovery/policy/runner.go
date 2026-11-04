@@ -308,10 +308,18 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, mapLogger, &lagWarned)
 		dev, _ := entities[0].(*diode.Device) // Translate always emits the Device first
 		// A hostname of only whitespace is no name, and is never sent: with a
-		// netbox_id it would rename the matched device. Cleared before
-		// AssignPrimaryIP, which copies the Device into the primary IP.
+		// netbox_id it would rename the matched device. The name and the
+		// netbox_id match are both settled before AssignPrimaryIP, which copies
+		// the Device into the primary IP.
 		if dev != nil && dev.Name != nil && strings.TrimSpace(*dev.Name) == "" {
 			dev.Name = nil
+		}
+		// Q2: thread target netbox_id onto the Device for explicit NetBox matching.
+		if t.NetboxID != nil && dev != nil {
+			if dev.Metadata == nil {
+				dev.Metadata = diode.Metadata{}
+			}
+			dev.Metadata["source_match"] = diode.Metadata{"netbox_id": *t.NetboxID}
 		}
 		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		// Attach the captured CONFIG datastore (already redacted) to the Device,
@@ -324,13 +332,6 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			if assetTag != "" {
 				dev.AssetTag = &assetTag
 			}
-		}
-		// Q2: thread target netbox_id onto the Device for explicit NetBox matching.
-		if t.NetboxID != nil && dev != nil {
-			if dev.Metadata == nil {
-				dev.Metadata = diode.Metadata{}
-			}
-			dev.Metadata["source_match"] = diode.Metadata{"netbox_id": *t.NetboxID}
 		}
 		// H-1: never ingest a nameless, unidentified device. A flush can fire from
 		// an interface-only update or an empty/partial sync before the hostname

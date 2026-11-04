@@ -17,17 +17,23 @@ import (
 
 const guardHost = "192.0.2.20:57400"
 
+// noHostname makes guardRunner's device report no hostname leaf at all.
+const noHostname = "\x00"
+
 // guardRunner polls a GET target whose hostname leaf is hostname, with one
 // interface carrying the target's address so the primary IP is set too.
 func guardRunner(t *testing.T, hostname string, netboxID *int) (*Runner, *recordingClient, *syncBuf) {
 	t.Helper()
 	store, err := mapping.LoadProfiles("")
 	require.NoError(t, err)
-	fake := &gnmi.FakeSession{GetResult: gnmi.Notification{Updates: []gnmi.Update{
-		{Path: "/system/state/hostname", Value: hostname},
+	updates := []gnmi.Update{
 		{Path: "/interfaces/interface[name=Ethernet1]/state/type", Value: "iana-if-type:ethernetCsmacd"},
 		{Path: "/interfaces/interface[name=Ethernet1]/subinterfaces/subinterface[index=0]/ipv4/addresses/address[ip=192.0.2.20]/state/prefix-length", Value: float64(24)},
-	}}}
+	}
+	if hostname != noHostname {
+		updates = append(updates, gnmi.Update{Path: "/system/state/hostname", Value: hostname})
+	}
+	fake := &gnmi.FakeSession{GetResult: gnmi.Notification{Updates: updates}}
 	client := &recordingClient{}
 	logs := &syncBuf{}
 	pol := config.Policy{
@@ -110,4 +116,36 @@ func TestPaddedHostnameIsSentUnchanged(t *testing.T) {
 	require.True(t, ok)
 	require.NotNil(t, dev.Name)
 	require.Equal(t, " sw1 ", *dev.Name)
+}
+
+// primaryIPDevice is the device copy nested in the Device's primary IP.
+func primaryIPDevice(t *testing.T, dev *diode.Device) *diode.Device {
+	t.Helper()
+	require.NotNil(t, dev.PrimaryIp4)
+	iface, ok := dev.PrimaryIp4.AssignedObject.(*diode.Interface)
+	require.True(t, ok)
+	require.NotNil(t, iface.Device)
+	return iface.Device
+}
+
+// A device matched by netbox_id alone, with no usable hostname, can still be
+// matched where it is nested in its primary IP: the copy there carries the
+// same source_match, and nothing else from the Device's metadata.
+func TestPrimaryIPDeviceCarriesSourceMatchWithoutAName(t *testing.T) {
+	for name, hostname := range map[string]string{"absent": noHostname, "empty": "", "blank": "   "} {
+		t.Run(name, func(t *testing.T) {
+			id := 7
+			_, client, _ := guardRunner(t, hostname, &id)
+
+			require.Eventually(t, func() bool { return client.count() >= 1 }, 2*time.Second, 10*time.Millisecond)
+			ents := client.lastIngested()
+			dev, ok := ents[0].(*diode.Device)
+			require.True(t, ok)
+			require.Nil(t, dev.Name)
+			nested := primaryIPDevice(t, dev)
+			require.Nil(t, nested.Name)
+			require.Equal(t, diode.Metadata{"source_match": diode.Metadata{"netbox_id": 7}}, nested.Metadata)
+			require.Contains(t, dev.Metadata, "run_id", "the Device's own metadata is not shared with the copy")
+		})
+	}
 }

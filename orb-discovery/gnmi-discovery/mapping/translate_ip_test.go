@@ -219,3 +219,27 @@ func TestAssignPrimaryIPCarriesVrf(t *testing.T) {
 	require.NotNil(t, dev.PrimaryIp4.Vrf)            // VRF carried for per-VRF matching
 	require.Equal(t, "blue", *dev.PrimaryIp4.Vrf.Name)
 }
+
+// The device copy in a primary IP gets its own metadata holding only
+// source_match, so it can be matched like the Device and later metadata
+// written to the Device does not leak into it.
+func TestAssignPrimaryIPCopiesOnlySourceMatch(t *testing.T) {
+	sm := diode.Metadata{"netbox_id": 7}
+	dev := &diode.Device{Metadata: diode.Metadata{"source_match": sm, "other": "x"}}
+	ents := []diode.Entity{dev, &diode.IPAddress{
+		Address: strptr("192.0.2.1/24"), AssignedObject: &diode.Interface{Device: dev, Name: strptr("Ethernet1")},
+	}}
+	require.NotNil(t, AssignPrimaryIP(ents, "192.0.2.1"))
+	nested := dev.PrimaryIp4.AssignedObject.(*diode.Interface).Device
+	require.Equal(t, diode.Metadata{"source_match": sm}, nested.Metadata)
+	dev.Metadata["run_id"] = "r1"
+	require.NotContains(t, nested.Metadata, "run_id")
+
+	// Without source_match the copy carries no metadata, as before.
+	plain := &diode.Device{Metadata: diode.Metadata{"other": "x"}}
+	ents = []diode.Entity{plain, &diode.IPAddress{
+		Address: strptr("192.0.2.1/24"), AssignedObject: &diode.Interface{Device: plain, Name: strptr("Ethernet1")},
+	}}
+	require.NotNil(t, AssignPrimaryIP(ents, "192.0.2.1"))
+	require.Nil(t, plain.PrimaryIp4.AssignedObject.(*diode.Interface).Device.Metadata)
+}
