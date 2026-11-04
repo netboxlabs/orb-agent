@@ -389,8 +389,14 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			if hist.capsFailures < capsAttempts {
 				return fmt.Errorf("capabilities: %w", capErr)
 			}
-			setupReason = fmt.Sprintf("capabilities failed on %d consecutive attempts, using the _base profile: %v",
-				hist.capsFailures, capErr)
+			if hist.capsFailures == capsAttempts {
+				setupReason = fmt.Sprintf("capabilities failed on %d attempts in a row; using the _base profile: %v",
+					capsAttempts, capErr)
+			} else {
+				// An earlier _base connection synced, so this one did not redial.
+				setupReason = fmt.Sprintf("capabilities failed (%v); using the _base profile, "+
+					"as on the earlier connection that synced", capErr)
+			}
 			record()
 		}
 		r.logger.Log(r.ctx, hist.logLevel(), "gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)

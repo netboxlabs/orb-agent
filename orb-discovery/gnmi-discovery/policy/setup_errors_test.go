@@ -82,7 +82,7 @@ func TestCapabilitiesRefusedEveryTimeIngestsOnBaseAfterThreeAttempts(t *testing.
 	require.EqualValues(t, capsAttempts, d.dials.Load())
 	require.EqualValues(t, 1, srv.subs.Load(), "only the last attempt went past Capabilities")
 	st := targetStatus(t, r)
-	require.Contains(t, st.DegradedReason, "capabilities")
+	require.Contains(t, st.DegradedReason, "capabilities failed on 3 attempts in a row")
 	require.Contains(t, logs.String(), "profile=_base")
 }
 
@@ -582,4 +582,27 @@ func TestGetPollDegradationClearsOnTheNextCleanPoll(t *testing.T) {
 	require.Eventually(t, func() bool { return targetStatus(t, r).DegradedReason != "" }, 5*time.Second, 5*time.Millisecond)
 	refusing.Store(false)
 	require.Eventually(t, func() bool { return targetStatus(t, r).DegradedReason == "" }, 5*time.Second, 5*time.Millisecond)
+}
+
+// After a _base connection has synced, a reconnect goes on with _base at once,
+// and its reason says that rather than counting attempts it did not make.
+func TestBaseReasonAfterASyncedBaseConnection(t *testing.T) {
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	refused := status.Error(codes.Unavailable, "refused")
+	script := make([]error, 20)
+	for i := range script {
+		script[i] = refused
+	}
+	// The _base connection syncs and drops; the next one goes on with _base.
+	dialer := &capsScriptDialer{script: script, dropStream: func(dial int32) bool { return dial == capsAttempts }}
+	r, client, _ := capsScriptRunner(t, store, dialer)
+
+	require.Eventually(t, func() bool {
+		return dialer.dials.Load() == capsAttempts+1 && strings.Count(dialer.eventLog(), "S") == 2
+	}, 2*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool { return client.count() > 0 }, 2*time.Second, 5*time.Millisecond)
+	reason := targetStatus(t, r).DegradedReason
+	require.Contains(t, reason, "as on the earlier connection that synced")
+	require.NotContains(t, reason, "in a row")
 }
