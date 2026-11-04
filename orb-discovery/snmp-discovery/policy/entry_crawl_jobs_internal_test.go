@@ -3,12 +3,14 @@ package policy
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gosnmp/gosnmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -20,11 +22,19 @@ import (
 // or SNMPv3 users it lists. An SNMPv3 probe presents no user of the entry's,
 // so every SNMPv3 agent answers it. A probe slowed for a host and community
 // holds that entry's scan back, so the other entry schedules its crawls first.
+// Every agent also answers with the rows in extra.
 type credentialAgents struct {
 	accepts map[string][]string
 	slow    map[string]string
+	extra   map[string]snmp.PDU
 	mu      sync.Mutex
 	crawls  map[string]int
+}
+
+func (a *credentialAgents) rows(host string) map[string]snmp.PDU {
+	rows := agentRows(host)
+	maps.Copy(rows, a.extra)
+	return rows
 }
 
 func (a *credentialAgents) dial(host string, _ uint16, _ int, timeout time.Duration, auth *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
@@ -38,7 +48,7 @@ func (a *credentialAgents) dial(host string, _ uint16, _ int, timeout time.Durat
 			time.Sleep(600 * time.Millisecond)
 		}
 		if v3 || slices.Contains(a.accepts[host], credential) {
-			return &rowWalker{rows: agentRows(host)}, nil
+			return &rowWalker{rows: a.rows(host)}, nil
 		}
 		return failingWalker{}, nil
 	}
@@ -46,7 +56,7 @@ func (a *credentialAgents) dial(host string, _ uint16, _ int, timeout time.Durat
 	a.crawls[host+"/"+credential]++
 	a.mu.Unlock()
 	if slices.Contains(a.accepts[host], credential) {
-		return &rowWalker{rows: agentRows(host)}, nil
+		return &rowWalker{rows: a.rows(host)}, nil
 	}
 	return failingWalker{}, nil
 }
@@ -235,4 +245,52 @@ policies:
 	}
 	assert.ElementsMatch(t, []any{float64(1), float64(2)}, entries["192.0.2.1"])
 	assert.Equal(t, []any{float64(3)}, entries["192.0.2.9"])
+}
+
+// Asset tags are claimed by the device's address, not by the crawl job, so
+// two entries that crawl one host both send its tag, and neither is told the
+// other already owns it.
+func TestEntriesCrawlingOneHostShareItsAssetTag(t *testing.T) {
+	agents := &credentialAgents{
+		accepts: map[string][]string{"192.0.2.1": {"community-a", "community-b"}},
+		extra: map[string]snmp.PDU{
+			// One chassis, with a serial and an asset ID.
+			".1.3.6.1.2.1.47.1.1.1.1.4.1":  {Type: gosnmp.Integer, Value: 0},
+			".1.3.6.1.2.1.47.1.1.1.1.5.1":  {Type: gosnmp.Integer, Value: 3},
+			".1.3.6.1.2.1.47.1.1.1.1.11.1": {Type: gosnmp.OctetString, Value: "SN-0001"},
+			".1.3.6.1.2.1.47.1.1.1.1.15.1": {Type: gosnmp.OctetString, Value: "ASSET-0001"},
+		},
+		crawls: map[string]int{},
+	}
+	client := &recordingClient{}
+	logs := &lockedBuffer{}
+	r, _ := newPolicyRunner(t, `
+policies:
+  p1:
+    config:
+      timeout: 10
+      snmp_timeout: 3
+      snmp_probe_timeout: 1
+      options:
+        discover_asset_tags: true
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: example-community
+      targets:
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+`
+`, agents.dial, client, jsonLogger(logs))
+
+	r.Start()
+	require.Eventually(t, func() bool { return len(client.devicesOf("192.0.2.1")) == 2 }, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, r.Stop())
+
+	for _, device := range client.devicesOf("192.0.2.1") {
+		require.NotNil(t, device.AssetTag)
+		assert.Equal(t, "ASSET-0001", *device.AssetTag)
+	}
+	for _, record := range recordsAt(t, logs, "WARN") {
+		assert.NotEqual(t, "asset tag skipped: already discovered on another target of this policy", record["msg"])
+	}
 }
