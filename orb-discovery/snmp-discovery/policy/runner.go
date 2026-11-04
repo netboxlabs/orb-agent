@@ -196,8 +196,9 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	targetCh := make(chan config.Target)
 	resultsCh := make(chan config.Target, workerCount)
 
-	// Addresses whose probe started before the scan ran out of time.
-	var probed atomic.Int64
+	// Addresses whose probe started before the scan ran out of time, and
+	// probes that panicked.
+	var probed, panicked atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
 	for range workerCount {
@@ -208,7 +209,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 					continue
 				}
 				probed.Add(1)
-				if r.probeRecovering(ctx, log, target) {
+				if r.probeRecovering(ctx, log, target, &panicked) {
 					resultsCh <- target
 				}
 			}
@@ -251,19 +252,35 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	// runScanWithOriginal invocation for a different range target in the same policy.
 	r.pruneHostJobs(originalTarget+"::", liveIDs)
 
+	// Probe panics past the first are only counted. The count goes once on
+	// the scan's last line, and in its reason when it fails.
+	panics := panicked.Load()
+	withPanics := func(attrs ...any) []any {
+		if panics > 0 {
+			attrs = append(attrs, "panicked_probes", panics)
+		}
+		return attrs
+	}
+	failure := func(err error) error {
+		if panics > 0 {
+			return fmt.Errorf("%w; %d probes panicked, the log has the first one's stack", err, panics)
+		}
+		return err
+	}
+
 	// A scan that ran out of its own time still crawls the hosts it found,
 	// and its run fails saying how far it got. One cut short because the
 	// policy stopped crawls nothing.
 	var timedOut error
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		if !errors.Is(ctxErr, context.DeadlineExceeded) || r.ctx.Err() != nil {
-			log.Warn("SNMP probe scan interrupted", "error", ctxErr, "responsive_target_count", len(responsive))
-			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, ctxErr, len(responsive))
+			log.Warn("SNMP probe scan interrupted", withPanics("error", ctxErr, "responsive_target_count", len(responsive))...)
+			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(ctxErr), len(responsive))
 			return
 		}
-		timedOut = fmt.Errorf("%w (probed %d of %d addresses, %d responded; raise timeout to probe them all)",
-			ctxErr, probed.Load(), len(targets), len(responsive))
-		log.Warn("SNMP probe scan interrupted", "error", timedOut, "responsive_target_count", len(responsive))
+		timedOut = failure(fmt.Errorf("%w (probed %d of %d addresses, %d responded; raise timeout to probe them all)",
+			ctxErr, probed.Load(), len(targets), len(responsive)))
+		log.Warn("SNMP probe scan interrupted", withPanics("error", timedOut, "responsive_target_count", len(responsive))...)
 	}
 
 	if len(responsive) == 0 {
@@ -271,9 +288,9 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, 0)
 			return
 		}
-		log.Warn("no hosts responded to SNMP probe")
+		log.Warn("no hosts responded to SNMP probe", withPanics()...)
 		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
-			RunStatusFailed, fmt.Errorf("no hosts responded to SNMP probe"), 0)
+			RunStatusFailed, failure(fmt.Errorf("no hosts responded to SNMP probe")), 0)
 		return
 	}
 
@@ -316,7 +333,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 
 	// Update scan run status
 	r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusCompleted, nil, len(responsive))
-	log.Info("SNMP probe scan complete", "responsive_target_count", len(responsive))
+	log.Info("SNMP probe scan complete", withPanics("responsive_target_count", len(responsive))...)
 }
 
 // pruneHostJobs forgets the crawl jobs under keyPrefix that are no longer
@@ -387,13 +404,16 @@ func (r *Runner) failRunOnPanic(log *slog.Logger, target string, port uint16, ru
 }
 
 // probeRecovering probes one address. A panic counts as no answer, so the
-// worker that hit it goes on probing the rest of the range.
-func (r *Runner) probeRecovering(ctx context.Context, log *slog.Logger, target config.Target) (answered bool) {
+// worker that hit it goes on probing the rest of the range. Only the scan's
+// first panic is logged, with its stack; panicked counts them all.
+func (r *Runner) probeRecovering(ctx context.Context, log *slog.Logger, target config.Target, panicked *atomic.Int64) (answered bool) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			log.Error("recovered from a panic while probing; the address counts as not answering",
-				"host", target.Host, "port", target.Port,
-				"error", fmt.Errorf("panic: %v", recovered), "stack", string(debug.Stack()))
+			if panicked.Add(1) == 1 {
+				log.Error("recovered from a panic while probing; the address counts as not answering, and the scan counts any further probe panics",
+					"host", target.Host, "port", target.Port,
+					"error", fmt.Errorf("panic: %v", recovered), "stack", string(debug.Stack()))
+			}
 			answered = false
 		}
 	}()

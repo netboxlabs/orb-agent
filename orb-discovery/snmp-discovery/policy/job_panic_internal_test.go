@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -278,8 +279,21 @@ policies:
 	assert.Contains(t, errs[0]["stack"], "goroutine")
 }
 
+// recordsAt returns the records logged at level.
+func recordsAt(t *testing.T, logs *lockedBuffer, level string) []map[string]any {
+	t.Helper()
+	var records []map[string]any
+	for _, record := range logRecords(t, logs.String()) {
+		if record["level"] == level {
+			records = append(records, record)
+		}
+	}
+	return records
+}
+
 // A probe that panics counts as no answer, and its worker goes on probing the
-// rest of the range.
+// rest of the range. Only the first panic of a scan is logged with its stack;
+// the rest are counted.
 func TestProbePanicKeepsTheWorker(t *testing.T) {
 	var targets []config.Target
 	for i := 1; i <= 254; i++ {
@@ -295,9 +309,7 @@ func TestProbePanicKeepsTheWorker(t *testing.T) {
 		}
 		return &rowWalker{rows: agentRows(host)}, nil
 	}
-	scheduler, err := gocron.NewScheduler()
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = scheduler.Shutdown() })
+	scheduler := notStartedScheduler(t)
 	r := scanRunner(t, scheduler, factory, nil)
 	logs := &lockedBuffer{}
 	r.logger = jsonLogger(logs)
@@ -308,7 +320,92 @@ func TestProbePanicKeepsTheWorker(t *testing.T) {
 	runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
 	require.Len(t, runs, 1)
 	assert.Equal(t, RunStatusCompleted, runs[0].Status)
-	assert.Len(t, errorRecords(t, logs), len(targets)-1, "one error per address whose probe panicked")
+	errs := errorRecords(t, logs)
+	require.Len(t, errs, 1, "the first panic, with its stack")
+	assert.Contains(t, errs[0]["stack"], "goroutine")
+	assert.NotEmpty(t, errs[0]["host"])
+	var complete []map[string]any
+	for _, record := range recordsAt(t, logs, "INFO") {
+		if record["msg"] == "SNMP probe scan complete" {
+			complete = append(complete, record)
+		}
+	}
+	require.Len(t, complete, 1)
+	assert.InDelta(t, len(targets)-1, complete[0]["panicked_probes"], 0, "the count, once")
+}
+
+// A scan that fails says in its reason, and on its failure line, how many of
+// its probes panicked.
+func TestProbePanicsCountedWhenTheScanFails(t *testing.T) {
+	targets := []config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}, {Host: "192.0.2.3", Port: 161}}
+	panicking := func(string, uint16, int, time.Duration, *config.Authentication, *slog.Logger) (snmp.Walker, error) {
+		panic("probe failure")
+	}
+	silentLast := func(host string, port uint16, retries int, timeout time.Duration, auth *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
+		if host == "192.0.2.3" {
+			return silentWalker{}, nil
+		}
+		return panicking(host, port, retries, timeout, auth, logger)
+	}
+	for _, tc := range []struct {
+		name       string
+		factory    snmp.ClientFactory
+		timeout    time.Duration
+		stop       bool
+		wantReason *regexp.Regexp
+		wantLine   string
+	}{
+		{
+			name:       "no host answers",
+			factory:    panicking,
+			timeout:    10 * time.Second,
+			wantReason: regexp.MustCompile(`^no hosts responded to SNMP probe; 3 probes panicked, the log has the first one's stack$`),
+			wantLine:   "no hosts responded to SNMP probe",
+		},
+		{
+			name:       "the policy stops",
+			factory:    silentLast,
+			timeout:    10 * time.Second,
+			stop:       true,
+			wantReason: regexp.MustCompile(`^context canceled; 2 probes panicked, the log has the first one's stack$`),
+			wantLine:   "SNMP probe scan interrupted",
+		},
+		{
+			name:       "the scan runs out of time",
+			factory:    silentLast,
+			timeout:    300 * time.Millisecond,
+			wantReason: regexp.MustCompile(`^context deadline exceeded \(.*\); 2 probes panicked, the log has the first one's stack$`),
+			wantLine:   "SNMP probe scan interrupted",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := scanRunner(t, notStartedScheduler(t), tc.factory, nil)
+			r.timeout = tc.timeout
+			if tc.stop {
+				ctx, cancel := context.WithCancel(r.ctx)
+				r.ctx = ctx
+				time.AfterFunc(300*time.Millisecond, cancel)
+			}
+			logs := &lockedBuffer{}
+			r.logger = jsonLogger(logs)
+
+			r.runScanWithOriginal(targets, "192.0.2.1-3")
+
+			runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-3", 161)
+			require.Len(t, runs, 1)
+			assert.Equal(t, RunStatusFailed, runs[0].Status)
+			assert.Regexp(t, tc.wantReason, runs[0].Reason)
+			assert.Len(t, errorRecords(t, logs), 1)
+			var lines []map[string]any
+			for _, record := range recordsAt(t, logs, "WARN") {
+				if record["msg"] == tc.wantLine {
+					lines = append(lines, record)
+				}
+			}
+			require.Len(t, lines, 1)
+			assert.NotNil(t, lines[0]["panicked_probes"])
+		})
+	}
 }
 
 // A panic outside any run is still recovered by the scheduler, and logged.
