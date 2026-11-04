@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -166,4 +167,19 @@ func TestRescanKeepsOneCrawlJobPerEntryAndHost(t *testing.T) {
 		fmt.Sprintf("0::192.0.2.0/30::%s:161", "192.0.2.1"), fmt.Sprintf("0::192.0.2.0/30::%s:161", "192.0.2.2"),
 		fmt.Sprintf("1::192.0.2.0/30::%s:161", "192.0.2.1"), fmt.Sprintf("1::192.0.2.0/30::%s:161", "192.0.2.2"),
 	}, keys)
+}
+
+// An entry's scan forgets its own crawl jobs that are gone, and leaves every
+// other entry's to that entry's scans.
+func TestScanPrunesOnlyItsOwnEntrysJobs(t *testing.T) {
+	agents := &credentialAgents{accepts: map[string][]string{}, crawls: map[string]int{}}
+	r := scanRunner(t, notStartedScheduler(t), agents.dial, nil)
+	own, other := "0::192.0.2.0/30::192.0.2.9:161", "1::192.0.2.0/30::192.0.2.9:161"
+	r.activeHostJobs[own] = uuid.New()
+	r.activeHostJobs[other] = uuid.New()
+
+	r.runScanWithOriginal(0, nil, "192.0.2.0/30")
+
+	assert.NotContains(t, r.activeHostJobs, own, "entry 1's dead job is forgotten")
+	assert.Contains(t, r.activeHostJobs, other, "entry 2's is left to its own scans")
 }

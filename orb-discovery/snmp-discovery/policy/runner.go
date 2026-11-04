@@ -710,10 +710,10 @@ func logEntitiesForIngestion(log *slog.Logger, entities []diode.Entity) {
 }
 
 // assetTagClaimer returns the per-target claim callback handed to
-// mapping.TranslateAsStack. targetID must uniquely identify the target
-// within this policy — host:port, matching the runner's job identity —
-// NOT the bare host: two agents on one host behind different ports are
-// distinct devices, and keying by host alone would let them share a
+// mapping.TranslateAsStack. targetID is the device's address, host:port,
+// not the crawl job's key: entries that crawl one host share its asset tags.
+// Not the bare host either: two agents on one host behind different ports
+// are distinct devices, and keying by host alone would let them share a
 // cloned tag. First target to discover a tag owns it for the lifetime
 // of this runner (one policy); the same target may re-claim its tags
 // on every cycle. A different target reporting an already-owned tag —
