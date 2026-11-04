@@ -452,6 +452,22 @@ policies:
 	assert.Contains(t, lineContaining(out, "usernme"), "policy=p2")
 }
 
+// An option written at config level is reported with its policy and the place it belongs.
+func TestMisplacedOptionWarningNamesThePolicy(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      emit_lag_membership: false
+    scope:
+      targets:
+        - host: 192.0.2.1
+`)
+	line := lineContaining(out, "emit_lag_membership")
+	assert.Contains(t, line, "policy=p1")
+	assert.Contains(t, line, "did_you_mean=options.emit_lag_membership")
+}
+
 // A key in a block that several policies share through an anchor is reported
 // once for each of them.
 func TestUnknownKeyInASharedAnchorNamesEveryPolicy(t *testing.T) {

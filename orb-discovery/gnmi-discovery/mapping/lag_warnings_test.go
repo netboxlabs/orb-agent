@@ -86,7 +86,7 @@ func TestLagWarningsLogEachMembershipOnce(t *testing.T) {
 		"the same member under another aggregate is still logged")
 }
 
-// Without a LagWarnings every translation logs, as Translate always has.
+// Without a LagWarnings every translation logs, as TranslateWithOptions always has.
 func TestLagWarningsNilLogsEveryTime(t *testing.T) {
 	store, err := LoadProfiles("")
 	require.NoError(t, err)

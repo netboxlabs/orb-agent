@@ -124,10 +124,10 @@ func entryLine(entry string) int {
 // policyKeyOwners maps every key a policy uses, including keys it takes from an
 // anchor or a `<<` merge, to the policies that use it, in document order.
 //
-// It does not know which block type each key sits in, so an anchor reused in
-// different blocks can name a policy whose own use of it is valid. That needs
-// shared anchors in a payload posted to the backend API directly; the agent
-// sends one policy per request.
+// Keys are matched by line only, without their block type or column, so a
+// payload posted to the backend API directly with several policies on one
+// line, or with shared or overridden anchors, can name a policy that is not at
+// fault. The agent sends one policy per request, in block style without anchors.
 func policyKeyOwners(data []byte) map[keyAt][]string {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
