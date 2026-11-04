@@ -34,8 +34,9 @@ type probeTarget struct {
 	failAfterData error
 	gets          atomic.Int32
 
-	mu      sync.Mutex
-	subReqs [][]string
+	mu         sync.Mutex
+	subReqs    [][]string
+	sampleReqs [][]string // the SAMPLE subscriptions among subReqs
 }
 
 func newProbeTarget(t *testing.T) (*probeTarget, Session) {
@@ -63,6 +64,9 @@ func newProbeTarget(t *testing.T) (*probeTarget, Session) {
 		}
 		pt.mu.Lock()
 		pt.subReqs = append(pt.subReqs, paths)
+		if subs := req.GetSubscribe().GetSubscription(); len(subs) > 0 && subs[0].GetMode() == gnmiproto.SubscriptionMode_SAMPLE {
+			pt.sampleReqs = append(pt.sampleReqs, paths)
+		}
 		pt.mu.Unlock()
 		if pt.subErr != nil {
 			if err := pt.subErr(paths); err != nil {
@@ -431,7 +435,12 @@ func TestRetryRefusedTooRestoresThePaths(t *testing.T) {
 		return nil
 	}
 	var calls atomic.Int32
+	var refusing atomic.Bool
+	refusing.Store(true)
 	pt.subErr = func([]string) error {
+		if !refusing.Load() {
+			return nil
+		}
 		return status.Error(codes.InvalidArgument, fmt.Sprintf("on_change refused, call %d", calls.Add(1)))
 	}
 
@@ -446,9 +455,26 @@ func TestRetryRefusedTooRestoresThePaths(t *testing.T) {
 		t.Fatal("no error")
 	}
 
-	pt.subErr = nil
-	subscribeAndRead(t, sess)
-	assert.Equal(t, sorted(probePaths...), pt.lastSubscription(t), "the NotFound path stays for the session")
+	// gnmic may still send the refused subscription once more in the
+	// background, so the next one is told apart by its mode.
+	refusing.Store(false)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel2()
+	notes, errs2, err := sess.Subscribe(ctx2, Sample, probePaths, 100)
+	require.NoError(t, err)
+	select {
+	case <-notes:
+	case e := <-errs2:
+		t.Fatalf("stream failed: %v", e)
+	case <-ctx2.Done():
+		t.Fatal("no data")
+	}
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
+	require.Len(t, pt.sampleReqs, 1)
+	got := slices.Clone(pt.sampleReqs[0])
+	slices.Sort(got)
+	assert.Equal(t, sorted(probePaths...), got, "the NotFound path stays for the session")
 }
 
 // The retry is served every time: it waits for the refused attempt to wind
