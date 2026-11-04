@@ -238,7 +238,7 @@ Each target in the `targets` list can include:
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope. `position` and `face` are set here only (see [Rack placement](#rack-placement)) |
-| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range, a `/32` or a one-address range included. |
 
 #### Subnet and range scanning
 
@@ -256,8 +256,10 @@ a host as an entry of its own (the address written as itself, a `/32` or a
 one-address range) and a subnet or range of the same policy covers it on the
 same `port`, the subnet or range leaves it out: the range neither probes nor
 crawls it, and the host is discovered once, with its own entry's
-`authentication`, `override_defaults` and `netbox_id`. An entry without a
-`port` is on 161, so it matches a range on 161. Hostnames are not resolved, so
+`authentication` and `override_defaults`. Its entry's `netbox_id` applies only
+when the host is written as the bare address: one on a `/32` or a one-address
+range is ignored, as on any subnet or range syntax. An entry without a `port`
+is on 161, so it matches a range on 161. Hostnames are not resolved, so
 a hostname entry does not take its address out of a range. This applies
 within one policy: two policies covering the same host each discover it. A
 subnet or range whose every address is listed on its own is not scanned. When
