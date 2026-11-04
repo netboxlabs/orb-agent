@@ -138,8 +138,11 @@ type gnmicSession struct {
 //     next Subscribe on this session probes again;
 //   - any other error: pruned.
 //
-// The probe runs under one probeDeadline and never fails the subscription. If
-// it prunes everything, the full set is used, so it is never worse than no probe.
+// The probe runs under one probeDeadline and never fails the subscription. The
+// per-path Gets run probeConcurrency at a time, each under its own deadline, so
+// a slow device is asked about every path and one hung path cannot use up the
+// phase. If it prunes everything, the full set is used, so it is never worse
+// than no probe.
 func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []string {
 	s.mu.Lock()
 	cached := s.accepted
@@ -149,14 +152,18 @@ func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []stri
 	}
 	pctx, cancel := context.WithTimeout(ctx, s.probeDeadline())
 	defer cancel()
-	if _, err := s.getPaths(pctx, paths); err == nil {
+	if err := s.probeGet(pctx, paths); err == nil {
 		s.setProbe(paths, nil, nil)
 		return paths
 	}
+	errs := make([]error, len(paths))
+	runBounded(len(paths), probeConcurrency, func(i int) {
+		errs[i] = s.probeGet(pctx, paths[i:i+1])
+	})
 	ok := make([]string, 0, len(paths))
 	var unverified, inconclusive []string
-	for _, p := range paths {
-		_, err := s.getPaths(pctx, []string{p})
+	for i, p := range paths {
+		err := errs[i]
 		switch {
 		case err == nil:
 			ok = append(ok, p)
@@ -174,6 +181,38 @@ func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []stri
 	}
 	s.setProbe(ok, unverified, inconclusive)
 	return ok
+}
+
+// probeConcurrency is how many path probes run at once.
+const probeConcurrency = 8
+
+// probeGet is one probe Get, under a third of the probe's deadline so one hung
+// path cannot use up the phase.
+func (s *gnmicSession) probeGet(ctx context.Context, paths []string) error {
+	gctx, cancel := context.WithTimeout(ctx, s.probeDeadline()/3)
+	defer cancel()
+	_, err := s.getPaths(gctx, paths)
+	return err
+}
+
+// runBounded calls fn(0..n-1) from at most workers goroutines and waits.
+func runBounded(n, workers int, fn func(i int)) {
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	for range min(n, workers) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				fn(i)
+			}
+		}()
+	}
+	for i := range n {
+		idx <- i
+	}
+	close(idx)
+	wg.Wait()
 }
 
 // setProbe records a probe's result, caching it when every path got a verdict.

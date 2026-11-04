@@ -421,3 +421,38 @@ func TestRunnerHandsItsSetupTimeoutToTheSession(t *testing.T) {
 	defer d.mu.Unlock()
 	require.Equal(t, 1234*time.Millisecond, d.specs[0].SetupTimeout)
 }
+
+// A slow, strict device: every Get takes 400 ms, and it refuses any Get or
+// Subscribe that names a subtree it does not model. The probe must reach every
+// path within the setup deadline (scaled down here from 30 s), so that subtree
+// is pruned and the device streams, hostname included.
+func TestSlowStrictDeviceStreams(t *testing.T) {
+	unmodelled := func(paths []string) bool {
+		for _, p := range paths {
+			if strings.Contains(p, "switched-vlan") {
+				return true
+			}
+		}
+		return false
+	}
+	srv := &gnmiTarget{
+		getErr: func(paths []string) error {
+			time.Sleep(400 * time.Millisecond)
+			if unmodelled(paths) {
+				return status.Error(codes.InvalidArgument, "unknown path")
+			}
+			return nil
+		},
+		subErr: func(paths []string) error {
+			if unmodelled(paths) {
+				return status.Error(codes.InvalidArgument, "unknown path in subscription")
+			}
+			return nil
+		},
+	}
+	r, client, _, _ := runAgainst(t, srv, config.ModeAuto, func(r *Runner) { r.setupTimeout = 4 * time.Second })
+
+	require.Eventually(t, func() bool { return client.count() > 0 }, 15*time.Second, 20*time.Millisecond)
+	require.Equal(t, "sw1", *ingestedDevice(t, client).Name)
+	require.Equal(t, "on_change", targetStatus(t, r).ActiveMode)
+}

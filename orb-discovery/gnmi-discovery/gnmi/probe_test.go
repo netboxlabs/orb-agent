@@ -2,6 +2,7 @@ package gnmi
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -335,4 +336,34 @@ func TestSubscribeAfterARefusedOneIsServed(t *testing.T) {
 		cancel()
 		_ = sess.Close()
 	}
+}
+
+// Hung paths cannot hold the probe's workers until the deadline: each Get has
+// its own, so a path queued behind them is still asked, and answered.
+func TestProbeAsksEveryPathDespiteHungOnes(t *testing.T) {
+	const answered = "/system/state/hostname"
+	var paths []string
+	for i := range 9 {
+		paths = append(paths, fmt.Sprintf("/components/component[name=*]/state/leaf-%d", i))
+	}
+	paths = append(paths, answered) // probed last
+	pt := &probeTarget{srv: &testGNMIServer{}}
+	pt.srv.getHandler = func(ctx context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+		for _, p := range req.GetPath() {
+			if pathToString(p) != answered {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		}
+		return &gnmiproto.GetResponse{}, nil
+	}
+	addr := startTestGNMIServer(t, pt.srv)
+	sess, err := (&GnmicDialer{}).Dial(context.Background(), TargetSpec{Host: addr, Insecure: true, SetupTimeout: 900 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sess.Close() })
+
+	got := sess.(*gnmicSession).acceptedPaths(context.Background(), paths)
+	assert.ElementsMatch(t, paths, got, "nothing refused, so nothing pruned")
+	assert.NotContains(t, sess.InconclusivePaths(), answered)
+	assert.Len(t, sess.InconclusivePaths(), 9)
 }
