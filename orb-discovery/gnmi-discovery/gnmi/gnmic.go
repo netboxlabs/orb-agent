@@ -145,8 +145,8 @@ type gnmicSession struct {
 // The probe runs under one probeDeadline and never fails the subscription. The
 // per-path Gets run probeConcurrency at a time, each under its own deadline, so
 // a slow device is asked about every path and one hung path cannot use up the
-// phase; those left without an answer are asked again one at a time. If it prunes everything, the full set is used, so it is never worse
-// than no probe.
+// phase; those left without an answer are asked again one at a time. If it
+// prunes everything, the full set is used, so it is never worse than no probe.
 func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []string {
 	s.mu.Lock()
 	cached := s.accepted
@@ -169,12 +169,16 @@ func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []stri
 	runBounded(len(paths), probeConcurrency, func(i int) {
 		errs[i] = s.probeGet(pctx, paths[i:i+1])
 	})
-	// A device that limits concurrent RPCs refuses some of those with a
-	// transient code; ask those paths again one at a time, in what is left of
-	// the phase, as a probe without concurrency would have.
-	for i := range paths {
-		if Transient(errs[i]) {
-			errs[i] = s.probeGet(pctx, paths[i:i+1])
+	// A device that limits concurrent RPCs answers some of those and refuses
+	// the rest with a transient code; ask those again one at a time, in what is
+	// left of the phase, as a probe without concurrency would have. With no
+	// definite answer at all there is no sign of a limit, so nothing is asked
+	// twice.
+	if slices.ContainsFunc(errs, func(err error) bool { return !Transient(err) }) {
+		for i := range paths {
+			if Transient(errs[i]) {
+				errs[i] = s.probeGet(pctx, paths[i:i+1])
+			}
 		}
 	}
 	ok := make([]string, 0, len(paths))

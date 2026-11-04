@@ -512,3 +512,74 @@ func TestRetryIsServedEveryTime(t *testing.T) {
 		_ = sess.Close()
 	}
 }
+
+// A device that refuses every Get with a transient code gives the probe no
+// definite answer, so nothing suggests a concurrency limit: each path is asked
+// once, as without the concurrent pass.
+func TestProbeDoesNotAskAgainWithoutADefiniteAnswer(t *testing.T) {
+	for _, c := range []codes.Code{codes.Unavailable, codes.ResourceExhausted, codes.Aborted} {
+		t.Run(c.String(), func(t *testing.T) {
+			pt, sess := newProbeTarget(t)
+			pt.getErr = func(string) error { return status.Error(c, "refused") }
+
+			subscribeAndRead(t, sess)
+			assert.EqualValues(t, 1+len(probePaths), pt.gets.Load())
+			assert.ElementsMatch(t, probePaths, sess.InconclusivePaths())
+		})
+	}
+}
+
+// The one-at-a-time pass stays within the probe deadline: with one path
+// answered and four hung, the probe returns at the deadline, not after a
+// per-Get deadline for each hung path.
+func TestProbeAskingAgainStaysWithinTheDeadline(t *testing.T) {
+	const answered = "/system/state/hostname"
+	paths := []string{answered}
+	for i := range 4 {
+		paths = append(paths, fmt.Sprintf("/components/component[name=*]/state/leaf-%d", i))
+	}
+	srv := &testGNMIServer{}
+	srv.getHandler = func(ctx context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+		for _, p := range req.GetPath() {
+			if pathToString(p) != answered {
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		}
+		return &gnmiproto.GetResponse{}, nil
+	}
+	addr := startTestGNMIServer(t, srv)
+	sess, err := (&GnmicDialer{}).Dial(context.Background(), TargetSpec{Host: addr, Insecure: true, SetupTimeout: 300 * time.Millisecond})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = sess.Close() })
+
+	start := time.Now()
+	got := sess.(*gnmicSession).acceptedPaths(context.Background(), paths)
+	assert.Less(t, time.Since(start), 300*time.Millisecond+80*time.Millisecond)
+	assert.ElementsMatch(t, paths, got)
+	assert.Len(t, sess.InconclusivePaths(), 4)
+}
+
+// A NotFound or a refusal is a definite answer too: a device with a concurrency
+// limit whose paths all answer that way still has the rest asked again, and
+// none is left without a verdict.
+func TestProbeAsksAgainAfterAnyDefiniteAnswer(t *testing.T) {
+	for _, c := range []codes.Code{codes.NotFound, codes.InvalidArgument} {
+		t.Run(c.String(), func(t *testing.T) {
+			pt := &probeTarget{srv: &testGNMIServer{}}
+			var inflight atomic.Int32
+			pt.srv.getHandler = func(context.Context, *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
+				defer inflight.Add(-1)
+				if inflight.Add(1) > 1 {
+					return nil, status.Error(codes.ResourceExhausted, "too many concurrent RPCs")
+				}
+				time.Sleep(30 * time.Millisecond)
+				return nil, status.Error(c, "answered")
+			}
+			sess := dialPlaintext(t, startTestGNMIServer(t, pt.srv))
+
+			sess.(*gnmicSession).acceptedPaths(context.Background(), probePaths)
+			assert.Empty(t, sess.InconclusivePaths())
+		})
+	}
+}

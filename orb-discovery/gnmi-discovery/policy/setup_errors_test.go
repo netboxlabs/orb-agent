@@ -532,8 +532,8 @@ func TestUnansweredProbeIsNotRepeatedPerRung(t *testing.T) {
 
 	requireSettled(t, client, d, 1)
 	require.Equal(t, "sample", targetStatus(t, r).ActiveMode)
-	require.EqualValues(t, 1+2*len(base.SubscribePaths()), srv.gets.Load(),
-		"one multi-path Get, then each path concurrently and once more alone, for the on_change rung only")
+	require.EqualValues(t, 1+len(base.SubscribePaths()), srv.gets.Load(),
+		"one multi-path Get and one per path, for the on_change rung only")
 }
 
 // Wrong credentials cost few RPCs: the attempts that redial through
