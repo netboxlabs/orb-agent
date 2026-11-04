@@ -149,3 +149,20 @@ func TestPrimaryIPDeviceCarriesSourceMatchWithoutAName(t *testing.T) {
 		})
 	}
 }
+
+// A blank hostname is not a profile problem: the skip warning says the device
+// reported a blank one, rather than sending the operator to the profile.
+func TestSkipWarningSaysTheHostnameIsBlank(t *testing.T) {
+	_, _, blank := guardRunner(t, "   ", nil)
+	_, _, absent := guardRunner(t, noHostname, nil)
+
+	for _, logs := range []*syncBuf{blank, absent} {
+		require.Eventually(t, func() bool {
+			return strings.Contains(logs.String(), "skipping flush: no device identity")
+		}, 2*time.Second, 10*time.Millisecond)
+	}
+	require.Contains(t, blank.String(), "hostname is blank")
+	require.NotContains(t, blank.String(), "device.hostname path")
+	require.Contains(t, absent.String(), "device.hostname path")
+	require.NotContains(t, absent.String(), "hostname is blank")
+}

@@ -311,7 +311,8 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// netbox_id it would rename the matched device. The name and the
 		// netbox_id match are both settled before AssignPrimaryIP, which copies
 		// the Device into the primary IP.
-		if dev != nil && dev.Name != nil && strings.TrimSpace(*dev.Name) == "" {
+		blankName := dev != nil && dev.Name != nil && strings.TrimSpace(*dev.Name) == ""
+		if blankName {
 			dev.Name = nil
 		}
 		// Q2: thread target netbox_id onto the Device for explicit NetBox matching.
@@ -344,9 +345,14 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			metrics.GetFlushSkippedNoIdentity().Add(r.ctx, 1)
 			if !warnedNoIdentity {
 				warnedNoIdentity = true
-				r.logger.Warn("skipping flush: no device identity (no hostname leaf / netbox_id) — "+
-					"check the profile's device.hostname path for this vendor",
-					"policy", r.name, "host", t.Host, "profile", profile.Name)
+				msg := "skipping flush: no device identity (no hostname leaf / netbox_id) — " +
+					"check the profile's device.hostname path for this vendor"
+				if blankName {
+					// The leaf arrived, so the profile is not at fault.
+					msg = "skipping flush: no device identity (the hostname is blank and there is no netbox_id) — " +
+						"set a hostname on the device, or the target's netbox_id"
+				}
+				r.logger.Warn(msg, "policy", r.name, "host", t.Host, "profile", profile.Name)
 			}
 			return
 		}
