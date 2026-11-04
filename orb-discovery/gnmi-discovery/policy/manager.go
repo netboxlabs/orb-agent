@@ -76,17 +76,19 @@ func (m *Manager) ParsePolicies(data []byte) (map[string]config.Policy, error) {
 	if err := yaml.Unmarshal(data, &payload); err != nil {
 		return nil, err
 	}
+	// The policy name reaches a log line on nearly every path through this
+	// backend, so it is checked before anything else logs it.
+	for name := range payload.Policies {
+		if err := checkNoControlChars(name, "policy name"); err != nil {
+			return nil, err
+		}
+	}
 	config.WarnUnknownPolicyKeys(data, m.logger)
 	config.WarnAmbiguousNullKeys(data, m.logger)
 	if len(payload.Policies) == 0 {
 		return nil, errors.New("no policies found in the request")
 	}
 	for name, policy := range payload.Policies {
-		// The policy name reaches a log line on nearly every path through this
-		// backend, so it is checked before anything else logs it.
-		if err := checkNoControlChars(name, "policy name"); err != nil {
-			return nil, err
-		}
 		// Inherit BEFORE resolving env. resolveEnv walks only the target list,
 		// so inheriting afterwards would copy a scope-level ${GNMI_PASS} into
 		// every target as that literal string with resolution already past —

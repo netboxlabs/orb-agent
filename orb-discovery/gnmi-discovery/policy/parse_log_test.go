@@ -52,3 +52,15 @@ policies:
 	require.NotEmpty(t, unauth)
 	require.Contains(t, unauth, "policy=unverified")
 }
+
+// A policy name is checked before any warning logs it, so a name carrying a
+// control character never reaches a log line.
+func TestPolicyNameIsCheckedBeforeParseWarnings(t *testing.T) {
+	var logs bytes.Buffer
+	m := newManagerWithLogger(t, slog.New(slog.NewTextHandler(&logs, nil)))
+	_, err := m.ParsePolicies([]byte("policies:\n  \"p1\\nlevel=ERROR msg=forged\":\n    config:\n      bogus: 1\n" +
+		"    scope:\n      tls:\n      targets:\n        - host: 192.0.2.1\n          tls:\n"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "policy name")
+	require.Empty(t, logs.String())
+}
