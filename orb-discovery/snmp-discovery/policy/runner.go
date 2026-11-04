@@ -1052,30 +1052,45 @@ func (r *Runner) warnSlowScan(group expandedTargetGroup) {
 		"probe_time", worst.String(), "timeout", r.timeout.String())
 }
 
-// warnOverlappingEntries warns once for each pair of entries that reach the
-// same hosts on the same port: two subnets or ranges that overlap, or one host
-// listed twice. Each entry still discovers its hosts, as it always did.
+// maxOverlapsNamed is how many pairs of entries the overlap warning names.
+const maxOverlapsNamed = 5
+
+// warnOverlappingEntries warns once per policy load about pairs of entries
+// that reach the same hosts on the same port with the same authentication:
+// two subnets or ranges that overlap, or one host listed twice. Pairs with
+// different authentication are left out: listing a range once per credential
+// is how it is scanned with several, each entry probing with its own. Every
+// entry still discovers the hosts that answer it, as it always did.
 func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
+	type entry struct {
+		name string
+		auth config.Authentication
+	}
 	type span struct {
-		entry       string
+		entry
 		port        uint16
 		first, last netip.Addr
 	}
 	var spans []span
-	singles := make(map[string]string)
+	singles := make(map[string][]entry)
+	var pairs []string
 	for _, group := range groups {
 		if len(group.targets) == 0 {
 			continue
 		}
 		first := group.targets[0]
+		this := entry{group.originalTarget, r.scope.Authentication}
+		if first.Authentication != nil {
+			this.auth = *first.Authentication
+		}
 		if !group.several {
 			endpoint := endpointKey(first.Host, first.Port)
-			if other, ok := singles[endpoint]; ok {
-				r.logger.Warn("scope lists the same host twice; each entry discovers it",
-					"target", group.originalTarget, "other_target", other)
-				continue
+			for _, other := range singles[endpoint] {
+				if other.auth == this.auth {
+					pairs = append(pairs, other.name+" with "+this.name)
+				}
 			}
-			singles[endpoint] = group.originalTarget
+			singles[endpoint] = append(singles[endpoint], this)
 			continue
 		}
 		// An expanded subnet or range runs in order from its first address
@@ -1085,15 +1100,24 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		this := span{group.originalTarget, effectivePort(first.Port), start, end}
+		thisSpan := span{this, effectivePort(first.Port), start, end}
 		for _, other := range spans {
-			if other.port == this.port && other.first.Compare(this.last) <= 0 && this.first.Compare(other.last) <= 0 {
-				r.logger.Warn("scope entries overlap; each discovers the hosts they share",
-					"target", this.entry, "other_target", other.entry)
+			if other.port == thisSpan.port && other.auth == thisSpan.auth &&
+				other.first.Compare(thisSpan.last) <= 0 && thisSpan.first.Compare(other.last) <= 0 {
+				pairs = append(pairs, other.name+" with "+thisSpan.name)
 			}
 		}
-		spans = append(spans, this)
+		spans = append(spans, thisSpan)
 	}
+	if len(pairs) == 0 {
+		return
+	}
+	list := strings.Join(pairs[:min(len(pairs), maxOverlapsNamed)], ", ")
+	if more := len(pairs) - maxOverlapsNamed; more > 0 {
+		list += fmt.Sprintf(" and %d more", more)
+	}
+	r.logger.Warn("scope entries with the same authentication reach the same hosts; "+
+		"a host that answers both entries is discovered by each", "entries", list)
 }
 
 // effectivePort is the port a target is scanned on: an unset port is 161.
