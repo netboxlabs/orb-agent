@@ -142,7 +142,8 @@ func TestLoadWarnsAboutOverlappingEntries(t *testing.T) {
 }
 
 // The SNMPv3 probe presents a placeholder user, so every SNMPv3 entry over a
-// host finds it, and the crawls with a user the host does not know fail.
+// host finds it, and the crawls with credentials the host does not accept
+// fail.
 func TestLoadWarnsAboutSNMPv3EntriesOverTheSameHosts(t *testing.T) {
 	t.Run("two users over one range", func(t *testing.T) {
 		assert.Equal(t, []overlapWarning{{v3Overlap, "192.0.2.0/30 with 192.0.2.1-2"}}, overlapWarnings(t, `

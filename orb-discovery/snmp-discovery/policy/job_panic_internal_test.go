@@ -589,6 +589,10 @@ func TestCrawlThatDiscoversCountsOneSuccess(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, runs[0].Status)
 			assert.Equal(t, int64(1), discoverySuccesses(t, reader))
 			assert.Empty(t, discoveryFailures(t, reader))
+			if recorder, ok := tc.client.(*recordingClient); ok {
+				assert.Zero(t, runs[0].EntityCount, "nothing was discovered to send")
+				assert.Empty(t, recorder.batches, "nothing was sent")
+			}
 		})
 	}
 }

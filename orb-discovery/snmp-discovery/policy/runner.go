@@ -1181,14 +1181,14 @@ func (o *overlaps) add(entry, other string) {
 // warnOverlappingEntries warns at load about entries that crawl the same hosts
 // on the same port, with one line per kind:
 //   - a host listed on several entries, each crawled with no probe;
-//   - subnets or ranges whose probes present the same community: a host that
-//     answers one answers all;
+//   - subnets or ranges whose probes present the same version and community:
+//     a host that answers one answers all;
 //   - SNMPv3 subnets or ranges, whose probes all present the same placeholder
 //     user, so every one finds every SNMPv3 host.
 //
-// Subnets or ranges probing with different communities are left out: each
-// finds only the hosts that accept its community, which is how a range is
-// scanned with several. Every entry still crawls what it finds, as it did.
+// Subnets or ranges probing with a different version or community are left
+// out: each finds only the hosts that accept its own, which is how a range is
+// scanned with several. Every entry still crawls what it finds.
 func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 	type span struct {
 		name        string
