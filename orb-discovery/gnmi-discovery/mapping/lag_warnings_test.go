@@ -55,6 +55,35 @@ func TestLagWarningsLogEachMembershipOnce(t *testing.T) {
 	TranslateWithOptions(base, snap, virtual, "", nil, logger, &warned)
 	TranslateWithOptions(base, snap, virtual, "", nil, logger, &warned)
 	require.Equal(t, 1, countLines(buf.String(), notTypedLag, "Ethernet1", "Port-Channel1"))
+
+	// Two members of one missing aggregate are two warnings.
+	buf.Reset()
+	var shared LagWarnings
+	sameAgg := lagSnap(map[string]any{
+		"/interfaces/interface[name=Port-Channel1]/state/type":              nil,
+		"/interfaces/interface[name=Ethernet2]/state/type":                  "iana-if-type:ethernetCsmacd",
+		"/interfaces/interface[name=Ethernet2]/ethernet/state/aggregate-id": "Port-Channel1",
+	})
+	for range 2 {
+		TranslateWithOptions(base, sameAgg, nil, "", nil, logger, &shared)
+	}
+	require.Equal(t, 1, countLines(buf.String(), notDiscovered, "Ethernet1", "Port-Channel1"))
+	require.Equal(t, 1, countLines(buf.String(), notDiscovered, "Ethernet2", "Port-Channel1"),
+		"another member of the same aggregate is still logged")
+
+	// A member that moves to another missing aggregate is a new warning.
+	buf.Reset()
+	var moved LagWarnings
+	before := lagSnap(map[string]any{"/interfaces/interface[name=Port-Channel1]/state/type": nil})
+	TranslateWithOptions(base, before, nil, "", nil, logger, &moved)
+	after := lagSnap(map[string]any{
+		"/interfaces/interface[name=Port-Channel1]/state/type":              nil,
+		"/interfaces/interface[name=Ethernet1]/ethernet/state/aggregate-id": "Port-Channel3",
+	})
+	TranslateWithOptions(base, after, nil, "", nil, logger, &moved)
+	require.Equal(t, 1, countLines(buf.String(), notDiscovered, "Ethernet1", "Port-Channel1"))
+	require.Equal(t, 1, countLines(buf.String(), notDiscovered, "Ethernet1", "Port-Channel3"),
+		"the same member under another aggregate is still logged")
 }
 
 // Without a LagWarnings every translation logs, as Translate always has.
