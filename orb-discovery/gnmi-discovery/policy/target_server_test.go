@@ -182,6 +182,12 @@ func (s *gnmiTarget) eventLog() string {
 	return s.events.String()
 }
 
+func (s *gnmiTarget) subscribeRequests() [][]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]string(nil), s.subReqs...)
+}
+
 func targetLeaf(names []string, keys map[int]map[string]string, v string) *gnmiproto.Update {
 	elems := make([]*gnmiproto.PathElem, 0, len(names))
 	for i, n := range names {

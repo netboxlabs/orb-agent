@@ -374,6 +374,10 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		hist.credsWorked = true
 	}
 	profile := r.selectProfile(t, caps)
+	if profile.Device.Hostname != "" {
+		// The device's identity: no refused subscription is retried without it.
+		sess.PinPaths(profile.Device.Hostname)
+	}
 	defaults := config.MergeDefaults(&r.policy.Config.Defaults, t.OverrideDefaults)
 	// Capabilities vendor is the lowest-precedence discovered manufacturer source
 	// (chassis mfg-name and the policy default both override it in Translate).

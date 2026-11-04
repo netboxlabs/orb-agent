@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -455,4 +456,54 @@ func TestSlowStrictDeviceStreams(t *testing.T) {
 	require.Eventually(t, func() bool { return client.count() > 0 }, 15*time.Second, 20*time.Millisecond)
 	require.Equal(t, "sw1", *ingestedDevice(t, client).Name)
 	require.Equal(t, "on_change", targetStatus(t, r).ActiveMode)
+}
+
+// A device that refuses ON_CHANGE outright and answers NotFound for a list it
+// holds nothing in: the refusal is the mode's, so the sample rung still
+// subscribes to that list.
+func TestOnChangeRefusalKeepsNotFoundPathsForSample(t *testing.T) {
+	srv := &gnmiTarget{}
+	srv.getErr = func(paths []string) error {
+		for _, p := range paths {
+			if strings.Contains(p, "/vlans/vlan/") {
+				return status.Error(codes.NotFound, "no vlans")
+			}
+		}
+		return nil
+	}
+	srv.subErr = func([]string) error {
+		if !srv.sawSample.Load() {
+			return status.Error(codes.InvalidArgument, "ON_CHANGE not supported")
+		}
+		return nil
+	}
+	r, client, _, _ := runAgainst(t, srv, config.ModeAuto, nil)
+
+	require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond)
+	require.Equal(t, "sample", targetStatus(t, r).ActiveMode)
+	reqs := srv.subscribeRequests()
+	last := reqs[len(reqs)-1]
+	require.True(t, slices.ContainsFunc(last, func(p string) bool { return strings.Contains(p, "/vlans/vlan/") }),
+		"the sample subscription keeps the empty list: %v", last)
+}
+
+// The runner pins the profile's hostname path, so no retry drops it.
+func TestRunnerPinsTheHostnamePath(t *testing.T) {
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	fake := &gnmi.FakeSession{
+		OnChangeSupport: true,
+		OnChangeStream:  []gnmi.Notification{{Updates: []gnmi.Update{{Path: "/system/state/hostname", Value: "sw1"}}}, {SyncDone: true}},
+	}
+	client := &recordingClient{}
+	pol := config.Policy{
+		Config: config.PolicyConfig{Mode: config.ModeOnChange, DebounceMs: 10, Defaults: config.Defaults{Site: "lab", Role: "router"}},
+		Scope:  config.Scope{Targets: []config.Target{{Host: "192.0.2.40:57400"}}},
+	}
+	r, err := NewRunner(context.Background(), slog.Default(), "p1", pol, client, &gnmi.FakeDialer{Session: fake}, store)
+	require.NoError(t, err)
+	r.Start()
+	require.Eventually(t, func() bool { return client.count() > 0 }, 2*time.Second, 10*time.Millisecond)
+	require.NoError(t, r.Stop())
+	require.Equal(t, []string{"/system/state/hostname"}, fake.Pinned)
 }

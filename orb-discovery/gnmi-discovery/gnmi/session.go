@@ -75,6 +75,9 @@ type Session interface {
 	// InconclusivePaths returns the paths the last Subscribe's probe kept
 	// because the target gave no answer about them, such as a transient error.
 	InconclusivePaths() []string
+	// PinPaths names subscription paths a refused subscription is never
+	// retried without, such as the device's hostname.
+	PinPaths(paths ...string)
 	// Close releases the connection.
 	Close() error
 }

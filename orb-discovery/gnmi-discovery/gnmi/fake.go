@@ -25,6 +25,7 @@ type FakeSession struct {
 	Closed          bool
 	StopSubscribes  int      // count of StopSubscribe calls (test assertion)
 	Inconclusive    []string // returned by InconclusivePaths
+	Pinned          []string // recorded by PinPaths
 }
 
 // Capabilities returns the scripted capabilities.
@@ -101,6 +102,9 @@ func (f *FakeSession) StopSubscribe() { f.StopSubscribes++ }
 
 // InconclusivePaths returns the scripted paths.
 func (f *FakeSession) InconclusivePaths() []string { return f.Inconclusive }
+
+// PinPaths records the pinned paths.
+func (f *FakeSession) PinPaths(paths ...string) { f.Pinned = append(f.Pinned, paths...) }
 
 // Close marks the session closed.
 func (f *FakeSession) Close() error { f.Closed = true; return nil }

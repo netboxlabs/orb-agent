@@ -367,3 +367,59 @@ func TestProbeAsksEveryPathDespiteHungOnes(t *testing.T) {
 	assert.NotContains(t, sess.InconclusivePaths(), answered)
 	assert.Len(t, sess.InconclusivePaths(), 9)
 }
+
+// The retry drops only the paths the target answered NotFound for: never one
+// whose probe got no answer, and never a pinned path such as the hostname.
+func TestRetryDropsOnlyNotFoundPaths(t *testing.T) {
+	pt, sess := newProbeTarget(t)
+	pt.getErr = func(p string) error {
+		switch p {
+		case probeHostname, probeMTU:
+			return status.Error(codes.NotFound, "no data")
+		case probeSerial:
+			return status.Error(codes.Unavailable, "busy")
+		}
+		return nil
+	}
+	pt.subErr = func(paths []string) error {
+		if slices.Contains(paths, probeMTU) {
+			return status.Error(codes.InvalidArgument, "unknown path")
+		}
+		return nil
+	}
+	sess.PinPaths(probeHostname)
+
+	subscribeAndRead(t, sess)
+	assert.Equal(t, sorted(probeHostname, probeSerial), pt.lastSubscription(t))
+}
+
+// When the retry is refused as well, the dropped paths were not the cause:
+// they stay for the session, and the caller sees the original refusal.
+func TestRetryRefusedTooRestoresThePaths(t *testing.T) {
+	pt, sess := newProbeTarget(t)
+	pt.getErr = func(p string) error {
+		if p == probeMTU {
+			return status.Error(codes.NotFound, "no data")
+		}
+		return nil
+	}
+	var calls atomic.Int32
+	pt.subErr = func([]string) error {
+		return status.Error(codes.InvalidArgument, fmt.Sprintf("on_change refused, call %d", calls.Add(1)))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, errs, err := sess.Subscribe(ctx, OnChange, probePaths, 0)
+	require.NoError(t, err)
+	select {
+	case e := <-errs:
+		require.Contains(t, e.Error(), "call 1", "the original refusal")
+	case <-ctx.Done():
+		t.Fatal("no error")
+	}
+
+	pt.subErr = nil
+	subscribeAndRead(t, sess)
+	assert.Equal(t, sorted(probePaths...), pt.lastSubscription(t), "the NotFound path stays for the session")
+}

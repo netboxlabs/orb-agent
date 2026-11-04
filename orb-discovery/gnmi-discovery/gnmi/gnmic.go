@@ -122,11 +122,12 @@ type gnmicSession struct {
 	// accepted caches the subscribe paths the target accepts; nil until a
 	// probe reaches a verdict on every path.
 	accepted []string
-	// unverified are the accepted paths the target did not confirm: NotFound,
-	// or no answer at all.
-	unverified []string
+	// notFound are the accepted paths the target answered NotFound for.
+	notFound []string
 	// inconclusive are the paths the last probe kept because it got no answer.
 	inconclusive []string
+	// pinned are paths a refused subscription is never retried without.
+	pinned []string
 }
 
 // acceptedPaths returns the subset of paths the target accepts, so one
@@ -161,7 +162,7 @@ func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []stri
 		errs[i] = s.probeGet(pctx, paths[i:i+1])
 	})
 	ok := make([]string, 0, len(paths))
-	var unverified, inconclusive []string
+	var notFound, inconclusive []string
 	for i, p := range paths {
 		err := errs[i]
 		switch {
@@ -169,17 +170,16 @@ func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []stri
 			ok = append(ok, p)
 		case status.Code(err) == codes.NotFound:
 			ok = append(ok, p)
-			unverified = append(unverified, p)
+			notFound = append(notFound, p)
 		case Transient(err):
 			ok = append(ok, p)
-			unverified = append(unverified, p)
 			inconclusive = append(inconclusive, p)
 		}
 	}
 	if len(ok) == 0 {
 		ok = paths
 	}
-	s.setProbe(ok, unverified, inconclusive)
+	s.setProbe(ok, notFound, inconclusive)
 	return ok
 }
 
@@ -216,10 +216,10 @@ func runBounded(n, workers int, fn func(i int)) {
 }
 
 // setProbe records a probe's result, caching it when every path got a verdict.
-func (s *gnmicSession) setProbe(accepted, unverified, inconclusive []string) {
+func (s *gnmicSession) setProbe(accepted, notFound, inconclusive []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.unverified = unverified
+	s.notFound = notFound
 	s.inconclusive = inconclusive
 	if len(inconclusive) == 0 {
 		s.accepted = accepted
@@ -241,29 +241,37 @@ func (s *gnmicSession) InconclusivePaths() []string {
 	return slices.Clone(s.inconclusive)
 }
 
-// unverifiedIn returns the paths of a subscription the target did not confirm.
-func (s *gnmicSession) unverifiedIn(paths []string) []string {
+// PinPaths names paths a refused subscription is never retried without.
+func (s *gnmicSession) PinPaths(paths ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinned = append(s.pinned, paths...)
+}
+
+// retryCandidates returns the paths of a subscription a refusal may be blamed
+// on: those the target answered NotFound for, other than pinned ones. A path
+// whose probe got no answer is not blamed; nothing is known about it.
+func (s *gnmicSession) retryCandidates(paths []string) []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []string
 	for _, p := range paths {
-		if slices.Contains(s.unverified, p) {
+		if slices.Contains(s.notFound, p) && !slices.Contains(s.pinned, p) {
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
-// pruneUnverified drops paths from this session's probe results.
-func (s *gnmicSession) pruneUnverified(paths []string) {
+// pruneNotFound drops paths from this session's probe results.
+func (s *gnmicSession) pruneNotFound(paths []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	drop := func(p string) bool { return slices.Contains(paths, p) }
 	if s.accepted != nil {
 		s.accepted = slices.DeleteFunc(slices.Clone(s.accepted), drop)
 	}
-	s.unverified = slices.DeleteFunc(slices.Clone(s.unverified), drop)
-	s.inconclusive = slices.DeleteFunc(slices.Clone(s.inconclusive), drop)
+	s.notFound = slices.DeleteFunc(slices.Clone(s.notFound), drop)
 }
 
 // enc returns the negotiated request encoding, defaulting to json_ietf when
@@ -387,9 +395,9 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	if err != nil {
 		return nil, nil, err
 	}
-	// The unverified paths go out on trust. If the target refuses the stream
-	// before answering, they are the likely cause: prune them and retry once.
-	retryWithout := s.unverifiedIn(paths)
+	// The NotFound paths go out on trust. If the target refuses the stream
+	// before answering, they are the likely cause: retry once without them.
+	retryWithout := s.retryCandidates(paths)
 	if len(retryWithout) == len(paths) {
 		retryWithout = nil // nothing would be left to subscribe to
 	}
@@ -414,6 +422,22 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 		defer close(errs)
 		defer func() { endAttempt() }()
 		answered := false
+		// refused is the first attempt's refusal while the retry runs: if the
+		// retry fails too, the dropped paths were not the cause, so they stay
+		// and the caller sees the refusal as it would have without a retry.
+		var refused error
+		forward := func(e error) {
+			if !answered && refused != nil {
+				e = refused
+			}
+			if e == nil {
+				return
+			}
+			select {
+			case errs <- e:
+			case <-subCtx.Done():
+			}
+		}
 		for {
 			select {
 			case <-subCtx.Done():
@@ -426,22 +450,25 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 					// non-blocking and forward it; otherwise streamLoop sees a clean
 					// notes close, returns nil, and the target reconnects at on_change
 					// forever instead of downgrading to SAMPLE/GET.
+					var e error
 					select {
 					case terr, ok := <-rawErr:
-						if ok && terr != nil && terr.Err != nil {
-							select {
-							case errs <- terr.Err:
-							case <-subCtx.Done():
-							}
+						if ok && terr != nil {
+							e = terr.Err
 						}
 					default:
 					}
+					forward(e)
 					return
 				}
 				// SubscribeChan wraps the proto response in .Response.
 				resp := wrapped.Response
 				if resp == nil {
 					continue
+				}
+				if !answered && refused != nil {
+					// The retry is served, so the dropped paths were the cause.
+					s.pruneNotFound(retryWithout)
 				}
 				answered = true
 				if resp.GetSyncResponse() {
@@ -466,28 +493,25 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 				}
 				// TargetError wraps the underlying error in .Err.
 				if terr == nil || terr.Err == nil {
+					forward(nil)
 					return
 				}
-				if !answered && len(retryWithout) > 0 && !Transient(terr.Err) {
+				if !answered && refused == nil && len(retryWithout) > 0 && !Transient(terr.Err) {
 					// Wait for the refused attempt to wind down first: its
 					// teardown stops the subscription by name, and would stop
 					// the retry if it ran after it.
 					endAttempt()
 					drainSubscription(rawResp, rawErr)
 					kept := slices.DeleteFunc(slices.Clone(paths), func(p string) bool { return slices.Contains(retryWithout, p) })
-					s.pruneUnverified(retryWithout)
-					retryWithout = nil
 					retry, err := s.subscribeRequest(mode, kept, sampleIntervalMs)
 					if err == nil && subCtx.Err() == nil {
+						refused = terr.Err
 						attemptCtx, endAttempt = context.WithCancel(subCtx)
 						rawResp, rawErr = s.tg.SubscribeChan(attemptCtx, retry, name)
 						continue
 					}
 				}
-				select {
-				case errs <- terr.Err:
-				case <-subCtx.Done():
-				}
+				forward(terr.Err)
 				return
 			}
 		}
