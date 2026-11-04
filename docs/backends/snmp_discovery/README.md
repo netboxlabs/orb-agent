@@ -264,12 +264,27 @@ a hostname entry does not take its address out of a range. This applies
 within one policy: two policies covering the same host each discover it. A
 subnet or range whose every address is listed on its own is not scanned. When
 the policy is loaded, the agent logs which hosts each range leaves out.
-Overlapping subnets and ranges, and a host listed twice (`192.0.2.6` and
-`192.0.2.6/32`, say), are left as they are: each entry probes and crawls with
-its own `authentication`, so a host that answers both entries is discovered by
-each. Listing a range once per community or SNMPv3 user is how to scan it with
-several credentials. When the policy is loaded, the agent logs one warning
-naming the entries that reach the same hosts with the same `authentication`.
+
+**Overlapping entries.** Overlapping subnets and ranges, and a host listed twice (`192.0.2.6` and
+`192.0.2.6/32`, say), are left as they are: each overlapping entry crawls the
+host, with its own `authentication`, except entries written identically, which
+share one crawl, so only one of them crawls each host. A subnet or range crawls
+only the hosts that answer its probe:
+
+- With SNMPv1 and SNMPv2c the probe sends the entry's own community, so a host
+  is found only by the entries whose community it accepts. Listing a range once
+  per community is how to scan it with several.
+- With SNMPv3 the probe presents a placeholder user (see below), so it cannot
+  tell users apart: every SNMPv3 entry over a host finds it and crawls it, and
+  the crawls with a user the host does not know fail every cycle. List such
+  hosts on entries of their own, which win over ranges, or give each user a
+  range of its own that does not overlap the others.
+
+A host listed on several entries of its own is crawled by each, with no probe,
+whatever their credentials. When the policy is loaded, the agent warns, one
+line per kind, about hosts listed on several entries, about subnets or ranges
+that probe the same hosts with the same community, and about SNMPv3 subnets or
+ranges that reach the same hosts.
 
 **What the probe puts on the wire.** With SNMPv3 the probe presents a
 placeholder user and does not authenticate, so neither the configured user nor

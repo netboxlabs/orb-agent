@@ -1071,45 +1071,79 @@ func (r *Runner) warnSlowScan(group expandedTargetGroup) {
 		"probe_time", worst.String(), "timeout", r.timeout.String())
 }
 
-// maxOverlapsNamed is how many pairs of entries the overlap warning names.
+// maxOverlapsNamed is how many pairs of entries an overlap warning names.
 const maxOverlapsNamed = 5
 
-// warnOverlappingEntries warns once per policy load about pairs of entries
-// that reach the same hosts on the same port with the same authentication:
-// two subnets or ranges that overlap, or one host listed twice. Pairs with
-// different authentication are left out: listing a range once per credential
-// is how it is scanned with several, each entry probing with its own. Every
-// entry still discovers the hosts that answer it, as it always did.
-func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
-	type entry struct {
-		name string
-		auth config.Authentication
+// The warnings about entries that crawl the same hosts, one per kind.
+const (
+	hostListedTwiceWarning = "a host is listed on several entries; each crawls it, " +
+		"and a crawl with credentials the host does not accept fails"
+	sameCommunityOverlapWarning = "subnets or ranges probe the same hosts with the same community; " +
+		"each crawls every host that answers"
+	v3OverlapWarning = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes cannot tell users apart, " +
+		"so each crawls every host that answers, and a crawl with a user the host does not know fails; " +
+		"list such hosts on entries of their own, or use disjoint ranges"
+	sharedCrawlWarning = "; entries written identically share one crawl, so only one of them crawls each host"
+)
+
+// probeKey is what a scan's probe presents. SNMPv1 and SNMPv2c send the
+// entry's community; SNMPv3 sends a placeholder user whatever the entry's (see
+// probeAuthentication), so its version alone.
+type probeKey struct {
+	version, community string
+}
+
+func probeKeyOf(auth config.Authentication) probeKey {
+	if auth.ProtocolVersion == snmp.ProtocolVersion3 {
+		return probeKey{version: auth.ProtocolVersion}
 	}
+	return probeKey{auth.ProtocolVersion, auth.Community}
+}
+
+// overlaps collects the pairs of entries of one kind, and whether any two
+// share a crawl.
+type overlaps struct {
+	pairs       []string
+	sharedCrawl bool
+}
+
+func (o *overlaps) add(entry, other string, sharedCrawl bool) {
+	o.pairs = append(o.pairs, other+" with "+entry)
+	o.sharedCrawl = o.sharedCrawl || sharedCrawl
+}
+
+// warnOverlappingEntries warns at load about entries that crawl the same hosts
+// on the same port, with one line per kind:
+//   - a host listed on several entries, each crawled with no probe;
+//   - subnets or ranges whose probes present the same community: a host that
+//     answers one answers all;
+//   - SNMPv3 subnets or ranges, whose probes all present the same placeholder
+//     user, so every one finds every SNMPv3 host.
+//
+// Subnets or ranges probing with different communities are left out: each
+// finds only the hosts that accept its community, which is how a range is
+// scanned with several. Every entry still crawls what it finds, as it did.
+func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 	type span struct {
-		entry
+		name        string
+		probe       probeKey
 		port        uint16
 		first, last netip.Addr
 	}
 	var spans []span
-	singles := make(map[string][]entry)
-	var pairs []string
+	singles := make(map[string][]string)
+	var listedTwice, sameCommunity, v3 overlaps
 	for _, group := range groups {
 		if len(group.targets) == 0 {
 			continue
 		}
 		first := group.targets[0]
-		this := entry{group.originalTarget, r.scope.Authentication}
-		if first.Authentication != nil {
-			this.auth = *first.Authentication
-		}
 		if !group.several {
 			endpoint := endpointKey(first.Host, first.Port)
 			for _, other := range singles[endpoint] {
-				if other.auth == this.auth {
-					pairs = append(pairs, other.name+" with "+this.name)
-				}
+				listedTwice.add(group.originalTarget, other, false)
 			}
-			singles[endpoint] = append(singles[endpoint], this)
+			singles[endpoint] = append(singles[endpoint], group.originalTarget)
 			continue
 		}
 		// An expanded subnet or range runs in order from its first address
@@ -1119,24 +1153,43 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		thisSpan := span{this, effectivePort(first.Port), start, end}
+		auth := r.scope.Authentication
+		if first.Authentication != nil {
+			auth = *first.Authentication
+		}
+		this := span{group.originalTarget, probeKeyOf(auth), effectivePort(first.Port), start, end}
+		kind := &sameCommunity
+		if auth.ProtocolVersion == snmp.ProtocolVersion3 {
+			kind = &v3
+		}
 		for _, other := range spans {
-			if other.port == thisSpan.port && other.auth == thisSpan.auth &&
-				other.first.Compare(thisSpan.last) <= 0 && thisSpan.first.Compare(other.last) <= 0 {
-				pairs = append(pairs, other.name+" with "+thisSpan.name)
+			if other.port == this.port && other.probe == this.probe &&
+				other.first.Compare(this.last) <= 0 && this.first.Compare(other.last) <= 0 {
+				// A host's crawl is keyed by the range's text, so ranges written
+				// identically share it.
+				kind.add(this.name, other.name, this.name == other.name)
 			}
 		}
-		spans = append(spans, thisSpan)
+		spans = append(spans, this)
 	}
-	if len(pairs) == 0 {
+	r.warnOverlaps(hostListedTwiceWarning, listedTwice)
+	r.warnOverlaps(sameCommunityOverlapWarning, sameCommunity)
+	r.warnOverlaps(v3OverlapWarning, v3)
+}
+
+// warnOverlaps logs one warning naming the first pairs and counting the rest.
+func (r *Runner) warnOverlaps(msg string, o overlaps) {
+	if len(o.pairs) == 0 {
 		return
 	}
-	list := strings.Join(pairs[:min(len(pairs), maxOverlapsNamed)], ", ")
-	if more := len(pairs) - maxOverlapsNamed; more > 0 {
+	if o.sharedCrawl {
+		msg += sharedCrawlWarning
+	}
+	list := strings.Join(o.pairs[:min(len(o.pairs), maxOverlapsNamed)], ", ")
+	if more := len(o.pairs) - maxOverlapsNamed; more > 0 {
 		list += fmt.Sprintf(" and %d more", more)
 	}
-	r.logger.Warn("scope entries with the same authentication reach the same hosts; "+
-		"a host that answers both entries is discovered by each", "entries", list)
+	r.logger.Warn(msg, "entries", list)
 }
 
 // effectivePort is the port a target is scanned on: an unset port is 161.
