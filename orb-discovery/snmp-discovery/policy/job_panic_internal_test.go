@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-co-op/gocron/v2"
 	"github.com/gosnmp/gosnmp"
+	"github.com/netboxlabs/diode-sdk-go/diode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -554,6 +555,40 @@ func TestWalkHandoffLogsOnlyUnreadPanics(t *testing.T) {
 			require.Len(t, errs, 1)
 			assert.Equal(t, "panic: walk failure", errs[0]["error"])
 			assert.Equal(t, "goroutine 1 [running]:", errs[0]["stack"])
+		})
+	}
+}
+
+// A crawl that walks and maps its target is a successful discovery, whatever
+// becomes of the ingest, and one with nothing to ingest is one too.
+func TestCrawlThatDiscoversCountsOneSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		host       string
+		client     diode.Client
+		wantStatus RunStatus
+	}{
+		{"the ingest fails", "192.0.2.1", &failingIngestClient{}, RunStatusFailed},
+		{"the ingest reports errors", "192.0.2.1", &rejectingIngestClient{}, RunStatusFailed},
+		{"nothing to ingest", "192.0.2.5", &recordingClient{}, RunStatusCompleted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+				if host == "192.0.2.5" {
+					return &rowWalker{rows: map[string]snmp.PDU{}}, nil
+				}
+				return &rowWalker{rows: agentRows(host)}, nil
+			}
+			r, store := newPolicyRunner(t, singleTargetPolicy, factory, tc.client, discardLogger())
+			reader := useTestMeter(t)
+
+			r.runWithMetadata(config.Target{Host: tc.host, Port: 161}, "")
+
+			runs := store.GetRunsForTarget("p1", tc.host, 161)
+			require.Len(t, runs, 1)
+			assert.Equal(t, tc.wantStatus, runs[0].Status)
+			assert.Equal(t, int64(1), discoverySuccesses(t, reader))
+			assert.Empty(t, discoveryFailures(t, reader))
 		})
 	}
 }
