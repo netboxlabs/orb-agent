@@ -426,3 +426,26 @@ func TestDeliveryIsPerConnection(t *testing.T) {
 		return slices.ContainsFunc(d.gaps(), func(g time.Duration) bool { return g >= 400*time.Millisecond+200*time.Millisecond })
 	}, 10*time.Second, 20*time.Millisecond, "the backoff kept resetting")
 }
+
+// A step-down for a reason other than the credentials stays at INFO, even on
+// an attempt whose Capabilities refusal is quiet: a device that refuses
+// Capabilities, refuses ON_CHANGE outright and serves SAMPLE logs the step
+// down as before.
+func TestStepDownForAnotherReasonStaysINFO(t *testing.T) {
+	for _, c := range []codes.Code{codes.Unavailable, codes.PermissionDenied, codes.Unauthenticated} {
+		t.Run(c.String(), func(t *testing.T) {
+			srv := &gnmiTarget{capsErr: capsRefused(c, 0)}
+			srv.subErr = func([]string) error {
+				if !srv.sawSample.Load() {
+					return status.Error(codes.InvalidArgument, "ON_CHANGE not supported")
+				}
+				return nil
+			}
+			_, client, _, logs := runAgainst(t, srv, config.ModeAuto, nil)
+
+			require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond)
+			require.Contains(t, logs.String(), `level=INFO msg="on_change not available, using sample"`)
+			require.NotContains(t, logs.String(), `level=DEBUG msg="on_change not available, using sample"`)
+		})
+	}
+}

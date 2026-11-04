@@ -131,10 +131,10 @@ func (h *setupHistory) logLevel() slog.Level {
 	return slog.LevelWarn
 }
 
-// stepDownLevel is INFO for the ladder's step-down lines, or DEBUG for a quiet
-// attempt.
-func (h *setupHistory) stepDownLevel() slog.Level {
-	if h.quiet() {
+// stepDownLevel is INFO for a ladder step-down line, or DEBUG when a quiet
+// attempt's rung failed on the same refusal of the credentials.
+func (h *setupHistory) stepDownLevel(rungErr error) slog.Level {
+	if h.quiet() && credentialRefusal(rungErr) {
 		return slog.LevelDebug
 	}
 	return slog.LevelInfo
@@ -672,6 +672,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// data — surfaced by runOpenStream as errEarlyStreamFailure.
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.OnChange, profile.SubscribePaths(), 0)
 		var ocReason string
+		var ocErr error
 		if serr == nil {
 			setupDone(true)
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
@@ -681,15 +682,17 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			if !errors.Is(err, errEarlyStreamFailure) {
 				return err
 			}
+			ocErr = err
 			ocReason = err.Error() // on_change unviable mid-stream → fall through to sample
 		} else {
+			ocErr = serr
 			ocReason = serr.Error()
 		}
 		if r.ctx.Err() != nil {
 			return nil // ctx cancelled during/after on_change attempt
 		}
 
-		r.logger.Log(r.ctx, hist.stepDownLevel(), "on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
+		r.logger.Log(r.ctx, hist.stepDownLevel(ocErr), "on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		notes, errs, s2 := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if s2 == nil {
@@ -704,7 +707,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if r.ctx.Err() != nil {
 			return nil // ctx cancelled during/after sample attempt
 		}
-		r.logger.Log(r.ctx, hist.stepDownLevel(), "sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
+		r.logger.Log(r.ctx, hist.stepDownLevel(s2), "sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		// Tear down the SAMPLE subscription before switching to Get on the same
 		// session — Subscribe/Close are the only other teardown points and Close is
