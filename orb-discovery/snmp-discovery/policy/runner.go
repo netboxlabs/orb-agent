@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"reflect"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -1153,6 +1154,9 @@ const (
 	v3OverlapWarning = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes do not present the entry's user, " +
 		"so each crawls every host that answers, and a crawl with credentials the host does not accept fails; " +
 		"list such hosts on entries of their own, or use disjoint ranges"
+	differentDefaultsWarning = "scope entries with different override_defaults reach the same hosts; " +
+		"a host that answers several of these entries is sent with each entry's defaults in turn; " +
+		"give such a host an entry of its own"
 )
 
 // probeKey is what a scan's probe presents. SNMPv1 and SNMPv2c send the
@@ -1184,32 +1188,44 @@ func (o *overlaps) add(entry, other string) {
 //   - subnets or ranges whose probes present the same version and community:
 //     a host that answers one answers all;
 //   - SNMPv3 subnets or ranges, whose probes all present the same placeholder
-//     user, so every one finds every SNMPv3 host.
+//     user, so every one finds every SNMPv3 host;
+//   - entries with different effective override_defaults, whatever their
+//     credentials, since each sends a host it crawls with its own.
 //
 // Subnets or ranges probing with a different version or community are left
 // out: each finds only the hosts that accept its own, which is how a range is
 // scanned with several. Every entry still crawls what it finds.
 func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
+	type entry struct {
+		name     string
+		defaults *config.Defaults
+	}
 	type span struct {
-		name        string
+		entry
 		probe       probeKey
 		port        uint16
 		first, last netip.Addr
 	}
 	var spans []span
-	singles := make(map[string][]string)
-	var listedTwice, sameCommunity, v3 overlaps
+	singles := make(map[string][]entry)
+	var listedTwice, sameCommunity, v3, differentDefaults overlaps
 	for _, group := range groups {
 		if len(group.targets) == 0 {
 			continue
 		}
 		first := group.targets[0]
+		// Each entry sends what it crawls with its own defaults, whatever its
+		// credentials, so a host two entries crawl flips between them.
+		this := entry{group.originalTarget, config.MergeDefaults(&r.config.Defaults, first.OverrideDefaults)}
 		if !group.several {
 			endpoint := endpointKey(first.Host, first.Port)
 			for _, other := range singles[endpoint] {
-				listedTwice.add(group.originalTarget, other)
+				listedTwice.add(this.name, other.name)
+				if !reflect.DeepEqual(this.defaults, other.defaults) {
+					differentDefaults.add(this.name, other.name)
+				}
 			}
-			singles[endpoint] = append(singles[endpoint], group.originalTarget)
+			singles[endpoint] = append(singles[endpoint], this)
 			continue
 		}
 		// An expanded subnet or range runs in order from its first address
@@ -1223,22 +1239,29 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 		if first.Authentication != nil {
 			auth = *first.Authentication
 		}
-		this := span{group.originalTarget, probeKeyOf(auth), effectivePort(first.Port), start, end}
+		thisSpan := span{this, probeKeyOf(auth), effectivePort(first.Port), start, end}
 		kind := &sameCommunity
 		if auth.ProtocolVersion == snmp.ProtocolVersion3 {
 			kind = &v3
 		}
 		for _, other := range spans {
-			if other.port == this.port && other.probe == this.probe &&
-				other.first.Compare(this.last) <= 0 && this.first.Compare(other.last) <= 0 {
+			if other.port != thisSpan.port ||
+				other.first.Compare(thisSpan.last) > 0 || thisSpan.first.Compare(other.last) > 0 {
+				continue
+			}
+			if other.probe == thisSpan.probe {
 				kind.add(this.name, other.name)
 			}
+			if !reflect.DeepEqual(this.defaults, other.defaults) {
+				differentDefaults.add(this.name, other.name)
+			}
 		}
-		spans = append(spans, this)
+		spans = append(spans, thisSpan)
 	}
 	r.warnOverlaps(hostListedTwiceWarning, listedTwice)
 	r.warnOverlaps(sameCommunityOverlapWarning, sameCommunity)
 	r.warnOverlaps(v3OverlapWarning, v3)
+	r.warnOverlaps(differentDefaultsWarning, differentDefaults)
 }
 
 // warnOverlaps logs one warning naming the first pairs and counting the rest.

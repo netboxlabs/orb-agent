@@ -267,8 +267,10 @@ the policy is loaded, the agent logs which hosts each range leaves out.
 
 **Overlapping entries.** Overlapping subnets and ranges, and a host listed twice (`192.0.2.6` and
 `192.0.2.6/32`, say), are left as they are: each overlapping entry crawls the
-host, with its own `authentication`. A subnet or range crawls only the hosts
-that answer its probe:
+host, with its own `authentication` and its own `override_defaults`, so a host
+that answers entries with different defaults is sent with each in turn; give
+such a host an entry of its own. A subnet or range crawls only the hosts that
+answer its probe:
 
 - With SNMPv1 and SNMPv2c the probe sends the entry's own community, so a host
   is found only by the entries whose community it accepts. Listing a range once
@@ -283,8 +285,9 @@ that answer its probe:
 A host listed on several entries of its own is crawled by each, with no probe,
 whatever their credentials. When the policy is loaded, the agent warns, one
 line per kind, about hosts listed on several entries, about subnets or ranges
-that probe the same hosts with the same version and community, and about
-SNMPv3 subnets or ranges that reach the same hosts.
+that probe the same hosts with the same version and community, about SNMPv3
+subnets or ranges that reach the same hosts, and about entries with different
+`override_defaults` that reach the same hosts.
 
 **What the probe puts on the wire.** With SNMPv3 the probe presents a
 placeholder user and does not authenticate, so neither the configured user nor

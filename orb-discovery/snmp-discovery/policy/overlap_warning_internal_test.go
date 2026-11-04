@@ -193,3 +193,72 @@ func TestLoadDoesNotWarnAboutOneRangePerCommunity(t *testing.T) {
 `))
 	})
 }
+
+const differentDefaults = "scope entries with different override_defaults reach the same hosts; " +
+	"a host that answers several of these entries is sent with each entry's defaults in turn; " +
+	"give such a host an entry of its own"
+
+// Each entry sends a host it crawls with its own override_defaults, so a host
+// two entries crawl flips between them every cycle, whatever the credentials.
+func TestLoadWarnsAboutOverlappingEntriesWithDifferentDefaults(t *testing.T) {
+	site := func(name string) string {
+		return `
+          override_defaults:
+            site: ` + name
+	}
+	t.Run("one range per community, each with its own site", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{{differentDefaults, "192.0.2.0/30 with 192.0.2.0/30"}}, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+site("site-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+site("site-b")+`
+`))
+	})
+	t.Run("one range with defaults over another without", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{{differentDefaults, "192.0.2.0/29 with 192.0.2.4-5"}}, overlapWarnings(t, `
+        - host: 192.0.2.0/29`+v3Auth("user-a")+`
+        - host: 192.0.2.4-5`+v2cAuth("SNMPv2c", "community-b")+site("site-b")+`
+`))
+	})
+	t.Run("one host listed twice, each with its own site", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{
+			{hostListedTwice, "192.0.2.9 with 192.0.2.9/32"},
+			{differentDefaults, "192.0.2.9 with 192.0.2.9/32"},
+		}, overlapWarnings(t, `
+        - host: 192.0.2.9`+site("site-a")+`
+        - host: 192.0.2.9/32`+site("site-b")+`
+`))
+	})
+	t.Run("the same defaults", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+site("site-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+site("site-a")+`
+`))
+	})
+	t.Run("no defaults", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+`
+`))
+	})
+	t.Run("an override that changes nothing", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+site("undefined")+`
+`))
+	})
+	t.Run("disjoint ranges, or another port", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+site("site-a")+`
+        - host: 192.0.2.4-5`+site("site-b")+`
+        - host: 192.0.2.0/30
+          port: 1161`+site("site-c")+`
+`))
+	})
+	// A host listed on its own is taken out of the range, so only its own
+	// entry's defaults reach it.
+	t.Run("a range and a host listed on its own", func(t *testing.T) {
+		assert.Empty(t, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+site("site-a")+`
+        - host: 192.0.2.1`+site("site-b")+`
+`))
+	})
+}
