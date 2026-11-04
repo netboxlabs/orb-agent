@@ -323,7 +323,7 @@ func TestRunIngestsALargeTargetInChunks(t *testing.T) {
 	runner.runStore = NewRunStore()
 	runner.timeout = 5 * time.Second
 
-	runner.runWithMetadata(config.Target{Host: "192.0.2.10", Port: 161}, "")
+	runner.runWithMetadata(0, config.Target{Host: "192.0.2.10", Port: 161}, "")
 
 	require.Greater(t, len(client.calls), 1)
 	sent := 0
@@ -357,7 +357,7 @@ func TestRunFailsWhenARequestReportsErrors(t *testing.T) {
 	runner.runStore = NewRunStore()
 	runner.timeout = 5 * time.Second
 
-	runner.runWithMetadata(config.Target{Host: "192.0.2.10", Port: 161}, "")
+	runner.runWithMetadata(0, config.Target{Host: "192.0.2.10", Port: 161}, "")
 
 	require.Greater(t, len(client.calls), 1)
 	runs := runner.runStore.GetRunsForTarget("test-policy", "192.0.2.10", 161)

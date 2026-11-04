@@ -204,7 +204,7 @@ func TestCrawlPanicFailsItsRun(t *testing.T) {
 
 			// The policy is still usable: its next crawl completes, and
 			// counts as a success.
-			r.runWithMetadata(config.Target{Host: "192.0.2.1", Port: 161}, "")
+			r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
 			runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
 			require.Len(t, runs, 2)
 			assert.Equal(t, RunStatusCompleted, runs[1].Status)
@@ -253,7 +253,7 @@ func TestVendorWalkPanicFailsItsRun(t *testing.T) {
 	reader := useTestMeter(t)
 	logs.Reset()
 
-	r.runWithMetadata(config.Target{Host: "192.0.2.1", Port: 161}, "")
+	r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
 
 	require.Equal(t, int32(2), sessions.Load(), "the vendor walk ran")
 	runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
@@ -501,7 +501,7 @@ func TestLateWalkPanicIsLogged(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
-			_, _, err := r.queryTarget(ctx, config.Target{Host: "192.0.2.1", Port: 161})
+			_, _, err := r.queryTarget(ctx, 0, config.Target{Host: "192.0.2.1", Port: 161})
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			close(release)
 
@@ -582,7 +582,7 @@ func TestCrawlThatDiscoversCountsOneSuccess(t *testing.T) {
 			r, store := newPolicyRunner(t, singleTargetPolicy, factory, tc.client, discardLogger())
 			reader := useTestMeter(t)
 
-			r.runWithMetadata(config.Target{Host: tc.host, Port: 161}, "")
+			r.runWithMetadata(0, config.Target{Host: tc.host, Port: 161}, "")
 
 			runs := store.GetRunsForTarget("p1", tc.host, 161)
 			require.Len(t, runs, 1)

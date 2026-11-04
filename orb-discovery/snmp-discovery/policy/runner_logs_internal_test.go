@@ -132,7 +132,8 @@ policies:
 
 	crawl := func(host string, client diode.Client) {
 		r.client = client
-		r.runWithMetadata(config.Target{Host: host, Port: 161}, "")
+		// As the policy's third entry.
+		r.runWithMetadata(2, config.Target{Host: host, Port: 161}, "")
 	}
 	crawl("192.0.2.1", &recordingClient{})
 	crawl("192.0.2.2", &recordingClient{})
@@ -148,6 +149,7 @@ policies:
 		}
 		logged[record["msg"].(string)]++
 		assert.Equal(t, "p1", record["policy"], "%v", record)
+		assert.InDelta(t, 3, record["entry"], 0, "%v", record)
 		assert.Contains(t, []any{"192.0.2.1", "192.0.2.2", "192.0.2.3", "192.0.2.4", "192.0.2.5"}, record["host"], "%v", record)
 	}
 	// The lines this proves, so a change that stops logging them is noticed.
@@ -208,6 +210,7 @@ policies:
 		if record["level"] != "DEBUG" {
 			infos++
 			assert.Equal(t, "192.0.2.0/30", record["target"], "%v", record)
+			assert.InDelta(t, 1, record["entry"], 0, "%v", record)
 		}
 	}
 	assert.Equal(t, 2, infos, "the scan's start and its no-answer warning")

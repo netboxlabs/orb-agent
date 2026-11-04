@@ -183,3 +183,56 @@ func TestScanPrunesOnlyItsOwnEntrysJobs(t *testing.T) {
 	assert.NotContains(t, r.activeHostJobs, own, "entry 1's dead job is forgotten")
 	assert.Contains(t, r.activeHostJobs, other, "entry 2's is left to its own scans")
 }
+
+// A crawl's lines say which scope entry it came from, counting from 1, so
+// crawls of one host by identical entries can be told apart.
+func TestCrawlLinesNameTheirEntry(t *testing.T) {
+	agents := &credentialAgents{
+		accepts: map[string][]string{"192.0.2.1": {"community-a", "community-b"}, "192.0.2.9": {"example-community"}},
+		crawls:  map[string]int{},
+	}
+	logs := &lockedBuffer{}
+	r, _ := newPolicyRunner(t, `
+policies:
+  p1:
+    config:
+      timeout: 10
+      snmp_timeout: 3
+      snmp_probe_timeout: 1
+    scope:
+      authentication:
+        protocol_version: SNMPv2c
+        community: example-community
+      targets:
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+`
+        - host: 192.0.2.9
+`, agents.dial, &recordingClient{}, jsonLogger(logs))
+
+	r.Start()
+	require.Eventually(t, func() bool {
+		return agents.crawled("192.0.2.1", "community-a") > 0 && agents.crawled("192.0.2.1", "community-b") > 0 &&
+			agents.crawled("192.0.2.9", "example-community") > 0
+	}, 10*time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		complete := 0
+		for _, record := range logRecords(t, logs.String()) {
+			if record["msg"] == "entities ingested successfully" {
+				complete++
+			}
+		}
+		return complete == 3
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, r.Stop())
+
+	entries := map[string][]any{}
+	for _, record := range logRecords(t, logs.String()) {
+		if record["msg"] != "SNMP crawl complete" {
+			continue
+		}
+		host := record["host"].(string)
+		entries[host] = append(entries[host], record["entry"])
+	}
+	assert.ElementsMatch(t, []any{float64(1), float64(2)}, entries["192.0.2.1"])
+	assert.Equal(t, []any{float64(3)}, entries["192.0.2.9"])
+}

@@ -143,7 +143,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	for _, group := range expandedTargetGroups {
 		if !group.several {
 			// Create scan task for single target
-			task := gocron.NewTask(runner.run, group.targets[0])
+			task := gocron.NewTask(runner.run, group.entry, group.targets[0])
 			if policy.Config.Schedule != nil {
 				_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
 					gocron.WithSingletonMode(gocron.LimitModeReschedule))
@@ -177,7 +177,7 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 
 func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, originalTarget string) {
 	policyName := r.ctx.Value(policyKey).(string)
-	log := r.logger.With("target", originalTarget)
+	log := r.logger.With("entry", entry+1, "target", originalTarget)
 
 	// All expanded targets have the same port, get it from the first target
 	port := uint16(161) // default
@@ -309,7 +309,7 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 			continue
 		}
 
-		task := gocron.NewTask(r.runWithMetadata, target, originalTarget)
+		task := gocron.NewTask(r.runWithMetadata, entry, target, originalTarget)
 		var newJob gocron.Job
 		if r.config.Schedule != nil {
 			// Crawled right after the scan that found it, then on the schedule.
@@ -376,6 +376,12 @@ func (r *Runner) recordHostJob(jobKey string, id uuid.UUID) {
 // targetLogger is the runner's logger naming one target.
 func (r *Runner) targetLogger(target config.Target) *slog.Logger {
 	return r.logger.With("host", target.Host, "port", target.Port)
+}
+
+// crawlLogger names one target and the scope entry it is crawled for,
+// counting entries from 1.
+func (r *Runner) crawlLogger(entry int, target config.Target) *slog.Logger {
+	return r.targetLogger(target).With("entry", entry+1)
 }
 
 // panicError is a panic recovered on a goroutine of a crawl, carried to the
@@ -587,16 +593,16 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 }
 
 // run runs the policy for a single target (no parent)
-func (r *Runner) run(target config.Target) {
-	r.runWithMetadata(target, "")
+func (r *Runner) run(entry int, target config.Target) {
+	r.runWithMetadata(entry, target, "")
 }
 
 // runWithMetadata runs the policy with metadata tracking
-func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
+func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget string) {
 	policyName := r.ctx.Value(policyKey).(string)
 	targetHost := target.Host
 	targetPort := target.Port
-	log := r.targetLogger(target)
+	log := r.crawlLogger(entry, target)
 
 	// Create run at start (includes port)
 	run := r.runStore.CreateRun(policyName, targetHost, targetPort, parentTarget)
@@ -625,7 +631,7 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	entities, primaryHits, err := r.queryTarget(ctx, target)
+	entities, primaryHits, err := r.queryTarget(ctx, entry, target)
 	if err != nil {
 		var walkPanic *panicError
 		if errors.As(err, &walkPanic) {
@@ -831,13 +837,13 @@ func sendWalkPanic(h *walkHandoff) {
 // primary IP). The hits are returned by value — never stashed on the
 // shared Runner, which serves targets concurrently — so the caller can
 // thread them into PruneNestedRefs for this target only.
-func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
+func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 
 	targetDefaults := r.resolveTargetDefaults(target)
-	log := r.targetLogger(target)
+	log := r.crawlLogger(entry, target)
 
 	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, log, r.manufacturers, r.deviceLookup, targetDefaults, r.config.Options)
 	if err != nil {
