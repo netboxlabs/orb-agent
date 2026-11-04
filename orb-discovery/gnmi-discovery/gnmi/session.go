@@ -1,6 +1,9 @@
 package gnmi
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Update is a single normalized leaf update from a gNMI notification.
 // Path is the absolute OpenConfig path; Value is the decoded scalar/string.
@@ -92,4 +95,6 @@ type TargetSpec struct {
 	CAFile     string
 	CertFile   string
 	KeyFile    string
+	// SetupTimeout bounds the subscription-path probe; SetupTimeout when zero.
+	SetupTimeout time.Duration
 }

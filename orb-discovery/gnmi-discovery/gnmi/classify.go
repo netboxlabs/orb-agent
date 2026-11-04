@@ -10,8 +10,9 @@ import (
 )
 
 // SetupTimeout bounds each call a connection makes before it delivers: the
-// Capabilities call and the subscription-path probe.
-const SetupTimeout = 10 * time.Second
+// Capabilities call and the subscription-path probe. It is long enough for a
+// device whose login waits on a slow AAA server.
+const SetupTimeout = 30 * time.Second
 
 // Transient reports whether err is a call that got no answer about the request:
 // the target was unreachable, busy, slow or not accepting the login yet. A retry

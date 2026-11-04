@@ -257,7 +257,7 @@ func TestProbeEndsAtItsDeadline(t *testing.T) {
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	sess.(*gnmicSession).probeTimeout = 100 * time.Millisecond
+	sess.(*gnmicSession).setupTimeout = 100 * time.Millisecond
 
 	start := time.Now()
 	subscribeAndRead(t, sess)

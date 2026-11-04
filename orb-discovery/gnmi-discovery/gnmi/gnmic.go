@@ -69,7 +69,7 @@ func (d *GnmicDialer) Dial(ctx context.Context, spec TargetSpec) (Session, error
 	if err := tg.CreateGNMIClient(ctx); err != nil {
 		return nil, fmt.Errorf("gnmi dial: create client: %w", err)
 	}
-	return &gnmicSession{tg: tg, origin: spec.Origin}, nil
+	return &gnmicSession{tg: tg, origin: spec.Origin, setupTimeout: spec.SetupTimeout}, nil
 }
 
 // withOrigin prefixes a gNMI request path with the session's origin
@@ -113,8 +113,8 @@ type gnmicSession struct {
 	subEncoding string
 	// origin is the gNMI request-path origin (e.g. "openconfig"); "" = origin-less.
 	origin string
-	// probeTimeout bounds the subscription-path probe; SetupTimeout when zero.
-	probeTimeout time.Duration
+	// setupTimeout bounds the subscription-path probe; SetupTimeout when zero.
+	setupTimeout time.Duration
 
 	// mu guards the probe results below, which the subscription producer
 	// prunes when it retries without the unverified paths.
@@ -189,8 +189,8 @@ func (s *gnmicSession) setProbe(accepted, unverified, inconclusive []string) {
 
 // probeDeadline is how long the subscription-path probe may take.
 func (s *gnmicSession) probeDeadline() time.Duration {
-	if s.probeTimeout > 0 {
-		return s.probeTimeout
+	if s.setupTimeout > 0 {
+		return s.setupTimeout
 	}
 	return SetupTimeout
 }

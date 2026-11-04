@@ -236,7 +236,15 @@ func (d *countingGnmicDialer) Dial(ctx context.Context, spec gnmi.TargetSpec) (g
 // reconnects. tune adjusts the runner before it starts.
 func runAgainst(t *testing.T, srv *gnmiTarget, mode string, tune func(*Runner)) (*Runner, *recordingClient, *countingGnmicDialer, *syncBuf) {
 	t.Helper()
-	addr := startGNMITarget(t, srv)
+	dialer := &countingGnmicDialer{}
+	r, client, _, logs := runAgainstWith(t, startGNMITarget(t, srv), dialer, mode, tune)
+	return r, client, dialer, logs
+}
+
+// runAgainstWith is runAgainst for a target already listening at addr, dialled
+// through dialer.
+func runAgainstWith(t *testing.T, addr string, dialer gnmi.Dialer, mode string, tune func(*Runner)) (*Runner, *recordingClient, gnmi.Dialer, *syncBuf) {
+	t.Helper()
 	store, err := mapping.LoadProfiles("")
 	require.NoError(t, err)
 	user, pass := "user", "secret"
@@ -250,7 +258,6 @@ func runAgainst(t *testing.T, srv *gnmiTarget, mode string, tune func(*Runner)) 
 	}
 	logs := &syncBuf{}
 	client := &recordingClient{}
-	dialer := &countingGnmicDialer{}
 	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	r, err := NewRunner(context.Background(), logger, "p1", pol, client, dialer, store)
 	require.NoError(t, err)

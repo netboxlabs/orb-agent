@@ -63,7 +63,7 @@ type Runner struct {
 	wg       sync.WaitGroup
 
 	backoffBase  time.Duration // initial reconnect backoff; tests shorten it
-	setupTimeout time.Duration // bounds Capabilities; tests shorten it
+	setupTimeout time.Duration // bounds Capabilities and the path probe; tests shorten it
 	// backoffCap and credentialBackoffCap cap the reconnect backoff; see
 	// setupHistory.slowBackoff. Tests shorten them.
 	backoffCap, credentialBackoffCap time.Duration
@@ -314,6 +314,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		Host: t.Host, Username: t.ResolvedUsername(), Password: t.ResolvedPassword(),
 		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: t.ResolvedOrigin(),
 		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
+		SetupTimeout: r.setupTimeout,
 	})
 	if err != nil {
 		return err

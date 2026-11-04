@@ -389,3 +389,35 @@ func TestDegradedReasonInStatusJSON(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(b), "degraded_reason")
 }
+
+// specDialer records the specs it is asked to dial.
+type specDialer struct {
+	countingGnmicDialer
+	mu    sync.Mutex
+	specs []gnmi.TargetSpec
+}
+
+func (d *specDialer) Dial(ctx context.Context, spec gnmi.TargetSpec) (gnmi.Session, error) {
+	d.mu.Lock()
+	d.specs = append(d.specs, spec)
+	d.mu.Unlock()
+	return d.countingGnmicDialer.Dial(ctx, spec)
+}
+
+// One setup timeout bounds Capabilities and the path probe: the runner hands
+// its own to the session it dials.
+func TestRunnerHandsItsSetupTimeoutToTheSession(t *testing.T) {
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	r, err := NewRunner(context.Background(), slog.Default(), "p1", config.Policy{}, &recordingClient{}, &specDialer{}, store)
+	require.NoError(t, err)
+	require.Equal(t, gnmi.SetupTimeout, r.setupTimeout)
+
+	addr := startGNMITarget(t, &gnmiTarget{})
+	d := &specDialer{}
+	_, _, _, _ = runAgainstWith(t, addr, d, config.ModeOnChange, func(r *Runner) { r.setupTimeout = 1234 * time.Millisecond })
+	require.Eventually(t, func() bool { return d.dials.Load() > 0 }, 2*time.Second, 5*time.Millisecond)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	require.Equal(t, 1234*time.Millisecond, d.specs[0].SetupTimeout)
+}
