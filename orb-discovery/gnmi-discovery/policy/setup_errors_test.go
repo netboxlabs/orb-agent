@@ -249,12 +249,13 @@ func TestCleanSetupClearsTheDegradedReason(t *testing.T) {
 		script:     []error{refused, refused, refused},
 		dropStream: func(dial int32) bool { return dial == capsAttempts },
 	}
-	r, client, _ := capsScriptRunner(t, store, dialer)
+	r, _, _ := capsScriptRunner(t, store, dialer)
 
-	// The degraded connection drops before it flushes; the next one ingests.
-	require.Eventually(t, func() bool { return dialer.dials.Load() == capsAttempts+1 && client.count() >= 1 },
-		5*time.Second, 5*time.Millisecond)
-	require.Empty(t, targetStatus(t, r).DegradedReason)
+	// Dial 4 answers Capabilities; once it has subscribed, its setup is done.
+	require.Eventually(t, func() bool {
+		return dialer.dials.Load() == capsAttempts+1 && strings.Count(dialer.eventLog(), "S") == 2 &&
+			targetStatus(t, r).DegradedReason == ""
+	}, 5*time.Second, 5*time.Millisecond)
 }
 
 // The profile and the manufacturer come from the Capabilities answer that
@@ -348,8 +349,9 @@ func getPoll(t *testing.T, c codes.Code) (*diode.Device, TargetStatus) {
 	require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, "SN-0001", *ingestedDevice(t, client).Serial)
 
-	srv.serial.Store("SN-0002")
+	// Refused first, so no poll can fetch the new serial before the refusal.
 	refusing.Store(true)
+	srv.serial.Store("SN-0002")
 	n := client.count()
 	require.Eventually(t, func() bool { return client.count() >= n+2 }, 5*time.Second, 10*time.Millisecond)
 	return ingestedDevice(t, client), targetStatus(t, r)

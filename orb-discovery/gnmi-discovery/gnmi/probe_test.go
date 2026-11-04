@@ -450,3 +450,38 @@ func TestRetryRefusedTooRestoresThePaths(t *testing.T) {
 	subscribeAndRead(t, sess)
 	assert.Equal(t, sorted(probePaths...), pt.lastSubscription(t), "the NotFound path stays for the session")
 }
+
+// The retry is served every time: it waits for the refused attempt to wind
+// down, whose teardown would otherwise stop it. Looped, as that teardown races
+// the retry.
+func TestRetryIsServedEveryTime(t *testing.T) {
+	for i := range 50 {
+		pt, sess := newProbeTarget(t)
+		pt.getErr = func(p string) error {
+			if p == probeMTU {
+				return status.Error(codes.NotFound, "no data")
+			}
+			return nil
+		}
+		pt.subErr = func(paths []string) error {
+			if slices.Contains(paths, probeMTU) {
+				return status.Error(codes.InvalidArgument, "unknown path")
+			}
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		notes, errs, err := sess.Subscribe(ctx, OnChange, probePaths, 0)
+		require.NoError(t, err)
+		select {
+		case n, ok := <-notes:
+			require.True(t, ok, "iteration %d: stream closed before any data", i)
+			require.NotEmpty(t, n.Updates, "iteration %d", i)
+		case e := <-errs:
+			t.Fatalf("iteration %d: stream failed: %v", i, e)
+		case <-ctx.Done():
+			t.Fatalf("iteration %d: no data", i)
+		}
+		cancel()
+		_ = sess.Close()
+	}
+}
