@@ -283,12 +283,12 @@ func targetStatus(t *testing.T, r *Runner) TargetStatus {
 	return st[0]
 }
 
-// requireSettled asserts the target ingests and then stops redialling.
-func requireSettled(t *testing.T, client *recordingClient, d *countingGnmicDialer, maxDials int32) {
+// requireSettled asserts the target ingests after exactly dials connections
+// and then stops redialling.
+func requireSettled(t *testing.T, client *recordingClient, d *countingGnmicDialer, dials int32) {
 	t.Helper()
 	require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond, "never ingested")
-	dials := d.dials.Load()
-	require.LessOrEqual(t, dials, maxDials)
+	require.Equal(t, dials, d.dials.Load())
 	time.Sleep(300 * time.Millisecond)
 	require.Equal(t, dials, d.dials.Load(), "the target kept redialling after it ingested")
 }

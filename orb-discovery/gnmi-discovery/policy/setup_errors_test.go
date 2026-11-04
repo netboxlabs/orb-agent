@@ -314,7 +314,7 @@ func TestGetRungDoesNotCarryTheProbe(t *testing.T) {
 	}
 	r, client, d, _ := runAgainst(t, srv, config.ModeAuto, nil)
 
-	requireSettled(t, client, d, 3)
+	requireSettled(t, client, d, 1)
 	st := targetStatus(t, r)
 	require.Equal(t, "get", st.ActiveMode)
 	require.Empty(t, st.DegradedReason)

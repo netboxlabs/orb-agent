@@ -19,9 +19,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// subscriptionName is the gnmic-side name used for this session's single
-// subscription. It is reused across re-Subscribe calls (the auto-fallback
-// ladder) so StopSubscription can clear the prior subscription's state.
+// subscriptionName prefixes the gnmic-side name of each subscription. Every
+// Subscribe takes a name of its own: gnmic stops a subscription by name when
+// an attempt ends, and with one shared name the end of a refused attempt
+// could stop the next rung's stream.
 const subscriptionName = "default"
 
 // GnmicDialer implements Dialer using the gnmic library.
@@ -87,6 +88,10 @@ func withOrigin(origin, path string) string {
 // gnmicSession wraps a gnmic Target and implements Session.
 type gnmicSession struct {
 	tg *target.Target
+	// subName is the gnmic name of the active subscription, and subs counts
+	// the Subscribes that named one.
+	subName string
+	subs    int
 	// subCancel cancels the context driving the active SubscribeChan producer
 	// goroutine. It is set by Subscribe and invoked by Close so the producer
 	// always observes cancellation, even while it is blocked in gnmic's
@@ -302,7 +307,9 @@ func (s *gnmicSession) StopSubscribe() {
 		s.subCancel()
 		s.subCancel = nil
 	}
-	s.tg.StopSubscription(subscriptionName)
+	if s.subName != "" {
+		s.tg.StopSubscription(s.subName)
+	}
 }
 
 // Subscribe opens a gNMI STREAM subscription.
@@ -352,10 +359,13 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	// caller's ctx lifetime.
 	subCtx, cancel := context.WithCancel(ctx)
 	s.subCancel = cancel
+	s.subs++
+	name := fmt.Sprintf("%s-%d", subscriptionName, s.subs)
+	s.subName = name
 
 	// Each attempt runs under its own context so a retry can end the first.
 	attemptCtx, endAttempt := context.WithCancel(subCtx)
-	rawResp, rawErr := s.tg.SubscribeChan(attemptCtx, req, subscriptionName)
+	rawResp, rawErr := s.tg.SubscribeChan(attemptCtx, req, name)
 
 	notes := make(chan Notification)
 	errs := make(chan error, 1)
@@ -431,7 +441,7 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 					retry, err := s.subscribeRequest(mode, kept, sampleIntervalMs)
 					if err == nil && subCtx.Err() == nil {
 						attemptCtx, endAttempt = context.WithCancel(subCtx)
-						rawResp, rawErr = s.tg.SubscribeChan(attemptCtx, retry, subscriptionName)
+						rawResp, rawErr = s.tg.SubscribeChan(attemptCtx, retry, name)
 						continue
 					}
 				}

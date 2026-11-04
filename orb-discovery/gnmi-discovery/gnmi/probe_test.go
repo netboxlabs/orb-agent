@@ -298,3 +298,41 @@ func TestStreamFailingAfterDataIsNotRetried(t *testing.T) {
 		assert.Contains(t, s, probeMTU, "no retry without the kept path")
 	}
 }
+
+// A subscription that follows a refused one on the same session is served:
+// the refused attempt's teardown must not stop it. Looped, as the teardown
+// races the next Subscribe.
+func TestSubscribeAfterARefusedOneIsServed(t *testing.T) {
+	for i := range 50 {
+		pt, sess := newProbeTarget(t)
+		var calls atomic.Int32
+		pt.subErr = func([]string) error {
+			if calls.Add(1) == 1 {
+				return status.Error(codes.InvalidArgument, "on_change not supported")
+			}
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, errs, err := sess.Subscribe(ctx, OnChange, probePaths, 0)
+		require.NoError(t, err)
+		select {
+		case e := <-errs:
+			require.Equal(t, codes.InvalidArgument, status.Code(e), "iteration %d", i)
+		case <-ctx.Done():
+			t.Fatalf("iteration %d: no refusal", i)
+		}
+		notes, errs2, err := sess.Subscribe(ctx, Sample, probePaths, 100)
+		require.NoError(t, err)
+		select {
+		case n, ok := <-notes:
+			require.True(t, ok, "iteration %d: stream closed before any data", i)
+			require.NotEmpty(t, n.Updates, "iteration %d", i)
+		case e := <-errs2:
+			t.Fatalf("iteration %d: stream failed: %v", i, e)
+		case <-ctx.Done():
+			t.Fatalf("iteration %d: no data", i)
+		}
+		cancel()
+		_ = sess.Close()
+	}
+}
