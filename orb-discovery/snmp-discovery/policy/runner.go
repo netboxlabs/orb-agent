@@ -278,7 +278,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(ctxErr), len(responsive))
 			return
 		}
-		timedOut = failure(fmt.Errorf("%w (probed %d of %d addresses, %d responded; raise timeout to probe them all)",
+		timedOut = failure(fmt.Errorf("%w (started probing %d of %d addresses, %d responded; raise timeout to probe them all)",
 			ctxErr, probed.Load(), len(targets), len(responsive)))
 		log.Warn("SNMP probe scan interrupted", withPanics("error", timedOut, "responsive_target_count", len(responsive))...)
 	}

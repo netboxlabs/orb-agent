@@ -30,6 +30,11 @@ func (silentWalker) Walk(ctx context.Context, _ string, _ int) (map[string]snmp.
 
 // mostlySilentRange is 300 addresses of which only the first answers.
 func mostlySilentRange(answered func()) ([]config.Target, snmp.ClientFactory) {
+	return silentRange(func(host string) bool { return host == "192.0.2.1" }, answered)
+}
+
+// silentRange is 300 addresses of which only those answers picks answer.
+func silentRange(answers func(host string) bool, answered func()) ([]config.Target, snmp.ClientFactory) {
 	var targets []config.Target
 	for i := 1; i <= 254; i++ {
 		targets = append(targets, config.Target{Host: fmt.Sprintf("192.0.2.%d", i), Port: 161})
@@ -38,7 +43,7 @@ func mostlySilentRange(answered func()) ([]config.Target, snmp.ClientFactory) {
 		targets = append(targets, config.Target{Host: fmt.Sprintf("198.51.100.%d", i), Port: 161})
 	}
 	factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
-		if host == "192.0.2.1" {
+		if answers(host) {
 			answered()
 			return &rowWalker{rows: agentRows(host)}, nil
 		}
@@ -70,13 +75,38 @@ func TestTimedOutScanCrawlsWhatItFound(t *testing.T) {
 	require.Len(t, runs, 1)
 	assert.Equal(t, RunStatusFailed, runs[0].Status)
 	assert.Equal(t, 1, runs[0].EntityCount)
-	m := regexp.MustCompile(`^context deadline exceeded \(probed (\d+) of 300 addresses, 1 responded; raise timeout to probe them all\)$`).
-		FindStringSubmatch(runs[0].Reason)
-	require.NotNil(t, m, runs[0].Reason)
-	probed, err := strconv.Atoi(m[1])
+	assertStartedProbing(t, runs[0].Reason, 1)
+}
+
+// assertStartedProbing checks a timed-out scan's reason over 300 addresses:
+// every worker started a probe, the tail was never reached.
+func assertStartedProbing(t *testing.T, reason string, responded int) {
+	t.Helper()
+	m := regexp.MustCompile(`^context deadline exceeded \(started probing (\d+) of 300 addresses, (\d+) responded; raise timeout to probe them all\)$`).
+		FindStringSubmatch(reason)
+	require.NotNil(t, m, reason)
+	started, err := strconv.Atoi(m[1])
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, probed, maxProbeWorkers, "every worker took an address")
-	assert.Less(t, probed, len(targets), "the tail was never reached")
+	assert.GreaterOrEqual(t, started, maxProbeWorkers, "every worker took an address")
+	assert.Less(t, started, 300, "the tail was never reached")
+	assert.Equal(t, strconv.Itoa(responded), m[2])
+}
+
+// A scan that runs out of time before any address answers schedules nothing,
+// and still says how far it got.
+func TestTimedOutScanWithNoAnswer(t *testing.T) {
+	targets, factory := silentRange(func(string) bool { return false }, func() {})
+	scheduler := notStartedScheduler(t)
+	r := scanRunner(t, scheduler, factory, nil)
+	r.timeout = 300 * time.Millisecond
+
+	r.runScanWithOriginal(targets, "192.0.2.1-198.51.100.46")
+
+	assert.Empty(t, scheduler.Jobs())
+	runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-198.51.100.46", 161)
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusFailed, runs[0].Status)
+	assertStartedProbing(t, runs[0].Reason, 0)
 }
 
 // A scan cut short because its policy stopped schedules nothing, whichever
