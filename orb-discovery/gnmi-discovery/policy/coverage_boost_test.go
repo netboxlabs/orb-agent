@@ -886,7 +886,7 @@ func TestDeliverGetReflushesOnDebounce(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_ = r.deliverGet("h:1", fake, base, mapping.NewDeviceModel(), deb, flush, func(string) {})
+		_ = r.deliverGet("h:1", fake, base, mapping.NewDeviceModel(), deb, flush, func(int) {})
 		close(done)
 	}()
 

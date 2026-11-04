@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -322,27 +321,35 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	defer func() { _ = sess.Close() }()
 
 	// Why this connection runs with less than the device offers: recorded in
-	// status as it is found, and cleared once a clean setup completes.
-	var degraded []string
-	record := func(reasons []string) {
+	// status as it is found. Setup's reasons hold for the connection, and the
+	// last Get poll's is replaced by the next poll's.
+	var setupReason, probeReason, pollReason string
+	record := func() {
+		var reasons []string
+		for _, s := range []string{setupReason, probeReason, pollReason} {
+			if s != "" {
+				reasons = append(reasons, s)
+			}
+		}
 		joined := strings.Join(reasons, "; ")
 		r.setState(t.Host, func(s *targetState) { s.DegradedReason = joined })
 	}
-	addDegraded := func(reason string) {
-		if slices.Contains(degraded, reason) {
-			return
-		}
-		degraded = append(degraded, reason)
-		record(degraded)
-	}
-	// setupDone records how setup went once delivery starts. A stream also
-	// carries the paths its probe kept without an answer; Get uses no probe.
+	// setupDone records how setup went once delivery starts, which clears the
+	// reason after a clean setup. A stream also carries the paths its probe
+	// kept without an answer; Get uses no probe.
 	setupDone := func(streaming bool) {
-		reasons := slices.Clone(degraded)
+		probeReason = ""
 		if n := len(sess.InconclusivePaths()); streaming && n > 0 {
-			reasons = append(reasons, fmt.Sprintf("path probe got no answer for %d path(s); subscribed to them unverified", n))
+			probeReason = fmt.Sprintf("path probe got no answer for %d path(s); subscribed to them unverified", n)
 		}
-		record(reasons)
+		record()
+	}
+	pollDone := func(carried int) {
+		pollReason = ""
+		if carried > 0 {
+			pollReason = fmt.Sprintf("the last Get poll failed on some paths; %d value(s) kept from the poll before", carried)
+		}
+		record()
 	}
 
 	// Capabilities picks the profile and the encodings for the whole connection,
@@ -364,8 +371,9 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			if hist.capsFailures < capsAttempts {
 				return fmt.Errorf("capabilities: %w", capErr)
 			}
-			addDegraded(fmt.Sprintf("capabilities failed on %d consecutive attempts, using the _base profile: %v",
-				hist.capsFailures, capErr))
+			setupReason = fmt.Sprintf("capabilities failed on %d consecutive attempts, using the _base profile: %v",
+				hist.capsFailures, capErr)
+			record()
 		}
 		r.logger.Log(r.ctx, hist.logLevel(), "gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
 		r.setState(t.Host, func(s *targetState) { s.LastError = "capabilities: " + capErr.Error() })
@@ -562,7 +570,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	case config.ModeGet:
 		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get" })
-		return r.deliverGet(t.Host, sess, profile, model, deb, flush, addDegraded)
+		return r.deliverGet(t.Host, sess, profile, model, deb, flush, pollDone)
 	case config.ModeSample:
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if serr != nil {
@@ -634,7 +642,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		sess.StopSubscribe()
 		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get"; s.FallbackReason = s2.Error() })
-		return r.deliverGet(t.Host, sess, profile, model, deb, flush, addDegraded)
+		return r.deliverGet(t.Host, sess, profile, model, deb, flush, pollDone)
 	}
 }
 
@@ -828,11 +836,10 @@ func (r *Runner) filterNotification(n gnmi.Notification, profile *mapping.Profil
 // paths. Each Get is an authoritative full view (keep=1), reconciled into the
 // shared model so a departed path drops out of the ingested snapshot — subject
 // to the same empty-view guard as streaming (a Get that returns no device
-// anchor must not wipe the model). A path whose Get failed for a reason that
-// says nothing about the path keeps the previous poll's entries instead, and
-// the session is reported degraded.
+// anchor must not wipe the model). A path whose Get failed with a transient
+// code keeps the previous poll's entries instead; pollDone hears how many.
 func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Profile, model *mapping.DeviceModel,
-	deb *Debouncer, flush func(), addDegraded func(string),
+	deb *Debouncer, flush func(), pollDone func(carried int),
 ) error {
 	paths := profile.SubscribePaths()
 	anchor := profile.Device.Hostname
@@ -847,14 +854,11 @@ func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Pro
 		model.Apply(r.filterNotification(n, profile))
 		var carried []string
 		for p, perr := range failed {
-			if !getPathGone(perr) {
+			if gnmi.Transient(perr) {
 				carried = append(carried, p)
 			}
 		}
-		if len(carried) > 0 {
-			model.Retain(carried)
-			addDegraded("a Get poll failed on some paths; they keep the previous poll's values")
-		}
+		pollDone(model.Retain(carried))
 		trustworthy := anchor == "" || model.SeenInCycle(anchor)
 		pruned := model.EndCycle(1, trustworthy)
 		if len(pruned) > 0 {
@@ -885,17 +889,6 @@ func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Pro
 			// outage waited for the next get_interval_ms poll to recover.
 			flush()
 		}
-	}
-}
-
-// getPathGone reports whether a path's Get error is the target's answer about
-// the path: not modelled, not supported, or holding nothing.
-func getPathGone(err error) bool {
-	switch status.Code(err) {
-	case codes.NotFound, codes.InvalidArgument, codes.Unimplemented:
-		return true
-	default:
-		return false
 	}
 }
 

@@ -193,7 +193,8 @@ func TestRetainKeepsEntriesUnderRequestPaths(t *testing.T) {
 	m.EndCycle(1, true)
 
 	m.Apply(gnmi.Notification{Updates: []gnmi.Update{{Path: "/system/state/hostname", Value: "sw1"}}})
-	m.Retain([]string{"/interfaces/interface[name=*]/state/mtu", "/components/component[name=*]/state/serial-no"})
+	kept := m.Retain([]string{"/interfaces/interface[name=*]/state/mtu", "/components/component[name=*]/state/serial-no"})
+	require.Equal(t, 3, kept)
 	pruned := m.EndCycle(1, true)
 
 	require.Equal(t, []string{
@@ -203,4 +204,39 @@ func TestRetainKeepsEntriesUnderRequestPaths(t *testing.T) {
 	snap := m.Snapshot()
 	require.Equal(t, 9000, snap["/interfaces/interface[name=Ethernet1/1]/state/mtu"])
 	require.Equal(t, "SN-0001", snap["/components/component[name=chassis1]/state/serial-no"])
+}
+
+// A "*" key value is matched up to the "]" that closes it, so a value may hold
+// "/" or "]", and a match never spans into another element.
+func TestRetainMatchesKeyValuesElementByElement(t *testing.T) {
+	cases := []struct {
+		req, path string
+		want      bool
+	}{
+		{
+			"/interfaces/interface[name=*]/subinterfaces/subinterface[index=*]/ipv6/addresses/address[ip=*]/state/prefix-length",
+			"/interfaces/interface[name=Ethernet1/1]/subinterfaces/subinterface[index=0]/ipv6/addresses/address[ip=2001:db8::1]/state/prefix-length", true,
+		},
+		{
+			"/network-instances/network-instance[name=*]/interfaces/interface[id=*]/state/interface",
+			"/network-instances/network-instance[name=vrf.a+b]/interfaces/interface[id=Ethernet1.100]/state/interface", true,
+		},
+		{"/components/component[name=*]/state/serial-no", "/components/component[name=PSU[1]]/state/serial-no", true},
+		{"/interfaces/interface[name=*]/state/mtu", "/interfaces/interface[name=]/state/mtu", true},
+		{"/system/state/hostname", "/system/state/hostname", true},
+		{"/interfaces/interface[name=*]/state/mtu", "/interfaces/interface[name=Eth1]/state/mtu-limit", false},
+		{"/interfaces/interface[name=*]/state/mtu", "/interfaces/interface[name=Eth1]/state/mtu/x", false},
+		{"/system/state/hostname", "/system/state/hostnameX", false},
+		{"/interfaces/interface[name=*]/state/mtu", "/interfaces/interface[name=Eth1][unit=0]/state/mtu", false},
+		{
+			"/interfaces/interface[name=*]/state/mtu",
+			"/interfaces/interface[name=Eth1]/subinterfaces/subinterface[index=0]/state/mtu", false,
+		},
+	}
+	for _, c := range cases {
+		m := NewDeviceModel()
+		m.Apply(gnmi.Notification{Updates: []gnmi.Update{{Path: c.path, Value: 1}}})
+		m.EndCycle(1, true)
+		require.Equal(t, c.want, m.Retain([]string{c.req}) == 1, "%s against %s", c.path, c.req)
+	}
 }

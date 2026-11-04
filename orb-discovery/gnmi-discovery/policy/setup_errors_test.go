@@ -355,10 +355,10 @@ func getPoll(t *testing.T, c codes.Code) (*diode.Device, TargetStatus) {
 	return ingestedDevice(t, client), targetStatus(t, r)
 }
 
-// A path whose Get failed for a reason that says nothing about it keeps what
-// the previous poll found, rather than flipping the device type for a poll.
+// A path whose Get failed with a transient code keeps what the previous poll
+// found, rather than flipping the device type for a poll.
 func TestGetPollKeepsAPathThatFailedTransiently(t *testing.T) {
-	for _, c := range []codes.Code{codes.Unavailable, codes.ResourceExhausted, codes.PermissionDenied, codes.Internal} {
+	for _, c := range []codes.Code{codes.Unavailable, codes.ResourceExhausted, codes.Unauthenticated, codes.Aborted} {
 		t.Run(c.String(), func(t *testing.T) {
 			dev, st := getPoll(t, c)
 			require.Equal(t, "MODEL-1", *dev.DeviceType.Model)
@@ -369,9 +369,12 @@ func TestGetPollKeepsAPathThatFailedTransiently(t *testing.T) {
 	}
 }
 
-// A path the target does not model, or holds nothing under, is dropped as before.
+// Any other code drops the path for that poll, as before.
 func TestGetPollDropsAPathTheTargetRefuses(t *testing.T) {
-	for _, c := range []codes.Code{codes.InvalidArgument, codes.Unimplemented, codes.NotFound} {
+	for _, c := range []codes.Code{
+		codes.InvalidArgument, codes.Unimplemented, codes.NotFound,
+		codes.PermissionDenied, codes.Internal, codes.Unknown, codes.FailedPrecondition,
+	} {
 		t.Run(c.String(), func(t *testing.T) {
 			dev, st := getPoll(t, c)
 			require.Equal(t, "Unknown", *dev.DeviceType.Model)
@@ -548,4 +551,35 @@ func TestWrongCredentialsRPCsPerAttempt(t *testing.T) {
 	full := 1 + len(attempts[capsAttempts-1])
 	t.Logf("the _base attempt with wrong credentials made %d RPCs (%s)", full, "C"+attempts[capsAttempts-1])
 	require.LessOrEqual(t, full, 69, "develop made 69 per attempt")
+}
+
+// A path that fails on every poll and never had a value carries nothing
+// forward, so the session is not reported degraded for it.
+func TestGetPollWithNothingToCarryIsNotDegraded(t *testing.T) {
+	srv := &gnmiTarget{getErr: func(paths []string) error {
+		for _, p := range paths {
+			if strings.Contains(p, "switched-vlan") {
+				return status.Error(codes.Unavailable, "busy")
+			}
+		}
+		return nil
+	}}
+	r, client, _, _ := runAgainst(t, srv, config.ModeGet, func(r *Runner) { r.policy.Config.GetIntervalMs = 30 })
+
+	require.Eventually(t, func() bool { return client.count() >= 3 }, 5*time.Second, 10*time.Millisecond)
+	require.Empty(t, targetStatus(t, r).DegradedReason)
+}
+
+// A poll that carried values forward marks the session degraded until the
+// next clean poll.
+func TestGetPollDegradationClearsOnTheNextCleanPoll(t *testing.T) {
+	var refusing atomic.Bool
+	srv := &gnmiTarget{getErr: refuseComponents(codes.Unavailable, &refusing)}
+	r, client, _, _ := runAgainst(t, srv, config.ModeGet, func(r *Runner) { r.policy.Config.GetIntervalMs = 30 })
+
+	require.Eventually(t, func() bool { return client.count() > 0 }, 5*time.Second, 10*time.Millisecond)
+	refusing.Store(true)
+	require.Eventually(t, func() bool { return targetStatus(t, r).DegradedReason != "" }, 5*time.Second, 5*time.Millisecond)
+	refusing.Store(false)
+	require.Eventually(t, func() bool { return targetStatus(t, r).DegradedReason == "" }, 5*time.Second, 5*time.Millisecond)
 }
