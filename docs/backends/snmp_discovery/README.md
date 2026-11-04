@@ -267,9 +267,8 @@ the policy is loaded, the agent logs which hosts each range leaves out.
 
 **Overlapping entries.** Overlapping subnets and ranges, and a host listed twice (`192.0.2.6` and
 `192.0.2.6/32`, say), are left as they are: each overlapping entry crawls the
-host, with its own `authentication`, except entries written identically, which
-share one crawl, so only one of them crawls each host. A subnet or range crawls
-only the hosts that answer its probe:
+host, with its own `authentication`. A subnet or range crawls only the hosts
+that answer its probe:
 
 - With SNMPv1 and SNMPv2c the probe sends the entry's own community, so a host
   is found only by the entries whose community it accepts. Listing a range once

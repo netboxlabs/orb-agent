@@ -1150,7 +1150,6 @@ const (
 	v3OverlapWarning = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes cannot tell users apart, " +
 		"so each crawls every host that answers, and a crawl with a user the host does not know fails; " +
 		"list such hosts on entries of their own, or use disjoint ranges"
-	sharedCrawlWarning = "; entries written identically share one crawl, so only one of them crawls each host"
 )
 
 // probeKey is what a scan's probe presents. SNMPv1 and SNMPv2c send the
@@ -1167,16 +1166,13 @@ func probeKeyOf(auth config.Authentication) probeKey {
 	return probeKey{auth.ProtocolVersion, auth.Community}
 }
 
-// overlaps collects the pairs of entries of one kind, and whether any two
-// share a crawl.
+// overlaps collects the pairs of entries of one kind.
 type overlaps struct {
-	pairs       []string
-	sharedCrawl bool
+	pairs []string
 }
 
-func (o *overlaps) add(entry, other string, sharedCrawl bool) {
+func (o *overlaps) add(entry, other string) {
 	o.pairs = append(o.pairs, other+" with "+entry)
-	o.sharedCrawl = o.sharedCrawl || sharedCrawl
 }
 
 // warnOverlappingEntries warns at load about entries that crawl the same hosts
@@ -1208,7 +1204,7 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 		if !group.several {
 			endpoint := endpointKey(first.Host, first.Port)
 			for _, other := range singles[endpoint] {
-				listedTwice.add(group.originalTarget, other, false)
+				listedTwice.add(group.originalTarget, other)
 			}
 			singles[endpoint] = append(singles[endpoint], group.originalTarget)
 			continue
@@ -1232,9 +1228,7 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 		for _, other := range spans {
 			if other.port == this.port && other.probe == this.probe &&
 				other.first.Compare(this.last) <= 0 && this.first.Compare(other.last) <= 0 {
-				// A host's crawl is keyed by the range's text, so ranges written
-				// identically share it.
-				kind.add(this.name, other.name, this.name == other.name)
+				kind.add(this.name, other.name)
 			}
 		}
 		spans = append(spans, this)
@@ -1248,9 +1242,6 @@ func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
 func (r *Runner) warnOverlaps(msg string, o overlaps) {
 	if len(o.pairs) == 0 {
 		return
-	}
-	if o.sharedCrawl {
-		msg += sharedCrawlWarning
 	}
 	list := strings.Join(o.pairs[:min(len(o.pairs), maxOverlapsNamed)], ", ")
 	if more := len(o.pairs) - maxOverlapsNamed; more > 0 {

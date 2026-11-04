@@ -66,7 +66,6 @@ const (
 	v3Overlap = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes cannot tell users apart, " +
 		"so each crawls every host that answers, and a crawl with a user the host does not know fails; " +
 		"list such hosts on entries of their own, or use disjoint ranges"
-	sharedCrawl     = "; entries written identically share one crawl, so only one of them crawls each host"
 	hostListedTwice = "a host is listed on several entries; each crawls it, " +
 		"and a crawl with credentials the host does not accept fails"
 )
@@ -86,8 +85,8 @@ func TestLoadWarnsAboutOverlappingEntries(t *testing.T) {
         - host: 192.0.2.2-3
 `))
 	})
-	t.Run("one range written twice shares one crawl", func(t *testing.T) {
-		assert.Equal(t, []overlapWarning{{sameCommunityOverlap + sharedCrawl, "192.0.2.0/24 with 192.0.2.0/24"}},
+	t.Run("one range written twice", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{{sameCommunityOverlap, "192.0.2.0/24 with 192.0.2.0/24"}},
 			overlapWarnings(t, `
         - host: 192.0.2.0/24`+v2cAuth("SNMPv2c", "community-a")+`
         - host: 192.0.2.0/24`+v2cAuth("SNMPv2c", "community-a")+`
@@ -152,7 +151,7 @@ func TestLoadWarnsAboutSNMPv3EntriesOverTheSameHosts(t *testing.T) {
 `))
 	})
 	t.Run("two users over one range written twice", func(t *testing.T) {
-		assert.Equal(t, []overlapWarning{{v3Overlap + sharedCrawl, "192.0.2.0/30 with 192.0.2.0/30"}}, overlapWarnings(t, `
+		assert.Equal(t, []overlapWarning{{v3Overlap, "192.0.2.0/30 with 192.0.2.0/30"}}, overlapWarnings(t, `
         - host: 192.0.2.0/30`+v3Auth("user-a")+`
         - host: 192.0.2.0/30`+v3Auth("user-b")+`
 `))
