@@ -320,7 +320,8 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 			return
 		}
 		if workedAt := r.connWorkedAt(t.Host); !workedAt.IsZero() {
-			// A connection that synced or flushed worked, whatever ended it. It
+			// A connection that synced, or flushed what the device delivered,
+			// worked, whatever ended it. It
 			// resets the backoff only if it then lasted, or a device that drops
 			// right after each sync would be redialled at the base delay for ever.
 			hist.credsWorked = true
@@ -429,7 +430,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			if hist.capsFailures == capsAttempts {
 				capsNote = fmt.Sprintf("capabilities failed on %d attempts in a row (%v)", capsAttempts, capErr)
 			} else {
-				// An earlier connection without Capabilities synced, so this one
+				// An earlier connection without Capabilities worked, so this one
 				// did not redial.
 				capsNote = fmt.Sprintf("capabilities failed (%v)", capErr)
 				afterSync = true
@@ -449,7 +450,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		}
 		setupReason = capsNote + "; " + using
 		if afterSync {
-			setupReason += ", as on the earlier connection that synced"
+			setupReason += ", as on an earlier connection that worked"
 		}
 		record()
 	}

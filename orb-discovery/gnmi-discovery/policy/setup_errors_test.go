@@ -607,7 +607,7 @@ func TestBaseReasonAfterASyncedBaseConnection(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 	require.Eventually(t, func() bool { return client.count() > 0 }, 2*time.Second, 5*time.Millisecond)
 	reason := targetStatus(t, r).DegradedReason
-	require.Contains(t, reason, "as on the earlier connection that synced")
+	require.Contains(t, reason, "as on an earlier connection that worked")
 	require.NotContains(t, reason, "in a row")
 }
 

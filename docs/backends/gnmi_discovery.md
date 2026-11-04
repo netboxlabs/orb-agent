@@ -312,14 +312,17 @@ clear on its own (`Unauthenticated`, `Unavailable`, `ResourceExhausted`,
 `DeadlineExceeded` or `Aborted`), the target reconnects rather than settle for
 the `_base` profile. After three such failures in a row it goes on with `_base`,
 for devices that never answer `Capabilities` but still stream; once such a
-connection has synced, later connections go on with `_base` at once. Any other
-failure, `Unimplemented` included, uses `_base` at once. A target with a pinned
-`profile` redials the same way but keeps that profile when it goes on; only the
-encodings are not negotiated.
+connection has worked (synced, or ingested something the device sent), later
+connections go on with `_base` at once. Any other failure, `Unimplemented`
+included, uses `_base` at once. A target with a pinned `profile` redials the
+same way but keeps that profile when it goes on; what it goes without are the
+negotiated encodings and the vendor `Capabilities` would have reported.
 
 Before subscribing, the agent probes the subscription paths with `Get`, because a
 strict device refuses a whole subscription over one path it does not support.
-The probe asks about the paths eight at a time and has 30 seconds in all. A path
+The probe asks about the paths eight at a time, then asks again one at a time
+the paths left without an answer, unless none got a definite answer, and has 30
+seconds in all. A path
 the device refuses is left out. A path it answers `NotFound` for, modelled but
 empty so far, stays in, and so does one whose probe got no answer. When the
 device refuses the login itself (`Unauthenticated`), the paths are not asked
