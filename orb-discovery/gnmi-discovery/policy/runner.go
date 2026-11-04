@@ -86,7 +86,7 @@ type targetState struct {
 	LastError      string
 	DegradedReason string    // why the session runs degraded; cleared by a clean setup
 	lastProfile    string    // last profile selected for this host; gates the selection log
-	connSynced     time.Time // the current connection's first sync, zero before it
+	connWorked     time.Time // when the current connection first synced or flushed
 }
 
 // capsAttempts is how many consecutive transient Capabilities failures a target
@@ -231,23 +231,33 @@ func (r *Runner) setState(host string, fn func(*targetState)) {
 func (r *Runner) markSynced(host string) {
 	r.setState(host, func(s *targetState) {
 		s.LastSync = time.Now()
-		if s.connSynced.IsZero() {
-			s.connSynced = s.LastSync
+		if s.connWorked.IsZero() {
+			s.connWorked = s.LastSync
 		}
 	})
 }
 
-// connSyncedAt returns when host's connection first synced and starts the
-// next connection's record; zero if it never synced.
-func (r *Runner) connSyncedAt(host string) time.Time {
+// markWorking records that host's current connection delivered: a flush
+// counts, so a target with no hostname leaf that ingests by netbox_id does.
+func (r *Runner) markWorking(host string) {
+	r.setState(host, func(s *targetState) {
+		if s.connWorked.IsZero() {
+			s.connWorked = time.Now()
+		}
+	})
+}
+
+// connWorkedAt returns when host's connection first synced or flushed and
+// starts the next connection's record; zero if it did neither.
+func (r *Runner) connWorkedAt(host string) time.Time {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s, ok := r.states[host]
 	if !ok {
 		return time.Time{}
 	}
-	at := s.connSynced
-	s.connSynced = time.Time{}
+	at := s.connWorked
+	s.connWorked = time.Time{}
 	return at
 }
 
@@ -300,12 +310,12 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 		if r.ctx.Err() != nil {
 			return
 		}
-		if syncedAt := r.connSyncedAt(t.Host); !syncedAt.IsZero() {
-			// A connection that synced worked, whatever ended it. It resets the
-			// backoff only if it then lasted, or a device that drops right
-			// after each sync would be redialled at the base delay for ever.
+		if workedAt := r.connWorkedAt(t.Host); !workedAt.IsZero() {
+			// A connection that synced or flushed worked, whatever ended it. It
+			// resets the backoff only if it then lasted, or a device that drops
+			// right after each sync would be redialled at the base delay for ever.
 			hist.credsWorked = true
-			if time.Since(syncedAt) >= max(r.backoffCap, backoff.next) {
+			if time.Since(workedAt) >= max(r.backoffCap, backoff.next) {
 				backoff.reset()
 			}
 		} else if hist.capsFailures >= capsAttempts {
@@ -598,6 +608,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		}
 		r.runStore.UpdateRun(r.name, t.Host, run.ID, RunStatusCompleted, nil, len(entities))
 		first, mode := false, ""
+		r.markWorking(t.Host)
 		r.setState(t.Host, func(s *targetState) {
 			s.LastFlush = time.Now()
 			s.LastError = ""

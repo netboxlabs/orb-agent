@@ -295,3 +295,30 @@ func TestWrongCredentialsQuietTheStepDownLines(t *testing.T) {
 		})
 	}
 }
+
+// A target matched by netbox_id whose device sends no hostname never has a
+// trustworthy sync, but a successful flush shows its credentials work: after
+// its stream drops it redials at the usual backoff, not the credential one.
+// Capabilities refuses the credentials every time, as on a device that never
+// answers it. Scaled down from 30 s and 15 min.
+func TestFlushCountsAsWorkingCredentials(t *testing.T) {
+	srv := &gnmiTarget{
+		noHostname: true,
+		dropAfter:  150 * time.Millisecond,
+		capsErr:    capsRefused(codes.Unauthenticated, 0),
+	}
+	id := 7
+	_, client, d, _ := runAgainst(t, srv, config.ModeOnChange, func(r *Runner) {
+		r.policy.Scope.Targets[0].NetboxID = &id
+		r.backoffBase = 10 * time.Millisecond
+		r.backoffCap = 50 * time.Millisecond
+		r.credentialBackoffCap = 2 * time.Second
+	})
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= 9 }, 10*time.Second, 10*time.Millisecond)
+	require.Positive(t, client.count(), "the netbox_id target ingests")
+	gaps := d.gaps()
+	for _, g := range gaps[capsAttempts:] {
+		require.Less(t, g, 150*time.Millisecond+100*time.Millisecond, "waited past the usual cap: %v", gaps)
+	}
+}

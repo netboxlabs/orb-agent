@@ -32,6 +32,8 @@ type gnmiTarget struct {
 	capsHang bool
 	getErr   func(paths []string) error
 	subErr   func(paths []string) error
+	// noHostname leaves the hostname leaf out of everything the device sends.
+	noHostname bool
 	// dropAfter, when set, ends each stream that long after its sync.
 	dropAfter time.Duration
 	// encodings the device advertises; JSON_IETF when empty.
@@ -176,6 +178,9 @@ func (s *gnmiTarget) device(paths []string) []*gnmiproto.Update {
 	}
 	var out []*gnmiproto.Update
 	for _, u := range all {
+		if s.noHostname && elemNames(u.GetPath()) == "/system/state/hostname" {
+			continue
+		}
 		if want[elemNames(u.GetPath())] {
 			out = append(out, u)
 		}

@@ -350,11 +350,11 @@ target stays quiet, since the line is per connection rather than per flush.
 
 A target that loses its connection reconnects after a delay that doubles from
 1 second up to 30 seconds. The delay starts again from 1 second after a
-connection that stayed up past its first sync for at least 30 seconds, or for the
-current delay if that is longer, so a device that drops right after each sync is
-not redialled every second. A target whose `Capabilities` call refuses the credentials
+connection that stayed up past its first sync or ingest for at least 30 seconds,
+or for the current delay if that is longer, so a device that drops right after
+each sync is not redialled every second. A target whose `Capabilities` call refuses the credentials
 (`Unauthenticated` or `PermissionDenied`), and that has not answered
-`Capabilities` or synced since the policy started, waits up to 15 minutes
+`Capabilities`, synced or ingested since the policy started, waits up to 15 minutes
 instead, and logs the refusal at `WARN` once and at `DEBUG` after that; its
 mode step-down lines drop to `DEBUG` with it.
 
