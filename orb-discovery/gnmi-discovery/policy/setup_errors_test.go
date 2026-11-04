@@ -97,9 +97,9 @@ func TestBaseConnectionThatNeverSyncedRestartsTheCount(t *testing.T) {
 	_, _, d, _ := runAgainst(t, srv, config.ModeAuto, nil)
 
 	require.Eventually(t, func() bool { return d.dials.Load() >= 2*capsAttempts+1 }, 5*time.Second, 10*time.Millisecond)
-	// Three Capabilities, the _base attempt's subscriptions, then three
-	// Capabilities again.
-	require.Regexp(t, `^CCCS+CCCS`, srv.eventLog())
+	// Three Capabilities, the _base attempt's Gets and subscriptions, then
+	// three Capabilities again.
+	require.Regexp(t, `^CCC[GS]*S[GS]*CCC`, srv.eventLog())
 }
 
 // Unimplemented is the device's answer, not a refusal to wait out: _base at
@@ -506,4 +506,46 @@ func TestRunnerPinsTheHostnamePath(t *testing.T) {
 	require.Eventually(t, func() bool { return client.count() > 0 }, 2*time.Second, 10*time.Millisecond)
 	require.NoError(t, r.Stop())
 	require.Equal(t, []string{"/system/state/hostname"}, fake.Pinned)
+}
+
+// A device that never answers Get is probed once per connection, not once
+// per rung of the auto ladder.
+func TestUnansweredProbeIsNotRepeatedPerRung(t *testing.T) {
+	store, err := mapping.LoadProfiles("")
+	require.NoError(t, err)
+	base, _ := store.Get("_base")
+	srv := &gnmiTarget{getErr: always(codes.Unavailable)}
+	srv.subErr = func([]string) error {
+		if !srv.sawSample.Load() {
+			return status.Error(codes.InvalidArgument, "ON_CHANGE not supported")
+		}
+		return nil
+	}
+	r, client, d, _ := runAgainst(t, srv, config.ModeAuto, nil)
+
+	requireSettled(t, client, d, 1)
+	require.Equal(t, "sample", targetStatus(t, r).ActiveMode)
+	require.EqualValues(t, 1+len(base.SubscribePaths()), srv.gets.Load(),
+		"one multi-path Get and one per path, for the on_change rung only")
+}
+
+// Wrong credentials cost few RPCs: the attempts that redial through
+// Capabilities cost one each, and the attempt that goes on with _base costs
+// no more than an attempt cost before.
+func TestWrongCredentialsRPCsPerAttempt(t *testing.T) {
+	srv := &gnmiTarget{
+		capsErr: capsRefused(codes.Unauthenticated, 0),
+		getErr:  always(codes.Unauthenticated),
+		subErr:  always(codes.Unauthenticated),
+	}
+	_, _, d, _ := runAgainst(t, srv, config.ModeAuto, nil)
+
+	require.Eventually(t, func() bool { return d.dials.Load() >= capsAttempts+1 }, 5*time.Second, 5*time.Millisecond)
+	attempts := strings.Split(srv.eventLog(), "C")[1:] // each attempt starts with Capabilities
+	for i, a := range attempts[:capsAttempts-1] {
+		require.Empty(t, a, "attempt %d: Capabilities alone", i+1)
+	}
+	full := 1 + len(attempts[capsAttempts-1])
+	t.Logf("the _base attempt with wrong credentials made %d RPCs (%s)", full, "C"+attempts[capsAttempts-1])
+	require.LessOrEqual(t, full, 69, "develop made 69 per attempt")
 }

@@ -43,7 +43,7 @@ type gnmiTarget struct {
 	mu      sync.Mutex
 	subEncs []gnmiproto.Encoding
 	subReqs [][]string
-	events  strings.Builder // C per Capabilities, S per Subscribe
+	events  strings.Builder // C per Capabilities, G per Get, S per Subscribe
 	stop    chan struct{}   // closed by dropStreams to end the open streams
 }
 
@@ -73,6 +73,9 @@ func (s *gnmiTarget) Capabilities(ctx context.Context, _ *gnmiproto.CapabilityRe
 
 func (s *gnmiTarget) Get(_ context.Context, req *gnmiproto.GetRequest) (*gnmiproto.GetResponse, error) {
 	s.gets.Add(1)
+	s.mu.Lock()
+	s.events.WriteString("G")
+	s.mu.Unlock()
 	paths := requestPaths(req.GetPath())
 	if s.getErr != nil {
 		if err := s.getErr(paths); err != nil {

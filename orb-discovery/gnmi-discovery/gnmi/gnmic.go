@@ -119,8 +119,8 @@ type gnmicSession struct {
 	// mu guards the probe results below, which the subscription producer
 	// prunes when it retries without the unverified paths.
 	mu sync.Mutex
-	// accepted caches the subscribe paths the target accepts; nil until a
-	// probe reaches a verdict on every path.
+	// accepted caches the subscribe paths the probe kept, for the life of the
+	// connection; nil until the first Subscribe probes them.
 	accepted []string
 	// notFound are the accepted paths the target answered NotFound for.
 	notFound []string
@@ -135,9 +135,12 @@ type gnmicSession struct {
 // subscription. Fast path: a single multi-path Get; if it succeeds, every path
 // is valid. Otherwise each path is probed alone:
 //   - answered, or NotFound (modelled but empty so far): kept;
-//   - a transient error: kept without a verdict, and nothing is cached, so the
-//     next Subscribe on this session probes again;
+//   - a transient error: kept without a verdict;
 //   - any other error: pruned.
+//
+// The result holds for the connection; the next connection probes again. A
+// multi-path Get refused with Unauthenticated skips the per-path Gets: a login
+// is refused for every path alike.
 //
 // The probe runs under one probeDeadline and never fails the subscription. The
 // per-path Gets run probeConcurrency at a time, each under its own deadline, so
@@ -153,8 +156,13 @@ func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []stri
 	}
 	pctx, cancel := context.WithTimeout(ctx, s.probeDeadline())
 	defer cancel()
-	if err := s.probeGet(pctx, paths); err == nil {
+	err := s.probeGet(pctx, paths)
+	if err == nil {
 		s.setProbe(paths, nil, nil)
+		return paths
+	}
+	if status.Code(err) == codes.Unauthenticated {
+		s.setProbe(paths, nil, paths)
 		return paths
 	}
 	errs := make([]error, len(paths))
@@ -215,15 +223,13 @@ func runBounded(n, workers int, fn func(i int)) {
 	wg.Wait()
 }
 
-// setProbe records a probe's result, caching it when every path got a verdict.
+// setProbe records a probe's result for the connection.
 func (s *gnmicSession) setProbe(accepted, notFound, inconclusive []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.accepted = accepted
 	s.notFound = notFound
 	s.inconclusive = inconclusive
-	if len(inconclusive) == 0 {
-		s.accepted = accepted
-	}
 }
 
 // probeDeadline is how long the subscription-path probe may take.

@@ -132,9 +132,9 @@ func subscribeAndRead(t *testing.T, sess Session) Notification {
 	return Notification{}
 }
 
-// A probe that gets no answer keeps the paths, reports them, and is not
-// cached: the next Subscribe on the session probes again.
-func TestProbeWithoutAnAnswerKeepsThePathsAndProbesAgain(t *testing.T) {
+// A probe that gets no answer keeps the paths and reports them, for the whole
+// connection: the next Subscribe on the session does not probe again.
+func TestProbeWithoutAnAnswerKeepsThePathsForTheConnection(t *testing.T) {
 	pt, sess := newProbeTarget(t)
 	var refusing atomic.Bool
 	refusing.Store(true)
@@ -152,9 +152,36 @@ func TestProbeWithoutAnAnswerKeepsThePathsAndProbesAgain(t *testing.T) {
 	refusing.Store(false)
 	before := pt.gets.Load()
 	subscribeAndRead(t, sess)
-	assert.Greater(t, pt.gets.Load(), before, "the session probed again")
-	assert.Empty(t, sess.InconclusivePaths())
+	assert.Equal(t, before, pt.gets.Load(), "the session did not probe again")
+	assert.ElementsMatch(t, probePaths, sess.InconclusivePaths())
 	assert.Equal(t, sorted(probePaths...), pt.lastSubscription(t))
+}
+
+// A login the target refuses is refused for every path alike, so the probe
+// does not ask about each one.
+func TestProbeSkipsThePerPathGetsWhenTheLoginIsRefused(t *testing.T) {
+	pt, sess := newProbeTarget(t)
+	pt.getErr = func(string) error { return status.Error(codes.Unauthenticated, "bad credentials") }
+
+	subscribeAndRead(t, sess)
+	assert.EqualValues(t, 1, pt.gets.Load(), "only the multi-path Get")
+	assert.ElementsMatch(t, probePaths, sess.InconclusivePaths())
+	assert.Equal(t, sorted(probePaths...), pt.lastSubscription(t))
+}
+
+// PermissionDenied can be one path's: a device may authorize per path. The
+// probe still asks about each, and prunes only the denied one.
+func TestProbeStillAsksPerPathAfterAPermissionDenied(t *testing.T) {
+	pt, sess := newProbeTarget(t)
+	pt.getErr = func(p string) error {
+		if p == probeSerial {
+			return status.Error(codes.PermissionDenied, "not authorized for this path")
+		}
+		return nil
+	}
+
+	subscribeAndRead(t, sess)
+	assert.Equal(t, sorted(probeHostname, probeMTU), pt.lastSubscription(t))
 }
 
 // NotFound is a modelled path with nothing under it yet: it stays in the
