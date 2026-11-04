@@ -1164,7 +1164,7 @@ const (
 		"list such hosts on entries of their own, or use disjoint ranges"
 	differentDefaultsWarning = "scope entries with different override_defaults reach the same hosts; " +
 		"a host that answers several of these entries is sent with each entry's defaults in turn; " +
-		"give such a host an entry of its own"
+		"list such a host once, on a single entry of its own"
 )
 
 // probeKey is what a scan's probe presents. SNMPv1 and SNMPv2c send the

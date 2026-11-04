@@ -177,7 +177,7 @@ func TestLoadWarnsAboutSNMPv3EntriesOverTheSameHosts(t *testing.T) {
 // With SNMPv1 and SNMPv2c the probe sends each entry's own community, so a
 // host is found only by the entries whose community it accepts: listing a
 // range once per community is how it is scanned with several, and such
-// entries are not warned about.
+// entries are not warned about unless their defaults differ.
 func TestLoadDoesNotWarnAboutOneRangePerCommunity(t *testing.T) {
 	t.Run("one /24 per community", func(t *testing.T) {
 		require.Empty(t, overlapWarnings(t, `
@@ -197,7 +197,7 @@ func TestLoadDoesNotWarnAboutOneRangePerCommunity(t *testing.T) {
 
 const differentDefaults = "scope entries with different override_defaults reach the same hosts; " +
 	"a host that answers several of these entries is sent with each entry's defaults in turn; " +
-	"give such a host an entry of its own"
+	"list such a host once, on a single entry of its own"
 
 // Each entry sends a host it crawls with its own override_defaults, so a host
 // two entries crawl flips between them every cycle, whatever the credentials.
@@ -244,6 +244,23 @@ func TestLoadWarnsAboutOverlappingEntriesWithDifferentDefaults(t *testing.T) {
 		assert.Empty(t, overlapWarnings(t, `
         - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+`
         - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+site("undefined")+`
+`))
+	})
+	// Defaults are compared as written, as the docs say.
+	t.Run("tags in another order", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{{differentDefaults, "192.0.2.0/30 with 192.0.2.0/30"}}, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+`
+          override_defaults:
+            tags: [tag-a, tag-b]
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+`
+          override_defaults:
+            tags: [tag-b, tag-a]
+`))
+	})
+	t.Run("a trailing space", func(t *testing.T) {
+		assert.Equal(t, []overlapWarning{{differentDefaults, "192.0.2.0/30 with 192.0.2.0/30"}}, overlapWarnings(t, `
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-a")+site("site-a")+`
+        - host: 192.0.2.0/30`+v2cAuth("SNMPv2c", "community-b")+site(`"site-a "`)+`
 `))
 	})
 	t.Run("disjoint ranges, or another port", func(t *testing.T) {
