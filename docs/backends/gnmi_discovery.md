@@ -355,7 +355,8 @@ current delay if that is longer, so a device that drops right after each sync is
 not redialled every second. A target whose `Capabilities` call refuses the credentials
 (`Unauthenticated` or `PermissionDenied`), and that has not answered
 `Capabilities` or synced since the policy started, waits up to 15 minutes
-instead, and logs the refusal at `WARN` once and at `DEBUG` after that.
+instead, and logs the refusal at `WARN` once and at `DEBUG` after that; its
+mode step-down lines drop to `DEBUG` with it.
 
 `/api/v1/status` reports each target's `active_mode`, `fallback_reason`,
 `last_error` and `degraded_reason`. `degraded_reason` says why the current

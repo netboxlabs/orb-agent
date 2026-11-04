@@ -116,13 +116,27 @@ func (h *setupHistory) slowBackoff() bool {
 	return h.credsRefused && !h.credsWorked
 }
 
-// logLevel is WARN, except for the repeats of a refusal of credentials that
-// never worked: those say nothing the first one did not.
+// quiet reports whether this attempt repeats a refusal of credentials that
+// never worked, which has had its WARN: its lines say nothing new.
+func (h *setupHistory) quiet() bool {
+	return h.slowBackoff() && h.credsWarned
+}
+
+// logLevel is WARN, or DEBUG for a quiet attempt.
 func (h *setupHistory) logLevel() slog.Level {
-	if h.slowBackoff() && h.credsWarned {
+	if h.quiet() {
 		return slog.LevelDebug
 	}
 	return slog.LevelWarn
+}
+
+// stepDownLevel is INFO for the ladder's step-down lines, or DEBUG for a quiet
+// attempt.
+func (h *setupHistory) stepDownLevel() slog.Level {
+	if h.quiet() {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
 }
 
 // attemptLogged notes, once an attempt is logged, that a refusal of credentials
@@ -655,7 +669,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			return nil // ctx cancelled during/after on_change attempt
 		}
 
-		r.logger.Info("on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
+		r.logger.Log(r.ctx, hist.stepDownLevel(), "on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		notes, errs, s2 := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if s2 == nil {
@@ -670,7 +684,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if r.ctx.Err() != nil {
 			return nil // ctx cancelled during/after sample attempt
 		}
-		r.logger.Info("sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
+		r.logger.Log(r.ctx, hist.stepDownLevel(), "sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		// Tear down the SAMPLE subscription before switching to Get on the same
 		// session — Subscribe/Close are the only other teardown points and Close is

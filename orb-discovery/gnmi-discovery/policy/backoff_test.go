@@ -270,3 +270,28 @@ func TestBackoffResetNeedsTheCurrentDelayToo(t *testing.T) {
 	// where a reset would wait 10 ms.
 	require.GreaterOrEqual(t, d.gaps()[working-1], 300*time.Millisecond+80*time.Millisecond, d.gaps())
 }
+
+// With credentials that never worked, the step-down lines are quiet like the
+// refusal: at INFO at most on the first attempt, at DEBUG after.
+func TestWrongCredentialsQuietTheStepDownLines(t *testing.T) {
+	// PermissionDenied goes on with _base on the first attempt, and walks the
+	// ladder there; Unauthenticated redials first, so its first walk is a repeat.
+	firstINFO := map[codes.Code]int{codes.PermissionDenied: 1, codes.Unauthenticated: 0}
+	for c, want := range firstINFO {
+		t.Run(c.String(), func(t *testing.T) {
+			srv := &gnmiTarget{
+				capsErr: func(int32) error { return status.Error(c, "bad credentials") },
+				getErr:  always(c),
+				subErr:  always(c),
+			}
+			_, _, d, logs := runAgainst(t, srv, config.ModeAuto, nil)
+
+			require.Eventually(t, func() bool { return d.dials.Load() >= 6 }, 10*time.Second, 5*time.Millisecond)
+			for _, msg := range []string{"on_change not available, using sample", "sample not available, using get"} {
+				out := logs.String()
+				require.Equal(t, want, strings.Count(out, `level=INFO msg="`+msg), msg)
+				require.Positive(t, strings.Count(out, `level=DEBUG msg="`+msg), msg)
+			}
+		})
+	}
+}
