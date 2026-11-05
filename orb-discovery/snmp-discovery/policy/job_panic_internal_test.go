@@ -15,6 +15,7 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/gosnmp/gosnmp"
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
+	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/ingest"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/metrics"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 )
@@ -599,4 +601,59 @@ func TestCrawlThatDiscoversCountsOneSuccess(t *testing.T) {
 			}
 		})
 	}
+}
+
+// panickingIngestClient panics on its first ingest while armed, then records
+// as recordingClient does.
+type panickingIngestClient struct {
+	recordingClient
+	armed atomic.Bool
+}
+
+func (c *panickingIngestClient) Ingest(ctx context.Context, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	if c.armed.CompareAndSwap(true, false) {
+		panic("unexpected entity shape")
+	}
+	return c.recordingClient.Ingest(ctx, entities, opts...)
+}
+
+// A crawl whose ingest panics in the queue's consumer fails its run with the
+// panic as its reason, and counts as any failed ingest does. The stack is
+// logged once, and the next crawl ingests through the same queue.
+func TestCrawlIngestPanicFailsItsRun(t *testing.T) {
+	logs := &lockedBuffer{}
+	inner := &panickingIngestClient{}
+	inner.armed.Store(true)
+	client, err := ingest.NewQueuedClient(inner, 1, jsonLogger(logs))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+		return &rowWalker{rows: agentRows(host)}, nil
+	}
+	r, store := newPolicyRunner(t, singleTargetPolicy, factory, client, jsonLogger(logs))
+	reader := useTestMeter(t)
+	logs.Reset()
+
+	r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
+
+	runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusFailed, runs[0].Status)
+	assert.Equal(t, "panic: unexpected entity shape", runs[0].Reason)
+	errs := errorRecords(t, logs)
+	require.Len(t, errs, 2, "the queue's record of the panic, then the crawl's of its failed ingest")
+	assert.Equal(t, "panic: unexpected entity shape", errs[0]["error"])
+	assert.Contains(t, errs[0]["stack"], "panickingIngestClient")
+	assert.Equal(t, "error ingesting entities", errs[1]["msg"])
+	assert.Equal(t, "panic: unexpected entity shape", errs[1]["error"])
+	assert.Equal(t, "192.0.2.1", errs[1]["host"])
+	assert.NotContains(t, errs[1], "stack", "one stack per panic")
+	assert.Equal(t, int64(1), discoverySuccesses(t, reader), "a failed ingest still counts as a successful discovery")
+	assert.Empty(t, discoveryFailures(t, reader))
+
+	r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
+	runs = store.GetRunsForTarget("p1", "192.0.2.1", 161)
+	require.Len(t, runs, 2)
+	assert.Equal(t, RunStatusCompleted, runs[1].Status)
+	assert.Len(t, inner.devicesOf("192.0.2.1"), 1, "the next crawl ingested")
 }

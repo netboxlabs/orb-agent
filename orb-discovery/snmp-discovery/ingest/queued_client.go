@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -125,12 +126,37 @@ func (c *QueuedClient) execute(req *ingestRequest) {
 		defer cancel()
 	}
 
-	resp, err := req.run(ctx)
+	resp, err := c.runRecovering(ctx, req)
 	select {
 	case req.result <- ingestResult{resp: resp, err: err}:
 	default:
 		c.logger.Warn("ingest result not delivered: caller no longer waiting")
 	}
+}
+
+// panicError is a panic recovered from an ingest, returned to its caller as
+// the ingest's error.
+type panicError struct {
+	value any
+	stack []byte
+}
+
+func (e *panicError) Error() string {
+	return fmt.Sprintf("panic: %v", e.value)
+}
+
+// runRecovering runs req. A panic fails this ingest alone and is logged here
+// with its stack, whether or not the caller is still waiting, so the consumer
+// and every later ingest carry on.
+func (c *QueuedClient) runRecovering(ctx context.Context, req *ingestRequest) (resp *diodepb.IngestResponse, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			p := &panicError{value: recovered, stack: debug.Stack()}
+			c.logger.Error("recovered from a panic in an ingest; the ingest failed", "error", p, "stack", string(p.stack))
+			resp, err = nil, p
+		}
+	}()
+	return req.run(ctx)
 }
 
 func (c *QueuedClient) enqueue(
