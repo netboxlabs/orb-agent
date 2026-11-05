@@ -36,15 +36,31 @@ func CutValues(s string, values []string) string {
 	return mask(s, values, true)
 }
 
-func mask(s string, values []string, cut bool) string {
+// LongestForm returns the length of the longest form of values that Values
+// masks: how far past a point in a text a value masked there can reach.
+func LongestForm(values []string) int {
+	longest := 0
+	for _, f := range maskedForms(values) {
+		longest = max(longest, len(f))
+	}
+	return longest
+}
+
+// maskedForms returns the forms of values that mask matches, each once.
+func maskedForms(values []string) []string {
 	var forms []string
 	for _, v := range values {
-		for _, f := range quotedForms(v) {
+		for _, f := range append(quotedForms(v), splitHeads(v)...) {
 			if !slices.Contains(forms, f) {
 				forms = append(forms, f)
 			}
 		}
 	}
+	return forms
+}
+
+func mask(s string, values []string, cut bool) string {
+	forms := maskedForms(values)
 	if len(forms) == 0 || s == "" {
 		return s
 	}
@@ -138,10 +154,27 @@ func standsAlone(s string, from, to int, v string) bool {
 	return startsWord && endsWord
 }
 
+// splitHeads returns v's heads cut inside a character, as a backend quotes
+// them that cuts a value by bytes (yaml.v3 quotes a long value's first 7) and
+// answers in JSON: encoding/json replaces each byte of the cut character with
+// U+FFFD.
+func splitHeads(v string) []string {
+	var heads []string
+	for i := 0; i < len(v); {
+		_, size := utf8.DecodeRuneInString(v[i:])
+		for k := 1; k < size; k++ {
+			heads = append(heads, v[:i]+strings.Repeat(string(utf8.RuneError), k))
+		}
+		i += size
+	}
+	return heads
+}
+
 // quotedForms returns v as an error can quote it: as it is, escaped as Go
-// quotes a string (%q and strconv's errors; only ASCII, as %+q and Python's
-// json.dumps do), and escaped as JSON, with the HTML escaping Go's encoder
-// applies by default and without, as in a JSON body kept whole.
+// quotes a string (%q and strconv's errors; only ASCII, as %+q does, and as
+// Python's json.dumps does for characters below U+10000), and escaped as JSON,
+// with the HTML escaping Go's encoder applies by default and without, as in a
+// JSON body kept whole.
 func quotedForms(v string) []string {
 	if v == "" {
 		return nil

@@ -33,6 +33,9 @@ func TestFailedApplyErrorLeavesOutTheResolvedSecret(t *testing.T) {
 	}{
 		{"value quoted whole", "k3Y-9xQz", "k3Y-9xQz"},
 		{"value quoted truncated", resolvedSecret, "Pl41n-r"},
+		// The first 7 bytes end inside "€", whose bytes there the backend's
+		// JSON answer replaces with U+FFFD.
+		{"value quoted truncated inside a character", "Hello€world123", "Hello"},
 	} {
 		t.Run(secret.name, func(t *testing.T) {
 			logs := &renderedLogs{}

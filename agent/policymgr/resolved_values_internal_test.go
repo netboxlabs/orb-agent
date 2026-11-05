@@ -38,24 +38,22 @@ func TestResolvedValues(t *testing.T) {
 }
 
 // TestBackendRefusal masks a policy's resolved values in a backend's error,
-// names the fields whose values it masked, and bounds the text it logs and
-// the reason it stores.
+// names the fields whose values the error quotes, and bounds the text it logs
+// and the reason it stores.
 func TestBackendRefusal(t *testing.T) {
 	typeErr := "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `k3Y-9xQz` into int"
+	retries := []resolvedValue{{path: "config.retries", value: "k3Y-9xQz"}}
+	note := " (the error quotes the value of the secret reference at config.retries, masked as ********)"
 
-	t.Run("names the field whose value is masked", func(t *testing.T) {
-		logged, reason := backendRefusal(typeErr, []resolvedValue{
-			{path: "config.retries", value: "k3Y-9xQz"},
-			{path: "scope.authentication.community", value: "n0t-qu0ted-here"},
-		})
-		want := "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int" +
-			" (******** is the value of the secret reference at config.retries)"
+	t.Run("names the field whose value the error quotes", func(t *testing.T) {
+		logged, reason := backendRefusal(typeErr, append(retries, resolvedValue{path: "scope.authentication.community", value: "n0t-qu0ted-here"}))
+		want := "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int" + note
 		assert.Equal(t, want, reason)
 		assert.Equal(t, want, logged)
 	})
 
 	t.Run("an error that quotes no value is left as it is", func(t *testing.T) {
-		logged, reason := backendRefusal("400 policy name is taken", []resolvedValue{{path: "config.retries", value: "k3Y-9xQz"}})
+		logged, reason := backendRefusal("400 policy name is taken", retries)
 		assert.Equal(t, "400 policy name is taken", reason)
 		assert.Equal(t, "400 policy name is taken", logged)
 	})
@@ -67,29 +65,31 @@ func TestBackendRefusal(t *testing.T) {
 		}
 		_, reason := backendRefusal("400 bad community c0mmun1ty-v4l", values)
 		assert.Equal(t, "400 bad community ********"+
-			" (******** is the value of the secret reference at scope.targets[0].community,"+
-			" scope.targets[1].community, scope.targets[2].community and 1 more)", reason)
+			" (the error quotes the values of the secret references at scope.targets[0].community,"+
+			" scope.targets[1].community, scope.targets[2].community and 1 more, masked as ********)", reason)
 	})
 
 	t.Run("bounds what it logs and stores", func(t *testing.T) {
-		values := []resolvedValue{{path: "config.retries", value: "k3Y-9xQz"}}
-		logged, reason := backendRefusal(typeErr+"; "+strings.Repeat("x", 20000), values)
-		note := " (******** is the value of the secret reference at config.retries)"
+		logged, reason := backendRefusal(typeErr+"; "+strings.Repeat("x", 20000), retries)
 		assert.NotContains(t, logged, "k3Y-9xQz")
 		assert.NotContains(t, reason, "k3Y-9xQz")
 		assert.True(t, strings.HasSuffix(reason, "... (truncated)"+note), "the reason says it is cut: %q", reason[len(reason)-120:])
-		assert.LessOrEqual(t, len(reason), maxBackendErrLen+len(note))
+		assert.Len(t, strings.TrimSuffix(reason, note), maxBackendErrLen)
 		assert.True(t, strings.HasSuffix(logged, "... (truncated)"+note))
-		assert.LessOrEqual(t, len(logged), maxMaskedErrLen+len(note))
+		assert.Len(t, strings.TrimSuffix(logged, note), maxMaskedErrLen)
 	})
 
 	t.Run("bounds a text that masking makes longer", func(t *testing.T) {
-		// Each text is within its bound until " 0" becomes " ********".
-		values := []resolvedValue{{path: "config.retries", value: "0"}}
-		logged, _ := backendRefusal(strings.Repeat(" 0", 4000), values)
-		assert.LessOrEqual(t, len(logged), maxMaskedErrLen+200)
-		_, reason := backendRefusal(strings.Repeat(" 0", 500), values)
-		assert.LessOrEqual(t, len(reason), maxBackendErrLen+200)
+		zero := []resolvedValue{{path: "config.retries", value: "0"}}
+		zeroNote := " (the error quotes the value of the secret reference at config.retries, masked as ********)"
+		// The first texts are within their bound until " 0" becomes
+		// " ********"; the last is cut before masking too.
+		for _, text := range []string{strings.Repeat(" 0", 500), strings.Repeat(" 0", 4000), strings.Repeat(" 0", 6000)} {
+			logged, reason := backendRefusal(text, zero)
+			assert.LessOrEqual(t, len(strings.TrimSuffix(reason, zeroNote)), maxBackendErrLen, "%d bytes", len(text))
+			assert.LessOrEqual(t, len(strings.TrimSuffix(logged, zeroNote)), maxMaskedErrLen, "%d bytes", len(text))
+			assert.True(t, strings.HasSuffix(reason, "... (truncated)"+zeroNote), "%d bytes", len(text))
+		}
 	})
 
 	t.Run("cuts at the start of a character", func(t *testing.T) {
@@ -98,14 +98,13 @@ func TestBackendRefusal(t *testing.T) {
 		assert.True(t, cut)
 	})
 
-	t.Run("a value the cut runs through is masked from its first byte", func(t *testing.T) {
-		values := []resolvedValue{{path: "config.retries", value: "k3Y-9xQz"}}
+	t.Run("a value a kept bound runs through is masked", func(t *testing.T) {
 		for _, limit := range []int{maxMaskedErrLen, maxBackendErrLen} {
-			// Wherever near limit the cut falls, one of these puts it after
+			// Wherever near limit the bound falls, one of these puts it after
 			// each of the value's bytes.
 			for at := limit - len(truncationMarker) - len("k3Y-9xQz"); at <= limit; at++ {
 				text := strings.Repeat("x", at) + "k3Y-9xQz" + strings.Repeat("y", 20000)
-				logged, reason := backendRefusal(text, values)
+				logged, reason := backendRefusal(text, retries)
 				out := logged
 				if limit == maxBackendErrLen {
 					out = reason
@@ -115,11 +114,63 @@ func TestBackendRefusal(t *testing.T) {
 		}
 	})
 
-	t.Run("names only the fields masked in what it keeps", func(t *testing.T) {
-		values := []resolvedValue{{path: "config.retries", value: "k3Y-9xQz"}}
-		// The value is past the reason's cut and before the log's.
-		logged, reason := backendRefusal(strings.Repeat("x ", 600)+"k3Y-9xQz into int", values)
-		assert.NotContains(t, reason, "secret reference", "the reason shows no masked value to explain")
-		assert.Contains(t, logged, "(******** is the value of the secret reference at config.retries)")
+	t.Run("a truncated value's tail a kept bound runs through is masked", func(t *testing.T) {
+		// pydantic quotes a long value's first 25 and last 24 characters.
+		value := "Pl41n-r3solved-credential-7f3a-and-more-to-be-truncated"
+		values := []resolvedValue{{path: "config.token", value: value}}
+		tail := value[len(value)-24:]
+		repr := "input_value='" + value[:25] + "..." + tail + "'"
+		for _, limit := range []int{maxMaskedErrLen, maxBackendErrLen} {
+			for at := limit - len(truncationMarker) - len(repr); at <= limit; at++ {
+				logged, reason := backendRefusal(strings.Repeat("x", at)+repr+strings.Repeat("y", 20000), values)
+				out := logged
+				if limit == maxBackendErrLen {
+					out = reason
+				}
+				assert.NotContains(t, out, "..."+tail[:1], "limit %d, the repr from byte %d", limit, at)
+			}
+		}
 	})
+
+	t.Run("a value the end of what it masks runs through is masked when kept", func(t *testing.T) {
+		// Masking each whole value shortens the text by 47 bytes, enough to
+		// bring the end of what is masked within what is logged.
+		value := "Pl41n-r3solved-credential-7f3a-and-more-to-be-truncated"
+		values := []resolvedValue{{path: "config.token", value: value}}
+		prefix := strings.Repeat(value+" ", 140)
+		// One of these puts the end of what is masked, past maxMaskedErrLen,
+		// after each of the last value's first bytes.
+		for at := maxMaskedErrLen; at <= maxMaskedErrLen+2*len(value); at++ {
+			logged, _ := backendRefusal(prefix+strings.Repeat("y", at-len(prefix))+value+strings.Repeat("z", 20000), values)
+			assert.NotContains(t, logged, "yP", "the last value from byte %d", at)
+		}
+	})
+
+	t.Run("names a field whose value is quoted past the reason's bound", func(t *testing.T) {
+		logged, reason := backendRefusal(strings.Repeat("x ", 600)+"k3Y-9xQz into int", retries)
+		assert.True(t, strings.HasSuffix(reason, note), "the reason still says what the error quotes: %q", reason)
+		assert.Contains(t, logged, "******** into int"+note)
+	})
+
+	t.Run("names no field for the error's own bytes at the end of what it masks", func(t *testing.T) {
+		// The error quotes the retries value; "parse" starts with the
+		// community's first 2 bytes, and one of these puts the end of the
+		// text masked between them and the rest.
+		values := append(retries, resolvedValue{path: "scope.authentication.community", value: "pa55-w0rd-xyz"})
+		for at := maxMaskedErrLen; at <= maxMaskedErrLen+50; at++ {
+			logged, reason := backendRefusal(typeErr+strings.Repeat("y", at-len(typeErr))+"parse error"+strings.Repeat("z", 20000), values)
+			assert.True(t, strings.HasSuffix(logged, note), "parse from byte %d", at)
+			assert.True(t, strings.HasSuffix(reason, note), "parse from byte %d", at)
+		}
+	})
+}
+
+// TestComparePaths orders the numbers in paths as numbers.
+func TestComparePaths(t *testing.T) {
+	assert.Negative(t, comparePaths("a[2]", "a[10]"))
+	assert.Positive(t, comparePaths("a[10]", "a[2]"))
+	assert.Negative(t, comparePaths("a[002]", "a[10]"), "leading zeros do not count")
+	assert.Negative(t, comparePaths("a", "a.b"), "a path before the paths under it")
+	assert.Positive(t, comparePaths("a.b", "a"))
+	assert.Negative(t, comparePaths("a.b", "a.c"))
 }

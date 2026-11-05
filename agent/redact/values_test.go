@@ -40,6 +40,26 @@ func encodedJSONNoHTML(t *testing.T, v any) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
+// jsonRoundTrip returns s as a backend's JSON answer carries it: encoded by
+// encoding/json, which replaces each byte of an invalid UTF-8 sequence with
+// U+FFFD, and decoded, as the agent reads the answer. It checks s had such a
+// sequence, so the case tests a value cut inside a character.
+func jsonRoundTrip(t *testing.T, s string) string {
+	t.Helper()
+	b, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded string
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded == s {
+		t.Fatalf("%q has no byte to replace", s)
+	}
+	return decoded
+}
+
 // TestValues masks a policy's resolved values in a backend's error text,
 // whole, truncated and escaped as backends quote them, and leaves the error's
 // own words readable, including those a value happens to contain.
@@ -79,6 +99,20 @@ func TestValues(t *testing.T) {
 			text:   "a=k3Y-9xQz b=Sec0nd-v4l c=k3Y-9xQz",
 			values: []string{"k3Y-9xQz", "Sec0nd-v4l"},
 			want:   "a=******** b=******** c=********",
+		},
+		{
+			// yaml.v3 quotes the first 7 bytes, which end inside "€"; gin's
+			// JSON answer replaces each of its 2 bytes there with U+FFFD.
+			name:   "the first 7 bytes of a value, cut inside a character and sent as JSON",
+			text:   "line 4: cannot unmarshal !!str `" + jsonRoundTrip(t, "Hello€world123"[:7]) + "...` into int",
+			values: []string{"Hello€world123"},
+			want:   "line 4: cannot unmarshal !!str `********...` into int",
+		},
+		{
+			name:   "a tail of exactly 7 bytes",
+			text:   "ends with al-7f3a!",
+			values: []string{long},
+			want:   "ends with ********!",
 		},
 		{
 			name:   "a head of exactly 7 bytes, inside a word",
@@ -126,12 +160,24 @@ func TestValues(t *testing.T) {
 			want:   "400 yaml: unmarshal errors:\n  line 10: cannot unmarshal !!str `********` into bool; public_key unset",
 		},
 		{
+			name:   "a short value at the start of the text",
+			text:   "ab9 refused",
+			values: []string{"ab9"},
+			want:   "******** refused",
+		},
+		{
 			// The value's own first byte is no letter or digit, so it
 			// starts a word wherever it is.
-			name:   "a short value whose edge is punctuation, glued to a word",
+			name:   "a short value whose first byte is punctuation, glued to a word",
 			text:   "x-abc refused",
 			values: []string{"-abc"},
 			want:   "x******** refused",
+		},
+		{
+			name:   "a short value whose last byte is punctuation, glued to a word",
+			text:   "abc-x refused",
+			values: []string{"abc-"},
+			want:   "********x refused",
 		},
 		{
 			name:   "a value quoted as Go quotes it",
@@ -211,6 +257,7 @@ func TestCutValues(t *testing.T) {
 		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "refused: ********"},
 		{"a value whole before the cut", "refused: k3Y-9xQz, then", "refused: ********, then"},
 		{"no value at the cut", "refused: xx", "refused: xx"},
+		{"a short head before the cut", "refused: k3 then xx", "refused: k3 then xx"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := CutValues(tc.text, []string{"k3Y-9xQz"}); got != tc.want {

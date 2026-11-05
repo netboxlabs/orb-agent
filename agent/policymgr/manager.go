@@ -915,78 +915,92 @@ func secretsFailureReason(err error) string {
 
 // maxBackendErrLen bounds a backend's refusal kept as the policy's reason, as
 // maxSecretsFailureReasonLen bounds a secrets failure: the reason rides every
-// heartbeat. maxMaskedErrLen bounds the refusal logged, and so how much of it
-// is masked: masking takes the refusal's length times the length of the
-// policy's resolved values, under the backend's apply mutex. Each bound holds
-// the masked text with its truncationMarker; the note naming the masked
-// fields follows it.
+// heartbeat. maxMaskedErrLen bounds the refusal logged. Each bound holds the
+// masked text with its truncationMarker; the note naming the fields follows
+// it.
 const (
 	maxBackendErrLen = 1024
 	maxMaskedErrLen  = 8 << 10
 )
 
-// maskedFieldsNamed is how many fields a refusal names whose values it masks;
-// it counts the others.
-const maskedFieldsNamed = 3
+// quotedFieldsNamed is how many fields a refusal names whose values the
+// backend's error quotes; it counts the others.
+const quotedFieldsNamed = 3
 
 // backendRefusal masks a policy's resolved values in text, a backend's error,
-// and names the fields of the policy whose values it masked: a backend's
-// error locates the value by a line of the YAML the agent sent it, which the
-// user never sees. It returns the text to log, at most maxMaskedErrLen of the
-// error, and the policy's reason, at most maxBackendErrLen of it.
+// and names the fields of the policy whose values the error quotes. It
+// returns the text to log, at most maxMaskedErrLen of the error, and the
+// policy's reason, at most maxBackendErrLen of it.
+//
+// Masking takes the text's length times the values', under the backend's
+// apply mutex, so only the text kept is masked, and the longest form of a
+// value past it: a value, or a truncated one's tail, that a bound runs
+// through is then whole in what is masked, and masked whole before the bound
+// cuts the masked text.
 func backendRefusal(text string, resolved []resolvedValue) (logged, reason string) {
-	return refusalWithin(text, resolved, maxMaskedErrLen), refusalWithin(text, resolved, maxBackendErrLen)
-}
-
-// refusalWithin is backendRefusal's text kept to limit bytes. The text is cut
-// before it is masked, which bounds the cost, so a value the cut runs through
-// is masked from its first byte. Masking can make the text longer, a short
-// value becoming MaskedSecret, so it is cut again after. The fields named are
-// those whose values are masked in the text kept.
-func refusalWithin(text string, resolved []resolvedValue, limit int) string {
-	window, cut := text, len(text) > limit
-	maskWith := redact.Values
-	if cut {
-		window, _ = cutAt(text, limit-len(truncationMarker))
-		maskWith = redact.CutValues
-	}
 	var values []string
 	for _, r := range resolved {
 		if !slices.Contains(values, r.value) {
 			values = append(values, r.value)
 		}
 	}
-	masked := maskWith(window, values)
-
-	var fields []string
-	if masked != window {
-		for _, v := range values {
-			if maskWith(window, []string{v}) == window {
-				continue
-			}
-			for _, r := range resolved {
-				if r.value == v {
-					fields = append(fields, r.path)
-				}
-			}
-		}
-		slices.SortFunc(fields, comparePaths)
+	window, cut := cutAt(text, maxMaskedErrLen+redact.LongestForm(values))
+	plain := redact.Values(window, values)
+	masked := plain
+	if cut {
+		// A value the window's end runs through is masked from its first
+		// byte too, in case masking before it made the text short enough to
+		// keep it. It is not named: those first bytes may be the error's own.
+		masked = redact.CutValues(window, values)
 	}
 	var note string
-	if len(fields) > 0 {
-		var more string
-		if len(fields) > maskedFieldsNamed {
-			more = fmt.Sprintf(" and %d more", len(fields)-maskedFieldsNamed)
-			fields = fields[:maskedFieldsNamed]
-		}
-		note = " (" + redact.MaskedSecret + " is the value of the secret reference at " + strings.Join(fields, ", ") + more + ")"
+	if plain != window {
+		note = quotedFieldsNote(window, values, resolved)
 	}
+	return kept(masked, maxMaskedErrLen, cut) + note, kept(masked, maxBackendErrLen, cut) + note
+}
 
-	if cut || len(masked) > limit {
-		masked, _ = cutAt(masked, limit-len(truncationMarker))
-		masked += truncationMarker
+// quotedFieldsNote names the fields of the policy whose values text quotes:
+// a backend's error locates a value by a line of the YAML the agent sent it,
+// which the user never sees. It says what the error quotes, so it holds even
+// when a bound cuts the masked value from what is kept.
+func quotedFieldsNote(text string, values []string, resolved []resolvedValue) string {
+	var fields []string
+	for _, v := range values {
+		if redact.Values(text, []string{v}) == text {
+			continue
+		}
+		for _, r := range resolved {
+			if r.value == v {
+				fields = append(fields, r.path)
+			}
+		}
 	}
-	return masked + note
+	if len(fields) == 0 {
+		return ""
+	}
+	slices.SortFunc(fields, comparePaths)
+	what := "the value of the secret reference at "
+	if len(fields) > 1 {
+		what = "the values of the secret references at "
+	}
+	var more string
+	if len(fields) > quotedFieldsNamed {
+		more = fmt.Sprintf(" and %d more", len(fields)-quotedFieldsNamed)
+		fields = fields[:quotedFieldsNamed]
+	}
+	return " (the error quotes " + what + strings.Join(fields, ", ") + more + ", masked as " + redact.MaskedSecret + ")"
+}
+
+// kept returns at most limit bytes of masked, ending with truncationMarker
+// when they are cut or masked was cut from a longer text. Masking can make a
+// text longer, a short value becoming MaskedSecret.
+func kept(masked string, limit int, cut bool) string {
+	if !cut && len(masked) <= limit {
+		return masked
+	}
+	masked, _ = cutAt(masked, limit-len(truncationMarker))
+	return masked + truncationMarker
 }
 
 // comparePaths orders paths as text, but the numbers in them as numbers, so

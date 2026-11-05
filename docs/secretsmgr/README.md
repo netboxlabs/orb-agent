@@ -54,18 +54,19 @@ agent logs that error or reports it as the policy's error, it masks each
 resolved value as `********`:
 
 - the whole value, and its first or last 7 bytes or more, as a backend that
-  shortens a value quotes it;
+  shortens a value quotes it, including first bytes that end inside a
+  character;
 - the same escaped, as Go or JSON quote a string.
 
 A value shorter than 7 bytes is masked only where it is a word of its own, and
 a run from the middle of a value is left alone, since it is more likely the
-error's own words. The agent then names the fields whose values it masked,
-because the backend's error points at a line of the policy as the agent sent
-it, not at a field you wrote:
+error's own words. The agent then names the fields whose values the error
+quotes, because the backend's error points at a line of the policy as the
+agent sent it, not at a field you wrote:
 
 ```text
 400 yaml: unmarshal errors:
-  line 4: cannot unmarshal !!str `********` into int (******** is the value of the secret reference at config.retries)
+  line 4: cannot unmarshal !!str `********` into int (the error quotes the value of the secret reference at config.retries, masked as ********)
 ```
 
 Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
