@@ -111,7 +111,7 @@ type MockMQTTConnection struct {
 
 	// guarded by mu — written from the goroutine under test, read from test goroutines
 	connectCalled      bool
-	disconnectCalled   bool
+	disconnectCount    int
 	lastConnectDetails ConnectionDetails
 
 	hooks     []func(cm *autopaho.ConnectionManager, topics TokenResponseTopics)
@@ -129,9 +129,14 @@ func (m *MockMQTTConnection) ConnectCalled() bool {
 
 // DisconnectCalled returns whether Disconnect has been called (safe for concurrent use).
 func (m *MockMQTTConnection) DisconnectCalled() bool {
+	return m.DisconnectCount() > 0
+}
+
+// DisconnectCount returns how many times Disconnect has been called (safe for concurrent use).
+func (m *MockMQTTConnection) DisconnectCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.disconnectCalled
+	return m.disconnectCount
 }
 
 // LastConnectDetails returns the details passed to the most recent Connect call (safe for concurrent use).
@@ -153,7 +158,7 @@ func (m *MockMQTTConnection) Connect(_ context.Context, _ context.Context, detai
 // Disconnect disconnects from the MQTT broker
 func (m *MockMQTTConnection) Disconnect(ctx context.Context, _ string) error {
 	m.mu.Lock()
-	m.disconnectCalled = true
+	m.disconnectCount++
 	m.mu.Unlock()
 	if m.OnDisconnect != nil {
 		m.OnDisconnect(ctx)
