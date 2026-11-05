@@ -240,6 +240,11 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 	// which is why this is a local and not a Runner field.
 	var unscopedVLANs unscopedVLANWarner
 
+	// Mapper warnings name the policy and host, and each skipped LAG membership
+	// is logged once per connection rather than on every flush.
+	mapLogger := r.logger.With("policy", r.name, "host", t.Host)
+	var lagWarned mapping.LagWarnings
+
 	// Config capture (options.capture_config): fetch the CONFIG datastore once per
 	// connection — on the first flush, which fires right after the initial sync —
 	// redact it, and cache it for subsequent flushes. A fresh runOnce on reconnect
@@ -300,9 +305,24 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		maybeCaptureConfig()
 		snap := model.Snapshot()
 		resolveAssetTag(snap)
-		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, r.logger)
-		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
+		entities := mapping.TranslateWithOptions(profile, snap, defaults, discoveredVendor, &r.policy.Config.Options, mapLogger, &lagWarned)
 		dev, _ := entities[0].(*diode.Device) // Translate always emits the Device first
+		// A hostname of only whitespace is no name, and is never sent: with a
+		// netbox_id it would rename the matched device. The name and the
+		// netbox_id match are both settled before AssignPrimaryIP, which copies
+		// the Device into the primary IP.
+		blankName := dev != nil && dev.Name != nil && strings.TrimSpace(*dev.Name) == ""
+		if blankName {
+			dev.Name = nil
+		}
+		// Q2: thread target netbox_id onto the Device for explicit NetBox matching.
+		if t.NetboxID != nil && dev != nil {
+			if dev.Metadata == nil {
+				dev.Metadata = diode.Metadata{}
+			}
+			dev.Metadata["source_match"] = diode.Metadata{"netbox_id": *t.NetboxID}
+		}
+		primaryIP := mapping.AssignPrimaryIP(entities, targetHostIP(t.Host))
 		// Attach the captured CONFIG datastore (already redacted) to the Device,
 		// when capture_config is on and the fetch succeeded. Same post-Translate
 		// decoration pattern as AssignPrimaryIP; no-op when configRaw is empty.
@@ -314,27 +334,25 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 				dev.AssetTag = &assetTag
 			}
 		}
-		// Q2: thread target netbox_id onto the Device for explicit NetBox matching.
-		if t.NetboxID != nil && dev != nil {
-			if dev.Metadata == nil {
-				dev.Metadata = diode.Metadata{}
-			}
-			dev.Metadata["source_match"] = diode.Metadata{"netbox_id": *t.NetboxID}
-		}
 		// H-1: never ingest a nameless, unidentified device. A flush can fire from
 		// an interface-only update or an empty/partial sync before the hostname
 		// leaf has arrived; with neither a name nor a netbox_id there is no device
 		// identity, so skip until one is known. MED-1: this is also the symptom of
 		// a hostname-path mismatch for an unknown vendor on _base, which would
 		// otherwise be a permanent silent no-ingest — so count it and warn once.
-		hasName := dev != nil && dev.Name != nil && *dev.Name != ""
+		hasName := dev != nil && dev.Name != nil
 		if !hasName && t.NetboxID == nil {
 			metrics.GetFlushSkippedNoIdentity().Add(r.ctx, 1)
 			if !warnedNoIdentity {
 				warnedNoIdentity = true
-				r.logger.Warn("skipping flush: no device identity (no hostname leaf / netbox_id) — "+
-					"check the profile's device.hostname path for this vendor",
-					"policy", r.name, "host", t.Host, "profile", profile.Name)
+				msg := "skipping flush: no device identity (no hostname leaf / netbox_id) — " +
+					"check the profile's device.hostname path for this vendor"
+				if blankName {
+					// The leaf arrived, so the profile is not at fault.
+					msg = "skipping flush: no device identity (the hostname is blank and there is no netbox_id) — " +
+						"set a hostname on the device, or the target's netbox_id"
+				}
+				r.logger.Warn(msg, "policy", r.name, "host", t.Host, "profile", profile.Name)
 			}
 			return
 		}

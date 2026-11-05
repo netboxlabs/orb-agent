@@ -152,7 +152,7 @@ in a range whose contents are not known in advance.
 | mode | str | no | Per-target delivery mode override (`auto`/`on_change`/`sample`/`get`). |
 | profile | str | no | Pin a gNMI profile (auto-detected when omitted). |
 | origin | str | no | gNMI path origin (default `openconfig`); set `""` for origin-less paths. |
-| netbox_id | int | no | Pin discovery to an existing NetBox device ID. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
+| netbox_id | int | no | Pin discovery to an existing NetBox device ID. A device whose hostname is empty or only whitespace is then sent without a name, so the pinned device keeps its own; without `netbox_id` such a device is not sent at all. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
 | override_defaults | map | no | Per-target overrides of the policy `defaults`. Also takes `position` and `face`, which are valid only here (see [Rack placement](#rack-placement)). |
 
 #### Ranges and subnets
@@ -220,7 +220,7 @@ Each interface's NetBox type is resolved per interface, in precedence order:
 6. The policy's `interface.if_type` default, else `other`.
 
 #### LAG membership
-With `options.emit_lag_membership` on (the default), a port whose OpenConfig `ethernet/state/aggregate-id` names an aggregate gets `Interface.lag` set to it. Nothing is created: the link is made only when the aggregate was discovered in the same cycle and typed `lag`, so an aggregate that is absent or excluded by `interface_exclude_patterns` leaves the member without a LAG and logs a warning. An aggregate is typed `lag` by its OpenConfig `state/type`, by a built-in name rule (`Port-Channel`/`po`, `ae`, `Bundle-Ether`, `Eth-Trunk`, `PortChannel`, `lag`/`lag-`, `bond`) or by `interface_patterns`; add an `interface_patterns` rule for an aggregate name none of these cover. A member typed `virtual` is skipped too, since NetBox refuses a LAG parent on one, and so is a member typed `bridge` or `lag`. device-discovery applies the same membership rules, with a shorter list of built-in LAG names.
+With `options.emit_lag_membership` on (the default), a port whose OpenConfig `ethernet/state/aggregate-id` names an aggregate gets `Interface.lag` set to it. Nothing is created: the link is made only when the aggregate was discovered in the same cycle and typed `lag`, so an aggregate that is absent or excluded by `interface_exclude_patterns` leaves the member without a LAG and logs a warning. Each skipped member is logged once per connection, with the policy and host, rather than on every update. An aggregate is typed `lag` by its OpenConfig `state/type`, by a built-in name rule (`Port-Channel`/`po`, `ae`, `Bundle-Ether`, `Eth-Trunk`, `PortChannel`, `lag`/`lag-`, `bond`) or by `interface_patterns`; add an `interface_patterns` rule for an aggregate name none of these cover. A member typed `virtual` is skipped too, since NetBox refuses a LAG parent on one, and so is a member typed `bridge` or `lag`. device-discovery applies the same membership rules, with a shorter list of built-in LAG names.
 
 #### Rack placement
 `rack` places discovered devices in a NetBox rack. It is a literal rack name, set
