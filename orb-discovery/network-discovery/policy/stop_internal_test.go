@@ -74,13 +74,14 @@ func shortStopTimeout(t *testing.T) {
 	t.Cleanup(func() { schedulerStopTimeout = saved })
 }
 
-// fakeClient counts ingests, and those delivered. An ingest whose context is
-// cancelled fails with the status error grpc-go returns, which is not
-// context.Canceled; with err set, a released ingest fails with err. With
+// fakeClient counts ingests started, returned and delivered. An ingest whose
+// context is cancelled fails with the status error grpc-go returns, which is
+// not context.Canceled; with err set, a released ingest fails with err. With
 // release set, an ingest signals ingesting and waits for release or for its
 // context to end.
 type fakeClient struct {
 	ingests   atomic.Int32
+	returned  atomic.Int32
 	delivered atomic.Int32
 	ingesting chan struct{}
 	release   chan struct{}
@@ -89,6 +90,7 @@ type fakeClient struct {
 
 func (c *fakeClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	c.ingests.Add(1)
+	defer c.returned.Add(1)
 	if c.release != nil {
 		c.ingesting <- struct{}{}
 		select {
@@ -287,6 +289,12 @@ func TestStopLetsAnIngestUnderwayFinish(t *testing.T) {
 	store := NewRunStore()
 	r, err := NewRunner(context.Background(), logs.logger(), "p1", scanPolicy(), client, store)
 	require.NoError(t, err)
+	// Diode answers once the stop starts waiting for jobs.
+	var cancelledFirst bool
+	r.scheduler = &hookedScheduler{Scheduler: r.scheduler, beforeStopJobs: func() {
+		cancelledFirst = r.ctx.Err() != nil
+		release()
+	}}
 	r.Start()
 
 	select {
@@ -294,22 +302,35 @@ func TestStopLetsAnIngestUnderwayFinish(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the scan did not reach its ingest")
 	}
-	stopped := make(chan error, 1)
-	go func() { stopped <- r.Stop() }()
-	require.Eventually(t, func() bool { return r.ctx.Err() != nil }, 5*time.Second, 10*time.Millisecond,
-		"the stop did not cancel the runner")
-	select {
-	case <-stopped:
-		t.Fatal("the stop returned before the ingest finished")
-	default:
-	}
-	release()
-	require.NoError(t, <-stopped)
+	require.NoError(t, r.Stop())
+	assert.Equal(t, int32(1), client.returned.Load(), "the stop returned before the ingest finished")
+	assert.True(t, cancelledFirst, "the stop waited for jobs before cancelling the runner")
 
 	run := waitForRun(t, store, "p1", RunStatusCompleted)
 	assert.Equal(t, 1, run.EntityCount)
 	assert.Equal(t, int32(1), client.delivered.Load())
 	assert.Empty(t, logs.records(t, "ERROR"))
+}
+
+// hookedScheduler runs beforeStopJobs when a stop starts waiting for jobs.
+type hookedScheduler struct {
+	gocron.Scheduler
+	beforeStopJobs func()
+}
+
+func (s *hookedScheduler) StopJobs() error {
+	s.beforeStopJobs()
+	return s.Scheduler.StopJobs()
+}
+
+// waitForStop waits until a stop has cancelled the runner.
+func waitForStop(t *testing.T, r *Runner) {
+	t.Helper()
+	select {
+	case <-r.ctx.Done():
+	case <-time.After(30 * time.Second):
+		t.Fatal("the stop did not cancel the runner")
+	}
 }
 
 // Once Stop returns, the policy sends nothing: an ingest still running when
@@ -352,6 +373,77 @@ func TestStopCancelsAnIngestItGaveUpWaitingFor(t *testing.T) {
 	assert.Equal(t, status.FromContextError(context.Canceled).Err().Error(), stopped[0]["error"])
 }
 
+// pausingHandler holds the record whose message is msg until proceed is
+// closed, after signalling reached, so a test can act at that point of a run.
+type pausingHandler struct {
+	slog.Handler
+	msg     string
+	reached chan struct{}
+	proceed chan struct{}
+}
+
+func (h *pausingHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Message == h.msg {
+		select {
+		case h.reached <- struct{}{}:
+		default:
+		}
+		<-h.proceed
+	}
+	return h.Handler.Handle(ctx, record)
+}
+
+// A policy that stops after its scan returns and before its ingest starts
+// sends nothing: the results are dropped and the run ends as a stopped run.
+func TestStopBetweenScanAndIngestSendsNothing(t *testing.T) {
+	fakeNmap(t, oneHostNmap)
+	reader := useTestMeter(t)
+	logs := &logBuffer{}
+	// "discovery complete" is logged once the scan has returned its hosts,
+	// before the entities are built and ingested.
+	pause := &pausingHandler{
+		Handler: slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		msg:     "discovery complete",
+		reached: make(chan struct{}, 1),
+		proceed: make(chan struct{}),
+	}
+	proceed := sync.OnceFunc(func() { close(pause.proceed) })
+	t.Cleanup(proceed)
+	client := &fakeClient{}
+	store := NewRunStore()
+	r, err := NewRunner(context.Background(), slog.New(pause), "p1", scanPolicy(), client, store)
+	require.NoError(t, err)
+	r.Start()
+
+	select {
+	case <-pause.reached:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the scan did not return its hosts")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Stop() }()
+	waitForStop(t, r)
+	proceed()
+	require.NoError(t, <-stopped)
+
+	assert.Zero(t, client.ingests.Load(), "the stopped policy started an ingest")
+	runs := store.GetRunsForPolicy("p1")
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusFailed, runs[0].Status)
+	assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
+	assert.Empty(t, logs.records(t, "ERROR"))
+	assert.Zero(t, sumOf(t, reader, "discovery_failure"))
+	var skipped []map[string]any
+	for _, record := range logs.records(t, "INFO") {
+		if record["msg"] == "ingest skipped: policy stopped" {
+			skipped = append(skipped, record)
+		}
+	}
+	require.Len(t, skipped, 1)
+	assert.Equal(t, "p1", skipped[0]["policy"])
+	assert.Equal(t, "run interrupted: policy stopped", skipped[0]["reason"])
+}
+
 // A genuine Diode error that lands while Stop waits for the ingest is still
 // an ingest failure: it is logged at ERROR and its run keeps the real error.
 func TestIngestErrorDuringTheStopWaitIsStillAnError(t *testing.T) {
@@ -376,8 +468,7 @@ func TestIngestErrorDuringTheStopWaitIsStillAnError(t *testing.T) {
 	}
 	stopped := make(chan error, 1)
 	go func() { stopped <- r.Stop() }()
-	require.Eventually(t, func() bool { return r.ctx.Err() != nil }, 5*time.Second, 10*time.Millisecond,
-		"the stop did not cancel the runner")
+	waitForStop(t, r)
 	release()
 	require.NoError(t, <-stopped)
 

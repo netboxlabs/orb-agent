@@ -399,6 +399,14 @@ func (r *Runner) run() {
 
 	annotateEntitiesWithRunID(entities, run.ID)
 
+	// A policy stopped before its ingest starts sends nothing, so a replacement
+	// cannot be followed by results from the old configuration.
+	if r.ctx.Err() != nil {
+		r.logger.Info("ingest skipped: policy stopped", "policy", policyName, "reason", errPolicyStopped, "entity_count", len(entities))
+		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, 0)
+		return
+	}
+
 	// A stop ends the scan, not an ingest already underway: Stop waits for the
 	// ingest and cancels it only if that wait runs out.
 	resp, err := r.client.Ingest(r.ingestCtx, entities, diode.WithIngestMetadata(diode.Metadata{
