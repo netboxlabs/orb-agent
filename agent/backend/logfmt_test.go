@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseLogfmtLevel(t *testing.T) {
@@ -157,4 +158,68 @@ func TestParseLogfmt_DuplicateKeys_LastWriterWins(t *testing.T) {
 	fields, ok := parseLogfmt(line)
 	assert.True(t, ok)
 	assert.Equal(t, "second", fields["key"])
+}
+
+// attrPairs flattens attrs to key/value pairs: assert.Equal on slog.Attr
+// compares only the length and first byte of a string value.
+func attrPairs(attrs []slog.Attr) [][2]string {
+	pairs := make([][2]string, 0, len(attrs))
+	for _, attr := range attrs {
+		pairs = append(pairs, [2]string{attr.Key, attr.Value.String()})
+	}
+	return pairs
+}
+
+// Values that are not valid Go double quoting keep the legacy decoding, which
+// drops each backslash and keeps the character after it.
+func TestNormalizeLogfmtLine_KeepsLegacyDecoding(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+		want  string
+	}{
+		{"unknown escape", `"bad \q escape"`, "bad q escape"},
+		{"escape and unknown escape", `"line\nbad\q"`, "linenbadq"},
+		{"surrogate half", `"\ud800"`, "ud800"},
+		{"short hex escape", `"\x4"`, "x4"},
+		{"escaped single quote", `"it\'s"`, "it's"},
+		{"single quoted", `'two words'`, "two words"},
+		{"single quoted escaped quote", `'it\'s'`, "it's"},
+		{"single quoted backslash n", `'a\nb'`, "anb"},
+		{"single quoted lone escape", `'\n'`, "n"},
+		{"single quoted unicode escape", `'caf\u00e9'`, "cafu00e9"},
+		{"single quoted double quotes", `'say "hi"'`, `say "hi"`},
+		{"unquoted backslashes", `C:\dir\n`, `C:\dir\n`},
+		{"unquoted empty", ``, ""},
+		{"raw invalid byte quoted", "\"a\xffb\"", "a\ufffdb"},
+		{"raw invalid byte unquoted", "a\xffb", "a\ufffdb"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := `level=WARN msg=m key=` + tt.token + ` next=1`
+			msg, attrs, level, ok := NormalizeLogfmtLine(line, slog.LevelError)
+			require.True(t, ok)
+			assert.Equal(t, "m", msg)
+			assert.Equal(t, slog.LevelWarn, level)
+			assert.Equal(t, [][2]string{{"key", tt.want}, {"next", "1"}}, attrPairs(attrs))
+		})
+	}
+
+	t.Run("message", func(t *testing.T) {
+		msg, _, _, ok := NormalizeLogfmtLine(`msg="bad \q escape"`, slog.LevelError)
+		require.True(t, ok)
+		assert.Equal(t, "bad q escape", msg)
+	})
+}
+
+func TestNormalizeLogfmtLine_UnterminatedQuoteIsNotLogfmt(t *testing.T) {
+	for _, token := range []string{`"open`, `"open\`, `"open\"`, `'open`} {
+		t.Run(token, func(t *testing.T) {
+			msg, attrs, level, ok := NormalizeLogfmtLine(`msg=m key=`+token, slog.LevelError)
+			assert.False(t, ok)
+			assert.Empty(t, msg)
+			assert.Nil(t, attrs)
+			assert.Equal(t, slog.LevelError, level)
+		})
+	}
 }
