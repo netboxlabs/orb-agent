@@ -20,27 +20,26 @@ import (
 // CurrentDeviceFrom(entities), threaded in so the batch is scanned once).
 // entities is scanned to also clear the name on the shared
 // VirtualChassis.Master matcher ref so suppression is consistent on
-// stacks. host and logger are for log context only.
+// stacks. logger names the target.
 //
 // No-op when emission is enabled (the default), dev is nil, dev is a
 // virtual-chassis member, or the name is already unset. When disabled but
 // the device carries no alternative matcher, the name is kept and a
 // warning is logged — Name is a primary device matcher, so dropping it
 // without a source_match / asset_tag would emit an unmatchable device.
-func ApplyDeviceNameEmission(entities []diode.Entity, dev *diode.Device, emit bool, host string, logger *slog.Logger) {
+func ApplyDeviceNameEmission(entities []diode.Entity, dev *diode.Device, emit bool, logger *slog.Logger) {
 	if emit || dev == nil || dev.VcPosition != nil || dev.Name == nil {
 		return
 	}
 	if !deviceHasAlternativeMatcher(dev) {
 		if logger != nil {
 			logger.Warn("emit_device_name disabled but device has no alternative matcher (netbox_id/source_match, asset_tag); keeping name to avoid an unmatchable device",
-				"host", host, "name", *dev.Name)
+				"name", *dev.Name)
 		}
 		return
 	}
 	if logger != nil {
-		logger.Debug("emit_device_name: suppressing Device.name from sysName",
-			"host", host, "name", *dev.Name)
+		logger.Debug("emit_device_name: suppressing Device.name from sysName", "name", *dev.Name)
 	}
 	dev.Name = nil
 	clearVirtualChassisMasterName(entities)

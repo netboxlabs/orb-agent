@@ -13,7 +13,6 @@ import (
 
 func TestApplyDeviceNameEmission(t *testing.T) {
 	logger := slog.Default()
-	const host = "10.0.0.1"
 
 	sourceMatch := func() diode.Metadata {
 		return diode.Metadata{"source_match": diode.Metadata{"netbox_id": 123}}
@@ -22,67 +21,67 @@ func TestApplyDeviceNameEmission(t *testing.T) {
 
 	t.Run("emit enabled leaves name untouched", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1"), Serial: StringPtr("FCW123")}
-		ApplyDeviceNameEmission(ents(dev), dev, true, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, true, logger)
 		require.NotNil(t, dev.Name)
 		assert.Equal(t, "sw1", *dev.Name)
 	})
 
 	t.Run("disabled + source_match clears name", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1"), Metadata: sourceMatch()}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		assert.Nil(t, dev.Name)
 	})
 
 	t.Run("disabled + asset_tag clears name", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1"), AssetTag: StringPtr("ASSET-1")}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		assert.Nil(t, dev.Name)
 	})
 
 	t.Run("disabled + serial only keeps name (serial is not a stub-carried matcher)", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1"), Serial: StringPtr("FCW123")}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		require.NotNil(t, dev.Name)
 		assert.Equal(t, "sw1", *dev.Name)
 	})
 
 	t.Run("disabled + no matcher keeps name", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1")}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		require.NotNil(t, dev.Name)
 		assert.Equal(t, "sw1", *dev.Name)
 	})
 
 	t.Run("disabled + blank asset_tag keeps name", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1"), AssetTag: StringPtr("  ")}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		require.NotNil(t, dev.Name)
 		assert.Equal(t, "sw1", *dev.Name)
 	})
 
 	t.Run("disabled + nil name is a no-op", func(t *testing.T) {
 		dev := &diode.Device{Metadata: sourceMatch()}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		assert.Nil(t, dev.Name)
 	})
 
 	t.Run("disabled + virtual-chassis member untouched", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1-2"), VcPosition: int64Ptr(2), Metadata: sourceMatch()}
-		ApplyDeviceNameEmission(ents(dev), dev, false, host, logger)
+		ApplyDeviceNameEmission(ents(dev), dev, false, logger)
 		require.NotNil(t, dev.Name)
 		assert.Equal(t, "sw1-2", *dev.Name)
 	})
 
 	t.Run("nil device does not panic", func(t *testing.T) {
 		assert.NotPanics(t, func() {
-			ApplyDeviceNameEmission(nil, nil, false, host, logger)
+			ApplyDeviceNameEmission(nil, nil, false, logger)
 		})
 	})
 
 	t.Run("nil logger, no matcher, does not panic (WARN branch)", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1")}
 		assert.NotPanics(t, func() {
-			ApplyDeviceNameEmission(ents(dev), dev, false, host, nil)
+			ApplyDeviceNameEmission(ents(dev), dev, false, nil)
 		})
 		require.NotNil(t, dev.Name)
 	})
@@ -90,7 +89,7 @@ func TestApplyDeviceNameEmission(t *testing.T) {
 	t.Run("nil logger, matcher present, clears name (Debug branch)", func(t *testing.T) {
 		dev := &diode.Device{Name: StringPtr("sw1"), Metadata: sourceMatch()}
 		assert.NotPanics(t, func() {
-			ApplyDeviceNameEmission(ents(dev), dev, false, host, nil)
+			ApplyDeviceNameEmission(ents(dev), dev, false, nil)
 		})
 		assert.Nil(t, dev.Name)
 	})
@@ -103,7 +102,6 @@ func TestApplyDeviceNameEmission(t *testing.T) {
 // preserved and the ref stays matchable via source_match.
 func TestApplyDeviceNameEmission_VirtualChassis(t *testing.T) {
 	logger := slog.Default()
-	const host = "10.0.0.1"
 
 	newRef := func() *diode.Device {
 		return &diode.Device{Name: StringPtr("stack-sysname"), Metadata: diode.Metadata{"source_match": diode.Metadata{"netbox_id": 7}}}
@@ -125,7 +123,7 @@ func TestApplyDeviceNameEmission_VirtualChassis(t *testing.T) {
 	vc := &diode.VirtualChassis{Name: &vcName, Master: vcRef}
 
 	entities := []diode.Entity{master, vc, member2}
-	ApplyDeviceNameEmission(entities, master, false, host, logger)
+	ApplyDeviceNameEmission(entities, master, false, logger)
 
 	assert.Nil(t, master.Name, "master rich device name suppressed")
 	assert.Nil(t, vcRef.Name, "VC-entity master ref name suppressed")
@@ -145,7 +143,6 @@ func TestApplyDeviceNameEmission_VirtualChassis(t *testing.T) {
 // silently orphaning stubs.
 func TestApplyDeviceNameEmission_StubsStayMatchable(t *testing.T) {
 	logger := slog.Default()
-	const host = "10.0.0.1"
 
 	build := func(withSourceMatch bool) []diode.Entity {
 		dev := &diode.Device{Name: StringPtr("sw1")}
@@ -175,7 +172,7 @@ func TestApplyDeviceNameEmission_StubsStayMatchable(t *testing.T) {
 	assertStubMatchable := func(t *testing.T, entities []diode.Entity) {
 		t.Helper()
 		dev := CurrentDeviceFrom(entities)
-		ApplyDeviceNameEmission(entities, dev, false, host, logger)
+		ApplyDeviceNameEmission(entities, dev, false, logger)
 		require.Nil(t, dev.Name, "top-level device name suppressed")
 		PruneNestedRefs(entities, dev, nil)
 		assertStub := func(stub *diode.Device, where string) {
@@ -215,12 +212,11 @@ func TestApplyDeviceNameEmission_StubsStayMatchable(t *testing.T) {
 // record (not just retains the name) when suppression is requested but no
 // qualifying matcher is present.
 func TestApplyDeviceNameEmission_WarnLogged(t *testing.T) {
-	const host = "10.0.0.1"
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	dev := &diode.Device{Name: StringPtr("sw1")} // no matcher
-	ApplyDeviceNameEmission([]diode.Entity{dev}, dev, false, host, logger)
+	ApplyDeviceNameEmission([]diode.Entity{dev}, dev, false, logger)
 
 	out := buf.String()
 	assert.Contains(t, out, "level=WARN")

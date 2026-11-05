@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"net"
 	"os"
@@ -941,4 +942,19 @@ func TestClientWalkReturnsWhenTheContextIsCancelledMidRequest(t *testing.T) {
 	_, err = client.Walk(ctx, "1.3.6.1.2.1.2.2.1.2", 1)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 2*time.Second, "a cancellation interrupts the read in flight")
+}
+
+// MapPDU leaves reporting an unhandled type to its caller, which logs it with
+// the target; it writes nothing to the process-wide logger, whose stderr the
+// agent would log as an error.
+func TestMapPDUUnhandledTypeWritesNothingToTheDefaultLogger(t *testing.T) {
+	var buf bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	_, err := snmp.MapPDU(snmp.PDU{Name: ".1.3.6.1.2.1.2.2.1.4.1", Type: gosnmp.Opaque, Value: []byte{0x9f, 0x78}})
+
+	require.Error(t, err)
+	assert.Empty(t, buf.String())
 }

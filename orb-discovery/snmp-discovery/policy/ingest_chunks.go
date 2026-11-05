@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
@@ -57,12 +58,11 @@ func chunkEntities(entities []diode.Entity, maxBytes int) [][]diode.Entity {
 // returned together. A request that fails outright stops the rest; its error
 // says how many entities were already sent and keeps the errors that earlier
 // requests reported.
-func (r *Runner) ingest(host string, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+func (r *Runner) ingest(log *slog.Logger, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
 	chunks := chunkEntities(entities, maxIngestChunkBytes)
 	if len(chunks) > 1 {
-		policyName, _ := r.ctx.Value(policyKey).(string)
-		r.logger.Info("sending the target in several requests to stay under Diode's message size limit",
-			"host", host, "policy", policyName, "entity_count", len(entities), "requests", len(chunks))
+		log.Info("sending the target in several requests to stay under Diode's message size limit",
+			"entity_count", len(entities), "requests", len(chunks))
 	}
 	var errs []string
 	sent := 0

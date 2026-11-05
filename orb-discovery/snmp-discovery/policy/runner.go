@@ -2,10 +2,17 @@ package policy
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
+	"reflect"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-co-op/gocron/v2"
@@ -38,6 +45,10 @@ const (
 type expandedTargetGroup struct {
 	originalTarget string          // Original target string (e.g., "192.168.1.0/24")
 	targets        []config.Target // Expanded targets
+	entry          int             // The entry's index in the policy's scope targets
+	// several marks an entry that expands to several addresses. Its hosts are
+	// probed before they are crawled, however many are left to scan.
+	several bool
 }
 
 // Runner represents the policy runner
@@ -70,7 +81,13 @@ type Runner struct {
 
 // NewRunner returns a new policy runner
 func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig *config.Mapping, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever, runStore *RunStore) (*Runner, error) {
-	s, err := gocron.NewScheduler()
+	logger = logger.With("policy", name)
+	// A backstop: runs and scans recover their own panics and fail their run.
+	s, err := gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithEventListeners(
+		gocron.AfterJobRunsWithPanic(func(_ uuid.UUID, job string, recovered any) {
+			logger.Error("recovered from a panic in a job", "job", job,
+				"error", fmt.Errorf("panic: %v", recovered), "stack", string(debug.Stack()))
+		}))))
 	if err != nil {
 		return nil, err
 	}
@@ -122,11 +139,13 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	}
 
 	expandedTargetGroups := runner.expandTargetRanges(runner.scope.Targets)
+	runner.warnOverlappingEntries(expandedTargetGroups)
+	expandedTargetGroups = runner.leaveOutOwnEntries(expandedTargetGroups)
 
 	for _, group := range expandedTargetGroups {
-		if len(group.targets) == 1 {
+		if !group.several {
 			// Create scan task for single target
-			task := gocron.NewTask(runner.run, group.targets[0])
+			task := gocron.NewTask(runner.run, group.entry, group.targets[0])
 			if policy.Config.Schedule != nil {
 				_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
 					gocron.WithSingletonMode(gocron.LimitModeReschedule))
@@ -141,7 +160,8 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			continue
 		}
 		// Create scan task for multiple targets with original target
-		task := gocron.NewTask(runner.runScanWithOriginal, group.targets, group.originalTarget)
+		runner.warnSlowScan(group)
+		task := gocron.NewTask(runner.runScanWithOriginal, group.entry, group.targets, group.originalTarget)
 		if policy.Config.Schedule != nil {
 			_, err = runner.scheduler.NewJob(gocron.CronJob(*policy.Config.Schedule, false), task,
 				gocron.WithSingletonMode(gocron.LimitModeReschedule))
@@ -157,8 +177,9 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	return runner, nil
 }
 
-func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget string) {
+func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, originalTarget string) {
 	policyName := r.ctx.Value(policyKey).(string)
+	log := r.logger.With("entry", entry+1, "target", originalTarget)
 
 	// All expanded targets have the same port, get it from the first target
 	port := uint16(161) // default
@@ -168,9 +189,10 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 
 	// Create run for the scan operation (includes port)
 	scanRun := r.runStore.CreateRun(policyName, originalTarget, port, "")
+	defer r.recoverRun(log, originalTarget, port, scanRun.ID)
 
-	r.logger.Info("starting SNMP probe scan", "policy", policyName, "target", originalTarget, "target_count", len(targets))
-	workerCount := min(256, len(targets))
+	log.Info("starting SNMP probe scan", "target_count", len(targets))
+	workerCount := min(maxProbeWorkers, len(targets))
 
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
@@ -178,13 +200,20 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	targetCh := make(chan config.Target)
 	resultsCh := make(chan config.Target, workerCount)
 
+	// Addresses whose probe started before the scan ran out of time, and
+	// probes that panicked.
+	var probed, panicked atomic.Int64
 	var wg sync.WaitGroup
 	wg.Add(workerCount)
 	for range workerCount {
 		go func() {
 			defer wg.Done()
 			for target := range targetCh {
-				if r.probeTarget(ctx, target) {
+				if ctx.Err() != nil {
+					continue
+				}
+				probed.Add(1)
+				if r.probeRecovering(ctx, log, target, &panicked) {
 					resultsCh <- target
 				}
 			}
@@ -210,7 +239,7 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 	var responsive []config.Target
 	for target := range resultsCh {
 		responsive = append(responsive, target)
-		r.logger.Debug("SNMP probe succeeded", "host", target.Host, "port", target.Port, "policy", policyName)
+		log.Debug("SNMP probe succeeded", "host", target.Host, "port", target.Port)
 	}
 
 	// Snapshot live job IDs before the loop to avoid holding two locks simultaneously.
@@ -222,11 +251,102 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 		liveIDs[j.ID()] = struct{}{}
 	}
 
-	// Prune stale host->job mappings for this originalTarget only.
-	// Scoped to the current range to avoid deleting entries freshly added by a concurrent
-	// runScanWithOriginal invocation for a different range target in the same policy.
-	keyPrefix := originalTarget + "::"
+	// Crawl jobs are keyed by scope entry, so each entry crawls every host its
+	// own probe finds, with its own credentials, even when two entries are
+	// written identically. Stale ones are pruned for this entry only, so a
+	// concurrent scan of another entry keeps the jobs it just added.
+	keyPrefix := fmt.Sprintf("%d::%s::", entry, originalTarget)
+	r.pruneHostJobs(keyPrefix, liveIDs)
+
+	// Probe panics past the first are only counted. The count goes once on
+	// the scan's last line, and in its reason when it fails.
+	panics := panicked.Load()
+	withPanics := func(attrs ...any) []any {
+		if panics > 0 {
+			attrs = append(attrs, "panicked_probes", panics)
+		}
+		return attrs
+	}
+	failure := func(err error) error {
+		if panics > 0 {
+			return fmt.Errorf("%w; %d probes panicked, the log has the first one's stack", err, panics)
+		}
+		return err
+	}
+
+	// A scan that ran out of its own time still crawls the hosts it found,
+	// and its run fails saying how far it got. One cut short because the
+	// policy stopped crawls nothing.
+	var timedOut error
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		if !errors.Is(ctxErr, context.DeadlineExceeded) || r.ctx.Err() != nil {
+			log.Warn("SNMP probe scan interrupted", withPanics("error", ctxErr, "responsive_target_count", len(responsive))...)
+			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(ctxErr), len(responsive))
+			return
+		}
+		timedOut = failure(fmt.Errorf("%w (started probing %d of %d addresses, %d responded; raise timeout to probe them all)",
+			ctxErr, probed.Load(), len(targets), len(responsive)))
+		log.Warn("SNMP probe scan interrupted", withPanics("error", timedOut, "responsive_target_count", len(responsive))...)
+	}
+
+	if len(responsive) == 0 {
+		if timedOut != nil {
+			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, 0)
+			return
+		}
+		log.Warn("no hosts responded to SNMP probe", withPanics()...)
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
+			RunStatusFailed, failure(fmt.Errorf("no hosts responded to SNMP probe")), 0)
+		return
+	}
+
+	var err error
+	for _, target := range responsive {
+		jobKey := fmt.Sprintf("%s%s:%d", keyPrefix, target.Host, target.Port)
+
+		// Checked and recorded apart from scheduling, so the mutex is never
+		// held across the scheduler's internal locks.
+		if r.hostJobActive(jobKey, liveIDs) {
+			log.Debug("crawl job already active, skipping", "host", target.Host)
+			continue
+		}
+
+		task := gocron.NewTask(r.runWithMetadata, entry, target, originalTarget)
+		var newJob gocron.Job
+		if r.config.Schedule != nil {
+			// Crawled right after the scan that found it, then on the schedule.
+			newJob, err = r.scheduler.NewJob(gocron.CronJob(*r.config.Schedule, false), task,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule),
+				gocron.WithStartAt(gocron.WithStartImmediately()))
+		} else {
+			newJob, err = r.scheduler.NewJob(gocron.OneTimeJob(
+				gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
+				gocron.WithSingletonMode(gocron.LimitModeReschedule))
+		}
+		if err != nil {
+			log.Error("failed to schedule crawl task for responsive target", "host", target.Host, "error", err)
+			continue
+		}
+
+		r.recordHostJob(jobKey, newJob.ID())
+		liveIDs[newJob.ID()] = struct{}{} // keep snapshot current for remaining iterations
+	}
+
+	if timedOut != nil {
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, len(responsive))
+		return
+	}
+
+	// Update scan run status
+	r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusCompleted, nil, len(responsive))
+	log.Info("SNMP probe scan complete", withPanics("responsive_target_count", len(responsive))...)
+}
+
+// pruneHostJobs forgets the crawl jobs under keyPrefix, one scope entry's,
+// that are no longer scheduled.
+func (r *Runner) pruneHostJobs(keyPrefix string, liveIDs map[uuid.UUID]struct{}) {
 	r.activeHostJobsMu.Lock()
+	defer r.activeHostJobsMu.Unlock()
 	for jobKey, jobID := range r.activeHostJobs {
 		if strings.HasPrefix(jobKey, keyPrefix) {
 			if _, alive := liveIDs[jobID]; !alive {
@@ -234,65 +354,98 @@ func (r *Runner) runScanWithOriginal(targets []config.Target, originalTarget str
 			}
 		}
 	}
-	r.activeHostJobsMu.Unlock()
+}
 
-	// Check if context was canceled or timed out
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		r.logger.Warn("SNMP probe scan interrupted", "policy", policyName, "error", ctxErr, "responsive_target_count", len(responsive))
-		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, ctxErr, len(responsive))
+// hostJobActive reports whether jobKey's crawl job is still scheduled.
+func (r *Runner) hostJobActive(jobKey string, liveIDs map[uuid.UUID]struct{}) bool {
+	r.activeHostJobsMu.Lock()
+	defer r.activeHostJobsMu.Unlock()
+	id, ok := r.activeHostJobs[jobKey]
+	if !ok {
+		return false
+	}
+	_, alive := liveIDs[id]
+	return alive
+}
+
+// recordHostJob records the crawl job scheduled for jobKey.
+func (r *Runner) recordHostJob(jobKey string, id uuid.UUID) {
+	r.activeHostJobsMu.Lock()
+	defer r.activeHostJobsMu.Unlock()
+	r.activeHostJobs[jobKey] = id
+}
+
+// targetLogger is the runner's logger naming one target.
+func (r *Runner) targetLogger(target config.Target) *slog.Logger {
+	return r.logger.With("host", target.Host, "port", target.Port)
+}
+
+// crawlLogger names one target and the scope entry it is crawled for,
+// counting entries from 1.
+func (r *Runner) crawlLogger(entry int, target config.Target) *slog.Logger {
+	return r.targetLogger(target).With("entry", entry+1)
+}
+
+// panicError is a panic recovered on a goroutine of a crawl, carried to the
+// crawl's job as its error so the job fails its run and logs the panic once.
+type panicError struct {
+	value any
+	stack []byte
+}
+
+func (e *panicError) Error() string {
+	return fmt.Sprintf("panic: %v", e.value)
+}
+
+// recoverRun is deferred by a scan once its run exists. It turns a panic into
+// a failed run and one error record, so one target cannot stop the process or
+// leave its policy running.
+func (r *Runner) recoverRun(log *slog.Logger, target string, port uint16, runID string) {
+	if recovered := recover(); recovered != nil {
+		r.failRunOnPanic(log, target, port, runID, &panicError{value: recovered, stack: debug.Stack()})
+	}
+}
+
+// finishCrawl is deferred by a crawl once its run exists. A panic fails the
+// run and counts as a failed discovery. A crawl that walked and mapped its
+// target, and ended without a panic, counts as a successful one.
+func (r *Runner) finishCrawl(log *slog.Logger, host string, port uint16, runID string, discovered *bool) {
+	policyName, _ := r.ctx.Value(policyKey).(string)
+	if recovered := recover(); recovered != nil {
+		r.countDiscoveryFailure(policyName, "panic")
+		r.failRunOnPanic(log, host, port, runID, &panicError{value: recovered, stack: debug.Stack()})
 		return
 	}
-
-	if len(responsive) == 0 {
-		r.logger.Warn("no hosts responded to SNMP probe",
-			"policy", policyName, "target", originalTarget)
-		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
-			RunStatusFailed, fmt.Errorf("no hosts responded to SNMP probe"), 0)
-		return
+	if *discovered {
+		if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
+			rMetric.Add(r.ctx, 1, metric.WithAttributes(attribute.String("policy", policyName)))
+		}
 	}
+}
 
-	var err error
-	for _, target := range responsive {
-		jobKey := fmt.Sprintf("%s::%s:%d", originalTarget, target.Host, target.Port)
+// failRunOnPanic marks a run failed by a panic and logs the panic with its
+// stack.
+func (r *Runner) failRunOnPanic(log *slog.Logger, target string, port uint16, runID string, err *panicError) {
+	log.Error("recovered from a panic; the run is marked failed", "error", err, "stack", string(err.stack))
+	policyName, _ := r.ctx.Value(policyKey).(string)
+	r.runStore.UpdateRun(policyName, target, port, runID, RunStatusFailed, err, 0)
+}
 
-		// Check under lock, then unlock before calling scheduler to avoid holding mutex
-		// across scheduler's internal locks.
-		r.activeHostJobsMu.Lock()
-		if existingID, ok := r.activeHostJobs[jobKey]; ok {
-			if _, alive := liveIDs[existingID]; alive {
-				r.activeHostJobsMu.Unlock()
-				r.logger.Debug("crawl job already active, skipping",
-					"host", target.Host, "policy", policyName)
-				continue
+// probeRecovering probes one address. A panic counts as no answer, so the
+// worker that hit it goes on probing the rest of the range. Only the scan's
+// first panic is logged, with its stack; panicked counts them all.
+func (r *Runner) probeRecovering(ctx context.Context, log *slog.Logger, target config.Target, panicked *atomic.Int64) (answered bool) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if panicked.Add(1) == 1 {
+				log.Error("recovered from a panic while probing; the address counts as not answering, and the scan counts any further probe panics",
+					"host", target.Host, "port", target.Port,
+					"error", fmt.Errorf("panic: %v", recovered), "stack", string(debug.Stack()))
 			}
+			answered = false
 		}
-		r.activeHostJobsMu.Unlock()
-
-		task := gocron.NewTask(r.runWithMetadata, target, originalTarget)
-		var newJob gocron.Job
-		if r.config.Schedule != nil {
-			newJob, err = r.scheduler.NewJob(gocron.CronJob(*r.config.Schedule, false), task,
-				gocron.WithSingletonMode(gocron.LimitModeReschedule))
-		} else {
-			newJob, err = r.scheduler.NewJob(gocron.OneTimeJob(
-				gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), task,
-				gocron.WithSingletonMode(gocron.LimitModeReschedule))
-		}
-		if err != nil {
-			r.logger.Error("failed to schedule crawl task for responsive target",
-				"host", target.Host, "policy", policyName, "error", err)
-			continue
-		}
-
-		r.activeHostJobsMu.Lock()
-		r.activeHostJobs[jobKey] = newJob.ID()
-		liveIDs[newJob.ID()] = struct{}{} // keep snapshot current for remaining iterations
-		r.activeHostJobsMu.Unlock()
-	}
-
-	// Update scan run status
-	r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusCompleted, nil, len(responsive))
-	r.logger.Info("SNMP probe scan complete", "policy", policyName, "responsive_target_count", len(responsive))
+	}()
+	return r.probeTarget(ctx, target)
 }
 
 // resolveTargetAuthentication returns the authentication to use for a target
@@ -416,7 +569,7 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 
 	auth := probeAuthentication(r.resolveTargetAuthentication(target))
 
-	snmpClient, err := r.ClientFactory(target.Host, target.Port, 0, r.snmpProbeTimeout, auth, r.logger)
+	snmpClient, err := r.ClientFactory(target.Host, target.Port, 0, r.snmpProbeTimeout, auth, r.targetLogger(target))
 	if err != nil {
 		return false
 	}
@@ -442,18 +595,21 @@ func (r *Runner) probeTarget(ctx context.Context, target config.Target) bool {
 }
 
 // run runs the policy for a single target (no parent)
-func (r *Runner) run(target config.Target) {
-	r.runWithMetadata(target, "")
+func (r *Runner) run(entry int, target config.Target) {
+	r.runWithMetadata(entry, target, "")
 }
 
 // runWithMetadata runs the policy with metadata tracking
-func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
+func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget string) {
 	policyName := r.ctx.Value(policyKey).(string)
 	targetHost := target.Host
 	targetPort := target.Port
+	log := r.crawlLogger(entry, target)
 
 	// Create run at start (includes port)
 	run := r.runStore.CreateRun(policyName, targetHost, targetPort, parentTarget)
+	discovered := false
+	defer r.finishCrawl(log, targetHost, targetPort, run.ID, &discovered)
 
 	// Track policy execution
 	if rMetric := metrics.GetPolicyExecutions(); rMetric != nil {
@@ -477,16 +633,22 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
-	entities, primaryHits, err := r.queryTarget(ctx, target)
+	entities, primaryHits, err := r.queryTarget(ctx, entry, target)
 	if err != nil {
-		r.logger.Error("error querying target", "host", target.Host, "error", err, "policy", policyName)
+		var walkPanic *panicError
+		if errors.As(err, &walkPanic) {
+			r.failRunOnPanic(log, targetHost, targetPort, run.ID, walkPanic)
+			return
+		}
+		log.Error("error querying target", "error", err)
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
 		return
 	}
-	r.logger.Info("SNMP crawl complete", "host", target.Host, "policy", policyName, "entity_count", len(entities))
+	discovered = true
+	log.Info("SNMP crawl complete", "entity_count", len(entities))
 
 	if len(entities) == 0 {
-		r.logger.Info("no entities to ingest", "host", target.Host, "policy", policyName)
+		log.Info("no entities to ingest")
 		// Update run status to completed even if no entities
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusCompleted, nil, 0)
 		return
@@ -504,63 +666,62 @@ func (r *Runner) runWithMetadata(target config.Target, parentTarget string) {
 		entities,
 		currentDevice,
 		r.config.Options.DeviceNameEmissionEnabled(),
-		targetHost,
-		r.logger,
+		log,
 	)
 	annotateEntitiesWithRunID(entities, run.ID)
-	r.warnUnscopedVLANs(entities, policyName, target.Host)
+	r.warnUnscopedVLANs(log, entities)
 
 	// Strip nested Device/Interface refs to matcher-only stubs to shrink
 	// the wire payload. Runs after annotation so the annotators can walk
 	// the rich shared graph with their unsafe.Pointer dedup intact —
 	// otherwise every stub would need its own metadata pass.
 	if r.config.Options.IPAddressEmissionEnabled() {
-		r.logEntitiesForIngestion(entities)
+		logEntitiesForIngestion(log, entities)
 		mapping.PruneNestedRefs(entities, currentDevice, primaryHits)
 	} else {
 		// emit_ip_addresses: false. Prefixes, VRFs and stack routing have
 		// already used the addresses; each now gives way to the interface
 		// stub it carried.
 		entities = mapping.OmitIPAddresses(entities, currentDevice)
-		r.logEntitiesForIngestion(entities)
+		logEntitiesForIngestion(log, entities)
 	}
 
 	// After pruning, so it checks exactly what is sent: until then, copies
 	// made during mapping can still hold a value this run dropped, such as a
 	// suppressed device name.
-	if err := r.repairInvalidUTF8(entities, policyName, target.Host); err != nil {
+	if err := repairInvalidUTF8(log, entities); err != nil {
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, len(entities))
 		return
 	}
 
-	resp, err := r.ingest(target.Host, entities, diode.WithIngestMetadata(diode.Metadata{
+	resp, err := r.ingest(log, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
 	}))
 	if err != nil {
-		r.logger.Error("error ingesting entities", "host", target.Host, "error", err, "policy", policyName, "entity_count", len(entities))
+		log.Error("error ingesting entities", "error", err, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, len(entities))
 	} else if resp != nil && resp.Errors != nil {
 		ingestErr := fmt.Errorf("ingestion errors: %v", resp.Errors)
-		r.logger.Error("error ingesting entities", "host", target.Host, "error", resp.Errors, "policy", policyName, "entity_count", len(entities))
+		log.Error("error ingesting entities", "error", resp.Errors, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, ingestErr, len(entities))
 	} else {
-		r.logger.Info("entities ingested successfully", "host", target.Host, "policy", policyName, "entity_count", len(entities))
+		log.Info("entities ingested successfully", "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusCompleted, nil, len(entities))
 	}
 }
 
-func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
+func logEntitiesForIngestion(log *slog.Logger, entities []diode.Entity) {
 	for _, entity := range entities {
-		r.logger.Debug("entity for ingestion", "entity", entity.ConvertToProtoMessage())
+		log.Debug("entity for ingestion", "entity", entity.ConvertToProtoMessage())
 	}
 }
 
 // assetTagClaimer returns the per-target claim callback handed to
-// mapping.TranslateAsStack. targetID must uniquely identify the target
-// within this policy — host:port, matching the runner's job identity —
-// NOT the bare host: two agents on one host behind different ports are
-// distinct devices, and keying by host alone would let them share a
+// mapping.TranslateAsStack. targetID is the device's address, host:port,
+// not the crawl job's key: entries that crawl one host share its asset tags.
+// Not the bare host either: two agents on one host behind different ports
+// are distinct devices, and keying by host alone would let them share a
 // cloned tag. First target to discover a tag owns it for the lifetime
 // of this runner (one policy); the same target may re-claim its tags
 // on every cycle. A different target reporting an already-owned tag —
@@ -572,7 +733,7 @@ func (r *Runner) logEntitiesForIngestion(entities []diode.Entity) {
 // first claims the tag, so a pre-existing NetBox record created by the
 // other target may still be matched. This guards the steady state; it
 // cannot see NetBox's actual tag assignments.
-func (r *Runner) assetTagClaimer(targetID string) func(string) bool {
+func (r *Runner) assetTagClaimer(targetID string, log *slog.Logger) func(string) bool {
 	return func(tag string) bool {
 		r.assetTagOwnersMu.Lock()
 		defer r.assetTagOwnersMu.Unlock()
@@ -589,9 +750,86 @@ func (r *Runner) assetTagClaimer(targetID string) func(string) bool {
 		if owner == targetID {
 			return true
 		}
-		r.logger.Warn("asset tag skipped: already discovered on another target of this policy",
+		log.Warn("asset tag skipped: already discovered on another target of this policy",
 			"asset_tag", tag, "target", targetID, "owner_target", owner)
 		return false
+	}
+}
+
+// countDiscoveryFailure records a failed discovery and why.
+func (r *Runner) countDiscoveryFailure(policyName, reason string) {
+	if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
+		rMetric.Add(r.ctx, 1, metric.WithAttributes(
+			attribute.String("policy", policyName),
+			attribute.String("error", reason),
+		))
+	}
+}
+
+// walkResult is what a walk goroutine sends its crawl.
+type walkResult struct {
+	oids mapping.ObjectIDValueMap
+	err  error
+}
+
+// walkHandoff carries a walk goroutine's one result to its crawl. Once the
+// crawl stops waiting, a panic the walk reports is logged here, with its
+// stack, rather than lost in a channel nobody reads.
+type walkHandoff struct {
+	ch        chan walkResult
+	log       *slog.Logger
+	mu        sync.Mutex
+	abandoned bool
+}
+
+func newWalkHandoff(log *slog.Logger) *walkHandoff {
+	// Buffered, so the walk can always hand its result over and exit.
+	return &walkHandoff{ch: make(chan walkResult, 1), log: log}
+}
+
+// deliver hands res to the crawl without blocking, or logs it if it is a
+// panic the crawl will not read.
+func (h *walkHandoff) deliver(res walkResult) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.abandoned {
+		h.logUnread(res)
+		return
+	}
+	select {
+	case h.ch <- res:
+	default:
+		h.logUnread(res)
+	}
+}
+
+// abandon records that the crawl stopped waiting, and logs a panic already
+// handed over that the crawl did not read.
+func (h *walkHandoff) abandon() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.abandoned = true
+	select {
+	case res := <-h.ch:
+		h.logUnread(res)
+	default:
+	}
+}
+
+func (h *walkHandoff) logUnread(res walkResult) {
+	var walkPanic *panicError
+	if errors.As(res.err, &walkPanic) {
+		h.log.Error("recovered from a panic in a walk the crawl had stopped waiting for",
+			"error", walkPanic, "stack", string(walkPanic.stack))
+	}
+}
+
+// sendWalkPanic is deferred by a walk goroutine. It hands a panic to the
+// crawl as the walk's error, so the crawl fails at once instead of at the
+// timeout.
+func sendWalkPanic(h *walkHandoff) {
+	if recovered := recover(); recovered != nil {
+		h.deliver(walkResult{err: &panicError{value: recovered, stack: debug.Stack()}})
 	}
 }
 
@@ -601,21 +839,22 @@ func (r *Runner) assetTagClaimer(targetID string) func(string) bool {
 // primary IP). The hits are returned by value — never stashed on the
 // shared Runner, which serves targets concurrently — so the caller can
 // thread them into PruneNestedRefs for this target only.
-func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
+func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 
 	targetDefaults := r.resolveTargetDefaults(target)
+	log := r.crawlLogger(entry, target)
 
-	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, r.logger, r.manufacturers, r.deviceLookup, targetDefaults, r.config.Options)
+	mappingConfig, err := mapping.NewConfig(r.mappingConfig.Entries, log, r.manufacturers, r.deviceLookup, targetDefaults, r.config.Options)
 	if err != nil {
-		r.logger.Error("error creating mapping config", "error", err)
+		log.Error("error creating mapping config", "error", err)
 		return nil, nil, err
 	}
 	targetHost := strings.TrimSpace(target.Host)
 
-	mapper := mapping.NewObjectIDMapper(mappingConfig, r.logger, targetDefaults, targetHost)
+	mapper := mapping.NewObjectIDMapper(mappingConfig, log, targetDefaults, targetHost)
 	mapper.SetContext(ctx)
 	policyName := r.ctx.Value(policyKey).(string)
 	// Track discovery attempt
@@ -630,48 +869,39 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 	auth := r.resolveTargetAuthentication(target)
 
-	host := snmp.NewHost(targetHost, target.Port, r.config.Retries, r.snmpTimeout, auth, r.logger, r.ClientFactory)
-
-	type walkResult struct {
-		oids mapping.ObjectIDValueMap
-		err  error
-	}
+	host := snmp.NewHost(targetHost, target.Port, r.config.Retries, r.snmpTimeout, auth, log, r.ClientFactory)
 
 	// Phase 1: walk generic OIDs (sysObjectID/sysDescr included).
 	genericOIDs := mappingConfig.GenericObjectIDs()
-	r.logger.Info("querying target", "host", targetHost, "port", target.Port, "object_count", len(genericOIDs))
-	r.logger.Debug("phase 1 walk", "host", targetHost, "oid_count", len(genericOIDs))
+	log.Info("querying target", "object_count", len(genericOIDs))
+	log.Debug("phase 1 walk", "oid_count", len(genericOIDs))
 
-	// The buffered channel ensures the goroutine can always send its result and exit,
+	// The handoff lets the goroutine always hand its result over and exit,
 	// even if we have already returned due to context cancellation. The goroutine is
 	// bounded by snmpTimeout (set on the SNMP client), so it is not a permanent leak.
-	resultCh := make(chan walkResult, 1)
+	generic := newWalkHandoff(log)
 	go func() {
+		defer sendWalkPanic(generic)
 		oids, err := host.Walk(ctx, genericOIDs)
-		resultCh <- walkResult{oids, err}
+		generic.deliver(walkResult{oids, err})
 	}()
 
 	var oids mapping.ObjectIDValueMap
 	select {
 	case <-ctx.Done():
-		if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-			rMetric.Add(r.ctx, 1,
-				metric.WithAttributes(
-					attribute.String("policy", policyName),
-					attribute.String("error", ctx.Err().Error()),
-				))
-		}
+		generic.abandon()
+		r.countDiscoveryFailure(policyName, ctx.Err().Error())
 		return nil, nil, ctx.Err()
-	case res := <-resultCh:
-		if res.err != nil {
-			r.logger.Warn("error crawling host", "host", targetHost, "error", res.err)
-			if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-				rMetric.Add(r.ctx, 1,
-					metric.WithAttributes(
-						attribute.String("policy", policyName),
-						attribute.String("error", res.err.Error()),
-					))
-			}
+	case res := <-generic.ch:
+		var walkPanic *panicError
+		switch {
+		case errors.As(res.err, &walkPanic):
+			// Logged once, with its stack, by the crawl.
+			r.countDiscoveryFailure(policyName, "panic")
+			return nil, nil, res.err
+		case res.err != nil:
+			log.Warn("error crawling host", "error", res.err)
+			r.countDiscoveryFailure(policyName, res.err.Error())
 			return nil, nil, res.err
 		}
 		oids = res.oids
@@ -683,34 +913,34 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	if vendor != "" {
 		vendorOIDs := mappingConfig.VendorObjectIDs(vendor)
 		if len(vendorOIDs) > 0 {
-			r.logger.Debug("phase 2 walk",
-				"host", targetHost, "vendor", vendor, "oid_count", len(vendorOIDs))
-			vendorCh := make(chan walkResult, 1)
+			log.Debug("phase 2 walk", "vendor", vendor, "oid_count", len(vendorOIDs))
+			vendorWalk := newWalkHandoff(log)
 			go func() {
+				defer sendWalkPanic(vendorWalk)
 				out, err := host.Walk(ctx, vendorOIDs)
-				vendorCh <- walkResult{out, err}
+				vendorWalk.deliver(walkResult{out, err})
 			}()
 			select {
 			case <-ctx.Done():
+				vendorWalk.abandon()
 				// Mirror the phase-1 ctx.Done() handling: record the
 				// failure metric and return. Latency on the failure
 				// path is captured by runWithMetadata's defer (the
 				// outermost scope), which fires regardless of how
 				// queryTarget exits, so we deliberately don't record
 				// latency here.
-				if rMetric := metrics.GetDiscoveryFailure(); rMetric != nil {
-					rMetric.Add(r.ctx, 1,
-						metric.WithAttributes(
-							attribute.String("policy", policyName),
-							attribute.String("error", ctx.Err().Error()),
-						))
-				}
+				r.countDiscoveryFailure(policyName, ctx.Err().Error())
 				return nil, nil, ctx.Err()
-			case res := <-vendorCh:
-				if res.err != nil {
-					r.logger.Warn("phase 2 walk failed; continuing with generic only",
-						"host", targetHost, "vendor", vendor, "error", res.err)
-				} else {
+			case res := <-vendorWalk.ch:
+				var walkPanic *panicError
+				switch {
+				case errors.As(res.err, &walkPanic):
+					// A panic fails the crawl, as one in the first phase does.
+					r.countDiscoveryFailure(policyName, "panic")
+					return nil, nil, res.err
+				case res.err != nil:
+					log.Warn("phase 2 walk failed; continuing with generic only", "vendor", vendor, "error", res.err)
+				default:
 					for k, v := range res.oids {
 						oids[k] = v
 					}
@@ -718,14 +948,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 			}
 		}
 	} else {
-		r.logger.Debug("no vendor matched; generic-only path", "host", targetHost)
-	}
-
-	// Track successful discovery
-	if rMetric := metrics.GetDiscoverySuccess(); rMetric != nil {
-		rMetric.Add(r.ctx, 1,
-			metric.WithAttributes(
-				attribute.String("policy", policyName)))
+		log.Debug("no vendor matched; generic-only path")
 	}
 
 	// Record discovery latency
@@ -741,14 +964,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// as a VLAN ID. Done here, once, so every consumer below sees one keying
 	// and the translation's warnings are logged once per target. A no-op
 	// everywhere else.
-	oids = mapping.ResolveJuniperVlanIndices(oids, r.logger)
+	oids = mapping.ResolveJuniperVlanIndices(oids, log)
 
 	entities := make([]diode.Entity, 0)
 	entitiesForTarget := mapper.MapObjectIDsToEntity(oids)
 	ifIndexByIface := mapper.InterfacesByIfIndex()
 	entitiesForTarget = mapping.TranslateAsStack(entitiesForTarget, oids, ifIndexByIface,
-		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port)),
-		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, sysOID), r.logger)
+		r.assetTagClaimer(fmt.Sprintf("%s:%d", targetHost, target.Port), log),
+		targetDefaults.StackMemberNameTemplate, r.modelPin(targetDefaults, sysOID), log)
 
 	// Module / module bay emission. Opt-in via options.discover_modules
 	// (default = off -> zero behaviour change). Reuses the chassis-path
@@ -778,14 +1001,14 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 		// would need to accept a pre-parsed inventory parameter; this
 		// caller would then pass it directly instead of re-deriving via
 		// ChassisInventoryFromOIDs. Defer until a broader runner cleanup.
-		chassisInv := mapping.ChassisInventoryFromOIDs(oids, r.logger)
+		chassisInv := mapping.ChassisInventoryFromOIDs(oids, log)
 		memberDevices := mapping.MemberDevicesFromEntities(entitiesForTarget, chassisInv)
 		aliasMap := mapping.AliasMapFromOIDs(oids)
 
 		moduleEntities, ifaceModuleMap := mapping.TranslateModulesWithAlias(
 			oids, chassisInv, memberDevices,
 			&r.config.Options, targetDefaults,
-			r.logger, aliasMap, r.moduleModels(),
+			log, aliasMap, r.moduleModels(),
 		)
 
 		entitiesForTarget = mapping.SpliceModulesAfterDevices(entitiesForTarget, moduleEntities)
@@ -807,7 +1030,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// from IEEE8023-LAG-MIB. Runs after stack translation so the member and
 	// aggregate Device pointers already name the owning member.
 	if r.config.Options.LagMembershipEnabled() {
-		mapping.AttachLagMembership(oids, ifIndexByIface, r.logger)
+		mapping.AttachLagMembership(oids, ifIndexByIface, log)
 	}
 
 	// VRF discovery: translate the walked VRF MIB rows (the columns are
@@ -820,16 +1043,16 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// refs reconcile against them by name+rd).
 	vrfByAddress := map[string]*diode.VRF{}
 	if r.config.Options.VrfDiscoveryEnabled() {
-		vrfEntities, vrfByIfIndex := mapping.TranslateVrfs(oids, targetDefaults, r.logger)
+		vrfEntities, vrfByIfIndex := mapping.TranslateVrfs(oids, targetDefaults, log)
 		if len(vrfEntities) > 0 {
-			vrfByAddress = mapping.AttachVrfs(entitiesForTarget, vrfByIfIndex, ifIndexByIface, r.logger)
+			vrfByAddress = mapping.AttachVrfs(entitiesForTarget, vrfByIfIndex, ifIndexByIface, log)
 			// Addresses whose interface was never walked had their assignment
 			// cleared during mapping, so AttachVrfs cannot reach them by
 			// interface pointer. Recover their VRF from the ifIndex recorded
 			// before the clear, or the discovered VRF would be lost for exactly
 			// the addresses this backend already had to degrade.
 			mapping.AttachVrfsToUnverified(
-				mapper.UnverifiedAssignmentIfIndexes(), vrfByIfIndex, vrfByAddress, r.logger,
+				mapper.UnverifiedAssignmentIfIndexes(), vrfByIfIndex, vrfByAddress, log,
 			)
 			entitiesForTarget = append(entitiesForTarget, vrfEntities...)
 		}
@@ -841,7 +1064,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	// option so a target pays nothing (no ifName/ifDescr rescan) when it's off.
 	var sviVlanByIfIndex map[int]*diode.VLAN
 	if r.config.Options.PrefixVlanMode() != "off" {
-		sviVlanByIfIndex = mapping.ResolveSviVlans(oids, entitiesForTarget, r.logger)
+		sviVlanByIfIndex = mapping.ResolveSviVlans(oids, entitiesForTarget, log)
 	}
 
 	// Prefix derivation (default on, opt-out via emit_prefixes: false):
@@ -852,7 +1075,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 	if r.config.Options.PrefixEmissionEnabled() {
 		prefixEntities := mapping.DerivePrefixes(
 			entitiesForTarget, vrfByAddress, sviVlanByIfIndex, ifIndexByIface,
-			targetDefaults, &r.config.Options, r.logger,
+			targetDefaults, &r.config.Options, log,
 		)
 		entitiesForTarget = append(entitiesForTarget, prefixEntities...)
 	}
@@ -874,7 +1097,7 @@ func (r *Runner) queryTarget(ctx context.Context, target config.Target) ([]diode
 
 func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expandedTargetGroup {
 	expandedGroups := make([]expandedTargetGroup, 0, len(configuredTargets))
-	for _, target := range configuredTargets {
+	for entry, target := range configuredTargets {
 		originalHost := target.Host // Preserve original target string
 		ips, err := targets.Expand(target.Host)
 		if err != nil {
@@ -897,14 +1120,292 @@ func (r *Runner) expandTargetRanges(configuredTargets []config.Target) []expande
 		expandedGroups = append(expandedGroups, expandedTargetGroup{
 			originalTarget: originalHost,
 			targets:        expandedTargets,
+			entry:          entry,
+			several:        len(ips) > 1,
 		})
 	}
 	return expandedGroups
 }
 
+// maxProbeWorkers is how many addresses a scan probes at once.
+const maxProbeWorkers = 256
+
+// worstScanTime is how long probing addresses takes when none answers: each
+// round of maxProbeWorkers waits out the probe timeout.
+func worstScanTime(addresses int, probeTimeout time.Duration) time.Duration {
+	rounds := (addresses + maxProbeWorkers - 1) / maxProbeWorkers
+	return time.Duration(rounds) * probeTimeout
+}
+
+// warnSlowScan warns when a scan of the range may run out of time before it
+// probes every address. Nothing else changes: the scan still crawls what it
+// finds.
+func (r *Runner) warnSlowScan(group expandedTargetGroup) {
+	worst := worstScanTime(len(group.targets), r.snmpProbeTimeout)
+	if worst <= r.timeout {
+		return
+	}
+	r.logger.Warn("a scan of this target may run out of time before probing every address; raise timeout to probe them all",
+		"target", group.originalTarget, "addresses", len(group.targets),
+		"probe_time", worst.String(), "timeout", r.timeout.String())
+}
+
+// maxOverlapsNamed is how many pairs of entries an overlap warning names.
+const maxOverlapsNamed = 5
+
+// The warnings about entries that crawl the same hosts, one per kind.
+const (
+	hostListedTwiceWarning = "a host is listed on several entries; each crawls it, " +
+		"and a crawl with credentials the host does not accept fails"
+	sameCommunityOverlapWarning = "subnets or ranges probe the same hosts with the same version and community; " +
+		"each crawls every host that answers"
+	v3OverlapWarning = "SNMPv3 subnets or ranges reach the same hosts; SNMPv3 probes do not present the entry's user, " +
+		"so each crawls every host that answers, and a crawl with credentials the host does not accept fails; " +
+		"list such hosts on entries of their own, or use disjoint ranges"
+	differentDefaultsWarning = "scope entries with different override_defaults reach the same hosts; " +
+		"a host that answers several of these entries is sent with each entry's defaults in turn; " +
+		"list such a host once, on a single entry of its own"
+)
+
+// probeKey is what a scan's probe presents. SNMPv1 and SNMPv2c send the
+// entry's community; SNMPv3 sends a placeholder user whatever the entry's (see
+// probeAuthentication), so its version alone.
+type probeKey struct {
+	version, community string
+}
+
+func probeKeyOf(auth config.Authentication) probeKey {
+	if auth.ProtocolVersion == snmp.ProtocolVersion3 {
+		return probeKey{version: auth.ProtocolVersion}
+	}
+	return probeKey{auth.ProtocolVersion, auth.Community}
+}
+
+// overlaps counts the pairs of entries of one kind, keeping only the ones a
+// warning names.
+type overlaps struct {
+	named []string
+	count int
+}
+
+func (o *overlaps) add(entry, other string) {
+	o.count++
+	if len(o.named) < maxOverlapsNamed {
+		o.named = append(o.named, other+" with "+entry)
+	}
+}
+
+// warnOverlappingEntries warns at load about entries that crawl the same hosts
+// on the same port, with one line per kind:
+//   - a host listed on several entries, each crawled with no probe;
+//   - subnets or ranges whose probes present the same version and community:
+//     a host that answers one answers all;
+//   - SNMPv3 subnets or ranges, whose probes all present the same placeholder
+//     user, so every one finds every SNMPv3 host;
+//   - entries with different effective override_defaults, whatever their
+//     credentials, since each sends a host it crawls with its own.
+//
+// Subnets or ranges probing with a different version or community are left
+// out: each finds only the hosts that accept its own, which is how a range is
+// scanned with several. Every entry still crawls what it finds. Hosts listed
+// on their own leave every subnet or range first, so ranges that share only
+// such hosts no longer overlap.
+func (r *Runner) warnOverlappingEntries(groups []expandedTargetGroup) {
+	type entry struct {
+		name     string
+		defaults *config.Defaults
+	}
+	type span struct {
+		entry
+		probe probeKey
+		port  uint16
+		addrs ipv4Span
+	}
+	var spans []span
+	singles := make(map[string][]entry)
+	listed := listedAddresses(groups)
+	var listedTwice, sameCommunity, v3, differentDefaults overlaps
+	for _, group := range groups {
+		if len(group.targets) == 0 {
+			continue
+		}
+		first := group.targets[0]
+		// Each entry sends what it crawls with its own defaults, whatever its
+		// credentials, so a host two entries crawl flips between them.
+		this := entry{group.originalTarget, config.MergeDefaults(&r.config.Defaults, first.OverrideDefaults)}
+		if !group.several {
+			endpoint := endpointKey(first.Host, first.Port)
+			for _, other := range singles[endpoint] {
+				listedTwice.add(this.name, other.name)
+				if !reflect.DeepEqual(this.defaults, other.defaults) {
+					differentDefaults.add(this.name, other.name)
+				}
+			}
+			singles[endpoint] = append(singles[endpoint], this)
+			continue
+		}
+		// An expanded subnet or range runs in order from its first address
+		// to its last.
+		start, err1 := netip.ParseAddr(first.Host)
+		end, err2 := netip.ParseAddr(group.targets[len(group.targets)-1].Host)
+		if err1 != nil || err2 != nil || !start.Is4() || !end.Is4() {
+			continue
+		}
+		auth := r.scope.Authentication
+		if first.Authentication != nil {
+			auth = *first.Authentication
+		}
+		thisSpan := span{this, probeKeyOf(auth), effectivePort(first.Port), ipv4Span{ipv4Value(start), ipv4Value(end)}}
+		kind := &sameCommunity
+		if auth.ProtocolVersion == snmp.ProtocolVersion3 {
+			kind = &v3
+		}
+		for _, other := range spans {
+			if other.port != thisSpan.port || !other.addrs.sharesHost(thisSpan.addrs, listed[thisSpan.port]) {
+				continue
+			}
+			if other.probe == thisSpan.probe {
+				kind.add(this.name, other.name)
+			}
+			if !reflect.DeepEqual(this.defaults, other.defaults) {
+				differentDefaults.add(this.name, other.name)
+			}
+		}
+		spans = append(spans, thisSpan)
+	}
+	r.warnOverlaps(hostListedTwiceWarning, listedTwice)
+	r.warnOverlaps(sameCommunityOverlapWarning, sameCommunity)
+	r.warnOverlaps(v3OverlapWarning, v3)
+	r.warnOverlaps(differentDefaultsWarning, differentDefaults)
+}
+
+// ipv4Span is the addresses of an expanded subnet or range, first to last.
+type ipv4Span struct {
+	first, last uint32
+}
+
+// sharesHost reports whether two spans still share an address once the hosts
+// listed on their own, sorted in listed, have left them both.
+func (s ipv4Span) sharesHost(o ipv4Span, listed []uint32) bool {
+	lo, hi := max(s.first, o.first), min(s.last, o.last)
+	if lo > hi {
+		return false
+	}
+	from, _ := slices.BinarySearch(listed, lo)
+	to, found := slices.BinarySearch(listed, hi)
+	if found {
+		to++
+	}
+	return uint64(to-from) < uint64(hi-lo)+1
+}
+
+func ipv4Value(addr netip.Addr) uint32 {
+	b := addr.As4()
+	return binary.BigEndian.Uint32(b[:])
+}
+
+// listedAddresses returns, per port, the sorted IPv4 addresses of the hosts
+// the policy lists as entries of their own, which leave every subnet or range
+// as leaveOutOwnEntries takes them out.
+func listedAddresses(groups []expandedTargetGroup) map[uint16][]uint32 {
+	listed := make(map[uint16][]uint32)
+	for _, group := range groups {
+		if group.several || len(group.targets) != 1 {
+			continue
+		}
+		addr, err := netip.ParseAddr(group.targets[0].Host)
+		if err != nil || !addr.Is4() {
+			continue
+		}
+		port := effectivePort(group.targets[0].Port)
+		listed[port] = append(listed[port], ipv4Value(addr))
+	}
+	for port, addrs := range listed {
+		slices.Sort(addrs)
+		listed[port] = slices.Compact(addrs)
+	}
+	return listed
+}
+
+// warnOverlaps logs one warning naming the first pairs and counting the rest.
+func (r *Runner) warnOverlaps(msg string, o overlaps) {
+	if o.count == 0 {
+		return
+	}
+	list := strings.Join(o.named, ", ")
+	if more := o.count - len(o.named); more > 0 {
+		list += fmt.Sprintf(" and %d more", more)
+	}
+	r.logger.Warn(msg, "entries", list)
+}
+
+// effectivePort is the port a target is scanned on: an unset port is 161.
+func effectivePort(port uint16) uint16 {
+	if port == 0 {
+		return SNMPDefaultPort
+	}
+	return port
+}
+
+// maxLeftOutNamed is how many left-out hosts a range's load line names.
+const maxLeftOutNamed = 10
+
+// leaveOutOwnEntries takes out of each subnet or range the hosts the policy
+// also lists as entries of their own, on the same port, so each is crawled
+// once with its own entry's settings. A subnet or range left empty is dropped.
+func (r *Runner) leaveOutOwnEntries(groups []expandedTargetGroup) []expandedTargetGroup {
+	own := make(map[string]bool)
+	for _, target := range r.scope.Targets {
+		if endpoint, ok := endpointOf(target); ok {
+			own[endpoint] = true
+		}
+	}
+	if len(own) == 0 {
+		return groups
+	}
+	kept := make([]expandedTargetGroup, 0, len(groups))
+	for _, group := range groups {
+		if group.several {
+			group.targets = r.withoutOwnEntries(group, own)
+			if len(group.targets) == 0 {
+				continue
+			}
+		}
+		kept = append(kept, group)
+	}
+	return kept
+}
+
+// withoutOwnEntries returns a range's hosts less those in own, and logs the
+// ones it left out. It filters in place, so a large range is not copied.
+func (r *Runner) withoutOwnEntries(group expandedTargetGroup, own map[string]bool) []config.Target {
+	kept := group.targets[:0]
+	var named []string
+	leftOut := 0
+	for _, target := range group.targets {
+		if !own[endpointKey(target.Host, target.Port)] {
+			kept = append(kept, target)
+			continue
+		}
+		leftOut++
+		if len(named) < maxLeftOutNamed {
+			named = append(named, target.Host)
+		}
+	}
+	if leftOut > 0 {
+		list := strings.Join(named, ", ")
+		if more := leftOut - len(named); more > 0 {
+			list += fmt.Sprintf(" and %d more", more)
+		}
+		r.logger.Info("Leaving out "+list+", discovered from their own scope entries",
+			"target", group.originalTarget)
+	}
+	return kept
+}
+
 // Start starts the policy runner
 func (r *Runner) Start() {
-	r.logger.Info("starting policy runner", "policy", r.ctx.Value(policyKey))
+	r.logger.Info("starting policy runner")
 	r.scheduler.Start()
 }
 
@@ -920,18 +1421,18 @@ func (r *Runner) Stop() error {
 // touched, so the operator can find the value on the device. It returns an
 // error when any other field is invalid, and the target must then not be
 // ingested.
-func (r *Runner) repairInvalidUTF8(entities []diode.Entity, policyName, host string) error {
+func repairInvalidUTF8(log *slog.Logger, entities []diode.Entity) error {
 	repaired, refused := mapping.RepairInvalidUTF8(entities)
 	if len(refused) == 0 {
 		for _, rep := range repaired {
-			r.logger.Warn(mapping.InvalidUTF8Warning, "policy", policyName, "host", host,
+			log.Warn(mapping.InvalidUTF8Warning,
 				"entity", rep.Entity, "field", rep.Field, "count", rep.Count, "example", rep.Example)
 		}
 		return nil
 	}
 	fields := make([]string, 0, len(refused))
 	for _, rep := range refused {
-		r.logger.Error(mapping.InvalidUTF8Refusal, "policy", policyName, "host", host,
+		log.Error(mapping.InvalidUTF8Refusal,
 			"entity", rep.Entity, "field", rep.Field, "count", rep.Count, "example", rep.Example)
 		fields = append(fields, rep.Entity+"."+rep.Field)
 	}
@@ -942,12 +1443,12 @@ func (r *Runner) repairInvalidUTF8(entities []diode.Entity, policyName, host str
 // runner is per policy, so a re-applied policy warns again, and the Once keeps
 // concurrently scheduled targets from repeating it. The count test sits outside
 // the Once so a target with nothing to report cannot burn it.
-func (r *Runner) warnUnscopedVLANs(entities []diode.Entity, policyName, host string) {
+func (r *Runner) warnUnscopedVLANs(log *slog.Logger, entities []diode.Entity) {
 	n := mapping.CountUnscopedVLANs(entities)
 	if n == 0 {
 		return
 	}
 	r.warnedUnscopedVLANs.Do(func() {
-		r.logger.Warn(mapping.UnscopedVLANWarning, "policy", policyName, "host", host, "vlans", n)
+		log.Warn(mapping.UnscopedVLANWarning, "vlans", n)
 	})
 }
