@@ -58,12 +58,15 @@ policies:
 
 // stuckAgents stands in for agents that answer nothing: every walk lasts until
 // its context ends. A host answers picks answers its probe at once instead.
-// walking hears of each walk as it starts and of each probe answered.
+// With vendorOID set, a crawl's first walk answers at once, naming that
+// sysObjectID, so the crawl goes on to the vendor's own walk. walking hears of
+// each walk as it starts and of each probe answered.
 type stuckAgents struct {
-	answers  func(host string) bool
-	walking  chan string
-	inFlight atomic.Int64
-	crawls   atomic.Int64
+	answers   func(host string) bool
+	vendorOID string
+	walking   chan string
+	inFlight  atomic.Int64
+	crawls    atomic.Int64
 }
 
 func newStuckAgents(answers func(host string) bool) *stuckAgents {
@@ -72,7 +75,11 @@ func newStuckAgents(answers func(host string) bool) *stuckAgents {
 
 func (a *stuckAgents) dial(host string, _ uint16, _ int, timeout time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 	if timeout != defaultSNMPProbeTimeout {
-		a.crawls.Add(1)
+		if a.crawls.Add(1) == 1 && a.vendorOID != "" {
+			rows := agentRows(host)
+			rows[oidSysObjectID] = snmp.PDU{Type: gosnmp.ObjectIdentifier, Value: a.vendorOID}
+			return &rowWalker{rows: rows}, nil
+		}
 	} else if a.answers(host) {
 		a.walking <- host
 		return &rowWalker{rows: agentRows(host)}, nil
@@ -133,46 +140,63 @@ func startPolicies(t *testing.T, m *Manager, policyYAML string) {
 	}
 }
 
-// A crawl still walking when its policy stops ends at once, whether the policy
-// was deleted or the process is shutting down. Its run fails, but it is no
-// failed discovery: one info line, no warning or error, no discovery_failure,
-// nothing ingested, and its walk returns with it.
+// A crawl still walking when its policy stops ends at once, in its first walk
+// or in its vendor's, whether the policy was deleted or the process is shutting
+// down. Its run fails, but it is no failed discovery: one info line, no warning
+// or error, no discovery_failure, nothing ingested, and its walk returns with it.
 func TestStopEndsABusyCrawl(t *testing.T) {
-	for _, tc := range []struct {
+	walks := []struct {
+		name      string
+		vendorOID string
+	}{
+		{"in its first walk", ""},
+		// A numeric sysObjectID the vendor matchers map to a vendor with walks
+		// of its own.
+		{"in its vendor walk", ".1.3.6.1.4.1.2636.1.1.1.2.21"},
+	}
+	stops := []struct {
 		name string
 		stop func(m *Manager, shutdown context.CancelFunc)
 	}{
 		{"the policy is deleted", func(m *Manager, _ context.CancelFunc) { m.StopPolicy("p1") }},
 		{"the process shuts down", func(m *Manager, shutdown context.CancelFunc) { shutdown(); m.Stop() }},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			logs := &lockedBuffer{}
-			client := &recordingClient{}
-			agents := newStuckAgents(func(string) bool { return false })
-			m, shutdown := fakeNetworkManager(t, jsonLogger(logs), client, agents.dial)
-			reader := useTestMeter(t)
-			startPolicies(t, m, busyHostPolicy)
-			require.Equal(t, "192.0.2.10", agents.await(t))
-			logs.Reset()
-
-			start := time.Now()
-			tc.stop(m, shutdown)
-			assert.Less(t, time.Since(start), stopBound, "the stop waited for the crawl")
-
-			assert.False(t, m.HasPolicy("p1"))
-			runs := m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
-			require.Len(t, runs, 1)
-			assert.Equal(t, RunStatusFailed, runs[0].Status)
-			assert.Equal(t, "context canceled", runs[0].Reason)
-			assert.Eventually(t, func() bool { return agents.inFlight.Load() == 0 },
-				stopBound, 10*time.Millisecond, "the walk ended with its crawl")
-			assert.Empty(t, client.devicesOf("192.0.2.10"), "nothing ingested")
-			assert.Empty(t, discoveryFailures(t, reader))
-			assert.Empty(t, recordsAt(t, logs, "ERROR"))
-			assert.Empty(t, recordsAt(t, logs, "WARN"))
-			assert.Equal(t, []any{"SNMP crawl stopped with its policy"}, messages(t, logs, "INFO"))
-		})
 	}
+	for _, walk := range walks {
+		for _, tc := range stops {
+			t.Run(walk.name+", "+tc.name, func(t *testing.T) {
+				testStopEndsABusyCrawl(t, walk.vendorOID, tc.stop)
+			})
+		}
+	}
+}
+
+func testStopEndsABusyCrawl(t *testing.T, vendorOID string, stop func(m *Manager, shutdown context.CancelFunc)) {
+	logs := &lockedBuffer{}
+	client := &recordingClient{}
+	agents := newStuckAgents(func(string) bool { return false })
+	agents.vendorOID = vendorOID
+	m, shutdown := fakeNetworkManager(t, jsonLogger(logs), client, agents.dial)
+	reader := useTestMeter(t)
+	startPolicies(t, m, busyHostPolicy)
+	require.Equal(t, "192.0.2.10", agents.await(t))
+	logs.Reset()
+
+	start := time.Now()
+	stop(m, shutdown)
+	assert.Less(t, time.Since(start), stopBound, "the stop waited for the crawl")
+
+	assert.False(t, m.HasPolicy("p1"))
+	runs := m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusFailed, runs[0].Status)
+	assert.Equal(t, "context canceled", runs[0].Reason)
+	assert.Eventually(t, func() bool { return agents.inFlight.Load() == 0 },
+		stopBound, 10*time.Millisecond, "the walk ended with its crawl")
+	assert.Empty(t, client.devicesOf("192.0.2.10"), "nothing ingested")
+	assert.Empty(t, discoveryFailures(t, reader))
+	assert.Empty(t, recordsAt(t, logs, "ERROR"))
+	assert.Empty(t, recordsAt(t, logs, "WARN"))
+	assert.Equal(t, []any{"SNMP crawl stopped with its policy"}, messages(t, logs, "INFO"))
 }
 
 // A scan still probing when its policy stops ends at once, and crawls nothing,
