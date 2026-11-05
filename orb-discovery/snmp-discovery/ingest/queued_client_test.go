@@ -510,15 +510,18 @@ func TestRequestAbandonedWhileQueuedIsNotSent(t *testing.T) {
 	}()
 	<-inner.sending
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// The caller's context ends with a cause, as a stopped policy's does, and
+	// the caller is told that cause.
+	stopped := errors.New("run interrupted: policy stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
 	abandonedDone := make(chan error, 1)
 	go func() {
 		_, err := client.Ingest(ctx, nil)
 		abandonedDone <- err
 	}()
 	require.Eventually(t, func() bool { return len(queue) == 1 }, time.Second, 5*time.Millisecond)
-	cancel()
-	require.ErrorIs(t, <-abandonedDone, context.Canceled)
+	cancel(stopped)
+	assert.ErrorIs(t, <-abandonedDone, stopped)
 
 	// Queued behind the abandoned request, so its turn comes first.
 	lastDone := make(chan error, 1)
@@ -532,4 +535,27 @@ func TestRequestAbandonedWhileQueuedIsNotSent(t *testing.T) {
 	require.NoError(t, <-lastDone)
 
 	assert.EqualValues(t, 2, inner.sent.Load(), "the first and last requests only")
+}
+
+// A caller whose context ends while it waits for room in a full queue is told
+// why its context ended.
+func TestCallerWaitingForRoomIsToldItsCause(t *testing.T) {
+	inner := &turnClient{release: make(chan struct{}), sending: make(chan struct{}, 4)}
+	client, err := NewQueuedClient(inner, 1, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	queue := client.(*QueuedClient).requests
+	defer close(inner.release)
+
+	go func() { _, _ = client.Ingest(context.Background(), nil) }()
+	<-inner.sending
+	go func() { _, _ = client.Ingest(context.Background(), nil) }()
+	require.Eventually(t, func() bool { return len(queue) == 1 }, time.Second, 5*time.Millisecond)
+
+	// The queue is full, so this caller waits for room until its context ends.
+	stopped := errors.New("run interrupted: policy stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(stopped)
+	_, err = client.Ingest(ctx, nil)
+	assert.ErrorIs(t, err, stopped)
 }

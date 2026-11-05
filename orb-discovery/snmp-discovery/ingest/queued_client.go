@@ -150,7 +150,7 @@ func (c *QueuedClient) enqueue(
 	select {
 	case c.requests <- req:
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	case <-c.shutdownCh:
 		return nil, ErrIngestQueueClosed
 	}
@@ -159,7 +159,7 @@ func (c *QueuedClient) enqueue(
 	case res := <-req.result:
 		return res.resp, res.err
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, context.Cause(ctx)
 	case <-c.done:
 		select {
 		case res := <-req.result:

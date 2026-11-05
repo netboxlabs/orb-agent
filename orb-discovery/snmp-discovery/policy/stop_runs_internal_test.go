@@ -573,6 +573,47 @@ func TestStopCancelsAnIngestThatOutlastsItsWait(t *testing.T) {
 	}
 }
 
+// An ingest the stop ends between two requests of a target says why on its
+// stop line, after how far it got: the policy's stop, or the process shutting
+// down. Here the first request goes out just as the stop lands, so the check
+// before the second is what ends the send.
+func TestIngestStoppedBetweenRequestsSaysWhy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stop   func(m *Manager, shutdown context.CancelFunc)
+		reason string
+	}{
+		{"the policy is deleted", func(m *Manager, _ context.CancelFunc) { m.StopPolicy("p1") }, "run interrupted: policy stopped"},
+		{"the process shuts down", func(m *Manager, shutdown context.CancelFunc) { shutdown(); m.Stop() }, "context canceled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withStopTimeout(t, 200*time.Millisecond)
+			withChunkLimit(t, 1)
+			logs := &lockedBuffer{}
+			client := newGatedClient()
+			client.sentAsCancelled = true
+			m, shutdown := fakeNetworkManager(t, jsonLogger(logs), client, newFakeAgents(time.Second).dial)
+			startPolicies(t, m, busyHostPolicy)
+			client.awaitSending(t)
+			logs.Reset()
+
+			tc.stop(m, shutdown)
+
+			var runs []*Run
+			require.Eventually(t, func() bool {
+				runs = m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
+				return len(runs) == 1 && runs[0].Status != RunStatusRunning
+			}, stopBound, 10*time.Millisecond)
+			assert.Equal(t, tc.reason, runs[0].Reason)
+			assert.EqualValues(t, 1, client.begun.Load(), "the second request was never begun")
+			assert.Zero(t, client.late.Load())
+			lines := stopLines(t, logs, "SNMP crawl stopped with its policy")
+			require.Len(t, lines, 1)
+			assert.Regexp(t, `^request 2 of \d+ failed, 1 of \d+ entities already sent: `+tc.reason+`$`, lines[0]["error"])
+		})
+	}
+}
+
 // The process shutting down ends an ingest under way at once, so the stops
 // that follow have nothing to wait for. The run gives "context canceled", with
 // one info line, no warning and no error, and nothing more is sent.
