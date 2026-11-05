@@ -21,15 +21,19 @@ import (
 )
 
 // fakeBlockingNmap puts a script named nmap first on PATH that runs until it
-// is killed, as a long scan does, without touching the network.
-func fakeBlockingNmap(t *testing.T) {
+// is killed, as a long scan does, without touching the network. The script
+// creates the returned marker file when it starts.
+func fakeBlockingNmap(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake nmap is a shell script")
 	}
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "nmap"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o700))
+	marker := filepath.Join(dir, "started")
+	body := "#!/bin/sh\ntouch '" + marker + "'\nexec sleep 30\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nmap"), []byte(body), 0o700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return marker
 }
 
 func serve(srv *server.Server, method, path string, body []byte) *httptest.ResponseRecorder {
@@ -44,7 +48,7 @@ func serve(srv *server.Server, method, path string, body []byte) *httptest.Respo
 // while the policy's scan runs, the delete returns at once and the post starts
 // the new version.
 func TestServerReplacesAPolicyWhileItsScanRuns(t *testing.T) {
-	fakeBlockingNmap(t)
+	started := fakeBlockingNmap(t)
 	logger := slog.New(slog.DiscardHandler)
 	manager := policy.NewManager(context.Background(), logger, new(MockClient))
 	t.Cleanup(manager.Stop)
@@ -58,6 +62,10 @@ func TestServerReplacesAPolicyWhileItsScanRuns(t *testing.T) {
 		return json.Unmarshal(w.Body.Bytes(), &status) == nil &&
 			len(status.Policies) == 1 && status.Policies[0].Status == "running"
 	}, 10*time.Second, 10*time.Millisecond, "the scan did not start")
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(started)
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond, "the fake nmap did not start")
 
 	start := time.Now()
 	w := serve(srv, http.MethodDelete, "/api/v1/policies/p1", nil)

@@ -40,21 +40,44 @@ const oneHostNmap = `cat <<'EOF'
 EOF`
 
 // fakeNmap puts a shell script named nmap first on PATH, so a scan runs it
-// instead of nmap and nothing touches the network.
-func fakeNmap(t *testing.T, script string) {
+// instead of nmap and nothing touches the network. The script creates the
+// returned marker file when it starts.
+func fakeNmap(t *testing.T, script string) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake nmap is a shell script")
 	}
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "nmap"), []byte("#!/bin/sh\n"+script+"\n"), 0o700))
+	marker := filepath.Join(dir, "started")
+	body := "#!/bin/sh\ntouch '" + marker + "'\n" + script + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "nmap"), []byte(body), 0o700))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return marker
 }
 
-// fakeClient counts ingests. With release set, an ingest signals ingesting and
-// waits for release; it fails with its context's error, as a gRPC call does.
+// waitForNmap waits until the fake nmap has started.
+func waitForNmap(t *testing.T, marker string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, 10*time.Second, 10*time.Millisecond, "the fake nmap did not start")
+}
+
+// shortStopTimeout makes Stop give up waiting for a running job quickly.
+func shortStopTimeout(t *testing.T) {
+	t.Helper()
+	saved := schedulerStopTimeout
+	schedulerStopTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { schedulerStopTimeout = saved })
+}
+
+// fakeClient counts ingests, and those delivered: an ingest whose context is
+// cancelled fails, as a gRPC call does. With release set, an ingest signals
+// ingesting and waits for release or for its context to end.
 type fakeClient struct {
 	ingests   atomic.Int32
+	delivered atomic.Int32
 	ingesting chan struct{}
 	release   chan struct{}
 }
@@ -63,9 +86,16 @@ func (c *fakeClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.In
 	c.ingests.Add(1)
 	if c.release != nil {
 		c.ingesting <- struct{}{}
-		<-c.release
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+		}
 	}
-	return &diodepb.IngestResponse{}, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.delivered.Add(1)
+	return &diodepb.IngestResponse{}, nil
 }
 
 func (c *fakeClient) IngestProto(context.Context, []*diodepb.Entity, ...diode.IngestOption) (*diodepb.IngestResponse, error) {
@@ -158,12 +188,12 @@ func scanPolicy() config.Policy {
 // Stopping a policy while its scan runs ends the scan, so the stop returns at
 // once, the policy is gone, and the same name starts a new runner.
 func TestStopPolicyDuringAScanFreesTheName(t *testing.T) {
-	fakeNmap(t, blockingNmap)
+	started := fakeNmap(t, blockingNmap)
 	m := NewManager(context.Background(), slog.New(slog.DiscardHandler), &fakeClient{})
 	t.Cleanup(m.Stop)
 
 	require.NoError(t, m.StartPolicy("p1", scanPolicy()))
-	waitForRun(t, m.runStore, "p1", RunStatusRunning)
+	waitForNmap(t, started)
 	old := m.policies["p1"]
 
 	start := time.Now()
@@ -175,10 +205,11 @@ func TestStopPolicyDuringAScanFreesTheName(t *testing.T) {
 	assert.NotSame(t, old, m.policies["p1"], "the name did not start a new runner")
 }
 
-// A scan cut short by its policy stopping is not a failed discovery: nothing
-// is ingested, nothing is logged at ERROR, and its run says why it ended.
+// A scan cut short by its policy stopping is not a failed discovery: its nmap
+// is killed, nothing is ingested, nothing is logged at ERROR, and its run says
+// why it ended.
 func TestScanStoppedWithItsPolicyIsNotAFailure(t *testing.T) {
-	fakeNmap(t, blockingNmap)
+	started := fakeNmap(t, blockingNmap)
 	reader := useTestMeter(t)
 	logs := &logBuffer{}
 	client := &fakeClient{}
@@ -186,7 +217,7 @@ func TestScanStoppedWithItsPolicyIsNotAFailure(t *testing.T) {
 	t.Cleanup(m.Stop)
 
 	require.NoError(t, m.StartPolicy("p1", scanPolicy()))
-	waitForRun(t, m.runStore, "p1", RunStatusRunning)
+	waitForNmap(t, started)
 	m.StopPolicy("p1")
 
 	assert.Zero(t, client.ingests.Load(), "a stopped scan ingested")
@@ -200,6 +231,7 @@ func TestScanStoppedWithItsPolicyIsNotAFailure(t *testing.T) {
 	}
 	require.Len(t, stopped, 1)
 	assert.Equal(t, "p1", stopped[0]["policy"])
+	assert.Equal(t, "signal: killed", stopped[0]["error"], "the scan did not end with its nmap killed")
 
 	runs := m.runStore.GetRunsForPolicy("p1")
 	require.Len(t, runs, 1)
@@ -237,8 +269,7 @@ func TestScanTimeoutStillFailsTheRun(t *testing.T) {
 	assert.Zero(t, client.ingests.Load())
 }
 
-// A stop leaves an ingest that has already started to finish, as it did
-// before stops cancelled scans.
+// A stop waits for an ingest already underway and lets it finish.
 func TestStopLetsAnIngestUnderwayFinish(t *testing.T) {
 	fakeNmap(t, oneHostNmap)
 	logs := &logBuffer{}
@@ -259,12 +290,57 @@ func TestStopLetsAnIngestUnderwayFinish(t *testing.T) {
 	go func() { stopped <- r.Stop() }()
 	require.Eventually(t, func() bool { return r.ctx.Err() != nil }, 5*time.Second, 10*time.Millisecond,
 		"the stop did not cancel the runner")
+	select {
+	case <-stopped:
+		t.Fatal("the stop returned before the ingest finished")
+	default:
+	}
 	release()
 	require.NoError(t, <-stopped)
 
 	run := waitForRun(t, store, "p1", RunStatusCompleted)
 	assert.Equal(t, 1, run.EntityCount)
+	assert.Equal(t, int32(1), client.delivered.Load())
 	assert.Empty(t, logs.records(t, "ERROR"))
+}
+
+// Once Stop returns, the policy sends nothing: an ingest still running when
+// the stop gives up waiting is cancelled, and its run ends as a stopped run.
+func TestStopCancelsAnIngestItGaveUpWaitingFor(t *testing.T) {
+	fakeNmap(t, oneHostNmap)
+	shortStopTimeout(t)
+	reader := useTestMeter(t)
+	logs := &logBuffer{}
+	client := &fakeClient{ingesting: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(client.release) })
+	t.Cleanup(release)
+	store := NewRunStore()
+	r, err := NewRunner(context.Background(), logs.logger(), "p1", scanPolicy(), client, store)
+	require.NoError(t, err)
+	r.Start()
+
+	select {
+	case <-client.ingesting:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the scan did not reach its ingest")
+	}
+	require.Error(t, r.Stop(), "the stop did not report giving up on the ingest")
+	// Diode answers only after the stop has returned.
+	release()
+
+	run := waitForRun(t, store, "p1", RunStatusFailed)
+	assert.Equal(t, "run interrupted: policy stopped", run.Reason)
+	assert.Zero(t, client.delivered.Load(), "the stopped policy delivered an ingest")
+	assert.Empty(t, logs.records(t, "ERROR"))
+	assert.Zero(t, sumOf(t, reader, "discovery_failure"))
+	var stopped []map[string]any
+	for _, record := range logs.records(t, "INFO") {
+		if record["msg"] == "ingest stopped with its policy" {
+			stopped = append(stopped, record)
+		}
+	}
+	require.Len(t, stopped, 1)
+	assert.Equal(t, "p1", stopped[0]["policy"])
 }
 
 // stopFailingScheduler reports an error from StopJobs, as a scheduler does
