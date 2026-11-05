@@ -183,10 +183,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 		s.logger.Debug("starting policy", "policy", name, "targets", len(policy.Scope.Targets))
 		if s.manager.HasPolicy(name) {
 			for _, p := range rPolicies {
-				if err = s.manager.StopPolicy(p); err != nil {
-					c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
-					return
-				}
+				s.manager.StopPolicy(p)
 			}
 			c.IndentedJSON(http.StatusConflict, Response{"policy '" + name + "' already exists"})
 			return
@@ -194,9 +191,7 @@ func (s *Server) createPolicy(c *gin.Context) {
 
 		if err := s.manager.StartPolicy(name, policy); err != nil {
 			for _, p := range rPolicies {
-				if sErr := s.manager.StopPolicy(p); sErr != nil {
-					err = fmt.Errorf("%v: %v", err, sErr)
-				}
+				s.manager.StopPolicy(p)
 			}
 			c.IndentedJSON(http.StatusBadRequest, Response{err.Error()})
 			return
@@ -214,11 +209,8 @@ func (s *Server) deletePolicy(c *gin.Context) {
 		return
 	}
 
-	if err := s.manager.StopPolicy(policy); err != nil {
-		c.IndentedJSON(http.StatusInternalServerError, Response{err.Error()})
-	} else {
-		c.IndentedJSON(http.StatusOK, Response{"policy '" + policy + "' was deleted"})
-	}
+	s.manager.StopPolicy(policy)
+	c.IndentedJSON(http.StatusOK, Response{"policy '" + policy + "' was deleted"})
 }
 
 // Stop stops the snmp-discovery server
@@ -230,9 +222,7 @@ func (s *Server) Stop() {
 		s.logger.Error("shutting down HTTP server", "error", err)
 	}
 
-	if err := s.manager.Stop(); err != nil {
-		s.logger.Error("stopping policy manager", "error", err)
-	}
+	s.manager.Stop()
 }
 
 // recoverPanics answers a request whose handler panicked with a 500 and logs the

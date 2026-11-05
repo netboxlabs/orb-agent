@@ -55,6 +55,7 @@ type expandedTargetGroup struct {
 type Runner struct {
 	scheduler        gocron.Scheduler
 	ctx              context.Context
+	cancel           context.CancelFunc // ends ctx, which every scan and crawl derives from
 	client           diode.Client
 	logger           *slog.Logger
 	timeout          time.Duration
@@ -120,7 +121,6 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if runner.timeout <= runner.snmpTimeout {
 		return nil, fmt.Errorf("policy timeout (%s) must be greater than snmp_timeout (%s)", runner.timeout, runner.snmpTimeout)
 	}
-	runner.ctx = context.WithValue(ctx, policyKey, name)
 	runner.scope = policy.Scope
 	runner.config = policy.Config
 
@@ -174,6 +174,8 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			return nil, err
 		}
 	}
+	// Made last, so a policy refused above leaves no context behind.
+	runner.ctx, runner.cancel = context.WithCancel(context.WithValue(ctx, policyKey, name))
 	return runner, nil
 }
 
@@ -242,22 +244,6 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 		log.Debug("SNMP probe succeeded", "host", target.Host, "port", target.Port)
 	}
 
-	// Snapshot live job IDs before the loop to avoid holding two locks simultaneously.
-	// Done here (before early returns) so stale entries are pruned on every probe invocation,
-	// including the zero-responsive and context-timeout paths.
-	jobs := r.scheduler.Jobs()
-	liveIDs := make(map[uuid.UUID]struct{}, len(jobs))
-	for _, j := range jobs {
-		liveIDs[j.ID()] = struct{}{}
-	}
-
-	// Crawl jobs are keyed by scope entry, so each entry crawls every host its
-	// own probe finds, with its own credentials, even when two entries are
-	// written identically. Stale ones are pruned for this entry only, so a
-	// concurrent scan of another entry keeps the jobs it just added.
-	keyPrefix := fmt.Sprintf("%d::%s::", entry, originalTarget)
-	r.pruneHostJobs(keyPrefix, liveIDs)
-
 	// Probe panics past the first are only counted. The count goes once on
 	// the scan's last line, and in its reason when it fails.
 	panics := panicked.Load()
@@ -274,16 +260,34 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 		return err
 	}
 
+	// A scan cut short because the policy stopped crawls nothing, and asks the
+	// scheduler, which is stopping, for nothing.
+	if err := r.ctx.Err(); err != nil {
+		log.Info("SNMP probe scan stopped with its policy", withPanics("responsive_target_count", len(responsive))...)
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(err), len(responsive))
+		return
+	}
+
+	// Snapshot live job IDs before the loop to avoid holding two locks simultaneously.
+	// Done here (before the early returns below) so stale entries are pruned on every probe invocation,
+	// including the zero-responsive and context-timeout paths.
+	jobs := r.scheduler.Jobs()
+	liveIDs := make(map[uuid.UUID]struct{}, len(jobs))
+	for _, j := range jobs {
+		liveIDs[j.ID()] = struct{}{}
+	}
+
+	// Crawl jobs are keyed by scope entry, so each entry crawls every host its
+	// own probe finds, with its own credentials, even when two entries are
+	// written identically. Stale ones are pruned for this entry only, so a
+	// concurrent scan of another entry keeps the jobs it just added.
+	keyPrefix := fmt.Sprintf("%d::%s::", entry, originalTarget)
+	r.pruneHostJobs(keyPrefix, liveIDs)
+
 	// A scan that ran out of its own time still crawls the hosts it found,
-	// and its run fails saying how far it got. One cut short because the
-	// policy stopped crawls nothing.
+	// and its run fails saying how far it got.
 	var timedOut error
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		if !errors.Is(ctxErr, context.DeadlineExceeded) || r.ctx.Err() != nil {
-			log.Warn("SNMP probe scan interrupted", withPanics("error", ctxErr, "responsive_target_count", len(responsive))...)
-			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(ctxErr), len(responsive))
-			return
-		}
 		timedOut = failure(fmt.Errorf("%w (started probing %d of %d addresses, %d responded; raise timeout to probe them all)",
 			ctxErr, probed.Load(), len(targets), len(responsive)))
 		log.Warn("SNMP probe scan interrupted", withPanics("error", timedOut, "responsive_target_count", len(responsive))...)
@@ -640,6 +644,9 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 			r.failRunOnPanic(log, targetHost, targetPort, run.ID, walkPanic)
 			return
 		}
+		if r.endStoppedCrawl(log, targetHost, targetPort, run.ID, 0) {
+			return
+		}
 		log.Error("error querying target", "error", err)
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, 0)
 		return
@@ -694,10 +701,18 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 		return
 	}
 
+	// Nothing is sent for a policy that has stopped: it may already have been
+	// replaced by a new version.
+	if r.endStoppedCrawl(log, targetHost, targetPort, run.ID, len(entities)) {
+		return
+	}
 	resp, err := r.ingest(log, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
 	}))
+	if err != nil && r.endStoppedCrawl(log, targetHost, targetPort, run.ID, len(entities)) {
+		return
+	}
 	if err != nil {
 		log.Error("error ingesting entities", "error", err, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusFailed, err, len(entities))
@@ -709,6 +724,20 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 		log.Info("entities ingested successfully", "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusCompleted, nil, len(entities))
 	}
+}
+
+// endStoppedCrawl ends a crawl whose policy has stopped, reporting whether it
+// did. The run fails, since the crawl did not finish, but with one info line
+// rather than an error: the stop cut it short.
+func (r *Runner) endStoppedCrawl(log *slog.Logger, host string, port uint16, runID string, entityCount int) bool {
+	err := r.ctx.Err()
+	if err == nil {
+		return false
+	}
+	log.Info("SNMP crawl stopped with its policy")
+	policyName, _ := r.ctx.Value(policyKey).(string)
+	r.runStore.UpdateRun(policyName, host, port, runID, RunStatusFailed, err, entityCount)
+	return true
 }
 
 func logEntitiesForIngestion(log *slog.Logger, entities []diode.Entity) {
@@ -753,6 +782,14 @@ func (r *Runner) assetTagClaimer(targetID string, log *slog.Logger) func(string)
 		log.Warn("asset tag skipped: already discovered on another target of this policy",
 			"asset_tag", tag, "target", targetID, "owner_target", owner)
 		return false
+	}
+}
+
+// countTimeout records a crawl that ran out of its own time as a failed
+// discovery. One its policy's stop cut short is not counted.
+func (r *Runner) countTimeout(policyName string, err error) {
+	if r.ctx.Err() == nil {
+		r.countDiscoveryFailure(policyName, err.Error())
 	}
 }
 
@@ -890,7 +927,7 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 	select {
 	case <-ctx.Done():
 		generic.abandon()
-		r.countDiscoveryFailure(policyName, ctx.Err().Error())
+		r.countTimeout(policyName, ctx.Err())
 		return nil, nil, ctx.Err()
 	case res := <-generic.ch:
 		var walkPanic *panicError
@@ -929,7 +966,7 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 				// outermost scope), which fires regardless of how
 				// queryTarget exits, so we deliberately don't record
 				// latency here.
-				r.countDiscoveryFailure(policyName, ctx.Err().Error())
+				r.countTimeout(policyName, ctx.Err())
 				return nil, nil, ctx.Err()
 			case res := <-vendorWalk.ch:
 				var walkPanic *panicError
@@ -1409,11 +1446,12 @@ func (r *Runner) Start() {
 	r.scheduler.Start()
 }
 
-// Stop stops the policy runner
+// Stop stops the policy runner. Cancelling first ends the scans and crawls
+// under way, which the scheduler can wait for but not cut short. Shutdown,
+// rather than StopJobs, answers a scan still asking the scheduler for jobs:
+// StopJobs holds such a call, and so the stop, until its timeout.
 func (r *Runner) Stop() error {
-	if err := r.scheduler.StopJobs(); err != nil {
-		return err
-	}
+	r.cancel()
 	return r.scheduler.Shutdown()
 }
 

@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
 	"go.yaml.in/yaml/v3"
@@ -42,6 +41,7 @@ type Manager struct {
 	mappingConfig config.Mapping
 	manufacturers data.ManufacturerRetriever
 	runStore      *RunStore
+	clientFactory snmp.ClientFactory
 }
 
 // NewManager returns a new policy manager
@@ -60,6 +60,7 @@ func NewManager(ctx context.Context, logger *slog.Logger, client diode.Client, m
 		policies:      make(map[string]*Runner),
 		manufacturers: manufacturers,
 		runStore:      NewRunStore(),
+		clientFactory: snmp.NewClient,
 	}, nil
 }
 
@@ -647,12 +648,7 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 			manufacturerRetriever = resolver
 		}
 
-		// Create logger-aware ClientFactory wrapper
-		clientFactory := func(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger) (snmp.Walker, error) {
-			return snmp.NewClient(host, port, retries, timeout, authentication, logger)
-		}
-
-		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, clientFactory, &m.mappingConfig, manufacturerRetriever, deviceLookup, m.runStore)
+		r, err := NewRunner(m.ctx, m.logger, name, policy, m.client, m.clientFactory, &m.mappingConfig, manufacturerRetriever, deviceLookup, m.runStore)
 		if err != nil {
 			return err
 		}
@@ -663,25 +659,25 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	return nil
 }
 
-// StopPolicy stops the policy
-func (m *Manager) StopPolicy(name string) error {
-	if m.HasPolicy(name) {
-		if err := m.policies[name].Stop(); err != nil {
-			return err
-		}
-		delete(m.policies, name)
+// StopPolicy stops the policy and removes it. A policy that does not stop
+// cleanly is removed all the same: its scans and crawls have been told to stop,
+// and keeping it would refuse a new version under its name.
+func (m *Manager) StopPolicy(name string) {
+	r, ok := m.policies[name]
+	if !ok {
+		return
 	}
-	return nil
+	if err := r.Stop(); err != nil {
+		m.logger.Warn("policy did not stop cleanly; it is removed all the same", "policy", name, "error", err)
+	}
+	delete(m.policies, name)
 }
 
-// Stop stops the policy manager
-func (m *Manager) Stop() error {
+// Stop stops every policy.
+func (m *Manager) Stop() {
 	for name := range m.policies {
-		if err := m.StopPolicy(name); err != nil {
-			return err
-		}
+		m.StopPolicy(name)
 	}
-	return nil
 }
 
 // GetCapabilities returns the capabilities of snm-discovery
