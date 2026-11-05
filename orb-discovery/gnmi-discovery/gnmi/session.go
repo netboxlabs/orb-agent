@@ -1,6 +1,9 @@
 package gnmi
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Update is a single normalized leaf update from a gNMI notification.
 // Path is the absolute OpenConfig path; Value is the decoded scalar/string.
@@ -56,8 +59,10 @@ type Session interface {
 	// returns a notifications channel and an errors channel. The channels
 	// close when ctx is cancelled or the stream ends.
 	Subscribe(ctx context.Context, mode Mode, paths []string, sampleIntervalMs int) (<-chan Notification, <-chan error, error)
-	// GetOnce performs a single gNMI Get over paths.
-	GetOnce(ctx context.Context, paths []string) (Notification, error)
+	// GetOnce performs a single gNMI Get over paths. A path the target fails
+	// on is returned in the map with its error, and the rest still answer; the
+	// error is set only when every path failed.
+	GetOnce(ctx context.Context, paths []string) (Notification, map[string]error, error)
 	// GetConfig fetches the target's CONFIG datastore as a serialized JSON_IETF
 	// document: a single Get with DataType=CONFIG over the origin-prefixed root
 	// path "/". Returns the raw JSON bytes. Used only when capture_config is on.
@@ -67,6 +72,12 @@ type Session interface {
 	// on the same connection without leaking the prior subscription. No-op if
 	// there is no active subscription; idempotent.
 	StopSubscribe()
+	// InconclusivePaths returns the paths the last Subscribe's probe kept
+	// because the target gave no answer about them, such as a transient error.
+	InconclusivePaths() []string
+	// PinPaths names subscription paths a refused subscription is never
+	// retried without, such as the device's hostname.
+	PinPaths(paths ...string)
 	// Close releases the connection.
 	Close() error
 }
@@ -87,4 +98,6 @@ type TargetSpec struct {
 	CAFile     string
 	CertFile   string
 	KeyFile    string
+	// SetupTimeout bounds the subscription-path probe; SetupTimeout when zero.
+	SetupTimeout time.Duration
 }

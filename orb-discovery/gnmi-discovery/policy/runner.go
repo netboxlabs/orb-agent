@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/netboxlabs/diode-sdk-go/diode"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/gnmi-discovery/gnmi"
@@ -60,7 +61,11 @@ type Runner struct {
 	runStore *RunStore
 	wg       sync.WaitGroup
 
-	backoffBase time.Duration // initial reconnect backoff; tests shorten it
+	backoffBase  time.Duration // initial reconnect backoff; tests shorten it
+	setupTimeout time.Duration // bounds Capabilities and the path probe; tests shorten it
+	// backoffCap and credentialBackoffCap cap the reconnect backoff; see
+	// setupHistory.slowBackoff. Tests shorten them.
+	backoffCap, credentialBackoffCap time.Duration
 
 	mu     sync.Mutex
 	states map[string]*targetState // by host
@@ -79,8 +84,100 @@ type targetState struct {
 	LastSync       time.Time // last completed initial-sync / snapshot boundary
 	LastFlush      time.Time // last successful Diode ingest
 	LastError      string
-	lastProfile    string // last profile selected for this host; gates the selection log
+	DegradedReason string    // why the session runs degraded; cleared by a clean setup
+	lastProfile    string    // last profile selected for this host; gates the selection log
+	connWorked     time.Time // when the current connection first synced or flushed
+	connDelivered  bool      // the current connection got a notification or a Get answer
 }
+
+// capsAttempts is how many consecutive transient Capabilities failures a target
+// redials through before it goes on with the _base profile.
+const capsAttempts = 3
+
+const (
+	// defaultBackoffCap is the longest wait between a target's connection attempts.
+	defaultBackoffCap = 30 * time.Second
+	// defaultCredentialBackoffCap replaces it while the target's credentials
+	// have only ever been refused: retrying every 30 s only repeats the refusal.
+	defaultCredentialBackoffCap = 15 * time.Minute
+)
+
+// setupHistory is what a target's earlier connections said about their setup.
+// It lives as long as the target loop, and only that goroutine touches it.
+type setupHistory struct {
+	capsFailures int  // consecutive transient Capabilities failures
+	credsRefused bool // this attempt's Capabilities refused the credentials
+	credsWorked  bool // Capabilities answered, or a connection synced
+	credsWarned  bool // a refusal of credentials that never worked was logged at WARN
+}
+
+// slowBackoff reports whether the attempt that just ended had its credentials
+// refused, and they have never worked.
+func (h *setupHistory) slowBackoff() bool {
+	return h.credsRefused && !h.credsWorked
+}
+
+// quiet reports whether this attempt repeats a refusal of credentials that
+// never worked, which has had its WARN: its lines say nothing new.
+func (h *setupHistory) quiet() bool {
+	return h.slowBackoff() && h.credsWarned
+}
+
+// logLevel is WARN, or DEBUG for a quiet attempt.
+func (h *setupHistory) logLevel() slog.Level {
+	if h.quiet() {
+		return slog.LevelDebug
+	}
+	return slog.LevelWarn
+}
+
+// stepDownLevel is INFO for a ladder step-down line, or DEBUG when a quiet
+// attempt's rung failed on the same refusal of the credentials.
+func (h *setupHistory) stepDownLevel(rungErr error) slog.Level {
+	if h.quiet() && credentialRefusal(rungErr) {
+		return slog.LevelDebug
+	}
+	return slog.LevelInfo
+}
+
+// attemptLogged notes, once an attempt is logged, that a refusal of credentials
+// that never worked has had its one WARN.
+func (h *setupHistory) attemptLogged() {
+	if h.slowBackoff() {
+		h.credsWarned = true
+	}
+}
+
+// credentialRefusal reports whether a Capabilities error is the device
+// refusing the credentials.
+func credentialRefusal(err error) bool {
+	switch status.Code(err) {
+	case codes.Unauthenticated, codes.PermissionDenied:
+		return true
+	default:
+		return false
+	}
+}
+
+// reconnectBackoff is a target's delay between connection attempts.
+type reconnectBackoff struct {
+	base, next time.Duration
+}
+
+func newReconnectBackoff(base time.Duration) *reconnectBackoff {
+	return &reconnectBackoff{base: base, next: base}
+}
+
+// delay returns the wait before the next attempt, capped at ceiling, and
+// doubles it for the one after.
+func (b *reconnectBackoff) delay(ceiling time.Duration) time.Duration {
+	d := min(b.next, ceiling)
+	b.next = min(2*d, ceiling)
+	return d
+}
+
+// reset starts the delay again from the base.
+func (b *reconnectBackoff) reset() { b.next = b.base }
 
 // NewRunner creates a runner for a policy.
 func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy,
@@ -90,10 +187,13 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	return &Runner{
 		ctx: rctx, cancel: cancel, logger: logger, name: name, policy: policy,
 		client: client, dialer: dialer, store: store,
-		runStore:    NewRunStore(),
-		backoffBase: time.Second,
-		states:      map[string]*targetState{},
-		subscribed:  map[string]struct{}{},
+		runStore:             NewRunStore(),
+		backoffBase:          time.Second,
+		backoffCap:           defaultBackoffCap,
+		credentialBackoffCap: defaultCredentialBackoffCap,
+		setupTimeout:         gnmi.SetupTimeout,
+		states:               map[string]*targetState{},
+		subscribed:           map[string]struct{}{},
 	}, nil
 }
 
@@ -126,6 +226,48 @@ func (r *Runner) setState(host string, fn func(*targetState)) {
 	if s, ok := r.states[host]; ok {
 		fn(s)
 	}
+}
+
+// markSynced records a completed sync of host's current connection.
+func (r *Runner) markSynced(host string) {
+	r.setState(host, func(s *targetState) {
+		s.LastSync = time.Now()
+		if s.connWorked.IsZero() {
+			s.connWorked = s.LastSync
+		}
+	})
+}
+
+// markDelivered records that host's current connection got something from
+// the device: a stream notification or a Get answer.
+func (r *Runner) markDelivered(host string) {
+	r.setState(host, func(s *targetState) { s.connDelivered = true })
+}
+
+// markWorking records that host's current connection flushed what the device
+// delivered, so a target with no hostname leaf that ingests by netbox_id
+// counts as working. A flush of nothing, as a SAMPLE tick makes, does not.
+func (r *Runner) markWorking(host string) {
+	r.setState(host, func(s *targetState) {
+		if s.connDelivered && s.connWorked.IsZero() {
+			s.connWorked = time.Now()
+		}
+	})
+}
+
+// connWorkedAt returns when host's connection first synced or flushed and
+// starts the next connection's record; zero if it did neither.
+func (r *Runner) connWorkedAt(host string) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.states[host]
+	if !ok {
+		return time.Time{}
+	}
+	at := s.connWorked
+	s.connWorked = time.Time{}
+	s.connDelivered = false
+	return at
 }
 
 // targetLoop owns the per-target in-memory model and debouncer for the whole
@@ -161,8 +303,9 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 	retry.Stop()
 	defer retry.Stop()
 
-	backoff := r.backoffBase
+	backoff := newReconnectBackoff(r.backoffBase)
 	first := true
+	var hist setupHistory
 	for {
 		if r.ctx.Err() != nil {
 			return
@@ -171,20 +314,39 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 			metrics.GetReconnects().Add(r.ctx, 1)
 		}
 		first = false
-		err := r.runOnce(t, model, deb, retry)
+		hist.credsRefused = false
+		err := r.runOnce(t, model, deb, retry, &hist)
 		if r.ctx.Err() != nil {
 			return
 		}
+		if workedAt := r.connWorkedAt(t.Host); !workedAt.IsZero() {
+			// A connection that synced, or flushed what the device delivered,
+			// worked, whatever ended it. It
+			// resets the backoff only if it then lasted, or a device that drops
+			// right after each sync would be redialled at the base delay for ever.
+			hist.credsWorked = true
+			if time.Since(workedAt) >= max(r.backoffCap, backoff.next) {
+				backoff.reset()
+			}
+		} else if hist.capsFailures >= capsAttempts {
+			// A connection on _base that never synced earns no shortcut: the
+			// next ones go through Capabilities again before giving up on it.
+			hist.capsFailures = 0
+		}
 		if err != nil {
-			r.logger.Warn("gnmi target loop error", "policy", r.name, "host", t.Host, "error", err)
+			r.logger.Log(r.ctx, hist.logLevel(), "gnmi target loop error", "policy", r.name, "host", t.Host, "error", err)
 			r.setState(t.Host, func(s *targetState) { s.LastError = err.Error() })
 		}
+		hist.attemptLogged()
+		ceiling := r.backoffCap
+		if hist.slowBackoff() {
+			ceiling = r.credentialBackoffCap
+		}
 		select {
-		case <-time.After(backoff):
+		case <-time.After(backoff.delay(ceiling)):
 		case <-r.ctx.Done():
 			return
 		}
-		backoff = time.Duration(math.Min(float64(backoff*2), float64(30*time.Second)))
 	}
 }
 
@@ -197,28 +359,105 @@ func (r *Runner) targetLoop(t config.Target, startDelay time.Duration) {
 // and re-attempts the preferred mode — a transient ON_CHANGE drop never
 // permanently demotes the target. Explicit on_change/sample modes never
 // auto-downgrade; they return the error to reconnect at the same mode.
-func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer) error {
+func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debouncer, retry *time.Timer, hist *setupHistory) error {
 	tls := t.ResolvedTLS()
 	sess, err := r.dialer.Dial(r.ctx, gnmi.TargetSpec{
 		Host: t.Host, Username: t.ResolvedUsername(), Password: t.ResolvedPassword(),
 		SkipVerify: tls.SkipVerify, Insecure: tls.Insecure, Origin: t.ResolvedOrigin(),
 		CAFile: tls.CAFile, CertFile: tls.CertFile, KeyFile: tls.KeyFile,
+		SetupTimeout: r.setupTimeout,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = sess.Close() }()
 
-	// M-6: do not swallow Capabilities errors — they usually mean auth/TLS/model
-	// detection failed. Log, surface in status, count, then fall back to _base
-	// (matcher already does that) so discovery still attempts standard OpenConfig.
-	caps, capErr := sess.Capabilities(r.ctx)
+	// Why this connection runs with less than the device offers: recorded in
+	// status as it is found. Setup's reasons hold for the connection, and the
+	// last Get poll's is replaced by the next poll's.
+	var setupReason, probeReason, pollReason string
+	record := func() {
+		var reasons []string
+		for _, s := range []string{setupReason, probeReason, pollReason} {
+			if s != "" {
+				reasons = append(reasons, s)
+			}
+		}
+		joined := strings.Join(reasons, "; ")
+		r.setState(t.Host, func(s *targetState) { s.DegradedReason = joined })
+	}
+	// setupDone records how setup went once delivery starts, which clears the
+	// reason after a clean setup. A stream also carries the paths its probe
+	// kept without an answer; Get uses no probe.
+	setupDone := func(streaming bool) {
+		probeReason = ""
+		if n := len(sess.InconclusivePaths()); streaming && n > 0 {
+			probeReason = fmt.Sprintf("path probe got no answer for %d path(s); subscribed to them unverified", n)
+		}
+		record()
+	}
+	pollDone := func(carried int) {
+		pollReason = ""
+		if carried > 0 {
+			pollReason = fmt.Sprintf("the last Get poll failed on some paths; %d value(s) kept from the poll before", carried)
+		}
+		record()
+	}
+
+	// Capabilities picks the profile and the encodings for the whole connection,
+	// so a transient failure redials rather than settling for _base. After
+	// capsAttempts in a row the target goes on with _base, as a device that
+	// never answers Capabilities but serves Subscribe needs. Any other error is
+	// the device's answer and falls back to _base at once.
+	// How Capabilities failed when the connection goes on without it; the
+	// reason is worded once the profile in use is known.
+	var capsNote string
+	afterSync := false
+	capCtx, cancelCaps := context.WithTimeout(r.ctx, r.setupTimeout)
+	caps, capErr := sess.Capabilities(capCtx)
+	cancelCaps()
 	if capErr != nil {
-		r.logger.Warn("gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
-		r.setState(t.Host, func(s *targetState) { s.LastError = "capabilities: " + capErr.Error() })
+		if r.ctx.Err() != nil {
+			return nil
+		}
 		metrics.GetCapabilityErrors().Add(r.ctx, 1)
+		hist.credsRefused = credentialRefusal(capErr)
+		if gnmi.Transient(capErr) {
+			hist.capsFailures++
+			if hist.capsFailures < capsAttempts {
+				return fmt.Errorf("capabilities: %w", capErr)
+			}
+			if hist.capsFailures == capsAttempts {
+				capsNote = fmt.Sprintf("capabilities failed on %d attempts in a row (%v)", capsAttempts, capErr)
+			} else {
+				// An earlier connection without Capabilities worked, so this one
+				// did not redial.
+				capsNote = fmt.Sprintf("capabilities failed (%v)", capErr)
+				afterSync = true
+			}
+		}
+		r.logger.Log(r.ctx, hist.logLevel(), "gnmi capabilities failed", "policy", r.name, "host", t.Host, "error", capErr)
+		r.setState(t.Host, func(s *targetState) { s.LastError = "capabilities: " + capErr.Error() })
+	} else {
+		hist.capsFailures = 0
+		hist.credsWorked = true
 	}
 	profile := r.selectProfile(t, caps)
+	if capsNote != "" {
+		using := "using the _base profile"
+		if t.Profile != "" && profile.Name == t.Profile {
+			using = "keeping the pinned profile " + profile.Name + ", without negotiated encodings"
+		}
+		setupReason = capsNote + "; " + using
+		if afterSync {
+			setupReason += ", as on an earlier connection that worked"
+		}
+		record()
+	}
+	if profile.Device.Hostname != "" {
+		// The device's identity: no refused subscription is retried without it.
+		sess.PinPaths(profile.Device.Hostname)
+	}
 	defaults := config.MergeDefaults(&r.policy.Config.Defaults, t.OverrideDefaults)
 	// Capabilities vendor is the lowest-precedence discovered manufacturer source
 	// (chassis mfg-name and the policy default both override it in Translate).
@@ -284,7 +523,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			return
 		}
 		fetch := func(path string) (string, bool) {
-			n, gerr := sess.GetOnce(r.ctx, []string{path})
+			n, _, gerr := sess.GetOnce(r.ctx, []string{path})
 			if gerr != nil {
 				r.logger.Warn("asset_tag reference fetch failed", "policy", r.name, "host", t.Host, "path", path, "error", gerr)
 				return "", false
@@ -397,6 +636,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		}
 		r.runStore.UpdateRun(r.name, t.Host, run.ID, RunStatusCompleted, nil, len(entities))
 		first, mode := false, ""
+		r.markWorking(t.Host)
 		r.setState(t.Host, func(s *targetState) {
 			s.LastFlush = time.Now()
 			s.LastError = ""
@@ -419,13 +659,15 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 
 	switch mode {
 	case config.ModeGet:
+		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get" })
-		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
+		return r.deliverGet(t.Host, sess, profile, model, deb, flush, pollDone)
 	case config.ModeSample:
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if serr != nil {
 			return serr
 		}
+		setupDone(true)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "sample" })
 		return r.runOpenStream(t.Host, profile, sampleEvery, notes, errs, model, deb, flush)
 	case config.ModeOnChange:
@@ -433,6 +675,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if serr != nil {
 			return serr // explicit on_change: surface failure, do not degrade
 		}
+		setupDone(true)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
 		return r.runOpenStream(t.Host, profile, 0, notes, errs, model, deb, flush)
 	default: // auto — walk the ladder on subscribe rejection OR early stream failure
@@ -448,7 +691,9 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// data — surfaced by runOpenStream as errEarlyStreamFailure.
 		notes, errs, serr := sess.Subscribe(r.ctx, gnmi.OnChange, profile.SubscribePaths(), 0)
 		var ocReason string
+		var ocErr error
 		if serr == nil {
+			setupDone(true)
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "on_change"; s.FallbackReason = "" })
 			err := r.runOpenStream(t.Host, profile, 0, notes, errs, model, deb, flush)
 			// A non-early error (productive flap, or ctx-cancel returning nil) goes
@@ -456,18 +701,21 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 			if !errors.Is(err, errEarlyStreamFailure) {
 				return err
 			}
+			ocErr = err
 			ocReason = err.Error() // on_change unviable mid-stream → fall through to sample
 		} else {
+			ocErr = serr
 			ocReason = serr.Error()
 		}
 		if r.ctx.Err() != nil {
 			return nil // ctx cancelled during/after on_change attempt
 		}
 
-		r.logger.Info("on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
+		r.logger.Log(r.ctx, hist.stepDownLevel(ocErr), "on_change not available, using sample", "policy", r.name, "host", t.Host, "reason", ocReason)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		notes, errs, s2 := sess.Subscribe(r.ctx, gnmi.Sample, profile.SubscribePaths(), r.policy.Config.SampleIntervalMs)
 		if s2 == nil {
+			setupDone(true)
 			r.setState(t.Host, func(s *targetState) { s.ActiveMode = "sample"; s.FallbackReason = ocReason })
 			err := r.runOpenStream(t.Host, profile, sampleEvery, notes, errs, model, deb, flush)
 			if !errors.Is(err, errEarlyStreamFailure) {
@@ -478,7 +726,7 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		if r.ctx.Err() != nil {
 			return nil // ctx cancelled during/after sample attempt
 		}
-		r.logger.Info("sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
+		r.logger.Log(r.ctx, hist.stepDownLevel(s2), "sample not available, using get", "policy", r.name, "host", t.Host, "reason", s2)
 		metrics.GetModeFallbacks().Add(r.ctx, 1)
 		// Tear down the SAMPLE subscription before switching to Get on the same
 		// session — Subscribe/Close are the only other teardown points and Close is
@@ -486,8 +734,9 @@ func (r *Runner) runOnce(t config.Target, model *mapping.DeviceModel, deb *Debou
 		// producer/gRPC stream would keep retrying in the background for the entire
 		// GET fallback.
 		sess.StopSubscribe()
+		setupDone(false)
 		r.setState(t.Host, func(s *targetState) { s.ActiveMode = "get"; s.FallbackReason = s2.Error() })
-		return r.deliverGet(t.Host, sess, profile, model, deb, flush)
+		return r.deliverGet(t.Host, sess, profile, model, deb, flush, pollDone)
 	}
 }
 
@@ -563,7 +812,7 @@ func (r *Runner) streamLoop(host string, profile *mapping.Profile, pruneEvery ti
 			metrics.GetRemovalsBlocked().Add(r.ctx, int64(len(pruned)))
 		}
 		if trustworthy {
-			r.setState(host, func(s *targetState) { s.LastSync = time.Now() })
+			r.markSynced(host)
 		}
 		synced = true // initial dump complete — debounced flushes may proceed
 		deb.Trigger()
@@ -574,10 +823,9 @@ func (r *Runner) streamLoop(host string, profile *mapping.Profile, pruneEvery ti
 	// logic is shared by the errs-case and the notes-closed drain below.
 	earlyFailureErr := func(e error) error {
 		if !productive {
-			// Preserve the underlying stream error text (why ON_CHANGE/SAMPLE was
-			// rejected) while wrapping the sentinel so errors.Is still matches and
-			// the auto ladder can downgrade.
-			return fmt.Errorf("subscription failed before any data: %w: %v", errEarlyStreamFailure, e)
+			// Wrap both, so errors.Is still matches the sentinel for the auto
+			// ladder and status.Code reads the code the target refused with.
+			return fmt.Errorf("subscription failed before any data: %w: %w", errEarlyStreamFailure, e)
 		}
 		return e
 	}
@@ -612,7 +860,10 @@ func (r *Runner) streamLoop(host string, profile *mapping.Profile, pruneEvery ti
 				}
 				return nil
 			}
-			productive = true
+			if !productive {
+				productive = true
+				r.markDelivered(host)
+			}
 			notif.Add(r.ctx, 1)
 			n = r.filterNotification(n, profile) // B-1/M-2: drop non-curated updates and out-of-scope deletes
 			if len(n.Deletes) > 0 {
@@ -682,26 +933,37 @@ func (r *Runner) filterNotification(n gnmi.Notification, profile *mapping.Profil
 // paths. Each Get is an authoritative full view (keep=1), reconciled into the
 // shared model so a departed path drops out of the ingested snapshot — subject
 // to the same empty-view guard as streaming (a Get that returns no device
-// anchor must not wipe the model).
-func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Profile, model *mapping.DeviceModel, deb *Debouncer, flush func()) error {
+// anchor must not wipe the model). A path whose Get failed with a transient
+// code keeps the previous poll's entries instead; pollDone hears how many.
+func (r *Runner) deliverGet(host string, sess gnmi.Session, profile *mapping.Profile, model *mapping.DeviceModel,
+	deb *Debouncer, flush func(), pollDone func(carried int),
+) error {
 	paths := profile.SubscribePaths()
 	anchor := profile.Device.Hostname
 	ticker := time.NewTicker(time.Duration(r.policy.Config.GetIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
 	do := func() error {
-		n, err := sess.GetOnce(r.ctx, paths)
+		n, failed, err := sess.GetOnce(r.ctx, paths)
 		if err != nil {
 			return err
 		}
+		r.markDelivered(host)
 		metrics.GetNotifications().Add(r.ctx, 1)
 		model.Apply(r.filterNotification(n, profile))
+		var carried []string
+		for p, perr := range failed {
+			if gnmi.Transient(perr) {
+				carried = append(carried, p)
+			}
+		}
+		pollDone(model.Retain(carried))
 		trustworthy := anchor == "" || model.SeenInCycle(anchor)
 		pruned := model.EndCycle(1, trustworthy)
 		if len(pruned) > 0 {
 			metrics.GetRemovalsBlocked().Add(r.ctx, int64(len(pruned)))
 		}
 		if trustworthy {
-			r.setState(host, func(s *targetState) { s.LastSync = time.Now() })
+			r.markSynced(host)
 		}
 		flush()
 		return nil
@@ -781,6 +1043,9 @@ type TargetStatus struct {
 	// LastError carries the most recent error of any kind for the target —
 	// dial/TLS, Capabilities, stream, or ingest — so it is named generically.
 	LastError string `json:"last_error,omitempty"`
+	// DegradedReason says why the current session runs with less than the
+	// device offers. A clean connection setup clears it; a flush does not.
+	DegradedReason string `json:"degraded_reason,omitempty"`
 }
 
 // TargetStatuses returns a snapshot of all target states.
@@ -792,6 +1057,7 @@ func (r *Runner) TargetStatuses() []TargetStatus {
 		out = append(out, TargetStatus{
 			Host: host, ActiveMode: s.ActiveMode, FallbackReason: s.FallbackReason,
 			LastSync: s.LastSync, LastFlush: s.LastFlush, LastError: s.LastError,
+			DegradedReason: s.DegradedReason,
 		})
 	}
 	return out

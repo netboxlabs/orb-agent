@@ -53,7 +53,7 @@ gNMI discovery policies are broken into two subsections: `config` and `scope`.
 | mode | str | no | Delivery mode: `auto` (default), `on_change`, `sample`, or `get`. `auto` negotiates the best mode per target (`ON_CHANGE → SAMPLE → GET`). |
 | debounce_ms | int | no | Flush delay in ms after the last notification before a snapshot is ingested (default `2000`). |
 | sample_interval_ms | int | no | `SAMPLE` subscription interval in ms (default `300000` = 5m). |
-| get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). |
+| get_interval_ms | int | no | `GET` poll interval in ms (default `900000` = 15m). A path a poll fails on with a code that can clear on its own (`Unauthenticated`, `Unavailable`, `ResourceExhausted`, `DeadlineExceeded` or `Aborted`) keeps its previous values for that poll; any other code drops it for that poll. |
 | probe_timeout_ms | int | no | How long a sweep waits for one address to answer (default `3000`). Too low and a whole subnet reports as absent with no failure signal. |
 | rescan_interval_ms | int | no | Re-probe addresses this policy is not subscribed to, picking up devices that were down when the policy was applied. Unset or `0` disables it; a non-zero value below `60000` is rejected. |
 | send_credentials_to_unverified_targets | bool | no | Permit a CIDR or range target to carry a password when TLS does not verify the server. Off by default. See [Credentials and ranges](#credentials-and-ranges). |
@@ -150,7 +150,7 @@ in a range whose contents are not known in advance.
 | password | str | no | gNMI password. `${ENV_VAR}` syntax is supported. Set it to `""` to block the scope's, as with `username`. |
 | tls | map | no | TLS settings: `skip_verify` (keep TLS, don't verify the cert), `insecure` (opt-in PLAINTEXT, off by default), `ca`/`cert`/`key` (optional mTLS). TLS with system root CAs is the default. |
 | mode | str | no | Per-target delivery mode override (`auto`/`on_change`/`sample`/`get`). |
-| profile | str | no | Pin a gNMI profile (auto-detected when omitted). |
+| profile | str | no | Pin a gNMI profile. When omitted it is matched from the device's `Capabilities` answer (see [Connection setup and delivery mode](#connection-setup-and-delivery-mode)). |
 | origin | str | no | gNMI path origin (default `openconfig`); set `""` for origin-less paths. |
 | netbox_id | int | no | Pin discovery to an existing NetBox device ID. A device whose hostname is empty or only whitespace is then sent without a name, so the pinned device keeps its own; without `netbox_id` such a device is not sent at all. Silently ignored when `host` is a CIDR or range: one NetBox device ID cannot describe a range. |
 | override_defaults | map | no | Per-target overrides of the policy `defaults`. Also takes `position` and `face`, which are valid only here (see [Rack placement](#rack-placement)). |
@@ -304,7 +304,38 @@ orb:
               netbox_id: 42              # honoured: a bare address, not a range
 ```
 
-## Delivery mode in the log
+## Connection setup and delivery mode
+
+Each connection starts with the gNMI `Capabilities` call, which picks the profile
+and the encodings. It has 30 seconds to answer. If it fails with a code that can
+clear on its own (`Unauthenticated`, `Unavailable`, `ResourceExhausted`,
+`DeadlineExceeded` or `Aborted`), the target reconnects rather than settle for
+the `_base` profile. After three such failures in a row it goes on with `_base`,
+for devices that never answer `Capabilities` but still stream; once such a
+connection has worked (synced, or ingested something the device sent), later
+connections go on with `_base` at once. Any other failure, `Unimplemented`
+included, uses `_base` at once. A target with a pinned `profile` redials the
+same way but keeps that profile when it goes on; what it goes without are the
+negotiated encodings and the vendor `Capabilities` would have reported.
+
+Before subscribing, the agent probes the subscription paths with `Get`, because a
+strict device refuses a whole subscription over one path it does not support.
+The probe asks about the paths eight at a time, then asks again one at a time
+the paths left without an answer, unless none got a definite answer, and has 30
+seconds in all. A path
+the device refuses is left out. A path it answers `NotFound` for, modelled but
+empty so far, stays in, and so does one whose probe got no answer. When the
+device refuses the login itself (`Unauthenticated`), the paths are not asked
+about one by one and all stay in. The result holds for the rest of the
+connection, and the next connection probes again.
+
+If the device then refuses the subscription before sending anything, with a
+code other than those that can clear on their own, the paths it answered
+`NotFound` for are dropped and the subscription is retried once without them.
+Paths whose probe got no answer, and the profile's hostname path, are never
+dropped. If the retry is served, the dropped paths stay out for the rest of the
+connection; if it is refused too, they were not the cause, so they stay in and
+the original refusal is what the mode step-down below sees.
 
 In `auto` mode the agent tries `ON_CHANGE` first and steps down to `SAMPLE`, then
 `GET`, for devices that do not offer streaming. Many platforms serve `GET` and
@@ -319,3 +350,27 @@ INFO  discovery flushed                      policy=… host=… active_mode=sam
 
 The second line is the one that confirms the target is discovering. After it the
 target stays quiet, since the line is per connection rather than per flush.
+
+A target that loses its connection reconnects after a delay that doubles from
+1 second up to 30 seconds. The delay starts again from 1 second after a
+connection that stayed up past its first sync or ingest for at least 30 seconds,
+or for the current delay if that is longer, so a device that drops right after
+each sync is not redialled every second. A target whose `Capabilities` call refuses the credentials
+(`Unauthenticated` or `PermissionDenied`), and that has not answered
+`Capabilities`, synced or ingested since the policy started, waits up to 15 minutes
+instead, and logs the refusal at `WARN` once and at `DEBUG` after that; its
+mode step-down lines drop to `DEBUG` with it.
+
+`/api/v1/status` reports each target's `active_mode`, `fallback_reason`,
+`last_error` and `degraded_reason`. `degraded_reason` says why the current
+session runs on less than the device offers, and lists each reason that applies:
+
+- `Capabilities` failed with a code that can clear on its own and the connection
+  went on without it, with `_base` or the pinned profile;
+- the probe got no answer for some of the paths a stream subscribed to;
+- the last `GET` poll kept values from the poll before, for paths that failed
+  with a code that can clear on its own.
+
+The first two hold for the connection and are cleared when the next connection
+sets up cleanly. The last is recomputed on every poll, so a clean poll clears
+it. A successful ingest clears none of them.

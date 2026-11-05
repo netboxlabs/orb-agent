@@ -649,11 +649,13 @@ func (s *allRejectSession) Subscribe(_ context.Context, _ gnmi.Mode, _ []string,
 	return nil, nil, errors.New("mode not supported by this test target")
 }
 
-func (s *allRejectSession) GetOnce(_ context.Context, _ []string) (gnmi.Notification, error) {
-	return s.getResult, nil
+func (s *allRejectSession) GetOnce(_ context.Context, _ []string) (gnmi.Notification, map[string]error, error) {
+	return s.getResult, nil, nil
 }
 func (s *allRejectSession) GetConfig(_ context.Context) ([]byte, error) { return nil, nil }
 func (s *allRejectSession) StopSubscribe()                              { atomic.AddInt32(&s.stopSubs, 1) }
+func (s *allRejectSession) InconclusivePaths() []string                 { return nil }
+func (s *allRejectSession) PinPaths(...string)                          {}
 func (s *allRejectSession) Close() error                                { return nil }
 
 type allRejectDialer struct{ sess *allRejectSession }
@@ -884,7 +886,7 @@ func TestDeliverGetReflushesOnDebounce(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_ = r.deliverGet("h:1", fake, base, mapping.NewDeviceModel(), deb, flush)
+		_ = r.deliverGet("h:1", fake, base, mapping.NewDeviceModel(), deb, flush, func(int) {})
 		close(done)
 	}()
 

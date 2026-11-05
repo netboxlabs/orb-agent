@@ -141,6 +141,57 @@ func (m *DeviceModel) BeginSync() {
 	m.cycle++
 }
 
+// Retain stamps every entry at the given request paths as seen in the current
+// cycle, so the next EndCycle keeps it, and returns how many it stamped. A
+// request path's "*" list key matches any value.
+func (m *DeviceModel) Retain(requestPaths []string) int {
+	kept := 0
+	for p := range m.values {
+		for _, rp := range requestPaths {
+			if matchRequestPath(rp, p) {
+				m.lastSeen[p] = m.cycle
+				kept++
+				break
+			}
+		}
+	}
+	return kept
+}
+
+// matchRequestPath reports whether path is the leaf a request path names, with
+// each "*" key value matching any value.
+func matchRequestPath(request, path string) bool {
+	for {
+		i := strings.Index(request, "=*]")
+		if i < 0 {
+			return request == path
+		}
+		prefix := request[:i+1] // through the "="
+		if !strings.HasPrefix(path, prefix) {
+			return false
+		}
+		end := keyValueEnd(path[len(prefix):])
+		if end < 0 {
+			return false
+		}
+		request = request[i+3:]
+		path = path[len(prefix)+end+1:]
+	}
+}
+
+// keyValueEnd returns the index of the "]" that closes a key value: the first
+// one followed by "/", "[" or the end. The value itself may hold "/" or "]",
+// as in "Ethernet1/1" or "PSU[1]"; values are written without escaping, so
+// one holding "]/" or "][" cannot be told apart and does not match.
+func keyValueEnd(s string) int {
+	for j := 0; j < len(s); j++ {
+		if s[j] == ']' && (j+1 == len(s) || s[j+1] == '/' || s[j+1] == '[') {
+			return j
+		}
+	}
+	return -1
+}
+
 // Snapshot returns a copy of the current path→value map.
 func (m *DeviceModel) Snapshot() map[string]any {
 	out := make(map[string]any, len(m.values))
