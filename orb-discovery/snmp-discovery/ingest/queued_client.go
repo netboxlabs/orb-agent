@@ -108,10 +108,12 @@ func (c *QueuedClient) shutdownSignaled() bool {
 
 func (c *QueuedClient) execute(req *ingestRequest) {
 	// A caller that stopped waiting while its request was queued has had its
-	// answer, so the request is not sent: a stopped policy sends nothing.
-	if err := req.ctx.Err(); err != nil {
+	// answer, so the request is not sent: a stopped policy sends nothing. A
+	// caller that hears from the queue first is told the same: why its context
+	// ended.
+	if req.ctx.Err() != nil {
 		select {
-		case req.result <- ingestResult{err: err}:
+		case req.result <- ingestResult{err: context.Cause(req.ctx)}:
 		default:
 		}
 		return

@@ -42,6 +42,10 @@ var schedulerStopTimeout = 10 * time.Second
 // down.
 var newScheduler = gocron.NewScheduler
 
+// startWalk starts a crawl's walk on its own goroutine. A variable so tests can
+// run a walk to its end before the crawl waits for it.
+var startWalk = func(walk func()) { go walk() }
+
 // Define a custom type for the context key
 type contextKey string
 
@@ -988,11 +992,11 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 	// even if we have already returned due to context cancellation. The goroutine is
 	// bounded by snmpTimeout (set on the SNMP client), so it is not a permanent leak.
 	generic := newWalkHandoff(log)
-	go func() {
+	startWalk(func() {
 		defer sendWalkPanic(generic)
 		oids, err := host.Walk(ctx, genericOIDs)
 		generic.deliver(walkResult{oids, err})
-	}()
+	})
 
 	var oids mapping.ObjectIDValueMap
 	select {
@@ -1007,6 +1011,10 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 			// Logged once, with its stack, by the crawl.
 			r.countDiscoveryFailure(policyName, "panic")
 			return nil, nil, res.err
+		case res.err != nil && r.ctx.Err() != nil:
+			// The walk ended with the stop and was heard first: the crawl was
+			// stopped, as in the branch above, not failed.
+			return nil, nil, context.Cause(r.ctx)
 		case res.err != nil:
 			log.Warn("error crawling host", "error", res.err)
 			r.countDiscoveryFailure(policyName, res.err.Error())
@@ -1023,11 +1031,11 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 		if len(vendorOIDs) > 0 {
 			log.Debug("phase 2 walk", "vendor", vendor, "oid_count", len(vendorOIDs))
 			vendorWalk := newWalkHandoff(log)
-			go func() {
+			startWalk(func() {
 				defer sendWalkPanic(vendorWalk)
 				out, err := host.Walk(ctx, vendorOIDs)
 				vendorWalk.deliver(walkResult{out, err})
-			}()
+			})
 			select {
 			case <-ctx.Done():
 				vendorWalk.abandon()
@@ -1046,6 +1054,9 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 					// A panic fails the crawl, as one in the first phase does.
 					r.countDiscoveryFailure(policyName, "panic")
 					return nil, nil, res.err
+				case res.err != nil && r.ctx.Err() != nil:
+					// Stopped, as in the first phase.
+					return nil, nil, context.Cause(r.ctx)
 				case res.err != nil:
 					log.Warn("phase 2 walk failed; continuing with generic only", "vendor", vendor, "error", res.err)
 				default:

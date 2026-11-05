@@ -559,3 +559,39 @@ func TestCallerWaitingForRoomIsToldItsCause(t *testing.T) {
 	_, err = client.Ingest(ctx, nil)
 	assert.ErrorIs(t, err, stopped)
 }
+
+// unheardContext has ended, but its Done channel never fires, so a caller
+// waiting on it takes whatever the queue answers: the case in which the caller
+// hears from the queue before it hears of its own context.
+type unheardContext struct {
+	context.Context
+}
+
+func (unheardContext) Done() <-chan struct{} { return nil }
+
+// A caller whose request the queue drops, its context having ended while the
+// request was queued, is told why its context ended, even when it hears from
+// the queue first.
+func TestDroppedRequestGivesItsCause(t *testing.T) {
+	inner := &turnClient{release: make(chan struct{}), sending: make(chan struct{}, 4)}
+	client, err := NewQueuedClient(inner, 1, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+
+	stopped := errors.New("run interrupted: policy stopped")
+	ended, cancel := context.WithCancelCause(context.Background())
+	cancel(stopped)
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(unheardContext{ended}, nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, stopped)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dropped request was never answered")
+	}
+	assert.Zero(t, inner.sent.Load(), "the request was not sent")
+}

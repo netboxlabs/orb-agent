@@ -204,6 +204,158 @@ func testStopEndsABusyCrawl(t *testing.T, vendorOID string, stop func(m *Manager
 	assert.Equal(t, reason, infos[0]["error"], "the stop's cause, as the run gives")
 }
 
+// cancellingWalker stops the policy when walked, then returns its context's
+// error at once, as the real client does once its context ends.
+type cancellingWalker struct {
+	stop func()
+}
+
+func (cancellingWalker) Connect() error { return nil }
+func (cancellingWalker) Close() error   { return nil }
+
+func (w cancellingWalker) Walk(ctx context.Context, _ string, _ int) (map[string]snmp.PDU, error) {
+	w.stop()
+	return nil, ctx.Err()
+}
+
+// A walk that ends with its policy's stop, or with the process shutting down,
+// is a stopped crawl, whichever the crawl hears of first: the walk's error or
+// the stop. Walks run to their end before the crawl waits, so both are ready
+// when it looks and the runtime picks either; the stop is repeated so that
+// both are taken.
+func TestWalkEndingWithTheStopIsAStoppedCrawl(t *testing.T) {
+	previous := startWalk
+	startWalk = func(walk func()) { walk() }
+	t.Cleanup(func() { startWalk = previous })
+
+	for _, phase := range []struct {
+		name      string
+		vendorOID string
+	}{
+		{"in its first walk", ""},
+		{"in its vendor walk", ".1.3.6.1.4.1.2636.1.1.1.2.21"},
+	} {
+		for _, stop := range []struct {
+			name     string
+			shutdown bool
+			reason   string
+		}{
+			{"the policy is deleted", false, "run interrupted: policy stopped"},
+			{"the process shuts down", true, "context canceled"},
+		} {
+			t.Run(phase.name+", "+stop.name, func(t *testing.T) {
+				logs := &lockedBuffer{}
+				var r *Runner
+				var stopRun func()
+				dials := 0
+				factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+					dials++
+					if phase.vendorOID != "" && dials == 1 {
+						rows := agentRows(host)
+						rows[oidSysObjectID] = snmp.PDU{Type: gosnmp.ObjectIdentifier, Value: phase.vendorOID}
+						return &rowWalker{rows: rows}, nil
+					}
+					return cancellingWalker{stop: stopRun}, nil
+				}
+				// At info, which is all the test reads: debug costs most of the time.
+				logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+				r, store := newPolicyRunner(t, singleTargetPolicy, factory, &recordingClient{}, logger)
+				reader := useTestMeter(t)
+				logs.Reset()
+
+				const stops = 200
+				for range stops {
+					parent, shutdown := context.WithCancel(context.Background())
+					r.ctx, r.cancel = context.WithCancelCause(context.WithValue(parent, policyKey, "p1"))
+					stopRun = func() { r.cancel(errPolicyStopped) }
+					if stop.shutdown {
+						stopRun = shutdown
+					}
+					dials = 0
+					r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
+					shutdown()
+				}
+
+				assert.Empty(t, discoveryFailures(t, reader))
+				assert.Zero(t, discoverySuccesses(t, reader))
+				assert.Empty(t, recordsAt(t, logs, "WARN"))
+				assert.Empty(t, recordsAt(t, logs, "ERROR"))
+				assert.Len(t, stopLines(t, logs, "SNMP crawl stopped with its policy"), stops)
+				for _, run := range store.GetRunsForTarget("p1", "192.0.2.1", 161) {
+					assert.Equal(t, RunStatusFailed, run.Status)
+					assert.Equal(t, stop.reason, run.Reason)
+				}
+			})
+		}
+	}
+}
+
+// A walk the crawl's own timeout ends is no stopped crawl, whichever the crawl
+// hears of first: the walk's error or its deadline. In its first walk the crawl
+// fails; in its vendor walk it fails, or goes on with its first walk's tables,
+// as it always has.
+func TestWalkEndingWithItsOwnTimeoutIsNoStop(t *testing.T) {
+	previous := startWalk
+	startWalk = func(walk func()) { walk() }
+	t.Cleanup(func() { startWalk = previous })
+
+	for _, phase := range []struct {
+		name      string
+		vendorOID string
+	}{
+		{"in its first walk", ""},
+		{"in its vendor walk", ".1.3.6.1.4.1.2636.1.1.1.2.21"},
+	} {
+		t.Run(phase.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			logger := slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+			client := &recordingClient{}
+			dials, timedWalks := 0, 0
+			factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+				dials++
+				if phase.vendorOID != "" && dials == 1 {
+					rows := agentRows(host)
+					rows[oidSysObjectID] = snmp.PDU{Type: gosnmp.ObjectIdentifier, Value: phase.vendorOID}
+					return &rowWalker{rows: rows}, nil
+				}
+				timedWalks++
+				return silentWalker{}, nil
+			}
+			r, store := newPolicyRunner(t, singleTargetPolicy, factory, client, logger)
+			// Time enough for the first walk to answer, when it is not the one
+			// the timeout ends.
+			r.timeout = 20 * time.Millisecond
+			reader := useTestMeter(t)
+			logs.Reset()
+
+			const crawls = 30
+			for range crawls {
+				dials = 0
+				r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
+			}
+
+			require.Equal(t, crawls, timedWalks, "every crawl reached the walk its timeout ends")
+			failures := discoveryFailures(t, reader)
+			for _, reason := range failures {
+				assert.Equal(t, "context deadline exceeded", reason)
+			}
+			assert.Empty(t, stopLines(t, logs, "SNMP crawl stopped with its policy"))
+			if phase.vendorOID == "" {
+				assert.Len(t, failures, crawls)
+				assert.Len(t, recordsAt(t, logs, "ERROR"), crawls)
+				for _, run := range store.GetRunsForTarget("p1", "192.0.2.1", 161) {
+					assert.Equal(t, RunStatusFailed, run.Status)
+					assert.Equal(t, "context deadline exceeded", run.Reason)
+				}
+				return
+			}
+			// Each crawl either failed or went on and sent what its first
+			// walk found.
+			assert.Equal(t, crawls, len(failures)+len(client.devicesOf("192.0.2.1")))
+		})
+	}
+}
+
 // A scan still probing when its policy stops ends at once, and crawls nothing,
 // not even the host it had already found. Its run fails, with one info line and
 // no warning or error.
