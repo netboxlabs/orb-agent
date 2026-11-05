@@ -128,7 +128,8 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), runner.task, gocron.WithSingletonMode(gocron.LimitModeReschedule))
 	}
 	if err != nil {
-		return nil, err
+		// The scheduler runs a goroutine from creation; no runner owns it now.
+		return nil, errors.Join(err, s.Shutdown())
 	}
 	runner.timeout = time.Duration(policy.Config.Timeout) * time.Minute
 	if runner.timeout == 0 {
@@ -405,7 +406,7 @@ func (r *Runner) run() {
 		"run_id":      run.ID,
 	}))
 	if err != nil && r.ingestCtx.Err() != nil {
-		r.logger.Info("ingest stopped with its policy", "policy", policyName, "entity_count", len(entities))
+		r.logger.Info("ingest stopped with its policy", "policy", policyName, "entity_count", len(entities), "error", err)
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, len(entities))
 	} else if err != nil {
 		r.logger.Error("error ingesting entities", "error", err, "policy", policyName, "entity_count", len(entities))

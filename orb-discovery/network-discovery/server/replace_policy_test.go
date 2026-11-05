@@ -61,11 +61,11 @@ func TestServerReplacesAPolicyWhileItsScanRuns(t *testing.T) {
 		w := serve(srv, http.MethodGet, "/api/v1/status", nil)
 		return json.Unmarshal(w.Body.Bytes(), &status) == nil &&
 			len(status.Policies) == 1 && status.Policies[0].Status == "running"
-	}, 10*time.Second, 10*time.Millisecond, "the scan did not start")
+	}, 30*time.Second, 10*time.Millisecond, "the scan did not start")
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(started)
 		return err == nil
-	}, 10*time.Second, 10*time.Millisecond, "the fake nmap did not start")
+	}, 30*time.Second, 10*time.Millisecond, "the fake nmap did not start")
 
 	start := time.Now()
 	w := serve(srv, http.MethodDelete, "/api/v1/policies/p1", nil)

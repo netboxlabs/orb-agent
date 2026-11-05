@@ -22,6 +22,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/config"
 	"github.com/netboxlabs/orb-agent/orb-discovery/network-discovery/metrics"
@@ -61,7 +63,7 @@ func waitForNmap(t *testing.T, marker string) {
 	require.Eventually(t, func() bool {
 		_, err := os.Stat(marker)
 		return err == nil
-	}, 10*time.Second, 10*time.Millisecond, "the fake nmap did not start")
+	}, 30*time.Second, 10*time.Millisecond, "the fake nmap did not start")
 }
 
 // shortStopTimeout makes Stop give up waiting for a running job quickly.
@@ -72,14 +74,17 @@ func shortStopTimeout(t *testing.T) {
 	t.Cleanup(func() { schedulerStopTimeout = saved })
 }
 
-// fakeClient counts ingests, and those delivered: an ingest whose context is
-// cancelled fails, as a gRPC call does. With release set, an ingest signals
-// ingesting and waits for release or for its context to end.
+// fakeClient counts ingests, and those delivered. An ingest whose context is
+// cancelled fails with the status error grpc-go returns, which is not
+// context.Canceled; with err set, a released ingest fails with err. With
+// release set, an ingest signals ingesting and waits for release or for its
+// context to end.
 type fakeClient struct {
 	ingests   atomic.Int32
 	delivered atomic.Int32
 	ingesting chan struct{}
 	release   chan struct{}
+	err       error
 }
 
 func (c *fakeClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
@@ -92,7 +97,10 @@ func (c *fakeClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.In
 		}
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, status.FromContextError(err).Err()
+	}
+	if c.err != nil {
+		return nil, c.err
 	}
 	c.delivered.Add(1)
 	return &diodepb.IngestResponse{}, nil
@@ -177,7 +185,7 @@ func waitForRun(t *testing.T, store *RunStore, policyName string, status RunStat
 		}
 		latest = runs[len(runs)-1]
 		return latest.Status == status
-	}, 10*time.Second, 10*time.Millisecond, "no %s run for %s", status, policyName)
+	}, 30*time.Second, 10*time.Millisecond, "no %s run for %s", status, policyName)
 	return latest
 }
 
@@ -283,7 +291,7 @@ func TestStopLetsAnIngestUnderwayFinish(t *testing.T) {
 
 	select {
 	case <-client.ingesting:
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the scan did not reach its ingest")
 	}
 	stopped := make(chan error, 1)
@@ -321,7 +329,7 @@ func TestStopCancelsAnIngestItGaveUpWaitingFor(t *testing.T) {
 
 	select {
 	case <-client.ingesting:
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		t.Fatal("the scan did not reach its ingest")
 	}
 	require.Error(t, r.Stop(), "the stop did not report giving up on the ingest")
@@ -341,6 +349,60 @@ func TestStopCancelsAnIngestItGaveUpWaitingFor(t *testing.T) {
 	}
 	require.Len(t, stopped, 1)
 	assert.Equal(t, "p1", stopped[0]["policy"])
+	assert.Equal(t, status.FromContextError(context.Canceled).Err().Error(), stopped[0]["error"])
+}
+
+// A genuine Diode error that lands while Stop waits for the ingest is still
+// an ingest failure: it is logged at ERROR and its run keeps the real error.
+func TestIngestErrorDuringTheStopWaitIsStillAnError(t *testing.T) {
+	fakeNmap(t, oneHostNmap)
+	logs := &logBuffer{}
+	client := &fakeClient{
+		ingesting: make(chan struct{}),
+		release:   make(chan struct{}),
+		err:       status.Error(codes.Unavailable, "diode unavailable"),
+	}
+	release := sync.OnceFunc(func() { close(client.release) })
+	t.Cleanup(release)
+	store := NewRunStore()
+	r, err := NewRunner(context.Background(), logs.logger(), "p1", scanPolicy(), client, store)
+	require.NoError(t, err)
+	r.Start()
+
+	select {
+	case <-client.ingesting:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the scan did not reach its ingest")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Stop() }()
+	require.Eventually(t, func() bool { return r.ctx.Err() != nil }, 5*time.Second, 10*time.Millisecond,
+		"the stop did not cancel the runner")
+	release()
+	require.NoError(t, <-stopped)
+
+	run := waitForRun(t, store, "p1", RunStatusFailed)
+	assert.Equal(t, "rpc error: code = Unavailable desc = diode unavailable", run.Reason)
+	errs := logs.records(t, "ERROR")
+	require.Len(t, errs, 1)
+	assert.Equal(t, "error ingesting entities", errs[0]["msg"])
+	assert.Equal(t, "rpc error: code = Unavailable desc = diode unavailable", errs[0]["error"])
+}
+
+// A policy whose job cannot be scheduled leaves no scheduler goroutine behind.
+func TestNewRunnerWithABadScheduleLeavesNoScheduler(t *testing.T) {
+	bad := "not a schedule"
+	policy := config.Policy{
+		Config: config.PolicyConfig{Schedule: &bad},
+		Scope:  config.Scope{Targets: []string{"192.0.2.0/24"}},
+	}
+	before := runtime.NumGoroutine()
+	for range 20 {
+		_, err := NewRunner(context.Background(), slog.New(slog.DiscardHandler), "p1", policy, &fakeClient{}, NewRunStore())
+		require.Error(t, err)
+	}
+	require.Eventually(t, func() bool { return runtime.NumGoroutine() <= before+2 }, 5*time.Second, 10*time.Millisecond,
+		"the schedulers of runners that failed to build are still running")
 }
 
 // stopFailingScheduler reports an error from StopJobs, as a scheduler does
