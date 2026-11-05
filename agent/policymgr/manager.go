@@ -12,6 +12,7 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
@@ -578,10 +579,15 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
+		// The backend's error can quote the policy's data, which carries its
+		// secrets resolved here: a field of the wrong type is quoted in a
+		// type error. The secrets are masked before the error is logged and
+		// before it becomes the reason the heartbeat reports to Fleet.
+		reason := redact.Values(err.Error(), resolvedValues(payload.Data, pd.Data))
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
-			"backend", pd.Backend, "error", err)
+			"backend", pd.Backend, "error", reason)
 		pd.State = policies.FailedToApply
-		pd.BackendErr = err.Error()
+		pd.BackendErr = reason
 	} else {
 		a.logger.Info("policy applied successfully", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend)
@@ -899,4 +905,36 @@ func secretsFailureReason(err error) string {
 		reason = reason[:maxSecretsFailureReasonLen-len(truncationMarker)] + truncationMarker
 	}
 	return reason
+}
+
+// resolvedValues returns the strings in resolved that differ from raw at the
+// same place: the values a policy's secret references resolved to, since a
+// reference is resolved as a whole string value.
+func resolvedValues(raw, resolved any) []string {
+	var values []string
+	var walk func(raw, resolved any)
+	walk = func(raw, resolved any) {
+		switch r := resolved.(type) {
+		case string:
+			if s, ok := raw.(string); !ok || s != r {
+				values = append(values, r)
+			}
+		case map[string]any:
+			m, _ := raw.(map[string]any)
+			for k, v := range r {
+				walk(m[k], v)
+			}
+		case []any:
+			s, _ := raw.([]any)
+			for i, v := range r {
+				var at any
+				if i < len(s) {
+					at = s[i]
+				}
+				walk(at, v)
+			}
+		}
+	}
+	walk(raw, resolved)
+	return values
 }

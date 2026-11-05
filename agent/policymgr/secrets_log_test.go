@@ -39,6 +39,24 @@ import (
 // distinctive, so a match in the log can only be the secret.
 const resolvedSecret = "Pl41n-r3solved-credential-7f3a"
 
+// policyBackends are the backends the agent sends a policy's body to, with
+// the executable each one starts and its registration.
+var policyBackends = []struct {
+	backend    string
+	executable string
+	register   func() bool
+}{
+	{"device_discovery", "device-discovery", devicediscovery.Register},
+	{"network_discovery", "network-discovery", networkdiscovery.Register},
+	{"snmp_discovery", "snmp-discovery", snmpdiscovery.Register},
+	{"gnmi_discovery", "gnmi-discovery", gnmidiscovery.Register},
+	{"snmp_telemetry", "snmp-telemetry", snmptelemetry.Register},
+	{"gnmi_telemetry", "gnmi-telemetry", gnmitelemetry.Register},
+	{"worker", "orb-worker", worker.Register},
+	{"pktvisor", "pktvisord", pktvisor.Register},
+	{"opentelemetry_infinity", "otlpinf", opentelemetryinfinity.Register},
+}
+
 // TestManagedPolicySecretsNeverReachTheLog applies, to every backend the agent
 // sends a policy's body to, a policy whose credential comes from a secret
 // reference, through the policy manager and a real secrets manager. The
@@ -56,21 +74,7 @@ func TestManagedPolicySecretsNeverReachTheLog(t *testing.T) {
 	mgr, err := policymgr.New(logger, startDoppler(t, logger, "SNMP_COMMUNITY", resolvedSecret), config.Config{})
 	require.NoError(t, err)
 
-	for _, tc := range []struct {
-		backend    string
-		executable string
-		register   func() bool
-	}{
-		{"device_discovery", "device-discovery", devicediscovery.Register},
-		{"network_discovery", "network-discovery", networkdiscovery.Register},
-		{"snmp_discovery", "snmp-discovery", snmpdiscovery.Register},
-		{"gnmi_discovery", "gnmi-discovery", gnmidiscovery.Register},
-		{"snmp_telemetry", "snmp-telemetry", snmptelemetry.Register},
-		{"gnmi_telemetry", "gnmi-telemetry", gnmitelemetry.Register},
-		{"worker", "orb-worker", worker.Register},
-		{"pktvisor", "pktvisord", pktvisor.Register},
-		{"opentelemetry_infinity", "otlpinf", opentelemetryinfinity.Register},
-	} {
+	for _, tc := range policyBackends {
 		t.Run(tc.backend, func(t *testing.T) {
 			posted := startBackend(t, logger, mgr, tc.backend, tc.executable, tc.register)
 			from := logs.len()
@@ -164,12 +168,32 @@ func startBackend(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager
 	t.Helper()
 	var mu sync.Mutex
 	var posted bytes.Buffer
+	startBackendAnswering(t, logger, mgr, name, executable, register, func(_ http.ResponseWriter, body []byte) bool {
+		mu.Lock()
+		posted.Write(body)
+		mu.Unlock()
+		return false
+	})
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return posted.String()
+	}
+}
+
+// startBackendAnswering is startBackend with the answer to a posted policy
+// left to onPolicy: it is passed the body, and when it reports that it wrote
+// the response the server writes nothing more.
+func startBackendAnswering(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool, onPolicy func(w http.ResponseWriter, body []byte) bool,
+) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/policies" {
 			body, _ := io.ReadAll(r.Body)
-			mu.Lock()
-			posted.Write(body)
-			mu.Unlock()
+			if onPolicy(w, body) {
+				return
+			}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -200,12 +224,6 @@ func startBackend(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), config.ContextKey("agent_id"), "agent-1"))
 	t.Cleanup(cancel)
 	require.NoError(t, be.Start(ctx, cancel))
-
-	return func() string {
-		mu.Lock()
-		defer mu.Unlock()
-		return posted.String()
-	}
 }
 
 // renderedLogs renders every record, at every level, in the console's text
