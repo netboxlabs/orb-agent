@@ -161,10 +161,13 @@ func standsAlone(s string, from, to int, v string) bool {
 // splitHeads returns v's heads cut inside a character, as a backend quotes
 // them that cuts a value by bytes (yaml.v3 quotes a long value's first 7) and
 // answers in JSON: encoding/json replaces each byte of the cut character with
-// U+FFFD.
+// U+FFFD. Only cuts within v's first longRun bytes count: one further in
+// follows a head of longRun bytes or more, which mask masks on its own, and
+// a form for each would cost a pass over the text per byte of every
+// character in v.
 func splitHeads(v string) []string {
 	var heads []string
-	for i := 0; i < len(v); {
+	for i := 0; i < len(v) && i < longRun; {
 		_, size := utf8.DecodeRuneInString(v[i:])
 		for k := 1; k < size; k++ {
 			heads = append(heads, v[:i]+strings.Repeat(string(utf8.RuneError), k))

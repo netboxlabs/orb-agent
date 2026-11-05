@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // encodedJSON encodes v as Go's encoding/json does by default, escaping <, >
@@ -107,6 +108,15 @@ func TestValues(t *testing.T) {
 			text:   "line 4: cannot unmarshal !!str `" + jsonRoundTrip(t, "Hello€world123"[:7]) + "...` into int",
 			values: []string{"Hello€world123"},
 			want:   "line 4: cannot unmarshal !!str `********...` into int",
+		},
+		{
+			// The first 11 bytes are a head of longRun or more, masked as
+			// such; the U+FFFD that stand for the cut character are none of
+			// its bytes.
+			name:   "the first bytes of a value, cut inside a character past its first 7",
+			text:   "quoted `" + jsonRoundTrip(t, "Hello-world€tail"[:13]) + "...`",
+			values: []string{"Hello-world€tail"},
+			want:   "quoted `********��...`",
 		},
 		{
 			name:   "a tail of exactly 7 bytes",
@@ -267,5 +277,27 @@ func TestCutValues(t *testing.T) {
 	}
 	if got := Values("refused: xk", []string{"k3Y-9xQz"}); got != "refused: xk" {
 		t.Errorf("Values masks the end of a text that is not cut: %q", got)
+	}
+}
+
+// TestSplitHeadsCutWithinTheFirstLongRunBytes keeps the forms of a value cut
+// inside a character to those Values needs: a cut further in leaves a head of
+// longRun bytes or more before it, which Values masks on its own. A value of
+// many multibyte characters would otherwise give a form per byte of each,
+// each as long as the value before it.
+func TestSplitHeadsCutWithinTheFirstLongRunBytes(t *testing.T) {
+	// "密" is 3 bytes: the cuts inside its occurrences at bytes 0, 3 and 6.
+	heads := splitHeads(strings.Repeat("密", 341))
+	if len(heads) != 6 {
+		t.Errorf("%d heads, want 6", len(heads))
+	}
+	for _, h := range heads {
+		if kept := strings.TrimRight(h, string(utf8.RuneError)); len(kept) >= longRun {
+			t.Errorf("a head cut after %d whole bytes: %q", len(kept), h)
+		}
+	}
+	// "€" starts at byte 7, after a head of longRun bytes.
+	if heads := splitHeads("abcdefg€"); len(heads) != 0 {
+		t.Errorf("heads cut after the first longRun bytes: %q", heads)
 	}
 }
