@@ -659,16 +659,20 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	return nil
 }
 
-// StopPolicy stops the policy and removes it. A policy that does not stop
-// cleanly is removed all the same: its scans and crawls have been told to stop,
-// and keeping it would refuse a new version under its name.
+// outlastedWaitWarning is logged when a policy's job is still running as the
+// stop's wait for it ends: the job was cancelled, and sends nothing more.
+const outlastedWaitWarning = "policy stopped; a job outlasted the stop's wait, and any send it had under way was cancelled"
+
+// StopPolicy stops the policy and removes it. A policy whose job outlasts the
+// stop's wait is removed all the same: the job has been cancelled, and keeping
+// the policy would refuse a new version under its name.
 func (m *Manager) StopPolicy(name string) {
 	r, ok := m.policies[name]
 	if !ok {
 		return
 	}
 	if err := r.Stop(); err != nil {
-		m.logger.Warn("policy did not stop cleanly; it is removed all the same", "policy", name, "error", err)
+		m.logger.Warn(outlastedWaitWarning, "policy", name, "error", err)
 	}
 	delete(m.policies, name)
 }

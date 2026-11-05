@@ -29,8 +29,9 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
 )
 
-// errPolicyStopped is the reason a run its policy's stop cut short gives. The
-// process shutting down cancels runs plainly, and they give "context canceled".
+// errPolicyStopped is the reason recorded for a run its policy's stop cut
+// short. Process shutdown cancels plainly, so its runs record "context
+// canceled".
 var errPolicyStopped = errors.New("run interrupted: policy stopped")
 
 // schedulerStopTimeout is how long a stop waits for the policy's running jobs,
@@ -289,12 +290,17 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 		return err
 	}
 
-	// A scan cut short because the policy stopped crawls nothing, and asks the
-	// scheduler, which is stopping, for nothing.
-	if r.ctx.Err() != nil {
+	// A scan its policy's stop cut short is a stopped run.
+	endStopped := func() {
 		cause := context.Cause(r.ctx)
 		log.Info("SNMP probe scan stopped with its policy", withPanics("error", cause, "responsive_target_count", len(responsive))...)
 		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(cause), len(responsive))
+	}
+
+	// A scan stopped by now crawls nothing, and asks the scheduler, which is
+	// stopping, for nothing.
+	if r.ctx.Err() != nil {
+		endStopped()
 		return
 	}
 
@@ -315,23 +321,13 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 	r.pruneHostJobs(keyPrefix, liveIDs)
 
 	// A scan that ran out of its own time still crawls the hosts it found,
-	// and its run fails saying how far it got.
+	// and its run fails saying how far it got. One the stop cuts short from
+	// here on ends below.
 	var timedOut error
-	if ctxErr := ctx.Err(); ctxErr != nil {
+	if ctxErr := ctx.Err(); errors.Is(ctxErr, context.DeadlineExceeded) {
 		timedOut = failure(fmt.Errorf("%w (started probing %d of %d addresses, %d responded; raise timeout to probe them all)",
 			ctxErr, probed.Load(), len(targets), len(responsive)))
 		log.Warn("SNMP probe scan interrupted", withPanics("error", timedOut, "responsive_target_count", len(responsive))...)
-	}
-
-	if len(responsive) == 0 {
-		if timedOut != nil {
-			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, 0)
-			return
-		}
-		log.Warn("no hosts responded to SNMP probe", withPanics()...)
-		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
-			RunStatusFailed, failure(fmt.Errorf("no hosts responded to SNMP probe")), 0)
-		return
 	}
 
 	var err error
@@ -364,6 +360,24 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 
 		r.recordHostJob(jobKey, newJob.ID())
 		liveIDs[newJob.ID()] = struct{}{} // keep snapshot current for remaining iterations
+	}
+
+	// A stop that landed since the check above leaves the crawls just
+	// scheduled unrun, so the scan is a stopped run all the same.
+	if r.ctx.Err() != nil {
+		endStopped()
+		return
+	}
+
+	if len(responsive) == 0 {
+		if timedOut != nil {
+			r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, timedOut, 0)
+			return
+		}
+		log.Warn("no hosts responded to SNMP probe", withPanics()...)
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID,
+			RunStatusFailed, failure(fmt.Errorf("no hosts responded to SNMP probe")), 0)
+		return
 	}
 
 	if timedOut != nil {
@@ -672,6 +686,15 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 	ctx, cancel := context.WithTimeout(r.ctx, r.timeout)
 	defer cancel()
 
+	// A crawl the stop cut short counts as neither a success nor a failure.
+	endStopped := func(stopped context.Context, entityCount int, err error) bool {
+		if !r.endStoppedCrawl(stopped, log, targetHost, targetPort, run.ID, entityCount, err) {
+			return false
+		}
+		discovered = false
+		return true
+	}
+
 	entities, primaryHits, err := r.queryTarget(ctx, entry, target)
 	if err != nil {
 		var walkPanic *panicError
@@ -679,7 +702,7 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 			r.failRunOnPanic(log, targetHost, targetPort, run.ID, walkPanic)
 			return
 		}
-		if r.endStoppedCrawl(r.ctx, log, targetHost, targetPort, run.ID, 0, err) {
+		if endStopped(r.ctx, 0, err) {
 			return
 		}
 		log.Error("error querying target", "error", err)
@@ -690,6 +713,10 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 	log.Info("SNMP crawl complete", "entity_count", len(entities))
 
 	if len(entities) == 0 {
+		// Nothing to send is no reason to call a stopped crawl complete.
+		if endStopped(r.ctx, 0, nil) {
+			return
+		}
 		log.Info("no entities to ingest")
 		// Update run status to completed even if no entities
 		r.runStore.UpdateRun(policyName, targetHost, targetPort, run.ID, RunStatusCompleted, nil, 0)
@@ -738,9 +765,10 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 
 	// Nothing is sent for a policy that has stopped: it may already have been
 	// replaced by a new version, and this crawl read the device with the old
-	// one's settings. An ingest already under way is left to end, unless the
-	// stop's wait for it ends first.
-	if r.endStoppedCrawl(r.ctx, log, targetHost, targetPort, run.ID, len(entities), nil) {
+	// one's settings. Once past this check the ingest counts as under way,
+	// chunking included, and is left to end unless the stop's wait for it
+	// ends first.
+	if endStopped(r.ctx, len(entities), nil) {
 		return
 	}
 	resp, err := r.ingest(log, entities, diode.WithIngestMetadata(diode.Metadata{
@@ -750,7 +778,7 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 	// Whether the stop ended the ingest is the ingest context's to say: the
 	// SDK reports a cancelled request as a gRPC status, not as the context's
 	// error, and a failure Diode reports during the stop's wait is still one.
-	if err != nil && r.endStoppedCrawl(r.ingestCtx, log, targetHost, targetPort, run.ID, len(entities), err) {
+	if err != nil && endStopped(r.ingestCtx, len(entities), err) {
 		return
 	}
 	if err != nil {
@@ -766,11 +794,9 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 	}
 }
 
-// endStoppedCrawl ends a crawl once stopped, the context it was working
-// under, has ended, and reports whether it did. The run fails with the stop's
-// cause, since the crawl did not finish, but with one info line rather than an
-// error: the stop cut it short. err, when the crawl has one, says how far it
-// got.
+// endStoppedCrawl ends the crawl if stopped has ended, and reports whether it
+// did. The run fails with stopped's cause and one info line, not an error; err,
+// if any, goes on that line to say how far the crawl got.
 func (r *Runner) endStoppedCrawl(stopped context.Context, log *slog.Logger, host string, port uint16, runID string, entityCount int, err error) bool {
 	if stopped.Err() == nil {
 		return false
@@ -922,8 +948,8 @@ func sendWalkPanic(h *walkHandoff) {
 // shared Runner, which serves targets concurrently — so the caller can
 // thread them into PruneNestedRefs for this target only.
 func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Target) ([]diode.Entity, map[*diode.IPAddress]bool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, nil, err
+	if ctx.Err() != nil {
+		return nil, nil, context.Cause(ctx)
 	}
 
 	targetDefaults := r.resolveTargetDefaults(target)
@@ -973,7 +999,7 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 	case <-ctx.Done():
 		generic.abandon()
 		r.countTimeout(policyName, ctx.Err())
-		return nil, nil, ctx.Err()
+		return nil, nil, context.Cause(ctx)
 	case res := <-generic.ch:
 		var walkPanic *panicError
 		switch {
@@ -1012,7 +1038,7 @@ func (r *Runner) queryTarget(ctx context.Context, entry int, target config.Targe
 				// queryTarget exits, so we deliberately don't record
 				// latency here.
 				r.countTimeout(policyName, ctx.Err())
-				return nil, nil, ctx.Err()
+				return nil, nil, context.Cause(ctx)
 			case res := <-vendorWalk.ch:
 				var walkPanic *panicError
 				switch {

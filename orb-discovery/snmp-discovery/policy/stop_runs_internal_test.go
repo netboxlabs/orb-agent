@@ -201,7 +201,7 @@ func testStopEndsABusyCrawl(t *testing.T, vendorOID string, stop func(m *Manager
 	infos := recordsAt(t, logs, "INFO")
 	require.Len(t, infos, 1)
 	assert.Equal(t, "SNMP crawl stopped with its policy", infos[0]["msg"])
-	assert.Equal(t, "context canceled", infos[0]["error"], "the walk's own error")
+	assert.Equal(t, reason, infos[0]["error"], "the stop's cause, as the run gives")
 }
 
 // A scan still probing when its policy stops ends at once, and crawls nothing,
@@ -274,35 +274,111 @@ func (h stoppingHandler) WithGroup(name string) slog.Handler {
 
 // A crawl whose policy stops once its walks and mapping are done, before it
 // starts sending, sends nothing: the device was read with the settings of a
-// policy that may already have been replaced. Its run is a stopped one.
+// policy that may already have been replaced. Its run is a stopped one, with
+// something to send or not, and counts as neither a success nor a failure.
 func TestCrawlStoppedBeforeIngestSendsNothing(t *testing.T) {
-	logs := &lockedBuffer{}
-	client := &recordingClient{}
-	var r *Runner
-	// Stop's first step: the ingest context stays open while Stop waits for
-	// the crawl.
-	logger := slog.New(stoppingHandler{jsonLogger(logs).Handler(), func() { r.cancel(errPolicyStopped) }})
-	r, store := newPolicyRunner(t, singleTargetPolicy, newFakeAgents(time.Second).dial, client, logger)
-	reader := useTestMeter(t)
-	logs.Reset()
+	for _, tc := range []struct {
+		name string
+		rows map[string]snmp.PDU
+	}{
+		{"with something to send", agentRows("192.0.2.1")},
+		{"with nothing to send", map[string]snmp.PDU{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			client := &recordingClient{}
+			factory := func(string, uint16, int, time.Duration, *config.Authentication, *slog.Logger) (snmp.Walker, error) {
+				return &rowWalker{rows: tc.rows}, nil
+			}
+			var r *Runner
+			// Stop's first step: the ingest context stays open while Stop waits
+			// for the crawl.
+			logger := slog.New(stoppingHandler{jsonLogger(logs).Handler(), func() { r.cancel(errPolicyStopped) }})
+			r, store := newPolicyRunner(t, singleTargetPolicy, factory, client, logger)
+			reader := useTestMeter(t)
+			logs.Reset()
 
-	r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
+			r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
 
-	assert.Empty(t, client.devicesOf("192.0.2.1"), "nothing ingested")
-	runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
-	require.Len(t, runs, 1)
-	assert.Equal(t, RunStatusFailed, runs[0].Status)
-	assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
-	assert.Empty(t, discoveryFailures(t, reader))
-	assert.Empty(t, recordsAt(t, logs, "ERROR"))
-	var stopLines []map[string]any
+			assert.Empty(t, client.devicesOf("192.0.2.1"), "nothing ingested")
+			runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
+			require.Len(t, runs, 1)
+			assert.Equal(t, RunStatusFailed, runs[0].Status)
+			assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
+			assert.Empty(t, discoveryFailures(t, reader))
+			assert.Zero(t, discoverySuccesses(t, reader))
+			assert.Empty(t, recordsAt(t, logs, "ERROR"))
+			assert.NotContains(t, messages(t, logs, "INFO"), "no entities to ingest")
+			stopLines := stopLines(t, logs, "SNMP crawl stopped with its policy")
+			require.Len(t, stopLines, 1)
+			assert.Equal(t, "run interrupted: policy stopped", stopLines[0]["error"])
+		})
+	}
+}
+
+// stopLines returns the info records logged with msg.
+func stopLines(t *testing.T, logs *lockedBuffer, msg string) []map[string]any {
+	t.Helper()
+	var lines []map[string]any
 	for _, record := range recordsAt(t, logs, "INFO") {
-		if record["msg"] == "SNMP crawl stopped with its policy" {
-			stopLines = append(stopLines, record)
+		if record["msg"] == msg {
+			lines = append(lines, record)
 		}
 	}
-	require.Len(t, stopLines, 1)
-	assert.Equal(t, "run interrupted: policy stopped", stopLines[0]["error"])
+	return lines
+}
+
+// stoppingJobsScheduler stops the policy when the scan asks for its jobs,
+// which it does after its own stop check, before it schedules any crawl.
+type stoppingJobsScheduler struct {
+	gocron.Scheduler
+	stop func()
+}
+
+func (s stoppingJobsScheduler) Jobs() []gocron.Job {
+	s.stop()
+	return s.Scheduler.Jobs()
+}
+
+// A scan whose policy stops after its stop check, while it schedules the
+// crawls of what it found, is a stopped run all the same: those crawls never
+// run. So is one that found nothing, which is not reported as finding nothing.
+func TestScanStoppedWhileSchedulingIsAStoppedRun(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		answers    string
+		responsive int
+	}{
+		{"a host answered", "192.0.2.1", 1},
+		{"no host answered", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
+				if host == tc.answers {
+					return &rowWalker{rows: agentRows(host)}, nil
+				}
+				return failingWalker{}, nil
+			}
+			var cancel context.CancelCauseFunc
+			r := scanRunner(t, stoppingJobsScheduler{notStartedScheduler(t), func() { cancel(errPolicyStopped) }}, factory, nil)
+			r.ctx, cancel = context.WithCancelCause(r.ctx)
+			t.Cleanup(func() { cancel(nil) })
+			logs := &lockedBuffer{}
+			r.logger = jsonLogger(logs)
+
+			r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.1", Port: 161}, {Host: "192.0.2.2", Port: 161}}, "192.0.2.1-192.0.2.2")
+
+			runs := r.runStore.GetRunsForTarget("p1", "192.0.2.1-192.0.2.2", 161)
+			require.Len(t, runs, 1)
+			assert.Equal(t, RunStatusFailed, runs[0].Status)
+			assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
+			assert.Empty(t, recordsAt(t, logs, "WARN"))
+			assert.NotContains(t, messages(t, logs, "INFO"), "SNMP probe scan complete")
+			lines := stopLines(t, logs, "SNMP probe scan stopped with its policy")
+			require.Len(t, lines, 1)
+			assert.EqualValues(t, tc.responsive, lines[0]["responsive_target_count"])
+		})
+	}
 }
 
 // gatedClient holds each ingest until the test answers it or the ingest's
@@ -364,14 +440,19 @@ func withStopTimeout(t *testing.T, d time.Duration) {
 func TestStopLetsAnIngestUnderWayEnd(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
+		chunkLimit int
 		answer     error
 		wantStatus RunStatus
 		wantReason string
 	}{
-		{"Diode takes it", nil, RunStatusCompleted, ""},
-		{"Diode refuses it", status.Error(codes.Unavailable, "diode unavailable"), RunStatusFailed, "rpc error: code = Unavailable desc = diode unavailable"},
+		{"Diode takes it", 0, nil, RunStatusCompleted, ""},
+		{"Diode takes every request of a target sent in several", 1, nil, RunStatusCompleted, ""},
+		{"Diode refuses it", 0, status.Error(codes.Unavailable, "diode unavailable"), RunStatusFailed, "rpc error: code = Unavailable desc = diode unavailable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.chunkLimit > 0 {
+				withChunkLimit(t, tc.chunkLimit)
+			}
 			logs := &lockedBuffer{}
 			client := newGatedClient()
 			m, _ := fakeNetworkManager(t, jsonLogger(logs), client, newFakeAgents(time.Second).dial)
@@ -391,12 +472,21 @@ func TestStopLetsAnIngestUnderWayEnd(t *testing.T) {
 			case <-time.After(stopBound):
 				t.Error("the stop did not cancel the policy's context")
 			}
-			select {
-			case client.answer <- tc.answer:
-			case <-time.After(stopBound):
-				t.Error("the stop did not leave the ingest under way to end")
+			// Every request the crawl sends while the stop waits is answered.
+			requests := 1
+			for answering := true; answering; {
+				select {
+				case client.answer <- tc.answer:
+				case <-client.sending:
+					requests++
+				case <-stopped:
+					answering = false
+				case <-time.After(stopBound):
+					t.Error("the stop did not leave the ingest under way to end")
+					<-stopped
+					answering = false
+				}
 			}
-			<-stopped
 			if t.Failed() {
 				return
 			}
@@ -407,7 +497,14 @@ func TestStopLetsAnIngestUnderWayEnd(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, runs[0].Status)
 			assert.Equal(t, tc.wantReason, runs[0].Reason)
 			assert.Equal(t, tc.answer == nil, len(client.devicesOf("192.0.2.10")) == 1, "sent only if Diode took it")
+			if tc.answer == nil {
+				assert.Equal(t, requests, client.sentBatches(), "every request sent")
+			}
+			if tc.chunkLimit > 0 {
+				assert.GreaterOrEqual(t, requests, 2)
+			}
 			assert.Zero(t, client.late.Load())
+			assert.EqualValues(t, 1, discoverySuccesses(t, reader), "the crawl ended as it would have")
 			assert.NotContains(t, messages(t, logs, "INFO"), "SNMP crawl stopped with its policy")
 			assert.Empty(t, recordsAt(t, logs, "WARN"), "the stop ended cleanly")
 			assert.Empty(t, discoveryFailures(t, reader))
@@ -464,17 +561,69 @@ func TestStopCancelsAnIngestThatOutlastsItsWait(t *testing.T) {
 			assert.Zero(t, client.late.Load(), "nothing sent once the stop ended the ingest")
 			assert.Empty(t, recordsAt(t, logs, "ERROR"))
 			assert.Empty(t, discoveryFailures(t, reader))
-			var stopLines []map[string]any
-			for _, record := range recordsAt(t, logs, "INFO") {
-				if record["msg"] == "SNMP crawl stopped with its policy" {
-					stopLines = append(stopLines, record)
-				}
-			}
-			require.Len(t, stopLines, 1)
-			assert.Contains(t, stopLines[0]["error"], tc.wantInError)
-			assert.Contains(t, stopLines[0]["error"], "entities already sent")
+			assert.Zero(t, discoverySuccesses(t, reader))
+			warns := recordsAt(t, logs, "WARN")
+			require.Len(t, warns, 1)
+			assert.Equal(t, "policy stopped; a job outlasted the stop's wait, and any send it had under way was cancelled", warns[0]["msg"])
+			lines := stopLines(t, logs, "SNMP crawl stopped with its policy")
+			require.Len(t, lines, 1)
+			assert.Contains(t, lines[0]["error"], tc.wantInError)
+			assert.Contains(t, lines[0]["error"], "entities already sent")
 		})
 	}
+}
+
+// The process shutting down ends an ingest under way at once, so the stops
+// that follow have nothing to wait for. The run gives "context canceled", with
+// one info line, no warning and no error, and nothing more is sent.
+func TestShutdownEndsAnIngestUnderWay(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		chunkLimit int
+	}{
+		{"in one request", 0},
+		{"in several requests", 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.chunkLimit > 0 {
+				withChunkLimit(t, tc.chunkLimit)
+			}
+			logs := &lockedBuffer{}
+			client := newGatedClient()
+			m, shutdown := fakeNetworkManager(t, jsonLogger(logs), client, newFakeAgents(time.Second).dial)
+			reader := useTestMeter(t)
+			startPolicies(t, m, busyHostPolicy)
+			client.awaitSending(t)
+			logs.Reset()
+
+			start := time.Now()
+			shutdown()
+			m.Stop()
+			assert.Less(t, time.Since(start), stopBound, "the stop waited for the ingest")
+
+			var runs []*Run
+			require.Eventually(t, func() bool {
+				runs = m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
+				return len(runs) == 1 && runs[0].Status != RunStatusRunning
+			}, stopBound, 10*time.Millisecond)
+			assert.Equal(t, RunStatusFailed, runs[0].Status)
+			assert.Equal(t, "context canceled", runs[0].Reason)
+			assert.Zero(t, client.late.Load(), "nothing sent once shutdown ended the ingest")
+			assert.Empty(t, recordsAt(t, logs, "WARN"))
+			assert.Empty(t, recordsAt(t, logs, "ERROR"))
+			assert.Empty(t, discoveryFailures(t, reader))
+			assert.Zero(t, discoverySuccesses(t, reader))
+			lines := stopLines(t, logs, "SNMP crawl stopped with its policy")
+			require.Len(t, lines, 1)
+		})
+	}
+}
+
+// sentBatches returns how many ingests the client took.
+func (c *recordingClient) sentBatches() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.batches)
 }
 
 // A crawl or scan that starts once its policy has stopped does nothing and
@@ -595,6 +744,7 @@ func TestStopPolicyRemovesAPolicyThatDidNotStopCleanly(t *testing.T) {
 	assert.Error(t, r.ctx.Err(), "its scans and crawls were told to stop")
 	warns := recordsAt(t, logs, "WARN")
 	require.Len(t, warns, 1)
+	assert.Equal(t, "policy stopped; a job outlasted the stop's wait, and any send it had under way was cancelled", warns[0]["msg"])
 	assert.Equal(t, "p1", warns[0]["policy"])
 	assert.Equal(t, gocron.ErrStopSchedulerTimedOut.Error(), warns[0]["error"])
 }
