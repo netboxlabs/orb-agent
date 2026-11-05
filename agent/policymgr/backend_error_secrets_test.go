@@ -92,6 +92,7 @@ func assertReasonLeavesOutSecret(t *testing.T, mgr policymgr.PolicyManager, poli
 	require.Equal(t, policies.FailedToApply, stored.State, "the backend refused the policy: %s", stored.BackendErr)
 	assert.Contains(t, stored.BackendErr, "cannot unmarshal", "the reason still names the type error")
 	assert.Contains(t, stored.BackendErr, "into int", "the reason still names the type wanted")
+	assert.Contains(t, stored.BackendErr, "the secret reference at config.retries", "the reason names the field")
 	assert.NotContains(t, stored.BackendErr, quoted, "the reason, sent in every heartbeat, leaves out the value")
 }
 

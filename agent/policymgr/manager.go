@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
@@ -583,9 +586,9 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		// secrets resolved here: a field of the wrong type is quoted in a
 		// type error. The secrets are masked before the error is logged and
 		// before it becomes the reason the heartbeat reports to Fleet.
-		reason := redact.Values(err.Error(), resolvedValues(payload.Data, pd.Data))
+		logged, reason := backendRefusal(err.Error(), resolvedValues(payload.Data, pd.Data))
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
-			"backend", pd.Backend, "error", reason)
+			"backend", pd.Backend, "error", logged)
 		pd.State = policies.FailedToApply
 		pd.BackendErr = reason
 	} else {
@@ -893,11 +896,13 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 // can embed raw HTTP response bodies, and the reason rides in every heartbeat.
 const maxSecretsFailureReasonLen = 1024
 
+// truncationMarker ends a reason cut to its bound.
+const truncationMarker = "... (truncated)"
+
 // secretsFailureReason builds the operator-facing reason for a failed secret
 // resolution. It contains secret references from the policy body and provider
 // error messages, never resolved secret values.
 func secretsFailureReason(err error) string {
-	const truncationMarker = "... (truncated)"
 	reason := "failed to resolve policy secrets: " + err.Error()
 	if len(reason) > maxSecretsFailureReasonLen {
 		// keep the TOTAL length within maxSecretsFailureReasonLen, marker included,
@@ -907,22 +912,109 @@ func secretsFailureReason(err error) string {
 	return reason
 }
 
-// resolvedValues returns the strings in resolved that differ from raw at the
-// same place: the values a policy's secret references resolved to, since a
-// reference is resolved as a whole string value.
-func resolvedValues(raw, resolved any) []string {
+// maxBackendErrLen bounds a backend's refusal kept as the policy's reason, as
+// maxSecretsFailureReasonLen bounds a secrets failure: the reason rides every
+// heartbeat. maxMaskedErrLen bounds how much of the refusal is masked and
+// logged: masking takes the refusal's length times the length of the policy's
+// resolved values, under the backend's apply mutex.
+const (
+	maxBackendErrLen = 1024
+	maxMaskedErrLen  = 8 << 10
+)
+
+// maskedFieldsNamed is how many fields a refusal names whose values it masks;
+// it counts the others.
+const maskedFieldsNamed = 3
+
+// backendRefusal masks a policy's resolved values in text, a backend's error,
+// and names the fields of the policy whose values it masked: a backend's
+// error locates the value by a line of the YAML the agent sent it, which the
+// user never sees. It returns the text to log, at most maxMaskedErrLen of the
+// error, and the policy's reason, at most maxBackendErrLen of it.
+func backendRefusal(text string, resolved []resolvedValue) (logged, reason string) {
+	text, cutLogged := cutAt(text, maxMaskedErrLen)
 	var values []string
-	var walk func(raw, resolved any)
-	walk = func(raw, resolved any) {
+	for _, r := range resolved {
+		if !slices.Contains(values, r.value) {
+			values = append(values, r.value)
+		}
+	}
+	masked := redact.Values(text, values)
+
+	var fields []string
+	if masked != text {
+		for _, v := range values {
+			if redact.Values(text, []string{v}) == text {
+				continue
+			}
+			for _, r := range resolved {
+				if r.value == v {
+					fields = append(fields, r.path)
+				}
+			}
+		}
+		slices.Sort(fields)
+	}
+	var note string
+	if len(fields) > 0 {
+		var more string
+		if len(fields) > maskedFieldsNamed {
+			more = fmt.Sprintf(" and %d more", len(fields)-maskedFieldsNamed)
+			fields = fields[:maskedFieldsNamed]
+		}
+		note = " (" + redact.MaskedSecret + " is the value of the secret reference at " + strings.Join(fields, ", ") + more + ")"
+	}
+
+	logged, reason = masked, masked
+	if cutLogged {
+		logged += truncationMarker
+	}
+	if cutLogged || len(reason) > maxBackendErrLen {
+		reason, _ = cutAt(reason, maxBackendErrLen-len(truncationMarker))
+		reason += truncationMarker
+	}
+	return logged + note, reason + note
+}
+
+// cutAt returns s cut to at most n bytes at the start of a character, and
+// whether it was cut.
+func cutAt(s string, n int) (string, bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n], true
+}
+
+// resolvedValue is a value a policy's secret reference resolved to, and the
+// path in the policy's data of the field that held the reference.
+type resolvedValue struct {
+	path  string
+	value string
+}
+
+// resolvedValues returns the strings in resolved that differ from raw at the
+// same place, with their paths: the values a policy's secret references
+// resolved to, since a reference is resolved as a whole string value.
+func resolvedValues(raw, resolved any) []resolvedValue {
+	var values []resolvedValue
+	var walk func(path string, raw, resolved any)
+	walk = func(path string, raw, resolved any) {
 		switch r := resolved.(type) {
 		case string:
 			if s, ok := raw.(string); !ok || s != r {
-				values = append(values, r)
+				values = append(values, resolvedValue{path: path, value: r})
 			}
 		case map[string]any:
 			m, _ := raw.(map[string]any)
 			for k, v := range r {
-				walk(m[k], v)
+				at := k
+				if path != "" {
+					at = path + "." + k
+				}
+				walk(at, m[k], v)
 			}
 		case []any:
 			s, _ := raw.([]any)
@@ -931,10 +1023,10 @@ func resolvedValues(raw, resolved any) []string {
 				if i < len(s) {
 					at = s[i]
 				}
-				walk(at, v)
+				walk(fmt.Sprintf("%s[%d]", path, i), at, v)
 			}
 		}
 	}
-	walk(raw, resolved)
+	walk("", raw, resolved)
 	return values
 }
