@@ -518,7 +518,7 @@ func TestIngestPanicLeavesTheProcessRunning(t *testing.T) {
 		require.NoError(t, client.Close())
 		return
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestIngestPanicLeavesTheProcessRunning$")
+	cmd := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$")
 	// The race runtime otherwise waits a second before the child exits.
 	cmd.Env = append(os.Environ(), panicChildEnv+"=1", "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
 	out, err := cmd.CombinedOutput()
@@ -640,6 +640,10 @@ func TestIngestPanicIsLoggedWhenTheCallerHasGone(t *testing.T) {
 	client, err := NewQueuedClient(inner, 1, jsonLogger(logs))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	// Registered after Close's cleanup so it runs first: a failed assertion
+	// must not leave Close waiting on the stalled ingest.
+	release := sync.OnceFunc(func() { close(inner.release) })
+	t.Cleanup(release)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	gone := make(chan error, 1)
@@ -647,10 +651,16 @@ func TestIngestPanicIsLoggedWhenTheCallerHasGone(t *testing.T) {
 		_, err := client.Ingest(ctx, nil)
 		gone <- err
 	}()
-	<-inner.started
+	select {
+	case <-inner.started:
+	case err := <-gone:
+		t.Fatalf("the ingest returned without reaching the inner client: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the ingest never reached the inner client")
+	}
 	cancel()
 	require.ErrorIs(t, <-gone, context.Canceled)
-	close(inner.release)
+	release()
 
 	require.Eventually(t, func() bool { return len(logs.errorRecords(t)) > 0 }, 5*time.Second, 10*time.Millisecond)
 	errs := logs.errorRecords(t)
