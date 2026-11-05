@@ -41,6 +41,16 @@ const oneHostNmap = `cat <<'EOF'
 </nmaprun>
 EOF`
 
+// noHostsNmap prints the XML of a scan that found no hosts, with a warning on
+// stderr as nmap often writes.
+const noHostsNmap = `echo 'Warning: 192.0.2.10 did not respond' >&2
+cat <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<nmaprun scanner="nmap">
+<runstats><finished exit="success"/><hosts up="0" down="1" total="1"/></runstats>
+</nmaprun>
+EOF`
+
 // fakeNmap puts a shell script named nmap first on PATH, so a scan runs it
 // instead of nmap and nothing touches the network. The script creates the
 // returned marker file when it starts.
@@ -442,6 +452,57 @@ func TestStopBetweenScanAndIngestSendsNothing(t *testing.T) {
 	require.Len(t, skipped, 1)
 	assert.Equal(t, "p1", skipped[0]["policy"])
 	assert.Equal(t, "run interrupted: policy stopped", skipped[0]["reason"])
+}
+
+// A policy that stops once its scan has returned is a stopped run however the
+// scan ended: a scan that found no hosts is not a completed discovery.
+func TestStopAfterAScanWithNoHostsIsAStoppedRun(t *testing.T) {
+	fakeNmap(t, noHostsNmap)
+	reader := useTestMeter(t)
+	logs := &logBuffer{}
+	// "run finished with warnings" is logged as soon as the scan returns.
+	pause := &pausingHandler{
+		Handler: slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}),
+		msg:     "run finished with warnings",
+		reached: make(chan struct{}, 1),
+		proceed: make(chan struct{}),
+	}
+	proceed := sync.OnceFunc(func() { close(pause.proceed) })
+	t.Cleanup(proceed)
+	client := &fakeClient{}
+	store := NewRunStore()
+	r, err := NewRunner(context.Background(), slog.New(pause), "p1", scanPolicy(), client, store)
+	require.NoError(t, err)
+	r.Start()
+
+	select {
+	case <-pause.reached:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the scan did not return")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Stop() }()
+	waitForStop(t, r)
+	proceed()
+	require.NoError(t, <-stopped)
+
+	runs := store.GetRunsForPolicy("p1")
+	require.Len(t, runs, 1)
+	assert.Equal(t, RunStatusFailed, runs[0].Status)
+	assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
+	assert.Zero(t, sumOf(t, reader, "discovery_success"), "a stopped scan counted as a successful discovery")
+	assert.Zero(t, sumOf(t, reader, "discovery_failure"))
+	assert.Zero(t, client.ingests.Load())
+	assert.Empty(t, logs.records(t, "ERROR"))
+	var stoppedRecords []map[string]any
+	for _, record := range logs.records(t, "INFO") {
+		if record["msg"] == "nmap scan stopped with its policy" {
+			stoppedRecords = append(stoppedRecords, record)
+		}
+	}
+	require.Len(t, stoppedRecords, 1)
+	assert.Equal(t, "p1", stoppedRecords[0]["policy"])
+	assert.NotContains(t, stoppedRecords[0], "error", "the scan returned no error to log")
 }
 
 // A genuine Diode error that lands while Stop waits for the ingest is still

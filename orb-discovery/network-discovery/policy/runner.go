@@ -301,13 +301,18 @@ func (r *Runner) run() {
 	if len(*warnings) > 0 {
 		r.logger.Warn("run finished with warnings", "warnings", fmt.Sprintf("%v", *warnings))
 	}
-	if err != nil {
-		// A scan cut short because its policy stopped is not a failed discovery.
-		if r.ctx.Err() != nil {
-			r.logger.Info("nmap scan stopped with its policy", "policy", policyName, "error", err)
-			r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, 0)
-			return
+	// A scan whose policy stopped is neither a failed nor a successful
+	// discovery, however it ended.
+	if r.ctx.Err() != nil {
+		attrs := []any{"policy", policyName}
+		if err != nil {
+			attrs = append(attrs, "error", err)
 		}
+		r.logger.Info("nmap scan stopped with its policy", attrs...)
+		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, 0)
+		return
+	}
+	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			r.logger.Warn("nmap scan timed out; consider increasing policy timeout",
 				"timeout", r.timeout,
