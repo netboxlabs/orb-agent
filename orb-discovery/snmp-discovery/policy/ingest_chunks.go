@@ -67,7 +67,12 @@ func (r *Runner) ingest(log *slog.Logger, entities []diode.Entity, opts ...diode
 	var errs []string
 	sent := 0
 	for i, chunk := range chunks {
-		resp, err := r.client.Ingest(r.ctx, chunk, opts...)
+		// Nothing more is sent once a stop has ended the ingest.
+		var resp *diodepb.IngestResponse
+		err := r.ingestCtx.Err()
+		if err == nil {
+			resp, err = r.client.Ingest(r.ingestCtx, chunk, opts...)
+		}
 		if err != nil {
 			if len(chunks) > 1 {
 				err = fmt.Errorf("request %d of %d failed, %d of %d entities already sent: %w",

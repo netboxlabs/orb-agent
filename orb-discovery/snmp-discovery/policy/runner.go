@@ -29,6 +29,18 @@ import (
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/targets"
 )
 
+// errPolicyStopped is the reason a run its policy's stop cut short gives. The
+// process shutting down cancels runs plainly, and they give "context canceled".
+var errPolicyStopped = errors.New("run interrupted: policy stopped")
+
+// schedulerStopTimeout is how long a stop waits for the policy's running jobs,
+// gocron's default. A variable so tests can shorten it.
+var schedulerStopTimeout = 10 * time.Second
+
+// newScheduler makes a policy's scheduler. A variable so tests can see it shut
+// down.
+var newScheduler = gocron.NewScheduler
+
 // Define a custom type for the context key
 type contextKey string
 
@@ -55,7 +67,9 @@ type expandedTargetGroup struct {
 type Runner struct {
 	scheduler        gocron.Scheduler
 	ctx              context.Context
-	cancel           context.CancelFunc // ends ctx, which every scan and crawl derives from
+	cancel           context.CancelCauseFunc // ends ctx, which every scan and crawl derives from
+	ingestCtx        context.Context         // bounds sending to Diode, which a stop ends only once its wait does
+	cancelIngest     context.CancelCauseFunc
 	client           diode.Client
 	logger           *slog.Logger
 	timeout          time.Duration
@@ -81,10 +95,10 @@ type Runner struct {
 }
 
 // NewRunner returns a new policy runner
-func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig *config.Mapping, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever, runStore *RunStore) (*Runner, error) {
+func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, ClientFactory snmp.ClientFactory, mappingConfig *config.Mapping, manufacturers data.ManufacturerRetriever, deviceLookup data.DeviceRetriever, runStore *RunStore) (_ *Runner, err error) {
 	logger = logger.With("policy", name)
 	// A backstop: runs and scans recover their own panics and fail their run.
-	s, err := gocron.NewScheduler(gocron.WithGlobalJobOptions(gocron.WithEventListeners(
+	s, err := newScheduler(gocron.WithStopTimeout(schedulerStopTimeout), gocron.WithGlobalJobOptions(gocron.WithEventListeners(
 		gocron.AfterJobRunsWithPanic(func(_ uuid.UUID, job string, recovered any) {
 			logger.Error("recovered from a panic in a job", "job", job,
 				"error", fmt.Errorf("panic: %v", recovered), "stack", string(debug.Stack()))
@@ -92,6 +106,13 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 	if err != nil {
 		return nil, err
 	}
+	// The scheduler's goroutine is already running: a policy refused below
+	// shuts it down rather than leaving it for the life of the process.
+	defer func() {
+		if err != nil {
+			_ = s.Shutdown()
+		}
+	}()
 
 	runner := &Runner{
 		scheduler:      s,
@@ -174,12 +195,20 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			return nil, err
 		}
 	}
-	// Made last, so a policy refused above leaves no context behind.
-	runner.ctx, runner.cancel = context.WithCancel(context.WithValue(ctx, policyKey, name))
+	// Made last, so a policy refused above leaves no context behind. Sending
+	// has its own context, so a stop can leave an ingest under way to end.
+	parent := context.WithValue(ctx, policyKey, name)
+	runner.ctx, runner.cancel = context.WithCancelCause(parent)
+	runner.ingestCtx, runner.cancelIngest = context.WithCancelCause(parent)
 	return runner, nil
 }
 
 func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, originalTarget string) {
+	// A scan that starts once its policy has stopped records nothing: the
+	// policy may already run again under its name.
+	if r.ctx.Err() != nil {
+		return
+	}
 	policyName := r.ctx.Value(policyKey).(string)
 	log := r.logger.With("entry", entry+1, "target", originalTarget)
 
@@ -262,15 +291,16 @@ func (r *Runner) runScanWithOriginal(entry int, targets []config.Target, origina
 
 	// A scan cut short because the policy stopped crawls nothing, and asks the
 	// scheduler, which is stopping, for nothing.
-	if err := r.ctx.Err(); err != nil {
-		log.Info("SNMP probe scan stopped with its policy", withPanics("responsive_target_count", len(responsive))...)
-		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(err), len(responsive))
+	if r.ctx.Err() != nil {
+		cause := context.Cause(r.ctx)
+		log.Info("SNMP probe scan stopped with its policy", withPanics("error", cause, "responsive_target_count", len(responsive))...)
+		r.runStore.UpdateRun(policyName, originalTarget, port, scanRun.ID, RunStatusFailed, failure(cause), len(responsive))
 		return
 	}
 
 	// Snapshot live job IDs before the loop to avoid holding two locks simultaneously.
-	// Done here (before the early returns below) so stale entries are pruned on every probe invocation,
-	// including the zero-responsive and context-timeout paths.
+	// Done here (before the early returns below) so stale entries are pruned on every scan
+	// that was not stopped, including the zero-responsive and context-timeout paths.
 	jobs := r.scheduler.Jobs()
 	liveIDs := make(map[uuid.UUID]struct{}, len(jobs))
 	for _, j := range jobs {
@@ -605,6 +635,11 @@ func (r *Runner) run(entry int, target config.Target) {
 
 // runWithMetadata runs the policy with metadata tracking
 func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget string) {
+	// A crawl that starts once its policy has stopped records nothing: the
+	// policy may already run again under its name.
+	if r.ctx.Err() != nil {
+		return
+	}
 	policyName := r.ctx.Value(policyKey).(string)
 	targetHost := target.Host
 	targetPort := target.Port
@@ -644,7 +679,7 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 			r.failRunOnPanic(log, targetHost, targetPort, run.ID, walkPanic)
 			return
 		}
-		if r.endStoppedCrawl(log, targetHost, targetPort, run.ID, 0) {
+		if r.endStoppedCrawl(r.ctx, log, targetHost, targetPort, run.ID, 0, err) {
 			return
 		}
 		log.Error("error querying target", "error", err)
@@ -702,15 +737,20 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 	}
 
 	// Nothing is sent for a policy that has stopped: it may already have been
-	// replaced by a new version.
-	if r.endStoppedCrawl(log, targetHost, targetPort, run.ID, len(entities)) {
+	// replaced by a new version, and this crawl read the device with the old
+	// one's settings. An ingest already under way is left to end, unless the
+	// stop's wait for it ends first.
+	if r.endStoppedCrawl(r.ctx, log, targetHost, targetPort, run.ID, len(entities), nil) {
 		return
 	}
 	resp, err := r.ingest(log, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
 	}))
-	if err != nil && r.endStoppedCrawl(log, targetHost, targetPort, run.ID, len(entities)) {
+	// Whether the stop ended the ingest is the ingest context's to say: the
+	// SDK reports a cancelled request as a gRPC status, not as the context's
+	// error, and a failure Diode reports during the stop's wait is still one.
+	if err != nil && r.endStoppedCrawl(r.ingestCtx, log, targetHost, targetPort, run.ID, len(entities), err) {
 		return
 	}
 	if err != nil {
@@ -726,17 +766,22 @@ func (r *Runner) runWithMetadata(entry int, target config.Target, parentTarget s
 	}
 }
 
-// endStoppedCrawl ends a crawl whose policy has stopped, reporting whether it
-// did. The run fails, since the crawl did not finish, but with one info line
-// rather than an error: the stop cut it short.
-func (r *Runner) endStoppedCrawl(log *slog.Logger, host string, port uint16, runID string, entityCount int) bool {
-	err := r.ctx.Err()
-	if err == nil {
+// endStoppedCrawl ends a crawl once stopped, the context it was working
+// under, has ended, and reports whether it did. The run fails with the stop's
+// cause, since the crawl did not finish, but with one info line rather than an
+// error: the stop cut it short. err, when the crawl has one, says how far it
+// got.
+func (r *Runner) endStoppedCrawl(stopped context.Context, log *slog.Logger, host string, port uint16, runID string, entityCount int, err error) bool {
+	if stopped.Err() == nil {
 		return false
 	}
-	log.Info("SNMP crawl stopped with its policy")
+	cause := context.Cause(stopped)
+	if err == nil {
+		err = cause
+	}
+	log.Info("SNMP crawl stopped with its policy", "error", err)
 	policyName, _ := r.ctx.Value(policyKey).(string)
-	r.runStore.UpdateRun(policyName, host, port, runID, RunStatusFailed, err, entityCount)
+	r.runStore.UpdateRun(policyName, host, port, runID, RunStatusFailed, cause, entityCount)
 	return true
 }
 
@@ -1446,13 +1491,17 @@ func (r *Runner) Start() {
 	r.scheduler.Start()
 }
 
-// Stop stops the policy runner. Cancelling first ends the scans and crawls
-// under way, which the scheduler can wait for but not cut short. Shutdown,
-// rather than StopJobs, answers a scan still asking the scheduler for jobs:
-// StopJobs holds such a call, and so the stop, until its timeout.
+// Stop stops the policy runner, and nothing of the policy is sent once it
+// returns. Cancelling ctx first ends the scans and crawls under way, which the
+// scheduler can wait for but not cut short. An ingest already under way is left
+// to end while Shutdown waits for the running jobs, and is cancelled if that
+// wait ends first. Shutdown, rather than StopJobs, answers a scan still asking
+// the scheduler for jobs: StopJobs holds such a call until its timeout.
 func (r *Runner) Stop() error {
-	r.cancel()
-	return r.scheduler.Shutdown()
+	r.cancel(errPolicyStopped)
+	err := r.scheduler.Shutdown()
+	r.cancelIngest(errPolicyStopped)
+	return err
 }
 
 // repairInvalidUTF8 repairs invalid UTF-8 in free text and logs each field it

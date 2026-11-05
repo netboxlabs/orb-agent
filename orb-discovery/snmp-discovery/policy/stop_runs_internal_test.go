@@ -14,9 +14,10 @@ import (
 	"github.com/netboxlabs/diode-sdk-go/diode/v1/diodepb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/config"
-	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/data"
 	"github.com/netboxlabs/orb-agent/orb-discovery/snmp-discovery/snmp"
 )
 
@@ -155,22 +156,23 @@ func TestStopEndsABusyCrawl(t *testing.T) {
 		{"in its vendor walk", ".1.3.6.1.4.1.2636.1.1.1.2.21"},
 	}
 	stops := []struct {
-		name string
-		stop func(m *Manager, shutdown context.CancelFunc)
+		name   string
+		stop   func(m *Manager, shutdown context.CancelFunc)
+		reason string
 	}{
-		{"the policy is deleted", func(m *Manager, _ context.CancelFunc) { m.StopPolicy("p1") }},
-		{"the process shuts down", func(m *Manager, shutdown context.CancelFunc) { shutdown(); m.Stop() }},
+		{"the policy is deleted", func(m *Manager, _ context.CancelFunc) { m.StopPolicy("p1") }, "run interrupted: policy stopped"},
+		{"the process shuts down", func(m *Manager, shutdown context.CancelFunc) { shutdown(); m.Stop() }, "context canceled"},
 	}
 	for _, walk := range walks {
 		for _, tc := range stops {
 			t.Run(walk.name+", "+tc.name, func(t *testing.T) {
-				testStopEndsABusyCrawl(t, walk.vendorOID, tc.stop)
+				testStopEndsABusyCrawl(t, walk.vendorOID, tc.stop, tc.reason)
 			})
 		}
 	}
 }
 
-func testStopEndsABusyCrawl(t *testing.T, vendorOID string, stop func(m *Manager, shutdown context.CancelFunc)) {
+func testStopEndsABusyCrawl(t *testing.T, vendorOID string, stop func(m *Manager, shutdown context.CancelFunc), reason string) {
 	logs := &lockedBuffer{}
 	client := &recordingClient{}
 	agents := newStuckAgents(func(string) bool { return false })
@@ -189,14 +191,17 @@ func testStopEndsABusyCrawl(t *testing.T, vendorOID string, stop func(m *Manager
 	runs := m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
 	require.Len(t, runs, 1)
 	assert.Equal(t, RunStatusFailed, runs[0].Status)
-	assert.Equal(t, "context canceled", runs[0].Reason)
+	assert.Equal(t, reason, runs[0].Reason)
 	assert.Eventually(t, func() bool { return agents.inFlight.Load() == 0 },
 		stopBound, 10*time.Millisecond, "the walk ended with its crawl")
 	assert.Empty(t, client.devicesOf("192.0.2.10"), "nothing ingested")
 	assert.Empty(t, discoveryFailures(t, reader))
 	assert.Empty(t, recordsAt(t, logs, "ERROR"))
 	assert.Empty(t, recordsAt(t, logs, "WARN"))
-	assert.Equal(t, []any{"SNMP crawl stopped with its policy"}, messages(t, logs, "INFO"))
+	infos := recordsAt(t, logs, "INFO")
+	require.Len(t, infos, 1)
+	assert.Equal(t, "SNMP crawl stopped with its policy", infos[0]["msg"])
+	assert.Equal(t, "context canceled", infos[0]["error"], "the walk's own error")
 }
 
 // A scan still probing when its policy stops ends at once, and crawls nothing,
@@ -226,7 +231,7 @@ func TestStopEndsABusyScan(t *testing.T) {
 	runs := m.runStore.GetRunsForTarget("p1", "192.0.2.1-192.0.2.3", 161)
 	require.Len(t, runs, 1)
 	assert.Equal(t, RunStatusFailed, runs[0].Status)
-	assert.Equal(t, "context canceled", runs[0].Reason)
+	assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
 	assert.Equal(t, 1, runs[0].EntityCount, "the host that answered before the stop")
 	r.activeHostJobsMu.Lock()
 	assert.Empty(t, r.activeHostJobs, "no crawl scheduled")
@@ -241,34 +246,43 @@ func TestStopEndsABusyScan(t *testing.T) {
 	infos := recordsAt(t, logs, "INFO")
 	require.Len(t, infos, 1)
 	assert.Equal(t, "SNMP probe scan stopped with its policy", infos[0]["msg"])
+	assert.Equal(t, "run interrupted: policy stopped", infos[0]["error"])
 	assert.EqualValues(t, 1, infos[0]["responsive_target_count"])
 }
 
-// stoppingManufacturers stops the policy on the first manufacturer lookup,
-// which the mapper makes on the crawl's goroutine once the walk is done.
-type stoppingManufacturers struct {
-	data.ManufacturerRetriever
+// stoppingHandler stops the policy as the crawl logs that its walks and
+// mapping are done, the last thing it does before it sends.
+type stoppingHandler struct {
+	slog.Handler
 	stop func()
 }
 
-func (m stoppingManufacturers) GetManufacturer(id string) (string, error) {
-	m.stop()
-	return m.ManufacturerRetriever.GetManufacturer(id)
+func (h stoppingHandler) Handle(ctx context.Context, record slog.Record) error {
+	if record.Message == "SNMP crawl complete" {
+		h.stop()
+	}
+	return h.Handler.Handle(ctx, record)
 }
 
-// A crawl whose policy stops after the walk, before anything is sent, sends
-// nothing: the policy that asked for it is gone.
+func (h stoppingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return stoppingHandler{h.Handler.WithAttrs(attrs), h.stop}
+}
+
+func (h stoppingHandler) WithGroup(name string) slog.Handler {
+	return stoppingHandler{h.Handler.WithGroup(name), h.stop}
+}
+
+// A crawl whose policy stops once its walks and mapping are done, before it
+// starts sending, sends nothing: the device was read with the settings of a
+// policy that may already have been replaced. Its run is a stopped one.
 func TestCrawlStoppedBeforeIngestSendsNothing(t *testing.T) {
 	logs := &lockedBuffer{}
 	client := &recordingClient{}
-	factory := func(host string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
-		rows := agentRows(host)
-		rows[oidSysObjectID] = snmp.PDU{Type: gosnmp.ObjectIdentifier, Value: ".1.3.6.1.4.1.32473.1.1"}
-		return &rowWalker{rows: rows}, nil
-	}
-	r, store := newPolicyRunner(t, singleTargetPolicy, factory, client, jsonLogger(logs))
-	// Stop cancels the policy's context before anything else.
-	r.manufacturers = stoppingManufacturers{ManufacturerRetriever: r.manufacturers, stop: r.cancel}
+	var r *Runner
+	// Stop's first step: the ingest context stays open while Stop waits for
+	// the crawl.
+	logger := slog.New(stoppingHandler{jsonLogger(logs).Handler(), func() { r.cancel(errPolicyStopped) }})
+	r, store := newPolicyRunner(t, singleTargetPolicy, newFakeAgents(time.Second).dial, client, logger)
 	reader := useTestMeter(t)
 	logs.Reset()
 
@@ -278,52 +292,251 @@ func TestCrawlStoppedBeforeIngestSendsNothing(t *testing.T) {
 	runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
 	require.Len(t, runs, 1)
 	assert.Equal(t, RunStatusFailed, runs[0].Status)
-	assert.Equal(t, "context canceled", runs[0].Reason)
+	assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
 	assert.Empty(t, discoveryFailures(t, reader))
 	assert.Empty(t, recordsAt(t, logs, "ERROR"))
-	assert.Contains(t, messages(t, logs, "INFO"), "SNMP crawl stopped with its policy")
+	var stopLines []map[string]any
+	for _, record := range recordsAt(t, logs, "INFO") {
+		if record["msg"] == "SNMP crawl stopped with its policy" {
+			stopLines = append(stopLines, record)
+		}
+	}
+	require.Len(t, stopLines, 1)
+	assert.Equal(t, "run interrupted: policy stopped", stopLines[0]["error"])
 }
 
-// sendingClient holds every ingest until its context ends, as a send to a
-// slow Diode does, and says when one starts.
-type sendingClient struct {
+// gatedClient holds each ingest until the test answers it or the ingest's
+// context ends. A cancelled ingest fails the way the Diode SDK's does, with a
+// gRPC status; with sentAsCancelled it succeeds instead, as a request that
+// went out just as the stop landed. It keeps what it was sent, and counts each
+// ingest begun once its context had ended.
+type gatedClient struct {
 	recordingClient
-	sending chan struct{}
+	sentAsCancelled bool
+	sending         chan struct{}
+	answer          chan error
+	late            atomic.Int64
 }
 
-func (c *sendingClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+func newGatedClient() *gatedClient {
+	return &gatedClient{sending: make(chan struct{}, 16), answer: make(chan error)}
+}
+
+func (c *gatedClient) Ingest(ctx context.Context, entities []diode.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	if ctx.Err() != nil {
+		c.late.Add(1)
+		return nil, status.FromContextError(ctx.Err()).Err()
+	}
 	c.sending <- struct{}{}
-	<-ctx.Done()
-	return nil, ctx.Err()
+	select {
+	case err := <-c.answer:
+		if err != nil {
+			return nil, err
+		}
+	case <-ctx.Done():
+		if !c.sentAsCancelled {
+			return nil, status.FromContextError(ctx.Err()).Err()
+		}
+	}
+	return c.recordingClient.Ingest(ctx, entities, opts...)
 }
 
-// A crawl whose policy stops while it is sending ends at once, with no error
-// line: the send was cut short by the stop, not refused by Diode.
-func TestCrawlStoppedWhileSendingIsNoFailure(t *testing.T) {
+func (c *gatedClient) awaitSending(t *testing.T) {
+	t.Helper()
+	select {
+	case <-c.sending:
+	case <-time.After(10 * time.Second):
+		t.Fatal("nothing was sent")
+	}
+}
+
+// withStopTimeout shortens how long a stop waits for running jobs.
+func withStopTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	previous := schedulerStopTimeout
+	schedulerStopTimeout = d
+	t.Cleanup(func() { schedulerStopTimeout = previous })
+}
+
+// An ingest already under way when its policy stops is left to end while the
+// stop waits for it, and ends as it would have: sent, or refused by Diode and
+// logged as the error it is.
+func TestStopLetsAnIngestUnderWayEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		answer     error
+		wantStatus RunStatus
+		wantReason string
+	}{
+		{"Diode takes it", nil, RunStatusCompleted, ""},
+		{"Diode refuses it", status.Error(codes.Unavailable, "diode unavailable"), RunStatusFailed, "rpc error: code = Unavailable desc = diode unavailable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs := &lockedBuffer{}
+			client := newGatedClient()
+			m, _ := fakeNetworkManager(t, jsonLogger(logs), client, newFakeAgents(time.Second).dial)
+			reader := useTestMeter(t)
+			startPolicies(t, m, busyHostPolicy)
+			client.awaitSending(t)
+			r := m.policies["p1"]
+			logs.Reset()
+
+			stopped := make(chan struct{})
+			go func() {
+				defer close(stopped)
+				m.StopPolicy("p1")
+			}()
+			select {
+			case <-r.ctx.Done():
+			case <-time.After(stopBound):
+				t.Error("the stop did not cancel the policy's context")
+			}
+			select {
+			case client.answer <- tc.answer:
+			case <-time.After(stopBound):
+				t.Error("the stop did not leave the ingest under way to end")
+			}
+			<-stopped
+			if t.Failed() {
+				return
+			}
+
+			assert.False(t, m.HasPolicy("p1"))
+			runs := m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
+			require.Len(t, runs, 1)
+			assert.Equal(t, tc.wantStatus, runs[0].Status)
+			assert.Equal(t, tc.wantReason, runs[0].Reason)
+			assert.Equal(t, tc.answer == nil, len(client.devicesOf("192.0.2.10")) == 1, "sent only if Diode took it")
+			assert.Zero(t, client.late.Load())
+			assert.NotContains(t, messages(t, logs, "INFO"), "SNMP crawl stopped with its policy")
+			assert.Empty(t, recordsAt(t, logs, "WARN"), "the stop ended cleanly")
+			assert.Empty(t, discoveryFailures(t, reader))
+			errs := recordsAt(t, logs, "ERROR")
+			if tc.answer == nil {
+				assert.Empty(t, errs)
+				return
+			}
+			require.Len(t, errs, 1)
+			assert.Equal(t, "error ingesting entities", errs[0]["msg"])
+			assert.Equal(t, tc.wantReason, errs[0]["error"])
+		})
+	}
+}
+
+// An ingest still under way when the stop's wait for it ends is cancelled
+// before the stop returns, and nothing more is sent: not the rest of a target
+// sent in several requests, whether the request in flight failed as it was
+// cancelled or went out just as the stop landed. Its run is a stopped one: one
+// info line saying how far the send got, no error, no discovery_failure.
+func TestStopCancelsAnIngestThatOutlastsItsWait(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		sentAsCancelled bool
+		wantInError     string
+	}{
+		{"the request in flight fails", false, "request 1 of "},
+		{"the request in flight went out", true, "request 2 of "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withStopTimeout(t, 200*time.Millisecond)
+			withChunkLimit(t, 1)
+			logs := &lockedBuffer{}
+			client := newGatedClient()
+			client.sentAsCancelled = tc.sentAsCancelled
+			m, _ := fakeNetworkManager(t, jsonLogger(logs), client, newFakeAgents(time.Second).dial)
+			reader := useTestMeter(t)
+			startPolicies(t, m, busyHostPolicy)
+			client.awaitSending(t)
+			logs.Reset()
+
+			start := time.Now()
+			m.StopPolicy("p1")
+			assert.Less(t, time.Since(start), stopBound, "the stop waited past its timeout")
+
+			assert.False(t, m.HasPolicy("p1"))
+			var runs []*Run
+			require.Eventually(t, func() bool {
+				runs = m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
+				return len(runs) == 1 && runs[0].Status != RunStatusRunning
+			}, stopBound, 10*time.Millisecond)
+			assert.Equal(t, RunStatusFailed, runs[0].Status)
+			assert.Equal(t, "run interrupted: policy stopped", runs[0].Reason)
+			assert.Zero(t, client.late.Load(), "nothing sent once the stop ended the ingest")
+			assert.Empty(t, recordsAt(t, logs, "ERROR"))
+			assert.Empty(t, discoveryFailures(t, reader))
+			var stopLines []map[string]any
+			for _, record := range recordsAt(t, logs, "INFO") {
+				if record["msg"] == "SNMP crawl stopped with its policy" {
+					stopLines = append(stopLines, record)
+				}
+			}
+			require.Len(t, stopLines, 1)
+			assert.Contains(t, stopLines[0]["error"], tc.wantInError)
+			assert.Contains(t, stopLines[0]["error"], "entities already sent")
+		})
+	}
+}
+
+// A crawl or scan that starts once its policy has stopped does nothing and
+// records nothing: the policy may already run again under its name.
+func TestRunStartingAfterItsPolicyStoppedRecordsNothing(t *testing.T) {
 	logs := &lockedBuffer{}
-	client := &sendingClient{sending: make(chan struct{}, 1)}
-	r, store := newPolicyRunner(t, singleTargetPolicy, newFakeAgents(time.Second).dial, client, jsonLogger(logs))
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
-	}()
-	<-client.sending
+	client := &recordingClient{}
+	agents := newFakeAgents(time.Second)
+	r, store := newPolicyRunner(t, singleTargetPolicy, agents.dial, client, jsonLogger(logs))
+	require.NoError(t, r.Stop())
 	logs.Reset()
 
-	require.NoError(t, r.Stop())
-	select {
-	case <-done:
-	case <-time.After(stopBound):
-		t.Fatal("the send outlived the stop")
-	}
+	r.runWithMetadata(0, config.Target{Host: "192.0.2.1", Port: 161}, "")
+	r.runScanWithOriginal(0, []config.Target{{Host: "192.0.2.2", Port: 161}, {Host: "192.0.2.3", Port: 161}}, "192.0.2.2-192.0.2.3")
 
-	runs := store.GetRunsForTarget("p1", "192.0.2.1", 161)
-	require.Len(t, runs, 1)
-	assert.Equal(t, RunStatusFailed, runs[0].Status)
-	assert.Equal(t, "context canceled", runs[0].Reason)
-	assert.Empty(t, recordsAt(t, logs, "ERROR"))
-	assert.Equal(t, []any{"SNMP crawl stopped with its policy"}, messages(t, logs, "INFO"))
+	assert.Empty(t, store.GetAllPoliciesWithRuns())
+	assert.Zero(t, agents.crawlCount("192.0.2.1", 161))
+	assert.Zero(t, agents.probeCount("192.0.2.2", 161))
+	assert.Empty(t, client.devicesOf("192.0.2.1"))
+	assert.Empty(t, logs.String())
+}
+
+// shutdownCounter counts the shutdowns of the scheduler it wraps.
+type shutdownCounter struct {
+	gocron.Scheduler
+	shutdowns atomic.Int64
+}
+
+func (s *shutdownCounter) Shutdown() error {
+	s.shutdowns.Add(1)
+	return s.Scheduler.Shutdown()
+}
+
+// A policy NewRunner refuses leaves no scheduler running behind it.
+func TestRefusedPolicyLeavesNoScheduler(t *testing.T) {
+	var made []*shutdownCounter
+	previous := newScheduler
+	newScheduler = func(options ...gocron.SchedulerOption) (gocron.Scheduler, error) {
+		s, err := previous(options...)
+		if err != nil {
+			return nil, err
+		}
+		counted := &shutdownCounter{Scheduler: s}
+		made = append(made, counted)
+		return counted, nil
+	}
+	t.Cleanup(func() { newScheduler = previous })
+
+	badSchedule := "not a schedule"
+	target := config.Scope{Targets: []config.Target{{Host: "192.0.2.1", Port: 161}}}
+	for name, p := range map[string]config.Policy{
+		"timeout not above snmp_timeout": {Config: config.PolicyConfig{Timeout: 5, SNMPTimeout: 5}, Scope: target},
+		"a job the scheduler refuses":    {Config: config.PolicyConfig{Schedule: &badSchedule}, Scope: target},
+	} {
+		_, err := NewRunner(context.Background(), discardLogger(), "p1", p, nil, newFakeAgents(time.Second).dial,
+			&config.Mapping{}, nil, nil, NewRunStore())
+		require.Error(t, err, name)
+	}
+	require.Len(t, made, 2)
+	for _, s := range made {
+		assert.EqualValues(t, 1, s.shutdowns.Load())
+	}
 }
 
 // A job that asks the scheduler for its jobs while its policy stops, as a scan
@@ -359,9 +572,14 @@ func (unstoppableScheduler) Shutdown() error { return gocron.ErrStopSchedulerTim
 
 func unstoppableRunner(t *testing.T, name string) *Runner {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), policyKey, name))
-	t.Cleanup(cancel)
-	return &Runner{scheduler: unstoppableScheduler{notStartedScheduler(t)}, ctx: ctx, cancel: cancel, logger: discardLogger()}
+	parent := context.WithValue(context.Background(), policyKey, name)
+	ctx, cancel := context.WithCancelCause(parent)
+	ingestCtx, cancelIngest := context.WithCancelCause(parent)
+	t.Cleanup(func() { cancel(nil); cancelIngest(nil) })
+	return &Runner{
+		scheduler: unstoppableScheduler{notStartedScheduler(t)}, ctx: ctx, cancel: cancel,
+		ingestCtx: ingestCtx, cancelIngest: cancelIngest, logger: discardLogger(),
+	}
 }
 
 // A policy whose runner does not stop cleanly is still removed, with a warning
