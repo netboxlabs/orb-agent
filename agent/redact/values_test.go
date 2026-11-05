@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math/rand"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -300,4 +303,101 @@ func TestSplitHeadsCutWithinTheFirstLongRunBytes(t *testing.T) {
 	if heads := splitHeads("abcdefg€"); len(heads) != 0 {
 		t.Errorf("heads cut after the first longRun bytes: %q", heads)
 	}
+}
+
+// TestValuesWorkGrowsWithTheTextAndTheValue masks a long value quoted whole in
+// a text as long within a bound that comparing each byte of one with each
+// byte of the other would take far longer than: a backend can echo a policy
+// holding a certificate bundle into its error. A value of one byte repeated
+// matches itself at every offset, the most work for a scan that is not
+// linear.
+func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
+	v := strings.Repeat("a", 256<<10)
+	rest := strings.Repeat(" x", 4<<10)
+	done := make(chan string, 1)
+	go func() { done <- Values("invalid policy: "+v+rest, []string{v}) }()
+	select {
+	case got := <-done:
+		if got != "invalid policy: "+MaskedSecret+rest {
+			t.Errorf("the value is not masked whole: %.80q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("masking a 256 KiB value took more than 5 s")
+	}
+}
+
+// TestRunStartsFollowTheirDefinition checks runStarts, which finds the runs to
+// mask in one pass per form, against trying every run of the text. Texts are
+// built from the values' own pieces over small alphabets, so heads, tails and
+// whole values overlap and repeat.
+func TestRunStartsFollowTheirDefinition(t *testing.T) {
+	r := rand.New(rand.NewSource(825))
+	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密")}
+	word := func(alphabet []rune, n int) string {
+		var b strings.Builder
+		for range n {
+			b.WriteRune(alphabet[r.Intn(len(alphabet))])
+		}
+		return b.String()
+	}
+	for range 20000 {
+		alphabet := alphabets[r.Intn(len(alphabets))]
+		var values []string
+		for range 1 + r.Intn(3) {
+			values = append(values, word(alphabet, r.Intn(14)))
+		}
+		var b strings.Builder
+		for range r.Intn(6) {
+			if r.Intn(4) == 0 {
+				b.WriteString(word(alphabet, r.Intn(8)))
+				continue
+			}
+			v := values[r.Intn(len(values))]
+			from, to := 0, len(v)
+			if r.Intn(2) == 0 {
+				from = r.Intn(len(v) + 1)
+			}
+			if r.Intn(2) == 0 {
+				to = from + r.Intn(len(v)-from+1)
+			}
+			b.WriteString(v[from:to])
+		}
+		s, forms := b.String(), maskedForms(values)
+		for _, cut := range []bool{false, true} {
+			if got, want := runStarts(s, forms, cut), runStartsByDefinition(s, forms, cut); !slices.Equal(got, want) {
+				t.Fatalf("runStarts(%q, %q, %v)\n got %v\nwant %v", s, forms, cut, got, want)
+			}
+		}
+	}
+}
+
+// runStartsByDefinition is runStarts by trying every run of s that ends at
+// each byte, from the longest.
+func runStartsByDefinition(s string, forms []string, cut bool) []int {
+	if len(forms) == 0 || s == "" {
+		return nil
+	}
+	start := make([]int, len(s))
+	for i := range start {
+		start[i] = len(s)
+	}
+	found := false
+	for _, v := range forms {
+		for i := range len(s) {
+			for from := max(0, i-len(v)+1); from <= i; from++ {
+				run := s[from : i+1]
+				whole := run == v && (len(run) >= longRun || standsAlone(s, from, i, v))
+				tail := len(run) >= longRun && strings.HasSuffix(v, run)
+				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1)
+				if whole || tail || head {
+					start[i] = min(start[i], from)
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		return nil
+	}
+	return start
 }

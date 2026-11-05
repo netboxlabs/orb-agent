@@ -60,56 +60,8 @@ func maskedForms(values []string) []string {
 }
 
 func mask(s string, values []string, cut bool) string {
-	forms := maskedForms(values)
-	if len(forms) == 0 || s == "" {
-		return s
-	}
-
-	// start[i] is where the earliest masked run ending at s[i] begins, or
-	// len(s) when none ends there.
-	start := make([]int, len(s))
-	for i := range start {
-		start[i] = len(s)
-	}
-	found := false
-	for _, v := range forms {
-		// run[j] is the length of the longest run of s ending at s[i] that
-		// ends at v[j] too; prev holds it for s[i-1].
-		prev, run := make([]int, len(v)), make([]int, len(v))
-		for i := range len(s) {
-			longest := 0
-			for j := range len(v) {
-				if s[i] != v[j] {
-					run[j] = 0
-					continue
-				}
-				n := 1
-				if j > 0 {
-					n += prev[j-1]
-				}
-				run[j] = n
-				// A run as long as v's first j+1 bytes reaches back to v's
-				// first byte: s ends at i with v's head of n bytes. One that
-				// ends at v's last byte is a tail, the whole of v when it is
-				// as long as v.
-				head, tail := n == j+1, j == len(v)-1
-				switch {
-				case tail && n == len(v) && (n >= longRun || standsAlone(s, i-n+1, i, v)):
-					longest = max(longest, n)
-				case tail && n >= longRun:
-					longest = max(longest, n)
-				case head && (n >= longRun || cut && i == len(s)-1):
-					longest = max(longest, n)
-				}
-			}
-			if longest > 0 {
-				start[i] = min(start[i], i-longest+1)
-				found = true
-			}
-			prev, run = run, prev
-		}
-	}
-	if !found {
+	start := runStarts(s, maskedForms(values), cut)
+	if start == nil {
 		return s
 	}
 
@@ -149,6 +101,47 @@ func mask(s string, values []string, cut bool) string {
 	return b.String()
 }
 
+// runStarts returns, for each byte of s, where the earliest run of s that
+// mask masks and that ends at that byte begins, or len(s) when none ends
+// there: the whole of a form, as long as longRun or a word of its own; a
+// head or tail of one as long as longRun; and, in a cut text, a head of any
+// length at its end. It returns nil when no run is masked.
+func runStarts(s string, forms []string, cut bool) []int {
+	if len(forms) == 0 || s == "" {
+		return nil
+	}
+	start := make([]int, len(s))
+	for i := range start {
+		start[i] = len(s)
+	}
+	found := false
+	for _, v := range forms {
+		// Each scan takes time in proportion to s and v, so a long value in
+		// a long text costs no more than reading both.
+		heads, tails := headRuns(s, v), tailRuns(s, v)
+		for i := range len(s) {
+			// A tail as long as v is the whole of v. The longest head or
+			// tail ending at s[i] is the one to mask when any is: one that
+			// is shorter is shorter than longRun too.
+			longest := 0
+			if n := tails[i]; n >= longRun || n == len(v) && standsAlone(s, i-n+1, i, v) {
+				longest = n
+			}
+			if n := heads[i]; n >= longRun || n > 0 && cut && i == len(s)-1 {
+				longest = max(longest, n)
+			}
+			if longest > 0 {
+				start[i] = min(start[i], i-longest+1)
+				found = true
+			}
+		}
+	}
+	if !found {
+		return nil
+	}
+	return start
+}
+
 // standsAlone reports whether s[from:to+1], an occurrence of v, is a word of
 // its own: on each side, either v's own edge is no word byte or the byte
 // beside it in s is not one.
@@ -156,6 +149,84 @@ func standsAlone(s string, from, to int, v string) bool {
 	startsWord := !isWordByte(v[0]) || from == 0 || !isWordByte(s[from-1])
 	endsWord := !isWordByte(v[len(v)-1]) || to == len(s)-1 || !isWordByte(s[to+1])
 	return startsWord && endsWord
+}
+
+// headRuns returns, for each byte of s, the length of the longest head of v
+// that ends there, found as Knuth-Morris-Pratt finds v in s.
+func headRuns(s, v string) []int {
+	// back[j] is the length of the longest head of v that is a tail of
+	// v[:j+1] and shorter than it: how much of a head is still matched when
+	// the byte after v[:j+1] is not the next in v.
+	back := make([]int, len(v))
+	for j, n := 1, 0; j < len(v); j++ {
+		for n > 0 && v[j] != v[n] {
+			n = back[n-1]
+		}
+		if v[j] == v[n] {
+			n++
+		}
+		back[j] = n
+	}
+	runs := make([]int, len(s))
+	n := 0
+	for i := range len(s) {
+		if n == len(v) {
+			n = back[n-1]
+		}
+		for n > 0 && s[i] != v[n] {
+			n = back[n-1]
+		}
+		if s[i] == v[n] {
+			n++
+		}
+		runs[i] = n
+	}
+	return runs
+}
+
+// tailRuns returns, for each byte of s, the length of the longest tail of v
+// that ends there. Read backwards, that is the longest head of v that starts
+// there, found with the Z algorithm.
+func tailRuns(s, v string) []int {
+	rs, rv := reversed(s), reversed(v)
+	// z[k] is the length of the longest head of rv that starts at rv[k];
+	// rv[l:r] is the head that reaches furthest found so far.
+	z := make([]int, len(rv))
+	for k, l, r := 1, 0, 0; k < len(rv); k++ {
+		n := 0
+		if k < r {
+			n = min(z[k-l], r-k)
+		}
+		for k+n < len(rv) && rv[k+n] == rv[n] {
+			n++
+		}
+		z[k] = n
+		if k+n > r {
+			l, r = k, k+n
+		}
+	}
+	runs := make([]int, len(s))
+	for p, l, r := 0, 0, 0; p < len(rs); p++ {
+		n := 0
+		if p < r {
+			n = min(z[p-l], r-p)
+		}
+		for p+n < len(rs) && n < len(rv) && rs[p+n] == rv[n] {
+			n++
+		}
+		runs[len(s)-1-p] = n
+		if p+n > r {
+			l, r = p, p+n
+		}
+	}
+	return runs
+}
+
+// reversed returns s with its bytes in reverse order.
+func reversed(s string) []byte {
+	b := []byte(s)
+	slices.Reverse(b)
+	return b
 }
 
 // splitHeads returns v's heads cut inside a character, as a backend quotes
