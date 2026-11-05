@@ -384,13 +384,14 @@ func TestScanStoppedWhileSchedulingIsAStoppedRun(t *testing.T) {
 // gatedClient holds each ingest until the test answers it or the ingest's
 // context ends. A cancelled ingest fails the way the Diode SDK's does, with a
 // gRPC status; with sentAsCancelled it succeeds instead, as a request that
-// went out just as the stop landed. It keeps what it was sent, and counts each
-// ingest begun once its context had ended.
+// went out just as the stop landed. It keeps what it was sent, and counts the
+// ingests begun, and those begun once their context had ended.
 type gatedClient struct {
 	recordingClient
 	sentAsCancelled bool
 	sending         chan struct{}
 	answer          chan error
+	begun           atomic.Int64
 	late            atomic.Int64
 }
 
@@ -403,6 +404,7 @@ func (c *gatedClient) Ingest(ctx context.Context, entities []diode.Entity, opts 
 		c.late.Add(1)
 		return nil, status.FromContextError(ctx.Err()).Err()
 	}
+	c.begun.Add(1)
 	c.sending <- struct{}{}
 	select {
 	case err := <-c.answer:
@@ -473,12 +475,9 @@ func TestStopLetsAnIngestUnderWayEnd(t *testing.T) {
 				t.Error("the stop did not cancel the policy's context")
 			}
 			// Every request the crawl sends while the stop waits is answered.
-			requests := 1
 			for answering := true; answering; {
 				select {
 				case client.answer <- tc.answer:
-				case <-client.sending:
-					requests++
 				case <-stopped:
 					answering = false
 				case <-time.After(stopBound):
@@ -490,6 +489,7 @@ func TestStopLetsAnIngestUnderWayEnd(t *testing.T) {
 			if t.Failed() {
 				return
 			}
+			requests := int(client.begun.Load())
 
 			assert.False(t, m.HasPolicy("p1"))
 			runs := m.runStore.GetRunsForTarget("p1", "192.0.2.10", 161)
