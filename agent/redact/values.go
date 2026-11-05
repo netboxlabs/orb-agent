@@ -74,28 +74,32 @@ func mask(s string, values []string, cut bool) string {
 	found := false
 	for _, v := range forms {
 		// run[j] is the length of the longest run of s ending at s[i] that
-		// ends at v[j-1] too; prev holds it for s[i-1].
-		prev, run := make([]int, len(v)+1), make([]int, len(v)+1)
+		// ends at v[j] too; prev holds it for s[i-1].
+		prev, run := make([]int, len(v)), make([]int, len(v))
 		for i := range len(s) {
 			longest := 0
-			for j := 1; j <= len(v); j++ {
-				if s[i] != v[j-1] {
+			for j := range len(v) {
+				if s[i] != v[j] {
 					run[j] = 0
 					continue
 				}
-				n := prev[j-1] + 1
+				n := 1
+				if j > 0 {
+					n += prev[j-1]
+				}
 				run[j] = n
-				// A run as long as j reaches back to v's first byte: s ends
-				// at i with v's head of j bytes. One that ends at v's last
-				// byte is a tail, the whole of v when it is as long as v.
-				head, tail := n >= j, j == len(v)
+				// A run as long as v's first j+1 bytes reaches back to v's
+				// first byte: s ends at i with v's head of n bytes. One that
+				// ends at v's last byte is a tail, the whole of v when it is
+				// as long as v.
+				head, tail := n == j+1, j == len(v)-1
 				switch {
 				case tail && n == len(v) && (n >= longRun || standsAlone(s, i-n+1, i, v)):
 					longest = max(longest, n)
 				case tail && n >= longRun:
 					longest = max(longest, n)
-				case head && (j >= longRun || cut && i == len(s)-1):
-					longest = max(longest, j)
+				case head && (n >= longRun || cut && i == len(s)-1):
+					longest = max(longest, n)
 				}
 			}
 			if longest > 0 {
