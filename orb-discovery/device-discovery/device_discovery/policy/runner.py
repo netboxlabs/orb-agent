@@ -14,13 +14,46 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.base import BaseTrigger
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from jnpr.junos.exception import (
+    ConnectAuthError as JunosConnectAuthError,
+)
+from jnpr.junos.exception import (
+    ConnectClosedError as JunosConnectClosedError,
+)
+from jnpr.junos.exception import (
+    ConnectError as JunosConnectError,
+)
+from jnpr.junos.exception import (
+    ConnectNotMasterError as JunosConnectNotMasterError,
+)
+from jnpr.junos.exception import (
+    ConnectRefusedError as JunosConnectRefusedError,
+)
+from jnpr.junos.exception import (
+    ConnectTimeoutError as JunosConnectTimeoutError,
+)
+from jnpr.junos.exception import (
+    ConnectUnknownHostError as JunosConnectUnknownHostError,
+)
+from jnpr.junos.exception import (
+    ProbeError as JunosProbeError,
+)
 from napalm import get_network_driver
 from napalm.base.exceptions import ConnectionException
+from ncclient.transport.errors import SessionError as NetconfSessionError
+from ncclient.transport.errors import TransportError as NetconfTransportError
 from netmiko.exceptions import NetmikoAuthenticationException
+from paramiko.ssh_exception import SSHException
 
 from device_discovery.client import Client
-from device_discovery.discovery import discover_device_driver, supported_drivers
-from device_discovery.log_config import configure_default_logging, flatten_message
+from device_discovery.discovery import (
+    DriverMismatchError,
+    discover_device_driver,
+    driver_session,
+    facts_mismatch,
+    supported_drivers,
+)
+from device_discovery.log_config import configure_default_logging, failure_text, flatten_message
 from device_discovery.metrics import get_metric
 from device_discovery.policy.models import (
     Config,
@@ -28,7 +61,9 @@ from device_discovery.policy.models import (
     Napalm,
     Options,
     Status,
+    host_endpoint,
     merge_override_defaults,
+    scope_endpoint,
 )
 from device_discovery.policy.portscan import (
     expand_hostnames,
@@ -57,13 +92,56 @@ logger = logging.getLogger(__name__)
 # reported in #494 ("unable to log into the device with the provided
 # credentials").
 #
-# ConnectionException already subsumes ConnectAuthError, ConnectTimeoutError,
-# ConnectionClosedException and UnsupportedVersion, so they are not listed.
+# ConnectionException already subsumes napalm's ConnectAuthError,
+# ConnectTimeoutError, ConnectionClosedException and UnsupportedVersion, so
+# they are not listed. PyEZ (junos) raises its own connection errors outside
+# napalm's, so they are listed by name. ConnectClosedError means the device
+# dropped the session: the runner runs no RPC after closing it. PyEZ's base
+# ConnectError also wraps any bug inside connect, so it counts only when the
+# error it kept is a transport one (see _is_expected_target_failure). ncclient's
+# transport and session errors, refused logins included, are listed for the
+# NETCONF drivers that raise them raw.
 # Builtin TimeoutError / ConnectionError / socket.gaierror are deliberately
 # EXCLUDED: Client().ingest runs inside the same catch-all, so widening this
 # would relabel a dead Diode endpoint as a per-host connection failure and
 # send the operator hunting devices while ingestion is down.
-_EXPECTED_TARGET_FAILURES = (ConnectionException, NetmikoAuthenticationException)
+_EXPECTED_TARGET_FAILURES = (
+    ConnectionException,
+    NetmikoAuthenticationException,
+    JunosConnectAuthError,
+    JunosConnectRefusedError,
+    JunosConnectTimeoutError,
+    JunosConnectUnknownHostError,
+    JunosConnectNotMasterError,
+    JunosProbeError,
+    JunosConnectClosedError,
+    NetconfTransportError,
+    NetconfSessionError,
+    DriverMismatchError,
+)
+
+
+# How many left-out addresses the log line names before it counts the rest.
+_LISTED_NAMED = 10
+
+
+def _sanitize(hostname: str) -> str:
+    """A scope hostname without the line breaks a log line or job name cannot carry."""
+    return hostname.replace("\r\n", "").replace("\n", "")
+
+
+def _name_withheld(scope: Napalm, config: Config) -> bool:
+    """
+    Whether the device goes out without a name, so facts that name nothing do no harm.
+
+    Mirrors translate's emit_device_name: the name is withheld only when the
+    device can be matched without it, by netbox_id or asset tag.
+    """
+    if config.options is None or config.options.emit_device_name:
+        return False
+    device = config.defaults.device if config.defaults else None
+    asset_tag = device.asset_tag if device else None
+    return scope.netbox_id is not None or bool(asset_tag and asset_tag.strip())
 
 
 def _is_expected_target_failure(error: BaseException) -> bool:
@@ -73,9 +151,14 @@ def _is_expected_target_failure(error: BaseException) -> bool:
     Evaluated on the raised object only. The ``__cause__`` / ``__context__``
     chain is deliberately NOT walked: a driver bug that surfaces while a
     connection error is being handled must stay UNEXPECTED and keep its
-    traceback.
+    traceback. PyEZ's base ConnectError is judged by the original error it
+    keeps in ``msg``, which is the transport failure or the bug it wrapped.
     """
-    return isinstance(error, _EXPECTED_TARGET_FAILURES)
+    if isinstance(error, _EXPECTED_TARGET_FAILURES):
+        return True
+    return isinstance(error, JunosConnectError) and isinstance(
+        getattr(error, "msg", None), (NetconfTransportError, NetconfSessionError, SSHException, EOFError, OSError)
+    )
 
 
 class PolicyRunner:
@@ -95,6 +178,8 @@ class PolicyRunner:
         self.scheduler = BackgroundScheduler()
         self.run_store = None
         self.active_host_jobs: dict[tuple[str, str], str] = {}
+        # Scopes whose driver came from discovery rather than the policy.
+        self.discovered_drivers: set[int] = set()
 
     def _validate_discovery_drivers(self):
         """
@@ -147,15 +232,32 @@ class PolicyRunner:
         self.scheduler.start()
         self._validate_discovery_drivers()
 
+        # A device with its own entry is discovered from that entry alone, so
+        # the policy's ranges leave it out rather than reach it a second time.
+        own_entries = {
+            e
+            for e in (
+                scope_endpoint(s.model_copy(update={"hostname": _sanitize(s.hostname)}))
+                for s in scopes
+            )
+            if e is not None
+        }
+
         set_telemetry = True
         for scope in scopes:
-            sanitized_hostname = scope.hostname.replace("\r\n", "").replace("\n", "")
+            sanitized_hostname = _sanitize(scope.hostname)
             if scope.driver and scope.driver not in supported_drivers:
                 self.scheduler.shutdown()
                 raise Exception(
                     f"Policy {self.name}, Hostname {sanitized_hostname}: specified driver '{scope.driver}' "
                     f"was not found in the current installed drivers list: {supported_drivers}."
                 )
+
+            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
+            if parsed_as_range and len(hostnames) > 1:
+                hostnames = self._without_own_entries(hostnames, scope, own_entries, sanitized_hostname)
+                if not hostnames:
+                    continue
 
             if self.config.schedule is not None:
                 logger.info(
@@ -176,7 +278,6 @@ class PolicyRunner:
                 config.defaults = merge_override_defaults(
                     config.defaults, scope.override_defaults
                 )
-            hostnames, parsed_as_range = expand_hostnames(sanitized_hostname)
 
             if parsed_as_range:
                 logger.info(
@@ -185,6 +286,7 @@ class PolicyRunner:
                 self.scheduler.add_job(
                     self.run_scan,
                     id=id,
+                    name=f"Policy {self.name}, Hostname {sanitized_hostname}",
                     trigger=trigger,
                     args=[hostnames, trigger, scope, config],
                     misfire_grace_time=None,
@@ -193,6 +295,7 @@ class PolicyRunner:
                 self.scheduler.add_job(
                     self.run,
                     id=id,
+                    name=f"Policy {self.name}, Hostname {sanitized_hostname}",
                     trigger=trigger,
                     args=[id, scope, config],
                     misfire_grace_time=None,
@@ -202,6 +305,7 @@ class PolicyRunner:
                 self.scheduler.add_job(
                     self.telemetry,
                     id=str(uuid.uuid4()),
+                    name=f"Policy {self.name}, telemetry",
                     trigger=trigger,
                 )
             self.status = Status.RUNNING
@@ -209,6 +313,24 @@ class PolicyRunner:
         active_policies = get_metric("active_policies")
         if active_policies:
             active_policies.add(1, {"policy": self.name})
+
+    def _without_own_entries(
+        self, hostnames: list[str], scope: Napalm, own_entries: set[str], sanitized_hostname: str
+    ) -> list[str]:
+        """A range's addresses, less those the policy also lists as targets of their own."""
+        if not own_entries:
+            return hostnames
+        listed = {h for h in hostnames if host_endpoint(h, scope.optional_args) in own_entries}
+        if not listed:
+            return hostnames
+        kept = [h for h in hostnames if h not in listed]
+        named = [h for h in hostnames if h in listed][:_LISTED_NAMED]
+        more = f" and {len(listed) - len(named)} more" if len(listed) > len(named) else ""
+        logger.info(
+            f"Policy {self.name}, Hostname {sanitized_hostname}: Leaving out "
+            f"{', '.join(named)}{more}, discovered from their own scope entries"
+        )
+        return kept
 
     def telemetry(self):
         """Telemetry job."""
@@ -236,13 +358,14 @@ class PolicyRunner:
             logger.info(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: Driver not informed, discovering it"
             )
-            scope.driver = discover_device_driver(scope, drivers=discovery_drivers)
+            scope.driver = discover_device_driver(scope, drivers=discovery_drivers, policy=self.name)
             if scope.driver is None:
                 self.status = Status.FAILED
                 logger.warning(
                     f"Policy {self.name}, Hostname {sanitized_hostname}: Not able to discover device driver"
                 )
                 return False
+            self.discovered_drivers.add(id(scope))
         return True
 
     def _collect_device_data(
@@ -276,12 +399,15 @@ class PolicyRunner:
         connection_start_time = time.perf_counter()
         # A copy, as drivers pop keys from optional_args and the next run
         # needs them.
-        with np_driver(
-            scope.hostname,
-            scope.username,
-            scope.password,
-            scope.timeout,
-            copy.deepcopy(scope.optional_args),
+        with driver_session(
+            np_driver(
+                scope.hostname,
+                scope.username,
+                scope.password,
+                scope.timeout,
+                copy.deepcopy(scope.optional_args),
+            ),
+            f"Policy {self.name}, Hostname {sanitized_hostname}",
         ) as device:
             connection_duration = (time.perf_counter() - connection_start_time) * 1000
             device_connection_latency = get_metric("device_connection_latency")
@@ -297,7 +423,7 @@ class PolicyRunner:
 
             data = {
                 "driver": scope.driver,
-                "device": device.get_facts(),
+                "device": self._checked_facts(device, scope, config),
                 "interface": device.get_interfaces(),
                 "interface_ip": device.get_interfaces_ip(),
                 "defaults": config.defaults,
@@ -315,13 +441,15 @@ class PolicyRunner:
                     data["config"] = device.get_config(sanitized=sanitized)
                 except Exception as e:
                     logger.warning(
-                        f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting config: {e}. Continuing without config data."
+                        f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting config: "
+                        f"{flatten_message(e)}. Continuing without config data."
                     )
             try:
                 data["vlan"] = device.get_vlans()
             except Exception as e:
                 logger.warning(
-                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: {e}. Continuing without VLAN data."
+                    f"Policy {self.name}, Hostname {sanitized_hostname}: Error getting VLANs: "
+                    f"{flatten_message(e)}. Continuing without VLAN data."
                 )
             get_iface_vlans = getattr(device, "get_interfaces_vlans", None)
             if callable(get_iface_vlans):
@@ -330,7 +458,7 @@ class PolicyRunner:
                 except Exception as e:
                     logger.warning(
                         f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                        f"Error getting interface VLANs: {e}. "
+                        f"Error getting interface VLANs: {flatten_message(e)}. "
                         "Continuing without interface-VLAN data."
                     )
             self._collect_lag_membership(config, device, data, sanitized_hostname)
@@ -342,21 +470,37 @@ class PolicyRunner:
                 except Exception as e:
                     logger.warning(
                         f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                        f"Error getting chassis members: {e}. "
+                        f"Error getting chassis members: {flatten_message(e)}. "
                         "Continuing without chassis data."
                     )
             self._collect_modules(config, device, data, sanitized_hostname)
             self._collect_network_instances(config, device, data, sanitized_hostname)
-            metadata = {
-                "policy_name": self.name,
-                "policy_instance": self.instance_id,
-                "hostname": sanitized_hostname,
-            }
-            entity_count = Client().ingest(metadata, data, run_id=run_id)
-            discovery_success = get_metric("discovery_success")
-            if discovery_success:
-                discovery_success.add(1, {"policy": self.name})
-            return entity_count
+
+        # Ingest after the session closes: it waits on a lock shared by
+        # every job, and the device should not hold a session meanwhile.
+        metadata = {
+            "policy_name": self.name,
+            "policy_instance": self.instance_id,
+            "hostname": sanitized_hostname,
+        }
+        entity_count = Client().ingest(metadata, data, run_id=run_id)
+        discovery_success = get_metric("discovery_success")
+        if discovery_success:
+            discovery_success.add(1, {"policy": self.name})
+        return entity_count
+
+    def _checked_facts(self, device: Any, scope: Napalm, config: Config) -> dict:
+        """The device's facts, refused when they show the driver does not fit the device."""
+        facts = device.get_facts()
+        mismatch = facts_mismatch(facts)
+        if mismatch and not _name_withheld(scope, config):
+            error = DriverMismatchError(f"'{scope.driver}' driver does not fit this device: {mismatch}")
+            # A discovered driver is discovered again next run, rather than refused every run.
+            if id(scope) in self.discovered_drivers:
+                self.discovered_drivers.discard(id(scope))
+                scope.driver = None
+            raise error
+        return facts
 
     def _collect_interfaces_vlan_id(
         self,
@@ -384,7 +528,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting interface VLAN IDs: {e}. "
+                f"Error getting interface VLAN IDs: {flatten_message(e)}. "
                 "Continuing with SVI-name VLANs only."
             )
 
@@ -411,7 +555,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting LAG membership: {e}. "
+                f"Error getting LAG membership: {flatten_message(e)}. "
                 "Continuing without LAG membership."
             )
 
@@ -442,7 +586,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting modules: {e}. "
+                f"Error getting modules: {flatten_message(e)}. "
                 "Continuing without module data."
             )
             data["modules"] = None
@@ -472,7 +616,7 @@ class PolicyRunner:
         except Exception as e:
             logger.warning(
                 f"Policy {self.name}, Hostname {sanitized_hostname}: "
-                f"Error getting network instances: {e}. "
+                f"Error getting network instances: {flatten_message(e)}. "
                 "Continuing without VRF data."
             )
 
@@ -497,10 +641,7 @@ class PolicyRunner:
             error: the exception that reached the per-target catch-all.
 
         """
-        message = (
-            f"Policy {self.name}, Hostname {sanitized_hostname}: "
-            f"{flatten_message(error)}"
-        )
+        message = f"Policy {self.name}, Hostname {sanitized_hostname}: {failure_text(error)}"
 
         if not _is_expected_target_failure(error):
             # exc_info takes the instance, not True, so this helper does not
@@ -607,12 +748,16 @@ class PolicyRunner:
                     )
                     id = str(uuid.uuid4())
                     self.scopes[id] = scope.model_copy(update={"hostname": sanitized_hostname, "netbox_id": None})
+                    # Runs now: the scan's own tick has started, so the trigger
+                    # alone would wait a whole period for the first discovery.
                     self.scheduler.add_job(
                         self.run_with_parent,
                         id=id,
+                        name=f"Policy {self.name}, Hostname {sanitized_hostname}",
                         trigger=trigger,
                         args=[id, self.scopes[id], config, original_hostname],
                         misfire_grace_time=None,
+                        next_run_time=datetime.now(),
                     )
                     self.active_host_jobs[(original_hostname, sanitized_hostname)] = id
                 else:
@@ -621,7 +766,7 @@ class PolicyRunner:
                     )
         except Exception as e:
             logger.error(
-                f"Policy {self.name}, Error during port scan for {original_hostname}: {e}"
+                f"Policy {self.name}, Error during port scan for {original_hostname}: {failure_text(e)}"
             )
             # UPDATE SCAN RUN AS FAILED
             self.run_store.update_run(
@@ -673,6 +818,8 @@ class PolicyRunner:
         logger.info(
             f"Policy {self.name}, Hostname {sanitized_hostname}: Get driver '{scope.driver}'"
         )
+        # A refused discovered driver is forgotten, so failure metrics use this copy.
+        driver = scope.driver
 
         try:
             discovery_attempts = get_metric("discovery_attempts")
@@ -731,7 +878,7 @@ class PolicyRunner:
                     {
                         "policy": self.name,
                         "hostname": sanitized_hostname,
-                        "driver": str(scope.driver),
+                        "driver": str(driver),
                         "status": "failed",
                     },
                 )
@@ -781,6 +928,8 @@ class PolicyRunner:
         logger.info(
             f"Policy {self.name}, Hostname {sanitized_hostname}: Get driver '{scope.driver}'"
         )
+        # A refused discovered driver is forgotten, so failure metrics use this copy.
+        driver = scope.driver
 
         try:
             discovery_attempts = get_metric("discovery_attempts")
@@ -839,7 +988,7 @@ class PolicyRunner:
                     {
                         "policy": self.name,
                         "hostname": sanitized_hostname,
-                        "driver": str(scope.driver),
+                        "driver": str(driver),
                         "status": "failed",
                     },
                 )

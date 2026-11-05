@@ -74,14 +74,19 @@ Precedence, highest first: an explicit `log_level`, then `debug: true` on the ba
 then the agent already running at debug (`-d` or `orb.debug.enable`).
 
 **A host that is reachable but not a manageable device logs exactly one record.** When
-a target answers on the scanned port but cannot be logged into, device-discovery emits a
-single WARNING per target per run, with no traceback:
+a target answers on the scanned port but cannot be logged into, or its driver does not fit
+it, device-discovery emits a single WARNING per target per run,
+with no traceback:
 
 ```
 WARNING:device_discovery.policy.runner:Policy my_policy, Hostname 10.0.0.5: Cannot connect to 10.0.0.5
 ```
 
-Stable phrases to alert or grep on: `Cannot connect to` and `Authentication to device failed`.
+Stable phrases to alert or grep on: `Cannot connect to`, `Authentication to device failed`,
+`driver does not fit this device`, and for `junos` targets `ConnectAuthError(`,
+`ConnectRefusedError(`, `ConnectTimeoutError(`, `ConnectUnknownHostError(`,
+`ConnectClosedError(`, `ProbeError(` and, on WARNING lines, `ConnectError(host:`. An ERROR line carrying `ConnectError(host:`
+is a fault PyEZ wrapped while connecting, and keeps its traceback.
 A sweep over unreachable address space produces one line per host, not one per traceback frame.
 
 Tracebacks for these expected failures are emitted only at DEBUG, on a single line with
@@ -106,7 +111,7 @@ Config defines data for the whole scope and is optional overall.
 
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. If not defined, it will execute scope only once  |
+| schedule | cron format | no  |  If defined, it will execute scope following cron schedule time. A host that a subnet or range scan finds is discovered right after that scan, then at each scheduled time. If not defined, it will execute scope only once  |
 | defaults | map | no  |  key value pair that defines default values  |
 | options | map | no | key value pair that defines config options |
 
@@ -315,7 +320,7 @@ The scope defines a list of devices that can be accessed and pulled data.
 | hostname | string | yes  | Device hostname. It also supports subnets (e.g. 192.168.1.0/28) and IP ranges in the format 192.168.0.1-192.168.0.10 or 192.168.0.1-10.  |
 | username | string | yes  | Device username  |
 | password | string | yes  | Device username's password |
-| driver | string | no  | If defined, connect using the specified NAPALM driver. If not set, all installed drivers are tried (or the `discovery_drivers` list if configured). |
+| driver | string | no  | If defined, connect using the specified NAPALM driver. Facts that show the driver does not fit the device, a hostname holding CLI error output or neither a hostname nor a serial number, fail the run and nothing is ingested, unless no device name is sent (`emit_device_name: false` with a `netbox_id` or `device.asset_tag`). If not set, the standard NAPALM drivers are tried (or the `discovery_drivers` list if configured), in order, until one identifies the device, and a driver picked this way whose facts are later refused is discovered again on the next run. When a driver's login is refused and another driver reads the device's facts with the same credentials, the refused driver is tried once more. This covers drivers that log in over SSH or NETCONF (`ios`, `iosxr`, `iosxr_netconf`, `junos`, `nxos_ssh`, `eos` with `transport: ssh`, and SSH or NETCONF drivers listed in `discovery_drivers`) and `nxos` over NX-API. Drivers that log in over another HTTP API, such as `eos` over eAPI, `paloalto_panos`, `aruba_aoscx`, `aruba_osswitch` and `cisco_asa`, report a refusal as a plain connection error and are not retried. |
 | timeout | integer | no | Seconds the driver waits on the device, 60 by default. Used by most drivers that talk to an API or NETCONF, such as `nxos`, `eos` over eAPI and `junos`, and as the per-command wait by `iosxr`. The other SSH drivers ignore it: see [Timeouts](./optional_args.md#timeouts). |
 | optional_args | map | no  | Arguments for the driver and its SSH connection, such as `ssh_config_file` for jumphosts or `read_timeout_override` for devices that are slow to answer. See [Optional Arguments](./optional_args.md). |
 | override_defaults | map | no | Allows overriding of any defaults for a specific device in the scope. Fields merge with the policy's, except that a VLAN group the override sets, and a tenant or VRF it names differently, replace the policy's as a whole (see [VRF tenant](#vrf-tenant)) |
@@ -328,6 +333,30 @@ addresses and `10.0.0.0/22` is 1022. A `/31` and a `/32` have no such pair to
 exclude and stay 2 and 1. IPv6 has no broadcast, so only the network address is
 excluded: `fd00::/126` is 3. A range excludes nothing, because someone who
 wrote `0` and `255` meant them, so `10.0.0.0-255` is 256.
+
+A subnet or range also leaves out every address the policy lists as an entry of
+its own (the address written as itself, a `/32` or a one-address range, on the
+same `optional_args.port`; an entry without a `port` does not match one with
+`port: 22`). That device is discovered once, with its own entry's
+credentials, `driver` and `override_defaults`. One entry can therefore sweep a
+mixed range with one account while the devices that need another account,
+driver or role are listed beside it:
+
+```yaml
+scope:
+  - hostname: 192.0.2.0/24        # switches, with the switch account
+    username: ${SWITCH_USER}
+    password: ${SWITCH_PASS}
+  - hostname: 192.0.2.10          # the firewall, left out of the /24
+    driver: paloalto_panos_ssh
+    username: ${FIREWALL_USER}
+    password: ${FIREWALL_PASS}
+    override_defaults:
+      role: Firewall
+```
+
+An entry written as a name is not matched against addresses. Subnets and ranges
+that overlap each other still each reach the addresses they share.
 
 A policy may expand to at most **65536** addresses in total, counted across all
 its scope entries before any expansion happens. The budget spans the policy

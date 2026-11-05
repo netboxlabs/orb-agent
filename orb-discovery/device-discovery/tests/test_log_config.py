@@ -11,6 +11,7 @@ from device_discovery.log_config import (
     _LEVEL_ALIASES,
     LOG_FORMAT,
     configure_logging,
+    failure_text,
     flatten_message,
     resolve_log_level,
 )
@@ -115,3 +116,54 @@ def test_flatten_message_collapses_multiline_exceptions():
     flattened = flatten_message(error)
     assert "\n" not in flattened
     assert flattened == "line one line two line three"
+
+
+def _chained(*errors):
+    """Raise errors[0] wrapped by each following one in turn; return the outermost."""
+    raised = None
+    for error in errors:
+        try:
+            if raised is None:
+                raise error
+            raise error from raised
+        except BaseException as e:  # noqa: BLE001
+            raised = e
+    return raised
+
+
+def test_failure_text_is_the_message_when_there_is_one():
+    """A failure with a message is named by it, on one line."""
+    assert failure_text(ValueError("Cannot connect\nto 192.0.2.10")) == "Cannot connect to 192.0.2.10"
+
+
+def test_failure_text_takes_the_first_message_down_the_chain():
+    """Empty or None messages give way to the first one the chain carries, after the outer type."""
+    error = _chained(TimeoutError("timed out after 30 s"), RuntimeError(""), ConnectionError(None))
+    assert failure_text(error) == "ConnectionError: timed out after 30 s"
+
+
+def test_failure_text_ignores_a_suppressed_context():
+    """An unrelated error that `from None` suppressed is not used."""
+    try:
+        try:
+            raise KeyError("unrelated")
+        except KeyError:
+            raise ConnectionError(None) from None
+    except ConnectionError as e:
+        error = e
+    assert failure_text(error) == "ConnectionError"
+
+
+def test_failure_text_falls_back_to_the_type():
+    """With no message anywhere, the failure is named by its type."""
+    assert failure_text(_chained(TimeoutError(), ConnectionError(""))) == "ConnectionError"
+
+
+def test_failure_text_never_raises():
+    """A message that cannot be rendered is skipped, never raised from inside a failure handler."""
+
+    class Unprintable(Exception):
+        def __str__(self):
+            raise RuntimeError("cannot render")
+
+    assert failure_text(_chained(Unprintable(), ConnectionError(None))) == "ConnectionError"
