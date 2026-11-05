@@ -9,24 +9,34 @@ import (
 	"unicode/utf8"
 )
 
-// A run of a value is masked wherever it is from longRun bytes, and from
-// minFragment bytes (or the whole of a shorter value) only where it is a word
-// of its own. Backends that truncate a value they quote keep a long run of it
-// (yaml.v3 the first 7 bytes of a string over 10), while a short run inside a
-// word is more likely the error's own text: masking it would hide the words
-// that say what is wrong, a short value like "0" every digit 0.
-const (
-	minFragment = 4
-	longRun     = 7
-)
+// longRun is the shortest head or tail of a value that Values masks on its
+// own. A backend that truncates a value it quotes keeps its head, its tail or
+// both (yaml.v3 the first 7 bytes of a string over 10; pydantic the first 25
+// and the last 24), so only those count. A run from the middle of a value is
+// more likely the error's own words, and masking it would tell anyone who
+// knows the error's text that the value contains them; a head or tail shorter
+// than longRun tells little and is as likely the error's own.
+const longRun = 7
 
-// Values returns s with values masked: every run of s that is also a run of
-// one of them, or of one escaped as Go or JSON quote it, is replaced by
-// MaskedSecret when it is long enough (see longRun and minFragment). A
-// backend's error can quote a policy's data, whose secret references are
-// resolved by then, whole, truncated or escaped; the agent passes such text
-// through Values before it logs or reports it. Empty values are ignored.
+// Values returns s with values masked: every occurrence of one of them, or of
+// one escaped as Go or JSON quote it, is replaced by MaskedSecret, and so is
+// every head or tail of one longRun bytes or longer. A value shorter than
+// longRun is masked only where it is a word of its own, so a short value
+// such as "0" leaves the digits of the error's numbers alone. A backend's
+// error can quote a policy's data, whose secret references are resolved by
+// then, whole, truncated or escaped; the agent passes such text through
+// Values before it logs or reports it. Empty values are ignored.
 func Values(s string, values []string) string {
+	return mask(s, values, false)
+}
+
+// CutValues is Values for s cut from a longer text: a value the cut runs
+// through is masked too, however few of its first bytes s ends with.
+func CutValues(s string, values []string) string {
+	return mask(s, values, true)
+}
+
+func mask(s string, values []string, cut bool) string {
 	var forms []string
 	for _, v := range values {
 		for _, f := range quotedForms(v) {
@@ -47,13 +57,11 @@ func Values(s string, values []string) string {
 	}
 	found := false
 	for _, v := range forms {
-		least := min(len(v), minFragment)
 		// run[j] is the length of the longest run of s ending at s[i] that
 		// ends at v[j-1] too; prev holds it for s[i-1].
 		prev, run := make([]int, len(v)+1), make([]int, len(v)+1)
 		for i := range len(s) {
 			longest := 0
-			endsWord := i+1 == len(s) || !isWordByte(s[i+1])
 			for j := 1; j <= len(v); j++ {
 				if s[i] != v[j-1] {
 					run[j] = 0
@@ -61,17 +69,17 @@ func Values(s string, values []string) string {
 				}
 				n := prev[j-1] + 1
 				run[j] = n
+				// A run as long as j reaches back to v's first byte: s ends
+				// at i with v's head of j bytes. One that ends at v's last
+				// byte is a tail, the whole of v when it is as long as v.
+				head, tail := n >= j, j == len(v)
 				switch {
-				case n >= longRun:
+				case tail && n == len(v) && (n >= longRun || standsAlone(s, i-n+1, i, v)):
 					longest = max(longest, n)
-				case n >= least && endsWord:
-					// The longest of its runs that starts a word.
-					for l := n; l >= least; l-- {
-						if from := i - l + 1; from == 0 || !isWordByte(s[from-1]) {
-							longest = max(longest, l)
-							break
-						}
-					}
+				case tail && n >= longRun:
+					longest = max(longest, n)
+				case head && (j >= longRun || cut && i == len(s)-1):
+					longest = max(longest, j)
 				}
 			}
 			if longest > 0 {
@@ -121,9 +129,19 @@ func Values(s string, values []string) string {
 	return b.String()
 }
 
+// standsAlone reports whether s[from:to+1], an occurrence of v, is a word of
+// its own: on each side, either v's own edge is no word byte or the byte
+// beside it in s is not one.
+func standsAlone(s string, from, to int, v string) bool {
+	startsWord := !isWordByte(v[0]) || from == 0 || !isWordByte(s[from-1])
+	endsWord := !isWordByte(v[len(v)-1]) || to == len(s)-1 || !isWordByte(s[to+1])
+	return startsWord && endsWord
+}
+
 // quotedForms returns v as an error can quote it: as it is, escaped as Go
-// quotes a string (%q, strconv's errors), and escaped as JSON, with the HTML
-// escaping Go's encoder applies by default (gin's JSON answers) and without.
+// quotes a string (%q and strconv's errors; only ASCII, as %+q and Python's
+// json.dumps do), and escaped as JSON, with the HTML escaping Go's encoder
+// applies by default and without, as in a JSON body kept whole.
 func quotedForms(v string) []string {
 	if v == "" {
 		return nil
@@ -135,6 +153,7 @@ func quotedForms(v string) []string {
 		}
 	}
 	add(strconv.Quote(v))
+	add(strconv.QuoteToASCII(v))
 	if b, err := json.Marshal(v); err == nil {
 		add(string(b))
 	}

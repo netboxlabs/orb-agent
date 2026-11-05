@@ -51,10 +51,17 @@ logs the references it resolves, never the values. See
 A backend that refuses a policy can quote one of its values in the error, as a
 type error does for a reference in a field that takes a number. Before the
 agent logs that error or reports it as the policy's error, it masks each
-resolved value as `********`, whether the error quotes the value whole, only
-part of it, or escaped. It then names the fields whose values it masked, since
-the backend's error points at a line of the policy as the agent sent it, not
-at a field you wrote:
+resolved value as `********`:
+
+- the whole value, and its first or last 7 bytes or more, as a backend that
+  shortens a value quotes it;
+- the same escaped, as Go or JSON quote a string.
+
+A value shorter than 7 bytes is masked only where it is a word of its own, and
+a run from the middle of a value is left alone, since it is more likely the
+error's own words. The agent then names the fields whose values it masked,
+because the backend's error points at a line of the policy as the agent sent
+it, not at a field you wrote:
 
 ```text
 400 yaml: unmarshal errors:
@@ -62,7 +69,8 @@ at a field you wrote:
 ```
 
 Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
-at most 1 KiB as the policy's error, ending with `... (truncated)` when cut.
+at most 1 KiB as the policy's error. A refusal that is cut ends with
+`... (truncated)`, followed by the note naming the fields.
 
 ## Rotation
 

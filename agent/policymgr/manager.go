@@ -1,6 +1,7 @@
 package policymgr
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -914,9 +915,11 @@ func secretsFailureReason(err error) string {
 
 // maxBackendErrLen bounds a backend's refusal kept as the policy's reason, as
 // maxSecretsFailureReasonLen bounds a secrets failure: the reason rides every
-// heartbeat. maxMaskedErrLen bounds how much of the refusal is masked and
-// logged: masking takes the refusal's length times the length of the policy's
-// resolved values, under the backend's apply mutex.
+// heartbeat. maxMaskedErrLen bounds the refusal logged, and so how much of it
+// is masked: masking takes the refusal's length times the length of the
+// policy's resolved values, under the backend's apply mutex. Each bound holds
+// the masked text with its truncationMarker; the note naming the masked
+// fields follows it.
 const (
 	maxBackendErrLen = 1024
 	maxMaskedErrLen  = 8 << 10
@@ -932,19 +935,33 @@ const maskedFieldsNamed = 3
 // user never sees. It returns the text to log, at most maxMaskedErrLen of the
 // error, and the policy's reason, at most maxBackendErrLen of it.
 func backendRefusal(text string, resolved []resolvedValue) (logged, reason string) {
-	text, cutLogged := cutAt(text, maxMaskedErrLen)
+	return refusalWithin(text, resolved, maxMaskedErrLen), refusalWithin(text, resolved, maxBackendErrLen)
+}
+
+// refusalWithin is backendRefusal's text kept to limit bytes. The text is cut
+// before it is masked, which bounds the cost, so a value the cut runs through
+// is masked from its first byte. Masking can make the text longer, a short
+// value becoming MaskedSecret, so it is cut again after. The fields named are
+// those whose values are masked in the text kept.
+func refusalWithin(text string, resolved []resolvedValue, limit int) string {
+	window, cut := text, len(text) > limit
+	maskWith := redact.Values
+	if cut {
+		window, _ = cutAt(text, limit-len(truncationMarker))
+		maskWith = redact.CutValues
+	}
 	var values []string
 	for _, r := range resolved {
 		if !slices.Contains(values, r.value) {
 			values = append(values, r.value)
 		}
 	}
-	masked := redact.Values(text, values)
+	masked := maskWith(window, values)
 
 	var fields []string
-	if masked != text {
+	if masked != window {
 		for _, v := range values {
-			if redact.Values(text, []string{v}) == text {
+			if maskWith(window, []string{v}) == window {
 				continue
 			}
 			for _, r := range resolved {
@@ -953,7 +970,7 @@ func backendRefusal(text string, resolved []resolvedValue) (logged, reason strin
 				}
 			}
 		}
-		slices.Sort(fields)
+		slices.SortFunc(fields, comparePaths)
 	}
 	var note string
 	if len(fields) > 0 {
@@ -965,15 +982,44 @@ func backendRefusal(text string, resolved []resolvedValue) (logged, reason strin
 		note = " (" + redact.MaskedSecret + " is the value of the secret reference at " + strings.Join(fields, ", ") + more + ")"
 	}
 
-	logged, reason = masked, masked
-	if cutLogged {
-		logged += truncationMarker
+	if cut || len(masked) > limit {
+		masked, _ = cutAt(masked, limit-len(truncationMarker))
+		masked += truncationMarker
 	}
-	if cutLogged || len(reason) > maxBackendErrLen {
-		reason, _ = cutAt(reason, maxBackendErrLen-len(truncationMarker))
-		reason += truncationMarker
+	return masked + note
+}
+
+// comparePaths orders paths as text, but the numbers in them as numbers, so
+// targets[2] comes before targets[10].
+func comparePaths(a, b string) int {
+	for a != "" && b != "" {
+		da, db := leadingDigits(a), leadingDigits(b)
+		if da > 0 && db > 0 {
+			na, nb := strings.TrimLeft(a[:da], "0"), strings.TrimLeft(b[:db], "0")
+			if c := cmp.Compare(len(na), len(nb)); c != 0 {
+				return c
+			}
+			if c := strings.Compare(na, nb); c != 0 {
+				return c
+			}
+			a, b = a[da:], b[db:]
+			continue
+		}
+		if a[0] != b[0] {
+			return cmp.Compare(a[0], b[0])
+		}
+		a, b = a[1:], b[1:]
 	}
-	return logged + note, reason + note
+	return cmp.Compare(len(a), len(b))
+}
+
+// leadingDigits returns how many ASCII digits s starts with.
+func leadingDigits(s string) int {
+	n := 0
+	for n < len(s) && '0' <= s[n] && s[n] <= '9' {
+		n++
+	}
+	return n
 }
 
 // cutAt returns s cut to at most n bytes at the start of a character, and
