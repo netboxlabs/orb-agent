@@ -467,3 +467,69 @@ func TestCloseUnblocksBlockedEnqueueWhenBufferFull(t *testing.T) {
 		t.Fatal("blocked enqueue did not return after shutdown started")
 	}
 }
+
+// turnClient holds every ingest until released, and counts the ingests it is
+// asked to send.
+type turnClient struct {
+	release chan struct{}
+	sending chan struct{}
+	sent    atomic.Int32
+}
+
+func (c *turnClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	c.sent.Add(1)
+	c.sending <- struct{}{}
+	select {
+	case <-c.release:
+		return &diodepb.IngestResponse{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *turnClient) IngestProto(ctx context.Context, _ []*diodepb.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	return c.Ingest(ctx, nil, opts...)
+}
+
+func (c *turnClient) Close() error { return nil }
+
+// A request whose caller stopped waiting while it was queued is not sent when
+// its turn comes: the caller has had its answer, and a policy that has stopped
+// sends nothing once its stop has returned.
+func TestRequestAbandonedWhileQueuedIsNotSent(t *testing.T) {
+	inner := &turnClient{release: make(chan struct{}), sending: make(chan struct{}, 4)}
+	client, err := NewQueuedClient(inner, 2, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	queue := client.(*QueuedClient).requests
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(context.Background(), nil)
+		firstDone <- err
+	}()
+	<-inner.sending
+
+	ctx, cancel := context.WithCancel(context.Background())
+	abandonedDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(ctx, nil)
+		abandonedDone <- err
+	}()
+	require.Eventually(t, func() bool { return len(queue) == 1 }, time.Second, 5*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-abandonedDone, context.Canceled)
+
+	// Queued behind the abandoned request, so its turn comes first.
+	lastDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(context.Background(), nil)
+		lastDone <- err
+	}()
+	require.Eventually(t, func() bool { return len(queue) == 2 }, time.Second, 5*time.Millisecond)
+	close(inner.release)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-lastDone)
+
+	assert.EqualValues(t, 2, inner.sent.Load(), "the first and last requests only")
+}
