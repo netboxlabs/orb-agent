@@ -810,8 +810,9 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// cannot tell an access port from a trunk. A PVID set anywhere shows the
 	// column is maintained, and the current table may then hold a VLAN assigned
 	// at runtime, so such a device is read as before, the static lists winning.
+	// Judged on every PVID walked, translated or not.
 	standIn := sysObjectIDUnder(all, dellEnterprise) && staticListsPublishedEmpty(rows) &&
-		qbridge.EveryPvidIsDefault(rows.PortPvid)
+		qbridge.EveryPvidIsDefault(bridgePortPvid)
 	if standIn {
 		// A static VLAN whose lists the device omits reads as the empty ones it
 		// publishes, so its PVID is withdrawn like theirs.

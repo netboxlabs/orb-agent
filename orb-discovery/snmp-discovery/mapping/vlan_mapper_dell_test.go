@@ -294,6 +294,11 @@ func TestVlanMapper_BuildGenericRows_DellStandInIsGated(t *testing.T) {
 		{"a port reports a PVID other than 1", func(all ObjectIDValueMap) {
 			all[oidDot1qPvid+"2"] = Value{Value: "10"}
 		}},
+		// The column is maintained whether or not that port's bridge-port row
+		// was walked.
+		{"a bridge port missing from the translation reports a PVID other than 1", func(all ObjectIDValueMap) {
+			all[oidDot1qPvid+"9"] = Value{Value: "10"}
+		}},
 		{"a static egress list names a port", func(all ObjectIDValueMap) {
 			all[oidDot1qVlanStaticEgressPorts+"30"] = Value{Value: portMask(4)}
 		}},
