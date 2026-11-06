@@ -454,6 +454,16 @@ func (r *Runner) ipAddressEntity(host nmap.Host, ipAddr, addr, policyName string
 
 	if record == recordInComments {
 		metadata := config.HostMetadata{Hostnames: recordedHostnames}
+		
+		for _, hostAddr := range host.Addresses {
+			if hostAddr.AddrType == "mac" {
+				metadata.MACAddress = hostAddr.Addr
+				if hostAddr.Vendor != "" {
+					metadata.MACAddress = fmt.Sprintf("%s (%s)", hostAddr.Addr, hostAddr.Vendor)
+				}
+				break
+			}
+		}
 
 		if host.ExtraPorts != nil {
 			metadata.ExtraPorts = make([]config.ExtraPort, len(host.ExtraPorts))
