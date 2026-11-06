@@ -42,7 +42,7 @@ orb:
 | `client_cert` / `client_key` | string | No (must be set together) | Paths to a client cert/key pair for mTLS to CCP. Required when the CyberArk admin authenticates this AppID by client certificate. |
 | `skip_tls_verify` | bool | No | Disables peer-cert verification. Logged at WARN at startup. Lab / development only. |
 | `timeout` | int | No | HTTP timeout in seconds (default `60`). |
-| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
+| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 The following fields accept an environment-variable placeholder of the form `${VAR_NAME}`: `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key`. Placeholders are resolved at agent startup; an unset variable causes the agent to fail startup with a clear error.
 

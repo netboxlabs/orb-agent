@@ -31,7 +31,7 @@ Exactly one of `server_url` or `tenant` must be set. `tenant` is a shorthand tha
 | `tenant` | string | Cond. | Subdomain of a Secret Server Cloud tenant on `secretservercloud.com`, for example `acme` for `acme.secretservercloud.com`. The rest of the hostname is fixed, so any other domain needs `server_url` instead. Mutually exclusive with `server_url`. |
 | `username` | string | Yes | Service-user username with `View Secret` permission on the referenced secrets. |
 | `password` | string | Yes | Password for the service user. |
-| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
+| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 Each of `server_url`, `tenant`, `username`, and `password` accepts an environment-variable placeholder of the form `${VAR_NAME}`. The placeholder is resolved at agent startup; an unset referenced variable causes the agent to fail startup with a clear error.
 
@@ -94,7 +94,7 @@ The Orb Agent will resolve the Delinea reference and use the actual secret value
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every secret that was resolved at least once. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value.
+If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every secret its policies reference. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value.
 
 If a poll fetch fails for a secret, every policy that references it is stopped on its backend and reported failed, whatever the config manager. The agent keeps polling the secret and re-applies those policies once it resolves again; see [Rotation](README.md#rotation).
 

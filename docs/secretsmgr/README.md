@@ -83,10 +83,9 @@ be rotated without restarting the agent.
 When a re-fetch fails, because the secret was deleted, the provider can't be
 reached or the agent's own credentials to it expired, the agent stops the
 policies that use the secret. It keeps them and reports each one failed with
-the reason `failed to resolve policy secrets:` followed by the provider's
-error, which names the reference, as when a secret doesn't resolve the first
-time a policy is applied. The agent goes on reading the secret on the
-schedule:
+a reason that starts with `failed to resolve policy secrets:` and names the
+reference, as it does for a secret that doesn't resolve the first time a
+policy is applied. The agent goes on reading the secret on the schedule:
 
 - once the secret resolves again, the policies are re-applied, with no
   restart;
@@ -94,15 +93,18 @@ schedule:
   the secret again and is applied if it resolves.
 
 A secret that doesn't resolve the first time a policy is applied is read on
-the schedule the same way. Only the secrets a policy's current version names
-count: a policy updated to use another secret no longer depends on the one it
-used before, which can then be deleted.
+the schedule the same way. Only the secrets named by the version of a policy
+the agent applied last count: once an update that moves a policy to another
+secret is applied, the one it used before can be deleted, and a removed
+policy depends on none.
 
 The agent stops the policies whatever made the read fail, so a provider that
-can't be reached for a moment costs them up to one schedule interval, and a
-policy that runs once is run again when it is re-applied, as it is when a
-value changes. The failure is logged once, at ERROR, as `Failed to retrieve
-secret during polling`, and the recovery at INFO as `Secret resolves again`.
+can't be reached for a moment costs them collection until the next read that
+succeeds: a schedule interval at least, more when a poll waits on a provider
+that doesn't answer. A policy that runs once is run again when it is
+re-applied, as it is when a value changes. The failure is logged once, at
+ERROR, as `Failed to retrieve secret during polling`, and a poll that finds
+the secret resolving again logs `Secret resolves again` at INFO.
 
 Without a `schedule`, the agent reads a secret only when it applies a policy,
 so a policy whose secret didn't resolve is applied again when it is delivered

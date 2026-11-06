@@ -29,7 +29,7 @@ orb:
 | `project`  | string | No  | Default Doppler project for short-form placeholders. |
 | `config`   | string | No  | Default Doppler config for short-form placeholders. |
 | `timeout`  | int    | No  | HTTP request timeout in seconds (default `60`). |
-| `schedule` | string | No  | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
+| `schedule` | string | No  | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 Each string field accepts an environment-variable placeholder of the form `${VAR_NAME}`. The placeholder is resolved at agent startup; an unset referenced variable causes the agent to fail startup with a clear error.
 

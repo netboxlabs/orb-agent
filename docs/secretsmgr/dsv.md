@@ -35,7 +35,7 @@ The provider does not eagerly authenticate at startup — the first secret fetch
 | `client_secret` | string | Yes | Client-credential secret. |
 | `tld` | string | No | Region top-level domain for the DSV endpoint (`com`, `eu`, `com.au`, …). Defaults to `com`. |
 | `url_template` | string | No | Advanced override of the SDK URL template (for a regional proxy or gateway). When empty, the SDK default `https://%s.secretsvaultcloud.%s/v1/%s%s` is used. |
-| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
+| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 Each string option accepts an environment-variable placeholder of the form `${VAR_NAME}`. The placeholder is resolved at agent startup; an unset referenced variable causes the agent to fail startup with a clear error.
 
@@ -85,7 +85,7 @@ The Orb Agent resolves the DSV reference and uses the actual secret value when t
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent periodically re-fetches every secret that was resolved at least once. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value.
+If you configure the `schedule` parameter, the Orb Agent periodically re-fetches every secret its policies reference. When a referenced secret value changes, the policies that referenced it are automatically re-applied with the new value.
 
 If a poll fetch fails for a secret, every policy that references it is stopped on its backend and reported failed, whatever the config manager. The agent keeps polling the secret and re-applies those policies once it resolves again; see [Rotation](README.md#rotation).
 
