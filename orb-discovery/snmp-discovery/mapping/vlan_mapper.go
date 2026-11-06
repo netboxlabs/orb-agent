@@ -788,11 +788,13 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// carrying 4094 masks and scanning them once per port, for rows that say
 	// nothing.
 	//
-	// The exception is a Dell switch whose static lists name no port at all,
-	// beside a dot1qPvid of 1 on every port. Its current table is the only
-	// membership it publishes, and read as operational it leaves that PVID
-	// standing, putting VLAN 1 untagged on trunks that do not carry it. There a
-	// VLAN's current rows replace its static row, as configuration.
+	// The exception is a Dell switch whose static lists name no port at all.
+	// Its current table is the only membership it publishes, and read as
+	// operational it leaves standing the PVID of 1 such a switch reports on
+	// every port, putting VLAN 1 untagged on trunks that do not carry it. There
+	// a VLAN's current rows replace its static row, as configuration, where
+	// they answer both columns: with one missing, the PVID would stand in for
+	// it and the same VLAN 1 would come back.
 	standIn := sysObjectIDUnder(all, dellEnterprise) && noStaticListNamesAPort(rows)
 	stoodIn := 0
 	currentNamedAVlan := false
@@ -803,17 +805,10 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		}
 		_, staticEgress := rows.VlanEgressPorts[vid]
 		_, staticUntagged := rows.VlanUntaggedPorts[vid]
-		if standIn && (staticEgress || staticUntagged) {
-			// Both static lists go, so a column the current table does not
-			// answer is absent rather than read as naming no port.
-			delete(rows.VlanEgressPorts, vid)
-			delete(rows.VlanUntaggedPorts, vid)
-			if currentEgress[vid] != nil {
-				rows.VlanEgressPorts[vid] = []byte(egress)
-			}
-			if currentUntagged[vid] != nil {
-				rows.VlanUntaggedPorts[vid] = []byte(untagged)
-			}
+		if standIn && (staticEgress || staticUntagged) &&
+			currentEgress[vid] != nil && currentUntagged[vid] != nil {
+			rows.VlanEgressPorts[vid] = []byte(egress)
+			rows.VlanUntaggedPorts[vid] = []byte(untagged)
 			stoodIn++
 		} else {
 			if !staticEgress && currentEgress[vid] != nil {

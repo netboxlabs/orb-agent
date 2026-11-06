@@ -119,27 +119,32 @@ func TestVlanMapper_BuildGenericRows_DellStandInIsConfiguration(t *testing.T) {
 	assert.Contains(t, rows.VlanUntaggedPorts, 40)
 }
 
-// A current table answering one column for a VLAN stands in for that VLAN's
-// static row as a whole, as a static table publishing only that column would.
-// Keeping the other static list would read it as saying no port is in it.
-func TestVlanMapper_BuildGenericRows_DellStandInIsPerVlan(t *testing.T) {
-	empty := string(make([]byte, 16))
+// A current table answering one column cannot stand in. Without an untagged
+// row the PVID of 1 would stand in for it and come back on every port, and
+// without an egress row a trunk would read as access in its native VLAN. The
+// device is left as it was rather than described wrongly.
+func TestVlanMapper_PostMap_DellStandInNeedsBothCurrentColumns(t *testing.T) {
+	for _, missing := range []string{oidDot1qVlanCurrentEgressPorts, oidDot1qVlanCurrentUntaggedPorts} {
+		all := dellEmptyStaticFixture()
+		for _, vid := range []string{"1", "10", "20", "30"} {
+			delete(all, missing+"0."+vid)
+		}
+		registry := NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
+		ifaces := dellTestInterfaces(registry)
 
-	all := dellEmptyStaticFixture()
-	all[oidDot1qVlanStaticEgressPorts+"50"] = Value{Value: empty}
-	all[oidDot1qVlanStaticUntaggedPorts+"50"] = Value{Value: empty}
-	all[oidDot1qVlanCurrentUntaggedPorts+"0.50"] = Value{Value: portMask(5)}
-	rows := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
-	assert.Equal(t, portMask(5), string(rows.VlanUntaggedPorts[50]))
-	assert.Equal(t, portMask(5), string(rows.VlanEgressPorts[50]), "an untagged member is an egress member")
+		NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).
+			PostMap(all, registry, &config.Defaults{})
 
-	all = dellEmptyStaticFixture()
-	all[oidDot1qVlanStaticEgressPorts+"50"] = Value{Value: empty}
-	all[oidDot1qVlanStaticUntaggedPorts+"50"] = Value{Value: empty}
-	all[oidDot1qVlanCurrentEgressPorts+"0.50"] = Value{Value: portMask(5)}
-	rows = NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
-	assert.Equal(t, portMask(5), string(rows.VlanEgressPorts[50]))
-	assert.NotContains(t, rows.VlanUntaggedPorts, 50)
+		for _, iface := range ifaces {
+			assert.Nil(t, iface.Mode, "%s without %s: mode", *iface.Name, missing)
+			assert.Nil(t, untaggedVid(iface), "%s without %s: untagged VLAN", *iface.Name, missing)
+			assert.Empty(t, taggedVids(iface), "%s without %s: tagged VLANs", *iface.Name, missing)
+		}
+
+		rows := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
+		assert.Equal(t, string(make([]byte, 16)), string(rows.VlanEgressPorts[1]), "without %s: VLAN 1 egress", missing)
+		assert.Equal(t, string(make([]byte, 16)), string(rows.VlanUntaggedPorts[1]), "without %s: VLAN 1 untagged", missing)
+	}
 }
 
 // Either static list is a static row: a VLAN publishing only one of them is
