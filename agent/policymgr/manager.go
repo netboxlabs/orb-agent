@@ -368,11 +368,14 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 			a.logger.Error("got error in update last status", "error", err)
 			return
 		}
-		if secretsFailed && !updatePolicy && a.secrets.Unresolved(payload.ID) == nil {
-			// A poll found the secrets resolving again while this first
-			// manage failed on them, and its report found no record yet to
-			// re-apply: the record is stored now, so apply it once more.
-			a.logger.Info("the secrets of a new policy resolve again since its manage failed on them; applying it again",
+		if secretsFailed && a.secrets.Unresolved(payload.ID) == nil {
+			// Another read found the secrets resolving while this manage
+			// failed on them, and nothing would report it for this policy: a
+			// poll's report finds no record yet for a new policy, and a
+			// concurrent Fleet request leaves the path refreshed with no
+			// report at all, since nothing polls Fleet. The record is stored
+			// now, so apply it once more.
+			a.logger.Info("the secrets of the policy resolve again since its manage failed on them; applying it again",
 				"policy_id", payload.ID, "policy_name", payload.Name)
 			a.refreshPolicyLocked(payload.Backend, payload.ID, nil)
 		}

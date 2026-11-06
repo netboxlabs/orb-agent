@@ -270,3 +270,30 @@ func TestAnAppliedVersionTellsTheSecretsManagerItsReferences(t *testing.T) {
 	defer secretsMgr.mu.Unlock()
 	assert.Equal(t, map[string]any{"unresolved-10": payload.Data}, secretsMgr.applied)
 }
+
+// An update whose secret request fails while another policy's request for the
+// same path succeeds finds the secrets resolving once its record is stored,
+// and nothing else reports it (Fleet has no poll): it is applied once more,
+// so the version before it does not keep running.
+func TestAnUpdateWhoseSecretResolvedWhileItsManageFailedIsApplied(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_update")
+	require.NoError(t, mgr.GetRepo().Update(storedPolicy("unresolved-11", "unresolved_update", policies.Running)))
+	secretsMgr.resolvedAgain = map[string]bool{"unresolved-11": true}
+	update := config.PolicyPayload{
+		Action: "manage", ID: "unresolved-11", Name: "unresolved-11", Backend: "unresolved_update", Version: 4,
+		Data: map[string]any{"community": "${fleet://snmp/community}"},
+	}
+	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-11")).Return(config.PolicyPayload{}, errSecretGone).Once()
+	solved := update
+	solved.Data = map[string]any{"community": "public"}
+	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-11")).Return(solved, nil).Once()
+	be.On("ApplyPolicy", byID("unresolved-11"), true).Return(nil).Once()
+
+	mgr.ManagePolicy(update)
+
+	stored, err := mgr.GetRepo().Get("unresolved-11")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	assert.Equal(t, int32(4), stored.Version)
+	be.AssertExpectations(t)
+}
