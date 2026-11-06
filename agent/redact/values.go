@@ -3,10 +3,12 @@ package redact
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -160,14 +162,15 @@ func shortMasked(s string, from, to int, v string, wording []bool) bool {
 }
 
 // errorWordingPatterns match the wording of the errors a refusal can carry
-// that the agent can tell apart from a policy's values: the status code the
-// agent writes first (backend.CommonRequest), and yaml.v3's decode errors,
-// whose only value is the one it quotes in backticks (submatch 1).
+// that the agent can tell apart from a policy's values: yaml.v3's decode
+// errors, whose only value is the one a type error quotes in backticks
+// (submatch 1). A type error ends with a Go type and its line: text after it
+// on the line, as in a JSON body kept whole, is not the decoder's, so the
+// pattern does not match there and every short value in it stays masked.
 var errorWordingPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`^\d{3} `),
 	regexp.MustCompile(`yaml: unmarshal errors:`),
 	regexp.MustCompile(`yaml: line \d+: `),
-	regexp.MustCompile("line \\d+: cannot unmarshal !!\\S+ (?:`(.*)` )?into [^\n]*"),
+	regexp.MustCompile("(?m)line \\d+: cannot unmarshal !!\\S+ (?:`(.*)` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+$"),
 }
 
 // errorWording returns, for each byte of s, whether it is part of the
@@ -315,14 +318,45 @@ func quotedForms(v string) []string {
 	if enc.Encode(v) == nil {
 		add(strings.TrimSuffix(b.String(), "\n"))
 	}
-	if repr := pythonRepr.Replace(v); !slices.Contains(forms, repr) {
+	if repr := pythonRepr(v); !slices.Contains(forms, repr) {
 		forms = append(forms, repr)
 	}
 	return forms
 }
 
-// pythonRepr escapes a string as Python's repr does between single quotes.
-var pythonRepr = strings.NewReplacer(`\`, `\\`, `'`, `\'`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+// pythonRepr returns v escaped as Python's repr escapes a string between
+// single quotes. It escapes a backslash, a single quote, \n, \r and \t by name, and a
+// character it does not print by its code: \xNN, \uNNNN or \UNNNNNNNN.
+// Python prints what Go's unicode.IsPrint does, the space alone among
+// spaces. A byte that is no UTF-8, which no Python string holds, is kept.
+func pythonRepr(v string) string {
+	var b strings.Builder
+	for i, r := range v {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\'':
+			b.WriteString(`\'`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == utf8.RuneError && !strings.HasPrefix(v[i:], string(utf8.RuneError)):
+			b.WriteByte(v[i])
+		case unicode.IsPrint(r):
+			b.WriteRune(r)
+		case r < 0x100:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r < 0x10000:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
+		}
+	}
+	return b.String()
+}
 
 // isWordByte reports whether c is part of a word: an ASCII letter or digit,
 // or an underscore.
