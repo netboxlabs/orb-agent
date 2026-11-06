@@ -90,6 +90,10 @@ type policyManager struct {
 	secrets secretsmgr.Manager
 	starter BackendStarter
 
+	// resolved holds the values each policy's secret references resolved
+	// to, to mask what its backend reports and prints.
+	resolved *resolvedSecrets
+
 	applyMu sync.Map // backend name -> *sync.Mutex
 
 	// restarting is the marker described in the type comment above.
@@ -121,8 +125,10 @@ func New(logger *slog.Logger, secrets secretsmgr.Manager, c config.Config) (Poli
 	if err != nil {
 		return nil, err
 	}
-	policyManager := &policyManager{logger: logger, config: c, repo: repo, secrets: secrets}
+	resolved := newResolvedSecrets()
+	policyManager := &policyManager{logger: logger, config: c, repo: &maskingRepo{PolicyRepo: repo, secrets: resolved}, secrets: secrets, resolved: resolved}
 	policyManager.secrets.RegisterUpdatePoliciesCallback(policyManager.policiesChanged)
+	backend.SetOutputMask(resolved.maskOutput)
 	return policyManager, nil
 }
 
@@ -597,13 +603,17 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		return fmt.Errorf("%w: %s", ErrBackendNotRunning, pd.Backend)
 	}
 
+	// From here on, what the backend reports or prints about the policy can
+	// quote its secrets, resolved in pd.Data; they are kept to mask it.
+	resolved := resolvedValues(payload.Data, pd.Data)
+	a.resolved.remember(pd.ID, pd.Backend, resolved)
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		// The backend's error can quote the policy's data, which carries its
 		// secrets resolved here: a field of the wrong type is quoted in a
 		// type error. The secrets are masked before the error is logged and
 		// before it becomes the reason the heartbeat reports to Fleet.
-		logged, reason := backendRefusal(err.Error(), resolvedValues(payload.Data, pd.Data))
+		logged, reason := backendRefusal(err.Error(), resolved)
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend, "error", logged)
 		pd.State = policies.FailedToApply
