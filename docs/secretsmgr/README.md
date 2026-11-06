@@ -48,6 +48,31 @@ so its own lines carry no resolved values. With debug logging on, the provider
 logs the references it resolves, never the values. See
 [Debug Logging](../config_samples.md#debug-logging).
 
+A backend that refuses a policy can quote one of its values in the error, as a
+type error does for a reference in a field that takes a number. Before the
+agent logs that error or reports it as the policy's error, it masks each
+resolved value as `********`:
+
+- the whole value, and its first or last 7 bytes or more, as a backend that
+  shortens a value quotes it, including first bytes that end inside a
+  character;
+- the same escaped, as Go or JSON quote a string.
+
+A value shorter than 7 bytes is masked only where it is a word of its own, and
+a run from the middle of a value is left alone, since it is more likely the
+error's own words. The agent then names the fields whose values the error
+quotes, because the backend's error points at a line of the policy as the
+agent sent it, not at a field you wrote:
+
+```text
+400 yaml: unmarshal errors:
+  line 4: cannot unmarshal !!str `********` into int (the error quotes the value of the secret reference at config.retries, masked as ********)
+```
+
+Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
+at most 1 KiB as the policy's error. A refusal that is cut ends with
+`... (truncated)`, followed by the note naming the fields.
+
 ## Rotation
 
 Every provider takes an optional `schedule`, a cron expression for re-fetching

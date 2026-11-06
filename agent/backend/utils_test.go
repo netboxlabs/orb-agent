@@ -95,6 +95,34 @@ func TestCommonRequest_Non2xxReturnsHTTPError(t *testing.T) {
 	assert.Contains(t, err.Error(), "404 policy 'test-job' not found")
 }
 
+// TestCommonRequest_Non2xxJSONWithoutTheMessageKeyReturnsHTTPError answers
+// with a JSON body that does not carry the key the caller reads the message
+// from. It is still a refusal: before, CommonRequest went on to decode the
+// already-read body as the response and reported success, so a policy the
+// backend refused was recorded as applied.
+func TestCommonRequest_Non2xxJSONWithoutTheMessageKeyReturnsHTTPError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proc := &mockCommander{status: backend.CmdStatus{PID: 123}}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"message":"retries: must be an integer"}`))
+	}))
+	defer srv.Close()
+
+	var resp any
+	err := backend.CommonRequest("testbackend", proc, logger, srv.URL, &resp,
+		http.MethodPost, http.NoBody, "application/x-yaml", 5, "detail")
+
+	require.Error(t, err)
+	var httpErr *backend.HTTPError
+	require.ErrorAs(t, err, &httpErr)
+	assert.Equal(t, http.StatusUnprocessableEntity, httpErr.StatusCode)
+	assert.Equal(t, `422 {"message":"retries: must be an integer"}`, err.Error(), "the body says why")
+	assert.Nil(t, resp, "a refusal is not decoded as the response")
+}
+
 func TestCommonRequest_Non2xxEmptyBodyReturnsHTTPError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	proc := &mockCommander{status: backend.CmdStatus{PID: 123}}

@@ -95,18 +95,19 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 		}
 		if len(body) == 0 {
 			return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d empty body", res.StatusCode)}
-		} else if body[0] == '{' {
+		}
+		if body[0] == '{' {
 			var jsonBody map[string]any
 			if err := json.Unmarshal(body, &jsonBody); err == nil {
 				if errMsg, ok := jsonBody[errorMsg]; ok {
 					return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, errMsg)}
 				}
-			} else {
-				return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, body)}
 			}
-		} else {
-			return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, body)}
 		}
+		// Any other body is the message, a JSON one without errorMsg included:
+		// it is a refusal all the same, never a response to decode. Falling
+		// through here reported it as a success.
+		return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, body)}
 	}
 
 	// Read and decode response body

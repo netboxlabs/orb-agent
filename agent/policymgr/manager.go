@@ -1,17 +1,22 @@
 package policymgr
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode/utf8"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
 	"github.com/netboxlabs/orb-agent/agent/config"
 	"github.com/netboxlabs/orb-agent/agent/policies"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 	"github.com/netboxlabs/orb-agent/agent/secretsmgr"
 )
 
@@ -578,10 +583,15 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
+		// The backend's error can quote the policy's data, which carries its
+		// secrets resolved here: a field of the wrong type is quoted in a
+		// type error. The secrets are masked before the error is logged and
+		// before it becomes the reason the heartbeat reports to Fleet.
+		logged, reason := backendRefusal(err.Error(), resolvedValues(payload.Data, pd.Data))
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
-			"backend", pd.Backend, "error", err)
+			"backend", pd.Backend, "error", logged)
 		pd.State = policies.FailedToApply
-		pd.BackendErr = err.Error()
+		pd.BackendErr = reason
 	} else {
 		a.logger.Info("policy applied successfully", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend)
@@ -887,11 +897,13 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 // can embed raw HTTP response bodies, and the reason rides in every heartbeat.
 const maxSecretsFailureReasonLen = 1024
 
+// truncationMarker ends a reason cut to its bound.
+const truncationMarker = "... (truncated)"
+
 // secretsFailureReason builds the operator-facing reason for a failed secret
 // resolution. It contains secret references from the policy body and provider
 // error messages, never resolved secret values.
 func secretsFailureReason(err error) string {
-	const truncationMarker = "... (truncated)"
 	reason := "failed to resolve policy secrets: " + err.Error()
 	if len(reason) > maxSecretsFailureReasonLen {
 		// keep the TOTAL length within maxSecretsFailureReasonLen, marker included,
@@ -899,4 +911,182 @@ func secretsFailureReason(err error) string {
 		reason = reason[:maxSecretsFailureReasonLen-len(truncationMarker)] + truncationMarker
 	}
 	return reason
+}
+
+// maxBackendErrLen bounds a backend's refusal kept as the policy's reason, as
+// maxSecretsFailureReasonLen bounds a secrets failure: the reason rides every
+// heartbeat. maxMaskedErrLen bounds the refusal logged. Each bound holds the
+// masked text with its truncationMarker; the note naming the fields follows
+// it.
+const (
+	maxBackendErrLen = 1024
+	maxMaskedErrLen  = 8 << 10
+)
+
+// quotedFieldsNamed is how many fields a refusal names whose values the
+// backend's error quotes; it counts the others.
+const quotedFieldsNamed = 3
+
+// backendRefusal masks a policy's resolved values in text, a backend's error,
+// and names the fields of the policy whose values the error quotes. It
+// returns the text to log, at most maxMaskedErrLen of the error, and the
+// policy's reason, at most maxBackendErrLen of it.
+//
+// Masking takes time in proportion to the text it masks, under the backend's
+// apply mutex, so only the text kept is masked, and the longest form of a
+// value past it: a value, or a truncated one's tail, that a bound runs
+// through is then whole in what is masked, and masked whole before the bound
+// cuts the masked text.
+func backendRefusal(text string, resolved []resolvedValue) (logged, reason string) {
+	var values []string
+	for _, r := range resolved {
+		if !slices.Contains(values, r.value) {
+			values = append(values, r.value)
+		}
+	}
+	window, cut := cutAt(text, maxMaskedErrLen+redact.LongestForm(values))
+	plain := redact.Values(window, values)
+	masked := plain
+	if cut {
+		// A value the window's end runs through is masked from its first
+		// byte too, in case masking before it made the text short enough to
+		// keep it. It is not named: those first bytes may be the error's own.
+		masked = redact.CutValues(window, values)
+	}
+	var note string
+	if plain != window {
+		note = quotedFieldsNote(window, values, resolved)
+	}
+	return kept(masked, maxMaskedErrLen, cut) + note, kept(masked, maxBackendErrLen, cut) + note
+}
+
+// quotedFieldsNote names the fields of the policy whose values text quotes:
+// a backend's error locates a value by a line of the YAML the agent sent it,
+// which the user never sees. It says what the error quotes, so it holds even
+// when a bound cuts the masked value from what is kept.
+func quotedFieldsNote(text string, values []string, resolved []resolvedValue) string {
+	var fields []string
+	for _, v := range values {
+		if redact.Values(text, []string{v}) == text {
+			continue
+		}
+		for _, r := range resolved {
+			if r.value == v {
+				fields = append(fields, r.path)
+			}
+		}
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	slices.SortFunc(fields, comparePaths)
+	what := "the value of the secret reference at "
+	if len(fields) > 1 {
+		what = "the values of the secret references at "
+	}
+	var more string
+	if len(fields) > quotedFieldsNamed {
+		more = fmt.Sprintf(" and %d more", len(fields)-quotedFieldsNamed)
+		fields = fields[:quotedFieldsNamed]
+	}
+	return " (the error quotes " + what + strings.Join(fields, ", ") + more + ", masked as " + redact.MaskedSecret + ")"
+}
+
+// kept returns at most limit bytes of masked, ending with truncationMarker
+// when they are cut or masked was cut from a longer text. Masking can make a
+// text longer, a short value becoming MaskedSecret.
+func kept(masked string, limit int, cut bool) string {
+	if !cut && len(masked) <= limit {
+		return masked
+	}
+	masked, _ = cutAt(masked, limit-len(truncationMarker))
+	return masked + truncationMarker
+}
+
+// comparePaths orders paths as text, but the numbers in them as numbers, so
+// targets[2] comes before targets[10].
+func comparePaths(a, b string) int {
+	for a != "" && b != "" {
+		da, db := leadingDigits(a), leadingDigits(b)
+		if da > 0 && db > 0 {
+			na, nb := strings.TrimLeft(a[:da], "0"), strings.TrimLeft(b[:db], "0")
+			if c := cmp.Compare(len(na), len(nb)); c != 0 {
+				return c
+			}
+			if c := strings.Compare(na, nb); c != 0 {
+				return c
+			}
+			a, b = a[da:], b[db:]
+			continue
+		}
+		if a[0] != b[0] {
+			return cmp.Compare(a[0], b[0])
+		}
+		a, b = a[1:], b[1:]
+	}
+	return cmp.Compare(len(a), len(b))
+}
+
+// leadingDigits returns how many ASCII digits s starts with.
+func leadingDigits(s string) int {
+	n := 0
+	for n < len(s) && '0' <= s[n] && s[n] <= '9' {
+		n++
+	}
+	return n
+}
+
+// cutAt returns s cut to at most n bytes at the start of a character, and
+// whether it was cut.
+func cutAt(s string, n int) (string, bool) {
+	if len(s) <= n {
+		return s, false
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n], true
+}
+
+// resolvedValue is a value a policy's secret reference resolved to, and the
+// path in the policy's data of the field that held the reference.
+type resolvedValue struct {
+	path  string
+	value string
+}
+
+// resolvedValues returns the strings in resolved that differ from raw at the
+// same place, with their paths: the values a policy's secret references
+// resolved to, since a reference is resolved as a whole string value.
+func resolvedValues(raw, resolved any) []resolvedValue {
+	var values []resolvedValue
+	var walk func(path string, raw, resolved any)
+	walk = func(path string, raw, resolved any) {
+		switch r := resolved.(type) {
+		case string:
+			if s, ok := raw.(string); !ok || s != r {
+				values = append(values, resolvedValue{path: path, value: r})
+			}
+		case map[string]any:
+			m, _ := raw.(map[string]any)
+			for k, v := range r {
+				at := k
+				if path != "" {
+					at = path + "." + k
+				}
+				walk(at, m[k], v)
+			}
+		case []any:
+			s, _ := raw.([]any)
+			for i, v := range r {
+				var at any
+				if i < len(s) {
+					at = s[i]
+				}
+				walk(fmt.Sprintf("%s[%d]", path, i), at, v)
+			}
+		}
+	}
+	walk("", raw, resolved)
+	return values
 }
