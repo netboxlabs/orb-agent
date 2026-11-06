@@ -76,7 +76,34 @@ at most 1 KiB as the policy's error. A refusal that is cut ends with
 ## Rotation
 
 Every provider takes an optional `schedule`, a cron expression for re-fetching
-secrets that have already been resolved. When a referenced value changes, the
-policies that used it are re-applied with the new value, so credentials can be
-rotated without restarting the agent. Each provider's page covers what happens
-when a re-fetch fails.
+the secrets the agent's policies reference. When a referenced value changes,
+the policies that use it are re-applied with the new value, so credentials can
+be rotated without restarting the agent.
+
+When a re-fetch fails, because the secret was deleted, the provider can't be
+reached or the agent's own credentials to it expired, the agent stops the
+policies that use the secret. It keeps them and reports each one failed with
+the reason `failed to resolve policy secrets:` followed by the provider's
+error, which names the reference, as when a secret doesn't resolve the first
+time a policy is applied. The agent goes on reading the secret on the
+schedule:
+
+- once the secret resolves again, the policies are re-applied, with no
+  restart;
+- a policy delivered again meanwhile, by an update to it for example, reads
+  the secret again and is applied if it resolves.
+
+A secret that doesn't resolve the first time a policy is applied is read on
+the schedule the same way. Only the secrets a policy's current version names
+count: a policy updated to use another secret no longer depends on the one it
+used before, which can then be deleted.
+
+The agent stops the policies whatever made the read fail, so a provider that
+can't be reached for a moment costs them up to one schedule interval, and a
+policy that runs once is run again when it is re-applied, as it is when a
+value changes. The failure is logged once, at ERROR, as `Failed to retrieve
+secret during polling`, and the recovery at INFO as `Secret resolves again`.
+
+Without a `schedule`, the agent reads a secret only when it applies a policy,
+so a policy whose secret didn't resolve is applied again when it is delivered
+again or the agent restarts.

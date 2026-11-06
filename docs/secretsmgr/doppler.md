@@ -96,6 +96,6 @@ The Orb Agent will resolve the Doppler reference and use the actual secret value
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. The change is logged at INFO as `Detected changed secret scheme=doppler ref=<name>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (deleted, revoked, network failure), the provider evicts the cache entry and the policy manager marks the affected policies as failed; the policy can recover only after a successful re-fetch.
+If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. The change is logged at INFO as `Detected changed secret scheme=doppler ref=<name>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (deleted, revoked, network failure), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in Doppler without restarting the Orb Agent or manually updating policies.

@@ -149,6 +149,6 @@ The Orb Agent will resolve the CyberArk references and use the actual values whe
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every cached secret. When a value changes, the related policies are automatically updated. The change is logged at INFO as `Detected changed secret scheme=cyberark ref=<body>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (account deleted, AppID revoked, network failure), the provider evicts the cache entry and the policy manager marks the affected policies as failed; the policy can recover only after a successful re-fetch.
+If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every cached secret. When a value changes, the related policies are automatically updated. The change is logged at INFO as `Detected changed secret scheme=cyberark ref=<body>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (account deleted, AppID revoked, network failure), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in CyberArk without restarting the Orb Agent or manually updating policies.
