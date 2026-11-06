@@ -330,9 +330,12 @@ func TestVlanMapper_PostMap_DellStandInIsLogged(t *testing.T) {
 	assert.Contains(t, buf.String(), "vlans=4")
 
 	// The rule applies with nothing to replace, and still changes the result:
-	// the empty static lists withdraw every PVID.
+	// VLAN 1, present by name only, reads as holding no port, withdrawing every
+	// PVID.
 	buf.Reset()
 	all = dellEmptyStaticFixture()
+	delete(all, oidDot1qVlanStaticEgressPorts+"1")
+	delete(all, oidDot1qVlanStaticUntaggedPorts+"1")
 	for _, vid := range []string{"1", "10", "20", "30"} {
 		delete(all, oidDot1qVlanCurrentEgressPorts+"0."+vid)
 		delete(all, oidDot1qVlanCurrentUntaggedPorts+"0."+vid)

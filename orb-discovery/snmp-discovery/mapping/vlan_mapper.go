@@ -809,7 +809,7 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// static row, as configuration, where they answer both columns: one alone
 	// cannot tell an access port from a trunk. A PVID set anywhere shows the
 	// column is maintained, and the current table may then hold a VLAN assigned
-	// at runtime, so such a device keeps the operational reading.
+	// at runtime, so such a device is read as before, the static lists winning.
 	standIn := sysObjectIDUnder(all, dellEnterprise) && staticListsPublishedEmpty(rows) &&
 		qbridge.EveryPvidIsDefault(rows.PortPvid)
 	if standIn {
