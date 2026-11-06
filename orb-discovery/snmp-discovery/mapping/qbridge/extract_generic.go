@@ -45,7 +45,9 @@ type GenericRows struct {
 
 	// VlanEgressFromCurrent and VlanUntaggedFromCurrent name, per column, the
 	// VLANs whose mask came from
-	// dot1qVlanCurrentTable rather than dot1qVlanStaticTable.
+	// dot1qVlanCurrentTable rather than dot1qVlanStaticTable. Current rows
+	// read as configuration, where they stand in for empty static lists, are
+	// not named.
 	//
 	// The two tables do not mean the same thing and cannot be read the same
 	// way. RFC 4363 defines the static untagged mask as configuration, the set

@@ -19,7 +19,10 @@ const (
 	oidSysObjectIDScalar    = ".1.3.6.1.2.1.1.2.0"
 	// juniperEnterprise is the sysObjectID prefix of the one vendor known to
 	// publish Q-BRIDGE port lists as text by default.
-	juniperEnterprise      = ".1.3.6.1.4.1.2636."
+	juniperEnterprise = ".1.3.6.1.4.1.2636."
+	// dellEnterprise is the sysObjectID prefix of Dell, some of whose switches
+	// publish their VLAN membership only in dot1qVlanCurrentTable.
+	dellEnterprise         = ".1.3.6.1.4.1.674."
 	oidDot1qVlanStaticName = ".1.3.6.1.2.1.17.7.1.4.3.1.1."
 	// CISCO-VTP-MIB vtpVlanName. Cisco IOS and IOS-XE do not implement
 	// dot1qVlanStaticName in the default SNMP context, so this is the only
@@ -784,19 +787,43 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// costs: two of them publish all 4094 VLANs empty, and merging those means
 	// carrying 4094 masks and scanning them once per port, for rows that say
 	// nothing.
+	//
+	// The exception is a Dell switch whose static lists name no port at all,
+	// beside a dot1qPvid of 1 on every port. Its current table is the only
+	// membership it publishes, and read as operational it leaves that PVID
+	// standing, putting VLAN 1 untagged on trunks that do not carry it. There a
+	// VLAN's current rows replace its static row, as configuration.
+	standIn := sysObjectIDUnder(all, dellEnterprise) && noStaticListNamesAPort(rows)
+	stoodIn := 0
 	currentNamedAVlan := false
 	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
 		egress, untagged := oneSnapshot(currentEgress[vid], currentUntagged[vid])
 		if isEmptyPortMask(egress) && isEmptyPortMask(untagged) {
 			continue
 		}
-		if _, ok := rows.VlanEgressPorts[vid]; !ok && currentEgress[vid] != nil {
-			rows.VlanEgressPorts[vid] = []byte(egress)
-			rows.VlanEgressFromCurrent[vid] = struct{}{}
-		}
-		if _, ok := rows.VlanUntaggedPorts[vid]; !ok && currentUntagged[vid] != nil {
-			rows.VlanUntaggedPorts[vid] = []byte(untagged)
-			rows.VlanUntaggedFromCurrent[vid] = struct{}{}
+		_, staticEgress := rows.VlanEgressPorts[vid]
+		_, staticUntagged := rows.VlanUntaggedPorts[vid]
+		if standIn && (staticEgress || staticUntagged) {
+			// Both static lists go, so a column the current table does not
+			// answer is absent rather than read as naming no port.
+			delete(rows.VlanEgressPorts, vid)
+			delete(rows.VlanUntaggedPorts, vid)
+			if currentEgress[vid] != nil {
+				rows.VlanEgressPorts[vid] = []byte(egress)
+			}
+			if currentUntagged[vid] != nil {
+				rows.VlanUntaggedPorts[vid] = []byte(untagged)
+			}
+			stoodIn++
+		} else {
+			if !staticEgress && currentEgress[vid] != nil {
+				rows.VlanEgressPorts[vid] = []byte(egress)
+				rows.VlanEgressFromCurrent[vid] = struct{}{}
+			}
+			if !staticUntagged && currentUntagged[vid] != nil {
+				rows.VlanUntaggedPorts[vid] = []byte(untagged)
+				rows.VlanUntaggedFromCurrent[vid] = struct{}{}
+			}
 		}
 		// This VLAN survived resolution with a port in it, which is what makes
 		// it evidence the device has VLANs of its own. Judged here rather than
@@ -811,6 +838,10 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		if qbridge.CoerceVid(vid) != nil {
 			currentNamedAVlan = true
 		}
+	}
+	if stoodIn > 0 {
+		m.logger.Debug("vlan: no static port list names a port; the current table stands in for it",
+			"vlans", stoodIn)
 	}
 
 	// An untagged member is an egress member: RFC 4363 defines the untagged
@@ -831,6 +862,19 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 
 	rows.VlanCatalogPresent = vlanCatalogPresent(all) || currentNamedAVlan
 	return rows
+}
+
+// noStaticListNamesAPort reports whether every static egress and untagged list
+// is empty. Called before the current table is merged in.
+func noStaticListNamesAPort(rows qbridge.GenericRows) bool {
+	for _, masks := range []map[int][]byte{rows.VlanEgressPorts, rows.VlanUntaggedPorts} {
+		for _, mask := range masks {
+			if !isEmptyPortMask(string(mask)) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // buildCiscoSBRows extracts the CISCOSB private-MIB per-port VLAN columns,
