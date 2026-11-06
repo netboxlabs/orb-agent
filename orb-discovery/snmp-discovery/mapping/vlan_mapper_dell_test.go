@@ -2,6 +2,7 @@ package mapping
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"strconv"
@@ -81,6 +82,35 @@ func TestVlanMapper_PostMap_DellStandInForANameOnlyStaticRow(t *testing.T) {
 	assertDellFixtureClassified(t, all)
 }
 
+// Where the current table puts no port in it either, such a VLAN has no port:
+// the lists the device omits read as the empty ones it publishes elsewhere.
+func TestVlanMapper_PostMap_DellNameOnlyVlanWithNoPortHoldsNone(t *testing.T) {
+	for _, current := range []string{"empty", "absent"} {
+		t.Run(current, func(t *testing.T) {
+			all := dellEmptyStaticFixture()
+			delete(all, oidDot1qVlanStaticEgressPorts+"1")
+			delete(all, oidDot1qVlanStaticUntaggedPorts+"1")
+			delete(all, oidDot1qVlanCurrentEgressPorts+"0.1")
+			delete(all, oidDot1qVlanCurrentUntaggedPorts+"0.1")
+			if current == "empty" {
+				all[oidDot1qVlanCurrentEgressPorts+"0.1"] = Value{Value: string(make([]byte, 16))}
+				all[oidDot1qVlanCurrentUntaggedPorts+"0.1"] = Value{Value: string(make([]byte, 16))}
+			}
+			registry := NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
+			ifaces := dellTestInterfaces(registry)
+
+			NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).
+				PostMap(all, registry, &config.Defaults{})
+
+			for _, ifIndex := range []int{101, 103, 105} {
+				assert.NotEqual(t, int64Ptr(1), untaggedVid(ifaces[ifIndex]), "%s untagged VLAN", *ifaces[ifIndex].Name)
+			}
+			assert.Equal(t, StringPtr("tagged"), ifaces[103].Mode)
+			assert.Nil(t, ifaces[105].Mode)
+		})
+	}
+}
+
 // A device publishing one static list column, empty, has shown the same empty
 // lists as one publishing both.
 func TestVlanMapper_PostMap_DellStandInWithOneStaticListColumn(t *testing.T) {
@@ -154,26 +184,37 @@ func TestVlanMapper_BuildGenericRows_DellStandInIsConfiguration(t *testing.T) {
 // device is left as it was rather than described wrongly.
 func TestVlanMapper_PostMap_DellStandInNeedsBothCurrentColumns(t *testing.T) {
 	for _, missing := range []string{oidDot1qVlanCurrentEgressPorts, oidDot1qVlanCurrentUntaggedPorts} {
-		all := dellEmptyStaticFixture()
-		for _, vid := range []string{"1", "10", "20", "30"} {
-			delete(all, missing+"0."+vid)
+		for _, nameOnly := range []bool{false, true} {
+			assertDellOneCurrentColumnInventsNothing(t, missing, nameOnly)
 		}
-		registry := NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
-		ifaces := dellTestInterfaces(registry)
-
-		NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).
-			PostMap(all, registry, &config.Defaults{})
-
-		for _, iface := range ifaces {
-			assert.Nil(t, iface.Mode, "%s without %s: mode", *iface.Name, missing)
-			assert.Nil(t, untaggedVid(iface), "%s without %s: untagged VLAN", *iface.Name, missing)
-			assert.Empty(t, taggedVids(iface), "%s without %s: tagged VLANs", *iface.Name, missing)
-		}
-
-		rows := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
-		assert.Equal(t, string(make([]byte, 16)), string(rows.VlanEgressPorts[1]), "without %s: VLAN 1 egress", missing)
-		assert.Equal(t, string(make([]byte, 16)), string(rows.VlanUntaggedPorts[1]), "without %s: VLAN 1 untagged", missing)
 	}
+}
+
+func assertDellOneCurrentColumnInventsNothing(t *testing.T, missing string, nameOnly bool) {
+	t.Helper()
+	all := dellEmptyStaticFixture()
+	for _, vid := range []string{"1", "10", "20", "30"} {
+		delete(all, missing+"0."+vid)
+	}
+	if nameOnly {
+		delete(all, oidDot1qVlanStaticEgressPorts+"1")
+		delete(all, oidDot1qVlanStaticUntaggedPorts+"1")
+	}
+	what := fmt.Sprintf("without %s, VLAN 1 name only %v", missing, nameOnly)
+
+	registry := NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	ifaces := dellTestInterfaces(registry)
+	NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).
+		PostMap(all, registry, &config.Defaults{})
+	for _, iface := range ifaces {
+		assert.Nil(t, iface.Mode, "%s %s: mode", *iface.Name, what)
+		assert.Nil(t, untaggedVid(iface), "%s %s: untagged VLAN", *iface.Name, what)
+		assert.Empty(t, taggedVids(iface), "%s %s: tagged VLANs", *iface.Name, what)
+	}
+
+	rows := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
+	assert.True(t, isEmptyPortMask(string(rows.VlanEgressPorts[1])), "%s: VLAN 1 egress", what)
+	assert.True(t, isEmptyPortMask(string(rows.VlanUntaggedPorts[1])), "%s: VLAN 1 untagged", what)
 }
 
 // Any static column is a static row: a VLAN publishing only one of them is
@@ -246,6 +287,14 @@ func TestVlanMapper_BuildGenericRows_DellStandInIsGated(t *testing.T) {
 		{"no sysObjectID", func(all ObjectIDValueMap) {
 			delete(all, oidSysObjectIDScalar)
 		}},
+		{"an enterprise number that only starts with Dell's", func(all ObjectIDValueMap) {
+			all[oidSysObjectIDScalar] = Value{Value: "1.3.6.1.4.1.6740.1"}
+		}},
+		// A PVID the operator had to set is evidence the column is maintained,
+		// and the current table may then hold a VLAN assigned at runtime.
+		{"a port reports a PVID other than 1", func(all ObjectIDValueMap) {
+			all[oidDot1qPvid+"2"] = Value{Value: "10"}
+		}},
 		{"a static egress list names a port", func(all ObjectIDValueMap) {
 			all[oidDot1qVlanStaticEgressPorts+"30"] = Value{Value: portMask(4)}
 		}},
@@ -270,14 +319,19 @@ func TestVlanMapper_PostMap_DellStandInIsLogged(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
+	// The VLAN outside the static table is not one the current table stands
+	// in for, and is not counted.
+	all := dellEmptyStaticFixture()
+	all[oidDot1qVlanCurrentEgressPorts+"0.3900"] = Value{Value: portMask(4)}
+	all[oidDot1qVlanCurrentUntaggedPorts+"0.3900"] = Value{Value: string(make([]byte, 16))}
 	registry := NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	dellTestInterfaces(registry)
-	NewVlanMapper(logger, config.Options{}).PostMap(dellEmptyStaticFixture(), registry, &config.Defaults{})
+	NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
 	assert.Equal(t, 1, bytes.Count(buf.Bytes(), []byte(msg)), buf.String())
 	assert.Contains(t, buf.String(), "vlans=4")
 
 	buf.Reset()
-	all := dellEmptyStaticFixture()
+	all = dellEmptyStaticFixture()
 	delete(all, oidSysObjectIDScalar)
 	registry = NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	dellTestInterfaces(registry)

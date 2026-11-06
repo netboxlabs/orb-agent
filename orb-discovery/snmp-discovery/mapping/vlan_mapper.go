@@ -712,7 +712,8 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// BasePortToIfIndex is fully populated.
 	bridgePortPvid := map[int]int{}
 	currentEgress, currentUntagged := map[int]map[int]string{}, map[int]map[int]string{}
-	// staticVlans are the VLANs with any dot1qVlanStaticTable column.
+	// staticVlans are the VLANs with a dot1qVlanStaticTable name, egress,
+	// untagged or row-status column.
 	staticVlans := map[int]struct{}{}
 	for oid, v := range all {
 		switch {
@@ -800,14 +801,29 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// carrying 4094 masks and scanning them once per port, for rows that say
 	// nothing.
 	//
-	// The exception is a Dell switch that publishes static port lists and names
-	// no port in any of them. Its current table is the only membership it
-	// publishes, and read as operational it leaves standing the PVID of 1 such
-	// a switch reports on every port, putting VLAN 1 untagged on trunks that do
-	// not carry it. There a VLAN's current rows replace its static row, as
-	// configuration, where they answer both columns: with one missing, the
-	// PVID would stand in for it and the same VLAN 1 would come back.
-	standIn := sysObjectIDUnder(all, dellEnterprise) && staticListsPublishedEmpty(rows)
+	// The exception is a Dell switch that publishes static port lists naming no
+	// port, and the default PVID of 1 on every port. Its current table is the
+	// only membership it publishes, and read as operational it leaves that PVID
+	// standing, putting VLAN 1 untagged on trunks that do not carry it. There a
+	// VLAN's current rows replace its static row, as configuration, where they
+	// answer both columns: with one missing, the PVID would stand in for it and
+	// the same VLAN 1 would come back. A PVID set anywhere shows the column is
+	// maintained, and the current table may then hold a VLAN assigned at
+	// runtime, so such a device keeps the operational reading.
+	standIn := sysObjectIDUnder(all, dellEnterprise) && staticListsPublishedEmpty(rows) &&
+		qbridge.EveryPvidIsDefault(rows.PortPvid)
+	if standIn {
+		// A static VLAN whose lists the device omits reads as the empty ones it
+		// publishes, so its PVID is withdrawn like theirs.
+		for vid := range staticVlans {
+			if _, ok := rows.VlanEgressPorts[vid]; !ok {
+				rows.VlanEgressPorts[vid] = []byte{}
+			}
+			if _, ok := rows.VlanUntaggedPorts[vid]; !ok {
+				rows.VlanUntaggedPorts[vid] = []byte{}
+			}
+		}
+	}
 	stoodIn := 0
 	currentNamedAVlan := false
 	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
@@ -817,20 +833,19 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		}
 		_, staticEgress := rows.VlanEgressPorts[vid]
 		_, staticUntagged := rows.VlanUntaggedPorts[vid]
-		_, static := staticVlans[vid]
-		if standIn && static && currentEgress[vid] != nil && currentUntagged[vid] != nil {
+		if _, static := staticVlans[vid]; standIn && static &&
+			currentEgress[vid] != nil && currentUntagged[vid] != nil {
 			rows.VlanEgressPorts[vid] = []byte(egress)
 			rows.VlanUntaggedPorts[vid] = []byte(untagged)
 			stoodIn++
-		} else {
-			if !staticEgress && currentEgress[vid] != nil {
-				rows.VlanEgressPorts[vid] = []byte(egress)
-				rows.VlanEgressFromCurrent[vid] = struct{}{}
-			}
-			if !staticUntagged && currentUntagged[vid] != nil {
-				rows.VlanUntaggedPorts[vid] = []byte(untagged)
-				rows.VlanUntaggedFromCurrent[vid] = struct{}{}
-			}
+		}
+		if !staticEgress && currentEgress[vid] != nil {
+			rows.VlanEgressPorts[vid] = []byte(egress)
+			rows.VlanEgressFromCurrent[vid] = struct{}{}
+		}
+		if !staticUntagged && currentUntagged[vid] != nil {
+			rows.VlanUntaggedPorts[vid] = []byte(untagged)
+			rows.VlanUntaggedFromCurrent[vid] = struct{}{}
 		}
 		// This VLAN survived resolution with a port in it, which is what makes
 		// it evidence the device has VLANs of its own. Judged here rather than

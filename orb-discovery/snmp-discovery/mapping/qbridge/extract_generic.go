@@ -259,18 +259,7 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 	// Judged per device, not per port, because that is the scope of the
 	// evidence: one port cannot tell us its own value is meaningful, but its
 	// neighbour reporting VLAN 130 tells us the column is not stuck at DEFVAL.
-	everyPvidIsDefault := true
-	for _, pvid := range rows.PortPvid {
-		// Only a value that names a VLAN counts. CoerceVid rejects 0 and the
-		// reserved ids, so a port answering a sentinel such as 4095 is not
-		// evidence that anyone maintains this column — and treating it as such
-		// would hand every neighbour back the access VLAN 1 this refusal
-		// exists to withhold, on the strength of a value that names no VLAN.
-		if vid := CoerceVid(pvid); vid != nil && *vid != defaultPvid {
-			everyPvidIsDefault = false
-			break
-		}
-	}
+	everyPvidIsDefault := EveryPvidIsDefault(rows.PortPvid)
 
 	out := make(map[int]*SwitchportInfo, len(ifIndexToBridge))
 	for ifIndex := range ifIndexToBridge {
@@ -411,6 +400,22 @@ func ExtractGeneric(rows GenericRows) (map[int]*SwitchportInfo, error) {
 		out[ifIndex] = info
 	}
 	return out, nil
+}
+
+// EveryPvidIsDefault reports whether no port reports a PVID other than the
+// MIB's default of 1.
+func EveryPvidIsDefault(pvids map[int]int) bool {
+	for _, pvid := range pvids {
+		// Only a value that names a VLAN counts. CoerceVid rejects 0 and the
+		// reserved ids, so a port answering a sentinel such as 4095 is not
+		// evidence that anyone maintains this column — and treating it as such
+		// would hand every neighbour back the access VLAN 1 this refusal
+		// exists to withhold, on the strength of a value that names no VLAN.
+		if vid := CoerceVid(pvid); vid != nil && *vid != defaultPvid {
+			return false
+		}
+	}
+	return true
 }
 
 // hasRow reports whether the table carries a row for vid, empty or not.
