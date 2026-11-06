@@ -63,8 +63,10 @@ not in the error's own wording: the status code in front of the refusal and
 the words of a YAML decoding error (`line 4: cannot unmarshal !!str ... into
 int`). A short value such as `int` or `line` is masked where the error quotes
 it and left where it is one of those words, so the error stays readable and
-doesn't show which word the value is. A run from the middle of a value is left
-alone, since it is more likely the error's own words. The agent then names the
+doesn't show which word the value is. In other errors the agent can't tell a
+value from the error's own words, so a short value that is one of them is
+masked there too. A run from the middle of a value is left alone, since it is
+more likely the error's own words. The agent then names the
 fields whose values the error quotes, because the backend's error points at a
 line of the policy as the agent sent it, not at a field you wrote:
 
@@ -73,9 +75,11 @@ line of the policy as the agent sent it, not at a field you wrote:
   line 4: cannot unmarshal !!str `********` into int (the error quotes the value of the secret reference at config.retries, masked as ********)
 ```
 
-When more than one field holds the value the error quotes, the note says so
-without naming them: only the value shows what the error quotes, and naming
-every field that holds it would also show that their secrets are equal.
+When one secret reference fills several fields, the note names them all. When
+different references hold the value the error quotes, it names none of them
+and says the error quotes the value of a secret reference: only the value
+shows what the error quotes, and naming the fields would also show that their
+secrets are equal.
 
 Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
 at most 1 KiB as the policy's error. A refusal that is cut ends with
