@@ -81,6 +81,14 @@ func TestValues(t *testing.T) {
 		want   string
 	}{
 		{
+			// Python's repr quotes a value holding both quotes in single
+			// quotes, escaping those; no Go or JSON form escapes them so.
+			name:   "a value with both quotes, as Python's repr quotes it",
+			text:   `bad password 'Ab\'c"de\'f"gh\'i"jk'`,
+			values: []string{`Ab'c"de'f"gh'i"jk`},
+			want:   `bad password '********'`,
+		},
+		{
 			name:   "a value quoted whole",
 			text:   typeErr,
 			values: []string{"k3Y-9xQz"},
@@ -289,6 +297,27 @@ func TestValuesMaskEachLineOfAValueOfSeveralLines(t *testing.T) {
 			value: doc,
 			want:  `{"level":"info",********}`,
 		},
+		{
+			name:  "the whole value, its short line with it",
+			text:  "creds: user\nlong-password-1 end",
+			value: "user\nlong-password-1",
+			want:  "creds: ******** end",
+		},
+		{
+			name:  "the whole value escaped as JSON, its short line with it",
+			text:  `creds: "user\nlong-password-1"`,
+			value: "user\nlong-password-1",
+			want:  `creds: "********"`,
+		},
+		{
+			// The line as it is ends at the first of the two backslashes JSON
+			// escapes it with; the escaped line takes both, so the JSON line
+			// a backend's adapter parses stays valid.
+			name:  "a line ending in a backslash, in a JSON log line",
+			text:  `{"msg":"line","text":"first-line-abc \\"}`,
+			value: "first-line-abc \\\nsecond-line-def",
+			want:  `{"msg":"line","text":"********"}`,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Values(tc.text, []string{tc.value}); got != tc.want {
@@ -321,6 +350,12 @@ func TestCutValues(t *testing.T) {
 	}
 	if got := Values("refused: xk", []string{"k3Y-9xQz"}); got != "refused: xk" {
 		t.Errorf("Values masks the end of a text that is not cut: %q", got)
+	}
+	// A line of a value of several lines the cut runs through, as a bound on
+	// a refusal that quotes the value whole cuts it.
+	multi := strings.Repeat("A", 20) + "\nZq9xW3rT7yU1iO5pL2kJ\nEND"
+	if got := CutValues("refused: "+strings.Repeat("A", 20)+" Zq9xW3rT7y", []string{multi}); got != "refused: ******** ********" {
+		t.Errorf("CutValues leaves the first bytes of a line at the cut: %q", got)
 	}
 }
 
@@ -373,7 +408,7 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 // whole values overlap and repeat.
 func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
-	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密")}
+	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("aab\n")}
 	word := func(alphabet []rune, n int) string {
 		var b strings.Builder
 		for range n {
@@ -403,19 +438,21 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 			}
 			b.WriteString(v[from:to])
 		}
-		s, forms := b.String(), maskedForms(values)
+		s, m := b.String(), NewMasker(values)
+		forms, lines := formValues(m), lineValues(m)
 		for _, cut := range []bool{false, true} {
-			if got, want := runStarts(s, forms, cut), runStartsByDefinition(s, forms, cut); !slices.Equal(got, want) {
-				t.Fatalf("runStarts(%q, %q, %v)\n got %v\nwant %v", s, forms, cut, got, want)
+			if got, want := m.runStarts(s, cut), runStartsByDefinition(s, forms, lines, cut); !slices.Equal(got, want) {
+				t.Fatalf("runStarts(%q, %q, %q, %v)\n got %v\nwant %v", s, forms, lines, cut, got, want)
 			}
 		}
 	}
 }
 
 // runStartsByDefinition is runStarts by trying every run of s that ends at
-// each byte, from the longest.
-func runStartsByDefinition(s string, forms []string, cut bool) []int {
-	if len(forms) == 0 || s == "" {
+// each byte, from the longest. A line of a value of several lines is masked
+// only whole, or as a head at the end of a cut text.
+func runStartsByDefinition(s string, forms, lines []string, cut bool) []int {
+	if len(forms) == 0 && len(lines) == 0 || s == "" {
 		return nil
 	}
 	start := make([]int, len(s))
@@ -437,8 +474,37 @@ func runStartsByDefinition(s string, forms []string, cut bool) []int {
 			}
 		}
 	}
+	for _, v := range lines {
+		for i := range len(s) {
+			for from := max(0, i-len(v)+1); from <= i; from++ {
+				run := s[from : i+1]
+				if run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) {
+					start[i] = min(start[i], from)
+					found = true
+				}
+			}
+		}
+	}
 	if !found {
 		return nil
 	}
 	return start
+}
+
+// formValues returns the texts of m's forms.
+func formValues(m *Masker) []string {
+	var vs []string
+	for _, f := range m.forms {
+		vs = append(vs, f.v)
+	}
+	return vs
+}
+
+// lineValues returns the texts of m's lines.
+func lineValues(m *Masker) []string {
+	var vs []string
+	for _, f := range m.lines {
+		vs = append(vs, f.v)
+	}
+	return vs
 }
