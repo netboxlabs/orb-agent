@@ -41,7 +41,25 @@ type policySecrets struct {
 	// Only two are kept, since each value is held in memory and masks every
 	// line the backend prints.
 	values, previous []resolvedValue
+	// masks masks the runs the backend reports for the policy, built from
+	// both when one is first stored after they changed.
+	masks *refusalMasks
 }
+
+// both returns the values of the policy's last two resolutions, each once.
+func (ps policySecrets) both() []resolvedValue {
+	both := slices.Clone(ps.values)
+	for _, r := range ps.previous {
+		if !slices.Contains(both, r) {
+			both = append(both, r)
+		}
+	}
+	return both
+}
+
+// noSecrets masks the runs of a policy the agent keeps no values for: it
+// only keeps their reasons to the bound.
+var noSecrets = newRefusalMasks(nil)
 
 type departedSecrets struct {
 	backend string
@@ -74,6 +92,7 @@ func (s *resolvedSecrets) remember(policyID, backendName string, resolved []reso
 	ps.backend = backendName
 	if !sameValues(ps.values, resolved) {
 		ps.previous, ps.values = ps.values, slices.Clone(resolved)
+		ps.masks = nil
 		delete(s.maskers, backendName)
 	}
 	s.byPolicy[policyID] = ps
@@ -110,11 +129,7 @@ func (s *resolvedSecrets) removed(policyID string) {
 // ran on for removedGrace, and has them dropped then, whatever else happens
 // before. The caller holds s.mu.
 func (s *resolvedSecrets) departLocked(ps policySecrets) {
-	s.departed = append(s.departed, departedSecrets{
-		backend: ps.backend,
-		values:  append(slices.Clone(ps.values), ps.previous...),
-		at:      s.now(),
-	})
+	s.departed = append(s.departed, departedSecrets{backend: ps.backend, values: ps.both(), at: s.now()})
 	time.AfterFunc(removedGrace, s.prune)
 }
 
@@ -141,8 +156,23 @@ func (s *resolvedSecrets) pruneLocked() {
 func (s *resolvedSecrets) of(policyID string) []resolvedValue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ps := s.byPolicy[policyID]
-	return append(slices.Clone(ps.values), ps.previous...)
+	return s.byPolicy[policyID].both()
+}
+
+// masksOf returns what masks the runs a backend reports for a policy the
+// agent runs.
+func (s *resolvedSecrets) masksOf(policyID string) *refusalMasks {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ps, ok := s.byPolicy[policyID]
+	if !ok {
+		return noSecrets
+	}
+	if ps.masks == nil {
+		ps.masks = newRefusalMasks(ps.both())
+		s.byPolicy[policyID] = ps
+	}
+	return ps.masks
 }
 
 // maskOutput masks, in a line a backend's process printed, the values of
@@ -156,8 +186,7 @@ func (s *resolvedSecrets) maskOutput(backendName, line string) string {
 		var values []string
 		for _, ps := range s.byPolicy {
 			if ps.backend == backendName {
-				values = appendNew(values, ps.values)
-				values = appendNew(values, ps.previous)
+				values = appendNew(values, ps.both())
 			}
 		}
 		for _, d := range s.departed {
@@ -198,15 +227,14 @@ type maskingRepo struct {
 // whole; any other is kept as reported, since Fleet matches a target to a
 // device by its exact name.
 func (r *maskingRepo) UpdateRuns(policyName string, runs []policies.RunData) error {
-	var resolved []resolvedValue
+	masks := noSecrets
 	if pd, err := r.GetByName(policyName); err == nil {
-		resolved = r.secrets.of(pd.ID)
+		masks = r.secrets.masksOf(pd.ID)
 	}
-	values := appendNew(nil, resolved)
-	isValue := func(s string) bool { return s != "" && slices.Contains(values, s) }
+	isValue := func(s string) bool { return s != "" && slices.Contains(masks.values, s) }
 	for i := range runs {
 		if runs[i].Reason != "" {
-			_, runs[i].Reason = backendRefusal(runs[i].Reason, resolved)
+			_, runs[i].Reason = masks.refusal(runs[i].Reason)
 		}
 		if slices.ContainsFunc(runs[i].Targets, isValue) {
 			targets := slices.Clone(runs[i].Targets)

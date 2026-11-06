@@ -1015,24 +1015,47 @@ const quotedFieldsNamed = 3
 // through is then whole in what is masked, and masked whole before the bound
 // cuts the masked text.
 func backendRefusal(text string, resolved []resolvedValue) (logged, reason string) {
+	return newRefusalMasks(resolved).refusal(text)
+}
+
+// refusalMasks masks a policy's resolved values in a backend's text as
+// backendRefusal does, with what it masks with built once: the runs a
+// backend reports are masked on every poll with the same values. A
+// refusalMasks is not changed once built, but for the maskers of single
+// values, built on first use, so texts can be masked with it concurrently.
+type refusalMasks struct {
+	resolved []resolvedValue
+	values   []string
+	all      *redact.Masker
+	// each masks values[i] alone, to tell which a text quotes.
+	eachOnce sync.Once
+	each     []*redact.Masker
+}
+
+func newRefusalMasks(resolved []resolvedValue) *refusalMasks {
 	var values []string
 	for _, r := range resolved {
 		if !slices.Contains(values, r.value) {
 			values = append(values, r.value)
 		}
 	}
-	window, cut := cutAt(text, maxMaskedErrLen+redact.LongestForm(values))
-	plain := redact.Values(window, values)
+	return &refusalMasks{resolved: resolved, values: values, all: redact.NewMasker(values)}
+}
+
+// refusal returns text masked, as backendRefusal does.
+func (m *refusalMasks) refusal(text string) (logged, reason string) {
+	window, cut := cutAt(text, maxMaskedErrLen+m.all.LongestForm())
+	plain := m.all.Mask(window)
 	masked := plain
 	if cut {
 		// A value the window's end runs through is masked from its first
 		// byte too, in case masking before it made the text short enough to
 		// keep it. It is not named: those first bytes may be the error's own.
-		masked = redact.CutValues(window, values)
+		masked = m.all.MaskCut(window)
 	}
 	var note string
 	if plain != window {
-		note = quotedFieldsNote(window, values, resolved)
+		note = m.quotedFieldsNote(window)
 	}
 	return kept(masked, maxMaskedErrLen, cut) + note, kept(masked, maxBackendErrLen, cut) + note
 }
@@ -1041,14 +1064,19 @@ func backendRefusal(text string, resolved []resolvedValue) (logged, reason strin
 // a backend's error locates a value by a line of the YAML the agent sent it,
 // which the user never sees. It says what the error quotes, so it holds even
 // when a bound cuts the masked value from what is kept.
-func quotedFieldsNote(text string, values []string, resolved []resolvedValue) string {
+func (m *refusalMasks) quotedFieldsNote(text string) string {
+	m.eachOnce.Do(func() {
+		for _, v := range m.values {
+			m.each = append(m.each, redact.NewMasker([]string{v}))
+		}
+	})
 	var fields []string
-	for _, v := range values {
-		if redact.Values(text, []string{v}) == text {
+	for i, v := range m.values {
+		if m.each[i].Mask(text) == text {
 			continue
 		}
-		for _, r := range resolved {
-			if r.value == v {
+		for _, r := range m.resolved {
+			if r.value == v && !slices.Contains(fields, r.path) {
 				fields = append(fields, r.path)
 			}
 		}

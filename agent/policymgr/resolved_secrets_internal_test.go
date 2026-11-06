@@ -85,6 +85,68 @@ func TestPolicyAddedAgainKeepsMaskingWhereItRan(t *testing.T) {
 	})
 }
 
+// TestOutputIsMaskedWithThePreviousResolutionToo has a backend print the
+// value a policy's reference resolved to before its last rotation, as a
+// backend still finishing a run it started with it does, while the policy
+// runs and within the minute after it is removed.
+func TestOutputIsMaskedWithThePreviousResolutionToo(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope.community", value: "b3fore-r0tation"}})
+	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope.community", value: "aft3r-r0tation"}})
+	const printed = "walk with b3fore-r0tation failed"
+
+	assert.Equal(t, "walk with ******** failed", resolved.maskOutput("worker", printed), "while the policy runs")
+	require.NoError(t, repo.Remove("policy-1"))
+	// Another policy applied to the backend changes what masks its output.
+	resolved.remember("policy-2", "worker", []resolvedValue{{path: "scope.password", value: "p4ssw0rd-v4l"}})
+	assert.Equal(t, "walk with ******** failed", resolved.maskOutput("worker", printed), "within the minute after its removal")
+}
+
+// TestRunReasonNamesEachFieldOnce reports a run that quotes a value the
+// policy's last two resolutions share: the note names its field once.
+func TestRunReasonNamesEachFieldOnce(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "worker", []resolvedValue{
+		{path: "scope.community", value: "c0mmun1ty-v4l"}, {path: "scope.password", value: "p4ssw0rd-v1"},
+	})
+	resolved.remember("policy-1", "worker", []resolvedValue{
+		{path: "scope.community", value: "c0mmun1ty-v4l"}, {path: "scope.password", value: "p4ssw0rd-v2"},
+	})
+
+	require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{{ID: "run-1", Status: "failed", Reason: "auth failed for community c0mmun1ty-v4l"}}))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	require.Len(t, stored.Runs, 1)
+	assert.Equal(t, "auth failed for community ******** (the error quotes the value of the secret reference at scope.community, masked as ********)",
+		stored.Runs[0].Reason)
+}
+
+// TestRunReportsReuseWhatTheyAreMaskedWith stores, poll after poll, the runs
+// of a policy holding a private key: what the runs' reasons are masked with
+// is built when the policy's values change, not for every run of every poll,
+// which would cost megabytes and milliseconds a poll for each such policy.
+func TestRunReportsReuseWhatTheyAreMaskedWith(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "worker", []resolvedValue{
+		{path: "scope.key", value: privateKey(t, 1800)},
+		{path: "scope.password", value: "p4ssw0rd-v4l"},
+	})
+	runs := make([]policies.RunData, 50)
+	poll := func() {
+		for i := range runs {
+			runs[i] = policies.RunData{ID: fmt.Sprint("run-", i), Status: "failed", Reason: "timeout polling 192.0.2.10"}
+		}
+		require.NoError(t, repo.UpdateRuns("policy-1", runs))
+	}
+	poll()
+
+	allocs := testing.AllocsPerRun(5, poll)
+	assert.LessOrEqual(t, allocs, 10.0*float64(len(runs)), "allocations to store a poll's runs")
+}
+
 // TestBackendOutputIsMaskedWithItsOwnPoliciesValues leaves a line one
 // backend prints as printed when only another backend's policy resolved the
 // value in it: each backend's lines cost the masking of its own policies'

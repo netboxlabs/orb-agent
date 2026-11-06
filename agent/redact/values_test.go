@@ -89,6 +89,25 @@ func TestValues(t *testing.T) {
 			want:   `bad password '********'`,
 		},
 		{
+			// No Go or JSON form holds \x01 beside an unescaped double quote.
+			name:   "a value with both quotes and a control character, as Python's repr quotes it",
+			text:   `bad password 'a\'b"c\x01defgh'`,
+			values: []string{"a'b\"c\x01defgh"},
+			want:   `bad password '********'`,
+		},
+		{
+			name:   "a value with a no-break space, as Python's repr escapes it",
+			text:   `bad password 'ab\xa0cdefgh'`,
+			values: []string{"ab\u00a0cdefgh"},
+			want:   `bad password '********'`,
+		},
+		{
+			name:   "a value with a next-line character, as Python's repr escapes it",
+			text:   `bad password 'secret\x85xy'`,
+			values: []string{"secret\u0085xy"},
+			want:   `bad password '********'`,
+		},
+		{
 			name:   "a value quoted whole",
 			text:   typeErr,
 			values: []string{"k3Y-9xQz"},
@@ -308,6 +327,18 @@ func TestValuesMaskEachLineOfAValueOfSeveralLines(t *testing.T) {
 			text:  `creds: "user\nlong-password-1"`,
 			value: "user\nlong-password-1",
 			want:  `creds: "********"`,
+		},
+		{
+			name:  "a line that occurs twice, overlapping",
+			text:  "ababababab",
+			value: "first line\nabababab\nlast line",
+			want:  "********",
+		},
+		{
+			name:  "a middle line with quotes, escaped as JSON",
+			text:  `{"msg":"middle \"quoted\" line"}`,
+			value: "first line\nmiddle \"quoted\" line\nlast line",
+			want:  `{"msg":"********"}`,
 		},
 		{
 			// The line as it is ends at the first of the two backslashes JSON

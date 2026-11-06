@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -44,7 +45,7 @@ func CutValues(s string, values []string) string {
 // LongestForm returns the length of the longest form of values that Values
 // masks: how far past a point in a text a value masked there can reach.
 func LongestForm(values []string) int {
-	return NewMasker(values).longest
+	return NewMasker(values).LongestForm()
 }
 
 // Masker masks a set of values in texts, as Values does. Building one finds
@@ -136,6 +137,12 @@ func newForm(v string) form {
 		}
 	}
 	return f
+}
+
+// LongestForm returns the length of the longest form of the Masker's values
+// that it masks, as the function LongestForm does.
+func (m *Masker) LongestForm() int {
+	return m.longest
 }
 
 // Mask returns s with the Masker's values masked, as Values does.
@@ -372,7 +379,9 @@ func quotedForms(v string) []string {
 // single quotes, with those, backslashes, tabs, line breaks and the other
 // ASCII control characters escaped; or, for a value with a single quote and
 // no double one, in double quotes, its single quotes left as they are. A
-// character past ASCII is kept as it is, as repr keeps every printable one.
+// character past ASCII is kept as it is when it is printable and escaped by
+// its code point otherwise, as repr does; Go's and Python's Unicode tables
+// can differ on a character Unicode added recently.
 func pythonRepr(v string) string {
 	quote := '\''
 	if strings.ContainsRune(v, '\'') && !strings.ContainsRune(v, '"') {
@@ -390,14 +399,27 @@ func pythonRepr(v string) string {
 			b.WriteString(`\n`)
 		case r == '\r':
 			b.WriteString(`\r`)
-		case r < ' ' || r == 0x7f:
-			b.WriteString(`\x`)
-			b.WriteString(strconv.FormatInt(int64(r)|0x100, 16)[1:])
+		case r < ' ' || r == 0x7f || r > 0x7f && !unicode.IsPrint(r):
+			b.WriteString(pythonEscape(r))
 		default:
 			b.WriteRune(r)
 		}
 	}
 	return b.String()
+}
+
+// pythonEscape returns r escaped by its code point, as Python's repr escapes
+// a character it does not print: \xNN up to U+00FF, \uNNNN up to U+FFFF and
+// \UNNNNNNNN past it.
+func pythonEscape(r rune) string {
+	switch {
+	case r <= 0xff:
+		return `\x` + strconv.FormatInt(int64(r)|0x100, 16)[1:]
+	case r <= 0xffff:
+		return `\u` + strconv.FormatInt(int64(r)|0x10000, 16)[1:]
+	default:
+		return `\U` + strconv.FormatInt(int64(r)|0x100000000, 16)[1:]
+	}
 }
 
 // isWordByte reports whether c is part of a word: an ASCII letter or digit,
