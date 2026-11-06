@@ -21,3 +21,7 @@ Upstream has no `NOTICE` file, so Apache 2.0 §4(d) does not apply.
 
 To refresh, clone upstream, `rsync -a --delete <clone>/profiles/kentik_snmp/ snmp-profiles/`,
 copy `LICENSE` across, and update the commit, date and count above.
+
+The sync is scoped to `snmp-profiles/`. The sibling `orb-profiles/` directory
+is maintained in this repository and is never part of it; see
+`orb-profiles/PROVENANCE.md`.
