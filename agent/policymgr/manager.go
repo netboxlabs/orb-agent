@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -603,7 +604,8 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		// secrets resolved here: a field of the wrong type is quoted in a
 		// type error. The secrets are masked before the error is logged and
 		// before it becomes the reason the heartbeat reports to Fleet.
-		logged, reason := backendRefusal(err.Error(), resolvedValues(payload.Data, pd.Data))
+		status, text := refusalStatus(err)
+		logged, reason := backendRefusal(status, text, resolvedValues(payload.Data, pd.Data))
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend, "error", logged)
 		pd.State = policies.FailedToApply
@@ -1004,7 +1006,10 @@ const quotedFieldsNamed = 3
 // value past it: a value, or a truncated one's tail, that a bound runs
 // through is then whole in what is masked, and masked whole before the bound
 // cuts the masked text.
-func backendRefusal(text string, resolved []resolvedValue) (logged, reason string) {
+//
+// status, kept in front of what is masked, is the status code an HTTP error
+// starts with (see refusalStatus).
+func backendRefusal(status, text string, resolved []resolvedValue) (logged, reason string) {
 	var values []string
 	for _, r := range resolved {
 		if !slices.Contains(values, r.value) {
@@ -1024,44 +1029,72 @@ func backendRefusal(text string, resolved []resolvedValue) (logged, reason strin
 	if plain != window {
 		note = quotedFieldsNote(window, values, resolved)
 	}
-	return kept(masked, maxMaskedErrLen, cut) + note, kept(masked, maxBackendErrLen, cut) + note
+	return status + kept(masked, maxMaskedErrLen-len(status), cut) + note,
+		status + kept(masked, maxBackendErrLen-len(status), cut) + note
+}
+
+// refusalStatus splits off the status code backend.CommonRequest writes in
+// front of an HTTP error's message: those digits are the agent's, not a
+// policy's value, so a short secret equal to them is not masked there. An
+// error that is no HTTPError, or a text that does not start with its code,
+// is left whole, and masked whole.
+func refusalStatus(err error) (status, text string) {
+	text = err.Error()
+	var httpErr *backend.HTTPError
+	if errors.As(err, &httpErr) {
+		if code := strconv.Itoa(httpErr.StatusCode) + " "; strings.HasPrefix(text, code) {
+			return code, text[len(code):]
+		}
+	}
+	return "", text
 }
 
 // quotedFieldsNote names the fields of the policy whose values text quotes:
 // a backend's error locates a value by a line of the YAML the agent sent it,
 // which the user never sees. It says what the error quotes, so it holds even
-// when a bound cuts the masked value from what is kept. A value more than one
-// field holds names none of them: only the value tells what the error quotes,
-// and naming them all would claim it quotes each, and show that their
-// secrets are equal.
+// when a bound cuts the masked value from what is kept. A value that one
+// secret reference fills names every field that reference is in. A value
+// that different references hold names none of them: only the value tells
+// what the error quotes, and naming them would claim it quotes each, and show
+// that their secrets are equal.
 func quotedFieldsNote(text string, values []string, resolved []resolvedValue) string {
 	var fields []string
-	shared := false
+	unnamed := 0
 	for _, v := range values {
 		if redact.Values(text, []string{v}) == text {
 			continue
 		}
-		var holders []string
+		var holders, refs []string
 		for _, r := range resolved {
 			if r.value == v {
 				holders = append(holders, r.path)
+				if !slices.Contains(refs, r.ref) {
+					refs = append(refs, r.ref)
+				}
 			}
 		}
-		if len(holders) > 1 {
-			shared = true
+		if len(holders) > 1 && (len(refs) > 1 || refs[0] == "") {
+			unnamed++
 			continue
 		}
 		fields = append(fields, holders...)
 	}
-	var sharedNote string
-	if shared {
-		sharedNote = "a value more than one secret reference holds"
+	var others string
+	switch {
+	case unnamed == 1 && len(fields) == 0:
+		others = "the value of a secret reference"
+	case unnamed == 1:
+		others = "the value of another secret reference"
+	case unnamed > 1 && len(fields) == 0:
+		others = "the values of secret references"
+	case unnamed > 1:
+		others = "the values of other secret references"
 	}
 	if len(fields) == 0 {
-		if !shared {
+		if others == "" {
 			return ""
 		}
-		return " (the error quotes " + sharedNote + ", masked as " + redact.MaskedSecret + ")"
+		return " (the error quotes " + others + ", masked as " + redact.MaskedSecret + ")"
 	}
 	slices.SortFunc(fields, comparePaths)
 	what := "the value of the secret reference at "
@@ -1073,10 +1106,10 @@ func quotedFieldsNote(text string, values []string, resolved []resolvedValue) st
 		more = fmt.Sprintf(" and %d more", len(fields)-quotedFieldsNamed)
 		fields = fields[:quotedFieldsNamed]
 	}
-	if shared {
-		sharedNote = ", and " + sharedNote
+	if others != "" {
+		others = ", and " + others
 	}
-	return " (the error quotes " + what + strings.Join(fields, ", ") + more + sharedNote + ", masked as " + redact.MaskedSecret + ")"
+	return " (the error quotes " + what + strings.Join(fields, ", ") + more + others + ", masked as " + redact.MaskedSecret + ")"
 }
 
 // kept returns at most limit bytes of masked, ending with truncationMarker
@@ -1140,6 +1173,7 @@ func cutAt(s string, n int) (string, bool) {
 type resolvedValue struct {
 	path  string
 	value string
+	ref   string // the policy's text there, with its secret reference
 }
 
 // resolvedValues returns the strings in resolved that differ from raw at the
@@ -1152,7 +1186,7 @@ func resolvedValues(raw, resolved any) []resolvedValue {
 		switch r := resolved.(type) {
 		case string:
 			if s, ok := raw.(string); !ok || s != r {
-				values = append(values, resolvedValue{path: path, value: r})
+				values = append(values, resolvedValue{path: path, value: r, ref: s})
 			}
 		case map[string]any:
 			m, _ := raw.(map[string]any)
