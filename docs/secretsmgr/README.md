@@ -89,11 +89,11 @@ does not mask a part of a host name.
 To mask them, the agent keeps the values of a policy's last two resolutions
 that differ, for as long as it runs the policy: after an edit or a rotation,
 the backend goes on reporting a run it ran with the earlier values. A value
-from before that is no longer masked. When the policy is removed, or moved to
-another backend, its values keep masking the output of the backend it ran
-on for a minute, for the lines that backend printed before, and the agent
-then drops them. A line a backend prints about the policy after that, such
-as one from a backend that failed to remove it, is relayed as printed.
+from before that is no longer masked. When the policy is removed, its values
+keep masking the backend's output for a minute, for the lines it printed
+before the removal, and the agent then drops them. A line a backend prints
+about the policy after that, such as one from a backend that failed to
+remove it, is relayed as printed.
 
 ## Rotation
 
