@@ -558,7 +558,10 @@ func TestFleetSecretsManager_SolvePolicySecrets_batchPartialDoesNotCache(t *test
 
 	_, err := fm.SolvePolicySecrets(payload)
 	require.Error(t, err)
-	assert.Empty(t, fm.usedVars, "failed batch must not populate cache")
+	for path, cached := range fm.usedVars {
+		assert.Empty(t, cached.Value, "failed batch must not cache %s's value", path)
+		assert.True(t, cached.stale, "%s is kept stale, to be requested again", path)
+	}
 }
 
 // Helper functions and mocks
@@ -916,4 +919,68 @@ func TestFleetSecretsManager_aStalePathIsNotSubstituted(t *testing.T) {
 	require.ErrorIs(t, err, refreshErr)
 	assert.Empty(t, v)
 	assert.True(t, fm.usedVars["snmp/community"].policyIDs["policy2"])
+}
+
+// A path that fails the first time a policy resolves it is kept, stale and
+// with no value, as the poller keeps a failed reference: Unresolved answers
+// its failure, so a new policy's manage does not take it for one that
+// resolved meanwhile, and the next resolve requests it again.
+func TestFleetSecretsManager_aPathThatFailsItsFirstResolveIsKeptStale(t *testing.T) {
+	fm, pub := newScriptedFleetManager(t, 5, func(_ int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		return &messages.SecretResponseMsg{
+			SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "error",
+			Errors: []messages.SecretError{{Path: req.Secrets[0].Path, Error: "not found", Code: messages.ErrorCodeNotFound}},
+		}, nil
+	})
+	payload := config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://snmp/community}"}}
+
+	_, err := fm.SolvePolicySecrets(payload)
+	require.Error(t, err)
+	assert.Error(t, fm.Unresolved("policy1"))
+	fm.mu.Lock()
+	entry := fm.usedVars["snmp/community"]
+	fm.mu.Unlock()
+	assert.True(t, entry.stale)
+	assert.Empty(t, entry.Value)
+	assert.True(t, entry.policyIDs["policy1"])
+
+	_, err = fm.SolvePolicySecrets(payload)
+	require.Error(t, err)
+	pub.mu.Lock()
+	defer pub.mu.Unlock()
+	assert.Equal(t, 2, pub.n, "a stale path is requested again")
+}
+
+// A first resolve whose request fails after another policy's request for the
+// same path succeeded leaves the path as that one stored it: the failure is
+// older than the value.
+func TestFleetSecretsManager_aFailedFirstResolveLeavesAPathRefreshedMeanwhile(t *testing.T) {
+	release := make(chan struct{})
+	fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		if n == 1 {
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "error",
+				Errors: []messages.SecretError{{Path: req.Secrets[0].Path, Error: "timeout", Code: messages.ErrorCodeTimeout}},
+			}, release
+		}
+		return fleetAnswer(req, "v1", 1), nil
+	})
+	done := make(chan error, 1)
+	go func() {
+		_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+		done <- err
+	}()
+	<-pub.published
+	_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+	require.NoError(t, err)
+	close(release)
+	require.Error(t, <-done)
+
+	fm.mu.Lock()
+	entry := fm.usedVars["snmp/community"]
+	fm.mu.Unlock()
+	assert.False(t, entry.stale)
+	assert.Equal(t, "v1", entry.Value)
+	assert.True(t, entry.policyIDs["policy1"])
+	assert.NoError(t, fm.Unresolved("policy1"))
 }

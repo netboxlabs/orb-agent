@@ -501,6 +501,25 @@ func (f *FleetSecretsManager) ensureSecrets(ctx context.Context, paths []string,
 	}
 
 	if _, err := f.requestSecrets(ctx, missing, policyIDs, true); err != nil {
+		// Kept stale, with the policy among the users, as the poller keeps a
+		// reference whose read failed: Unresolved answers the failure, the
+		// next resolve requests the path again, and a notification for it
+		// is acted on.
+		f.mu.Lock()
+		f.invalidations++
+		for _, path := range missing {
+			cached, exists := f.usedVars[path]
+			if cached.policyIDs == nil {
+				cached.policyIDs = make(map[string]bool)
+			}
+			cached.policyIDs[id] = true
+			// One another request refreshed meanwhile keeps its value.
+			if !exists || cached.stale {
+				cached.stale, cached.err, cached.staleAt = true, err, f.invalidations
+			}
+			f.usedVars[path] = cached
+		}
+		f.mu.Unlock()
 		return err
 	}
 	// A path a later refresh failed for while the request waited stays stale:
