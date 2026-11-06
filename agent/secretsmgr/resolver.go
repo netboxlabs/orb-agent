@@ -21,6 +21,9 @@ type cachedSecret struct {
 	// failing holds the policies whose last resolution of the reference
 	// failed, for the poll that finds it resolving again to re-apply them.
 	failing map[string]bool
+	// gen tells this entry apart from one created for the same reference
+	// after it was dropped, so a read of the dropped one is not applied to it.
+	gen uint64
 }
 
 // resolverFunc returns the resolved value for a single placeholder body

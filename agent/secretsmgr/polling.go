@@ -28,6 +28,7 @@ type pollingBase struct {
 	fetch     fetchFunc
 	mu        sync.Mutex
 	usedVars  map[string]cachedSecret
+	entries   uint64 // the entries created, numbering each one's gen
 	callback  func(map[string]error)
 	scheduler gocron.Scheduler
 }
@@ -161,7 +162,8 @@ func (b *pollingBase) resolveBody(body, policyID string) (string, error) {
 	b.mu.Lock()
 	cached, ok := b.usedVars[body]
 	if !ok {
-		cached = cachedSecret{policyIDs: map[string]bool{}, failed: true}
+		b.entries++
+		cached = cachedSecret{policyIDs: map[string]bool{}, failed: true, gen: b.entries}
 	}
 	cached.policyIDs[policyID] = true
 	stored := false
@@ -229,12 +231,17 @@ func (b *pollingBase) pollSecrets() {
 
 	for _, body := range bodies {
 		b.mu.Lock()
-		wasFailed := b.usedVars[body].failed
+		before, ok := b.usedVars[body]
 		b.mu.Unlock()
+		if !ok {
+			continue
+		}
 		current, err := b.fetch(body)
 		b.mu.Lock()
 		cached, ok := b.usedVars[body]
-		if !ok {
+		if !ok || cached.gen != before.gen {
+			// Dropped while it was read, and perhaps resolved again since
+			// by another policy: this read was of the entry dropped.
 			b.mu.Unlock()
 			continue
 		}
@@ -244,7 +251,7 @@ func (b *pollingBase) pollSecrets() {
 				b.logger.Debug("Secret still fails to resolve", "scheme", b.scheme, "ref", body, "error", err)
 				continue
 			}
-			if wasFailed {
+			if before.failed {
 				// A resolve read it successfully while this read was in
 				// flight, as a re-delivery does: that read stands.
 				b.mu.Unlock()

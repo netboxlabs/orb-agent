@@ -772,3 +772,47 @@ func TestPollingBase_APollsFailedReadOvertakenByASuccessfulResolveIsDropped(t *t
 	defer b.mu.Unlock()
 	require.False(t, b.usedVars["k"].failed)
 }
+
+// A reference dropped while a poll reads it, and resolved again by another
+// policy meanwhile, is a new entry: the poll's read of the old one is
+// discarded, even when it fails, so the policy that resolved it keeps running.
+func TestPollingBase_APollsReadOfAReplacedReferenceIsDiscarded(t *testing.T) {
+	var mu sync.Mutex
+	armed := false
+	entered, release := make(chan struct{}), make(chan struct{})
+	fetch := func(string) (string, error) {
+		mu.Lock()
+		gate := armed
+		armed = false
+		mu.Unlock()
+		if gate {
+			close(entered)
+			<-release
+			return "", errors.New("connection reset")
+		}
+		return "v1", nil
+	}
+	b := newBaseForTest(t, "scheme", fetch)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	_, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+
+	mu.Lock()
+	armed = true
+	mu.Unlock()
+	done := make(chan struct{})
+	go func() { b.pollSecrets(); close(done) }()
+	<-entered
+	b.ForgetPolicy("policy-1")
+	_, err = b.resolveBody("k", "policy-2")
+	require.NoError(t, err)
+	close(release)
+	<-done
+
+	requireNoChange(t, got)
+	require.NoError(t, b.Unresolved("policy-2"))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	require.False(t, b.usedVars["k"].failed)
+}
