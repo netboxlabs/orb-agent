@@ -802,14 +802,14 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// nothing.
 	//
 	// The exception is a Dell switch that publishes static port lists naming no
-	// port, and the default PVID of 1 on every port. Its current table is the
-	// only membership it publishes, and read as operational it leaves that PVID
-	// standing, putting VLAN 1 untagged on trunks that do not carry it. There a
-	// VLAN's current rows replace its static row, as configuration, where they
-	// answer both columns: with one missing, the PVID would stand in for it and
-	// the same VLAN 1 would come back. A PVID set anywhere shows the column is
-	// maintained, and the current table may then hold a VLAN assigned at
-	// runtime, so such a device keeps the operational reading.
+	// port, where no port reports a PVID other than the default of 1. Its
+	// current table is the only membership it publishes, and read as
+	// operational it leaves that PVID standing, putting VLAN 1 untagged on
+	// trunks that do not carry it. There a VLAN's current rows replace its
+	// static row, as configuration, where they answer both columns: one alone
+	// cannot tell an access port from a trunk. A PVID set anywhere shows the
+	// column is maintained, and the current table may then hold a VLAN assigned
+	// at runtime, so such a device keeps the operational reading.
 	standIn := sysObjectIDUnder(all, dellEnterprise) && staticListsPublishedEmpty(rows) &&
 		qbridge.EveryPvidIsDefault(rows.PortPvid)
 	if standIn {
@@ -861,9 +861,9 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			currentNamedAVlan = true
 		}
 	}
-	if stoodIn > 0 {
-		m.logger.Debug("vlan: no static port list names a port; the current table stands in for it",
-			"vlans", stoodIn)
+	if standIn {
+		m.logger.Debug("vlan: no static port list names a port and every PVID is the default; "+
+			"the current table stands in for the static lists", "vlans", stoodIn)
 	}
 
 	// An untagged member is an egress member: RFC 4363 defines the untagged

@@ -178,10 +178,9 @@ func TestVlanMapper_BuildGenericRows_DellStandInIsConfiguration(t *testing.T) {
 	assert.Contains(t, rows.VlanUntaggedPorts, 40)
 }
 
-// A current table answering one column cannot stand in. Without an untagged
-// row the PVID of 1 would stand in for it and come back on every port, and
-// without an egress row a trunk would read as access in its native VLAN. The
-// device is left as it was rather than described wrongly.
+// A current table answering one column cannot stand in: one alone cannot tell
+// an access port from a trunk. The VLAN keeps its empty static lists, so no
+// port is classified from it, rather than described wrongly.
 func TestVlanMapper_PostMap_DellStandInNeedsBothCurrentColumns(t *testing.T) {
 	for _, missing := range []string{oidDot1qVlanCurrentEgressPorts, oidDot1qVlanCurrentUntaggedPorts} {
 		for _, nameOnly := range []bool{false, true} {
@@ -329,6 +328,20 @@ func TestVlanMapper_PostMap_DellStandInIsLogged(t *testing.T) {
 	NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
 	assert.Equal(t, 1, bytes.Count(buf.Bytes(), []byte(msg)), buf.String())
 	assert.Contains(t, buf.String(), "vlans=4")
+
+	// The rule applies with nothing to replace, and still changes the result:
+	// the empty static lists withdraw every PVID.
+	buf.Reset()
+	all = dellEmptyStaticFixture()
+	for _, vid := range []string{"1", "10", "20", "30"} {
+		delete(all, oidDot1qVlanCurrentEgressPorts+"0."+vid)
+		delete(all, oidDot1qVlanCurrentUntaggedPorts+"0."+vid)
+	}
+	registry = NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dellTestInterfaces(registry)
+	NewVlanMapper(logger, config.Options{}).PostMap(all, registry, &config.Defaults{})
+	assert.Equal(t, 1, bytes.Count(buf.Bytes(), []byte(msg)), buf.String())
+	assert.Contains(t, buf.String(), "vlans=0")
 
 	buf.Reset()
 	all = dellEmptyStaticFixture()
