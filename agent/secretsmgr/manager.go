@@ -17,6 +17,13 @@ type Manager interface {
 	// policy is to be applied with it, an error that a reference no longer
 	// resolves, for that reason.
 	RegisterUpdatePoliciesCallback(callback func(map[string]error))
+	// Unresolved returns why a reference the policy uses does not resolve,
+	// as last read, or nil when none of them failed since the policy
+	// resolved it: a failure reported earlier may be out of date.
+	Unresolved(policyID string) error
+	// ForgetPolicy drops a removed policy from the references it used, so it
+	// is no longer reported and a reference no policy uses is no longer read.
+	ForgetPolicy(policyID string)
 	SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error)
 	SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error)
 }
@@ -54,6 +61,13 @@ func (v *dummyManager) Start(_ context.Context) error {
 }
 
 func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]error)) {
+}
+
+func (v *dummyManager) Unresolved(_ string) error {
+	return nil
+}
+
+func (v *dummyManager) ForgetPolicy(_ string) {
 }
 
 func (v *dummyManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {

@@ -53,8 +53,11 @@ func (b *pollingBase) RegisterUpdatePoliciesCallback(callback func(map[string]er
 }
 
 // SolvePolicySecrets walks the policy payload and replaces every
-// ${<scheme>://<body>} placeholder with the resolved secret value.
+// ${<scheme>://<body>} placeholder with the resolved secret value. The policy
+// stops counting as a user of the references its payload no longer names, so
+// a reference it was edited off can no longer stop it.
 func (b *pollingBase) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
+	b.retain(payload.ID, referencedBodies(payload.Data, b.scheme))
 	newPayload := payload
 	processed, err := processValue(payload.Data, b.scheme, payload.ID, b.resolveBody)
 	if err != nil {
@@ -96,6 +99,42 @@ func (b *pollingBase) SolveConfigSecrets(backends map[string]any, cm config.Mana
 	return newBackends, newCM, nil
 }
 
+// ForgetPolicy drops a removed policy from the references it used; a
+// reference no policy uses any more is no longer read.
+func (b *pollingBase) ForgetPolicy(policyID string) {
+	b.retain(policyID, nil)
+}
+
+// retain keeps policyID among the users of the references in bodies only,
+// and drops the references left with no user.
+func (b *pollingBase) retain(policyID string, bodies map[string]bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for body, cached := range b.usedVars {
+		if !cached.policyIDs[policyID] || bodies[body] {
+			continue
+		}
+		delete(cached.policyIDs, policyID)
+		delete(cached.failing, policyID)
+		if len(cached.policyIDs) == 0 {
+			delete(b.usedVars, body)
+		}
+	}
+}
+
+// Unresolved returns the error of the last read of a reference the policy
+// failed on, in order, while that reference still fails, or nil.
+func (b *pollingBase) Unresolved(policyID string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, body := range slices.Sorted(maps.Keys(b.usedVars)) {
+		if cached := b.usedVars[body]; cached.failed && cached.failing[policyID] {
+			return cached.err
+		}
+	}
+	return nil
+}
+
 // resolveBody returns the cached value for body, or fetches and caches it.
 // Race-safe via merge under the lock. A reference whose last read failed is
 // read again rather than served; one that still fails is kept, with the
@@ -126,7 +165,9 @@ func (b *pollingBase) resolveBody(body, policyID string) (string, error) {
 		// Another resolve or a poll read it meanwhile: its value is served.
 		value, err = cached.Value, nil
 	case err == nil:
-		cached.Value, cached.failed, stored = value, false, true
+		cached.Value, cached.failed, cached.err, stored = value, false, nil, true
+	default:
+		cached.err = err
 	}
 	if err != nil {
 		if cached.failing == nil {
@@ -196,13 +237,15 @@ func (b *pollingBase) pollSecrets() {
 				continue
 			}
 			// Every policy that uses it is told, and fails on it until it
-			// resolves again or the policy resolves it.
-			cached.Value, cached.failed = "", true
+			// resolves again or the policy resolves it. The policies told
+			// are a copy: a resolve may change the set once unlocked.
+			cached.Value, cached.failed, cached.err = "", true, err
 			cached.failing = maps.Clone(cached.policyIDs)
 			b.usedVars[body] = cached
+			told := maps.Clone(cached.failing)
 			b.mu.Unlock()
 			b.logger.Error("Failed to retrieve secret during polling", "scheme", b.scheme, "ref", body, "error", err)
-			for id := range cached.failing {
+			for id := range told {
 				markFalse(id, err)
 			}
 			continue
@@ -214,7 +257,7 @@ func (b *pollingBase) pollSecrets() {
 			ids = cached.policyIDs
 		}
 		ids = maps.Clone(ids)
-		cached.Value, cached.failed, cached.failing = current, false, nil
+		cached.Value, cached.failed, cached.err, cached.failing = current, false, nil, nil
 		b.usedVars[body] = cached
 		b.mu.Unlock()
 		switch {

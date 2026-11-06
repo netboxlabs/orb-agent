@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +20,9 @@ import (
 // errSecretGone is how Vault reports a reference whose path was deleted.
 var errSecretGone = errors.New("secret not found: secrets/snmp/community (secrets/data/snmp)")
 
-const unresolvedReason = "failed to resolve policy secrets: secret not found: secrets/snmp/community (secrets/data/snmp)"
+// unresolvedReason is the reason a stop stores: the error the secrets
+// manager answers when asked again, not the one the report carried.
+var unresolvedReason = "failed to resolve policy secrets: " + errStillUnresolved.Error()
 
 func newUnresolvedSecretFixture(t *testing.T, beName string) (*mockBackend, *mockSecretsManager, policymgr.PolicyManager) {
 	t.Helper()
@@ -74,13 +77,15 @@ func TestAPolicyWhoseSecretNoLongerResolvesIsStoppedAndKeptFailed(t *testing.T) 
 	secretsMgr.AssertNotCalled(t, "SolvePolicySecrets", mock.Anything)
 }
 
-// A policy the backend does not run is not asked to stop: only its reason
-// changes to the secret that no longer resolves.
-func TestAnUnresolvedSecretDoesNotStopAPolicyTheBackendDoesNotRun(t *testing.T) {
-	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_not_running")
-	failed := storedPolicy("unresolved-2", "unresolved_not_running", policies.FailedToApply)
+// A record failed by a refused update can still have its older version
+// running on the backend: that version is stopped too, and a backend that
+// answers it runs nothing of the policy is fine.
+func TestAnUnresolvedSecretStopsAnOlderVersionTheBackendStillRuns(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_older_version")
+	failed := storedPolicy("unresolved-2", "unresolved_older_version", policies.FailedToApply)
 	failed.BackendErr = "400 refused"
 	require.NoError(t, mgr.GetRepo().Update(failed))
+	be.On("RemovePolicy", byID("unresolved-2")).Return(&backend.HTTPError{StatusCode: http.StatusNotFound, Message: "404"}).Once()
 
 	secretsMgr.TriggerCallbacks(map[string]error{"unresolved-2": errSecretGone})
 
@@ -88,7 +93,80 @@ func TestAnUnresolvedSecretDoesNotStopAPolicyTheBackendDoesNotRun(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, policies.FailedToApply, stored.State)
 	assert.Equal(t, unresolvedReason, stored.BackendErr)
+	be.AssertExpectations(t)
+}
+
+// A record a backend restart deferred has nothing on the backend, so it is not
+// asked to stop; its reason becomes the secret, so the restart's replay leaves
+// it for the secret to resolve.
+func TestAnUnresolvedSecretOnARecordARestartDeferredIsNotStoppedButLeftOutOfTheReplay(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_deferred")
+	deferred := storedPolicy("unresolved-5", "unresolved_deferred", policies.FailedToApply)
+	deferred.BackendErr = policymgr.ReasonBackendStarting
+	require.NoError(t, mgr.GetRepo().Update(deferred))
+
+	secretsMgr.TriggerCallbacks(map[string]error{"unresolved-5": errSecretGone})
+
+	stored, err := mgr.GetRepo().Get("unresolved-5")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	assert.Equal(t, unresolvedReason, stored.BackendErr)
 	be.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+
+	require.NoError(t, mgr.ApplyBackendPolicies(t.Context(), "unresolved_deferred", be))
+	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+}
+
+// A failure the secrets manager reported can be out of date by the time the
+// policy's backend is free: a delivery resolved the policy's secrets again
+// meanwhile and applied it. The policy is left running.
+func TestAnOutOfDateFailureReportLeavesAPolicyThatResolvedItsSecretsAgain(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_out_of_date")
+	require.NoError(t, mgr.GetRepo().Update(storedPolicy("unresolved-6", "unresolved_out_of_date", policies.Running)))
+	secretsMgr.resolvedAgain = map[string]bool{"unresolved-6": true}
+
+	secretsMgr.TriggerCallbacks(map[string]error{"unresolved-6": errSecretGone})
+
+	stored, err := mgr.GetRepo().Get("unresolved-6")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	assert.Empty(t, stored.BackendErr)
+	be.AssertNotCalled(t, "RemovePolicy", mock.Anything)
+}
+
+// The stop writes the record back without the runs the state monitor wrote
+// while the backend was being called.
+func TestAStopForAnUnresolvedSecretKeepsRunUpdatesWrittenDuringTheStop(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_runs")
+	repo := mgr.GetRepo()
+	require.NoError(t, repo.Update(storedPolicy("unresolved-7", "unresolved_runs", policies.Running)))
+	be.On("RemovePolicy", byID("unresolved-7")).
+		Run(func(_ mock.Arguments) {
+			require.NoError(t, repo.UpdateRuns("unresolved-7", []policies.RunData{{ID: "run-7", Status: "running"}}))
+		}).
+		Return(nil).Once()
+
+	secretsMgr.TriggerCallbacks(map[string]error{"unresolved-7": errSecretGone})
+
+	stored, err := repo.Get("unresolved-7")
+	require.NoError(t, err)
+	assert.Equal(t, policies.FailedToApply, stored.State)
+	require.Len(t, stored.Runs, 1, "the run written during the stop must not be discarded by the write-back")
+	assert.Equal(t, "run-7", stored.Runs[0].ID)
+}
+
+// A removed policy is forgotten by the secrets manager, so a reference it used
+// no longer reports it, and one no policy uses is no longer read.
+func TestARemovedPolicyIsForgottenByTheSecretsManager(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_forget")
+	require.NoError(t, mgr.GetRepo().Update(storedPolicy("unresolved-8", "unresolved_forget", policies.Running)))
+	be.On("RemovePolicy", byID("unresolved-8")).Return(nil).Once()
+
+	require.NoError(t, mgr.RemovePolicy("unresolved-8", "unresolved-8", "unresolved_forget"))
+
+	secretsMgr.mu.Lock()
+	defer secretsMgr.mu.Unlock()
+	assert.Equal(t, []string{"unresolved-8"}, secretsMgr.forgotten)
 }
 
 // Once the secret resolves again, the secrets manager's report re-applies the

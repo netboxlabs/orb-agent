@@ -862,6 +862,8 @@ func (m *mockSecretsManager) Start(_ context.Context) error {
 	return nil
 }
 func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(_ func(map[string]error)) {}
+func (m *mockSecretsManager) Unresolved(_ string) error                               { return nil }
+func (m *mockSecretsManager) ForgetPolicy(_ string)                                   {}
 func (m *mockSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	return payload, nil
 }

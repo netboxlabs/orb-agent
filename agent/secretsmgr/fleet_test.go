@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -618,4 +619,156 @@ func (m *mockSubscriber) Subscribe(_ context.Context, _ *paho.Subscribe) error {
 
 func intPtr(i int) *int {
 	return &i
+}
+
+// scriptedPublisher answers each request with what answer returns for its
+// sequence number; a nil answer leaves the request unanswered, as a lost QoS 0
+// publish. published is closed when the first request is published.
+type scriptedPublisher struct {
+	fm        *FleetSecretsManager
+	mu        sync.Mutex
+	n         int
+	published chan struct{}
+	answer    func(n int, req messages.SecretRequestMsg) (resp *messages.SecretResponseMsg, after <-chan struct{})
+}
+
+func (p *scriptedPublisher) Publish(_ context.Context, _ string, payload []byte) error {
+	var req messages.SecretRequestMsg
+	if err := json.Unmarshal(payload, &req); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	p.n++
+	n := p.n
+	p.mu.Unlock()
+	if n == 1 {
+		close(p.published)
+	}
+	resp, after := p.answer(n, req)
+	if resp == nil {
+		return nil
+	}
+	go func() {
+		if after != nil {
+			<-after
+		}
+		b, _ := json.Marshal(resp)
+		_ = p.fm.handleResponse(b)
+	}()
+	return nil
+}
+
+func fleetAnswer(req messages.SecretRequestMsg, value string, version int) *messages.SecretResponseMsg {
+	return &messages.SecretResponseMsg{
+		SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "success",
+		Secrets: []messages.SecretValue{{Path: req.Secrets[0].Path, Value: value, Version: version}},
+	}
+}
+
+func newScriptedFleetManager(t *testing.T, timeout int, answer func(int, messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{})) (*FleetSecretsManager, *scriptedPublisher) {
+	t.Helper()
+	fm := NewFleetSecretsManager(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError})), config.FleetSecretsManager{Timeout: intPtr(timeout)})
+	fm.ctx = context.Background()
+	fm.requestTopic, fm.responseTopic, fm.updatedTopic = "test/request", "test/response", "test/updated"
+	pub := &scriptedPublisher{fm: fm, published: make(chan struct{}), answer: answer}
+	fm.publisher = pub
+	fm.subscriber = &mockSubscriber{}
+	return fm, pub
+}
+
+// Notifications are handled on goroutines of their own. A request for an
+// older version that fails after a newer notification already refreshed the
+// path neither marks the path stale nor reports its policies failed.
+func TestFleetSecretsManager_aLateFailureLeavesANewerRefreshAlone(t *testing.T) {
+	fm, pub := newScriptedFleetManager(t, 1, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		if n == 1 {
+			return nil, nil // lost: it times out
+		}
+		return fleetAnswer(req, "v3", 3), nil
+	})
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+	}
+	var mu sync.Mutex
+	var reports []map[string]error
+	fm.callback = func(m map[string]error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reports = append(reports, m)
+	}
+
+	done := make(chan struct{})
+	go func() { notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2}); close(done) }()
+	<-pub.published
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+	<-done
+
+	fm.mu.Lock()
+	entry := fm.usedVars["snmp/community"]
+	fm.mu.Unlock()
+	assert.False(t, entry.stale)
+	assert.Equal(t, 3, entry.Version)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, []map[string]error{{"policy1": nil}}, reports)
+	assert.NoError(t, fm.Unresolved("policy1"))
+}
+
+// A stale path is requested again while it is cached. An answer handled late
+// never replaces a newer version a notification stored meanwhile.
+func TestFleetSecretsManager_aLateAnswerNeverReplacesANewerVersion(t *testing.T) {
+	release := make(chan struct{})
+	fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		if n == 1 {
+			return fleetAnswer(req, "v2", 2), release // the re-delivery's request, answered late
+		}
+		return fleetAnswer(req, "v3", 3), nil
+	})
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}, stale: true},
+	}
+	fm.callback = func(map[string]error) {}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+		done <- err
+	}()
+	<-pub.published
+	notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+	close(release)
+	require.NoError(t, <-done)
+
+	fm.mu.Lock()
+	entry := fm.usedVars["snmp/community"]
+	fm.mu.Unlock()
+	assert.Equal(t, 3, entry.Version)
+	assert.Equal(t, "v3", entry.Value)
+	assert.False(t, entry.stale)
+}
+
+// Unresolved answers the failed refresh of a stale path the policy uses, and
+// nil once the path is refreshed; a policy edited off a path or forgotten no
+// longer counts among its users.
+func TestFleetSecretsManager_unresolvedAndTheUsersOfAPath(t *testing.T) {
+	fm, _ := newScriptedFleetManager(t, 5, func(_ int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		return fleetAnswer(req, "fresh", 9), nil
+	})
+	refreshErr := fmt.Errorf("secret request failed for path a: unavailable")
+	fm.usedVars = map[string]fleetCachedSecret{
+		"a": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true, "policy2": true}, stale: true, err: refreshErr},
+		"b": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy2": true}},
+	}
+	assert.ErrorIs(t, fm.Unresolved("policy1"), refreshErr)
+
+	// policy2 is edited off "a"; policy1 is removed.
+	_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://b}"}})
+	require.NoError(t, err)
+	assert.NoError(t, fm.Unresolved("policy2"))
+	fm.ForgetPolicy("policy1")
+
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	assert.NotContains(t, fm.usedVars, "a", "a path no policy uses is dropped")
+	assert.Equal(t, map[string]bool{"policy2": true}, fm.usedVars["b"].policyIDs)
 }

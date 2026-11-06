@@ -92,6 +92,29 @@ type mockSecretsManager struct {
 	mock.Mock
 	callbacks   []func(map[string]error)
 	passthrough bool
+
+	mu sync.Mutex
+	// resolvedAgain names the policies Unresolved answers nil for; any other
+	// policy is still failing, with errStillUnresolved.
+	resolvedAgain map[string]bool
+	forgotten     []string
+}
+
+var errStillUnresolved = errors.New("secret not found: still unresolved")
+
+func (m *mockSecretsManager) Unresolved(policyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.resolvedAgain[policyID] {
+		return nil
+	}
+	return errStillUnresolved
+}
+
+func (m *mockSecretsManager) ForgetPolicy(policyID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forgotten = append(m.forgotten, policyID)
 }
 
 func (m *mockSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
@@ -964,7 +987,7 @@ func TestPoliciesChanged(t *testing.T) {
 	assert.Contains(t, stateMap, "policy2")
 	require.Contains(t, stateMap, "policy3")
 	assert.Equal(t, policies.FailedToApply, stateMap["policy3"].State)
-	assert.Equal(t, "failed to resolve policy secrets: secret not found: p3/token", stateMap["policy3"].BackendErr)
+	assert.Equal(t, "failed to resolve policy secrets: "+errStillUnresolved.Error(), stateMap["policy3"].BackendErr)
 
 	// Verify policy2 was not updated in DB
 	updatedPolicy := stateMap["policy2"]

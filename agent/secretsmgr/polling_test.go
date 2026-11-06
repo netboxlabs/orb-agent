@@ -436,3 +436,265 @@ func TestPollingBase_PoliciesThatResolvedAFailedReferenceAreNotReappliedByThePol
 	b.pollSecrets()
 	requireNoChange(t, got)
 }
+
+// A poll that finds a reference failing tells the policies that use it while
+// resolves of that reference change who fails on it. Run with -race; without
+// it, the unguarded version ended in "concurrent map iteration and map write".
+func TestPollingBase_APollTellsThePoliciesWhileResolvesChangeThem(t *testing.T) {
+	var healthy atomic.Bool
+	healthy.Store(true)
+	fetch := func(string) (string, error) {
+		if healthy.Load() {
+			return "v", nil
+		}
+		return "", errors.New("sealed")
+	}
+	b := newBaseForTest(t, "scheme", fetch)
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) {})
+	for i := 0; i < 3; i++ {
+		_, _ = b.resolveBody("k", fmt.Sprintf("p%d", i))
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			_, _ = b.resolveBody("k", fmt.Sprintf("p%d", i%3))
+		}
+	}()
+	for n := 0; n < 2000; n++ {
+		healthy.Store(false)
+		b.pollSecrets()
+		healthy.Store(true)
+		b.pollSecrets()
+	}
+	close(stop)
+	wg.Wait()
+}
+
+// A resolve whose own read fails while a poll finds the reference resolving
+// again is served the poll's value.
+func TestPollingBase_AResolveRacingARecoveringPollIsServedThePollsValue(t *testing.T) {
+	var mu sync.Mutex
+	resolveEntered := make(chan struct{})
+	releaseResolve := make(chan struct{})
+	healthy, resolving := false, false
+	fetch := func(string) (string, error) {
+		mu.Lock()
+		isResolve := resolving
+		resolving = false
+		h := healthy
+		mu.Unlock()
+		if isResolve {
+			close(resolveEntered)
+			<-releaseResolve
+			return "", errors.New("connection reset")
+		}
+		if h {
+			return "v1", nil
+		}
+		return "", errors.New("sealed")
+	}
+	b := newBaseForTest(t, "scheme", fetch)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	_, err := b.resolveBody("k", "policy-1")
+	require.Error(t, err)
+
+	mu.Lock()
+	resolving = true
+	mu.Unlock()
+	type result struct {
+		v   string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() { v, err := b.resolveBody("k", "policy-2"); done <- result{v, err} }()
+	<-resolveEntered
+	mu.Lock()
+	healthy = true
+	mu.Unlock()
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-1": nil}, receiveChange(t, got))
+	close(releaseResolve)
+	r := <-done
+	require.NoError(t, r.err, "the poll read it meanwhile: its value is served")
+	require.Equal(t, "v1", r.v)
+}
+
+// A policy that resolved a failed reference again stays among its users, so a
+// later change of its value re-applies it with the others.
+func TestPollingBase_APolicyThatResolvedAFailedReferenceIsReappliedOnItsNextChange(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("k", "v1")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	for _, id := range []string{"policy-1", "policy-2"} {
+		_, err := b.resolveBody("k", id)
+		require.NoError(t, err)
+	}
+	s.setError("k", errors.New("sealed"))
+	b.pollSecrets()
+	receiveChange(t, got)
+	s.setValue("k", "v1")
+	_, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-2": nil}, receiveChange(t, got))
+
+	s.setValue("k", "v2")
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-1": nil, "policy-2": nil}, receiveChange(t, got))
+}
+
+// A policy failing on several references is reported with the first in order,
+// the same every time.
+func TestPollingBase_APolicyFailingOnSeveralReferencesIsReportedWithTheFirst(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		s := newStubFetcher()
+		b := newBaseForTest(t, "scheme", s.fn)
+		got := make(chan map[string]error, 1)
+		b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+		for _, k := range []string{"a", "b", "c", "d"} {
+			s.setValue(k, "v")
+			_, err := b.resolveBody(k, "policy-1")
+			require.NoError(t, err)
+		}
+		for _, k := range []string{"a", "b", "c", "d"} {
+			s.setError(k, errors.New("gone: "+k))
+		}
+		b.pollSecrets()
+		require.EqualError(t, receiveChange(t, got)["policy-1"], "gone: a")
+	}
+}
+
+// Unresolved answers, from the cache, the failure of a reference the policy
+// is still failing on, and nil once the policy resolved it again.
+func TestPollingBase_UnresolvedAnswersAStandingFailureOnly(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("k", "v1")
+	b := newBaseForTest(t, "scheme", s.fn)
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) {})
+	_, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	require.NoError(t, b.Unresolved("policy-1"))
+
+	readErr := errors.New("secret not found: k")
+	s.setError("k", readErr)
+	b.pollSecrets()
+	calls := s.calls.Load()
+	require.ErrorIs(t, b.Unresolved("policy-1"), readErr)
+	require.Equal(t, calls, s.calls.Load(), "Unresolved reads no secret")
+	require.NoError(t, b.Unresolved("policy-2"), "a policy that does not use it")
+
+	s.setValue("k", "v1")
+	_, err = b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	require.NoError(t, b.Unresolved("policy-1"))
+}
+
+// A policy edited off a reference no longer uses it: the reference failing
+// later does not report the policy, and one no policy uses is dropped.
+func TestPollingBase_APolicyEditedOffAReferenceIsNotReportedForIt(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("old/community", "public")
+	s.setValue("new/community", "public2")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://old/community}"}})
+	require.NoError(t, err)
+	_, err = b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://new/community}"}})
+	require.NoError(t, err)
+
+	s.setError("old/community", errors.New("secret not found: old/community"))
+	b.pollSecrets()
+	requireNoChange(t, got)
+	b.mu.Lock()
+	_, kept := b.usedVars["old/community"]
+	b.mu.Unlock()
+	require.False(t, kept, "a reference no policy uses is not read again")
+	require.NoError(t, b.Unresolved("policy-1"))
+}
+
+// A removed policy is forgotten: a reference only it used, even one that never
+// resolved, is no longer read.
+func TestPollingBase_AForgottenPolicysReferencesAreNoLongerRead(t *testing.T) {
+	s := newStubFetcher()
+	s.setError("typo/path", errors.New("secret not found: typo/path"))
+	s.setValue("shared", "v")
+	b := newBaseForTest(t, "scheme", s.fn)
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) {})
+	_, err := b.resolveBody("typo/path", "policy-1")
+	require.Error(t, err)
+	for _, id := range []string{"policy-1", "policy-2"} {
+		_, err = b.resolveBody("shared", id)
+		require.NoError(t, err)
+	}
+
+	b.ForgetPolicy("policy-1")
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	require.NotContains(t, b.usedVars, "typo/path")
+	require.Equal(t, map[string]bool{"policy-2": true}, b.usedVars["shared"].policyIDs)
+}
+
+// A policy edited off a reference that is failing is not re-applied when that
+// reference resolves again, and is no longer unresolved on its account.
+func TestPollingBase_APolicyEditedOffAFailingReferenceIsNotReappliedForIt(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("old", "v")
+	s.setValue("new", "v")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	for _, id := range []string{"policy-1", "policy-2"} {
+		_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: id, Data: map[string]any{"c": "${scheme://old}"}})
+		require.NoError(t, err)
+	}
+	s.setError("old", errors.New("sealed"))
+	b.pollSecrets()
+	require.Len(t, receiveChange(t, got), 2)
+
+	_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://new}"}})
+	require.NoError(t, err)
+	require.NoError(t, b.Unresolved("policy-1"))
+
+	s.setValue("old", "v")
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-2": nil}, receiveChange(t, got))
+}
+
+// A policy failing on two references, one of which another policy resolved
+// again since, is still unresolved on account of the other.
+func TestPollingBase_UnresolvedLooksPastAReferenceThatResolvesAgain(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("a", "v")
+	s.setValue("b", "v")
+	b := newBaseForTest(t, "scheme", s.fn)
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) {})
+	for _, k := range []string{"a", "b"} {
+		_, err := b.resolveBody(k, "policy-1")
+		require.NoError(t, err)
+	}
+	_, err := b.resolveBody("a", "policy-2")
+	require.NoError(t, err)
+	bErr := errors.New("gone: b")
+	s.setError("a", errors.New("gone: a"))
+	s.setError("b", bErr)
+	b.pollSecrets()
+
+	s.setValue("a", "v")
+	_, err = b.resolveBody("a", "policy-2")
+	require.NoError(t, err)
+
+	require.ErrorIs(t, b.Unresolved("policy-1"), bErr)
+}
