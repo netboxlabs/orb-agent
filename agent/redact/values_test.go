@@ -238,6 +238,12 @@ func TestValues(t *testing.T) {
 			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!seq into map[string]interface {}",
 		},
 		{
+			name:   "a short value after text like a YAML type error inside another message is masked",
+			text:   "400 p1: Invalid: line 1: cannot unmarshal !!str into abc",
+			values: []string{"abc"},
+			want:   "400 p1: Invalid: line 1: cannot unmarshal !!str into ********",
+		},
+		{
 			// Only its first byte is outside the wording: it is not a word
 			// of the error's own, but neither is it the value quoted.
 			name:   "a short value that runs into the YAML error's wording is left",
@@ -575,8 +581,14 @@ func TestErrorWording(t *testing.T) {
 			wording: "^^^^^^^^^^^^^^                         ",
 		},
 		{
-			text:    "x line 7: cannot unmarshal !!map into []string",
-			wording: "  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+			text:    "\n  line 7: cannot unmarshal !!map into []string",
+			wording: "   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+		},
+		{
+			// Only a line of its own: inside another message it is not
+			// the decoder's.
+			text:    "Invalid: line 1: cannot unmarshal !!str into abc",
+			wording: "                                                ",
 		},
 		{
 			text:    "line 4: cannot unmarshal !!str `a` into int; more",

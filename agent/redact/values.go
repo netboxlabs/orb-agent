@@ -163,14 +163,16 @@ func shortMasked(s string, from, to int, v string, wording []bool) bool {
 
 // errorWordingPatterns match the wording of the errors a refusal can carry
 // that the agent can tell apart from a policy's values: yaml.v3's decode
-// errors, whose only value is the one a type error quotes in backticks
-// (submatch 1). A type error ends with a Go type and its line: text after it
-// on the line, as in a JSON body kept whole, is not the decoder's, so the
-// pattern does not match there and every short value in it stays masked.
+// errors. A type error is a line of its own, indented, that ends with a Go
+// type (submatch 1 is its wording), and its only value is the one it quotes
+// in backticks (submatch 2): the same words inside another message, or text
+// after the type on its line, as in a JSON body kept whole, are not the
+// decoder's, so the pattern does not match there and every short value in
+// them stays masked.
 var errorWordingPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`yaml: unmarshal errors:`),
 	regexp.MustCompile(`yaml: line \d+: `),
-	regexp.MustCompile("(?m)line \\d+: cannot unmarshal !!\\S+ (?:`(.*)` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+$"),
+	regexp.MustCompile("(?m)^[ \\t]*(line \\d+: cannot unmarshal !!\\S+ (?:`(.*)` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+)$"),
 }
 
 // errorWording returns, for each byte of s, whether it is part of the
@@ -180,8 +182,12 @@ func errorWording(s string) []bool {
 	wording := make([]bool, len(s))
 	for _, re := range errorWordingPatterns {
 		for _, m := range re.FindAllStringSubmatchIndex(s, -1) {
-			for i := m[0]; i < m[1]; i++ {
-				wording[i] = len(m) < 4 || m[2] < 0 || i < m[2] || i >= m[3]
+			from, to, slotFrom, slotTo := m[0], m[1], -1, -1
+			if len(m) == 6 {
+				from, to, slotFrom, slotTo = m[2], m[3], m[4], m[5]
+			}
+			for i := from; i < to; i++ {
+				wording[i] = i < slotFrom || i >= slotTo
 			}
 		}
 	}
