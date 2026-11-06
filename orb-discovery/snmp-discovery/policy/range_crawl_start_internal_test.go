@@ -24,6 +24,7 @@ func scanRunner(t *testing.T, scheduler gocron.Scheduler, factory snmp.ClientFac
 	return &Runner{
 		scheduler:        scheduler,
 		ctx:              context.WithValue(context.Background(), policyKey, "p1"),
+		ingestCtx:        context.Background(),
 		client:           &recordingClient{},
 		logger:           discardLogger(),
 		timeout:          10 * time.Second,

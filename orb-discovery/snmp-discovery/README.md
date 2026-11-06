@@ -630,7 +630,6 @@ on demand, or use orb-test-lab for local testing.
 > | http code     | content-type                      | response                                                            |
 > |---------------|-----------------------------------|---------------------------------------------------------------------|
 > | `200`         | `application/json; charset=UTF-8` | `{ "detail": "policy 'policy_name' was deleted" }`                  |
-> | `400`         | `application/json; charset=UTF-8` | Any other policy deletion error                                     |
 > | `404`         | `application/json; charset=UTF-8` | `{ "detail": "policy 'policy_name' not found" }`                    |
 
 ##### Example cURL

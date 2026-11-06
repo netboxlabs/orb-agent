@@ -161,9 +161,10 @@ func TestIngestEntitySizeCoversTheGRPCRequest(t *testing.T) {
 
 func chunkRunner(client diode.Client) *Runner {
 	return &Runner{
-		ctx:    context.Background(),
-		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
-		client: client,
+		ctx:       context.Background(),
+		ingestCtx: context.Background(),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		client:    client,
 	}
 }
 

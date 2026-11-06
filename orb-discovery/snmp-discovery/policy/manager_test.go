@@ -635,8 +635,7 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 	assert.False(t, manager.HasPolicy("policy3"))
 
 	// Stop policy 1
-	err = manager.StopPolicy("policy1")
-	assert.NoError(t, err)
+	manager.StopPolicy("policy1")
 
 	// Check if the policy exists
 	assert.False(t, manager.HasPolicy("policy1"))
@@ -645,8 +644,7 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 	assert.False(t, manager.HasPolicy("policy3"))
 
 	// Stop Manager
-	err = manager.Stop()
-	assert.NoError(t, err)
+	manager.Stop()
 
 	// Check if the policies exist
 	assert.False(t, manager.HasPolicy("policy1"))
@@ -1185,8 +1183,7 @@ devices:
 	assert.True(t, manager.HasPolicy("test-policy-with-devices"))
 
 	// Clean up
-	err = manager.StopPolicy("test-policy-with-devices")
-	assert.NoError(t, err)
+	manager.StopPolicy("test-policy-with-devices")
 }
 
 func TestManagerParsePoliciesWithOverrideDefaults(t *testing.T) {

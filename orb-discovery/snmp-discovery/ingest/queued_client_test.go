@@ -473,6 +473,134 @@ func TestCloseUnblocksBlockedEnqueueWhenBufferFull(t *testing.T) {
 	}
 }
 
+// turnClient holds every ingest until released, and counts the ingests it is
+// asked to send.
+type turnClient struct {
+	release chan struct{}
+	sending chan struct{}
+	sent    atomic.Int32
+}
+
+func (c *turnClient) Ingest(ctx context.Context, _ []diode.Entity, _ ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	c.sent.Add(1)
+	c.sending <- struct{}{}
+	select {
+	case <-c.release:
+		return &diodepb.IngestResponse{}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *turnClient) IngestProto(ctx context.Context, _ []*diodepb.Entity, opts ...diode.IngestOption) (*diodepb.IngestResponse, error) {
+	return c.Ingest(ctx, nil, opts...)
+}
+
+func (c *turnClient) Close() error { return nil }
+
+// A request whose caller stopped waiting while it was queued is not sent when
+// its turn comes: the caller has had its answer, and a policy that has stopped
+// sends nothing once its stop has returned.
+func TestRequestAbandonedWhileQueuedIsNotSent(t *testing.T) {
+	inner := &turnClient{release: make(chan struct{}), sending: make(chan struct{}, 4)}
+	client, err := NewQueuedClient(inner, 2, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	queue := client.(*QueuedClient).requests
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(context.Background(), nil)
+		firstDone <- err
+	}()
+	<-inner.sending
+
+	// The caller's context ends with a cause, as a stopped policy's does, and
+	// the caller is told that cause.
+	stopped := errors.New("run interrupted: policy stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	abandonedDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(ctx, nil)
+		abandonedDone <- err
+	}()
+	require.Eventually(t, func() bool { return len(queue) == 1 }, time.Second, 5*time.Millisecond)
+	cancel(stopped)
+	assert.ErrorIs(t, <-abandonedDone, stopped)
+
+	// Queued behind the abandoned request, so its turn comes first.
+	lastDone := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(context.Background(), nil)
+		lastDone <- err
+	}()
+	require.Eventually(t, func() bool { return len(queue) == 2 }, time.Second, 5*time.Millisecond)
+	close(inner.release)
+	require.NoError(t, <-firstDone)
+	require.NoError(t, <-lastDone)
+
+	assert.EqualValues(t, 2, inner.sent.Load(), "the first and last requests only")
+}
+
+// A caller whose context ends while it waits for room in a full queue is told
+// why its context ended.
+func TestCallerWaitingForRoomIsToldItsCause(t *testing.T) {
+	inner := &turnClient{release: make(chan struct{}), sending: make(chan struct{}, 4)}
+	client, err := NewQueuedClient(inner, 1, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	queue := client.(*QueuedClient).requests
+	defer close(inner.release)
+
+	go func() { _, _ = client.Ingest(context.Background(), nil) }()
+	<-inner.sending
+	go func() { _, _ = client.Ingest(context.Background(), nil) }()
+	require.Eventually(t, func() bool { return len(queue) == 1 }, time.Second, 5*time.Millisecond)
+
+	// The queue is full, so this caller waits for room until its context ends.
+	stopped := errors.New("run interrupted: policy stopped")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cancel(stopped)
+	_, err = client.Ingest(ctx, nil)
+	assert.ErrorIs(t, err, stopped)
+}
+
+// unheardContext has ended, but its Done channel never fires, so a caller
+// waiting on it takes whatever the queue answers: the case in which the caller
+// hears from the queue before it hears of its own context.
+type unheardContext struct {
+	context.Context
+}
+
+func (unheardContext) Done() <-chan struct{} { return nil }
+
+// A caller whose request the queue drops, its context having ended while the
+// request was queued, is told why its context ended, even when it hears from
+// the queue first.
+func TestDroppedRequestGivesItsCause(t *testing.T) {
+	inner := &turnClient{release: make(chan struct{}), sending: make(chan struct{}, 4)}
+	client, err := NewQueuedClient(inner, 1, testLogger())
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
+
+	stopped := errors.New("run interrupted: policy stopped")
+	ended, cancel := context.WithCancelCause(context.Background())
+	cancel(stopped)
+	done := make(chan error, 1)
+	go func() {
+		_, err := client.Ingest(unheardContext{ended}, nil)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, stopped)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the dropped request was never answered")
+	}
+	assert.Zero(t, inner.sent.Load(), "the request was not sent")
+}
+
 // panickingClient panics on each call while armed, then answers as Diode does.
 type panickingClient struct {
 	armed atomic.Int32
