@@ -257,6 +257,47 @@ func TestValues(t *testing.T) {
 	}
 }
 
+// TestValuesMaskEachLineOfAValueOfSeveralLines masks a value of several
+// lines, such as a private key, in a text that quotes one of its lines, as a
+// backend that prints the value line by line does: each line of longRun bytes
+// or more, wherever it occurs whole. A shorter line, such as a brace, is
+// left, since it is more likely the text's own.
+func TestValuesMaskEachLineOfAValueOfSeveralLines(t *testing.T) {
+	key := "-----BEGIN OPENSSH PRIVATE KEY-----\r\n" +
+		"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\r\n" +
+		"QyNTUxOQAAACDx2Vn4zP0kq8c1+Lr6aQe2J0nRyWnLnYc4mJk1rVgk2wAAAJgH5w7lB+cO\r\n" +
+		"-----END OPENSSH PRIVATE KEY-----\r\n"
+	doc := "{\n  \"private_key\": \"v3ry-l0ng-s3cret\"\n}"
+	for _, tc := range []struct {
+		name, text, value, want string
+	}{
+		{
+			name:  "a middle line, indented as a YAML dump prints it",
+			text:  "    QyNTUxOQAAACDx2Vn4zP0kq8c1+Lr6aQe2J0nRyWnLnYc4mJk1rVgk2wAAAJgH5w7lB+cO",
+			value: key,
+			want:  "    ********",
+		},
+		{
+			name:  "a line inside other text",
+			text:  "bad key material b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW at line 2",
+			value: key,
+			want:  "bad key material ******** at line 2",
+		},
+		{
+			name:  "a line of longRun bytes or more, and not a brace",
+			text:  `{"level":"info","private_key": "v3ry-l0ng-s3cret"}`,
+			value: doc,
+			want:  `{"level":"info",********}`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Values(tc.text, []string{tc.value}); got != tc.want {
+				t.Errorf("Values(%q)\n got %q\nwant %q", tc.text, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestCutValues masks a value the end of a cut text runs through, from its
 // first byte, which Values leaves: in a text that is not cut, a value's first
 // bytes at its end are the text's own.

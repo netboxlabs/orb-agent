@@ -188,9 +188,22 @@ func startBackendAnswering(t *testing.T, logger *slog.Logger, mgr policymgr.Poli
 	register func() bool, onPolicy func(w http.ResponseWriter, body []byte) bool,
 ) {
 	t.Helper()
+	startBackendServing(t, logger, mgr, name, executable, register, func(w http.ResponseWriter, r *http.Request, body []byte) bool {
+		return r.Method == http.MethodPost && r.URL.Path == "/api/v1/policies" && onPolicy(w, body)
+	})
+}
+
+// startBackendServing is startBackend with the answer to every request to
+// the process's API left to answer: it is passed the request and its body,
+// and when it reports that it wrote the response the server writes nothing
+// more.
+func startBackendServing(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool, answer func(w http.ResponseWriter, r *http.Request, body []byte) bool,
+) {
+	t.Helper()
 	cmd := &mocks.MockCmd{}
 	mocks.SetupSuccessfulProcess(cmd, 12345)
-	startBackendProcess(t, logger, mgr, name, executable, register, onPolicy, cmd)
+	startBackendProcess(t, logger, mgr, name, executable, register, answer, cmd)
 }
 
 // startBackendPrinting is startBackend with the process's stdout and stderr
@@ -202,22 +215,19 @@ func startBackendPrinting(t *testing.T, logger *slog.Logger, mgr policymgr.Polic
 	t.Helper()
 	cmd := &mocks.MockCmd{}
 	stdout, stderr = mocks.SetupSuccessfulProcessWithOutput(cmd, 12345)
-	startBackendProcess(t, logger, mgr, name, executable, register, func(http.ResponseWriter, []byte) bool { return false }, cmd)
+	startBackendProcess(t, logger, mgr, name, executable, register, func(http.ResponseWriter, *http.Request, []byte) bool { return false }, cmd)
 	return stdout, stderr
 }
 
-// startBackendProcess is startBackendAnswering with the process mocked by
-// cmd.
+// startBackendProcess is startBackendServing with the process mocked by cmd.
 func startBackendProcess(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
-	register func() bool, onPolicy func(w http.ResponseWriter, body []byte) bool, cmd *mocks.MockCmd,
+	register func() bool, answer func(w http.ResponseWriter, r *http.Request, body []byte) bool, cmd *mocks.MockCmd,
 ) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/policies" {
-			body, _ := io.ReadAll(r.Body)
-			if onPolicy(w, body) {
-				return
-			}
+		body, _ := io.ReadAll(r.Body)
+		if answer(w, r, body) {
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
