@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -428,4 +429,135 @@ policies:
 `)
 	assert.Contains(t, out, "to connect without one")
 	assert.Contains(t, out, "for origin-less paths")
+}
+
+// Each unrecognized key names the policy it was written in: one payload carries
+// several policies, and the key alone does not say which one to fix.
+func TestUnknownKeyWarningsNameThePolicy(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      bogus_one: 1
+    scope:
+      targets:
+        - host: 192.0.2.1
+  p2:
+    scope:
+      usernme: admin
+      targets:
+        - host: 192.0.2.2
+`)
+	assert.Contains(t, lineContaining(out, "bogus_one"), "policy=p1")
+	assert.Contains(t, lineContaining(out, "usernme"), "policy=p2")
+}
+
+// An option written at config level is reported with its policy and the place it belongs.
+func TestMisplacedOptionWarningNamesThePolicy(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      emit_lag_membership: false
+    scope:
+      targets:
+        - host: 192.0.2.1
+`)
+	line := lineContaining(out, "emit_lag_membership")
+	assert.Contains(t, line, "policy=p1")
+	assert.Contains(t, line, "did_you_mean=options.emit_lag_membership")
+}
+
+// A key in a block that several policies share through an anchor is reported
+// once for each of them.
+func TestUnknownKeyInASharedAnchorNamesEveryPolicy(t *testing.T) {
+	out := captureWarnings(t, `
+shared: &shared
+  mode: get
+  bogus_shared: 1
+policies:
+  p1:
+    config:
+      <<: *shared
+    scope:
+      targets:
+        - host: 192.0.2.1
+  p2:
+    config: *shared
+    scope:
+      targets:
+        - host: 192.0.2.2
+`)
+	assert.Equal(t, 2, strings.Count(out, "key=bogus_shared"))
+	assert.Contains(t, out, "policy=p1")
+	assert.Contains(t, out, "policy=p2")
+}
+
+// The same key repeated on one line is one mistake in one policy, and one report.
+func TestUnknownKeyRepeatedOnOneLineIsReportedOnce(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    scope:
+      targets: [{host: 192.0.2.1, passwrd: a}, {host: 192.0.2.2, passwrd: b}]
+`)
+	assert.Equal(t, 1, strings.Count(out, "key=passwrd"))
+	assert.Contains(t, out, "policy=p1")
+}
+
+func lineContaining(out, s string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, s) {
+			return l
+		}
+	}
+	return ""
+}
+
+// The owner is found by the key's line, not its name alone: a key that is
+// wrong in one policy and right in another names only the first.
+func TestUnknownKeyIsMatchedByItsLine(t *testing.T) {
+	out := captureWarnings(t, `
+policies:
+  p1:
+    config:
+      site: lab
+    scope:
+      targets:
+        - host: 192.0.2.1
+  p2:
+    config:
+      defaults:
+        site: lab
+    scope:
+      targets:
+        - host: 192.0.2.2
+`)
+	assert.Contains(t, lineContaining(out, "key=site"), "policy=p1")
+	assert.NotContains(t, out, "policy=p2")
+}
+
+// A key written as an alias is reported under the name it resolves to.
+func TestUnknownKeyWrittenAsAnAliasNamesThePolicy(t *testing.T) {
+	out := captureWarnings(t, `
+names:
+  k: &k usernme
+policies:
+  p1:
+    scope:
+      *k : admin
+      targets:
+        - host: 192.0.2.1
+`)
+	assert.Contains(t, lineContaining(out, "key=usernme"), "policy=p1")
+	assert.NotContains(t, out, "policy=?")
+}
+
+// A key no policy can be matched to is still reported.
+func TestUnknownKeyWithNoOwnerIsStillReported(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	reportUnknownKeys(logger, []string{"line 99: field bogus not found in type config.PolicyConfig"}, nil)
+	assert.Contains(t, buf.String(), "key=bogus")
+	assert.Contains(t, buf.String(), "policy=?")
 }

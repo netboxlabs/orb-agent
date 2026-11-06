@@ -551,7 +551,7 @@ func TestTranslateInterfacesEnrichment(t *testing.T) {
 		// Port-Channel1: OC lag type
 		"/interfaces/interface[name=Port-Channel1]/state/type": "iana-if-type:ieee8023adLag",
 	}
-	ents := translateInterfaces(base, snap, dev, nil, nil, nil)
+	ents := translateInterfaces(base, snap, dev, nil, nil, nil, nil)
 	byName := map[string]*diode.Interface{}
 	for _, e := range ents {
 		if i, ok := e.(*diode.Interface); ok {
@@ -590,7 +590,7 @@ func TestTranslateInterfaceDuplex(t *testing.T) {
 		"/interfaces/interface[name=Ethernet2]/ethernet/state/negotiated-duplex-mode": "HALF",
 		"/interfaces/interface[name=Ethernet3]/state/type":                            "iana-if-type:ethernetCsmacd",
 	}
-	ents := translateInterfaces(base, snap, dev, nil, nil, nil)
+	ents := translateInterfaces(base, snap, dev, nil, nil, nil, nil)
 	byName := map[string]*diode.Interface{}
 	for _, e := range ents {
 		if i, ok := e.(*diode.Interface); ok {
@@ -643,7 +643,7 @@ func TestTranslateInterfacesSelfLagGuard(t *testing.T) {
 		"/interfaces/interface[name=Ethernet1]/state/type":                  "iana-if-type:ethernetCsmacd",
 		"/interfaces/interface[name=Ethernet1]/ethernet/state/aggregate-id": "Ethernet1",
 	}
-	ents := translateInterfaces(base, snap, dev, nil, nil, nil)
+	ents := translateInterfaces(base, snap, dev, nil, nil, nil, nil)
 	require.Len(t, ents, 1)
 	require.Nil(t, ents[0].(*diode.Interface).Lag)
 }
@@ -755,25 +755,25 @@ func TestTranslateLagNeedsADiscoveredLagAggregate(t *testing.T) {
 	base, _ := store.Get("_base")
 	dev := &diode.Device{Name: strptr("r1")}
 
-	got := lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, nil, nil), "Ethernet1")
+	got := lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, nil, nil, nil), "Ethernet1")
 	require.NotNil(t, got)
 	require.Equal(t, "Port-Channel1", *got.Name)
 
 	missing := lagSnap(map[string]any{"/interfaces/interface[name=Port-Channel1]/state/type": nil})
-	require.Nil(t, lagOf(t, translateInterfaces(base, missing, dev, nil, nil, nil), "Ethernet1"), "aggregate not discovered")
+	require.Nil(t, lagOf(t, translateInterfaces(base, missing, dev, nil, nil, nil, nil), "Ethernet1"), "aggregate not discovered")
 
 	excluded := &config.Defaults{InterfaceExcludePatterns: []string{"^Port-Channel"}}
-	require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, excluded, nil, nil), "Ethernet1"), "aggregate excluded")
+	require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, excluded, nil, nil, nil), "Ethernet1"), "aggregate excluded")
 
 	notLag := lagSnap(map[string]any{
 		"/interfaces/interface[name=Ethernet1]/ethernet/state/aggregate-id": "Ethernet2",
 		"/interfaces/interface[name=Ethernet2]/state/type":                  "iana-if-type:ethernetCsmacd",
 	})
-	require.Nil(t, lagOf(t, translateInterfaces(base, notLag, dev, nil, nil, nil), "Ethernet1"), "aggregate not typed lag")
+	require.Nil(t, lagOf(t, translateInterfaces(base, notLag, dev, nil, nil, nil, nil), "Ethernet1"), "aggregate not typed lag")
 
 	for _, typ := range []string{"virtual", "bridge", "lag"} {
 		member := &config.Defaults{InterfacePatterns: []config.InterfacePattern{{Match: "^Ethernet1$", Type: typ}}}
-		require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, member, nil, nil), "Ethernet1"), "member typed %s", typ)
+		require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, member, nil, nil, nil), "Ethernet1"), "member typed %s", typ)
 	}
 }
 
@@ -785,11 +785,11 @@ func TestTranslateLagMembershipToggle(t *testing.T) {
 	dev := &diode.Device{Name: strptr("r1")}
 	off, on := false, true
 
-	require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, &config.Options{EmitLagMembership: &off}, nil), "Ethernet1"))
-	require.NotNil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, &config.Options{EmitLagMembership: &on}, nil), "Ethernet1"))
-	require.NotNil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, &config.Options{}, nil), "Ethernet1"))
+	require.Nil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, &config.Options{EmitLagMembership: &off}, nil, nil), "Ethernet1"))
+	require.NotNil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, &config.Options{EmitLagMembership: &on}, nil, nil), "Ethernet1"))
+	require.NotNil(t, lagOf(t, translateInterfaces(base, lagSnap(nil), dev, nil, &config.Options{}, nil, nil), "Ethernet1"))
 
-	ents := TranslateWithOptions(base, lagSnap(nil), nil, "", &config.Options{EmitLagMembership: &off}, nil)
+	ents := TranslateWithOptions(base, lagSnap(nil), nil, "", &config.Options{EmitLagMembership: &off}, nil, nil)
 	require.Nil(t, lagOf(t, ents, "Ethernet1"), "TranslateWithOptions passes the toggle through")
 }
 
@@ -805,7 +805,7 @@ func TestTranslateLagLinksAnUntypedAggregateByName(t *testing.T) {
 		"/interfaces/interface[name=Port-Channel1]/state/type":              nil,
 		"/interfaces/interface[name=lag-1]/state/admin-status":              "UP",
 	})
-	got := lagOf(t, translateInterfaces(base, snap, dev, nil, nil, nil), "Ethernet1")
+	got := lagOf(t, translateInterfaces(base, snap, dev, nil, nil, nil, nil), "Ethernet1")
 	require.NotNil(t, got)
 	require.Equal(t, "lag-1", *got.Name)
 }

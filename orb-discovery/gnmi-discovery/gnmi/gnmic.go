@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	gpath "github.com/openconfig/gnmi/path"
@@ -13,11 +15,14 @@ import (
 	"github.com/openconfig/gnmi/value"
 	gapi "github.com/openconfig/gnmic/pkg/api"
 	"github.com/openconfig/gnmic/pkg/api/target"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// subscriptionName is the gnmic-side name used for this session's single
-// subscription. It is reused across re-Subscribe calls (the auto-fallback
-// ladder) so StopSubscription can clear the prior subscription's state.
+// subscriptionName prefixes the gnmic-side name of each subscription. Every
+// Subscribe takes a name of its own: gnmic stops a subscription by name when
+// an attempt ends, and with one shared name the end of a refused attempt
+// could stop the next rung's stream.
 const subscriptionName = "default"
 
 // GnmicDialer implements Dialer using the gnmic library.
@@ -64,7 +69,7 @@ func (d *GnmicDialer) Dial(ctx context.Context, spec TargetSpec) (Session, error
 	if err := tg.CreateGNMIClient(ctx); err != nil {
 		return nil, fmt.Errorf("gnmi dial: create client: %w", err)
 	}
-	return &gnmicSession{tg: tg, origin: spec.Origin}, nil
+	return &gnmicSession{tg: tg, origin: spec.Origin, setupTimeout: spec.SetupTimeout}, nil
 }
 
 // withOrigin prefixes a gNMI request path with the session's origin
@@ -83,6 +88,10 @@ func withOrigin(origin, path string) string {
 // gnmicSession wraps a gnmic Target and implements Session.
 type gnmicSession struct {
 	tg *target.Target
+	// subName is the gnmic name of the active subscription, and subs counts
+	// the Subscribes that named one.
+	subName string
+	subs    int
 	// subCancel cancels the context driving the active SubscribeChan producer
 	// goroutine. It is set by Subscribe and invoked by Close so the producer
 	// always observes cancellation, even while it is blocked in gnmic's
@@ -104,38 +113,183 @@ type gnmicSession struct {
 	subEncoding string
 	// origin is the gNMI request-path origin (e.g. "openconfig"); "" = origin-less.
 	origin string
-	// accepted caches the subscribe paths the target accepts (probed once per
-	// session); nil until the first Subscribe probes them.
+	// setupTimeout bounds the subscription-path probe; SetupTimeout when zero.
+	setupTimeout time.Duration
+
+	// mu guards the probe results below, which the subscription producer
+	// prunes when it retries without the unverified paths.
+	mu sync.Mutex
+	// accepted caches the subscribe paths the probe kept, for the life of the
+	// connection; nil until the first Subscribe probes them.
 	accepted []string
+	// notFound are the accepted paths the target answered NotFound for.
+	notFound []string
+	// inconclusive are the paths the last probe kept because it got no answer.
+	inconclusive []string
+	// pinned are paths a refused subscription is never retried without.
+	pinned []string
 }
 
 // acceptedPaths returns the subset of paths the target accepts, so one
 // unsupported path can't make a strict target reject the whole atomic
-// subscription. Fast path: a single multi-path Get — if it succeeds, every path
-// is valid. Only on failure does it Get per path to prune the unsupported ones
-// (reusing the same per-path tolerance as GetOnce). Result is cached for the
-// session (the auto ladder re-subscribes on the same session). If probing prunes
-// everything (e.g. a target that rejects Get), it falls back to the full set so
-// behavior is never worse than before.
+// subscription. Fast path: a single multi-path Get; if it succeeds, every path
+// is valid. Otherwise each path is probed alone:
+//   - answered, or NotFound (modelled but empty so far): kept;
+//   - a transient error: kept without a verdict;
+//   - any other error: pruned.
+//
+// The result holds for the connection; the next connection probes again. A
+// multi-path Get refused with Unauthenticated skips the per-path Gets: a login
+// is refused for every path alike.
+//
+// The probe runs under one probeDeadline and never fails the subscription. The
+// per-path Gets run probeConcurrency at a time, each under its own deadline, so
+// a slow device is asked about every path and one hung path cannot use up the
+// phase; those left without an answer are asked again one at a time. If it
+// prunes everything, the full set is used, so it is never worse than no probe.
 func (s *gnmicSession) acceptedPaths(ctx context.Context, paths []string) []string {
-	if s.accepted != nil {
-		return s.accepted
+	s.mu.Lock()
+	cached := s.accepted
+	s.mu.Unlock()
+	if cached != nil {
+		return cached
 	}
-	if _, err := s.getPaths(ctx, paths); err == nil {
-		s.accepted = paths
+	pctx, cancel := context.WithTimeout(ctx, s.probeDeadline())
+	defer cancel()
+	err := s.probeGet(pctx, paths)
+	if err == nil {
+		s.setProbe(paths, nil, nil)
 		return paths
 	}
+	if status.Code(err) == codes.Unauthenticated {
+		s.setProbe(paths, nil, paths)
+		return paths
+	}
+	errs := make([]error, len(paths))
+	runBounded(len(paths), probeConcurrency, func(i int) {
+		errs[i] = s.probeGet(pctx, paths[i:i+1])
+	})
+	// A device that limits concurrent RPCs answers some of those and refuses
+	// the rest with a transient code; ask those again one at a time, in what is
+	// left of the phase, as a probe without concurrency would have. With no
+	// definite answer at all there is no sign of a limit, so nothing is asked
+	// twice.
+	if slices.ContainsFunc(errs, func(err error) bool { return !Transient(err) }) {
+		for i := range paths {
+			if Transient(errs[i]) {
+				errs[i] = s.probeGet(pctx, paths[i:i+1])
+			}
+		}
+	}
 	ok := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if _, err := s.getPaths(ctx, []string{p}); err == nil {
+	var notFound, inconclusive []string
+	for i, p := range paths {
+		err := errs[i]
+		switch {
+		case err == nil:
 			ok = append(ok, p)
+		case status.Code(err) == codes.NotFound:
+			ok = append(ok, p)
+			notFound = append(notFound, p)
+		case Transient(err):
+			ok = append(ok, p)
+			inconclusive = append(inconclusive, p)
 		}
 	}
 	if len(ok) == 0 {
 		ok = paths
 	}
-	s.accepted = ok
+	s.setProbe(ok, notFound, inconclusive)
 	return ok
+}
+
+// probeConcurrency is how many path probes run at once.
+const probeConcurrency = 8
+
+// probeGet is one probe Get, under a third of the probe's deadline so one hung
+// path cannot use up the phase.
+func (s *gnmicSession) probeGet(ctx context.Context, paths []string) error {
+	gctx, cancel := context.WithTimeout(ctx, s.probeDeadline()/3)
+	defer cancel()
+	_, err := s.getPaths(gctx, paths)
+	return err
+}
+
+// runBounded calls fn(0..n-1) from at most workers goroutines and waits.
+func runBounded(n, workers int, fn func(i int)) {
+	idx := make(chan int)
+	var wg sync.WaitGroup
+	for range min(n, workers) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range idx {
+				fn(i)
+			}
+		}()
+	}
+	for i := range n {
+		idx <- i
+	}
+	close(idx)
+	wg.Wait()
+}
+
+// setProbe records a probe's result for the connection.
+func (s *gnmicSession) setProbe(accepted, notFound, inconclusive []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accepted = accepted
+	s.notFound = notFound
+	s.inconclusive = inconclusive
+}
+
+// probeDeadline is how long the subscription-path probe may take.
+func (s *gnmicSession) probeDeadline() time.Duration {
+	if s.setupTimeout > 0 {
+		return s.setupTimeout
+	}
+	return SetupTimeout
+}
+
+// InconclusivePaths returns the paths the last probe kept without an answer.
+func (s *gnmicSession) InconclusivePaths() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.inconclusive)
+}
+
+// PinPaths names paths a refused subscription is never retried without.
+func (s *gnmicSession) PinPaths(paths ...string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinned = append(s.pinned, paths...)
+}
+
+// retryCandidates returns the paths of a subscription a refusal may be blamed
+// on: those the target answered NotFound for, other than pinned ones. A path
+// whose probe got no answer is not blamed; nothing is known about it.
+func (s *gnmicSession) retryCandidates(paths []string) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, p := range paths {
+		if slices.Contains(s.notFound, p) && !slices.Contains(s.pinned, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// pruneNotFound drops paths from this session's probe results.
+func (s *gnmicSession) pruneNotFound(paths []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	drop := func(p string) bool { return slices.Contains(paths, p) }
+	if s.accepted != nil {
+		s.accepted = slices.DeleteFunc(slices.Clone(s.accepted), drop)
+	}
+	s.notFound = slices.DeleteFunc(slices.Clone(s.notFound), drop)
 }
 
 // enc returns the negotiated request encoding, defaulting to json_ietf when
@@ -218,7 +372,9 @@ func (s *gnmicSession) StopSubscribe() {
 		s.subCancel()
 		s.subCancel = nil
 	}
-	s.tg.StopSubscription(subscriptionName)
+	if s.subName != "" {
+		s.tg.StopSubscription(s.subName)
+	}
 }
 
 // Subscribe opens a gNMI STREAM subscription.
@@ -253,37 +409,28 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	// can't take down the rest.
 	paths = s.acceptedPaths(ctx, paths)
 
-	subOpts := []gapi.GNMIOption{
-		gapi.SubscriptionListModeSTREAM(),
-		gapi.Encoding(s.subEnc()),
-	}
-
-	for _, p := range paths {
-		var pathOpts []gapi.GNMIOption
-		pathOpts = append(pathOpts, gapi.Path(withOrigin(s.origin, p)))
-		switch mode {
-		case OnChange:
-			pathOpts = append(pathOpts, gapi.SubscriptionModeON_CHANGE())
-		default: // Sample
-			pathOpts = append(pathOpts, gapi.SubscriptionModeSAMPLE())
-			if sampleIntervalMs > 0 {
-				pathOpts = append(pathOpts, gapi.SampleInterval(time.Duration(sampleIntervalMs)*time.Millisecond))
-			}
-		}
-		subOpts = append(subOpts, gapi.Subscription(pathOpts...))
-	}
-
-	req, err := gapi.NewSubscribeRequest(subOpts...)
+	req, err := s.subscribeRequest(mode, paths, sampleIntervalMs)
 	if err != nil {
-		return nil, nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
+		return nil, nil, err
+	}
+	// The NotFound paths go out on trust. If the target refuses the stream
+	// before answering, they are the likely cause: retry once without them.
+	retryWithout := s.retryCandidates(paths)
+	if len(retryWithout) == len(paths) {
+		retryWithout = nil // nothing would be left to subscribe to
 	}
 
 	// Own context for the producer so Close() can stop it independently of the
 	// caller's ctx lifetime.
 	subCtx, cancel := context.WithCancel(ctx)
 	s.subCancel = cancel
+	s.subs++
+	name := fmt.Sprintf("%s-%d", subscriptionName, s.subs)
+	s.subName = name
 
-	rawResp, rawErr := s.tg.SubscribeChan(subCtx, req, subscriptionName)
+	// Each attempt runs under its own context so a retry can end the first.
+	attemptCtx, endAttempt := context.WithCancel(subCtx)
+	rawResp, rawErr := s.tg.SubscribeChan(attemptCtx, req, name)
 
 	notes := make(chan Notification)
 	errs := make(chan error, 1)
@@ -291,6 +438,24 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	go func() {
 		defer close(notes)
 		defer close(errs)
+		defer func() { endAttempt() }()
+		answered := false
+		// refused is the first attempt's refusal while the retry runs: if the
+		// retry fails too, the dropped paths were not the cause, so they stay
+		// and the caller sees the refusal as it would have without a retry.
+		var refused error
+		forward := func(e error) {
+			if !answered && refused != nil {
+				e = refused
+			}
+			if e == nil {
+				return
+			}
+			select {
+			case errs <- e:
+			case <-subCtx.Done():
+			}
+		}
 		for {
 			select {
 			case <-subCtx.Done():
@@ -303,16 +468,15 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 					// non-blocking and forward it; otherwise streamLoop sees a clean
 					// notes close, returns nil, and the target reconnects at on_change
 					// forever instead of downgrading to SAMPLE/GET.
+					var e error
 					select {
 					case terr, ok := <-rawErr:
-						if ok && terr != nil && terr.Err != nil {
-							select {
-							case errs <- terr.Err:
-							case <-subCtx.Done():
-							}
+						if ok && terr != nil {
+							e = terr.Err
 						}
 					default:
 					}
+					forward(e)
 					return
 				}
 				// SubscribeChan wraps the proto response in .Response.
@@ -320,6 +484,11 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 				if resp == nil {
 					continue
 				}
+				if !answered && refused != nil {
+					// The retry is served, so the dropped paths were the cause.
+					s.pruneNotFound(retryWithout)
+				}
+				answered = true
 				if resp.GetSyncResponse() {
 					select {
 					case notes <- Notification{SyncDone: true}:
@@ -341,12 +510,26 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 					return
 				}
 				// TargetError wraps the underlying error in .Err.
-				if terr != nil && terr.Err != nil {
-					select {
-					case errs <- terr.Err:
-					case <-subCtx.Done():
+				if terr == nil || terr.Err == nil {
+					forward(nil)
+					return
+				}
+				if !answered && refused == nil && len(retryWithout) > 0 && !Transient(terr.Err) {
+					// Wait for the refused attempt to wind down first: its
+					// teardown stops the subscription by name, and would stop
+					// the retry if it ran after it.
+					endAttempt()
+					drainSubscription(rawResp, rawErr)
+					kept := slices.DeleteFunc(slices.Clone(paths), func(p string) bool { return slices.Contains(retryWithout, p) })
+					retry, err := s.subscribeRequest(mode, kept, sampleIntervalMs)
+					if err == nil && subCtx.Err() == nil {
+						refused = terr.Err
+						attemptCtx, endAttempt = context.WithCancel(subCtx)
+						rawResp, rawErr = s.tg.SubscribeChan(attemptCtx, retry, name)
+						continue
 					}
 				}
+				forward(terr.Err)
 				return
 			}
 		}
@@ -355,11 +538,56 @@ func (s *gnmicSession) Subscribe(ctx context.Context, mode Mode, paths []string,
 	return notes, errs, nil
 }
 
-// GetOnce performs a single gNMI Get over the given paths.
-func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, error) {
+// drainSubscription reads a SubscribeChan's channels until its producer has
+// exited and closed both.
+func drainSubscription(resp <-chan *target.SubscribeResponse, errs <-chan *target.TargetError) {
+	for resp != nil || errs != nil {
+		select {
+		case _, ok := <-resp:
+			if !ok {
+				resp = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		}
+	}
+}
+
+// subscribeRequest builds a STREAM subscription over paths in mode.
+func (s *gnmicSession) subscribeRequest(mode Mode, paths []string, sampleIntervalMs int) (*gnmiproto.SubscribeRequest, error) {
+	subOpts := []gapi.GNMIOption{
+		gapi.SubscriptionListModeSTREAM(),
+		gapi.Encoding(s.subEnc()),
+	}
+	for _, p := range paths {
+		var pathOpts []gapi.GNMIOption
+		pathOpts = append(pathOpts, gapi.Path(withOrigin(s.origin, p)))
+		switch mode {
+		case OnChange:
+			pathOpts = append(pathOpts, gapi.SubscriptionModeON_CHANGE())
+		default: // Sample
+			pathOpts = append(pathOpts, gapi.SubscriptionModeSAMPLE())
+			if sampleIntervalMs > 0 {
+				pathOpts = append(pathOpts, gapi.SampleInterval(time.Duration(sampleIntervalMs)*time.Millisecond))
+			}
+		}
+		subOpts = append(subOpts, gapi.Subscription(pathOpts...))
+	}
+	req, err := gapi.NewSubscribeRequest(subOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("gnmi subscribe: build request: %w", err)
+	}
+	return req, nil
+}
+
+// GetOnce performs a single gNMI Get over the given paths, returning the error
+// of each path that failed.
+func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notification, map[string]error, error) {
 	// Fast path: one Get for all paths — most targets handle a multi-path Get fine.
 	if n, err := s.getPaths(ctx, paths); err == nil {
-		return n, nil
+		return n, nil, nil
 	}
 	// A multi-path Get can fail ATOMICALLY when the target returns
 	// NotFound/Unimplemented for one optional subtree it doesn't model (e.g.
@@ -372,10 +600,12 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 	result.SyncDone = true
 	got := 0
 	var lastErr error
+	failed := map[string]error{}
 	for _, p := range paths {
 		n, err := s.getPaths(ctx, []string{p})
 		if err != nil {
 			lastErr = err
+			failed[p] = err
 			continue
 		}
 		result.Updates = append(result.Updates, n.Updates...)
@@ -383,9 +613,9 @@ func (s *gnmicSession) GetOnce(ctx context.Context, paths []string) (Notificatio
 		got++
 	}
 	if got == 0 && lastErr != nil {
-		return Notification{}, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
+		return Notification{}, failed, fmt.Errorf("gnmi get: all paths failed: %w", lastErr)
 	}
-	return result, nil
+	return result, failed, nil
 }
 
 // getPaths issues a single gNMI Get for the given paths and merges the response

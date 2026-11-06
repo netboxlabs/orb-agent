@@ -205,7 +205,7 @@ class Client:
                 chunks = create_message_chunks(entities_list)
                 chunk_num = len(chunks)
                 logger.info(
-                    f"Hostname {hostname}: Message size {size_bytes} bytes exceeds 3MB, "
+                    f"Policy {policy_name}, Hostname {hostname}: Message size {size_bytes} bytes exceeds 3MB, "
                     f"splitting into {chunk_num} chunks"
                 )
 
@@ -222,8 +222,8 @@ class Client:
                         raise RuntimeError(error_msg)
 
                 logger.info(
-                    f"Hostname {hostname}: Successfully ingested {entity_count} entities "
-                    f"in {chunk_num} chunks"
+                    f"Policy {policy_name}, Hostname {hostname}: Successfully ingested "
+                    f"{entity_count} entities in {chunk_num} chunks"
                 )
             else:
                 response = self.diode_client.ingest(
@@ -236,7 +236,8 @@ class Client:
                     raise RuntimeError(error_msg)
 
                 logger.info(
-                    f"Hostname {hostname}: Successfully ingested {entity_count} entities"
+                    f"Policy {policy_name}, Hostname {hostname}: Successfully ingested "
+                    f"{entity_count} entities"
                 )
 
             return entity_count

@@ -251,7 +251,7 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 		return &testWalker{walkErr: errors.New("no response")}, nil
 	}
 
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "good-1", Port: 161},
 		{Host: "bad-1", Port: 161},
 		{Host: "good-2", Port: 161},
@@ -284,7 +284,7 @@ func TestQueryTargetContextAlreadyCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(ctx, 0, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.Canceled)
@@ -301,7 +301,7 @@ func TestQueryTargetContextTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	entities, primaryHits, err := runner.queryTarget(ctx, config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(ctx, 0, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -323,7 +323,7 @@ func TestQueryTargetWalkError(t *testing.T) {
 		return &testWalker{walkErr: walkErr}, nil
 	}, entries)
 
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "127.0.0.1", Port: 161})
 	assert.Nil(t, entities)
 	assert.Nil(t, primaryHits)
 	assert.ErrorIs(t, err, walkErr)
@@ -342,7 +342,7 @@ func TestQueryTargetSuccess(t *testing.T) {
 	}
 	runner := queryTargetRunner(snmp.NewFakeSNMPWalker, entries)
 
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "127.0.0.1", Port: 161})
+	entities, _, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "127.0.0.1", Port: 161})
 	require.NoError(t, err)
 	assert.NotEmpty(t, entities)
 }
@@ -422,7 +422,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -586,7 +586,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 	// between scans.
 	t.Run("IPv4 target -> PrimaryIp4", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+		entities, _, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "10.0.0.1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -607,7 +607,7 @@ func TestQueryTargetAssignsPrimaryIPFromTarget_ModernIpAddressTable(t *testing.T
 
 	t.Run("IPv6 target -> PrimaryIp6", func(t *testing.T) {
 		runner := queryTargetRunner(factory, entries)
-		entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "2001:db8::1", Port: 161})
+		entities, _, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "2001:db8::1", Port: 161})
 		require.NoError(t, err)
 		require.NotEmpty(t, entities)
 
@@ -662,14 +662,14 @@ func TestRunScanWithOriginal_SkipsDuplicateCrawlJob(t *testing.T) {
 		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		runStore:  runStore,
 		activeHostJobs: map[string]uuid.UUID{
-			"192.168.1.0/24::192.168.1.1:161": existingJobID,
+			"0::192.168.1.0/24::192.168.1.1:161": existingJobID,
 		},
 	}
 	runner.ClientFactory = func(_ string, _ uint16, _ int, _ time.Duration, _ *config.Authentication, _ *slog.Logger) (snmp.Walker, error) {
 		return &testWalker{}, nil
 	}
 
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "192.168.1.1", Port: 161},
 	}, "192.168.1.0/24")
 
@@ -695,7 +695,7 @@ func TestRunScanWithOriginal_FailsWhenNoResponsiveHosts(t *testing.T) {
 		return &testWalker{walkErr: errors.New("no response")}, nil
 	}
 
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "192.168.1.1", Port: 161},
 		{Host: "192.168.1.2", Port: 161},
 	}, "192.168.1.0/24")
@@ -725,7 +725,7 @@ func TestRunScanWithOriginal_NoDuplicateForRepeatedResponsiveHost(t *testing.T) 
 	}
 
 	// Same host appears twice in the targets list (simulates misconfigured overlapping range)
-	runner.runScanWithOriginal([]config.Target{
+	runner.runScanWithOriginal(0, []config.Target{
 		{Host: "192.168.1.1", Port: 161},
 		{Host: "192.168.1.1", Port: 161},
 	}, "192.168.1.0/24")
@@ -794,7 +794,7 @@ func TestRunnerAnnotateThenPrune(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, entries)
-	entities, primaryHits, err := runner.queryTarget(context.Background(), config.Target{Host: "10.0.0.1", Port: 161})
+	entities, primaryHits, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "10.0.0.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -938,7 +938,7 @@ func TestRunWithMetadata_StandaloneSetsSerialFromEntityMib(t *testing.T) {
 	}
 
 	runner := queryTargetRunner(factory, chassisEntries())
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	entities, _, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "192.0.2.1", Port: 161})
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -1032,7 +1032,7 @@ func modelDevices(t *testing.T, lookup fixedLookup, defaultModel string, target 
 		walker.pdus["1.3.6.1.2.1.47.1.1.1.1.13"][".1.3.6.1.2.1.47.1.1.1.1.13.1000"] = snmp.PDU{Value: "PN-24P-B", Type: gosnmp.OctetString, IdentifierSize: 2}
 	}
 
-	entities, _, err := runner.queryTarget(context.Background(), target)
+	entities, _, err := runner.queryTarget(context.Background(), 0, target)
 	require.NoError(t, err)
 	var devices []*diode.Device
 	for _, e := range entities {
@@ -1076,7 +1076,7 @@ func TestRunWithMetadata_StackPinnedModelWithoutSysObjectID(t *testing.T) {
 	runner := queryTargetRunner(factory, chassisEntries())
 	runner.config.Defaults.Device = config.DeviceDefaults{Model: "Operator Model", Manufacturer: "VendorA"}
 
-	entities, _, err := runner.queryTarget(context.Background(), standaloneTarget)
+	entities, _, err := runner.queryTarget(context.Background(), 0, standaloneTarget)
 	require.NoError(t, err)
 	var devices []*diode.Device
 	for _, e := range entities {
@@ -1188,7 +1188,7 @@ func TestRunWithMetadata_EmitsFullStackShape(t *testing.T) {
 	// Use NetboxID=42 on the target so we can verify source_match on master.
 	netboxID := 42
 	target := config.Target{Host: "192.0.2.1", Port: 161, NetboxID: &netboxID}
-	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
+	entities, primaryHits, err := runner.queryTarget(context.Background(), 0, target)
 	require.NoError(t, err)
 	require.NotEmpty(t, entities)
 
@@ -1296,7 +1296,7 @@ func TestRunWithMetadata_StackRackPlacement(t *testing.T) {
 		Port:             161,
 		OverrideDefaults: &config.Defaults{Position: &position, Face: "Front"},
 	}
-	entities, primaryHits, err := runner.queryTarget(context.Background(), target)
+	entities, primaryHits, err := runner.queryTarget(context.Background(), 0, target)
 	require.NoError(t, err)
 	mapping.PruneNestedRefs(entities, mapping.CurrentDeviceFrom(entities), primaryHits)
 
@@ -1386,8 +1386,8 @@ func TestAssetTagClaimer_Semantics(t *testing.T) {
 		assetTagOwners: map[string]string{},
 	}
 
-	claimA := r.assetTagClaimer("host-A")
-	claimB := r.assetTagClaimer("host-B")
+	claimA := r.assetTagClaimer("host-A", r.logger)
+	claimB := r.assetTagClaimer("host-B", r.logger)
 
 	// First claim by host-A: must succeed.
 	assert.True(t, claimA("TAG-001"), "first claim must be allowed")
@@ -1422,8 +1422,8 @@ func TestAssetTagClaimer_PortDistinguishesTargets(t *testing.T) {
 		assetTagOwners: map[string]string{},
 	}
 
-	claim161 := r.assetTagClaimer("10.0.0.1:161")
-	claim1161 := r.assetTagClaimer("10.0.0.1:1161")
+	claim161 := r.assetTagClaimer("10.0.0.1:161", r.logger)
+	claim1161 := r.assetTagClaimer("10.0.0.1:1161", r.logger)
 
 	assert.True(t, claim161("CLONED"), "first port claims the tag")
 	assert.False(t, claim1161("CLONED"),
@@ -1436,11 +1436,11 @@ func TestAssetTagClaimer_PortDistinguishesTargets(t *testing.T) {
 func TestAssetTagClaimer_NilMapLazyInit(t *testing.T) {
 	r := &Runner{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 
-	claim := r.assetTagClaimer("10.0.0.1:161")
+	claim := r.assetTagClaimer("10.0.0.1:161", r.logger)
 	assert.NotPanics(t, func() {
 		assert.True(t, claim("TAG-001"), "first claim on lazily-initialized map must succeed")
 	})
-	assert.False(t, r.assetTagClaimer("10.0.0.2:161")("TAG-001"),
+	assert.False(t, r.assetTagClaimer("10.0.0.2:161", r.logger)("TAG-001"),
 		"ownership recorded in the lazily-created map must suppress cross-target claims")
 }
 
@@ -1690,7 +1690,7 @@ func TestRunWithMetadata_ModuleLookupNamesModuleType(t *testing.T) {
 	mode := config.DiscoverModulesLinecards
 	runner.config.Options.DiscoverModules = &mode
 
-	entities, _, err := runner.queryTarget(context.Background(), config.Target{Host: "192.0.2.1", Port: 161})
+	entities, _, err := runner.queryTarget(context.Background(), 0, config.Target{Host: "192.0.2.1", Port: 161})
 	require.NoError(t, err)
 	var models []string
 	for _, e := range entities {
@@ -1775,7 +1775,7 @@ func TestRunOmitsIPAddresses(t *testing.T) {
 		for _, c := range configure {
 			c(runner, &target)
 		}
-		runner.runWithMetadata(target, "")
+		runner.runWithMetadata(0, target, "")
 		require.NotEmpty(t, client.entities)
 		return client.entities
 	}

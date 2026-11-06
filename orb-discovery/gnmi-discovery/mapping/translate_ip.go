@@ -257,6 +257,12 @@ func detachForPrimaryIP(ip *diode.IPAddress, owner *diode.Device) *diode.IPAddre
 			deviceCopy.PrimaryIp4 = nil
 			deviceCopy.PrimaryIp6 = nil
 			deviceCopy.Config = nil // never embed the captured config in a nested ref
+			// Its own metadata, holding only source_match: the copy must match like
+			// the Device, and must not share the map the Device's run_id goes into.
+			deviceCopy.Metadata = nil
+			if sm, ok := owner.Metadata["source_match"]; ok {
+				deviceCopy.Metadata = diode.Metadata{"source_match": sm}
+			}
 			ifaceCopy.Device = &deviceCopy
 		}
 		// Strip relationship pointers that can transitively reach a Device with a

@@ -110,7 +110,8 @@ type Host struct {
 	ClientFactory  ClientFactory
 }
 
-// NewHost creates a new Host
+// NewHost creates a new Host. logger names the target: Walk's lines and its
+// clients' add no host of their own.
 func NewHost(host string, port uint16, retries int, timeout time.Duration, authentication *config.Authentication, logger *slog.Logger, ClientFactory ClientFactory) *Host {
 	return &Host{
 		address:        host,
@@ -125,7 +126,7 @@ func NewHost(host string, port uint16, retries int, timeout time.Duration, authe
 
 // Walk walks the SNMP host
 func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.ObjectIDValueMap, error) {
-	s.logger.Info("scanning", "host", s.address)
+	s.logger.Info("scanning")
 
 	snmpClient, err := s.ClientFactory(s.address, s.port, s.retries, s.timeout, s.authentication, s.logger)
 	if err != nil {
@@ -133,13 +134,13 @@ func (s *Host) Walk(ctx context.Context, objectIDs map[string]int) (mapping.Obje
 	}
 	defer func() {
 		if err := snmpClient.Close(); err != nil {
-			s.logger.Warn("error closing SNMP connection", "host", s.address, "error", err)
+			s.logger.Warn("error closing SNMP connection", "error", err)
 		}
 	}()
 
 	err = snmpClient.Connect()
 	if err != nil {
-		s.logger.Warn("could not connect to host", "host", s.address, "error", err)
+		s.logger.Warn("could not connect to host", "error", err)
 		return nil, err
 	}
 
@@ -215,7 +216,7 @@ func MapPDU(pdu PDU) (mapping.Value, error) {
 			value = fmt.Sprintf("%d", val)
 		}
 	default:
-		slog.Warn("unhandled SNMP type", "name", pdu.Name, "type", pdu.Type)
+		// Not logged here: the caller logs it, naming the target.
 		return mapping.Value{}, fmt.Errorf("unhandled SNMP type: %s", pdu.Type)
 	}
 	return mapping.Value{

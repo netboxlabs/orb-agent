@@ -208,17 +208,18 @@ func toTags(names []string) []*diode.Tag {
 // It always emits one *diode.Device, then interfaces, then components
 // (ModuleBay before its Module, mirroring snmp-discovery ordering).
 func Translate(profile *Profile, snap map[string]any, defaults *config.Defaults, discoveredVendor string) []diode.Entity {
-	return TranslateWithOptions(profile, snap, defaults, discoveredVendor, nil, nil)
+	return TranslateWithOptions(profile, snap, defaults, discoveredVendor, nil, nil, nil)
 }
 
 // TranslateWithOptions is Translate with the policy's options applied and
-// skipped LAG memberships logged. opts and logger may be nil.
+// skipped LAG memberships logged, each once per lagWarned. opts, logger and
+// lagWarned may be nil; a nil lagWarned logs every skip.
 func TranslateWithOptions(profile *Profile, snap map[string]any, defaults *config.Defaults, discoveredVendor string,
-	opts *config.Options, logger *slog.Logger,
+	opts *config.Options, logger *slog.Logger, lagWarned *LagWarnings,
 ) []diode.Entity {
 	dev, deviceMfg := translateDevice(profile, snap, defaults, discoveredVendor)
 	entities := []diode.Entity{dev}
-	ifaceEntities := translateInterfaces(profile, snap, dev, defaults, opts, logger)
+	ifaceEntities := translateInterfaces(profile, snap, dev, defaults, opts, logger, lagWarned)
 	entities = append(entities, ifaceEntities...)
 	entities = append(entities, translateComponents(profile, snap, dev, deviceMfg)...)
 	entities = append(entities, translateIPs(profile, snap, dev, defaults, compileInterfaceExcludes(defaults))...) // Device -> Interfaces -> Modules -> subifs+IPs
@@ -454,7 +455,7 @@ func nameExcluded(name string, excludes []*regexp.Regexp) bool {
 }
 
 func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Device, defaults *config.Defaults,
-	opts *config.Options, logger *slog.Logger,
+	opts *config.Options, logger *slog.Logger, lagWarned *LagWarnings,
 ) []diode.Entity {
 	listPath := profile.Interfaces.ListPath
 	if listPath == "" {
@@ -586,7 +587,7 @@ func translateInterfaces(profile *Profile, snap map[string]any, dev *diode.Devic
 		}
 		out = append(out, iface)
 	}
-	attachLagMembership(out, lagClaims, dev, logger)
+	attachLagMembership(out, lagClaims, dev, logger, lagWarned)
 	return out
 }
 
@@ -596,13 +597,38 @@ type lagClaim struct {
 	aggregate string
 }
 
+// LagWarnings records the skipped LAG memberships already logged. A runner
+// keeps one per connection, so each (member, aggregate, reason) is logged once
+// rather than on every flush. The zero value is ready to use.
+type LagWarnings struct {
+	seen map[lagWarning]struct{}
+}
+
+type lagWarning struct{ reason, member, aggregate string }
+
+// first records the warning and reports whether it is new; a nil w always is.
+func (w *LagWarnings) first(reason, member, aggregate string) bool {
+	if w == nil {
+		return true
+	}
+	key := lagWarning{reason: reason, member: member, aggregate: aggregate}
+	if _, ok := w.seen[key]; ok {
+		return false
+	}
+	if w.seen == nil {
+		w.seen = map[lagWarning]struct{}{}
+	}
+	w.seen[key] = struct{}{}
+	return true
+}
+
 // attachLagMembership sets Interface.Lag on each claimed member, as a
 // matcher-only reference, when the aggregate was emitted this cycle and typed
 // lag. Nothing is created: an aggregate missing from the payload (absent or
 // excluded) or of another type is skipped with a warning, and so is a member
 // typed virtual (NetBox refuses a LAG parent on one), bridge or lag, as in
 // device-discovery.
-func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Device, logger *slog.Logger) {
+func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Device, logger *slog.Logger, lagWarned *LagWarnings) {
 	if len(claims) == 0 {
 		return
 	}
@@ -612,8 +638,9 @@ func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Devic
 			byName[*i.Name] = i
 		}
 	}
-	warn := func(msg string, args ...any) {
-		if logger != nil {
+	// The message is the reason, so it keys the warning with the pair.
+	warn := func(c lagClaim, msg string, args ...any) {
+		if logger != nil && lagWarned.first(msg, *c.member.Name, c.aggregate) {
 			logger.Warn(msg, args...)
 		}
 	}
@@ -622,11 +649,11 @@ func attachLagMembership(out []diode.Entity, claims []lagClaim, dev *diode.Devic
 		agg, ok := byName[c.aggregate]
 		switch {
 		case !ok:
-			warn("lag: aggregate interface not discovered; skipping member", "member", member, "aggregate", c.aggregate)
+			warn(c, "lag: aggregate interface not discovered; skipping member", "member", member, "aggregate", c.aggregate)
 		case agg.Type == nil || *agg.Type != "lag":
-			warn("lag: aggregate interface is not typed lag; skipping member", "member", member, "aggregate", c.aggregate)
+			warn(c, "lag: aggregate interface is not typed lag; skipping member", "member", member, "aggregate", c.aggregate)
 		case c.member.Type != nil && (*c.member.Type == "virtual" || *c.member.Type == "bridge" || *c.member.Type == "lag"):
-			warn("lag: member interface type cannot carry a LAG; skipping member",
+			warn(c, "lag: member interface type cannot carry a LAG; skipping member",
 				"member", member, "interface_type", *c.member.Type, "aggregate", c.aggregate)
 		default:
 			c.member.Lag = &diode.Interface{Device: dev, Name: strptr(c.aggregate)}

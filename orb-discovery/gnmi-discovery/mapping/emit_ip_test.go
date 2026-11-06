@@ -34,7 +34,7 @@ func TestTranslateWithOptions_EmitPrefixesAndIPAddresses(t *testing.T) {
 		{"neither", &config.Options{EmitPrefixes: &off, EmitIPAddresses: &off}, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ents := TranslateWithOptions(base, snap, &config.Defaults{}, "", tc.opts, nil)
+			ents := TranslateWithOptions(base, snap, &config.Defaults{}, "", tc.opts, nil, nil)
 			var addrs, prefixes, names []string
 			for _, e := range ents {
 				switch v := e.(type) {

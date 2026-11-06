@@ -68,8 +68,8 @@ SNMP discovery policies are broken down into two subsections: `config` and `scop
 ### Config Section
 | Parameter | Type | Required | Description |
 |:---------:|:----:|:--------:|:-----------:|
-| schedule | cron format | no | Cron expression for scheduling (e.g., "*/5 * * * *") |
-| timeout | integer | no | Timeout for whole policy in seconds (defaults to 120) |
+| schedule | cron format | no | Cron expression for scheduling (e.g., "*/5 * * * *"). A host a subnet or range scan finds is crawled right after that scan, then on the schedule. |
+| timeout | integer | no | Timeout for whole policy in seconds (defaults to 120). It also bounds each subnet or range scan, which probes 256 addresses at a time and waits up to `snmp_probe_timeout` for each. A scan that runs out of time still crawls the hosts it found, but the tail of a large range may never be probed, and the scan run is still reported as failed, with how many addresses it started probing. The agent warns when the policy is loaded if a range may not fit. |
 | snmp_timeout | integer | no | Timeout for SNMP operations in seconds for SNMP operations (defaults to 5) |
 | snmp_probe_timeout | integer | no | Timeout for SNMP probe operations in seconds (defaults to 1) |
 | retries | integer | no | Number of retries for SNMP operations (defaults to 0) |
@@ -238,7 +238,7 @@ Each target in the `targets` list can include:
 | port | integer | no | SNMP port (defaults to 161) |
 | authentication | map | no | Target-specific authentication (overrides policy-level authentication) |
 | override_defaults | map | no | Allows overriding of any defaults for a specific target in the scope. `position` and `face` are set here only (see [Rack placement](#rack-placement)) |
-| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range. |
+| netbox_id | integer | no | NetBox device primary key. When set, the diode plugin matches the device by PK instead of by name. Ignored when host is a subnet or IP range, a `/32` or a one-address range included. |
 
 #### Subnet and range scanning
 
@@ -250,6 +250,48 @@ subnet: `192.168.1.0-255` is 256 addresses, `.0` and `.255` included.
 
 Each address is probed for reachability before any discovery job is scheduled,
 and only addresses that answer are discovered.
+
+**A host listed on its own wins over a subnet or range.** When a policy lists
+a host as an entry of its own (the address written as itself, a `/32` or a
+one-address range) and a subnet or range of the same policy covers it on the
+same `port`, the subnet or range leaves it out: the range neither probes nor
+crawls it, and the host is discovered once, with its own entry's
+`authentication` and `override_defaults`. Its entry's `netbox_id` applies only
+when the host is written as the bare address: one on a `/32` or a one-address
+range is ignored, as on any subnet or range syntax. An entry without a `port`
+is on 161, so it matches a range on 161. Hostnames are not resolved, so
+a hostname entry does not take its address out of a range. This applies
+within one policy: two policies covering the same host each discover it. A
+subnet or range whose every address is listed on its own is not scanned. When
+the policy is loaded, the agent logs which hosts each range leaves out.
+
+**Overlapping entries.** Overlapping subnets and ranges, and a host listed twice (`192.0.2.6` and
+`192.0.2.6/32`, say), are left as they are: each overlapping entry crawls the
+host, with its own `authentication` and its own `override_defaults`, so a host
+that answers entries with different defaults is sent with each in turn; list
+such a host once, on a single entry of its own. A subnet or range crawls only
+the hosts that answer its probe:
+
+- With SNMPv1 and SNMPv2c the probe sends the entry's own community, so a host
+  is found only by the entries whose community it accepts. Listing a range once
+  per community is how to scan it with several.
+- With SNMPv3 the probe does not present the entry's user: it presents a
+  placeholder (see below). Every SNMPv3 entry over a host finds it and crawls
+  it, and the crawls with credentials the host does not accept fail every
+  cycle. List such hosts on entries of their own, which win over ranges, or
+  give each set of credentials a range of its own that does not overlap the
+  others.
+
+A host listed on several entries of its own is crawled by each, with no probe,
+whatever their credentials. When the policy is loaded, the agent warns, one
+line per kind, about hosts listed on several entries, about subnets or ranges
+that probe the same hosts with the same version and community, about SNMPv3
+subnets or ranges that reach the same hosts, and about entries with different
+defaults that reach the same hosts. Defaults are compared as each entry ends
+up with them, the policy `defaults` merged with its `override_defaults`, and
+as written: tags in another order, or a trailing space, count as a
+difference. Hosts listed on their own leave every subnet or range first, so
+ranges that share only such hosts are not warned about.
 
 **What the probe puts on the wire.** With SNMPv3 the probe presents a
 placeholder user and does not authenticate, so neither the configured user nor

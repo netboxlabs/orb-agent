@@ -1340,8 +1340,13 @@ func startedOnMockConnection(t *testing.T, mockConn *fleet.MockMQTTConnection) *
 type controlledTokenServer struct {
 	t            *testing.T
 	mu           sync.Mutex
-	failForCount int // requests 1..failForCount return 500; subsequent requests return a valid token
+	failForCount int // requests 1..failForCount return failStatus; subsequent requests return a valid token
+	failStatus   int // the status a failing request gets; 500 when zero
+	// script, when set, replaces failForCount: the statuses of the requests
+	// after the priming one, the last repeated; 200 answers a valid token.
+	script       []int
 	requestCount int
+	requestTimes []time.Time
 	validJWT     string
 	mqttURL      string
 }
@@ -1349,18 +1354,31 @@ type controlledTokenServer struct {
 func (s *controlledTokenServer) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	s.requestCount++
+	s.requestTimes = append(s.requestTimes, time.Now())
 	count := s.requestCount
+	failStatus := s.failStatus
+	script := s.script
+	validJWT := s.validJWT
 	s.mu.Unlock()
 
 	// Request 1 is the credential-priming GetToken call — always succeed.
 	// Requests 2..failForCount+1 fail; requests failForCount+2 onward succeed again.
-	if count > 1 && count <= s.failForCount+1 {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+	switch {
+	case count > 1 && script != nil:
+		if status := script[min(count-2, len(script)-1)]; status != http.StatusOK {
+			http.Error(w, http.StatusText(status), status)
+			return
+		}
+	case count > 1 && count <= s.failForCount+1:
+		if failStatus == 0 {
+			failStatus = http.StatusInternalServerError
+		}
+		http.Error(w, http.StatusText(failStatus), failStatus)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(fleet.TokenResponse{
-		AccessToken: s.validJWT,
+		AccessToken: validJWT,
 		MQTTURL:     s.mqttURL,
 		ExpiresIn:   3600,
 	})
@@ -1370,6 +1388,13 @@ func (s *controlledTokenServer) RequestCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.requestCount
+}
+
+// RequestTimes returns when each request arrived, the priming request first.
+func (s *controlledTokenServer) RequestTimes() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Time(nil), s.requestTimes...)
 }
 
 // newControlledTokenServer wraps a controlledTokenServer in a TLS httptest.Server.
@@ -1466,7 +1491,7 @@ func TestFleetConfigManager_ReconnectWorker_RetriesOnTransientFailure(t *testing
 	defer cancel()
 
 	// Run worker with very short backoffs so the test completes quickly.
-	go mgr.runReconnectWorker(ctx, 10*time.Second, 5, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond)
+	go mgr.runReconnectWorker(ctx, 10*time.Second, 5, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond, time.Minute)
 
 	// Trigger one reconnect.
 	mgr.reconnectChan <- struct{}{}
@@ -1505,7 +1530,7 @@ func TestFleetConfigManager_ReconnectWorker_DisconnectsAfterAllRetriesFail(t *te
 
 	// maxRetries=3, very short backoffs to keep test fast.
 	const testMaxRetries = 3
-	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, 5*time.Second)
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, 5*time.Second, time.Minute)
 
 	mgr.reconnectChan <- struct{}{}
 
@@ -1529,7 +1554,7 @@ func TestFleetConfigManager_ReconnectWorker_ExitsOnContextCancel(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		mgr.runReconnectWorker(ctx, 10*time.Second, 3, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond)
+		mgr.runReconnectWorker(ctx, 10*time.Second, 3, 10*time.Millisecond, 50*time.Millisecond, 50*time.Millisecond, time.Minute)
 		close(done)
 	}()
 
@@ -1561,7 +1586,7 @@ func TestFleetConfigManager_ReconnectWorker_ReschedulesAfterExhaustion(t *testin
 	// maxRetries=2, very short retry delay (50ms) so the re-signal arrives quickly.
 	const testMaxRetries = 2
 	const testRetryDelay = 50 * time.Millisecond
-	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, testRetryDelay)
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 10*time.Millisecond, 50*time.Millisecond, testRetryDelay, time.Minute)
 
 	// Send first signal; the worker will exhaust retries and schedule a re-signal.
 	mgr.reconnectChan <- struct{}{}
@@ -1592,7 +1617,7 @@ func TestFleetConfigManager_ReconnectWorker_AfterFuncSuppressedOnContextCancel(t
 	const testMaxRetries = 2
 	const testRetryDelay = 200 * time.Millisecond
 
-	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 5*time.Millisecond, 20*time.Millisecond, testRetryDelay)
+	go mgr.runReconnectWorker(ctx, 10*time.Second, testMaxRetries, 5*time.Millisecond, 20*time.Millisecond, testRetryDelay, time.Minute)
 
 	// Trigger one reconnect attempt.
 	mgr.reconnectChan <- struct{}{}

@@ -208,6 +208,19 @@ func ResetMeter() {
 	cacheLock.Unlock()
 }
 
+// UseMeterForTesting records every instrument on m, dropping those already
+// made, so a test can read what was recorded. A nil m turns metrics off.
+func UseMeterForTesting(m metric.Meter) {
+	cacheLock.Lock()
+	defer cacheLock.Unlock()
+	meter = m
+	logger = slog.Default()
+	counterCache = map[string]metric.Int64Counter{}
+	upDownCounterCache = map[string]metric.Int64UpDownCounter{}
+	histogramCache = map[string]metric.Float64Histogram{}
+	gaugeCache = map[string]metric.Int64Gauge{}
+}
+
 // Shutdown gracefully shuts down the metrics exporter
 func Shutdown(ctx context.Context) error {
 	if meterProvider != nil {

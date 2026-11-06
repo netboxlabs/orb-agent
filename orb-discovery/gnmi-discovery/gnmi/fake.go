@@ -17,12 +17,15 @@ type FakeSession struct {
 	SampleReplay    time.Duration  // gap between SAMPLE re-sends (default 20ms)
 	StreamErr       error          // if set, sent on the error channel after replay (simulates a mid-stream drop)
 	GetResult       Notification
+	GetPathErrs     map[string]error // returned with GetResult
 	GetErr          error
 	ConfigBytes     []byte // returned by GetConfig
 	ConfigErr       error  // if set, GetConfig returns this error
 	ConfigGets      int    // count of GetConfig calls (test assertion)
 	Closed          bool
-	StopSubscribes  int // count of StopSubscribe calls (test assertion)
+	StopSubscribes  int      // count of StopSubscribe calls (test assertion)
+	Inconclusive    []string // returned by InconclusivePaths
+	Pinned          []string // recorded by PinPaths
 }
 
 // Capabilities returns the scripted capabilities.
@@ -84,8 +87,8 @@ func (f *FakeSession) Subscribe(ctx context.Context, mode Mode, _ []string, _ in
 }
 
 // GetOnce returns the scripted Get result.
-func (f *FakeSession) GetOnce(_ context.Context, _ []string) (Notification, error) {
-	return f.GetResult, f.GetErr
+func (f *FakeSession) GetOnce(_ context.Context, _ []string) (Notification, map[string]error, error) {
+	return f.GetResult, f.GetPathErrs, f.GetErr
 }
 
 // GetConfig records the call and returns the scripted config bytes/error.
@@ -96,6 +99,12 @@ func (f *FakeSession) GetConfig(_ context.Context) ([]byte, error) {
 
 // StopSubscribe records the call; the fake has no real subscription to tear down.
 func (f *FakeSession) StopSubscribe() { f.StopSubscribes++ }
+
+// InconclusivePaths returns the scripted paths.
+func (f *FakeSession) InconclusivePaths() []string { return f.Inconclusive }
+
+// PinPaths records the pinned paths.
+func (f *FakeSession) PinPaths(paths ...string) { f.Pinned = append(f.Pinned, paths...) }
 
 // Close marks the session closed.
 func (f *FakeSession) Close() error { f.Closed = true; return nil }

@@ -3,11 +3,22 @@
 """NetBox Labs - Per-target failure logging behaviour unit tests."""
 
 import logging
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from jnpr.junos.exception import ConnectClosedError as JunosConnectClosedError
+from jnpr.junos.exception import ConnectError as JunosConnectError
+from jnpr.junos.exception import ConnectRefusedError as JunosConnectRefusedError
+from jnpr.junos.exception import ConnectTimeoutError as JunosConnectTimeoutError
 from napalm.base.exceptions import ConnectionException
+from ncclient.operations.errors import TimeoutExpiredError as NetconfTimeoutExpiredError
+from ncclient.transport.errors import AuthenticationError as NetconfAuthenticationError
+from ncclient.transport.errors import SessionCloseError as NetconfSessionCloseError
+from ncclient.transport.errors import SessionError as NetconfSessionError
+from ncclient.transport.errors import SSHError as NetconfSSHError
 from netmiko.exceptions import NetmikoAuthenticationException
+from paramiko.ssh_exception import SSHException
 
 from device_discovery.policy.models import Config, Defaults, Napalm, Status
 from device_discovery.policy.run import RunStatus, RunStore
@@ -67,6 +78,8 @@ ENTRY_POINTS = ["run", "run_with_parent"]
     [
         ConnectionException("Cannot connect to 10.0.0.5"),
         NetmikoAuthenticationException(AUTH_MESSAGE),
+        JunosConnectRefusedError(SimpleNamespace(hostname="10.0.0.5", port=830)),
+        NetconfAuthenticationError("Authentication failed for 10.0.0.5"),
     ],
 )
 def test_expected_failure_is_one_flat_warning(
@@ -185,3 +198,125 @@ def test_driver_discovery_failure_warns_rather_than_errors(runner, scope, config
     assert len(matching) == 1
     assert matching[0].levelno == logging.WARNING
     assert runner.status == Status.FAILED
+
+
+def _pyez_connect_error(original):
+    """PyEZ's base ConnectError as Device.open() raises it, keeping what failed inside connect."""
+    return JunosConnectError(SimpleNamespace(hostname="10.0.0.5", port=830), msg=original)
+
+
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+@pytest.mark.parametrize(
+    "error",
+    [
+        JunosConnectError(SimpleNamespace(hostname="10.0.0.5", port=830)),
+        _pyez_connect_error(TypeError("connect() got an unexpected keyword argument 'bind_addr'")),
+        _pyez_connect_error(NetconfTimeoutExpiredError("rpc timed out")),
+    ],
+)
+def test_pyez_errors_that_can_hide_bugs_keep_their_traceback(
+    runner, scope, config, entry_point, error, caplog
+):
+    """PyEZ's base ConnectError wrapping anything but a transport failure keeps ERROR and its traceback."""
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=error),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    errors = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    assert errors[0].exc_info is not None
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+@pytest.mark.parametrize(
+    "error",
+    [
+        _pyez_connect_error(NetconfSSHError("Negotiation failed: Error reading SSH protocol banner")),
+        _pyez_connect_error(ConnectionResetError(54, "Connection reset by peer")),
+        JunosConnectClosedError(SimpleNamespace(hostname="10.0.0.5", port=830)),
+    ],
+)
+def test_pyez_transport_failures_are_one_flat_warning(runner, scope, config, entry_point, error, caplog):
+    """A PyEZ connection that fails in transport, or that the device drops, logs one WARNING."""
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=error),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    records = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
+    assert [r.levelno for r in records] == [logging.WARNING]
+    assert records[0].exc_info is None
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+def test_an_empty_message_names_the_error_it_wraps(runner, scope, config, entry_point, caplog):
+    """Napalm's junos driver re-raises a PyEZ timeout as ConnectionException(None); the line names the timeout."""
+
+    def timeout(*args, **kwargs):
+        try:
+            raise JunosConnectTimeoutError(SimpleNamespace(hostname="10.0.0.5", port=830))
+        except JunosConnectTimeoutError as cte:
+            raise ConnectionException(cte.msg)  # noqa: B904
+
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=timeout),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    (record,) = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
+    assert record.getMessage().endswith(": ConnectTimeoutError(10.0.0.5)")
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+@pytest.mark.parametrize(
+    "error",
+    [
+        _pyez_connect_error(NetconfSessionError("Capability exchange timed out")),
+        _pyez_connect_error(EOFError()),
+        _pyez_connect_error(SSHException("Error reading SSH protocol banner")),
+        _pyez_connect_error(NetconfSessionCloseError("")),
+        NetconfSSHError("Could not open socket to 10.0.0.5:830"),
+        NetconfSessionError("Capability exchange timed out"),
+        NetconfSessionCloseError("Unexpected session close"),
+    ],
+)
+def test_other_netconf_transport_failures_are_one_flat_warning(
+    runner, scope, config, entry_point, error, caplog
+):
+    """Session timeouts, SSH errors and EOF while connecting, wrapped by PyEZ or raised raw, log one WARNING."""
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=error),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    records = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
+    assert [r.levelno for r in records] == [logging.WARNING]
+
+
+@pytest.mark.parametrize("entry_point", ENTRY_POINTS)
+def test_the_run_reason_matches_the_log_line(runner, scope, config, entry_point, caplog):
+    """/api/v1/status shows the same failure text as the log, also when the message is empty."""
+
+    def timeout(*args, **kwargs):
+        try:
+            raise JunosConnectTimeoutError(SimpleNamespace(hostname="10.0.0.5", port=830))
+        except JunosConnectTimeoutError as cte:
+            raise ConnectionException(cte.msg) from cte
+
+    with (
+        patch.object(PolicyRunner, "_collect_device_data", side_effect=timeout),
+        caplog.at_level(logging.INFO, logger=RUNNER_LOGGER),
+    ):
+        _invoke(runner, entry_point, scope, config)
+
+    (record,) = [r for r in caplog.records if r.name == RUNNER_LOGGER and r.levelno >= logging.WARNING]
+    (run,) = runner.run_store.get_runs_for_target("test_policy", "10.0.0.5")
+    assert run.reason == "ConnectionException: ConnectTimeoutError(10.0.0.5)"
+    assert record.getMessage().endswith(": " + run.reason)
