@@ -115,10 +115,13 @@ func runStarts(s string, forms []string, cut bool) []int {
 		start[i] = len(s)
 	}
 	found := false
+	// Each scan takes time in proportion to s and v, so a long value in a
+	// long text costs no more than reading both; the scans of every form
+	// fill the same runs.
+	heads, tails, rs := make([]int, len(s)), make([]int, len(s)), reversed(s)
 	for _, v := range forms {
-		// Each scan takes time in proportion to s and v, so a long value in
-		// a long text costs no more than reading both.
-		heads, tails := headRuns(s, v), tailRuns(s, v)
+		headRuns(heads, s, v)
+		tailRuns(tails, rs, v)
 		for i := range len(s) {
 			// A tail as long as v is the whole of v. The longest head or
 			// tail ending at s[i] is the one to mask when any is: one that
@@ -151,9 +154,9 @@ func standsAlone(s string, from, to int, v string) bool {
 	return startsWord && endsWord
 }
 
-// headRuns returns, for each byte of s, the length of the longest head of v
-// that ends there, found as Knuth-Morris-Pratt finds v in s.
-func headRuns(s, v string) []int {
+// headRuns sets runs[i] to the length of the longest head of v that ends at
+// s[i], found as Knuth-Morris-Pratt finds v in s.
+func headRuns(runs []int, s, v string) {
 	// back[j] is the length of the longest head of v that is a tail of
 	// v[:j+1] and shorter than it: how much of a head is still matched when
 	// the byte after v[:j+1] is not the next in v.
@@ -167,7 +170,6 @@ func headRuns(s, v string) []int {
 		}
 		back[j] = n
 	}
-	runs := make([]int, len(s))
 	n := 0
 	for i := range len(s) {
 		if n == len(v) {
@@ -181,14 +183,13 @@ func headRuns(s, v string) []int {
 		}
 		runs[i] = n
 	}
-	return runs
 }
 
-// tailRuns returns, for each byte of s, the length of the longest tail of v
-// that ends there. Read backwards, that is the longest head of v that starts
-// there, found with the Z algorithm.
-func tailRuns(s, v string) []int {
-	rs, rv := reversed(s), reversed(v)
+// tailRuns sets runs[i] to the length of the longest tail of v that ends at
+// the byte of s at i, rs being s read backwards. Read backwards, that is the
+// longest head of v that starts there, found with the Z algorithm.
+func tailRuns(runs []int, rs []byte, v string) {
+	rv := reversed(v)
 	// z[k] is the length of the longest head of rv that starts at rv[k];
 	// rv[l:r] is the head that reaches furthest found so far.
 	z := make([]int, len(rv))
@@ -205,7 +206,6 @@ func tailRuns(s, v string) []int {
 			l, r = k, k+n
 		}
 	}
-	runs := make([]int, len(s))
 	for p, l, r := 0, 0, 0; p < len(rs); p++ {
 		n := 0
 		if p < r {
@@ -214,12 +214,11 @@ func tailRuns(s, v string) []int {
 		for p+n < len(rs) && n < len(rv) && rs[p+n] == rv[n] {
 			n++
 		}
-		runs[len(s)-1-p] = n
+		runs[len(rs)-1-p] = n
 		if p+n > r {
 			l, r = p, p+n
 		}
 	}
-	return runs
 }
 
 // reversed returns s with its bytes in reverse order.

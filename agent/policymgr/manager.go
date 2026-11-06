@@ -932,7 +932,7 @@ const quotedFieldsNamed = 3
 // returns the text to log, at most maxMaskedErrLen of the error, and the
 // policy's reason, at most maxBackendErrLen of it.
 //
-// Masking takes the text's length times the values', under the backend's
+// Masking takes time in proportion to the text it masks, under the backend's
 // apply mutex, so only the text kept is masked, and the longest form of a
 // value past it: a value, or a truncated one's tail, that a bound runs
 // through is then whole in what is masked, and masked whole before the bound
