@@ -56,18 +56,26 @@ resolved value as `********`:
 - the whole value, and its first or last 7 bytes or more, as a backend that
   shortens a value quotes it, including first bytes that end inside a
   character;
-- the same escaped, as Go or JSON quote a string.
+- the same escaped, as Go, JSON or Python quote a string.
 
 A value shorter than 7 bytes is masked only where it is a word of its own, and
-a run from the middle of a value is left alone, since it is more likely the
-error's own words. The agent then names the fields whose values the error
-quotes, because the backend's error points at a line of the policy as the
-agent sent it, not at a field you wrote:
+not in the error's own wording: the status code in front of the refusal and
+the words of a YAML decoding error (`line 4: cannot unmarshal !!str ... into
+int`). A short value such as `int` or `line` is masked where the error quotes
+it and left where it is one of those words, so the error stays readable and
+doesn't show which word the value is. A run from the middle of a value is left
+alone, since it is more likely the error's own words. The agent then names the
+fields whose values the error quotes, because the backend's error points at a
+line of the policy as the agent sent it, not at a field you wrote:
 
 ```text
 400 yaml: unmarshal errors:
   line 4: cannot unmarshal !!str `********` into int (the error quotes the value of the secret reference at config.retries, masked as ********)
 ```
+
+When more than one field holds the value the error quotes, the note says so
+without naming them: only the value shows what the error quotes, and naming
+every field that holds it would also show that their secrets are equal.
 
 Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
 at most 1 KiB as the policy's error. A refusal that is cut ends with
