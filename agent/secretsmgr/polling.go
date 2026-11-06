@@ -250,6 +250,10 @@ func (b *pollingBase) pollSecrets() {
 			}
 			continue
 		}
+		// The policies still failing on it are re-applied, recovered or not:
+		// one a late failure report left running (see the policy manager's
+		// stop) may hold a value read before the failure, while another
+		// policy resolving it meanwhile stored the current one.
 		recovered := cached.failed
 		valueChanged := !recovered && current != cached.Value
 		ids := cached.failing

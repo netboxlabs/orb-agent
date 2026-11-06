@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -29,6 +30,7 @@ import (
 // a body wait until released.
 type vaultStub struct {
 	mu      sync.Mutex
+	reads   map[string]int
 	values  map[string]string
 	errs    map[string]error
 	gate    map[string]chan struct{}
@@ -36,7 +38,7 @@ type vaultStub struct {
 }
 
 func newVaultStub() *vaultStub {
-	return &vaultStub{values: map[string]string{}, errs: map[string]error{}, gate: map[string]chan struct{}{}, entered: map[string]chan struct{}{}}
+	return &vaultStub{reads: map[string]int{}, values: map[string]string{}, errs: map[string]error{}, gate: map[string]chan struct{}{}, entered: map[string]chan struct{}{}}
 }
 
 func (v *vaultStub) set(body, val string) {
@@ -60,8 +62,15 @@ func (v *vaultStub) block(body string) (entered <-chan struct{}, release func())
 	return e, func() { close(g) }
 }
 
+func (v *vaultStub) readsOf(body string) int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.reads[body]
+}
+
 func (v *vaultStub) fetch(body string) (string, error) {
 	v.mu.Lock()
+	v.reads[body]++
 	g, gated := v.gate[body]
 	if gated {
 		close(v.entered[body])
@@ -244,4 +253,53 @@ func TestAPolicyWhoseSecretIsDeletedRunsAgainOnceItIsBack(t *testing.T) {
 	require.Empty(t, pd.BackendErr)
 	_, running = be.runs("policy-1")
 	require.True(t, running)
+}
+
+// An update that lands while its backend restarts is stored unapplied, so the
+// secrets manager still counts the policy among the users of the path it used
+// before. Deleting that path then fails a poll's read before the replay: the
+// report leaves the deferred record to the replay, which applies the update.
+func TestAnUpdateDeferredByARestartIsAppliedWhenItsOldPathIsDeleted(t *testing.T) {
+	const beName = "deferred_update"
+	v, poller, be, mgr := newPollerAndManager(t, beName)
+	v.set("old/community", "public")
+	v.set("new/community", "public2")
+	deliver(mgr, "policy-1", beName, 1, "old/community", "ds")
+	require.NoError(t, mgr.RemoveBackendPolicies(beName, be, false))
+	deliver(mgr, "policy-1", beName, 2, "new/community", "")
+
+	v.fail("old/community", errors.New("secret not found: old/community"))
+	poller.Poll()
+	require.NoError(t, mgr.ApplyBackendPolicies(context.Background(), beName, be))
+
+	pd := storedState(t, mgr, "policy-1")
+	require.Equal(t, policies.Running, pd.State, pd.BackendErr)
+	data, running := be.runs("policy-1")
+	require.True(t, running)
+	require.Equal(t, map[string]any{"community": "public2"}, data)
+}
+
+// A policy unapplied by removing its last dataset, as the Telemetry Service
+// unapplies one, or removed outright, is forgotten: the path only it used is
+// no longer read.
+func TestARemovedPolicysPathIsNoLongerRead(t *testing.T) {
+	for _, how := range []string{"remove", "last dataset removed"} {
+		t.Run(how, func(t *testing.T) {
+			beName := "forgotten_" + strings.ReplaceAll(how, " ", "_")
+			v, poller, be, mgr := newPollerAndManager(t, beName)
+			v.set("snmp/community", "public")
+			deliver(mgr, "policy-1", beName, 1, "snmp/community", "ds-1")
+			if how == "remove" {
+				require.NoError(t, mgr.RemovePolicy("policy-1", "policy-1", beName))
+			} else {
+				mgr.RemovePolicyDataset("policy-1", "ds-1", beName, be)
+			}
+			_, err := mgr.GetRepo().Get("policy-1")
+			require.Error(t, err)
+
+			before := v.readsOf("snmp/community")
+			poller.Poll()
+			require.Equal(t, before, v.readsOf("snmp/community"))
+		})
+	}
 }

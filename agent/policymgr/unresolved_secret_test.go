@@ -96,10 +96,10 @@ func TestAnUnresolvedSecretStopsAnOlderVersionTheBackendStillRuns(t *testing.T) 
 	be.AssertExpectations(t)
 }
 
-// A record a backend restart deferred has nothing on the backend, so it is not
-// asked to stop; its reason becomes the secret, so the restart's replay leaves
-// it for the secret to resolve.
-func TestAnUnresolvedSecretOnARecordARestartDeferredIsNotStoppedButLeftOutOfTheReplay(t *testing.T) {
+// A record a backend restart deferred has nothing on the backend, and its
+// stored version may not be the one the report was about: it is left to the
+// restart's replay, which solves its secrets and applies it.
+func TestAnUnresolvedSecretLeavesARecordARestartDeferredToTheReplay(t *testing.T) {
 	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_deferred")
 	deferred := storedPolicy("unresolved-5", "unresolved_deferred", policies.FailedToApply)
 	deferred.BackendErr = policymgr.ReasonBackendStarting
@@ -110,11 +110,17 @@ func TestAnUnresolvedSecretOnARecordARestartDeferredIsNotStoppedButLeftOutOfTheR
 	stored, err := mgr.GetRepo().Get("unresolved-5")
 	require.NoError(t, err)
 	assert.Equal(t, policies.FailedToApply, stored.State)
-	assert.Equal(t, unresolvedReason, stored.BackendErr)
+	assert.Equal(t, policymgr.ReasonBackendStarting, stored.BackendErr)
 	be.AssertNotCalled(t, "RemovePolicy", mock.Anything)
 
+	solved := config.PolicyPayload{ID: "unresolved-5", Data: map[string]any{"community": "public"}}
+	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-5")).Return(solved, nil).Once()
+	be.On("ApplyPolicy", byID("unresolved-5"), true).Return(nil).Once()
 	require.NoError(t, mgr.ApplyBackendPolicies(t.Context(), "unresolved_deferred", be))
-	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)
+	stored, err = mgr.GetRepo().Get("unresolved-5")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	be.AssertExpectations(t)
 }
 
 // A failure the secrets manager reported can be out of date by the time the

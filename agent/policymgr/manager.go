@@ -529,7 +529,9 @@ func (a *policyManager) removePolicyDatasetLocked(policyID string, datasetID str
 		err = a.repo.Remove(policyData.ID)
 		if err != nil {
 			a.logger.Warn("policy failed to remove local", "policy_id", policyData.ID, "policy_name", policyData.Name, "error", err)
+			return
 		}
+		a.secrets.ForgetPolicy(policyData.ID)
 	}
 }
 
@@ -898,19 +900,27 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, readErr erro
 }
 
 // stopUnresolvedLocked takes a policy one of whose secret references no
-// longer resolves, as the secrets manager reported. The report can be out of
-// date by the time this backend's mutex is held: a delivery or a replay may
-// have resolved the policy's secrets again meanwhile, so the secrets manager
-// is asked again, from its cache, without reading any secret. When the
-// failure stands, the backend stops whatever it may run of the policy, since
-// the secret may have been revoked: a failed record can still have an older
-// version running, after an update it refused, or under its old name, after a
-// rename. A record a restart deferred has nothing on the backend. The record
-// is kept, failed for that reason, rather than removed: the policy is still
-// the agent's, so a re-delivery without a dataset ID applies it, and the
+// longer resolves, as the secrets manager reported. A record a restart
+// deferred is left to the restart's replay: nothing of it runs on the backend,
+// its stored version may name other references than the one reported (an
+// update deferred unsolved), and the replay solves its secrets, failing it if
+// they still fail. The report can also be out of date by the time this
+// backend's mutex is held: a delivery or a replay may have resolved the
+// policy's secrets again meanwhile, so the secrets manager is asked again,
+// from its cache, without reading any secret. When the failure stands, the
+// backend stops whatever it may run of the policy, since the secret may have
+// been revoked: a failed record can still have an older version running,
+// after an update it refused, or under its old name, after a rename. The
+// record is kept, failed for that reason, rather than removed: the policy is
+// still the agent's, so a re-delivery without a dataset ID applies it, and the
 // secrets manager reports it to apply again once the reference resolves, which
 // runs a one-shot policy that already ran again, as a changed value does.
 func (a *policyManager) stopUnresolvedLocked(policy policies.PolicyData) {
+	if deferredByRestart(policy) {
+		a.logger.Info("a secret of the policy no longer resolves; leaving it to the restart's replay",
+			"policy_id", policy.ID, "policy_name", policy.Name, "backend", policy.Backend)
+		return
+	}
 	unresolved := a.secrets.Unresolved(policy.ID)
 	if unresolved == nil {
 		a.logger.Info("the secrets of the policy resolve again since a failure was reported; leaving it",
@@ -919,7 +929,7 @@ func (a *policyManager) stopUnresolvedLocked(policy policies.PolicyData) {
 	}
 	a.logger.Warn("a secret of the policy no longer resolves; stopping the policy",
 		"policy_id", policy.ID, "policy_name", policy.Name, "backend", policy.Backend, "error", unresolved)
-	if !deferredByRestart(policy) && backend.HaveBackend(policy.Backend) {
+	if backend.HaveBackend(policy.Backend) {
 		err := removeFromBackend(backend.GetBackend(policy.Backend), policy)
 		var httpErr *backend.HTTPError
 		gone := errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound || errors.Is(err, errBackendNeverStarted)

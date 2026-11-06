@@ -772,3 +772,33 @@ func TestFleetSecretsManager_unresolvedAndTheUsersOfAPath(t *testing.T) {
 	assert.NotContains(t, fm.usedVars, "a", "a path no policy uses is dropped")
 	assert.Equal(t, map[string]bool{"policy2": true}, fm.usedVars["b"].policyIDs)
 }
+
+// Fleet answering, for a path whose refresh failed, the version the agent
+// already holds means that value is current: a notification and a delivery
+// alike clear the stale mark, and the notification re-applies the policies.
+func TestFleetSecretsManager_anAnswerAtTheHeldVersionClearsAStalePath(t *testing.T) {
+	for _, via := range []string{"notification", "delivery"} {
+		t.Run(via, func(t *testing.T) {
+			fm, _ := newScriptedFleetManager(t, 5, func(_ int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+				return fleetAnswer(req, "v1", 1), nil
+			})
+			fm.usedVars = map[string]fleetCachedSecret{
+				"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}, stale: true, err: fmt.Errorf("refresh failed")},
+			}
+			var reported map[string]error
+			fm.callback = func(m map[string]error) { reported = m }
+
+			if via == "notification" {
+				notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+				assert.Equal(t, map[string]error{"policy1": nil}, reported)
+			} else {
+				_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+				require.NoError(t, err)
+			}
+			assert.NoError(t, fm.Unresolved("policy1"))
+			fm.mu.Lock()
+			defer fm.mu.Unlock()
+			assert.False(t, fm.usedVars["snmp/community"].stale)
+		})
+	}
+}

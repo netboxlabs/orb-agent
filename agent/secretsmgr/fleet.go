@@ -240,8 +240,10 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 			f.mu.Unlock()
 			continue
 		}
-		// If the version is already up-to-date or newer, skip overwriting.
-		if cached.Version >= secret.Version {
+		// If the version is already up-to-date or newer, skip overwriting,
+		// unless its refresh failed: Fleet answering the version held means
+		// that value is current, and its policies were stopped for it.
+		if cached.Version > secret.Version || cached.Version == secret.Version && !cached.stale {
 			f.mu.Unlock()
 			continue
 		}
