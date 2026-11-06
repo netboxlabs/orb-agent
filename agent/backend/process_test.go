@@ -198,6 +198,55 @@ func TestStartProcess_Success(t *testing.T) {
 	logMu.Unlock()
 }
 
+// One string that is not UTF-8 fails the agent's whole OTLP log batch, so each
+// byte of a streamed line that is not UTF-8 reaches LogLine as U+FFFD, the way
+// the agent's console already shows it.
+func TestStartProcess_StreamsValidUTF8(t *testing.T) {
+	stubProcessTimers(t)
+	fake := newFakeCommander(4242)
+	stubNewCmdOptions(t, fake)
+
+	fake.stdoutCh <- "caf\u00e9 \ufffd kept"
+	fake.stdoutCh <- "two bad \xff\xfe bytes"
+	fake.stderrCh <- "crash output \xc3( from the child"
+
+	var (
+		logMu       sync.Mutex
+		stdoutLines []string
+		stderrLines []string
+	)
+	err := StartProcess(StartSpec{
+		Logger:         testProcessLogger(),
+		NameDisplay:    "test-backend",
+		NameUnderscore: "test_backend",
+		Exec:           "test-exec",
+		ListenAddr:     testListenAddr(t),
+		LogLine: func(line string, isStderr bool) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			if isStderr {
+				stderrLines = append(stderrLines, line)
+			} else {
+				stdoutLines = append(stdoutLines, line)
+			}
+		},
+		SetProc:        func(Commander, <-chan CmdStatus) {},
+		ReadinessCheck: func() (string, error) { return "1.2.3", nil },
+	})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		logMu.Lock()
+		defer logMu.Unlock()
+		return len(stdoutLines) == 2 && len(stderrLines) == 1
+	}, time.Second, 5*time.Millisecond)
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	assert.Equal(t, []string{"caf\u00e9 \ufffd kept", "two bad \ufffd\ufffd bytes"}, stdoutLines)
+	assert.Equal(t, []string{"crash output \ufffd( from the child"}, stderrLines)
+}
+
 // TestStartProcess_SetProcBeforeReadiness is the regression guard for the
 // nil-proc readiness bug: SetProc MUST publish a non-nil, running Commander
 // BEFORE the first ReadinessCheck call. The check records the proc it observes
