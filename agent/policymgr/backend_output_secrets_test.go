@@ -46,7 +46,7 @@ func TestBackendOutputLeavesOutTheResolvedSecret(t *testing.T) {
 					},
 				},
 			})
-			require.Equal(t, policies.Running, storedPolicy(t, mgr, policyID).State, "the policy is applied")
+			require.Equal(t, policies.Running, storedPolicyByID(t, mgr, policyID).State, "the policy is applied")
 			from := logs.len()
 
 			stdout <- "probe of 192.0.2.10 failed: bad community " + secret

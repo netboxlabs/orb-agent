@@ -52,7 +52,7 @@ func TestRunReasonLeavesOutTheResolvedSecret(t *testing.T) {
 		},
 	}
 	mgr.ManagePolicy(payload)
-	require.Equal(t, policies.Running, storedPolicy(t, mgr, policyID).State, "the policy is applied")
+	require.Equal(t, policies.Running, storedPolicyByID(t, mgr, policyID).State, "the policy is applied")
 
 	failed := "SNMP authentication failed for community '" + resolvedSecret + "' on 192.0.2.10"
 	reported.set(backend.PolicyStatusRun{ID: "run-1", Status: "failed", Reason: failed, Targets: []string{"192.0.2.10", resolvedSecret}, Driver: resolvedSecret})
@@ -81,7 +81,7 @@ func TestRunReasonLeavesOutTheResolvedSecret(t *testing.T) {
 			"scope": map[string]any{"authentication": map[string]any{"community": "plain-community"}},
 		}
 		mgr.ManagePolicy(payload)
-		require.Equal(t, policies.Running, storedPolicy(t, mgr, policyID).State, "version 2 is applied")
+		require.Equal(t, policies.Running, storedPolicyByID(t, mgr, policyID).State, "version 2 is applied")
 
 		reported.set(backend.PolicyStatusRun{ID: "run-1", Status: "failed", Reason: failed})
 		poll()
@@ -142,8 +142,8 @@ func pollingStatus(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManage
 	}
 }
 
-// storedPolicy returns the policy the manager stores under policyID.
-func storedPolicy(t *testing.T, mgr policymgr.PolicyManager, policyID string) policies.PolicyData {
+// storedPolicyByID returns the policy the manager stores under policyID.
+func storedPolicyByID(t *testing.T, mgr policymgr.PolicyManager, policyID string) policies.PolicyData {
 	t.Helper()
 	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
@@ -159,7 +159,7 @@ func storedPolicy(t *testing.T, mgr policymgr.PolicyManager, policyID string) po
 // storedRun returns the run runID of the policy stored under policyID.
 func storedRun(t *testing.T, mgr policymgr.PolicyManager, policyID, runID string) policies.RunData {
 	t.Helper()
-	for _, r := range storedPolicy(t, mgr, policyID).Runs {
+	for _, r := range storedPolicyByID(t, mgr, policyID).Runs {
 		if r.ID == runID {
 			return r
 		}
