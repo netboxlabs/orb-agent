@@ -68,11 +68,40 @@ func untaggedVid(iface *diode.Interface) *int64 {
 // port: trunks gain VLAN 1 untagged and ports in no VLAN become access ports
 // in it. Read as configuration, it describes every port as the device does.
 func TestVlanMapper_PostMap_DellCurrentTableStandsInForEmptyStaticLists(t *testing.T) {
+	assertDellFixtureClassified(t, dellEmptyStaticFixture())
+}
+
+// A VLAN is in the static table whichever of its columns the device answers.
+// VLAN 1 answering only a name still has its PVID withdrawn from the ports it
+// does not hold.
+func TestVlanMapper_PostMap_DellStandInForANameOnlyStaticRow(t *testing.T) {
+	all := dellEmptyStaticFixture()
+	delete(all, oidDot1qVlanStaticEgressPorts+"1")
+	delete(all, oidDot1qVlanStaticUntaggedPorts+"1")
+	assertDellFixtureClassified(t, all)
+}
+
+// A device publishing one static list column, empty, has shown the same empty
+// lists as one publishing both.
+func TestVlanMapper_PostMap_DellStandInWithOneStaticListColumn(t *testing.T) {
+	for _, dropped := range []string{oidDot1qVlanStaticEgressPorts, oidDot1qVlanStaticUntaggedPorts} {
+		t.Run(dropped, func(t *testing.T) {
+			all := dellEmptyStaticFixture()
+			for _, vid := range []string{"1", "10", "20", "30"} {
+				delete(all, dropped+vid)
+			}
+			assertDellFixtureClassified(t, all)
+		})
+	}
+}
+
+func assertDellFixtureClassified(t *testing.T, all ObjectIDValueMap) {
+	t.Helper()
 	registry := NewEntityRegistry(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	ifaces := dellTestInterfaces(registry)
 
 	NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).
-		PostMap(dellEmptyStaticFixture(), registry, &config.Defaults{})
+		PostMap(all, registry, &config.Defaults{})
 
 	for _, tc := range []struct {
 		ifIndex  int
@@ -100,8 +129,8 @@ func TestVlanMapper_PostMap_DellCurrentTableStandsInForEmptyStaticLists(t *testi
 // the current table puts no port in stays as it was.
 func TestVlanMapper_BuildGenericRows_DellStandInIsConfiguration(t *testing.T) {
 	all := dellEmptyStaticFixture()
-	all[oidDot1qVlanCurrentEgressPorts+"0.4000"] = Value{Value: portMask(4)}
-	all[oidDot1qVlanCurrentUntaggedPorts+"0.4000"] = Value{Value: string(make([]byte, 16))}
+	all[oidDot1qVlanCurrentEgressPorts+"0.3900"] = Value{Value: portMask(4)}
+	all[oidDot1qVlanCurrentUntaggedPorts+"0.3900"] = Value{Value: string(make([]byte, 16))}
 	all[oidDot1qVlanStaticEgressPorts+"40"] = Value{Value: string(make([]byte, 16))}
 	all[oidDot1qVlanStaticUntaggedPorts+"40"] = Value{Value: string(make([]byte, 16))}
 
@@ -113,8 +142,8 @@ func TestVlanMapper_BuildGenericRows_DellStandInIsConfiguration(t *testing.T) {
 		assert.NotContains(t, rows.VlanEgressFromCurrent, vid, "VLAN %d egress", vid)
 		assert.NotContains(t, rows.VlanUntaggedFromCurrent, vid, "VLAN %d untagged", vid)
 	}
-	assert.Contains(t, rows.VlanEgressFromCurrent, 4000)
-	assert.Contains(t, rows.VlanUntaggedFromCurrent, 4000)
+	assert.Contains(t, rows.VlanEgressFromCurrent, 3900)
+	assert.Contains(t, rows.VlanUntaggedFromCurrent, 3900)
 	assert.Equal(t, string(make([]byte, 16)), string(rows.VlanEgressPorts[40]))
 	assert.Contains(t, rows.VlanUntaggedPorts, 40)
 }
@@ -147,12 +176,17 @@ func TestVlanMapper_PostMap_DellStandInNeedsBothCurrentColumns(t *testing.T) {
 	}
 }
 
-// Either static list is a static row: a VLAN publishing only one of them is
-// configured as much as one publishing both.
-func TestVlanMapper_BuildGenericRows_DellStandInForEitherStaticList(t *testing.T) {
-	for _, staticPrefix := range []string{oidDot1qVlanStaticEgressPorts, oidDot1qVlanStaticUntaggedPorts} {
+// Any static column is a static row: a VLAN publishing only one of them is
+// configured as much as one publishing them all.
+func TestVlanMapper_BuildGenericRows_DellStandInForAnyStaticColumn(t *testing.T) {
+	for staticPrefix, value := range map[string]string{
+		oidDot1qVlanStaticEgressPorts:   string(make([]byte, 16)),
+		oidDot1qVlanStaticUntaggedPorts: string(make([]byte, 16)),
+		oidDot1qVlanStaticName:          "vlan50",
+		oidDot1qVlanStaticRowStatus:     "1",
+	} {
 		all := dellEmptyStaticFixture()
-		all[staticPrefix+"50"] = Value{Value: string(make([]byte, 16))}
+		all[staticPrefix+"50"] = Value{Value: value}
 		all[oidDot1qVlanCurrentEgressPorts+"0.50"] = Value{Value: portMask(5)}
 		all[oidDot1qVlanCurrentUntaggedPorts+"0.50"] = Value{Value: portMask(5)}
 
@@ -163,6 +197,38 @@ func TestVlanMapper_BuildGenericRows_DellStandInForEitherStaticList(t *testing.T
 		assert.NotContains(t, rows.VlanEgressFromCurrent, 50, staticPrefix)
 		assert.NotContains(t, rows.VlanUntaggedFromCurrent, 50, staticPrefix)
 	}
+}
+
+// The replacement is the snapshot the time marks resolved to, not each column's
+// newest row: the columns are paired at the newest mark they share.
+func TestVlanMapper_BuildGenericRows_DellStandInUsesOneSnapshot(t *testing.T) {
+	all := dellEmptyStaticFixture()
+	delete(all, oidDot1qVlanCurrentEgressPorts+"0.10")
+	delete(all, oidDot1qVlanCurrentUntaggedPorts+"0.10")
+	all[oidDot1qVlanCurrentEgressPorts+"5.10"] = Value{Value: portMask(2, 3)}
+	all[oidDot1qVlanCurrentEgressPorts+"9.10"] = Value{Value: portMask(2)}
+	all[oidDot1qVlanCurrentUntaggedPorts+"5.10"] = Value{Value: portMask(2)}
+
+	rows := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
+
+	assert.Equal(t, portMask(2, 3), string(rows.VlanEgressPorts[10]))
+	assert.Equal(t, portMask(2), string(rows.VlanUntaggedPorts[10]))
+}
+
+// A Dell device publishing no static port list at all has not shown the empty
+// lists this reads past, so its current table keeps the operational reading.
+func TestVlanMapper_BuildGenericRows_DellWithoutStaticListsIsUnchanged(t *testing.T) {
+	all := dellEmptyStaticFixture()
+	for _, vid := range []string{"1", "10", "20", "30"} {
+		delete(all, oidDot1qVlanStaticEgressPorts+vid)
+		delete(all, oidDot1qVlanStaticUntaggedPorts+vid)
+	}
+
+	rows := NewVlanMapper(slog.New(slog.NewTextHandler(io.Discard, nil)), config.Options{}).buildGenericRows(all)
+
+	assert.Equal(t, portMask(2, 3), string(rows.VlanEgressPorts[10]))
+	assert.Contains(t, rows.VlanEgressFromCurrent, 10)
+	assert.Contains(t, rows.VlanUntaggedFromCurrent, 10)
 }
 
 // Only on a Dell device, and only where every static list is empty: a device

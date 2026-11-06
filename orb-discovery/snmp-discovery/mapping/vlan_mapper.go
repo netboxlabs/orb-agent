@@ -712,6 +712,8 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// BasePortToIfIndex is fully populated.
 	bridgePortPvid := map[int]int{}
 	currentEgress, currentUntagged := map[int]map[int]string{}, map[int]map[int]string{}
+	// staticVlans are the VLANs with any dot1qVlanStaticTable column.
+	staticVlans := map[int]struct{}{}
 	for oid, v := range all {
 		switch {
 		case strings.HasPrefix(oid, oidDot1dBasePortIfIndex):
@@ -730,11 +732,21 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticEgressPorts))
 			if ok {
 				rows.VlanEgressPorts[vid] = []byte(v.Value)
+				staticVlans[vid] = struct{}{}
 			}
 		case strings.HasPrefix(oid, oidDot1qVlanStaticUntaggedPorts):
 			vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticUntaggedPorts))
 			if ok {
 				rows.VlanUntaggedPorts[vid] = []byte(v.Value)
+				staticVlans[vid] = struct{}{}
+			}
+		case strings.HasPrefix(oid, oidDot1qVlanStaticName):
+			if vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticName)); ok {
+				staticVlans[vid] = struct{}{}
+			}
+		case strings.HasPrefix(oid, oidDot1qVlanStaticRowStatus):
+			if vid, ok := atoi(strings.TrimPrefix(oid, oidDot1qVlanStaticRowStatus)); ok {
+				staticVlans[vid] = struct{}{}
 			}
 		case strings.HasPrefix(oid, oidDot1qVlanCurrentEgressPorts):
 			if vid, mark, ok := currentVlanRow(oid, oidDot1qVlanCurrentEgressPorts); ok {
@@ -788,14 +800,14 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	// carrying 4094 masks and scanning them once per port, for rows that say
 	// nothing.
 	//
-	// The exception is a Dell switch whose static lists name no port at all.
-	// Its current table is the only membership it publishes, and read as
-	// operational it leaves standing the PVID of 1 such a switch reports on
-	// every port, putting VLAN 1 untagged on trunks that do not carry it. There
-	// a VLAN's current rows replace its static row, as configuration, where
-	// they answer both columns: with one missing, the PVID would stand in for
-	// it and the same VLAN 1 would come back.
-	standIn := sysObjectIDUnder(all, dellEnterprise) && noStaticListNamesAPort(rows)
+	// The exception is a Dell switch that publishes static port lists and names
+	// no port in any of them. Its current table is the only membership it
+	// publishes, and read as operational it leaves standing the PVID of 1 such
+	// a switch reports on every port, putting VLAN 1 untagged on trunks that do
+	// not carry it. There a VLAN's current rows replace its static row, as
+	// configuration, where they answer both columns: with one missing, the
+	// PVID would stand in for it and the same VLAN 1 would come back.
+	standIn := sysObjectIDUnder(all, dellEnterprise) && staticListsPublishedEmpty(rows)
 	stoodIn := 0
 	currentNamedAVlan := false
 	for vid := range allCurrentVlans(currentEgress, currentUntagged) {
@@ -805,8 +817,8 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 		}
 		_, staticEgress := rows.VlanEgressPorts[vid]
 		_, staticUntagged := rows.VlanUntaggedPorts[vid]
-		if standIn && (staticEgress || staticUntagged) &&
-			currentEgress[vid] != nil && currentUntagged[vid] != nil {
+		_, static := staticVlans[vid]
+		if standIn && static && currentEgress[vid] != nil && currentUntagged[vid] != nil {
 			rows.VlanEgressPorts[vid] = []byte(egress)
 			rows.VlanUntaggedPorts[vid] = []byte(untagged)
 			stoodIn++
@@ -859,9 +871,13 @@ func (m *VlanMapper) buildGenericRows(all ObjectIDValueMap) qbridge.GenericRows 
 	return rows
 }
 
-// noStaticListNamesAPort reports whether every static egress and untagged list
-// is empty. Called before the current table is merged in.
-func noStaticListNamesAPort(rows qbridge.GenericRows) bool {
+// staticListsPublishedEmpty reports whether the device published static egress
+// or untagged lists and every one is empty. Called before the current table is
+// merged in.
+func staticListsPublishedEmpty(rows qbridge.GenericRows) bool {
+	if len(rows.VlanEgressPorts)+len(rows.VlanUntaggedPorts) == 0 {
+		return false
+	}
 	for _, masks := range []map[int][]byte{rows.VlanEgressPorts, rows.VlanUntaggedPorts} {
 		for _, mask := range masks {
 			if !isEmptyPortMask(string(mask)) {
