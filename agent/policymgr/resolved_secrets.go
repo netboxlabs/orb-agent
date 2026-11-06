@@ -1,6 +1,7 @@
 package policymgr
 
 import (
+	"cmp"
 	"slices"
 	"sync"
 	"time"
@@ -9,9 +10,9 @@ import (
 	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
-// removedGrace is how long a removed policy's values keep masking its
-// backend's output: a line the backend printed about the policy before the
-// removal can still be waiting to be relayed.
+// removedGrace is how long the values of a policy removed from a backend, or
+// moved to another, keep masking the backend's output: a line the backend
+// printed about the policy before can still be waiting to be relayed.
 const removedGrace = time.Minute
 
 // resolvedSecrets holds, by policy ID, the values the policy's secret
@@ -23,7 +24,13 @@ const removedGrace = time.Minute
 type resolvedSecrets struct {
 	mu       sync.Mutex
 	byPolicy map[string]policySecrets
-	now      func() time.Time
+	// departed holds the values of the policies removed from a backend, or
+	// moved to another, less than removedGrace ago.
+	departed []departedSecrets
+	// maskers holds, by backend, what masks its output, built from its
+	// policies' values when a line needs it after they changed.
+	maskers map[string]*redact.Masker
+	now     func() time.Time
 }
 
 type policySecrets struct {
@@ -34,12 +41,20 @@ type policySecrets struct {
 	// Only two are kept, since each value is held in memory and masks every
 	// line the backend prints.
 	values, previous []resolvedValue
-	// removed is when the policy was removed, or zero.
-	removed time.Time
+}
+
+type departedSecrets struct {
+	backend string
+	values  []resolvedValue
+	at      time.Time
 }
 
 func newResolvedSecrets() *resolvedSecrets {
-	return &resolvedSecrets{byPolicy: make(map[string]policySecrets), now: time.Now}
+	return &resolvedSecrets{
+		byPolicy: make(map[string]policySecrets),
+		maskers:  make(map[string]*redact.Masker),
+		now:      time.Now,
+	}
 }
 
 // remember records the values a policy's references resolved to for an apply
@@ -47,86 +62,114 @@ func newResolvedSecrets() *resolvedSecrets {
 func (s *resolvedSecrets) remember(policyID, backendName string, resolved []resolvedValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pruneLocked()
 	ps, ok := s.byPolicy[policyID]
 	if !ok && len(resolved) == 0 {
 		return
 	}
+	if ok && ps.backend != backendName {
+		s.departLocked(ps)
+		ps = policySecrets{}
+	}
 	ps.backend = backendName
-	ps.removed = time.Time{}
 	if !sameValues(ps.values, resolved) {
 		ps.previous, ps.values = ps.values, slices.Clone(resolved)
+		delete(s.maskers, backendName)
 	}
 	s.byPolicy[policyID] = ps
 }
 
-// sameValues reports whether a and b hold the same values, in any order:
-// resolvedValues walks maps, whose order changes from one call to the next.
+// sameValues reports whether a and b hold the same values, as many times
+// each, in any order: resolvedValues walks maps, whose order changes from
+// one call to the next.
 func sameValues(a, b []resolvedValue) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	for _, r := range a {
-		if !slices.Contains(b, r) {
-			return false
-		}
+	byPathAndValue := func(x, y resolvedValue) int {
+		return cmp.Or(cmp.Compare(x.path, y.path), cmp.Compare(x.value, y.value))
 	}
-	return true
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.SortFunc(a, byPathAndValue)
+	slices.SortFunc(b, byPathAndValue)
+	return slices.Equal(a, b)
 }
 
-// removed records that a policy was removed: its values are dropped
-// removedGrace later.
+// removed records that a policy was removed. Its values keep masking its
+// backend's output for removedGrace, and are dropped then.
 func (s *resolvedSecrets) removed(policyID string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if ps, ok := s.byPolicy[policyID]; ok {
-		ps.removed = s.now()
-		s.byPolicy[policyID] = ps
-	}
-}
-
-// kept returns the policy's entry, dropping it when it was removed more than
-// removedGrace ago. The caller holds s.mu.
-func (s *resolvedSecrets) kept(policyID string) (policySecrets, bool) {
-	ps, ok := s.byPolicy[policyID]
-	if ok && !ps.removed.IsZero() && s.now().Sub(ps.removed) > removedGrace {
 		delete(s.byPolicy, policyID)
-		return policySecrets{}, false
+		s.departLocked(ps)
 	}
-	return ps, ok
 }
 
-// of returns the values kept for a policy.
+// departLocked keeps a policy's values masking the output of the backend it
+// ran on for removedGrace, and has them dropped then, whatever else happens
+// before. The caller holds s.mu.
+func (s *resolvedSecrets) departLocked(ps policySecrets) {
+	s.departed = append(s.departed, departedSecrets{
+		backend: ps.backend,
+		values:  append(slices.Clone(ps.values), ps.previous...),
+		at:      s.now(),
+	})
+	time.AfterFunc(removedGrace, s.prune)
+}
+
+func (s *resolvedSecrets) prune() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked()
+}
+
+// pruneLocked drops the departed values older than removedGrace. The caller
+// holds s.mu.
+func (s *resolvedSecrets) pruneLocked() {
+	now := s.now()
+	s.departed = slices.DeleteFunc(s.departed, func(d departedSecrets) bool {
+		if now.Sub(d.at) <= removedGrace {
+			return false
+		}
+		delete(s.maskers, d.backend)
+		return true
+	})
+}
+
+// of returns the values kept for a policy the agent runs.
 func (s *resolvedSecrets) of(policyID string) []resolvedValue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ps, _ := s.kept(policyID)
-	values := slices.Clone(ps.values)
-	for _, r := range ps.previous {
-		if !slices.Contains(values, r) {
-			values = append(values, r)
-		}
-	}
-	return values
+	ps := s.byPolicy[policyID]
+	return append(slices.Clone(ps.values), ps.previous...)
 }
 
 // maskOutput masks, in a line a backend's process printed, the values of
-// every policy the backend runs: a line names no policy.
+// every policy the backend runs, or ran less than removedGrace ago: a line
+// names no policy.
 func (s *resolvedSecrets) maskOutput(backendName, line string) string {
-	var values []string
 	s.mu.Lock()
-	for id := range s.byPolicy {
-		ps, ok := s.kept(id)
-		if !ok || ps.backend != backendName {
-			continue
+	s.pruneLocked()
+	m, ok := s.maskers[backendName]
+	if !ok {
+		var values []string
+		for _, ps := range s.byPolicy {
+			if ps.backend == backendName {
+				values = appendNew(values, ps.values)
+				values = appendNew(values, ps.previous)
+			}
 		}
-		values = appendNew(values, ps.values)
-		values = appendNew(values, ps.previous)
+		for _, d := range s.departed {
+			if d.backend == backendName {
+				values = appendNew(values, d.values)
+			}
+		}
+		m = redact.NewMasker(values)
+		s.maskers[backendName] = m
 	}
 	s.mu.Unlock()
-	if len(values) == 0 {
-		return line
-	}
-	return redact.Values(line, values)
+	return m.Mask(line)
 }
 
 // appendNew appends to values those of resolved it does not hold yet.
@@ -150,35 +193,39 @@ type maskingRepo struct {
 // the runs a backend reports before storing them: the runs ride every
 // heartbeat to Fleet. A backend can put in a run's reason an exception's
 // text that quotes what it was given, so the reason is masked, and kept to
-// the bound a refusal is kept to, as a refusal is; and it can copy a target
-// or its driver from the policy's scope.
+// the bound a refusal is kept to, as a refusal is. It can also copy a target
+// or its driver from the policy's scope, so one that is a value is masked
+// whole; any other is kept as reported, since Fleet matches a target to a
+// device by its exact name.
 func (r *maskingRepo) UpdateRuns(policyName string, runs []policies.RunData) error {
 	var resolved []resolvedValue
 	if pd, err := r.GetByName(policyName); err == nil {
 		resolved = r.secrets.of(pd.ID)
 	}
 	values := appendNew(nil, resolved)
+	isValue := func(s string) bool { return s != "" && slices.Contains(values, s) }
 	for i := range runs {
 		if runs[i].Reason != "" {
 			_, runs[i].Reason = backendRefusal(runs[i].Reason, resolved)
 		}
-		if len(values) == 0 {
-			continue
-		}
-		if runs[i].Targets != nil {
-			targets := make([]string, len(runs[i].Targets))
-			for j, target := range runs[i].Targets {
-				targets[j] = redact.Values(target, values)
+		if slices.ContainsFunc(runs[i].Targets, isValue) {
+			targets := slices.Clone(runs[i].Targets)
+			for j, target := range targets {
+				if isValue(target) {
+					targets[j] = redact.MaskedSecret
+				}
 			}
 			runs[i].Targets = targets
 		}
-		runs[i].Driver = redact.Values(runs[i].Driver, values)
+		if isValue(runs[i].Driver) {
+			runs[i].Driver = redact.MaskedSecret
+		}
 	}
 	return r.PolicyRepo.UpdateRuns(policyName, runs)
 }
 
-// Remove removes a policy; the values its secret references resolved to are
-// dropped removedGrace later.
+// Remove removes a policy; the values its secret references resolved to keep
+// masking its backend's output for removedGrace.
 func (r *maskingRepo) Remove(policyID string) error {
 	err := r.PolicyRepo.Remove(policyID)
 	r.secrets.removed(policyID)
