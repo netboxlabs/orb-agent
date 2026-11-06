@@ -173,6 +173,75 @@ func TestValues(t *testing.T) {
 			want:   "400 yaml: unmarshal errors:\n  line 10: cannot unmarshal !!str `********` into bool; public_key unset",
 		},
 		{
+			name:   "a short value that is a word of the YAML error is masked only where it is quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `int` into int",
+			values: []string{"int"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a short value that is the YAML error's line word",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `line` into int",
+			values: []string{"line"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			// The secret sits in a field the error does not quote: masking
+			// the error's words would claim the error quotes it, and show
+			// which word it is.
+			name:   "the words of a YAML error about another field are left",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{"int", "line", "str", "into", "yaml", "4", "400", "errors", "cannot"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a YAML type error for a value that is no scalar is left",
+			text:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+			values: []string{"map", "string", "7"},
+			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+		},
+		{
+			name:   "a YAML syntax error's prefix is left",
+			text:   "400 yaml: line 3: did not find expected key",
+			values: []string{"yaml", "line", "3"},
+			want:   "400 yaml: line 3: did not find expected key",
+		},
+		{
+			name:   "the status code the agent puts first is left",
+			text:   "400 p1: invalid policy: target sw1: missing community",
+			values: []string{"400"},
+			want:   "400 p1: invalid policy: target sw1: missing community",
+		},
+		{
+			name:   "a value like a status code past the start is masked",
+			text:   "400 target sw1: port 161 is not allowed",
+			values: []string{"161"},
+			want:   "400 target sw1: port ******** is not allowed",
+		},
+		{
+			name:   "a short value a backend echoes unquoted is still masked",
+			text:   "400 core: invalid policy: policy-level: invalid security level abc",
+			values: []string{"abc"},
+			want:   "400 core: invalid policy: policy-level: invalid security level ********",
+		},
+		{
+			name:   "a short value in single quotes",
+			text:   "Input should be a valid integer [type=int_parsing, input_value='lab', input_type=str]",
+			values: []string{"lab"},
+			want:   "Input should be a valid integer [type=int_parsing, input_value='********', input_type=str]",
+		},
+		{
+			name:   "a value Python quotes with both kinds of quote in it",
+			text:   `Input should be a valid integer [type=int_parsing, input_value='a\'b"c', input_type=str]`,
+			values: []string{`a'b"c`},
+			want:   `Input should be a valid integer [type=int_parsing, input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a long value Python quotes with both kinds of quote in it",
+			text:   `[input_value='it\'s "x" k3Y', input_type=str]`,
+			values: []string{`it's "x" k3Y`},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
 			name:   "a short value at the start of the text",
 			text:   "ab9 refused",
 			values: []string{"ab9"},
@@ -332,7 +401,9 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 // whole values overlap and repeat.
 func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
-	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密")}
+	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4")}
+	// Pieces of the wording errorWording knows, so values meet it.
+	wording := []string{"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: "}
 	word := func(alphabet []rune, n int) string {
 		var b strings.Builder
 		for range n {
@@ -350,6 +421,10 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 		for range r.Intn(6) {
 			if r.Intn(4) == 0 {
 				b.WriteString(word(alphabet, r.Intn(8)))
+				continue
+			}
+			if r.Intn(5) == 0 {
+				b.WriteString(wording[r.Intn(len(wording))])
 				continue
 			}
 			v := values[r.Intn(len(values))]
@@ -386,7 +461,8 @@ func runStartsByDefinition(s string, forms []string, cut bool) []int {
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				whole := run == v && (len(run) >= longRun || standsAlone(s, from, i, v))
+				whole := run == v && (len(run) >= longRun ||
+					standsAlone(s, from, i, v) && !slices.Contains(errorWording(s)[from:i+1], true))
 				tail := len(run) >= longRun && strings.HasSuffix(v, run)
 				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1)
 				if whole || tail || head {

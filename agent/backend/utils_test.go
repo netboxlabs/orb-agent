@@ -95,6 +95,28 @@ func TestCommonRequest_Non2xxReturnsHTTPError(t *testing.T) {
 	assert.Contains(t, err.Error(), "404 policy 'test-job' not found")
 }
 
+// A detail that is no string, as FastAPI's list of validation errors, is
+// written as JSON: the values in it keep their quotes, which is what tells a
+// policy's value from the error's own words when the agent masks secrets.
+func TestCommonRequest_Non2xxStructuredDetailIsWrittenAsJSON(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proc := &mockCommander{status: backend.CmdStatus{PID: 123}}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"detail":[{"input":"abc","loc":["body","retries"],"msg":"Input should be a valid integer"}]}`))
+	}))
+	defer srv.Close()
+
+	var resp any
+	err := backend.CommonRequest("testbackend", proc, logger, srv.URL, &resp,
+		http.MethodPost, http.NoBody, "application/x-yaml", 5, "detail")
+
+	require.Error(t, err)
+	assert.Equal(t, `422 [{"input":"abc","loc":["body","retries"],"msg":"Input should be a valid integer"}]`, err.Error())
+}
+
 // TestCommonRequest_Non2xxJSONWithoutTheMessageKeyReturnsHTTPError answers
 // with a JSON body that does not carry the key the caller reads the message
 // from. It is still a refusal: before, CommonRequest went on to decode the

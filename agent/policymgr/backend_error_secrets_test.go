@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"sync"
 	"testing"
 
@@ -151,4 +152,45 @@ func mappingValue(n *yaml.Node, key string) *yaml.Node {
 		}
 	}
 	return nil
+}
+
+// A short secret that is also a word of the backend's YAML type error, as
+// "int" or "line", is masked only where the error quotes it: the error keeps
+// its own words, so it stays readable and does not show which word the secret
+// is, and the note names the field once.
+func TestFailedApplyErrorMasksAShortSecretOnlyWhereTheErrorQuotesIt(t *testing.T) {
+	for _, secret := range []string{"int", "line"} {
+		t.Run(secret, func(t *testing.T) {
+			logs := &renderedLogs{}
+			logger := logs.logger()
+			mgr, err := policymgr.New(logger, startDoppler(t, logger, "SNMP_RETRIES", secret), config.Config{})
+			require.NoError(t, err)
+			tc := policyBackends[0]
+			refusal := &typeErrorRefusal{}
+			startBackendAnswering(t, logger, mgr, tc.backend, tc.executable, tc.register, refusal.answer)
+			from := logs.len()
+
+			policyID := "short-secret-" + secret
+			mgr.ManagePolicy(config.PolicyPayload{
+				Action: "manage", ID: policyID, DatasetID: "dataset-1", Name: "short_secret_policy", Backend: tc.backend, Version: 1,
+				Data: map[string]any{
+					"input":  map[string]any{"tap": "default_pcap"},
+					"config": map[string]any{"retries": "${doppler://SNMP_RETRIES}"},
+				},
+			})
+			require.Contains(t, refusal.sent(), "!!str `"+secret+"` into int", "the backend's error quotes the value")
+
+			state, err := mgr.GetPolicyState()
+			require.NoError(t, err)
+			var reason string
+			for _, p := range state {
+				if p.ID == policyID {
+					reason = p.BackendErr
+				}
+			}
+			assert.Regexp(t, "^400 yaml: unmarshal errors:\n  line \\d+: cannot unmarshal !!str `\\*{8}` into int"+
+				regexp.QuoteMeta(" (the error quotes the value of the secret reference at config.retries, masked as ********)")+"$", reason)
+			assert.Empty(t, logs.linesWith(from, "`"+secret+"`"), "no log record carries the quoted value")
+		})
+	}
 }

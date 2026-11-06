@@ -100,6 +100,15 @@ func CommonRequest(backendName string, proc Commander, logger *slog.Logger, url 
 			var jsonBody map[string]any
 			if err := json.Unmarshal(body, &jsonBody); err == nil {
 				if errMsg, ok := jsonBody[errorMsg]; ok {
+					// A detail that is no string, such as FastAPI's list of
+					// validation errors, is written as JSON: the values in it
+					// keep their quotes, which is how the agent tells them
+					// from the error's own words when it masks secrets.
+					if _, isString := errMsg.(string); !isString {
+						if detail, err := json.Marshal(errMsg); err == nil {
+							errMsg = string(detail)
+						}
+					}
 					return &HTTPError{StatusCode: res.StatusCode, Message: fmt.Sprintf("%d %s", res.StatusCode, errMsg)}
 				}
 			}

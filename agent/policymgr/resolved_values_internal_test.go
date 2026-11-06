@@ -60,13 +60,40 @@ func TestBackendRefusal(t *testing.T) {
 
 	t.Run("names at most three fields, in order", func(t *testing.T) {
 		var values []resolvedValue
+		text := "400 bad communities"
 		for _, i := range []string{"10", "2", "0", "1"} {
-			values = append(values, resolvedValue{path: "scope.targets[" + i + "].community", value: "c0mmun1ty-v4l"})
+			values = append(values, resolvedValue{path: "scope.targets[" + i + "].community", value: "c0mmun1ty-v4l-" + i})
+			text += " c0mmun1ty-v4l-" + i
 		}
-		_, reason := backendRefusal("400 bad community c0mmun1ty-v4l", values)
-		assert.Equal(t, "400 bad community ********"+
+		_, reason := backendRefusal(text, values)
+		assert.Equal(t, "400 bad communities ******** ******** ******** ********"+
 			" (the error quotes the values of the secret references at scope.targets[0].community,"+
 			" scope.targets[1].community, scope.targets[2].community and 1 more, masked as ********)", reason)
+	})
+
+	t.Run("names no field whose value another field shares", func(t *testing.T) {
+		// Only the value tells which field the error quotes: naming every
+		// field that holds it would claim the error quotes them all, and
+		// show that their secrets are equal.
+		shared := []resolvedValue{
+			{path: "config.retries", value: "k3Y-9xQz"},
+			{path: "scope.authentication.community", value: "k3Y-9xQz"},
+		}
+		_, reason := backendRefusal(typeErr, shared)
+		assert.Equal(t, "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int"+
+			" (the error quotes a value more than one secret reference holds, masked as ********)", reason)
+
+		_, reason = backendRefusal("400 bad k3Y-9xQz and Sec0nd-v4l", append(shared, resolvedValue{path: "config.timeout", value: "Sec0nd-v4l"}))
+		assert.Equal(t, "400 bad ******** and ********"+
+			" (the error quotes the value of the secret reference at config.timeout,"+
+			" and a value more than one secret reference holds, masked as ********)", reason)
+	})
+
+	t.Run("names no field for a short value that is only a word of the YAML error", func(t *testing.T) {
+		text := "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int"
+		logged, reason := backendRefusal(text, []resolvedValue{{path: "scope.authentication.community", value: "int"}})
+		assert.Equal(t, text, reason)
+		assert.Equal(t, text, logged)
 	})
 
 	t.Run("bounds what it logs and stores", func(t *testing.T) {

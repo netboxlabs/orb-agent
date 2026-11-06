@@ -1030,21 +1030,38 @@ func backendRefusal(text string, resolved []resolvedValue) (logged, reason strin
 // quotedFieldsNote names the fields of the policy whose values text quotes:
 // a backend's error locates a value by a line of the YAML the agent sent it,
 // which the user never sees. It says what the error quotes, so it holds even
-// when a bound cuts the masked value from what is kept.
+// when a bound cuts the masked value from what is kept. A value more than one
+// field holds names none of them: only the value tells what the error quotes,
+// and naming them all would claim it quotes each, and show that their
+// secrets are equal.
 func quotedFieldsNote(text string, values []string, resolved []resolvedValue) string {
 	var fields []string
+	shared := false
 	for _, v := range values {
 		if redact.Values(text, []string{v}) == text {
 			continue
 		}
+		var holders []string
 		for _, r := range resolved {
 			if r.value == v {
-				fields = append(fields, r.path)
+				holders = append(holders, r.path)
 			}
 		}
+		if len(holders) > 1 {
+			shared = true
+			continue
+		}
+		fields = append(fields, holders...)
+	}
+	var sharedNote string
+	if shared {
+		sharedNote = "a value more than one secret reference holds"
 	}
 	if len(fields) == 0 {
-		return ""
+		if !shared {
+			return ""
+		}
+		return " (the error quotes " + sharedNote + ", masked as " + redact.MaskedSecret + ")"
 	}
 	slices.SortFunc(fields, comparePaths)
 	what := "the value of the secret reference at "
@@ -1056,7 +1073,10 @@ func quotedFieldsNote(text string, values []string, resolved []resolvedValue) st
 		more = fmt.Sprintf(" and %d more", len(fields)-quotedFieldsNamed)
 		fields = fields[:quotedFieldsNamed]
 	}
-	return " (the error quotes " + what + strings.Join(fields, ", ") + more + ", masked as " + redact.MaskedSecret + ")"
+	if shared {
+		sharedNote = ", and " + sharedNote
+	}
+	return " (the error quotes " + what + strings.Join(fields, ", ") + more + sharedNote + ", masked as " + redact.MaskedSecret + ")"
 }
 
 // kept returns at most limit bytes of masked, ending with truncationMarker
