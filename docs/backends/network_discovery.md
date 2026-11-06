@@ -65,7 +65,7 @@ Config defines data for the whole scope and is optional overall.
 
 | Key | Type | Description |
 |:---:|:----:|:-----------:|
-| emit_scan_metadata | bool | Write the scan result into each discovered IP's comments: every port nmap lists with its state, a count of the ports it summarised, and the reverse hostname when it had to change to fit `dns_name` or was left off. Defaults to `true`. Set `false` to send no comments, so the comments in NetBox stay as they are, including ones an earlier run wrote. When `defaults.comments` is set, that text is sent instead of the scan result, whatever this option says. With it off, a reverse hostname that had to change or was left off is not recorded anywhere; each run still logs how many there were. |
+| emit_scan_metadata | bool | Write the scan result into each discovered IP's comments: every port nmap lists with its state, a count of the ports it summarised, the reverse hostname when it had to change to fit `dns_name` or was left off, and the MAC address. nmap only reports a MAC address for hosts on the same network segment as the agent, and only when it runs privileged, so in Docker the container needs `--net=host`; other IPs get no MAC address in their comments. Defaults to `true`. Set `false` to send no comments, so the comments in NetBox stay as they are, including ones an earlier run wrote. When `defaults.comments` is set, that text is sent instead of the scan result, whatever this option says. With it off, a reverse hostname that had to change or was left off is not recorded anywhere; each run still logs how many there were. |
 
 ```yaml
 policies:
