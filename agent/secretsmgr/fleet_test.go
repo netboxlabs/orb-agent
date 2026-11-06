@@ -900,3 +900,20 @@ func TestFleetSecretsManager_anAnswerFromBeforeAFailedRefreshLeavesThePathStale(
 		})
 	}
 }
+
+// A path marked stale after ensureSecrets checked it, by a refresh that failed
+// in between, is not served when the policy's data is substituted: the
+// resolve fails with the refresh's error, and the policy counts among the
+// path's users so its next report reaches it.
+func TestFleetSecretsManager_aStalePathIsNotSubstituted(t *testing.T) {
+	fm := NewFleetSecretsManager(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError})), config.FleetSecretsManager{})
+	refreshErr := fmt.Errorf("secret request failed for path snmp/community: unavailable")
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "outdated", Version: 1, policyIDs: map[string]bool{"policy1": true}, stale: true, err: refreshErr},
+	}
+
+	v, err := fm.processString("${fleet://snmp/community}", "policy2")
+	require.ErrorIs(t, err, refreshErr)
+	assert.Empty(t, v)
+	assert.True(t, fm.usedVars["snmp/community"].policyIDs["policy2"])
+}

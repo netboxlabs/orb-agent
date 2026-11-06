@@ -550,8 +550,13 @@ func (f *FleetSecretsManager) processString(s string, id string) (string, error)
 		}
 		cached.policyIDs[id] = true
 		f.usedVars[fleetPath] = cached
-		value := cached.Value
+		value, stale, staleErr := cached.Value, cached.stale, cached.err
 		f.mu.Unlock()
+		if stale {
+			// A refresh failed after ensureSecrets checked the path: its
+			// value is outdated, so it is not served.
+			return "", staleErr
+		}
 		return value, nil
 	}
 	f.mu.Unlock()
