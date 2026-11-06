@@ -42,7 +42,7 @@ orb:
 | `client_cert` / `client_key` | string | No (must be set together) | Paths to a client cert/key pair for mTLS to CCP. Required when the CyberArk admin authenticates this AppID by client certificate. |
 | `skip_tls_verify` | bool | No | Disables peer-cert verification. Logged at WARN at startup. Lab / development only. |
 | `timeout` | int | No | HTTP timeout in seconds (default `60`). |
-| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, secrets are fetched once on first reference and never re-checked. |
+| `schedule` | string | No | Cron expression for periodic polling of cached secrets. When omitted, a secret is read when a policy that references it is applied, and not checked again while it resolves. |
 
 The following fields accept an environment-variable placeholder of the form `${VAR_NAME}`: `url`, `app_id`, `reason`, `ca_bundle`, `client_cert`, `client_key`. Placeholders are resolved at agent startup; an unset variable causes the agent to fail startup with a clear error.
 
@@ -149,6 +149,6 @@ The Orb Agent will resolve the CyberArk references and use the actual values whe
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every cached secret. When a value changes, the related policies are automatically updated. The change is logged at INFO as `Detected changed secret scheme=cyberark ref=<body>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (account deleted, AppID revoked, network failure), the provider evicts the cache entry and the policy manager marks the affected policies as failed; the policy can recover only after a successful re-fetch.
+If you configure the `schedule` parameter, the Orb Agent will periodically re-fetch every cached secret. When a value changes, the related policies are automatically updated. The change is logged at INFO as `Detected changed secret scheme=cyberark ref=<body>` so operators can confirm a rotation has propagated. If a secret becomes unreachable (account deleted, AppID revoked, network failure), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in CyberArk without restarting the Orb Agent or manually updating policies.

@@ -743,8 +743,8 @@ func TestCyberArkPollSecrets_DetectsChange(t *testing.T) {
 	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "v1"})
 
 	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
-	got := make(chan map[string]bool, 4)
-	c.RegisterUpdatePoliciesCallback(func(m map[string]bool) { got <- m })
+	got := make(chan map[string]error, 4)
+	c.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
 
 	_, err := c.resolveBody("Lab/Acc", "policy-1")
 	require.NoError(t, err)
@@ -754,20 +754,20 @@ func TestCyberArkPollSecrets_DetectsChange(t *testing.T) {
 	c.pollSecrets()
 	select {
 	case m := <-got:
-		require.Equal(t, map[string]bool{"policy-1": true}, m)
+		require.Equal(t, map[string]error{"policy-1": nil}, m)
 	case <-time.After(time.Second):
 		t.Fatal("expected change callback not invoked")
 	}
 }
 
-func TestCyberArkPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
+func TestCyberArkPollSecrets_FailureKeepsTheEntryAndReportsTheError(t *testing.T) {
 	fake := newFakeCCP()
 	defer fake.Close()
 	fake.set("orb-agent", "Lab", "Acc", map[string]any{"Content": "v1"})
 
 	c := newCyberarkManagerForTest(t, fake, config.CyberArkManager{})
-	got := make(chan map[string]bool, 4)
-	c.RegisterUpdatePoliciesCallback(func(m map[string]bool) { got <- m })
+	got := make(chan map[string]error, 4)
+	c.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
 
 	_, err := c.resolveBody("Lab/Acc", "policy-1")
 	require.NoError(t, err)
@@ -777,15 +777,17 @@ func TestCyberArkPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
 	c.pollSecrets()
 	select {
 	case m := <-got:
-		require.Equal(t, map[string]bool{"policy-1": false}, m)
+		require.Len(t, m, 1)
+		require.Error(t, m["policy-1"])
 	case <-time.After(time.Second):
 		t.Fatal("expected failure callback not invoked")
 	}
 
 	c.mu.Lock()
-	_, present := c.usedVars["Lab/Acc"]
+	entry, present := c.usedVars["Lab/Acc"]
 	c.mu.Unlock()
-	require.False(t, present, "failed entry must be evicted")
+	require.True(t, present, "a failed entry stays, so the next poll reads it again")
+	require.True(t, entry.failed, "a failed entry is marked failed, so its value is not served")
 }
 
 func TestNewManager_ReturnsCyberArkManagerWhenActive(t *testing.T) {

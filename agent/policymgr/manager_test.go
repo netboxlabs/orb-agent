@@ -90,8 +90,41 @@ func (m *mockBackend) RemovePolicy(policy policies.PolicyData) error {
 // Mock for the secretsmgr.Manager interface
 type mockSecretsManager struct {
 	mock.Mock
-	callbacks   []func(map[string]bool)
+	callbacks   []func(map[string]error)
 	passthrough bool
+
+	mu sync.Mutex
+	// resolvedAgain names the policies Unresolved answers nil for; any other
+	// policy is still failing, with errStillUnresolved.
+	resolvedAgain map[string]bool
+	forgotten     []string
+	applied       map[string]any
+}
+
+var errStillUnresolved = errors.New("secret not found: still unresolved")
+
+func (m *mockSecretsManager) Unresolved(policyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.resolvedAgain[policyID] {
+		return nil
+	}
+	return errStillUnresolved
+}
+
+func (m *mockSecretsManager) PolicyApplied(policyID string, data any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.applied == nil {
+		m.applied = map[string]any{}
+	}
+	m.applied[policyID] = data
+}
+
+func (m *mockSecretsManager) ForgetPolicy(policyID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.forgotten = append(m.forgotten, policyID)
 }
 
 func (m *mockSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
@@ -107,7 +140,7 @@ func (m *mockSecretsManager) SolveConfigSecrets(backends map[string]any, configM
 	return args.Get(0).(map[string]any), args.Get(1).(config.ManagerConfig), args.Error(2)
 }
 
-func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
+func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[string]error)) {
 	m.callbacks = append(m.callbacks, callback)
 }
 
@@ -116,7 +149,7 @@ func (m *mockSecretsManager) Start(context.Context) error {
 	return args.Error(0)
 }
 
-func (m *mockSecretsManager) TriggerCallbacks(policiesIDs map[string]bool) {
+func (m *mockSecretsManager) TriggerCallbacks(policiesIDs map[string]error) {
 	for _, callback := range m.callbacks {
 		callback(policiesIDs)
 	}
@@ -843,7 +876,7 @@ func TestSecretsRefreshKeepsRunUpdatesWrittenDuringTheApply(t *testing.T) {
 		}).
 		Return(nil).Once()
 
-	secretsMgr.TriggerCallbacks(map[string]bool{"runs-2": true})
+	secretsMgr.TriggerCallbacks(map[string]error{"runs-2": nil})
 
 	be.AssertExpectations(t)
 	stored, err := repo.Get("runs-2")
@@ -920,13 +953,12 @@ func TestPoliciesChanged(t *testing.T) {
 	}
 
 	// Set up for policy update callback
-	// Scenario: policy1 unchanged, policy2 updated, policy3 removed
-	policiesStatus := map[string]bool{
-		"policy1": true,  // Valid - no change
-		"policy2": true,  // Valid - will be updated
-		"policy3": false, // Invalid - will be removed
+	// Scenario: policy1 unchanged, policy2 updated, policy3's secret no longer resolves
+	policiesStatus := map[string]error{
+		"policy1": nil,                                      // Valid - no change
+		"policy2": nil,                                      // Valid - will be updated
+		"policy3": errors.New("secret not found: p3/token"), // Invalid - will be stopped and kept failed
 	}
-	// policy3 not included, meaning it should be removed
 
 	// Setup expectations for policy2 update
 	solvedPayload := config.PolicyPayload{
@@ -942,7 +974,7 @@ func TestPoliciesChanged(t *testing.T) {
 		return pd.ID == "policy2" && pd.Data.(map[string]any)["updated"] == "data"
 	}), true).Return(nil)
 
-	// Setup expectations for policy3 removal
+	// Setup expectations for policy3 being stopped on its backend
 	mockBe.On("RemovePolicy", mock.MatchedBy(func(pd policies.PolicyData) bool {
 		return pd.ID == "policy3"
 	})).Return(nil)
@@ -960,10 +992,12 @@ func TestPoliciesChanged(t *testing.T) {
 		stateMap[p.ID] = p
 	}
 
-	assert.Len(t, stateMap, 2)
+	assert.Len(t, stateMap, 3)
 	assert.Contains(t, stateMap, "policy1")
 	assert.Contains(t, stateMap, "policy2")
-	assert.NotContains(t, stateMap, "policy3")
+	require.Contains(t, stateMap, "policy3")
+	assert.Equal(t, policies.FailedToApply, stateMap["policy3"].State)
+	assert.Equal(t, "failed to resolve policy secrets: "+errStillUnresolved.Error(), stateMap["policy3"].BackendErr)
 
 	// Verify policy2 was not updated in DB
 	updatedPolicy := stateMap["policy2"]
@@ -1556,7 +1590,7 @@ func TestPoliciesChanged_BackendNotAvailable(t *testing.T) {
 	}))
 
 	// Trigger policiesChanged via secrets callback — backend not available path
-	secretsMgr.TriggerCallbacks(map[string]bool{"p_no_be": true})
+	secretsMgr.TriggerCallbacks(map[string]error{"p_no_be": nil})
 
 	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
@@ -1590,7 +1624,7 @@ func TestPoliciesChanged_SolveSecretsError(t *testing.T) {
 	secretsMgr.On("SolvePolicySecrets", mock.Anything).Return(config.PolicyPayload{}, errors.New("secrets error"))
 
 	// Should not panic, just log and continue
-	secretsMgr.TriggerCallbacks(map[string]bool{"p_sec_err": true})
+	secretsMgr.TriggerCallbacks(map[string]error{"p_sec_err": nil})
 	mockBe.AssertNotCalled(t, "ApplyPolicy")
 }
 
@@ -1838,7 +1872,7 @@ func TestPoliciesChanged_SecretsFailureAndRecovery(t *testing.T) {
 	// Name, Backend, Version, Data}) before finalizing.
 	reapplyPayload := config.PolicyPayload{ID: "policy-rc1", Name: "Recheck Policy", Backend: "secretsreapplybackend", Version: 1, Data: policyData}
 	secretsMgr.On("SolvePolicySecrets", reapplyPayload).Return(config.PolicyPayload{}, errors.New("vault sealed")).Once()
-	secretsMgr.TriggerCallbacks(map[string]bool{"policy-rc1": true})
+	secretsMgr.TriggerCallbacks(map[string]error{"policy-rc1": nil})
 
 	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
@@ -1849,7 +1883,7 @@ func TestPoliciesChanged_SecretsFailureAndRecovery(t *testing.T) {
 
 	// Recovery through the callback: secrets resolve again -> Running, error cleared.
 	secretsMgr.On("SolvePolicySecrets", reapplyPayload).Return(reapplyPayload, nil)
-	secretsMgr.TriggerCallbacks(map[string]bool{"policy-rc1": true})
+	secretsMgr.TriggerCallbacks(map[string]error{"policy-rc1": nil})
 
 	state, err = mgr.GetPolicyState()
 	require.NoError(t, err)
@@ -2474,9 +2508,9 @@ func TestRemovePolicyDatasetRefusesABackendOtherThanTheStoredOne(t *testing.T) {
 	assert.Contains(t, stored.Datasets, "ds1", "the dataset must stay")
 }
 
-// The secrets refresh removes a policy the provider no longer allows through
-// the same removal the remove action uses; both run inside the backend's
-// critical section without taking the mutex twice.
+// The secrets refresh stops a policy whose secret no longer resolves through
+// the backend's remove, as the remove action does; both run inside the
+// backend's critical section without taking the mutex twice.
 func TestRemovalsInsideTheCriticalSectionDoNotDeadlock(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	secretsMgr := new(mockSecretsManager)
@@ -2492,14 +2526,14 @@ func TestRemovalsInsideTheCriticalSectionDoNotDeadlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		secretsMgr.TriggerCallbacks(map[string]bool{"gone-1": false})
+		secretsMgr.TriggerCallbacks(map[string]error{"gone-1": errors.New("secret not found")})
 		mgr.ManagePolicy(config.PolicyPayload{Action: "remove", ID: "gone-2", Name: "gone-2", Backend: "reentrant_backend"})
 		close(done)
 	}()
-	waitFor(t, done, "the two removals")
+	waitFor(t, done, "the stop and the removal")
 	state, err := mgr.GetPolicyState()
 	require.NoError(t, err)
-	assert.Empty(t, policyIDs(state))
+	assert.Equal(t, []string{"gone-1"}, policyIDs(state), "the stopped policy stays, failed")
 }
 
 // A policy removed while the secrets refresh was about to re-apply it is not
@@ -2529,7 +2563,7 @@ func TestPoliciesChangedDoesNotResurrectARemovedPolicy(t *testing.T) {
 	go func() { _ = mgr.RemovePolicy("victim", "Victim", "resurrect_backend"); close(removeDone) }()
 	time.Sleep(50 * time.Millisecond) // let the remove queue on the mutex first
 	refreshDone := make(chan struct{})
-	go func() { secretsMgr.TriggerCallbacks(map[string]bool{"victim": true}); close(refreshDone) }()
+	go func() { secretsMgr.TriggerCallbacks(map[string]error{"victim": nil}); close(refreshDone) }()
 	time.Sleep(50 * time.Millisecond)
 
 	close(be.release)
@@ -2571,7 +2605,7 @@ func TestRefreshPolicySkipsAPolicyMovedToAnotherBackendWhileQueued(t *testing.T)
 	waitFor(t, from.entered, "the blocking manage reaching the backend")
 
 	refreshDone := make(chan struct{})
-	go func() { secretsMgr.TriggerCallbacks(map[string]bool{"held": true}); close(refreshDone) }()
+	go func() { secretsMgr.TriggerCallbacks(map[string]error{"held": nil}); close(refreshDone) }()
 	time.Sleep(50 * time.Millisecond) // let the refresh read "held"'s current backend and queue on its mutex
 
 	require.NoError(t, mgr.GetRepo().Update(policies.PolicyData{ID: "held", Name: "Held", Backend: "moved_to_backend", Version: 1, Data: map[string]any{}, State: policies.Running}))
@@ -2697,7 +2731,7 @@ func TestPoliciesChangedConsultsTheStarter(t *testing.T) {
 	starter := &fakeStarter{state: policymgr.StartStarting}
 	mgr.SetStarter(starter)
 
-	secretsMgr.TriggerCallbacks(map[string]bool{"refresh-1": true})
+	secretsMgr.TriggerCallbacks(map[string]error{"refresh-1": nil})
 
 	assert.Equal(t, []string{"starter_refresh"}, starter.callsSeen())
 	be.AssertNotCalled(t, "ApplyPolicy", mock.Anything, mock.Anything)

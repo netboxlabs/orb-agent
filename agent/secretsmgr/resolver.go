@@ -13,6 +13,17 @@ import (
 type cachedSecret struct {
 	Value     string
 	policyIDs map[string]bool
+	// failed means the last read of the reference failed, with err: Value is
+	// not served, and the reference is read again when it is resolved or
+	// polled.
+	failed bool
+	err    error
+	// failing holds the policies whose last resolution of the reference
+	// failed, for the poll that finds it resolving again to re-apply them.
+	failing map[string]bool
+	// gen tells this entry apart from one created for the same reference
+	// after it was dropped, so a read of the dropped one is not applied to it.
+	gen uint64
 }
 
 // resolverFunc returns the resolved value for a single placeholder body
@@ -20,6 +31,17 @@ type cachedSecret struct {
 // policy that triggered the lookup; the resolver is expected to record it for
 // later change-tracking.
 type resolverFunc func(body, policyID string) (string, error)
+
+// referencedBodies returns the bodies of the placeholders processValue
+// resolves in v, walking it the same way.
+func referencedBodies(v any, scheme string) map[string]bool {
+	bodies := map[string]bool{}
+	_, _ = processValue(v, scheme, "", func(body, _ string) (string, error) {
+		bodies[body] = true
+		return "", nil
+	})
+	return bodies
+}
 
 // processValue walks v and, for any string leaf that contains a
 // ${<scheme>://<body>} placeholder, returns the value produced by
