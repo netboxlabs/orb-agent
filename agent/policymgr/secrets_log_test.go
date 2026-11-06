@@ -188,6 +188,30 @@ func startBackendAnswering(t *testing.T, logger *slog.Logger, mgr policymgr.Poli
 	register func() bool, onPolicy func(w http.ResponseWriter, body []byte) bool,
 ) {
 	t.Helper()
+	cmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(cmd, 12345)
+	startBackendProcess(t, logger, mgr, name, executable, register, onPolicy, cmd)
+}
+
+// startBackendPrinting is startBackend with the process's stdout and stderr
+// left to the caller: a line sent on either is relayed as the backend's
+// process printing it.
+func startBackendPrinting(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool,
+) (stdout, stderr chan<- string) {
+	t.Helper()
+	cmd := &mocks.MockCmd{}
+	stdout, stderr = mocks.SetupSuccessfulProcessWithOutput(cmd, 12345)
+	startBackendProcess(t, logger, mgr, name, executable, register, func(http.ResponseWriter, []byte) bool { return false }, cmd)
+	return stdout, stderr
+}
+
+// startBackendProcess is startBackendAnswering with the process mocked by
+// cmd.
+func startBackendProcess(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool, onPolicy func(w http.ResponseWriter, body []byte) bool, cmd *mocks.MockCmd,
+) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/policies" {
 			body, _ := io.ReadAll(r.Body)
@@ -209,8 +233,6 @@ func startBackendAnswering(t *testing.T, logger *slog.Logger, mgr policymgr.Poli
 	require.NoError(t, os.WriteFile(filepath.Join(dir, executable), nil, 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cmd := &mocks.MockCmd{}
-	mocks.SetupSuccessfulProcess(cmd, 12345)
 	mocks.AllowHeldListenAddr(t)
 	original := backend.NewCmdOptions
 	backend.NewCmdOptions = func(backend.CmdOptions, string, ...string) backend.Commander { return cmd }
