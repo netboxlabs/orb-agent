@@ -56,7 +56,9 @@ resolved value as `********`:
 - the whole value, and its first or last 7 bytes or more, as a backend that
   shortens a value quotes it, including first bytes that end inside a
   character;
-- the same escaped, as Go or JSON quote a string.
+- the same escaped, as Go or JSON quote a string;
+- for a value of several lines, such as a private key, each of its lines of 7
+  bytes or more, as a backend that prints the value line by line quotes it.
 
 A value shorter than 7 bytes is masked only where it is a word of its own, and
 a run from the middle of a value is left alone, since it is more likely the
@@ -72,6 +74,23 @@ agent sent it, not at a field you wrote:
 Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
 at most 1 KiB as the policy's error. A refusal that is cut ends with
 `... (truncated)`, followed by the note naming the fields.
+
+A backend can also quote a value after it accepted the policy: in what it
+reports for a run, whose reason can carry an exception's text and whose
+targets can come from the policy's scope, or in a line its process prints,
+which the agent relays into its own log. The agent masks them the same way.
+It keeps a run's reason to the same 1 KiB, with the note naming the fields. A
+printed line names no policy, so the agent masks in it the values of every
+policy that backend runs.
+
+To mask them, the agent keeps the values of a policy's last two resolutions
+that differ, for as long as it runs the policy: after an edit or a rotation,
+the backend goes on reporting a run it ran with the earlier values. A value
+from before that is no longer masked. When the policy is removed, its values
+keep masking the backend's output for a minute, for the lines the backend
+printed before the removal, and are then dropped. A line a backend prints
+about the policy after that, such as one from a backend that failed to remove
+it, is relayed as printed.
 
 ## Rotation
 
