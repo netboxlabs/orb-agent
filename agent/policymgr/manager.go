@@ -255,6 +255,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 		// record keeps its runs when persisted: a same-version manage is a
 		// retry of what the backend already ran, not a new version.
 		var sameVersion bool
+		var secretsFailed bool
 		if a.repo.Exists(payload.ID) {
 			// we have already processed this policy id before (it may be running or failed)
 			// ensure we are associating this dataset with this policy, if one was specified
@@ -333,6 +334,7 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 				a.logger.Error("failed to solve secrets", "policy_id", payload.ID, "policy_name", payload.Name, "error", err)
 				pd.State = policies.FailedToApply
 				pd.BackendErr = secretsFailureReason(err)
+				secretsFailed = true
 			} else {
 				pd.Data = newPayload.Data
 				// A manage answers its caller through the stored state below,
@@ -365,6 +367,14 @@ func (a *policyManager) managePolicyLocked(payload config.PolicyPayload) {
 		if err != nil {
 			a.logger.Error("got error in update last status", "error", err)
 			return
+		}
+		if secretsFailed && !updatePolicy && a.secrets.Unresolved(payload.ID) == nil {
+			// A poll found the secrets resolving again while this first
+			// manage failed on them, and its report found no record yet to
+			// re-apply: the record is stored now, so apply it once more.
+			a.logger.Info("the secrets of a new policy resolve again since its manage failed on them; applying it again",
+				"policy_id", payload.ID, "policy_name", payload.Name)
+			a.refreshPolicyLocked(payload.Backend, payload.ID, nil)
 		}
 		return
 	case "remove":
@@ -600,6 +610,9 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 			"backend", pd.Backend)
 		pd.State = policies.Running
 		pd.BackendErr = ""
+		// payload.Data holds the references unresolved: the secrets only an
+		// earlier version named no longer count for the policy.
+		a.secrets.PolicyApplied(payload.ID, payload.Data)
 	}
 	return nil
 }

@@ -761,9 +761,11 @@ func TestFleetSecretsManager_unresolvedAndTheUsersOfAPath(t *testing.T) {
 	}
 	assert.ErrorIs(t, fm.Unresolved("policy1"), refreshErr)
 
-	// policy2 is edited off "a"; policy1 is removed.
-	_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://b}"}})
+	// policy2's edit off "a" is applied; policy1 is removed.
+	v2 := map[string]any{"c": "${fleet://b}"}
+	_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: v2})
 	require.NoError(t, err)
+	fm.PolicyApplied("policy2", v2)
 	assert.NoError(t, fm.Unresolved("policy2"))
 	fm.ForgetPolicy("policy1")
 
@@ -799,6 +801,102 @@ func TestFleetSecretsManager_anAnswerAtTheHeldVersionClearsAStalePath(t *testing
 			fm.mu.Lock()
 			defer fm.mu.Unlock()
 			assert.False(t, fm.usedVars["snmp/community"].stale)
+		})
+	}
+}
+
+// A refresh that fails reports every policy using the path when it fails,
+// including one that resolved the path while the request was in flight, and
+// so runs with the value the failed refresh was to replace.
+func TestFleetSecretsManager_aFailedRefreshReportsThePoliciesThatResolvedThePathMeanwhile(t *testing.T) {
+	fm, pub := newScriptedFleetManager(t, 1, func(int, messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+		return nil, nil // lost: it times out
+	})
+	fm.usedVars = map[string]fleetCachedSecret{
+		"snmp/community": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+	}
+	var mu sync.Mutex
+	var reported map[string]error
+	fm.callback = func(m map[string]error) {
+		mu.Lock()
+		defer mu.Unlock()
+		reported = m
+	}
+
+	done := make(chan struct{})
+	go func() { notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2}); close(done) }()
+	<-pub.published
+	_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy2", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+	require.NoError(t, err)
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, reported, 2)
+	assert.Error(t, reported["policy1"])
+	assert.Error(t, reported["policy2"])
+}
+
+// An answer to a request that started before a later refresh of the path
+// failed is out of date: it does not clear the stale mark that failure set,
+// through a notification or a delivery, and reports no policy to re-apply.
+func TestFleetSecretsManager_anAnswerFromBeforeAFailedRefreshLeavesThePathStale(t *testing.T) {
+	refused := func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+		return &messages.SecretResponseMsg{
+			SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "error",
+			Errors: []messages.SecretError{{Path: req.Secrets[0].Path, Error: "unavailable", Code: messages.ErrorCodeInternalError}},
+		}
+	}
+	for _, via := range []string{"notification", "delivery"} {
+		t.Run(via, func(t *testing.T) {
+			release := make(chan struct{})
+			fm, pub := newScriptedFleetManager(t, 5, func(n int, req messages.SecretRequestMsg) (*messages.SecretResponseMsg, <-chan struct{}) {
+				if n == 1 {
+					return fleetAnswer(req, "v2", 2), release // answered once the later refresh failed
+				}
+				return refused(req), nil
+			})
+			entry := fleetCachedSecret{Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}}
+			if via == "delivery" {
+				// A path whose refresh failed earlier: a delivery requests it.
+				entry.stale, entry.err = true, fmt.Errorf("refresh of v2 failed")
+			}
+			fm.usedVars = map[string]fleetCachedSecret{"snmp/community": entry}
+			var mu sync.Mutex
+			var reports []map[string]error
+			fm.callback = func(m map[string]error) {
+				mu.Lock()
+				defer mu.Unlock()
+				reports = append(reports, m)
+			}
+
+			done := make(chan error, 1)
+			go func() {
+				if via == "notification" {
+					notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 2})
+					done <- nil
+					return
+				}
+				_, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://snmp/community}"}})
+				done <- err
+			}()
+			<-pub.published
+			notify(t, fm, messages.SecretUpdate{Path: "snmp/community", Version: 3})
+			close(release)
+			if err := <-done; via == "delivery" {
+				assert.Error(t, err, "the delivery is not served the stale value")
+			}
+
+			fm.mu.Lock()
+			stale := fm.usedVars["snmp/community"].stale
+			fm.mu.Unlock()
+			assert.True(t, stale, "the refresh of v3 failed after the request answered with v2 started")
+			assert.Error(t, fm.Unresolved("policy1"))
+			mu.Lock()
+			defer mu.Unlock()
+			for _, r := range reports {
+				assert.Error(t, r["policy1"], "no report re-applies the policy: %v", reports)
+			}
 		})
 	}
 }

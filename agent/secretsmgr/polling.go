@@ -54,10 +54,9 @@ func (b *pollingBase) RegisterUpdatePoliciesCallback(callback func(map[string]er
 
 // SolvePolicySecrets walks the policy payload and replaces every
 // ${<scheme>://<body>} placeholder with the resolved secret value. The policy
-// stops counting as a user of the references its payload no longer names, so
-// a reference it was edited off can no longer stop it.
+// keeps counting as a user of the references an earlier version named until
+// this one is applied (PolicyApplied): that version may still run.
 func (b *pollingBase) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
-	b.retain(payload.ID, referencedBodies(payload.Data, b.scheme))
 	newPayload := payload
 	processed, err := processValue(payload.Data, b.scheme, payload.ID, b.resolveBody)
 	if err != nil {
@@ -97,6 +96,12 @@ func (b *pollingBase) SolveConfigSecrets(backends map[string]any, cm config.Mana
 	b.usedVars = make(map[string]cachedSecret)
 	b.mu.Unlock()
 	return newBackends, newCM, nil
+}
+
+// PolicyApplied drops the policy from the references the applied version's
+// data does not name, so a reference it was edited off can no longer stop it.
+func (b *pollingBase) PolicyApplied(policyID string, data any) {
+	b.retain(policyID, referencedBodies(data, b.scheme))
 }
 
 // ForgetPolicy drops a removed policy from the references it used; a
@@ -223,6 +228,9 @@ func (b *pollingBase) pollSecrets() {
 	}
 
 	for _, body := range bodies {
+		b.mu.Lock()
+		wasFailed := b.usedVars[body].failed
+		b.mu.Unlock()
 		current, err := b.fetch(body)
 		b.mu.Lock()
 		cached, ok := b.usedVars[body]
@@ -234,6 +242,13 @@ func (b *pollingBase) pollSecrets() {
 			if cached.failed {
 				b.mu.Unlock()
 				b.logger.Debug("Secret still fails to resolve", "scheme", b.scheme, "ref", body, "error", err)
+				continue
+			}
+			if wasFailed {
+				// A resolve read it successfully while this read was in
+				// flight, as a re-delivery does: that read stands.
+				b.mu.Unlock()
+				b.logger.Debug("Secret resolved by a policy while the poll's read failed", "scheme", b.scheme, "ref", body, "error", err)
 				continue
 			}
 			// Every policy that uses it is told, and fails on it until it

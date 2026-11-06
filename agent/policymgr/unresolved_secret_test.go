@@ -225,3 +225,48 @@ func TestAPolicyStoppedForAnUnresolvedSecretIsAppliedOnItsNextDelivery(t *testin
 	assert.Equal(t, int32(4), stored.Version)
 	be.AssertExpectations(t)
 }
+
+// A poll can find a new policy's secret resolving again after the policy's
+// first resolve failed but before its record was stored, so the poll's report
+// finds no record to re-apply. The manage asks the secrets manager again once
+// the record is stored, and applies the policy when its secrets resolve.
+func TestANewPolicyWhoseSecretResolvedWhileItsManageFailedIsApplied(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_new")
+	secretsMgr.resolvedAgain = map[string]bool{"unresolved-9": true}
+	payload := config.PolicyPayload{
+		Action: "manage", ID: "unresolved-9", Name: "unresolved-9", Backend: "unresolved_new", Version: 1, DatasetID: "ds-9",
+		Data: map[string]any{"community": "${vault://secrets/snmp/community}"},
+	}
+	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-9")).Return(config.PolicyPayload{}, errSecretGone).Once()
+	solved := payload
+	solved.Data = map[string]any{"community": "public"}
+	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-9")).Return(solved, nil).Once()
+	be.On("ApplyPolicy", byID("unresolved-9"), true).Return(nil).Once()
+
+	mgr.ManagePolicy(payload)
+
+	stored, err := mgr.GetRepo().Get("unresolved-9")
+	require.NoError(t, err)
+	assert.Equal(t, policies.Running, stored.State)
+	be.AssertExpectations(t)
+}
+
+// An applied version tells the secrets manager which references the policy
+// now uses, with its references unresolved.
+func TestAnAppliedVersionTellsTheSecretsManagerItsReferences(t *testing.T) {
+	be, secretsMgr, mgr := newUnresolvedSecretFixture(t, "unresolved_applied")
+	payload := config.PolicyPayload{
+		Action: "manage", ID: "unresolved-10", Name: "unresolved-10", Backend: "unresolved_applied", Version: 1, DatasetID: "ds-10",
+		Data: map[string]any{"community": "${vault://secrets/snmp/community}"},
+	}
+	solved := payload
+	solved.Data = map[string]any{"community": "public"}
+	secretsMgr.On("SolvePolicySecrets", payloadByID("unresolved-10")).Return(solved, nil).Once()
+	be.On("ApplyPolicy", byID("unresolved-10"), false).Return(nil).Once()
+
+	mgr.ManagePolicy(payload)
+
+	secretsMgr.mu.Lock()
+	defer secretsMgr.mu.Unlock()
+	assert.Equal(t, map[string]any{"unresolved-10": payload.Data}, secretsMgr.applied)
+}

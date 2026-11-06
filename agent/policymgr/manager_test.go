@@ -98,6 +98,7 @@ type mockSecretsManager struct {
 	// policy is still failing, with errStillUnresolved.
 	resolvedAgain map[string]bool
 	forgotten     []string
+	applied       map[string]any
 }
 
 var errStillUnresolved = errors.New("secret not found: still unresolved")
@@ -109,6 +110,15 @@ func (m *mockSecretsManager) Unresolved(policyID string) error {
 		return nil
 	}
 	return errStillUnresolved
+}
+
+func (m *mockSecretsManager) PolicyApplied(policyID string, data any) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.applied == nil {
+		m.applied = map[string]any{}
+	}
+	m.applied[policyID] = data
 }
 
 func (m *mockSecretsManager) ForgetPolicy(policyID string) {

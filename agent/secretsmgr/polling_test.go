@@ -600,7 +600,8 @@ func TestPollingBase_UnresolvedAnswersAStandingFailureOnly(t *testing.T) {
 	require.NoError(t, b.Unresolved("policy-1"))
 }
 
-// A policy edited off a reference no longer uses it: the reference failing
+// A policy whose edit onto another reference is applied no longer uses the
+// first one: the reference failing
 // later does not report the policy, and one no policy uses is dropped.
 func TestPollingBase_APolicyEditedOffAReferenceIsNotReportedForIt(t *testing.T) {
 	s := newStubFetcher()
@@ -611,8 +612,10 @@ func TestPollingBase_APolicyEditedOffAReferenceIsNotReportedForIt(t *testing.T) 
 	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
 	_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://old/community}"}})
 	require.NoError(t, err)
-	_, err = b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://new/community}"}})
+	v2 := map[string]any{"c": "${scheme://new/community}"}
+	_, err = b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: v2})
 	require.NoError(t, err)
+	b.PolicyApplied("policy-1", v2)
 
 	s.setError("old/community", errors.New("secret not found: old/community"))
 	b.pollSecrets()
@@ -664,8 +667,10 @@ func TestPollingBase_APolicyEditedOffAFailingReferenceIsNotReappliedForIt(t *tes
 	b.pollSecrets()
 	require.Len(t, receiveChange(t, got), 2)
 
-	_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://new}"}})
+	v2 := map[string]any{"c": "${scheme://new}"}
+	_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: v2})
 	require.NoError(t, err)
+	b.PolicyApplied("policy-1", v2)
 	require.NoError(t, b.Unresolved("policy-1"))
 
 	s.setValue("old", "v")
@@ -697,4 +702,73 @@ func TestPollingBase_UnresolvedLooksPastAReferenceThatResolvesAgain(t *testing.T
 	require.NoError(t, err)
 
 	require.ErrorIs(t, b.Unresolved("policy-1"), bErr)
+}
+
+// Resolving an update does not drop the references of the version still
+// running: until the update is applied, a reference only the running version
+// names still reports the policy, so revoking it stops that version.
+func TestPollingBase_ResolvingAnUpdateKeepsTheRunningVersionsReferences(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("old", "v")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	v1 := map[string]any{"c": "${scheme://old}"}
+	_, err := b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: v1})
+	require.NoError(t, err)
+	b.PolicyApplied("policy-1", v1)
+
+	_, err = b.SolvePolicySecrets(config.PolicyPayload{ID: "policy-1", Data: map[string]any{"c": "${scheme://new}"}})
+	require.Error(t, err, "the update's secret does not resolve")
+
+	s.setError("old", errors.New("revoked"))
+	b.pollSecrets()
+	require.ErrorContains(t, receiveChange(t, got)["policy-1"], "revoked")
+}
+
+// A poll's read of a failed reference that fails after a resolve read it
+// successfully, as a re-delivery does, is out of date: the reference stays
+// healthy and the poll reports nothing for it.
+func TestPollingBase_APollsFailedReadOvertakenByASuccessfulResolveIsDropped(t *testing.T) {
+	var mu sync.Mutex
+	failing, armed := true, false
+	entered, release := make(chan struct{}), make(chan struct{})
+	fetch := func(string) (string, error) {
+		mu.Lock()
+		gate, down := armed, failing
+		armed = false
+		mu.Unlock()
+		if gate {
+			close(entered)
+			<-release
+			return "", errors.New("connection reset")
+		}
+		if down {
+			return "", errors.New("sealed")
+		}
+		return "v1", nil
+	}
+	b := newBaseForTest(t, "scheme", fetch)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	_, err := b.resolveBody("k", "policy-1")
+	require.Error(t, err, "the reference fails from the start")
+
+	mu.Lock()
+	armed, failing = true, false
+	mu.Unlock()
+	done := make(chan struct{})
+	go func() { b.pollSecrets(); close(done) }()
+	<-entered
+	v, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v)
+	close(release)
+	<-done
+
+	requireNoChange(t, got)
+	require.NoError(t, b.Unresolved("policy-1"))
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	require.False(t, b.usedVars["k"].failed)
 }

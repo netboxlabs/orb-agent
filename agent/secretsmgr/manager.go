@@ -21,6 +21,10 @@ type Manager interface {
 	// as last read, or nil when none of them failed since the policy
 	// resolved it: a failure reported earlier may be out of date.
 	Unresolved(policyID string) error
+	// PolicyApplied tells the secrets manager that the version of the policy
+	// with data, its references unresolved, now runs: the references only an
+	// earlier version named no longer count for it.
+	PolicyApplied(policyID string, data any)
 	// ForgetPolicy drops a removed policy from the references it used, so it
 	// is no longer reported and a reference no policy uses is no longer read.
 	ForgetPolicy(policyID string)
@@ -65,6 +69,9 @@ func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]error)) 
 
 func (v *dummyManager) Unresolved(_ string) error {
 	return nil
+}
+
+func (v *dummyManager) PolicyApplied(_ string, _ any) {
 }
 
 func (v *dummyManager) ForgetPolicy(_ string) {

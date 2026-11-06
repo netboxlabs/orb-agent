@@ -303,3 +303,22 @@ func TestARemovedPolicysPathIsNoLongerRead(t *testing.T) {
 		})
 	}
 }
+
+// An update whose secret does not resolve leaves the version before it
+// running, and that version's secret still counts: revoking it stops the
+// policy.
+func TestTheRunningVersionsSecretStillCountsWhileItsUpdateFails(t *testing.T) {
+	const beName = "failed_update"
+	v, poller, be, mgr := newPollerAndManager(t, beName)
+	v.set("old/community", "public")
+	deliver(mgr, "policy-1", beName, 1, "old/community", "ds")
+	deliver(mgr, "policy-1", beName, 2, "new/community", "")
+	require.Equal(t, policies.FailedToApply, storedState(t, mgr, "policy-1").State)
+	_, running := be.runs("policy-1")
+	require.True(t, running, "the version before the update still runs")
+
+	v.fail("old/community", errors.New("permission denied: old/community revoked"))
+	poller.Poll()
+	_, running = be.runs("policy-1")
+	require.False(t, running, "revoking the running version's secret stops it")
+}
