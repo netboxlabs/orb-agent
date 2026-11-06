@@ -835,26 +835,30 @@ func (a *policyManager) applyStoredPolicy(policy *policies.PolicyData, be backen
 	return err
 }
 
-func (a *policyManager) policiesChanged(policiesIDs map[string]bool) {
-	for id, valid := range policiesIDs {
+// policiesChanged takes the secrets manager's report: a nil error re-applies
+// the policy, an error stops it for that reason (see stopUnresolvedLocked).
+func (a *policyManager) policiesChanged(policiesIDs map[string]error) {
+	for id, readErr := range policiesIDs {
 		policy, err := a.repo.Get(id)
 		if err != nil {
-			a.logger.Error("failed to get policy", "error", err)
+			// The secrets manager keeps the policies that used a reference
+			// after they are removed.
+			a.logger.Info("policy changed by the secrets provider is no longer stored, skipping", "policy_id", id)
 			continue
 		}
-		a.refreshPolicy(policy.Backend, id, valid)
+		a.refreshPolicy(policy.Backend, id, readErr)
 	}
 }
 
-// refreshPolicy re-applies or removes one policy after a secrets change,
+// refreshPolicy re-applies or stops one policy after a secrets change,
 // under its backend's mutex. The record is re-read under the lock: the
 // pre-lock read only chose the mutex, and a remove that landed meanwhile
 // must not be undone by a stale copy.
-func (a *policyManager) refreshPolicy(backendName, id string, valid bool) {
+func (a *policyManager) refreshPolicy(backendName, id string, readErr error) {
 	mu := a.applyLock(backendName)
 	mu.Lock()
 	defer mu.Unlock()
-	a.refreshPolicyLocked(backendName, id, valid)
+	a.refreshPolicyLocked(backendName, id, readErr)
 }
 
 // refreshPolicyLocked re-reads the record under backendName's mutex and bails
@@ -862,7 +866,7 @@ func (a *policyManager) refreshPolicy(backendName, id string, valid bool) {
 // another backend between the pre-lock read that chose the mutex and this
 // re-read would otherwise apply the policy to a different backend than the
 // one whose mutex is held.
-func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) {
+func (a *policyManager) refreshPolicyLocked(backendName, id string, readErr error) {
 	policy, err := a.repo.Get(id)
 	if err != nil {
 		a.logger.Info("policy changed by the secrets provider is no longer stored, skipping", "policy_id", id)
@@ -873,10 +877,8 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 			"policy_id", id, "locked_backend", backendName, "backend", policy.Backend)
 		return
 	}
-	if !valid {
-		if err := a.removePolicyLocked(policy.ID, policy.Name, policy.Backend); err != nil {
-			a.logger.Error("failed to remove policy", "error", err)
-		}
+	if readErr != nil {
+		a.stopUnresolvedLocked(policy, readErr)
 		return
 	}
 	if !backend.HaveBackend(policy.Backend) {
@@ -888,6 +890,31 @@ func (a *policyManager) refreshPolicyLocked(backendName, id string, valid bool) 
 		// return value; the record is stamped either way.
 		_ = a.applyStoredPolicy(&policy, backend.GetBackend(policy.Backend))
 	}
+	if err := a.persistApplyOutcome(policy); err != nil {
+		a.logger.Error("got error in update last status", "error", err)
+	}
+}
+
+// stopUnresolvedLocked takes a policy one of whose secret references no
+// longer resolves, as the secrets manager reported with readErr. The backend
+// stops running the policy, since the secret may have been revoked, and the
+// record is kept, failed for that reason, rather than removed: the policy is
+// still the agent's, so a re-delivery without a dataset ID applies it, and
+// the secrets manager reports it to apply again once the reference resolves.
+// Its secrets are not read again here: the read just failed.
+func (a *policyManager) stopUnresolvedLocked(policy policies.PolicyData, readErr error) {
+	a.logger.Warn("a secret of the policy no longer resolves; stopping the policy",
+		"policy_id", policy.ID, "policy_name", policy.Name, "backend", policy.Backend, "error", readErr)
+	if policy.State == policies.Running && backend.HaveBackend(policy.Backend) {
+		err := removeFromBackend(backend.GetBackend(policy.Backend), policy)
+		var httpErr *backend.HTTPError
+		gone := errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound || errors.Is(err, errBackendNeverStarted)
+		if err != nil && !gone {
+			a.logger.Error("backend failed to stop the policy", "policy_id", policy.ID, "policy_name", policy.Name, "error", err)
+		}
+	}
+	policy.State = policies.FailedToApply
+	policy.BackendErr = secretsFailureReason(readErr)
 	if err := a.persistApplyOutcome(policy); err != nil {
 		a.logger.Error("got error in update last status", "error", err)
 	}

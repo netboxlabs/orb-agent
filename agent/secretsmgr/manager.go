@@ -11,7 +11,12 @@ import (
 // Manager is an interface for managing secrets
 type Manager interface {
 	Start(ctx context.Context) error
-	RegisterUpdatePoliciesCallback(callback func(map[string]bool))
+	// RegisterUpdatePoliciesCallback registers the callback that reports the
+	// policies whose secrets changed since they were resolved, by policy ID:
+	// a nil error means a reference changed or resolves again and the
+	// policy is to be applied with it, an error that a reference no longer
+	// resolves, for that reason.
+	RegisterUpdatePoliciesCallback(callback func(map[string]error))
 	SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error)
 	SolveConfigSecrets(backends map[string]any, configManager config.ManagerConfig) (map[string]any, config.ManagerConfig, error)
 }
@@ -48,7 +53,7 @@ func (v *dummyManager) Start(_ context.Context) error {
 	return nil
 }
 
-func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]bool)) {
+func (v *dummyManager) RegisterUpdatePoliciesCallback(_ func(map[string]error)) {
 }
 
 func (v *dummyManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {

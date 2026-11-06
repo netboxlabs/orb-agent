@@ -13,6 +13,12 @@ import (
 type cachedSecret struct {
 	Value     string
 	policyIDs map[string]bool
+	// failed means the last read of the reference failed: Value is not
+	// served, and the reference is read again when it is resolved or polled.
+	failed bool
+	// failing holds the policies whose last resolution of the reference
+	// failed, for the poll that finds it resolving again to re-apply them.
+	failing map[string]bool
 }
 
 // resolverFunc returns the resolved value for a single placeholder body

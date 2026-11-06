@@ -41,7 +41,7 @@ type FleetSecretsManager struct {
 	config        config.FleetSecretsManager
 	ctx           context.Context
 	usedVars      map[string]fleetCachedSecret
-	callback      func(map[string]bool)
+	callback      func(map[string]error)
 	publisher     Publisher
 	subscriber    Subscriber
 	requestTopic  string
@@ -56,6 +56,12 @@ type fleetCachedSecret struct {
 	Value     string          // The actual secret value
 	Version   int             // Version number from control plane
 	policyIDs map[string]bool // The IDs of policies that have used this secret
+	// stale means the request that followed a newer version failed: Value is
+	// outdated, so the path is requested again, not served, when a policy
+	// resolves it. A policy resolving it refreshes it; the other policies
+	// stopped for it are applied again on their next delivery or the next
+	// newer version, since nothing polls Fleet for it.
+	stale bool
 }
 
 // NewFleetSecretsManager creates a new Fleet secrets manager
@@ -155,7 +161,7 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 		return err
 	}
 
-	changedPolicyIDs := make(map[string]bool)
+	changedPolicyIDs := make(map[string]error)
 
 	for _, update := range notification.Updates {
 		// Copy data needed for the request while holding the lock
@@ -198,20 +204,21 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 
 		// Re-acquire the lock before accessing or mutating shared state
 		f.mu.Lock()
+		sv, ok := byPath[path]
+		if err == nil && !ok {
+			err = fmt.Errorf("secret missing in response for path %s", path)
+		}
 		if err != nil {
 			f.logger.Error("failed to request updated secret", "path", path, "error", err)
+			if stale, exists := f.usedVars[path]; exists {
+				stale.stale = true
+				f.usedVars[path] = stale
+			}
 			// Mark policies as needing update but with error
 			for id := range policyIDsCopy {
-				changedPolicyIDs[id] = false
-			}
-			f.mu.Unlock()
-			continue
-		}
-		sv, ok := byPath[path]
-		if !ok {
-			f.logger.Error("failed to request updated secret", "path", path, "error", "missing in response")
-			for id := range policyIDsCopy {
-				changedPolicyIDs[id] = false
+				if changedPolicyIDs[id] == nil {
+					changedPolicyIDs[id] = err
+				}
 			}
 			f.mu.Unlock()
 			continue
@@ -234,11 +241,14 @@ func (f *FleetSecretsManager) handleUpdateNotification(payload []byte) error {
 		// Update cache
 		cached.Value = secret.Value
 		cached.Version = secret.Version
+		cached.stale = false
 		f.usedVars[path] = cached
 
-		// Mark policies as needing update
+		// Mark policies as needing update, unless another path failed for them
 		for id := range cached.policyIDs {
-			changedPolicyIDs[id] = true
+			if _, failed := changedPolicyIDs[id]; !failed {
+				changedPolicyIDs[id] = nil
+			}
 		}
 		f.mu.Unlock()
 	}
@@ -262,7 +272,7 @@ func (f *FleetSecretsManager) Start(ctx context.Context) error {
 }
 
 // RegisterUpdatePoliciesCallback registers a callback for policy updates when secrets change
-func (f *FleetSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
+func (f *FleetSecretsManager) RegisterUpdatePoliciesCallback(callback func(map[string]error)) {
 	f.callback = callback
 }
 
@@ -402,7 +412,7 @@ func (f *FleetSecretsManager) ensureSecrets(ctx context.Context, paths []string,
 	var missing []string
 	for _, path := range paths {
 		cached, exists := f.usedVars[path]
-		if exists {
+		if exists && !cached.stale {
 			if cached.policyIDs == nil {
 				cached.policyIDs = make(map[string]bool)
 			}
@@ -631,6 +641,7 @@ func (f *FleetSecretsManager) requestSecrets(ctx context.Context, paths []string
 				cached := f.usedVars[p]
 				cached.Value = sv.Value
 				cached.Version = sv.Version
+				cached.stale = false
 				if cached.policyIDs == nil {
 					cached.policyIDs = make(map[string]bool)
 				}

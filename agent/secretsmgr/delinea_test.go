@@ -331,8 +331,8 @@ func TestDelineaPolling_DetectsChange(t *testing.T) {
 	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
-	changed := make(chan map[string]bool, 1)
-	m.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+	changed := make(chan map[string]error, 1)
+	m.RegisterUpdatePoliciesCallback(func(ids map[string]error) { changed <- ids })
 
 	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "policy-A", Data: map[string]any{"c": "${delinea://id/1/password}"}})
 	require.NoError(t, err)
@@ -344,17 +344,17 @@ func TestDelineaPolling_DetectsChange(t *testing.T) {
 	select {
 	case ids := <-changed:
 		require.Contains(t, ids, "policy-A")
-		assert.True(t, ids["policy-A"], "value-changed signal should be true")
+		assert.NoError(t, ids["policy-A"], "value-changed signal should carry no error")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected callback to fire on change")
 	}
 	assert.Equal(t, "v2", m.usedVars["id/1/password"].Value, "cache should be updated to v2")
 }
 
-// A failed poll must evict the cached value so a subsequent resolve goes
-// back to Delinea instead of returning a stale credential the policy manager
-// has already removed.
-func TestDelineaPolling_FetchFailureEvictsCache(t *testing.T) {
+// A failed poll must stop serving the cached value so a subsequent resolve
+// goes back to Delinea instead of returning a stale credential the policy
+// manager has already stopped, while the entry stays for the next poll.
+func TestDelineaPolling_FetchFailureStopsServingTheCachedValue(t *testing.T) {
 	t.Parallel()
 	fake := newFakeDelineaServer()
 	t.Cleanup(fake.Close)
@@ -362,7 +362,7 @@ func TestDelineaPolling_FetchFailureEvictsCache(t *testing.T) {
 
 	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
-	m.RegisterUpdatePoliciesCallback(func(map[string]bool) {})
+	m.RegisterUpdatePoliciesCallback(func(map[string]error) {})
 
 	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "policy-A", Data: map[string]any{"c": "${delinea://id/1/password}"}})
 	require.NoError(t, err)
@@ -374,12 +374,13 @@ func TestDelineaPolling_FetchFailureEvictsCache(t *testing.T) {
 	m.pollSecrets()
 
 	m.mu.Lock()
-	_, stillCached := m.usedVars["id/1/password"]
+	entry, stillCached := m.usedVars["id/1/password"]
 	m.mu.Unlock()
-	assert.False(t, stillCached, "failed poll must evict the cache entry so the next resolve re-fetches from Delinea")
+	assert.True(t, stillCached, "a failed entry stays, so the next poll reads it again")
+	assert.True(t, entry.failed, "a failed entry is marked failed, so the next resolve re-fetches from Delinea")
 }
 
-func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
+func TestDelineaPolling_FetchFailureSignalsTheError(t *testing.T) {
 	t.Parallel()
 	fake := newFakeDelineaServer()
 	fake.putByID(1, fakeDelineaSecret{Items: []fakeDelineaSecretItem{{Slug: "password", ItemValue: "v1"}}})
@@ -387,8 +388,8 @@ func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
 	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
-	changed := make(chan map[string]bool, 1)
-	m.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+	changed := make(chan map[string]error, 1)
+	m.RegisterUpdatePoliciesCallback(func(ids map[string]error) { changed <- ids })
 
 	_, err := m.SolvePolicySecrets(config.PolicyPayload{ID: "policy-A", Data: map[string]any{"c": "${delinea://id/1/password}"}})
 	require.NoError(t, err)
@@ -399,7 +400,7 @@ func TestDelineaPolling_FetchFailureSignalsFalse(t *testing.T) {
 	select {
 	case ids := <-changed:
 		require.Contains(t, ids, "policy-A")
-		assert.False(t, ids["policy-A"], "fetch-failure signal should be false")
+		assert.Error(t, ids["policy-A"], "fetch-failure signal should carry the error")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected callback to fire on fetch failure")
 	}
@@ -452,8 +453,8 @@ func TestDelineaPolling_FailureIsStickyAcrossMultipleSecrets(t *testing.T) {
 	m := &delineaManager{preLogger: newTestLogger(), config: config.DelineaManager{ServerURL: fake.URL, Username: "u", Password: "p"}}
 	require.NoError(t, m.Start(context.Background()))
 
-	changed := make(chan map[string]bool, 1)
-	m.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+	changed := make(chan map[string]error, 1)
+	m.RegisterUpdatePoliciesCallback(func(ids map[string]error) { changed <- ids })
 
 	_, err := m.SolvePolicySecrets(config.PolicyPayload{
 		ID: "policy-A",
@@ -475,7 +476,7 @@ func TestDelineaPolling_FailureIsStickyAcrossMultipleSecrets(t *testing.T) {
 	select {
 	case ids := <-changed:
 		require.Contains(t, ids, "policy-A")
-		assert.False(t, ids["policy-A"], "failure should be sticky even when another secret changed")
+		assert.Error(t, ids["policy-A"], "failure should be sticky even when another secret changed")
 	case <-time.After(2 * time.Second):
 		t.Fatal("expected callback to fire")
 	}

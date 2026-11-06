@@ -125,8 +125,8 @@ func TestFleetSecretsManager_handleUpdateNotification(t *testing.T) {
 	}
 
 	var callbackCalled bool
-	var callbackPolicyIDs map[string]bool
-	fm.callback = func(policyIDs map[string]bool) {
+	var callbackPolicyIDs map[string]error
+	fm.callback = func(policyIDs map[string]error) {
 		callbackCalled = true
 		callbackPolicyIDs = policyIDs
 	}
@@ -146,13 +146,13 @@ func TestFleetSecretsManager_handleUpdateNotification(t *testing.T) {
 	payload, err := json.Marshal(notification)
 	require.NoError(t, err)
 
-	// handleUpdateNotification has no publisher: fetch fails, callback marks policies as failed.
+	// handleUpdateNotification has no publisher: fetch fails, callback reports the error.
 	err = fm.handleUpdateNotification(payload)
 	assert.NoError(t, err)
 
 	assert.True(t, callbackCalled)
 	assert.Contains(t, callbackPolicyIDs, "policy1")
-	assert.False(t, callbackPolicyIDs["policy1"])
+	assert.ErrorContains(t, callbackPolicyIDs["policy1"], "MQTT publisher not bound")
 }
 
 func TestFleetSecretsManager_handleUpdateNotification_successUpdatesCacheAndCallbacks(t *testing.T) {
@@ -173,9 +173,9 @@ func TestFleetSecretsManager_handleUpdateNotification_successUpdatesCacheAndCall
 		},
 	}
 
-	var callbackPolicyIDs map[string]bool
+	var callbackPolicyIDs map[string]error
 	var callbackCalled bool
-	fm.callback = func(ids map[string]bool) {
+	fm.callback = func(ids map[string]error) {
 		callbackCalled = true
 		callbackPolicyIDs = ids
 	}
@@ -211,7 +211,7 @@ func TestFleetSecretsManager_handleUpdateNotification_successUpdatesCacheAndCall
 
 	assert.True(t, callbackCalled)
 	require.Contains(t, callbackPolicyIDs, "policy1")
-	assert.True(t, callbackPolicyIDs["policy1"], "policy callback should signal success after version bump")
+	assert.NoError(t, callbackPolicyIDs["policy1"], "policy callback should signal success after version bump")
 
 	got := fm.usedVars["test/path"]
 	assert.Equal(t, 2, got.Version)
@@ -254,7 +254,7 @@ func TestFleetSecretsManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{})
 
 	called := false
-	callback := func(_ map[string]bool) {
+	callback := func(_ map[string]error) {
 		called = true
 	}
 
@@ -262,7 +262,7 @@ func TestFleetSecretsManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 	assert.NotNil(t, fm.callback)
 
 	// Manually call the callback to verify it works
-	fm.callback(map[string]bool{"policy1": true})
+	fm.callback(map[string]error{"policy1": nil})
 	assert.True(t, called)
 }
 
@@ -355,6 +355,153 @@ func TestFleetSecretsManager_SolvePolicySecrets_multiTokenStringPrefetchesFirstR
 	data, ok := out.Data.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "firstval", data["k"])
+}
+
+// A refresh that fails after Fleet announced a new version leaves the cached
+// value outdated: the next resolve of the path, as a re-delivery of the policy
+// makes, asks Fleet again instead of applying the value it had.
+func TestFleetSecretsManager_aFailedRefreshIsRequestedAgainOnResolve(t *testing.T) {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+	fm.usedVars = map[string]fleetCachedSecret{
+		"test/path": {Value: "oldvalue", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+	}
+	var reported map[string]error
+	fm.callback = func(ids map[string]error) { reported = ids }
+
+	notification, err := json.Marshal(messages.SecretUpdateNotificationMsg{
+		SchemaVersion: messages.CurrentSecretsSchemaVersion,
+		Timestamp:     time.Now(),
+		Updates:       []messages.SecretUpdate{{Path: "test/path", Version: 2, Contexts: []string{"policy1"}}},
+	})
+	require.NoError(t, err)
+	// No publisher bound yet: the refresh fails.
+	require.NoError(t, fm.handleUpdateNotification(notification))
+	require.Error(t, reported["policy1"])
+
+	requests := 0
+	fm.publisher = &asyncMockPublisher{
+		fm:        fm,
+		onPublish: func() { requests++ },
+		customResponse: func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			return &messages.SecretResponseMsg{
+				SchemaVersion: messages.CurrentSecretsSchemaVersion,
+				RequestID:     req.RequestID,
+				Timestamp:     time.Now(),
+				Status:        "success",
+				Secrets:       []messages.SecretValue{{Path: "test/path", Value: "newvalue", Version: 2}},
+			}
+		},
+	}
+	fm.subscriber = &mockSubscriber{}
+
+	out, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://test/path}"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, requests, "the path must be requested again")
+	assert.Equal(t, "newvalue", out.Data.(map[string]any)["c"])
+
+	_, err = fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://test/path}"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, requests, "once requested again, the path is served from the cache")
+}
+
+func newFleetManagerForStaleTests(t *testing.T, respond func(req messages.SecretRequestMsg) *messages.SecretResponseMsg) (*FleetSecretsManager, *int) {
+	t.Helper()
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	fm := NewFleetSecretsManager(logger, config.FleetSecretsManager{Timeout: intPtr(5)})
+	fm.ctx = ctx
+	fm.requestTopic = "test/request"
+	fm.responseTopic = "test/response"
+	fm.updatedTopic = "test/updated"
+	requests := 0
+	fm.publisher = &asyncMockPublisher{fm: fm, onPublish: func() { requests++ }, customResponse: respond}
+	fm.subscriber = &mockSubscriber{}
+	return fm, &requests
+}
+
+func notify(t *testing.T, fm *FleetSecretsManager, updates ...messages.SecretUpdate) {
+	t.Helper()
+	payload, err := json.Marshal(messages.SecretUpdateNotificationMsg{
+		SchemaVersion: messages.CurrentSecretsSchemaVersion,
+		Timestamp:     time.Now(),
+		Updates:       updates,
+	})
+	require.NoError(t, err)
+	require.NoError(t, fm.handleUpdateNotification(payload))
+}
+
+// A notification that refreshes a path whose last refresh failed reports its
+// policies to apply again, and the path is served from the cache from then on.
+func TestFleetSecretsManager_aNotificationRefreshesAStalePath(t *testing.T) {
+	fail := true
+	fm, requests := newFleetManagerForStaleTests(t, func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+		resp := &messages.SecretResponseMsg{SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "success"}
+		if fail {
+			resp.Status = "error"
+			resp.Errors = []messages.SecretError{{Path: "test/path", Error: "unavailable", Code: messages.ErrorCodeNotFound}}
+			return resp
+		}
+		resp.Secrets = []messages.SecretValue{{Path: "test/path", Value: "v3", Version: 3}}
+		return resp
+	})
+	fm.usedVars = map[string]fleetCachedSecret{
+		"test/path": {Value: "v1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+	}
+	var reported map[string]error
+	fm.callback = func(ids map[string]error) { reported = ids }
+
+	notify(t, fm, messages.SecretUpdate{Path: "test/path", Version: 2})
+	require.Error(t, reported["policy1"])
+
+	fail = false
+	notify(t, fm, messages.SecretUpdate{Path: "test/path", Version: 3})
+	require.Equal(t, map[string]error{"policy1": nil}, reported)
+
+	before := *requests
+	out, err := fm.SolvePolicySecrets(config.PolicyPayload{ID: "policy1", Data: map[string]any{"c": "${fleet://test/path}"}})
+	require.NoError(t, err)
+	assert.Equal(t, before, *requests, "a refreshed path is served from the cache")
+	assert.Equal(t, "v3", out.Data.(map[string]any)["c"])
+}
+
+// A policy whose paths change in one notification, one refreshed and one not,
+// is reported failed, whichever comes first.
+func TestFleetSecretsManager_aFailedPathOutweighsARefreshedOneForTheSamePolicy(t *testing.T) {
+	for _, order := range [][]string{{"path/bad", "path/good"}, {"path/good", "path/bad"}} {
+		fm, _ := newFleetManagerForStaleTests(t, func(req messages.SecretRequestMsg) *messages.SecretResponseMsg {
+			resp := &messages.SecretResponseMsg{SchemaVersion: messages.CurrentSecretsSchemaVersion, RequestID: req.RequestID, Timestamp: time.Now(), Status: "success"}
+			if req.Secrets[0].Path == "path/bad" {
+				resp.Status = "error"
+				resp.Errors = []messages.SecretError{{Path: "path/bad", Error: "gone", Code: messages.ErrorCodeNotFound}}
+				return resp
+			}
+			resp.Secrets = []messages.SecretValue{{Path: "path/good", Value: "v2", Version: 2}}
+			return resp
+		})
+		fm.usedVars = map[string]fleetCachedSecret{
+			"path/bad":  {Value: "b1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+			"path/good": {Value: "g1", Version: 1, policyIDs: map[string]bool{"policy1": true}},
+		}
+		var reported map[string]error
+		fm.callback = func(ids map[string]error) { reported = ids }
+
+		updates := make([]messages.SecretUpdate, 0, len(order))
+		for _, p := range order {
+			updates = append(updates, messages.SecretUpdate{Path: p, Version: 2})
+		}
+		notify(t, fm, updates...)
+		require.Len(t, reported, 1, "order %v", order)
+		assert.Error(t, reported["policy1"], "order %v", order)
+	}
 }
 
 func TestFleetSecretsManager_SolvePolicySecrets_batchPartialDoesNotCache(t *testing.T) {

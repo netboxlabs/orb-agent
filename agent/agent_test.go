@@ -861,7 +861,7 @@ type mockSecretsManager struct{}
 func (m *mockSecretsManager) Start(_ context.Context) error {
 	return nil
 }
-func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(_ func(map[string]bool)) {}
+func (m *mockSecretsManager) RegisterUpdatePoliciesCallback(_ func(map[string]error)) {}
 func (m *mockSecretsManager) SolvePolicySecrets(payload config.PolicyPayload) (config.PolicyPayload, error) {
 	return payload, nil
 }

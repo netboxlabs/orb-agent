@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 
 	"github.com/go-co-op/gocron/v2"
@@ -26,7 +28,7 @@ type pollingBase struct {
 	fetch     fetchFunc
 	mu        sync.Mutex
 	usedVars  map[string]cachedSecret
-	callback  func(map[string]bool)
+	callback  func(map[string]error)
 	scheduler gocron.Scheduler
 }
 
@@ -41,10 +43,10 @@ func (b *pollingBase) init(ctx context.Context, logger *slog.Logger, scheme stri
 	b.usedVars = make(map[string]cachedSecret)
 }
 
-// RegisterUpdatePoliciesCallback registers the policy-reapply callback used by
-// pollSecrets when cached values change or become unreachable. Safe to call
+// RegisterUpdatePoliciesCallback registers the callback pollSecrets reports
+// to when cached values change, stop resolving or resolve again. Safe to call
 // at any time relative to a running poll cycle.
-func (b *pollingBase) RegisterUpdatePoliciesCallback(callback func(map[string]bool)) {
+func (b *pollingBase) RegisterUpdatePoliciesCallback(callback func(map[string]error)) {
 	b.mu.Lock()
 	b.callback = callback
 	b.mu.Unlock()
@@ -95,12 +97,15 @@ func (b *pollingBase) SolveConfigSecrets(backends map[string]any, cm config.Mana
 }
 
 // resolveBody returns the cached value for body, or fetches and caches it.
-// Race-safe via merge under the lock.
+// Race-safe via merge under the lock. A reference whose last read failed is
+// read again rather than served; one that still fails is kept, with the
+// policy among those failing on it, so the poll that finds it resolving again
+// re-applies the policy, whether it failed here or on an earlier poll.
 func (b *pollingBase) resolveBody(body, policyID string) (string, error) {
 	b.mu.Lock()
-	if cached, ok := b.usedVars[body]; ok {
+	if cached, ok := b.usedVars[body]; ok && !cached.failed {
 		cached.policyIDs[policyID] = true
-		b.usedVars[body] = cached
+		delete(cached.failing, policyID)
 		value := cached.Value
 		b.mu.Unlock()
 		return value, nil
@@ -108,90 +113,118 @@ func (b *pollingBase) resolveBody(body, policyID string) (string, error) {
 	b.mu.Unlock()
 
 	value, err := b.fetch(body)
+
+	b.mu.Lock()
+	cached, ok := b.usedVars[body]
+	if !ok {
+		cached = cachedSecret{policyIDs: map[string]bool{}, failed: true}
+	}
+	cached.policyIDs[policyID] = true
+	stored := false
+	switch {
+	case !cached.failed:
+		// Another resolve or a poll read it meanwhile: its value is served.
+		value, err = cached.Value, nil
+	case err == nil:
+		cached.Value, cached.failed, stored = value, false, true
+	}
+	if err != nil {
+		if cached.failing == nil {
+			cached.failing = map[string]bool{}
+		}
+		cached.failing[policyID] = true
+	} else {
+		delete(cached.failing, policyID)
+	}
+	b.usedVars[body] = cached
+	b.mu.Unlock()
 	if err != nil {
 		return "", err
 	}
-
-	b.mu.Lock()
-	fresh := false
-	if existing, ok := b.usedVars[body]; ok {
-		existing.policyIDs[policyID] = true
-		value = existing.Value
-	} else {
-		b.usedVars[body] = cachedSecret{
-			Value:     value,
-			policyIDs: map[string]bool{policyID: true},
-		}
-		fresh = true
-	}
-	b.mu.Unlock()
-	if fresh {
+	if stored {
 		b.logger.Debug("Resolved secret", "scheme", b.scheme, "ref", body, "policy_id", policyID)
 	}
 	return value, nil
 }
 
-// pollSecrets re-fetches every cached secret and fires the callback for
-// changed entries (true) or failed refreshes (false). Failures are sticky
-// per policy ID. Failed entries are evicted from the cache.
+// pollSecrets re-reads every cached reference and reports, by policy ID, the
+// policies to apply again (a nil error) and those a reference of which no
+// longer resolves (the read's error). A reference whose read fails is
+// reported once, when it first fails, and kept, marked failed, so the next
+// polls read it again; the first poll that reads it again reports the
+// policies still failing on it, to apply again. A changed value reports
+// every policy that uses it. A policy's failure is sticky across references.
 func (b *pollingBase) pollSecrets() {
 	b.mu.Lock()
 	if len(b.usedVars) == 0 || b.callback == nil {
 		b.mu.Unlock()
 		return
 	}
-	type snap struct{ body, value string }
-	snapshots := make([]snap, 0, len(b.usedVars))
-	for body, cached := range b.usedVars {
-		snapshots = append(snapshots, snap{body: body, value: cached.Value})
-	}
+	// In order, so a policy failing on two references is reported with the
+	// same one every time.
+	bodies := slices.Sorted(maps.Keys(b.usedVars))
 	cb := b.callback
 	b.mu.Unlock()
 
-	b.logger.Debug("Polling secrets for changes", "scheme", b.scheme, "secretCount", len(snapshots))
-	changed := make(map[string]bool)
-	markFalse := func(id string) { changed[id] = false }
+	b.logger.Debug("Polling secrets for changes", "scheme", b.scheme, "secretCount", len(bodies))
+	changed := make(map[string]error)
+	markFalse := func(id string, err error) {
+		if prev := changed[id]; prev != nil {
+			return // the first failure is kept
+		}
+		changed[id] = err
+	}
 	markTrue := func(id string) {
-		if prev, ok := changed[id]; ok && !prev {
+		if _, ok := changed[id]; ok {
 			return // failure is sticky
 		}
-		changed[id] = true
+		changed[id] = nil
 	}
 
-	for _, s := range snapshots {
-		current, err := b.fetch(s.body)
-		if err != nil {
-			b.logger.Error("Failed to retrieve secret during polling", "scheme", b.scheme, "ref", s.body, "error", err)
-			b.mu.Lock()
-			cached, ok := b.usedVars[s.body]
-			ids := make([]string, 0, len(cached.policyIDs))
-			if ok {
-				for id := range cached.policyIDs {
-					ids = append(ids, id)
-				}
-				delete(b.usedVars, s.body)
-			}
+	for _, body := range bodies {
+		current, err := b.fetch(body)
+		b.mu.Lock()
+		cached, ok := b.usedVars[body]
+		if !ok {
 			b.mu.Unlock()
-			for _, id := range ids {
-				markFalse(id)
+			continue
+		}
+		if err != nil {
+			if cached.failed {
+				b.mu.Unlock()
+				b.logger.Debug("Secret still fails to resolve", "scheme", b.scheme, "ref", body, "error", err)
+				continue
+			}
+			// Every policy that uses it is told, and fails on it until it
+			// resolves again or the policy resolves it.
+			cached.Value, cached.failed = "", true
+			cached.failing = maps.Clone(cached.policyIDs)
+			b.usedVars[body] = cached
+			b.mu.Unlock()
+			b.logger.Error("Failed to retrieve secret during polling", "scheme", b.scheme, "ref", body, "error", err)
+			for id := range cached.failing {
+				markFalse(id, err)
 			}
 			continue
 		}
-		if current != s.value {
-			b.logger.Info("Detected changed secret", "scheme", b.scheme, "ref", s.body)
-			b.mu.Lock()
-			ids := []string{}
-			if cached, ok := b.usedVars[s.body]; ok {
-				cached.Value = current
-				b.usedVars[s.body] = cached
-				for id := range cached.policyIDs {
-					ids = append(ids, id)
-				}
-			}
-			b.mu.Unlock()
-			for _, id := range ids {
-				markTrue(id)
-			}
+		recovered := cached.failed
+		valueChanged := !recovered && current != cached.Value
+		ids := cached.failing
+		if valueChanged {
+			ids = cached.policyIDs
+		}
+		ids = maps.Clone(ids)
+		cached.Value, cached.failed, cached.failing = current, false, nil
+		b.usedVars[body] = cached
+		b.mu.Unlock()
+		switch {
+		case recovered:
+			b.logger.Info("Secret resolves again", "scheme", b.scheme, "ref", body)
+		case valueChanged:
+			b.logger.Info("Detected changed secret", "scheme", b.scheme, "ref", body)
+		}
+		for id := range ids {
+			markTrue(id)
 		}
 	}
 

@@ -85,8 +85,8 @@ func TestPollingBase_PollSecretsDetectsChange(t *testing.T) {
 	s.setValue("k", "v1")
 	b := newBaseForTest(t, "scheme", s.fn)
 
-	gotCalls := make(chan map[string]bool, 1)
-	b.RegisterUpdatePoliciesCallback(func(m map[string]bool) { gotCalls <- m })
+	gotCalls := make(chan map[string]error, 1)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { gotCalls <- m })
 
 	_, _ = b.resolveBody("k", "policy-1")
 	s.setValue("k", "v2")
@@ -94,7 +94,7 @@ func TestPollingBase_PollSecretsDetectsChange(t *testing.T) {
 	b.pollSecrets()
 	select {
 	case m := <-gotCalls:
-		require.Equal(t, map[string]bool{"policy-1": true}, m)
+		require.Equal(t, map[string]error{"policy-1": nil}, m)
 	case <-time.After(time.Second):
 		t.Fatal("expected callback not invoked")
 	}
@@ -109,8 +109,8 @@ func TestPollingBase_PollSecretsStickyFailure(t *testing.T) {
 	s.setValue("b", "vb1")
 	b := newBaseForTest(t, "scheme", s.fn)
 
-	gotCalls := make(chan map[string]bool, 1)
-	b.RegisterUpdatePoliciesCallback(func(m map[string]bool) { gotCalls <- m })
+	gotCalls := make(chan map[string]error, 1)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { gotCalls <- m })
 
 	_, _ = b.resolveBody("a", "policy-shared")
 	_, _ = b.resolveBody("b", "policy-shared")
@@ -122,14 +122,16 @@ func TestPollingBase_PollSecretsStickyFailure(t *testing.T) {
 	b.pollSecrets()
 	select {
 	case m := <-gotCalls:
-		require.Equal(t, map[string]bool{"policy-shared": false}, m)
+		require.Len(t, m, 1)
+		require.ErrorContains(t, m["policy-shared"], "boom")
 	case <-time.After(time.Second):
 		t.Fatal("expected sticky-failure callback not invoked")
 	}
 	b.mu.Lock()
-	_, present := b.usedVars["a"]
+	entry, present := b.usedVars["a"]
 	b.mu.Unlock()
-	require.False(t, present, "failed entry must be evicted")
+	require.True(t, present, "a failed entry stays, so the next poll reads it again")
+	require.True(t, entry.failed, "a failed entry is marked failed, so its value is not served")
 }
 
 func TestPollingBase_SolvePolicySecrets(t *testing.T) {
@@ -178,7 +180,7 @@ func TestPollingBase_NoCallbackWhenNothingChanged(t *testing.T) {
 	b := newBaseForTest(t, "scheme", s.fn)
 
 	called := atomic.Bool{}
-	b.RegisterUpdatePoliciesCallback(func(map[string]bool) { called.Store(true) })
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) { called.Store(true) })
 
 	_, _ = b.resolveBody("k", "p1")
 	b.pollSecrets()
@@ -196,7 +198,7 @@ func TestPollingBase_ConcurrentResolveAndPoll(t *testing.T) {
 		s.setValue(fmt.Sprintf("k%d", i), fmt.Sprintf("v%d-1", i))
 	}
 	b := newBaseForTest(t, "scheme", s.fn)
-	b.RegisterUpdatePoliciesCallback(func(map[string]bool) {})
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) {})
 
 	var wg sync.WaitGroup
 	// Concurrent resolveBody across distinct policies and bodies.
@@ -252,12 +254,12 @@ func TestPollingBase_RegisterCallbackAfterStart(t *testing.T) {
 	// Register callback concurrently with a second poll. Buffer is sized to
 	// absorb both potential sends (the concurrent poll + the final poll
 	// below) so the callback never blocks regardless of interleaving.
-	got := make(chan map[string]bool, 4)
+	got := make(chan map[string]error, 4)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		b.RegisterUpdatePoliciesCallback(func(m map[string]bool) { got <- m })
+		b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
 	}()
 	go func() {
 		defer wg.Done()
@@ -274,8 +276,163 @@ func TestPollingBase_RegisterCallbackAfterStart(t *testing.T) {
 
 	select {
 	case m := <-got:
-		require.Equal(t, map[string]bool{"policy-1": true}, m)
+		require.Equal(t, map[string]error{"policy-1": nil}, m)
 	case <-time.After(time.Second):
 		t.Fatal("callback not invoked after registration")
 	}
+}
+
+// receiveChange returns the policies a poll reported, failing when it reported
+// none. The callback runs inside pollSecrets, so a report is already sent.
+func receiveChange(t *testing.T, got <-chan map[string]error) map[string]error {
+	t.Helper()
+	select {
+	case m := <-got:
+		return m
+	default:
+		t.Fatal("expected the poll to report its policies")
+		return nil
+	}
+}
+
+func requireNoChange(t *testing.T, got <-chan map[string]error) {
+	t.Helper()
+	select {
+	case m := <-got:
+		t.Fatalf("expected no report, got %v", m)
+	default:
+	}
+}
+
+// A read that fails is reported once, with its error, for every policy that
+// uses the reference. The reference stays polled: a read that keeps failing
+// reports nothing more, and once it resolves the policies are re-applied, even
+// with the value it had before.
+func TestPollingBase_AFailedReadIsReportedOnceAndPolledUntilItResolves(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("k", "v1")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	_, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+
+	readErr := errors.New("secret not found: k")
+	s.setError("k", readErr)
+	b.pollSecrets()
+	m := receiveChange(t, got)
+	require.Len(t, m, 1)
+	require.ErrorIs(t, m["policy-1"], readErr)
+
+	b.pollSecrets()
+	requireNoChange(t, got)
+
+	s.setValue("k", "v1")
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-1": nil}, receiveChange(t, got))
+
+	// Resolved again, the next poll reports nothing, the value is served from
+	// the cache, and a new failure is reported again.
+	b.pollSecrets()
+	requireNoChange(t, got)
+	calls := s.calls.Load()
+	v, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v)
+	require.Equal(t, calls, s.calls.Load(), "a reference that resolves again is served from the cache")
+	s.setError("k", readErr)
+	b.pollSecrets()
+	require.ErrorIs(t, receiveChange(t, got)["policy-1"], readErr)
+}
+
+// A failed reference is not served from the cache: a policy that resolves it
+// again, as a re-delivery does, reads it from the provider.
+func TestPollingBase_AFailedReferenceIsReadAgainWhenResolved(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("k", "v1")
+	b := newBaseForTest(t, "scheme", s.fn)
+	b.RegisterUpdatePoliciesCallback(func(map[string]error) {})
+	_, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+
+	s.setError("k", errors.New("secret not found: k"))
+	b.pollSecrets()
+	_, err = b.resolveBody("k", "policy-1")
+	require.Error(t, err, "the value read before the failure must not be served")
+
+	s.setValue("k", "v2")
+	v, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	require.Equal(t, "v2", v)
+}
+
+// A reference that does not resolve when a policy is applied is polled too, so
+// the policy is re-applied once it resolves, without a restart.
+func TestPollingBase_AReferenceThatFailsAtFirstResolveIsPolled(t *testing.T) {
+	s := newStubFetcher()
+	s.setError("k", errors.New("secret not found: k"))
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+
+	_, err := b.resolveBody("k", "policy-1")
+	require.Error(t, err)
+	b.pollSecrets()
+	requireNoChange(t, got)
+
+	s.setValue("k", "v1")
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-1": nil}, receiveChange(t, got))
+}
+
+// Once one policy resolves a failed reference again, as its re-delivery does,
+// the next poll re-applies only the policies still failing on it: the one that
+// resolved it already runs with the value.
+func TestPollingBase_RecoveryReappliesOnlyThePoliciesStillFailing(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("k", "v1")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	for _, id := range []string{"policy-1", "policy-2"} {
+		_, err := b.resolveBody("k", id)
+		require.NoError(t, err)
+	}
+
+	s.setError("k", errors.New("secret not found: k"))
+	b.pollSecrets()
+	require.Len(t, receiveChange(t, got), 2)
+
+	s.setValue("k", "v1")
+	v, err := b.resolveBody("k", "policy-1")
+	require.NoError(t, err)
+	require.Equal(t, "v1", v)
+
+	b.pollSecrets()
+	require.Equal(t, map[string]error{"policy-2": nil}, receiveChange(t, got))
+}
+
+// A policy that resolves a failed reference again after another policy did is
+// no longer failing on it either: the next poll re-applies neither.
+func TestPollingBase_PoliciesThatResolvedAFailedReferenceAreNotReappliedByThePoll(t *testing.T) {
+	s := newStubFetcher()
+	s.setValue("k", "v1")
+	b := newBaseForTest(t, "scheme", s.fn)
+	got := make(chan map[string]error, 4)
+	b.RegisterUpdatePoliciesCallback(func(m map[string]error) { got <- m })
+	for _, id := range []string{"policy-1", "policy-2"} {
+		_, err := b.resolveBody("k", id)
+		require.NoError(t, err)
+	}
+	s.setError("k", errors.New("secret not found: k"))
+	b.pollSecrets()
+	require.Len(t, receiveChange(t, got), 2)
+
+	s.setValue("k", "v1")
+	for _, id := range []string{"policy-1", "policy-2"} {
+		_, err := b.resolveBody("k", id)
+		require.NoError(t, err)
+	}
+	b.pollSecrets()
+	requireNoChange(t, got)
 }
