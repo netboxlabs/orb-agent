@@ -25,7 +25,8 @@ const longRun = 7
 // such as "0" leaves the digits of the error's numbers alone. A backend's
 // error can quote a policy's data, whose secret references are resolved by
 // then, whole, truncated or escaped; the agent passes such text through
-// Values before it logs or reports it. Empty values are ignored.
+// Values before it logs or reports it. Empty values are ignored. A value of
+// several lines is also masked line by line; see maskLines.
 func Values(s string, values []string) string {
 	return mask(s, values, false)
 }
@@ -59,7 +60,32 @@ func maskedForms(values []string) []string {
 	return forms
 }
 
+// maskLines replaces, in s, each line of a value of several lines, a private
+// key say, wherever it occurs whole, as it is or escaped as Go or JSON quote
+// it: a backend that prints such a value prints it line by line, so no line
+// of its output holds the whole value. A line is trimmed of the spaces and
+// carriage return around it, as an indented dump prints it, and only one of
+// longRun bytes or more counts: a shorter one, a brace say, is more likely
+// the text's own.
+func maskLines(s string, values []string) string {
+	for _, v := range values {
+		if !strings.Contains(v, "\n") {
+			continue
+		}
+		for line := range strings.SplitSeq(v, "\n") {
+			if line = strings.TrimSpace(line); len(line) < longRun {
+				continue
+			}
+			for _, f := range quotedForms(line) {
+				s = strings.ReplaceAll(s, f, MaskedSecret)
+			}
+		}
+	}
+	return s
+}
+
 func mask(s string, values []string, cut bool) string {
+	s = maskLines(s, values)
 	start := runStarts(s, maskedForms(values), cut)
 	if start == nil {
 		return s
