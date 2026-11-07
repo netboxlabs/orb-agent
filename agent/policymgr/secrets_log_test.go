@@ -188,12 +188,46 @@ func startBackendAnswering(t *testing.T, logger *slog.Logger, mgr policymgr.Poli
 	register func() bool, onPolicy func(w http.ResponseWriter, body []byte) bool,
 ) {
 	t.Helper()
+	startBackendServing(t, logger, mgr, name, executable, register, func(w http.ResponseWriter, r *http.Request, body []byte) bool {
+		return r.Method == http.MethodPost && r.URL.Path == "/api/v1/policies" && onPolicy(w, body)
+	})
+}
+
+// startBackendServing is startBackend with the answer to every request to
+// the process's API left to answer: it is passed the request and its body,
+// and when it reports that it wrote the response the server writes nothing
+// more.
+func startBackendServing(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool, answer func(w http.ResponseWriter, r *http.Request, body []byte) bool,
+) {
+	t.Helper()
+	cmd := &mocks.MockCmd{}
+	mocks.SetupSuccessfulProcess(cmd, 12345)
+	startBackendProcess(t, logger, mgr, name, executable, register, answer, cmd)
+}
+
+// startBackendPrinting is startBackend with the process's stdout and stderr
+// left to the caller: a line sent on either is relayed as the backend's
+// process printing it.
+func startBackendPrinting(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool,
+) (stdout, stderr chan<- string) {
+	t.Helper()
+	cmd := &mocks.MockCmd{}
+	stdout, stderr = mocks.SetupSuccessfulProcessWithOutput(cmd, 12345)
+	startBackendProcess(t, logger, mgr, name, executable, register, func(http.ResponseWriter, *http.Request, []byte) bool { return false }, cmd)
+	return stdout, stderr
+}
+
+// startBackendProcess is startBackendServing with the process mocked by cmd.
+func startBackendProcess(t *testing.T, logger *slog.Logger, mgr policymgr.PolicyManager, name, executable string,
+	register func() bool, answer func(w http.ResponseWriter, r *http.Request, body []byte) bool, cmd *mocks.MockCmd,
+) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/policies" {
-			body, _ := io.ReadAll(r.Body)
-			if onPolicy(w, body) {
-				return
-			}
+		body, _ := io.ReadAll(r.Body)
+		if answer(w, r, body) {
+			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -209,8 +243,6 @@ func startBackendAnswering(t *testing.T, logger *slog.Logger, mgr policymgr.Poli
 	require.NoError(t, os.WriteFile(filepath.Join(dir, executable), nil, 0o755))
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	cmd := &mocks.MockCmd{}
-	mocks.SetupSuccessfulProcess(cmd, 12345)
 	mocks.AllowHeldListenAddr(t)
 	original := backend.NewCmdOptions
 	backend.NewCmdOptions = func(backend.CmdOptions, string, ...string) backend.Commander { return cmd }

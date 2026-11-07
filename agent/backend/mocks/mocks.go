@@ -52,6 +52,17 @@ func (m *MockCmd) GetStderr() <-chan string {
 
 // SetupSuccessfulProcess configures the mock for a successful running process
 func SetupSuccessfulProcess(mockCmd *MockCmd, pid int) (<-chan string, <-chan string) {
+	return setupSuccessfulProcess(mockCmd, pid)
+}
+
+// SetupSuccessfulProcessWithOutput is SetupSuccessfulProcess with the
+// process's stdout and stderr left to the caller: a line sent on either is
+// streamed to the backend as the process printing it.
+func SetupSuccessfulProcessWithOutput(mockCmd *MockCmd, pid int) (stdout, stderr chan<- string) {
+	return setupSuccessfulProcess(mockCmd, pid)
+}
+
+func setupSuccessfulProcess(mockCmd *MockCmd, pid int) (chan string, chan string) {
 	// Create status channel - create it as bidirectional first
 	statusCh := make(chan backend.CmdStatus, 1)
 	// Create a receive-only channel to return from the mock
@@ -94,7 +105,7 @@ func SetupSuccessfulProcess(mockCmd *MockCmd, pid int) (<-chan string, <-chan st
 		stderrCh <- "error"
 	}()
 
-	return readOnlyStdoutCh, readOnlyStderrCh
+	return stdoutCh, stderrCh
 }
 
 // SetupCompletedProcess configures the mock for a process that has completed

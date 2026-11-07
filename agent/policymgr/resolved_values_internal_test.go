@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestResolvedValues finds the values the secrets manager put in for a
@@ -173,4 +174,17 @@ func TestComparePaths(t *testing.T) {
 	assert.Negative(t, comparePaths("a", "a.b"), "a path before the paths under it")
 	assert.Positive(t, comparePaths("a.b", "a"))
 	assert.Negative(t, comparePaths("a.b", "a.c"))
+}
+
+// TestBackendRefusalMasksALineTheBoundCutsThrough has a backend quote a value
+// of several lines line by line, again and again, as a dump of the policy in
+// its error does, in a refusal longer than what is kept of it: the bound cuts
+// inside a line, and what is logged keeps none of that line's first bytes.
+func TestBackendRefusalMasksALineTheBoundCutsThrough(t *testing.T) {
+	line := strings.Repeat("Zq9xW3rT7yU1iO5pL2kJ8hG4fD6sA0mN3bV7cX1-", 25)
+	value := "-----BEGIN KEY-----\n" + line + "\n-----END KEY-----"
+	logged, reason := backendRefusal(strings.Repeat("  "+line+"\n", 20), []resolvedValue{{path: "scope.key", value: value}})
+	require.Contains(t, logged, "... (truncated)", "the bound cut the refusal")
+	assert.NotContains(t, logged, line[:16])
+	assert.NotContains(t, reason, line[:16])
 }
