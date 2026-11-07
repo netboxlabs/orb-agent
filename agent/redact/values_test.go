@@ -173,6 +173,163 @@ func TestValues(t *testing.T) {
 			want:   "400 yaml: unmarshal errors:\n  line 10: cannot unmarshal !!str `********` into bool; public_key unset",
 		},
 		{
+			name:   "a short value that is a word of the YAML error is masked only where it is quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `int` into int",
+			values: []string{"int"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a short value that is the YAML error's line word",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `line` into int",
+			values: []string{"line"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			// The secret sits in a field the error does not quote: masking
+			// the error's words would claim the error quotes it, and show
+			// which word it is.
+			name:   "the words of a YAML error about another field are left",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{"int", "line", "str", "into", "yaml", "4", "errors", "cannot"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a YAML type error for a value that is no scalar is left",
+			text:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+			values: []string{"map", "string", "7"},
+			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+		},
+		{
+			name:   "a YAML syntax error's prefix is left",
+			text:   "400 yaml: line 3: did not find expected key",
+			values: []string{"yaml", "line", "3"},
+			want:   "400 yaml: line 3: did not find expected key",
+		},
+		{
+			// The wording ends with the type: what follows on the line is
+			// not the decoder's.
+			name:   "a short value after a YAML type error on its line is masked",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int; community abc rejected",
+			values: []string{"abc"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int; community ******** rejected",
+		},
+		{
+			name:   "a short value quoted after a YAML type error on its line is masked",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!seq into string; got `abc` into x",
+			values: []string{"abc"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!seq into string; got `********` into x",
+		},
+		{
+			name:   "a short value in a JSON body that carries a YAML error is masked",
+			text:   `400 {"error":"yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str ` + "`three`" + ` into int","input":"abc"}`,
+			values: []string{"abc"},
+			want:   `400 {"error":"yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str ` + "`three`" + ` into int","input":"********"}`,
+		},
+		{
+			name:   "a short value after a carriage return is masked",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int\r abc",
+			values: []string{"abc"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int\r ********",
+		},
+		{
+			name:   "a YAML type error into a map type is left",
+			text:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!seq into map[string]interface {}",
+			values: []string{"map", "string"},
+			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!seq into map[string]interface {}",
+		},
+		{
+			name:   "a short value after text like a YAML type error inside another message is masked",
+			text:   "400 p1: Invalid: line 1: cannot unmarshal !!str into abc",
+			values: []string{"abc"},
+			want:   "400 p1: Invalid: line 1: cannot unmarshal !!str into ********",
+		},
+		{
+			// Only its first byte is outside the wording: it is not a word
+			// of the error's own, but neither is it the value quoted.
+			name:   "a short value that runs into the YAML error's wording is left",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{" line"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a short value holding the type error's own words, quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `` into` into int",
+			values: []string{"` into"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a status code is no wording of its own here",
+			text:   "400 target sw1: port 400 is not allowed",
+			values: []string{"400"},
+			want:   "******** target sw1: port ******** is not allowed",
+		},
+		{
+			name:   "a short value a backend echoes unquoted is still masked",
+			text:   "400 core: invalid policy: policy-level: invalid security level abc",
+			values: []string{"abc"},
+			want:   "400 core: invalid policy: policy-level: invalid security level ********",
+		},
+		{
+			name:   "a short value in single quotes",
+			text:   "Input should be a valid integer [type=int_parsing, input_value='lab', input_type=str]",
+			values: []string{"lab"},
+			want:   "Input should be a valid integer [type=int_parsing, input_value='********', input_type=str]",
+		},
+		{
+			name:   "a value Python quotes with both kinds of quote in it",
+			text:   `Input should be a valid integer [type=int_parsing, input_value='a\'b"c', input_type=str]`,
+			values: []string{`a'b"c`},
+			want:   `Input should be a valid integer [type=int_parsing, input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a value Python quotes with control characters escaped",
+			text:   `[input_value='a\'b"\x01\x7f', input_type=str]`,
+			values: []string{"a'b\"\x01\x7f"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a value Python quotes with characters it does not print escaped",
+			text:   `[input_value='p\'w"\xa0\u200b\n', input_type=str]`,
+			values: []string{"p'w\"\u00a0\u200b\n"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a value Python quotes with a backslash and a tab",
+			text:   `[input_value='a\'b"\\\t', input_type=str]`,
+			values: []string{"a'b\"\\\t"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a character it does not print past U+00FF",
+			text:   `[input_value='a\'"\u200b', input_type=str]`,
+			values: []string{"a'\"\u200b"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a newline",
+			text:   `[input_value='a\'"\n', input_type=str]`,
+			values: []string{"a'\"\n"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a tab",
+			text:   `[input_value='a\'"\t', input_type=str]`,
+			values: []string{"a'\"\t"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a backslash",
+			text:   `[input_value='a\'"\\', input_type=str]`,
+			values: []string{"a'\"\\"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a long value Python quotes with both kinds of quote in it",
+			text:   `[input_value='it\'s "x" k3Y', input_type=str]`,
+			values: []string{`it's "x" k3Y`},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
 			name:   "a short value at the start of the text",
 			text:   "ab9 refused",
 			values: []string{"ab9"},
@@ -332,7 +489,9 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 // whole values overlap and repeat.
 func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
-	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密")}
+	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4")}
+	// Pieces of the wording errorWording knows, so values meet it.
+	wording := []string{"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: "}
 	word := func(alphabet []rune, n int) string {
 		var b strings.Builder
 		for range n {
@@ -350,6 +509,10 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 		for range r.Intn(6) {
 			if r.Intn(4) == 0 {
 				b.WriteString(word(alphabet, r.Intn(8)))
+				continue
+			}
+			if r.Intn(5) == 0 {
+				b.WriteString(wording[r.Intn(len(wording))])
 				continue
 			}
 			v := values[r.Intn(len(values))]
@@ -386,7 +549,8 @@ func runStartsByDefinition(s string, forms []string, cut bool) []int {
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				whole := run == v && (len(run) >= longRun || standsAlone(s, from, i, v))
+				whole := run == v && (len(run) >= longRun ||
+					standsAlone(s, from, i, v) && !slices.Contains(errorWording(s)[from:i+1], true))
 				tail := len(run) >= longRun && strings.HasSuffix(v, run)
 				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1)
 				if whole || tail || head {
@@ -400,4 +564,47 @@ func runStartsByDefinition(s string, forms []string, cut bool) []int {
 		return nil
 	}
 	return start
+}
+
+// TestErrorWording marks the error's own wording, byte by byte, apart from
+// the value a YAML type error quotes.
+func TestErrorWording(t *testing.T) {
+	for _, tc := range []struct {
+		text, wording string // wording: '^' under each byte that is wording
+	}{
+		{
+			text:    "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `int` into int",
+			wording: "    ^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^",
+		},
+		{
+			text:    "yaml: line 3: did not find expected key",
+			wording: "^^^^^^^^^^^^^^                         ",
+		},
+		{
+			text:    "\n  line 7: cannot unmarshal !!map into []string",
+			wording: "   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+		},
+		{
+			// Only a line of its own: inside another message it is not
+			// the decoder's.
+			text:    "Invalid: line 1: cannot unmarshal !!str into abc",
+			wording: "                                                ",
+		},
+		{
+			text:    "line 4: cannot unmarshal !!str `a` into int; more",
+			wording: "                                                 ",
+		},
+	} {
+		var got strings.Builder
+		for _, w := range errorWording(tc.text) {
+			if w {
+				got.WriteByte('^')
+			} else {
+				got.WriteByte(' ')
+			}
+		}
+		if got.String() != tc.wording {
+			t.Errorf("errorWording(%q)\n got %q\nwant %q", tc.text, got.String(), tc.wording)
+		}
+	}
 }
