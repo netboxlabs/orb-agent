@@ -323,21 +323,32 @@ func quotedForms(v string) []string {
 	if enc.Encode(v) == nil {
 		add(strings.TrimSuffix(b.String(), "\n"))
 	}
-	if repr := pythonRepr(v); !slices.Contains(forms, repr) {
-		forms = append(forms, repr)
+	for _, escapeSingle := range []bool{true, false} {
+		for _, keepUnassigned := range []bool{false, true} {
+			if repr := pythonRepr(v, escapeSingle, keepUnassigned); !slices.Contains(forms, repr) {
+				forms = append(forms, repr)
+			}
+		}
 	}
 	return forms
 }
 
-// pythonRepr returns v escaped as Python's repr escapes it. Like repr, it
-// quotes v in double quotes when v holds a single quote and no double quote,
-// and in single quotes otherwise, escaping a single quote only then. It
-// escapes a backslash, \n, \r and \t by name, and a character it does not
-// print by its code: \xNN, \uNNNN or \UNNNNNNNN. Python prints what Go's
-// unicode.IsPrint does, the space alone among spaces. A byte that is no UTF-8,
-// which no Python string holds, is kept.
-func pythonRepr(v string) string {
-	escapeSingle := !strings.Contains(v, `'`) || strings.Contains(v, `"`)
+// assigned are the categories of every character Go's Unicode tables assign:
+// unicode.C also holds the code points they don't, so its parts are named.
+var assigned = []*unicode.RangeTable{unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs}
+
+// pythonRepr returns v escaped as Python's repr escapes it. repr escapes a
+// single quote when it quotes the string in single quotes: always when the
+// string also holds a double quote, which a text holding v can, and never when
+// it holds only single quotes, which it then quotes in double quotes. So the
+// caller asks for both, escapeSingle saying which. It escapes a backslash, \n,
+// \r and \t by name, and a character it does not print by its code: \xNN,
+// \uNNNN or \UNNNNNNNN. Python prints what Go's unicode.IsPrint does, the
+// space alone among spaces, for the characters both their Unicode versions
+// assign. A newer Python prints characters Go's tables don't assign yet, which
+// keepUnassigned keeps as they are. A byte that is no UTF-8, which no Python
+// string holds, is kept.
+func pythonRepr(v string, escapeSingle, keepUnassigned bool) string {
 	var b strings.Builder
 	for i, r := range v {
 		switch {
@@ -353,7 +364,7 @@ func pythonRepr(v string) string {
 			b.WriteString(`\t`)
 		case r == utf8.RuneError && !strings.HasPrefix(v[i:], string(utf8.RuneError)):
 			b.WriteByte(v[i])
-		case unicode.IsPrint(r):
+		case unicode.IsPrint(r), keepUnassigned && !unicode.In(r, assigned...):
 			b.WriteRune(r)
 		case r < 0x100:
 			fmt.Fprintf(&b, `\x%02x`, r)

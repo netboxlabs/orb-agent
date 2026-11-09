@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -342,6 +343,20 @@ func TestValues(t *testing.T) {
 			want:   `[input_value="********", input_type=str]`,
 		},
 		{
+			name:   "a short value with a single quote in a text Python quotes in single quotes",
+			text:   `[input_value='pw="it\'s"', input_type=str]`,
+			values: []string{"it's"},
+			want:   `[input_value='pw="********"', input_type=str]`,
+		},
+		{
+			// U+1C89 is in Unicode 16, which Python 3.14 prints and Go 1.26's
+			// Unicode 15 tables don't assign.
+			name:   "a short value Python quotes with a character newer than Go's Unicode tables",
+			text:   `[input_value='\x07` + "Ᲊ" + `', input_type=str]`,
+			values: []string{"\x07Ᲊ"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
 			name:   "a long value Python quotes in double quotes, with a single quote and a control character in it",
 			text:   `[input_value="it's\x07 k3Y!x", input_type=str]`,
 			values: []string{"it's\x07 k3Y!x"},
@@ -624,5 +639,16 @@ func TestErrorWording(t *testing.T) {
 		if got.String() != tc.wording {
 			t.Errorf("errorWording(%q)\n got %q\nwant %q", tc.text, got.String(), tc.wording)
 		}
+	}
+}
+
+// The Python forms were checked character by character against the agent
+// image's Python 3.14 (Unicode 16) with Go's Unicode 15 tables. A form keeps a
+// character Go's tables don't assign as it is, as Python prints it. Nothing
+// covers the other way: a Go that knows a newer Unicode than Python prints a
+// character Python escapes. Check the forms again before changing this.
+func TestPythonFormsAssumeGoUnicode15(t *testing.T) {
+	if unicode.Version != "15.0.0" {
+		t.Errorf("Go's Unicode tables are %s: check pythonRepr against the agent image's Python", unicode.Version)
 	}
 }
