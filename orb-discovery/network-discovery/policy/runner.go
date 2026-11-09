@@ -458,9 +458,7 @@ func (r *Runner) ipAddressEntity(host nmap.Host, ipAddr, addr, policyName string
 		for _, hostAddr := range host.Addresses {
 			if hostAddr.AddrType == "mac" {
 				metadata.MACAddress = hostAddr.Addr
-				if hostAddr.Vendor != "" {
-					metadata.MACAddress = fmt.Sprintf("%s (%s)", hostAddr.Addr, hostAddr.Vendor)
-				}
+				metadata.MACVendor = hostAddr.Vendor
 				break
 			}
 		}

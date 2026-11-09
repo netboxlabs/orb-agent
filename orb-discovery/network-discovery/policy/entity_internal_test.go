@@ -139,19 +139,25 @@ func TestIPAddressEntityRecordsMACAddressInTheComments(t *testing.T) {
 
 	ip, _ := r.ipAddressEntity(host, "192.0.2.20/24", "192.0.2.20", "p")
 	metadata := commentsOf(t, ip.Comments)
-	assert.Equal(t, "00:1A:2B:3C:4D:5E (Acme Networks)", metadata.MACAddress)
+	assert.Equal(t, "00:1A:2B:3C:4D:5E", metadata.MACAddress)
+	assert.Equal(t, "Acme Networks", metadata.MACVendor)
 
-	// nmap reports no vendor for some MACs, e.g. randomized ones
+	ip, _ = r.ipAddressEntity(scannedHost("clean.example.net"), "192.0.2.21/24", "192.0.2.21", "p")
+	metadata = commentsOf(t, ip.Comments)
+	assert.Empty(t, metadata.MACAddress)
+	assert.Empty(t, metadata.MACVendor)
+	assert.NotContains(t, *ip.Comments, `"mac_address"`)
+	assert.NotContains(t, *ip.Comments, `"mac_vendor"`)
+
 	host = scannedHost("clean.example.net")
 	host.Addresses = []nmap.Address{
 		{Addr: "192.0.2.22", AddrType: "ipv4"},
 		{Addr: "02:00:00:00:00:01", AddrType: "mac"},
 	}
+
 	ip, _ = r.ipAddressEntity(host, "192.0.2.22/24", "192.0.2.22", "p")
 	metadata = commentsOf(t, ip.Comments)
 	assert.Equal(t, "02:00:00:00:00:01", metadata.MACAddress)
-
-	ip, _ = r.ipAddressEntity(scannedHost("clean.example.net"), "192.0.2.21/24", "192.0.2.21", "p")
-	metadata = commentsOf(t, ip.Comments)
-	assert.Empty(t, metadata.MACAddress)
+	assert.Empty(t, metadata.MACVendor)
+	assert.NotContains(t, *ip.Comments, `"mac_vendor"`)
 }
