@@ -176,6 +176,19 @@ func TestBackendRefusal(t *testing.T) {
 		assert.True(t, cut)
 	})
 
+	t.Run("masks no first bytes of a value the text does not go on with past what it masks", func(t *testing.T) {
+		// Masking the long value shortens the text enough to log the end of
+		// what is masked, a type error's line, which ends in the token's
+		// first byte; the text goes on with a new line, not the token.
+		values := []resolvedValue{{path: "a.big", value: strings.Repeat("Q7", 100)}, {path: "b.tok", value: "t0ken9"}}
+		for _, quoted := range []int{10, 20, 30} {
+			text := "yaml: unmarshal errors:\n" + strings.Repeat("quoted "+values[0].value+"\n", quoted) +
+				strings.Repeat("  line 4: cannot unmarshal !!str `x` into int\n", 300)
+			logged, _ := backendRefusal("400 ", text, values)
+			assert.NotContains(t, logged, "in********", "%d quotes", quoted)
+		}
+	})
+
 	t.Run("finishes the line a cut ends in when its end is near", func(t *testing.T) {
 		for _, tc := range []struct {
 			text string
@@ -186,7 +199,10 @@ func TestBackendRefusal(t *testing.T) {
 			{"ab\ncd\nef", 4, "ab\ncd", true},
 			{"ab\ncd", 2, "ab", true},
 			{"ab\ncd", 4, "ab\ncd", false},
+			{"a" + strings.Repeat("b", maxLineRest) + "\nc", 1, "a" + strings.Repeat("b", maxLineRest), true},
 			{"a" + strings.Repeat("b", maxLineRest+1) + "\n", 1, "a", true},
+			{"a" + strings.Repeat("b", maxLineRest), 1, "a" + strings.Repeat("b", maxLineRest), false},
+			{"a" + strings.Repeat("b", maxLineRest+1), 1, "a", true},
 		} {
 			got, cut := finishLine(tc.text, tc.n)
 			assert.Equal(t, tc.want, got, "%q from byte %d", tc.text, tc.n)

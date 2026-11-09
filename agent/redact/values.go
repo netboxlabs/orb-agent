@@ -34,13 +34,17 @@ const longRun = 7
 // then, whole, truncated or escaped; the agent passes such text through
 // Values before it logs or reports it. Empty values are ignored.
 func Values(s string, values []string) string {
-	return mask(s, values, false)
+	return mask(s, values, false, "")
 }
 
-// CutValues is Values for s cut from a longer text: a value the cut runs
-// through is masked too, however few of its first bytes s ends with.
-func CutValues(s string, values []string) string {
-	return mask(s, values, true)
+// CutValues is Values for s cut from a longer text that goes on with after: a
+// value the cut runs through is masked too, however few of its first bytes s
+// ends with. It runs through the cut when after goes on with it to a head of
+// longRun bytes, or to the whole of a shorter value that is a word of its
+// own; first bytes of a value that after does not go on with are the text's
+// own, as the type that ends a YAML error's line.
+func CutValues(s, after string, values []string) string {
+	return mask(s, values, true, after)
 }
 
 // LongestForm returns the length of the longest form of values that Values
@@ -66,8 +70,8 @@ func maskedForms(values []string) []string {
 	return forms
 }
 
-func mask(s string, values []string, cut bool) string {
-	start := runStarts(s, maskedForms(values), cut)
+func mask(s string, values []string, cut bool, after string) string {
+	start := runStarts(s, maskedForms(values), cut, after)
 	if start == nil {
 		return s
 	}
@@ -112,9 +116,9 @@ func mask(s string, values []string, cut bool) string {
 // mask masks and that ends at that byte begins, or len(s) when none ends
 // there: the whole of a form, as long as longRun or a word of its own outside
 // the error's wording; a head or tail of one as long as longRun;
-// and, in a cut text, a head of any length at its end. It returns nil when no
-// run is masked.
-func runStarts(s string, forms []string, cut bool) []int {
+// and, in a text cut before after, a shorter head at its end that runs
+// through the cut (see cutHead). It returns nil when no run is masked.
+func runStarts(s string, forms []string, cut bool, after string) []int {
 	if len(forms) == 0 || s == "" {
 		return nil
 	}
@@ -139,11 +143,17 @@ func runStarts(s string, forms []string, cut bool) []int {
 			if n := tails[i]; n >= longRun || n == len(v) && shortMasked(s, i-n+1, i, v, wording) {
 				longest = n
 			}
-			if n := heads[i]; n >= longRun || n > 0 && cut && i == len(s)-1 {
+			if n := heads[i]; n >= longRun {
 				longest = max(longest, n)
 			}
 			if longest > 0 {
 				start[i] = min(start[i], i-longest+1)
+				found = true
+			}
+		}
+		if cut {
+			if n := cutHead(s, after, v); n > 0 {
+				start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 				found = true
 			}
 		}
@@ -201,6 +211,30 @@ func standsAlone(s string, from, to int, v string) bool {
 	startsWord := !isWordByte(v[0]) || from == 0 || !isWordByte(s[from-1])
 	endsWord := !isWordByte(v[len(v)-1]) || to == len(s)-1 || !isWordByte(s[to+1])
 	return startsWord && endsWord
+}
+
+// cutHead returns the length of the longest head of v shorter than longRun
+// that s ends with and that runs through the cut before after: after goes on
+// with it to a head of v longRun bytes long, or to the whole of a shorter v
+// that is a word of its own there. It returns 0 for none. A longer head is
+// masked wherever it ends.
+func cutHead(s, after, v string) int {
+	need := min(len(v), longRun)
+	for n := min(need-1, len(s)); n > 0; n-- {
+		if !strings.HasSuffix(s, v[:n]) || !strings.HasPrefix(after, v[n:need]) {
+			continue
+		}
+		if len(v) < longRun {
+			// Only the bytes around the value tell whether it is a word.
+			from := max(0, len(s)-n-1)
+			near := s[from:] + after[:min(len(after), len(v)-n+1)]
+			if at := len(s) - n - from; !standsAlone(near, at, at+len(v)-1, v) {
+				continue
+			}
+		}
+		return n
+	}
+	return 0
 }
 
 // headRuns sets runs[i] to the length of the longest head of v that ends at

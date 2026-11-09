@@ -449,22 +449,35 @@ func TestValues(t *testing.T) {
 
 // TestCutValues masks a value the end of a cut text runs through, from its
 // first byte, which Values leaves: in a text that is not cut, a value's first
-// bytes at its end are the text's own.
+// bytes at its end are the text's own. The text past the cut tells whether a
+// value runs through it.
 func TestCutValues(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		text string
-		want string
+		name   string
+		text   string
+		after  string
+		values []string
+		want   string
 	}{
-		{"a cut after the value's first byte", "refused: xk", "refused: x********"},
-		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "refused: ********"},
-		{"a value whole before the cut", "refused: k3Y-9xQz, then", "refused: ********, then"},
-		{"no value at the cut", "refused: xx", "refused: xx"},
-		{"a short head before the cut", "refused: k3 then xx", "refused: k3 then xx"},
+		{"a cut after the value's first byte", "refused: xk", "3Y-9xQz", nil, "refused: x********"},
+		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "Qz", nil, "refused: ********"},
+		{"a cut inside a head the error shortens", "input_value='k3Y", "-9xQ...'", nil, "input_value='********"},
+		{"a value whole before the cut", "refused: k3Y-9xQz, then", "", nil, "refused: ********, then"},
+		{"no value at the cut", "refused: xx", "x", nil, "refused: xx"},
+		{"a short head before the cut", "refused: k3 then xx", "x", nil, "refused: k3 then xx"},
+		{"the value's first byte, the text going on otherwise", "into int", "\n  line 5", nil, "into int"},
+		{"the value's first bytes, the text ending before a head of longRun", "refused: xk3", "Y", nil, "refused: xk3"},
+		{"a short value the cut runs through", "refused: t", "0k\n", []string{"t0k"}, "refused: ********"},
+		{"a short value the cut runs through inside a word", "into int", "0k\n", []string{"t0k"}, "into int"},
+		{"a short value the cut runs through, followed by a word", "refused: t", "0kx", []string{"t0k"}, "refused: t"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := CutValues(tc.text, []string{"k3Y-9xQz"}); got != tc.want {
-				t.Errorf("CutValues(%q)\n got %q\nwant %q", tc.text, got, tc.want)
+			values := tc.values
+			if values == nil {
+				values = []string{"k3Y-9xQz"}
+			}
+			if got := CutValues(tc.text, tc.after, values); got != tc.want {
+				t.Errorf("CutValues(%q, %q)\n got %q\nwant %q", tc.text, tc.after, got, tc.want)
 			}
 		})
 	}
@@ -559,17 +572,23 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 			b.WriteString(v[from:to])
 		}
 		s, forms := b.String(), maskedForms(values)
-		for _, cut := range []bool{false, true} {
-			if got, want := runStarts(s, forms, cut), runStartsByDefinition(s, forms, cut); !slices.Equal(got, want) {
-				t.Fatalf("runStarts(%q, %q, %v)\n got %v\nwant %v", s, forms, cut, got, want)
-			}
+		// The text past a cut goes on with a value, or with anything.
+		after := word(alphabet, r.Intn(8))
+		if v := values[r.Intn(len(values))]; r.Intn(2) == 0 {
+			after = v[r.Intn(len(v)+1):] + after
+		}
+		if got, want := runStarts(s, forms, false, ""), runStartsByDefinition(s, forms, false, ""); !slices.Equal(got, want) {
+			t.Fatalf("runStarts(%q, %q)\n got %v\nwant %v", s, forms, got, want)
+		}
+		if got, want := runStarts(s, forms, true, after), runStartsByDefinition(s, forms, true, after); !slices.Equal(got, want) {
+			t.Fatalf("runStarts(%q, %q) cut before %q\n got %v\nwant %v", s, forms, after, got, want)
 		}
 	}
 }
 
 // runStartsByDefinition is runStarts by trying every run of s that ends at
 // each byte, from the longest.
-func runStartsByDefinition(s string, forms []string, cut bool) []int {
+func runStartsByDefinition(s string, forms []string, cut bool, after string) []int {
 	if len(forms) == 0 || s == "" {
 		return nil
 	}
@@ -585,7 +604,7 @@ func runStartsByDefinition(s string, forms []string, cut bool) []int {
 				whole := run == v && (len(run) >= longRun ||
 					standsAlone(s, from, i, v) && !slices.Contains(errorWording(s)[from:i+1], true))
 				tail := len(run) >= longRun && strings.HasSuffix(v, run)
-				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1)
+				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {
 					start[i] = min(start[i], from)
 					found = true
@@ -597,6 +616,21 @@ func runStartsByDefinition(s string, forms []string, cut bool) []int {
 		return nil
 	}
 	return start
+}
+
+// runsThrough reports whether the head of v at s[from:] runs through the cut
+// between s and after: in the text they make, v goes on past the cut to a
+// head of longRun bytes, or to the whole of a shorter v that is a word of its
+// own there.
+func runsThrough(s, after string, from int, v string) bool {
+	if len(s)-from >= len(v) {
+		return false // v ends before the cut
+	}
+	text := s + after
+	if !strings.HasPrefix(text[from:], v[:min(len(v), longRun)]) {
+		return false
+	}
+	return len(v) >= longRun || standsAlone(text, from, from+len(v)-1, v)
 }
 
 // TestErrorWording marks the error's own wording, byte by byte, apart from

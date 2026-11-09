@@ -1023,10 +1023,11 @@ func backendRefusal(status, text string, resolved []resolvedValue) (logged, reas
 	plain := redact.Values(window, values)
 	masked := plain
 	if cut {
-		// A value the window's end runs through is masked from its first
-		// byte too, in case masking before it made the text short enough to
-		// keep it. It is not named: those first bytes may be the error's own.
-		masked = redact.CutValues(window, values)
+		// A value the window's end runs through, as the text past it shows,
+		// is masked from its first byte too, in case masking before it made
+		// the text short enough to keep it. It is not named: only its first
+		// bytes are in the window.
+		masked = redact.CutValues(window, text[len(window):], values)
 	}
 	var note string
 	if plain != window {
@@ -1168,11 +1169,11 @@ const maxLineRest = 256
 // line of its own, whole, so an aggregate error cut inside one would have the
 // words of its last line masked as a short value's.
 func finishLine(text string, n int) (string, bool) {
-	rest, cut := cutAt(text[n:], maxLineRest)
-	if i := strings.IndexByte(rest, '\n'); i >= 0 {
+	rest := text[n:]
+	if i := strings.IndexByte(rest[:min(len(rest), maxLineRest+1)], '\n'); i >= 0 {
 		return text[:n+i], true
 	}
-	if !cut {
+	if len(rest) <= maxLineRest {
 		return text, false
 	}
 	return text[:n], true
