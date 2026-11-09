@@ -330,6 +330,24 @@ func TestValues(t *testing.T) {
 			want:   `[input_value='********', input_type=str]`,
 		},
 		{
+			name:   "a short value Python quotes in double quotes, with a single quote and a control character in it",
+			text:   `[input_value="a'\x07", input_type=str]`,
+			values: []string{"a'\x07"},
+			want:   `[input_value="********", input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes in double quotes, with a single quote and a character it does not print in it",
+			text:   `[input_value="it's\xa0", input_type=str]`,
+			values: []string{"it's "},
+			want:   `[input_value="********", input_type=str]`,
+		},
+		{
+			name:   "a long value Python quotes in double quotes, with a single quote and a control character in it",
+			text:   `[input_value="it's\x07 k3Y!x", input_type=str]`,
+			values: []string{"it's\x07 k3Y!x"},
+			want:   `[input_value="********", input_type=str]`,
+		},
+		{
 			name:   "a short value at the start of the text",
 			text:   "ab9 refused",
 			values: []string{"ab9"},

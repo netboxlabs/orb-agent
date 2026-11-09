@@ -300,8 +300,7 @@ func splitHeads(v string) []string {
 // quotes a string (%q and strconv's errors; only ASCII, as %+q does, and as
 // Python's json.dumps does for characters below U+10000), escaped as JSON,
 // with the HTML escaping Go's encoder applies by default and without, as in a
-// JSON body kept whole, and escaped as Python's repr does in single quotes,
-// which it uses for a value holding both kinds of quote (pydantic's
+// JSON body kept whole, and escaped as Python's repr does (pydantic's
 // input_value).
 func quotedForms(v string) []string {
 	if v == "" {
@@ -330,18 +329,21 @@ func quotedForms(v string) []string {
 	return forms
 }
 
-// pythonRepr returns v escaped as Python's repr escapes a string between
-// single quotes. It escapes a backslash, a single quote, \n, \r and \t by name, and a
-// character it does not print by its code: \xNN, \uNNNN or \UNNNNNNNN.
-// Python prints what Go's unicode.IsPrint does, the space alone among
-// spaces. A byte that is no UTF-8, which no Python string holds, is kept.
+// pythonRepr returns v escaped as Python's repr escapes it. Like repr, it
+// quotes v in double quotes when v holds a single quote and no double quote,
+// and in single quotes otherwise, escaping a single quote only then. It
+// escapes a backslash, \n, \r and \t by name, and a character it does not
+// print by its code: \xNN, \uNNNN or \UNNNNNNNN. Python prints what Go's
+// unicode.IsPrint does, the space alone among spaces. A byte that is no UTF-8,
+// which no Python string holds, is kept.
 func pythonRepr(v string) string {
+	escapeSingle := !strings.Contains(v, `'`) || strings.Contains(v, `"`)
 	var b strings.Builder
 	for i, r := range v {
 		switch {
 		case r == '\\':
 			b.WriteString(`\\`)
-		case r == '\'':
+		case r == '\'' && escapeSingle:
 			b.WriteString(`\'`)
 		case r == '\n':
 			b.WriteString(`\n`)
