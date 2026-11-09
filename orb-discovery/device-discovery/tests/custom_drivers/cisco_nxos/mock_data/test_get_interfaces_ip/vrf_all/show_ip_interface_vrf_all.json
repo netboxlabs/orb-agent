@@ -1,0 +1,96 @@
+{
+  "TABLE_intf": {
+    "ROW_intf": [
+      {
+        "intf-name": "Vlan10",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 21,
+        "prefix": "192.0.2.2",
+        "subnet": "192.0.2.2",
+        "masklen": 28,
+        "num-addr": 1,
+        "bcast-addr": "255.255.255.255"
+      },
+      {
+        "intf-name": "Vlan20",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 22,
+        "prefix": "198.51.100.2",
+        "subnet": "198.51.100.2",
+        "masklen": 24,
+        "num-addr": 2,
+        "bcast-addr": "255.255.255.255",
+        "TABLE_secondary_address": {
+          "ROW_secondary_address": {
+            "prefix1": "198.51.100.130",
+            "masklen1": 25
+          }
+        }
+      },
+      {
+        "intf-name": "Vlan110",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 23,
+        "prefix": "192.0.2.34",
+        "subnet": "192.0.2.34",
+        "masklen": 28,
+        "num-addr": 1,
+        "bcast-addr": "255.255.255.255"
+      },
+      {
+        "intf-name": "Vlan111",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 24,
+        "prefix": "192.0.2.50",
+        "subnet": "192.0.2.50",
+        "masklen": 28,
+        "num-addr": 1,
+        "bcast-addr": "255.255.255.255"
+      },
+      {
+        "intf-name": "Vlan120",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 25,
+        "prefix": "203.0.113.2",
+        "subnet": "203.0.113.2",
+        "masklen": 24,
+        "num-addr": 1,
+        "bcast-addr": "255.255.255.255"
+      },
+      {
+        "intf-name": "loopback10",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 26,
+        "prefix": "203.0.113.255",
+        "subnet": "203.0.113.255",
+        "masklen": 32,
+        "num-addr": 1,
+        "bcast-addr": "255.255.255.255"
+      },
+      {
+        "intf-name": "mgmt0",
+        "proto-state": "up",
+        "link-state": "up",
+        "admin-state": "up",
+        "iod": 5,
+        "prefix": "192.0.2.66",
+        "subnet": "192.0.2.66",
+        "masklen": 29,
+        "num-addr": 1,
+        "bcast-addr": "255.255.255.255"
+      }
+    ]
+  }
+}

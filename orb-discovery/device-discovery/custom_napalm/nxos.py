@@ -5,6 +5,7 @@ Cisco NX-OS NAPALM driver subclass adding ``get_interfaces_vlans()`` and ``get_m
 Fetches structured switchport data via NX-API (JSON) and maps each row
 through the shared NX-OS field-normalizer + generic classifier.
 ``get_modules()`` adds Module / module-bay discovery for Nexus modular chassis via NX-API.
+``get_interfaces_ip()`` reads the addresses of every VRF, not only the default one.
 """
 
 import logging
@@ -576,8 +577,27 @@ def nxos_row_to_switchport_info(row: dict) -> SwitchportInfo:
     )
 
 
+# napalm's get_interfaces_ip() sends these without a VRF; NX-OS then answers for the default
+# VRF only. The same commands with "vrf all" cover every VRF, in the same table shape.
+_ALL_VRF_COMMANDS = ("show ip interface", "show ipv6 interface")
+
+
 class NXOSDriver(NapalmNXOSDriver):
     """Cisco NX-OS NAPALM driver with VLAN-interface association support."""
+
+    def _get_command_table(self, command: str, table_name: str, row_name: str) -> list:
+        """
+        Return a command's table rows, with ``show ip interface`` and ``show ipv6 interface`` covering every VRF.
+
+        napalm's ``get_interfaces_ip()`` sends both without a VRF, and NX-OS answers them for the
+        default VRF only, so the addresses of an SVI in any other VRF never reach discovery;
+        ``nxos_ssh`` already sends ``vrf all``. NX-API answers ``vrf all`` with the same table:
+        on NX-OS 9.3 one ``TABLE_intf`` whose ``ROW_intf`` lists the interfaces of every VRF,
+        which napalm's parser reads unchanged.
+        """
+        if command in _ALL_VRF_COMMANDS:
+            command = f"{command} vrf all"
+        return super()._get_command_table(command, table_name, row_name)
 
     def get_interfaces_vlans(self) -> dict[str, dict]:
         """Return per-interface VLAN config (NX-API JSON path)."""

@@ -1,9 +1,12 @@
 package backend
 
 import (
+	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // NormalizeLogfmtLine parses a logfmt line into (msg, attrs, level, ok).
@@ -11,8 +14,11 @@ import (
 // keep their fallback level and log the raw trimmed line as msg.
 // Contract: msg/level/time keys are removed from attrs; blank keys are skipped;
 // remaining attr keys are sorted alphabetically; level is parsed via ParseLogfmtLevel
-// (unknown levels keep the fallback); quoted values accept ' and " with backslash
-// escapes; duplicate keys last-writer-wins.
+// (unknown levels keep the fallback); duplicate keys last-writer-wins.
+// A double-quoted value that is valid Go quoting, as slog.TextHandler writes with
+// strconv.Quote, is decoded with strconv.Unquote, and a byte that would decode to
+// invalid UTF-8 is written as a \xNN escape. Any other quoted value, ' or ", drops
+// each backslash and keeps the character after it.
 func NormalizeLogfmtLine(line string, fallback slog.Level) (string, []slog.Attr, slog.Level, bool) {
 	fields, ok := parseLogfmt(line)
 	if !ok {
@@ -138,26 +144,55 @@ func readQuotedValue(runes []rune, start int) (string, int, bool) {
 	quote := runes[start]
 	index := start + 1
 	var builder strings.Builder
+	escaped := false
 
 	for index < length {
 		char := runes[index]
 		if char == '\\' && index+1 < length {
 			builder.WriteRune(runes[index+1])
 			index += 2
+			escaped = true
 			continue
 		}
 		if char == quote {
+			value := builder.String()
+			// Go quoting, as slog.TextHandler writes it; anything else keeps the
+			// legacy decoding. Without a backslash both read the same.
+			if quote == '"' && escaped {
+				if decoded, err := strconv.Unquote(string(runes[start : index+1])); err == nil {
+					value = escapeInvalidUTF8(decoded)
+				}
+			}
 			index++
 			for index < length && runes[index] == ' ' {
 				index++
 			}
-			return builder.String(), index, true
+			return value, index, true
 		}
 		builder.WriteRune(char)
 		index++
 	}
 
 	return "", length, false
+}
+
+// escapeInvalidUTF8 writes each byte that is not valid UTF-8 as a \xNN escape, as
+// strconv.Quote does, because the OTLP log export rejects invalid UTF-8.
+func escapeInvalidUTF8(value string) string {
+	if utf8.ValidString(value) {
+		return value
+	}
+	var builder strings.Builder
+	for index := 0; index < len(value); {
+		r, size := utf8.DecodeRuneInString(value[index:])
+		if r == utf8.RuneError && size == 1 {
+			fmt.Fprintf(&builder, `\x%02x`, value[index])
+		} else {
+			builder.WriteString(value[index : index+size])
+		}
+		index += size
+	}
+	return builder.String()
 }
 
 func readUnquotedValue(runes []rune, start int) (string, int, bool) {

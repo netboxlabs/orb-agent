@@ -1,0 +1,40 @@
+{
+  "TABLE_intf": {
+    "ROW_intf": [
+      {
+        "intf-name": "Vlan10",
+        "iod": 21,
+        "admin-state": "up",
+        "link-state": "up",
+        "forwarding-enabled": "disabled",
+        "ipv6-lstype": "none",
+        "linklocal-addr": "fe80::200:5eff:fe00:5301",
+        "linklocal-configured": "false",
+        "TABLE_addr": {
+          "ROW_addr": [
+            {
+              "addr": "2001:db8:10::2/64"
+            }
+          ]
+        }
+      },
+      {
+        "intf-name": "Vlan110",
+        "iod": 23,
+        "admin-state": "up",
+        "link-state": "up",
+        "forwarding-enabled": "disabled",
+        "ipv6-lstype": "none",
+        "linklocal-addr": "fe80::200:5eff:fe00:5301",
+        "linklocal-configured": "false",
+        "TABLE_addr": {
+          "ROW_addr": [
+            {
+              "addr": "2001:db8:110::2/64"
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

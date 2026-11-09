@@ -1,0 +1,64 @@
+{
+  "Vlan10": {
+    "ipv4": {
+      "192.0.2.2": {
+        "prefix_length": 28
+      }
+    },
+    "ipv6": {
+      "2001:db8:10::2": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "Vlan20": {
+    "ipv4": {
+      "198.51.100.2": {
+        "prefix_length": 24
+      },
+      "198.51.100.130": {
+        "prefix_length": 25
+      }
+    }
+  },
+  "Vlan110": {
+    "ipv4": {
+      "192.0.2.34": {
+        "prefix_length": 28
+      }
+    },
+    "ipv6": {
+      "2001:db8:110::2": {
+        "prefix_length": 64
+      }
+    }
+  },
+  "Vlan111": {
+    "ipv4": {
+      "192.0.2.50": {
+        "prefix_length": 28
+      }
+    }
+  },
+  "Vlan120": {
+    "ipv4": {
+      "203.0.113.2": {
+        "prefix_length": 24
+      }
+    }
+  },
+  "loopback10": {
+    "ipv4": {
+      "203.0.113.255": {
+        "prefix_length": 32
+      }
+    }
+  },
+  "mgmt0": {
+    "ipv4": {
+      "192.0.2.66": {
+        "prefix_length": 29
+      }
+    }
+  }
+}

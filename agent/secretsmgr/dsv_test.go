@@ -281,8 +281,8 @@ func TestDSVPolling_DetectsRotation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "old", got)
 
-	changed := make(chan map[string]bool, 1)
-	d.RegisterUpdatePoliciesCallback(func(ids map[string]bool) { changed <- ids })
+	changed := make(chan map[string]error, 1)
+	d.RegisterUpdatePoliciesCallback(func(ids map[string]error) { changed <- ids })
 
 	// Rotate the stored value, then trigger a poll directly.
 	srv.setSecret("servers/prod-db", map[string]any{"password": "new"})
@@ -290,7 +290,8 @@ func TestDSVPolling_DetectsRotation(t *testing.T) {
 
 	select {
 	case ids := <-changed:
-		assert.Equal(t, true, ids["policy-1"])
+		require.Contains(t, ids, "policy-1")
+		assert.NoError(t, ids["policy-1"])
 	default:
 		t.Fatal("expected update callback for rotated secret")
 	}

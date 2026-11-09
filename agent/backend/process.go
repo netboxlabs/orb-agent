@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"time"
+	"unicode/utf8"
 )
 
 // readinessBackoffCount is the number of readiness attempts. The per-iteration
@@ -322,13 +323,13 @@ func StartProcess(spec StartSpec) error {
 					stdout = nil
 					continue
 				}
-				spec.LogLine(line, false)
+				spec.LogLine(validUTF8(line), false)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				spec.LogLine(line, true)
+				spec.LogLine(validUTF8(line), true)
 			}
 		}
 	}()
@@ -415,4 +416,14 @@ func StartProcess(spec StartSpec) error {
 	}
 
 	return nil
+}
+
+// validUTF8 replaces each byte of a backend's output line that is not UTF-8
+// with U+FFFD, as the agent's console shows it, because one invalid string
+// fails the agent's whole OTLP log batch.
+func validUTF8(line string) string {
+	if utf8.ValidString(line) {
+		return line
+	}
+	return string([]rune(line))
 }

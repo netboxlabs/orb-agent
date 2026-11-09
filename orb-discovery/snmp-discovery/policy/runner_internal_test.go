@@ -269,6 +269,7 @@ func TestRunScanSchedulesResponsiveTargets(t *testing.T) {
 func queryTargetRunner(clientFactory snmp.ClientFactory, mappingEntries []config.MappingEntry) *Runner {
 	return &Runner{
 		ctx:           context.WithValue(context.Background(), policyKey, "test-policy"),
+		ingestCtx:     context.Background(),
 		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 		mappingConfig: &config.Mapping{Entries: mappingEntries},
 		scope:         config.Scope{Authentication: config.Authentication{}},

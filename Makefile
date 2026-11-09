@@ -103,10 +103,12 @@ test-timed:
 	echo "Test execution completed in $$duration seconds"; \
 	exit $$exit_code
 
+# Every package's test results reach the report and the exit status; only the
+# coverage total leaves out cmd and mocks.
 .PHONY: test-coverage
 test-coverage:
 	@mkdir -p .coverage
-	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | grep -Ev "cmd|mocks" | tparse -format=markdown > .coverage/test-report.md
+	@go test -race -cover -json -coverprofile=.coverage/cover.out.tmp ./... | tparse -format=markdown > .coverage/test-report.md
 	@cat .coverage/cover.out.tmp | grep -Ev "cmd|mocks" > .coverage/cover.out
 	@go tool cover -func=.coverage/cover.out | grep -E '^total:' | awk '{print substr($$3, 1, length($$3)-1)}' > .coverage/coverage.txt
 
