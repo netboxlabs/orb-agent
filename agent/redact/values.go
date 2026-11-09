@@ -29,50 +29,145 @@ const longRun = 7
 // error's own wording (see errorWording): a short value that is one of its
 // words, such as "int", is masked only where the error quotes it, so the
 // error stays readable and does not show which word the value is. A quoted
-// value is always a word of its own: no quote is a word byte. A backend's
-// error can quote a policy's data, whose secret references are resolved by
-// then, whole, truncated or escaped; the agent passes such text through
-// Values before it logs or reports it. Empty values are ignored.
+// value is always a word of its own: no quote is a word byte. A value of
+// several lines, a private key say, is also masked line by line, as a
+// backend that prints it line by line quotes it: each of its lines of
+// longRun bytes or more, trimmed of the spaces around it, wherever it occurs
+// whole. A backend's error can quote a policy's data, whose secret references
+// are resolved by then, whole, truncated or escaped; the agent passes such
+// text through Values before it logs or reports it. Empty values are ignored.
 func Values(s string, values []string) string {
-	return mask(s, values, false, "")
+	return NewMasker(values).Mask(s)
 }
 
 // CutValues is Values for s cut from a longer text that goes on with after: a
-// value the cut runs through is masked too, however few of its first bytes s
-// ends with. It runs through the cut when after goes on with it to a head of
-// longRun bytes, or to the whole of a shorter value that is a word of its
-// own; first bytes of a value that after does not go on with are the text's
-// own, as the type that ends a YAML error's line. With after empty, it masks
-// as Values does.
+// value, or a line of one, the cut runs through is masked too, however few of
+// its first bytes s ends with. A value runs through the cut when after goes
+// on with it to a head of longRun bytes, or to the whole of a shorter value
+// that is a word of its own; a line when after goes on with the rest of it.
+// First bytes of a value that after does not go on with are the text's own,
+// as the type that ends a YAML error's line. With after empty, it masks as
+// Values does.
 func CutValues(s, after string, values []string) string {
-	return mask(s, values, true, after)
+	return NewMasker(values).MaskCut(s, after)
 }
 
 // LongestForm returns the length of the longest form of values that Values
 // masks: how far past a point in a text a value masked there can reach.
 func LongestForm(values []string) int {
-	longest := 0
-	for _, f := range maskedForms(values) {
-		longest = max(longest, len(f))
-	}
-	return longest
+	return NewMasker(values).LongestForm()
 }
 
-// maskedForms returns the forms of values that mask matches, each once.
-func maskedForms(values []string) []string {
-	var forms []string
+// Masker masks a set of values in texts, as Values does. Building one finds
+// the forms of the values Values matches and readies each to be searched
+// for, which takes time and memory in proportion to the values; masking a
+// text with it then takes time in proportion to the text times the number of
+// forms, and allocates in proportion to the text alone. A caller that masks
+// many texts with the same values, a backend's output line by line, builds
+// one and keeps it. A Masker is not changed once built, so texts can be
+// masked with it concurrently.
+type Masker struct {
+	// forms are masked whole, by a head or by a tail; lines, the lines of
+	// values of several lines, only whole.
+	forms, lines []form
+	longest      int
+}
+
+// form is a text a Masker searches for, with what the searches need: back
+// for the heads of it a text holds, and rv and z for the tails.
+type form struct {
+	v string
+	// back[j] is the length of the longest head of v that is a tail of
+	// v[:j+1] and shorter than it: how much of a head is still matched when
+	// the byte after v[:j+1] is not the next in v.
+	back []int32
+	// rv is v read backwards, and z[k] the length of the longest head of rv
+	// that starts at rv[k].
+	rv []byte
+	z  []int32
+}
+
+// NewMasker returns a Masker for values.
+func NewMasker(values []string) *Masker {
+	m := &Masker{}
+	seen := make(map[string]bool)
 	for _, v := range values {
 		for _, f := range append(quotedForms(v), splitHeads(v)...) {
-			if !slices.Contains(forms, f) {
-				forms = append(forms, f)
+			if !seen[f] {
+				seen[f] = true
+				m.forms = append(m.forms, newForm(f))
+				m.longest = max(m.longest, len(f))
 			}
 		}
 	}
-	return forms
+	seen = make(map[string]bool)
+	for _, v := range values {
+		if !strings.Contains(v, "\n") {
+			continue
+		}
+		for line := range strings.SplitSeq(v, "\n") {
+			if line = strings.TrimSpace(line); len(line) < longRun {
+				continue
+			}
+			for _, f := range quotedForms(line) {
+				if !seen[f] {
+					seen[f] = true
+					m.lines = append(m.lines, newForm(f))
+				}
+			}
+		}
+	}
+	return m
 }
 
-func mask(s string, values []string, cut bool, after string) string {
-	start := runStarts(s, maskedForms(values), cut, after)
+func newForm(v string) form {
+	f := form{v: v, back: make([]int32, len(v)), rv: reversed(v), z: make([]int32, len(v))}
+	for j, n := 1, int32(0); j < len(v); j++ {
+		for n > 0 && v[j] != v[n] {
+			n = f.back[n-1]
+		}
+		if v[j] == v[n] {
+			n++
+		}
+		f.back[j] = n
+	}
+	// rv[l:r] is the head of rv that reaches furthest found so far.
+	rv := f.rv
+	for k, l, r := 1, 0, 0; k < len(rv); k++ {
+		n := 0
+		if k < r {
+			n = min(int(f.z[k-l]), r-k)
+		}
+		for k+n < len(rv) && rv[k+n] == rv[n] {
+			n++
+		}
+		f.z[k] = int32(n)
+		if k+n > r {
+			l, r = k, k+n
+		}
+	}
+	return f
+}
+
+// LongestForm returns the length of the longest form of the Masker's values
+// that it masks, as the function LongestForm does.
+func (m *Masker) LongestForm() int {
+	return m.longest
+}
+
+// Mask returns s with the Masker's values masked, as Values does.
+func (m *Masker) Mask(s string) string {
+	return m.mask(s, false, "")
+}
+
+// MaskCut returns s, cut from a longer text that goes on with after, with the
+// Masker's values masked, as CutValues does.
+func (m *Masker) MaskCut(s, after string) string {
+	return m.mask(s, true, after)
+}
+
+func (m *Masker) mask(s string, cut bool, after string) string {
+	start := m.runStarts(s, cut, after)
 	if start == nil {
 		return s
 	}
@@ -116,11 +211,12 @@ func mask(s string, values []string, cut bool, after string) string {
 // runStarts returns, for each byte of s, where the earliest run of s that
 // mask masks and that ends at that byte begins, or len(s) when none ends
 // there: the whole of a form, as long as longRun or a word of its own outside
-// the error's wording; a head or tail of one as long as longRun;
-// and, in a text cut before after, a shorter head at its end that runs
-// through the cut (see cutHead). It returns nil when no run is masked.
-func runStarts(s string, forms []string, cut bool, after string) []int {
-	if len(forms) == 0 || s == "" {
+// the error's wording; a head or tail of one as long as longRun; the whole of
+// a line; and, in a text cut before after, a head at its end of a form or a
+// line that runs through the cut (see cutHead and cutLineHead). It returns
+// nil when no run is masked.
+func (m *Masker) runStarts(s string, cut bool, after string) []int {
+	if len(m.forms) == 0 && len(m.lines) == 0 || s == "" {
 		return nil
 	}
 	start := make([]int, len(s))
@@ -136,31 +232,56 @@ func runStarts(s string, forms []string, cut bool, after string) []int {
 	}
 	textWording := errorWording(text)
 	wording := textWording[:len(s)]
-	// Each scan takes time in proportion to s and v, so a long value in a
-	// long text costs no more than reading both; the scans of every form
-	// fill the same runs.
-	heads, tails, rs := make([]int, len(s)), make([]int, len(s)), reversed(s)
-	for _, v := range forms {
-		headRuns(heads, s, v)
-		tailRuns(tails, rs, v)
-		for i := range len(s) {
-			// A tail as long as v is the whole of v. The longest head or
-			// tail ending at s[i] is the one to mask when any is: one that
-			// is shorter is shorter than longRun too.
-			longest := 0
-			if n := tails[i]; n >= longRun || n == len(v) && shortMasked(s, i-n+1, i, v, wording) {
-				longest = n
+	heads := make([]int, len(s))
+	if len(m.forms) > 0 {
+		// Each scan takes time in proportion to s, so a long value in a long
+		// text costs no more than reading both; the scans of every form fill
+		// the same runs.
+		tails, rs := make([]int, len(s)), reversed(s)
+		for i := range m.forms {
+			f := &m.forms[i]
+			f.headRuns(heads, s)
+			f.tailRuns(tails, rs)
+			for i := range len(s) {
+				// A tail as long as v is the whole of v. The longest head or
+				// tail ending at s[i] is the one to mask when any is: one that
+				// is shorter is shorter than longRun too.
+				longest := 0
+				if n := tails[i]; n >= longRun || n == len(f.v) && shortMasked(s, i-n+1, i, f.v, wording) {
+					longest = n
+				}
+				if n := heads[i]; n >= longRun {
+					longest = max(longest, n)
+				}
+				if longest > 0 {
+					start[i] = min(start[i], i-longest+1)
+					found = true
+				}
 			}
-			if n := heads[i]; n >= longRun {
-				longest = max(longest, n)
-			}
-			if longest > 0 {
-				start[i] = min(start[i], i-longest+1)
-				found = true
+			if cut {
+				if n := cutHead(s, after, f.v, text, textWording); n > 0 {
+					start[len(s)-1] = min(start[len(s)-1], len(s)-n)
+					found = true
+				}
 			}
 		}
+	}
+	for i := range m.lines {
+		f := &m.lines[i]
+		for from := 0; ; {
+			k := strings.Index(s[from:], f.v)
+			if k < 0 {
+				break
+			}
+			at := from + k
+			end := at + len(f.v) - 1
+			start[end] = min(start[end], at)
+			found = true
+			from = at + 1
+		}
 		if cut {
-			if n := cutHead(s, after, v, text, textWording); n > 0 {
+			f.headRuns(heads, s)
+			if n := f.cutLineHead(heads[len(s)-1], after); n > 0 {
 				start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 				found = true
 			}
@@ -258,29 +379,33 @@ func cutHead(s, after, v, text string, wording []bool) int {
 	return 0
 }
 
-// headRuns sets runs[i] to the length of the longest head of v that ends at
-// s[i], found as Knuth-Morris-Pratt finds v in s.
-func headRuns(runs []int, s, v string) {
-	// back[j] is the length of the longest head of v that is a tail of
-	// v[:j+1] and shorter than it: how much of a head is still matched when
-	// the byte after v[:j+1] is not the next in v.
-	back := make([]int, len(v))
-	for j, n := 1, 0; j < len(v); j++ {
-		for n > 0 && v[j] != v[n] {
-			n = back[n-1]
-		}
-		if v[j] == v[n] {
-			n++
-		}
-		back[j] = n
+// cutLineHead returns the length of the longest head of f's text, a line of
+// a value, that a cut text ends with and that after goes on with to the
+// whole line, a line being masked only whole; 0 for none. n is the longest
+// head of it the cut text ends with; the shorter ones are its borders.
+func (f *form) cutLineHead(n int, after string) int {
+	if n == len(f.v) {
+		n = int(f.back[n-1])
 	}
+	for ; n > 0; n = int(f.back[n-1]) {
+		if strings.HasPrefix(after, f.v[n:]) {
+			return n
+		}
+	}
+	return 0
+}
+
+// headRuns sets runs[i] to the length of the longest head of f's text that
+// ends at s[i], found as Knuth-Morris-Pratt finds it in s.
+func (f *form) headRuns(runs []int, s string) {
+	v, back := f.v, f.back
 	n := 0
 	for i := range len(s) {
 		if n == len(v) {
-			n = back[n-1]
+			n = int(back[n-1])
 		}
 		for n > 0 && s[i] != v[n] {
-			n = back[n-1]
+			n = int(back[n-1])
 		}
 		if s[i] == v[n] {
 			n++
@@ -289,31 +414,16 @@ func headRuns(runs []int, s, v string) {
 	}
 }
 
-// tailRuns sets runs[i] to the length of the longest tail of v that ends at
-// the byte of s at i, rs being s read backwards. Read backwards, that is the
-// longest head of v that starts there, found with the Z algorithm.
-func tailRuns(runs []int, rs []byte, v string) {
-	rv := reversed(v)
-	// z[k] is the length of the longest head of rv that starts at rv[k];
-	// rv[l:r] is the head that reaches furthest found so far.
-	z := make([]int, len(rv))
-	for k, l, r := 1, 0, 0; k < len(rv); k++ {
-		n := 0
-		if k < r {
-			n = min(z[k-l], r-k)
-		}
-		for k+n < len(rv) && rv[k+n] == rv[n] {
-			n++
-		}
-		z[k] = n
-		if k+n > r {
-			l, r = k, k+n
-		}
-	}
+// tailRuns sets runs[i] to the length of the longest tail of f's text that
+// ends at the byte of s at i, rs being s read backwards. Read backwards, that
+// is the longest head of the text read backwards that starts there, found
+// with the Z algorithm.
+func (f *form) tailRuns(runs []int, rs []byte) {
+	rv, z := f.rv, f.z
 	for p, l, r := 0, 0, 0; p < len(rs); p++ {
 		n := 0
 		if p < r {
-			n = min(z[p-l], r-p)
+			n = min(int(z[p-l]), r-p)
 		}
 		for p+n < len(rs) && n < len(rv) && rs[p+n] == rv[n] {
 			n++

@@ -36,6 +36,8 @@ type HostMetadata struct {
 	Hostnames  []Hostname  `json:"hostnames"`
 	Ports      []Port      `json:"ports"`
 	ExtraPorts []ExtraPort `json:"extra_ports"`
+	MACAddress string      `json:"mac_address,omitempty"`
+	MACVendor  string      `json:"mac_vendor,omitempty"`
 }
 
 // Status represents the status of the network-discovery service

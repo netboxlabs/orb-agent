@@ -91,6 +91,10 @@ type policyManager struct {
 	secrets secretsmgr.Manager
 	starter BackendStarter
 
+	// resolved holds the values each policy's secret references resolved
+	// to, to mask what its backend reports and prints.
+	resolved *resolvedSecrets
+
 	applyMu sync.Map // backend name -> *sync.Mutex
 
 	// restarting is the marker described in the type comment above.
@@ -122,8 +126,10 @@ func New(logger *slog.Logger, secrets secretsmgr.Manager, c config.Config) (Poli
 	if err != nil {
 		return nil, err
 	}
-	policyManager := &policyManager{logger: logger, config: c, repo: repo, secrets: secrets}
+	resolved := newResolvedSecrets()
+	policyManager := &policyManager{logger: logger, config: c, repo: &maskingRepo{PolicyRepo: repo, secrets: resolved}, secrets: secrets, resolved: resolved}
 	policyManager.secrets.RegisterUpdatePoliciesCallback(policyManager.policiesChanged)
+	backend.SetOutputMask(resolved.maskOutput)
 	return policyManager, nil
 }
 
@@ -598,6 +604,10 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		return fmt.Errorf("%w: %s", ErrBackendNotRunning, pd.Backend)
 	}
 
+	// From here on, what the backend reports or prints about the policy can
+	// quote its secrets, resolved in pd.Data; they are kept to mask it.
+	resolved := resolvedValues(payload.Data, pd.Data)
+	a.resolved.remember(pd.ID, pd.Backend, resolved)
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		// The backend's error can quote the policy's data, which carries its
@@ -605,7 +615,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 		// type error. The secrets are masked before the error is logged and
 		// before it becomes the reason the heartbeat reports to Fleet.
 		status, text := refusalStatus(err)
-		logged, reason := backendRefusal(status, text, resolvedValues(payload.Data, pd.Data))
+		logged, reason := backendRefusal(status, text, resolved)
 		a.logger.Warn("policy failed to apply", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend, "error", logged)
 		pd.State = policies.FailedToApply
@@ -1010,13 +1020,37 @@ const quotedFieldsNamed = 3
 // status, kept in front of what is masked, is the status code an HTTP error
 // starts with (see refusalStatus).
 func backendRefusal(status, text string, resolved []resolvedValue) (logged, reason string) {
+	return newRefusalMasks(resolved).refusal(status, text)
+}
+
+// refusalMasks masks a policy's resolved values in a backend's text as
+// backendRefusal does, with what it masks with built once: the runs a
+// backend reports are masked on every poll with the same values. A
+// refusalMasks is not changed once built, but for the maskers of single
+// values, built on first use, so texts can be masked with it concurrently.
+type refusalMasks struct {
+	resolved []resolvedValue
+	values   []string
+	all      *redact.Masker
+	// each masks values[i] alone, to tell which a text quotes.
+	eachOnce sync.Once
+	each     []*redact.Masker
+}
+
+func newRefusalMasks(resolved []resolvedValue) *refusalMasks {
 	var values []string
 	for _, r := range resolved {
 		if !slices.Contains(values, r.value) {
 			values = append(values, r.value)
 		}
 	}
-	window, cut := cutAt(text, maxMaskedErrLen+redact.LongestForm(values))
+	return &refusalMasks{resolved: resolved, values: values, all: redact.NewMasker(values)}
+}
+
+// refusal returns text masked, with status in front of it, as backendRefusal
+// does.
+func (m *refusalMasks) refusal(status, text string) (logged, reason string) {
+	window, cut := cutAt(text, maxMaskedErrLen+m.all.LongestForm())
 	if cut {
 		window, cut = finishLine(text, len(window))
 	}
@@ -1024,10 +1058,10 @@ func backendRefusal(status, text string, resolved []resolvedValue) (logged, reas
 	// masked from its first byte too, in case masking before it made the
 	// text short enough to keep it.
 	after := text[len(window):]
-	masked := redact.CutValues(window, after, values)
+	masked := m.all.MaskCut(window, after)
 	var note string
 	if masked != window {
-		note = quotedFieldsNote(window, after, values, resolved)
+		note = m.quotedFieldsNote(window, after)
 	}
 	return status + kept(masked, maxMaskedErrLen-len(status), cut) + note,
 		status + kept(masked, maxBackendErrLen-len(status), cut) + note
@@ -1055,30 +1089,44 @@ func refusalStatus(err error) (status, text string) {
 // sent it, which the user never sees. It says what the error quotes, so it
 // holds even when a bound cuts the masked value from what is kept. A value
 // that one secret reference fills names every field that reference is in. A
-// value that different references hold names none of them: only the value
-// tells what the error quotes, and naming them would claim it quotes each,
-// and show that their secrets are equal.
-func quotedFieldsNote(text, after string, values []string, resolved []resolvedValue) string {
+// value that different references hold in different fields names none of
+// them: only the value tells what the error quotes, and naming them would
+// claim it quotes each, and show that their secrets are equal. A field is
+// named once, though the values masked can hold it twice: a policy's
+// previous values and its current ones.
+func (m *refusalMasks) quotedFieldsNote(text, after string) string {
+	m.eachOnce.Do(func() {
+		for _, v := range m.values {
+			m.each = append(m.each, redact.NewMasker([]string{v}))
+		}
+	})
 	var fields []string
 	unnamed := 0
-	for _, v := range values {
-		if redact.CutValues(text, after, []string{v}) == text {
+	for i, v := range m.values {
+		if m.each[i].MaskCut(text, after) == text {
 			continue
 		}
 		var holders, refs []string
-		for _, r := range resolved {
-			if r.value == v {
+		for _, r := range m.resolved {
+			if r.value != v {
+				continue
+			}
+			if !slices.Contains(holders, r.path) {
 				holders = append(holders, r.path)
-				if !slices.Contains(refs, r.ref) {
-					refs = append(refs, r.ref)
-				}
+			}
+			if !slices.Contains(refs, r.ref) {
+				refs = append(refs, r.ref)
 			}
 		}
 		if len(holders) > 1 && (len(refs) > 1 || refs[0] == "") {
 			unnamed++
 			continue
 		}
-		fields = append(fields, holders...)
+		for _, h := range holders {
+			if !slices.Contains(fields, h) {
+				fields = append(fields, h)
+			}
+		}
 	}
 	var others string
 	switch {

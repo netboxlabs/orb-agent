@@ -125,3 +125,39 @@ func TestIPAddressEntityWarnsAboutThePolicysCommentsWithScanMetadataOff(t *testi
 	r.ipAddressEntity(scannedHost("abc*unit.example.net"), "192.0.2.17/24", "192.0.2.17", "p")
 	assert.Contains(t, logs.String(), "the policy's comments leave no room for the original")
 }
+
+// A MAC address reported by nmap is recorded in the comments with its
+// vendor, and a host without one leaves both fields empty.
+func TestIPAddressEntityRecordsMACAddressInTheComments(t *testing.T) {
+	r := &Runner{logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+
+	host := scannedHost("clean.example.net")
+	host.Addresses = []nmap.Address{
+		{Addr: "192.0.2.20", AddrType: "ipv4"},
+		{Addr: "00:1A:2B:3C:4D:5E", AddrType: "mac", Vendor: "Acme Networks"},
+	}
+
+	ip, _ := r.ipAddressEntity(host, "192.0.2.20/24", "192.0.2.20", "p")
+	metadata := commentsOf(t, ip.Comments)
+	assert.Equal(t, "00:1A:2B:3C:4D:5E", metadata.MACAddress)
+	assert.Equal(t, "Acme Networks", metadata.MACVendor)
+
+	ip, _ = r.ipAddressEntity(scannedHost("clean.example.net"), "192.0.2.21/24", "192.0.2.21", "p")
+	metadata = commentsOf(t, ip.Comments)
+	assert.Empty(t, metadata.MACAddress)
+	assert.Empty(t, metadata.MACVendor)
+	assert.NotContains(t, *ip.Comments, "mac_address")
+	assert.NotContains(t, *ip.Comments, "mac_vendor")
+
+	host = scannedHost("clean.example.net")
+	host.Addresses = []nmap.Address{
+		{Addr: "192.0.2.22", AddrType: "ipv4"},
+		{Addr: "02:00:00:00:00:01", AddrType: "mac"},
+	}
+
+	ip, _ = r.ipAddressEntity(host, "192.0.2.22/24", "192.0.2.22", "p")
+	metadata = commentsOf(t, ip.Comments)
+	assert.Equal(t, "02:00:00:00:00:01", metadata.MACAddress)
+	assert.Empty(t, metadata.MACVendor)
+	assert.NotContains(t, *ip.Comments, "mac_vendor")
+}

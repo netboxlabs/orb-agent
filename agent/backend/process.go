@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 )
@@ -41,6 +42,27 @@ func sleepUnlessDone(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// outputMask is what SetOutputMask set, or nil.
+var outputMask atomic.Pointer[func(backendName, line string) string]
+
+// SetOutputMask sets what each line a backend's process prints passes
+// through before the agent relays it into its own log: mask is given the
+// backend's registered name and the line. A backend can print what it was
+// given in a policy, secrets included, and only the policy manager knows
+// what a backend's policies resolved; until it sets the mask, lines are
+// relayed as printed.
+func SetOutputMask(mask func(backendName, line string) string) {
+	outputMask.Store(&mask)
+}
+
+// maskOutput returns line as the mask SetOutputMask set leaves it.
+func maskOutput(backendName, line string) string {
+	if mask := outputMask.Load(); mask != nil {
+		return (*mask)(backendName, line)
+	}
+	return line
+}
+
 // readinessBudgetKey marks a start context that carries a readiness budget.
 type readinessBudgetKey struct{}
 
@@ -63,7 +85,7 @@ func ReadinessBudgetFrom(ctx context.Context) time.Duration {
 type StartSpec struct {
 	Logger         *slog.Logger
 	NameDisplay    string // hyphen/space form for error strings + lifecycle logs (e.g. "network-discovery")
-	NameUnderscore string // underscore form passed only to StopProcess (e.g. "network_discovery")
+	NameUnderscore string // underscore form, the backend's registered name, passed to StopProcess and to the output mask (e.g. "network_discovery")
 	Exec           string
 	Args           []string
 	// ListenAddr is the host:port the backend serves its API on, the address
@@ -323,13 +345,13 @@ func StartProcess(spec StartSpec) error {
 					stdout = nil
 					continue
 				}
-				spec.LogLine(validUTF8(line), false)
+				spec.LogLine(maskOutput(spec.NameUnderscore, validUTF8(line)), false)
 			case line, open := <-stderr:
 				if !open {
 					stderr = nil
 					continue
 				}
-				spec.LogLine(validUTF8(line), true)
+				spec.LogLine(maskOutput(spec.NameUnderscore, validUTF8(line)), true)
 			}
 		}
 	}()
