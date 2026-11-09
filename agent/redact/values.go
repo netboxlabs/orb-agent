@@ -3,6 +3,8 @@ package redact
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,26 +22,34 @@ import (
 const longRun = 7
 
 // Values returns s with values masked: every occurrence of one of them, or of
-// one escaped as Go, JSON or Python's repr quote it, is replaced by
-// MaskedSecret, and so is every head or tail of one longRun bytes or longer.
-// A value shorter than longRun is masked only where it is a word of its own,
-// so a short value such as "0" leaves the digits of the error's numbers
-// alone. A value of several lines, a private key say, is also masked line by
-// line, as a backend that prints it line by line quotes it: each of its lines
-// of longRun bytes or more, trimmed of the spaces around it, wherever it
-// occurs whole. A backend's error can quote a policy's data, whose secret
-// references are resolved by then, whole, truncated or escaped; the agent
-// passes such text through Values before it logs or reports it. Empty values
-// are ignored.
+// one escaped as Go, JSON or Python quote it, is replaced by MaskedSecret, and
+// so is every head or tail of one longRun bytes or longer. A value shorter
+// than longRun is masked only where it is a word of its own, so a short value
+// such as "0" leaves the digits of the error's numbers alone, and not in the
+// error's own wording (see errorWording): a short value that is one of its
+// words, such as "int", is masked only where the error quotes it, so the
+// error stays readable and does not show which word the value is. A quoted
+// value is always a word of its own: no quote is a word byte. A value of
+// several lines, a private key say, is also masked line by line, as a
+// backend that prints it line by line quotes it: each of its lines of
+// longRun bytes or more, trimmed of the spaces around it, wherever it occurs
+// whole. A backend's error can quote a policy's data, whose secret references
+// are resolved by then, whole, truncated or escaped; the agent passes such
+// text through Values before it logs or reports it. Empty values are ignored.
 func Values(s string, values []string) string {
 	return NewMasker(values).Mask(s)
 }
 
-// CutValues is Values for s cut from a longer text: a value, or a line of
-// one, the cut runs through is masked too, however few of its first bytes s
-// ends with.
-func CutValues(s string, values []string) string {
-	return NewMasker(values).MaskCut(s)
+// CutValues is Values for s cut from a longer text that goes on with after: a
+// value, or a line of one, the cut runs through is masked too, however few of
+// its first bytes s ends with. A value runs through the cut when after goes
+// on with it to a head of longRun bytes, or to the whole of a shorter value
+// that is a word of its own; a line when after goes on with the rest of it.
+// First bytes of a value that after does not go on with are the text's own,
+// as the type that ends a YAML error's line. With after empty, it masks as
+// Values does.
+func CutValues(s, after string, values []string) string {
+	return NewMasker(values).MaskCut(s, after)
 }
 
 // LongestForm returns the length of the longest form of values that Values
@@ -147,16 +157,17 @@ func (m *Masker) LongestForm() int {
 
 // Mask returns s with the Masker's values masked, as Values does.
 func (m *Masker) Mask(s string) string {
-	return m.mask(s, false)
+	return m.mask(s, false, "")
 }
 
-// MaskCut returns s with the Masker's values masked, as CutValues does.
-func (m *Masker) MaskCut(s string) string {
-	return m.mask(s, true)
+// MaskCut returns s, cut from a longer text that goes on with after, with the
+// Masker's values masked, as CutValues does.
+func (m *Masker) MaskCut(s, after string) string {
+	return m.mask(s, true, after)
 }
 
-func (m *Masker) mask(s string, cut bool) string {
-	start := m.runStarts(s, cut)
+func (m *Masker) mask(s string, cut bool, after string) string {
+	start := m.runStarts(s, cut, after)
 	if start == nil {
 		return s
 	}
@@ -199,11 +210,12 @@ func (m *Masker) mask(s string, cut bool) string {
 
 // runStarts returns, for each byte of s, where the earliest run of s that
 // mask masks and that ends at that byte begins, or len(s) when none ends
-// there: the whole of a form, as long as longRun or a word of its own; a
-// head or tail of one as long as longRun; the whole of a line; and, in a cut
-// text, a head of a form or a line of any length at its end. It returns nil
-// when no run is masked.
-func (m *Masker) runStarts(s string, cut bool) []int {
+// there: the whole of a form, as long as longRun or a word of its own outside
+// the error's wording; a head or tail of one as long as longRun; the whole of
+// a line; and, in a text cut before after, a head at its end of a form or a
+// line that runs through the cut (see cutHead and cutLineHead). It returns
+// nil when no run is masked.
+func (m *Masker) runStarts(s string, cut bool, after string) []int {
 	if len(m.forms) == 0 && len(m.lines) == 0 || s == "" {
 		return nil
 	}
@@ -212,6 +224,14 @@ func (m *Masker) runStarts(s string, cut bool) []int {
 		start[i] = len(s)
 	}
 	found := false
+	// In a cut text, the error's wording, and whether a value at the cut is
+	// a word of its own, are told from the text past the cut too, as far as
+	// is within reach (see pastCut).
+	text := s
+	if cut {
+		text = s + pastCut(after)
+	}
+	textWording := errorWording(text)
 	heads := make([]int, len(s))
 	if len(m.forms) > 0 {
 		// Each scan takes time in proportion to s, so a long value in a long
@@ -227,14 +247,20 @@ func (m *Masker) runStarts(s string, cut bool) []int {
 				// tail ending at s[i] is the one to mask when any is: one that
 				// is shorter is shorter than longRun too.
 				longest := 0
-				if n := tails[i]; n >= longRun || n == len(f.v) && standsAlone(s, i-n+1, i, f.v) {
+				if n := tails[i]; n >= longRun || n == len(f.v) && shortMasked(text, i-n+1, i, f.v, textWording) {
 					longest = n
 				}
-				if n := heads[i]; n >= longRun || n > 0 && cut && i == len(s)-1 {
+				if n := heads[i]; n >= longRun {
 					longest = max(longest, n)
 				}
 				if longest > 0 {
 					start[i] = min(start[i], i-longest+1)
+					found = true
+				}
+			}
+			if cut {
+				if n := cutHead(s, after, f.v, text, textWording); n > 0 {
+					start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 					found = true
 				}
 			}
@@ -255,7 +281,7 @@ func (m *Masker) runStarts(s string, cut bool) []int {
 		}
 		if cut {
 			f.headRuns(heads, s)
-			if n := heads[len(s)-1]; n > 0 {
+			if n := f.cutLineHead(heads[len(s)-1], after); n > 0 {
 				start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 				found = true
 			}
@@ -267,6 +293,48 @@ func (m *Masker) runStarts(s string, cut bool) []int {
 	return start
 }
 
+// shortMasked reports whether s[from:to+1], an occurrence of v shorter than
+// longRun, is masked: where it is a word of its own that no byte of the
+// error's wording (wording, from errorWording) is part of.
+func shortMasked(s string, from, to int, v string, wording []bool) bool {
+	return standsAlone(s, from, to, v) && !slices.Contains(wording[from:to+1], true)
+}
+
+// errorWordingPatterns match the wording of the errors a refusal can carry
+// that the agent can tell apart from a policy's values: yaml.v3's decode
+// errors. A type error is a line of its own, indented, that ends with a Go
+// type (submatch 1 is its wording), and its only value is the one it quotes
+// in backticks (submatch 2): the same words inside another message, or text
+// after the type on its line, as in a JSON body kept whole, are not the
+// decoder's, so the pattern does not match there and every short value in
+// them stays masked. yaml.v3 quotes at most 10 bytes of the value, as they
+// are, so a new line in them runs the type error on to the next line, and
+// two type errors are never one.
+var errorWordingPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`yaml: unmarshal errors:`),
+	regexp.MustCompile(`yaml: line \d+: `),
+	regexp.MustCompile("(?m)^[ \\t]*(line \\d+: cannot unmarshal !!\\S+ (?:`((?s:.{0,10}))` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+)$"),
+}
+
+// errorWording returns, for each byte of s, whether it is part of the
+// error's own wording, where a short value that is a word of its own is not
+// masked: those words are the error's, not the policy's.
+func errorWording(s string) []bool {
+	wording := make([]bool, len(s))
+	for _, re := range errorWordingPatterns {
+		for _, m := range re.FindAllStringSubmatchIndex(s, -1) {
+			from, to, slotFrom, slotTo := m[0], m[1], -1, -1
+			if len(m) == 6 {
+				from, to, slotFrom, slotTo = m[2], m[3], m[4], m[5]
+			}
+			for i := from; i < to; i++ {
+				wording[i] = i < slotFrom || i >= slotTo
+			}
+		}
+	}
+	return wording
+}
+
 // standsAlone reports whether s[from:to+1], an occurrence of v, is a word of
 // its own: on each side, either v's own edge is no word byte or the byte
 // beside it in s is not one.
@@ -274,6 +342,57 @@ func standsAlone(s string, from, to int, v string) bool {
 	startsWord := !isWordByte(v[0]) || from == 0 || !isWordByte(s[from-1])
 	endsWord := !isWordByte(v[len(v)-1]) || to == len(s)-1 || !isWordByte(s[to+1])
 	return startsWord && endsWord
+}
+
+// maxCutReach bounds how much of the text past a cut is read to tell the
+// error's wording the cut runs through.
+const maxCutReach = 256
+
+// pastCut returns as much of after, the text past a cut, as is read to tell
+// the error's wording the cut runs through: maxCutReach bytes, and when after
+// goes on past them, a byte no word or type holds, so a YAML type error cut
+// there is not taken whole.
+func pastCut(after string) string {
+	if len(after) > maxCutReach {
+		return after[:maxCutReach] + "\x00"
+	}
+	return after
+}
+
+// cutHead returns the length of the longest head of v shorter than longRun
+// that s ends with and that runs through the cut before after: after goes on
+// with it to a head of v longRun bytes long, or to the whole of a shorter v
+// that is a word of its own there, outside the error's wording. text is s and
+// what pastCut reads of after, and wording is the error's wording in it. It
+// returns 0 for none. A longer head is masked wherever it ends.
+func cutHead(s, after, v, text string, wording []bool) int {
+	need := min(len(v), longRun)
+	for n := min(need-1, len(s)); n > 0; n-- {
+		if !strings.HasSuffix(s, v[:n]) || !strings.HasPrefix(after, v[n:need]) {
+			continue
+		}
+		if at := len(s) - n; len(v) < longRun && !shortMasked(text, at, at+len(v)-1, v, wording) {
+			continue
+		}
+		return n
+	}
+	return 0
+}
+
+// cutLineHead returns the length of the longest head of f's text, a line of
+// a value, that a cut text ends with and that after goes on with to the
+// whole line, a line being masked only whole; 0 for none. n is the longest
+// head of it the cut text ends with; the shorter ones are its borders.
+func (f *form) cutLineHead(n int, after string) int {
+	if n == len(f.v) {
+		n = int(f.back[n-1])
+	}
+	for ; n > 0; n = int(f.back[n-1]) {
+		if strings.HasPrefix(after, f.v[n:]) {
+			return n
+		}
+	}
+	return 0
 }
 
 // headRuns sets runs[i] to the length of the longest head of f's text that
@@ -346,8 +465,8 @@ func splitHeads(v string) []string {
 // quotes a string (%q and strconv's errors; only ASCII, as %+q does, and as
 // Python's json.dumps does for characters below U+10000), escaped as JSON,
 // with the HTML escaping Go's encoder applies by default and without, as in a
-// JSON body kept whole, and escaped as Python's repr quotes a str, as a
-// Python backend's exceptions and logged dicts do.
+// JSON body kept whole, and escaped as Python's repr does (pydantic's
+// input_value).
 func quotedForms(v string) []string {
 	if v == "" {
 		return nil
@@ -369,57 +488,58 @@ func quotedForms(v string) []string {
 	if enc.Encode(v) == nil {
 		add(strings.TrimSuffix(b.String(), "\n"))
 	}
-	if inner := pythonRepr(v); !slices.Contains(forms, inner) {
-		forms = append(forms, inner)
+	for _, escapeSingle := range []bool{true, false} {
+		for _, keepUnassigned := range []bool{false, true} {
+			if repr := pythonRepr(v, escapeSingle, keepUnassigned); !slices.Contains(forms, repr) {
+				forms = append(forms, repr)
+			}
+		}
 	}
 	return forms
 }
 
-// pythonRepr returns v as Python's repr quotes a str, without its quotes: in
-// single quotes, with those, backslashes, tabs, line breaks and the other
-// ASCII control characters escaped; or, for a value with a single quote and
-// no double one, in double quotes, its single quotes left as they are. A
-// character past ASCII is kept as it is when it is printable and escaped by
-// its code point otherwise, as repr does; Go's and Python's Unicode tables
-// can differ on a character Unicode added recently.
-func pythonRepr(v string) string {
-	quote := '\''
-	if strings.ContainsRune(v, '\'') && !strings.ContainsRune(v, '"') {
-		quote = '"'
-	}
+// assigned are the categories of every character Go's Unicode tables assign:
+// unicode.C also holds the code points they don't, so its parts are named.
+var assigned = []*unicode.RangeTable{unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs}
+
+// pythonRepr returns v escaped as Python's repr escapes it. repr escapes a
+// single quote when it quotes the string in single quotes: always when the
+// string also holds a double quote, which a text holding v can, and never when
+// it holds only single quotes, which it then quotes in double quotes. So the
+// caller asks for both, escapeSingle saying which. It escapes a backslash, \n,
+// \r and \t by name, and a character it does not print by its code: \xNN,
+// \uNNNN or \UNNNNNNNN. Python prints what Go's unicode.IsPrint does, the
+// space alone among spaces, for the characters both their Unicode versions
+// assign. A newer Python prints characters Go's tables don't assign yet, which
+// keepUnassigned keeps as they are. A byte that is no UTF-8, which no Python
+// string holds, is kept.
+func pythonRepr(v string, escapeSingle, keepUnassigned bool) string {
 	var b strings.Builder
-	for _, r := range v {
+	for i, r := range v {
 		switch {
-		case r == quote || r == '\\':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case r == '\t':
-			b.WriteString(`\t`)
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\'' && escapeSingle:
+			b.WriteString(`\'`)
 		case r == '\n':
 			b.WriteString(`\n`)
 		case r == '\r':
 			b.WriteString(`\r`)
-		case r < ' ' || r == 0x7f || r > 0x7f && !unicode.IsPrint(r):
-			b.WriteString(pythonEscape(r))
-		default:
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == utf8.RuneError && !strings.HasPrefix(v[i:], string(utf8.RuneError)):
+			b.WriteByte(v[i])
+		case unicode.IsPrint(r), keepUnassigned && !unicode.In(r, assigned...):
 			b.WriteRune(r)
+		case r < 0x100:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		case r < 0x10000:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		default:
+			fmt.Fprintf(&b, `\U%08x`, r)
 		}
 	}
 	return b.String()
-}
-
-// pythonEscape returns r escaped by its code point, as Python's repr escapes
-// a character it does not print: \xNN up to U+00FF, \uNNNN up to U+FFFF and
-// \UNNNNNNNN past it.
-func pythonEscape(r rune) string {
-	switch {
-	case r <= 0xff:
-		return `\x` + strconv.FormatInt(int64(r)|0x100, 16)[1:]
-	case r <= 0xffff:
-		return `\u` + strconv.FormatInt(int64(r)|0x10000, 16)[1:]
-	default:
-		return `\U` + strconv.FormatInt(int64(r)|0x100000000, 16)[1:]
-	}
 }
 
 // isWordByte reports whether c is part of a word: an ASCII letter or digit,

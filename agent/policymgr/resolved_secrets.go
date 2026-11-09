@@ -278,7 +278,7 @@ func (m *refusalMasks) maskRuns(runs []policies.RunData) {
 	isValue := func(v string) bool { return v != "" && slices.Contains(m.values, v) }
 	for i := range runs {
 		if runs[i].Reason != "" {
-			_, runs[i].Reason = m.refusal(runs[i].Reason)
+			_, runs[i].Reason = m.refusal("", runs[i].Reason)
 		}
 		if slices.ContainsFunc(runs[i].Targets, isValue) {
 			targets := slices.Clone(runs[i].Targets)

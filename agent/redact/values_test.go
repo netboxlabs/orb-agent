@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -200,6 +201,202 @@ func TestValues(t *testing.T) {
 			want:   "400 yaml: unmarshal errors:\n  line 10: cannot unmarshal !!str `********` into bool; public_key unset",
 		},
 		{
+			name:   "a short value that is a word of the YAML error is masked only where it is quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `int` into int",
+			values: []string{"int"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a short value that is the YAML error's line word",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `line` into int",
+			values: []string{"line"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			// The secret sits in a field the error does not quote: masking
+			// the error's words would claim the error quotes it, and show
+			// which word it is.
+			name:   "the words of a YAML error about another field are left",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{"int", "line", "str", "into", "yaml", "4", "errors", "cannot"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a YAML type error for a value that is no scalar is left",
+			text:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+			values: []string{"map", "string", "7"},
+			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+		},
+		{
+			name:   "a YAML syntax error's prefix is left",
+			text:   "400 yaml: line 3: did not find expected key",
+			values: []string{"yaml", "line", "3"},
+			want:   "400 yaml: line 3: did not find expected key",
+		},
+		{
+			// The wording ends with the type: what follows on the line is
+			// not the decoder's.
+			name:   "a short value after a YAML type error on its line is masked",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int; community abc rejected",
+			values: []string{"abc"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int; community ******** rejected",
+		},
+		{
+			name:   "a short value quoted after a YAML type error on its line is masked",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!seq into string; got `abc` into x",
+			values: []string{"abc"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!seq into string; got `********` into x",
+		},
+		{
+			name:   "a short value in a JSON body that carries a YAML error is masked",
+			text:   `400 {"error":"yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str ` + "`three`" + ` into int","input":"abc"}`,
+			values: []string{"abc"},
+			want:   `400 {"error":"yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str ` + "`three`" + ` into int","input":"********"}`,
+		},
+		{
+			name:   "a short value after a carriage return is masked",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int\r abc",
+			values: []string{"abc"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int\r ********",
+		},
+		{
+			name:   "a YAML type error into a map type is left",
+			text:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!seq into map[string]interface {}",
+			values: []string{"map", "string"},
+			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!seq into map[string]interface {}",
+		},
+		{
+			name:   "a short value after text like a YAML type error inside another message is masked",
+			text:   "400 p1: Invalid: line 1: cannot unmarshal !!str into abc",
+			values: []string{"abc"},
+			want:   "400 p1: Invalid: line 1: cannot unmarshal !!str into ********",
+		},
+		{
+			// Only its first byte is outside the wording: it is not a word
+			// of the error's own, but neither is it the value quoted.
+			name:   "a short value that runs into the YAML error's wording is left",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{" line"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a short value holding the type error's own words, quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `` into` into int",
+			values: []string{"` into"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a status code is no wording of its own here",
+			text:   "400 target sw1: port 400 is not allowed",
+			values: []string{"400"},
+			want:   "******** target sw1: port ******** is not allowed",
+		},
+		{
+			name:   "a short value a backend echoes unquoted is still masked",
+			text:   "400 core: invalid policy: policy-level: invalid security level abc",
+			values: []string{"abc"},
+			want:   "400 core: invalid policy: policy-level: invalid security level ********",
+		},
+		{
+			// yaml.v3 quotes a value of up to 10 bytes whole, new lines and all.
+			name:   "a short value that is a word of a YAML type error quoting a value with a new line",
+			text:   "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `a\nb` into int",
+			values: []string{"a\nb", "int"},
+			want:   "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a short value in single quotes",
+			text:   "Input should be a valid integer [type=int_parsing, input_value='lab', input_type=str]",
+			values: []string{"lab"},
+			want:   "Input should be a valid integer [type=int_parsing, input_value='********', input_type=str]",
+		},
+		{
+			name:   "a value Python quotes with both kinds of quote in it",
+			text:   `Input should be a valid integer [type=int_parsing, input_value='a\'b"c', input_type=str]`,
+			values: []string{`a'b"c`},
+			want:   `Input should be a valid integer [type=int_parsing, input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a value Python quotes with control characters escaped",
+			text:   `[input_value='a\'b"\x01\x7f', input_type=str]`,
+			values: []string{"a'b\"\x01\x7f"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a value Python quotes with characters it does not print escaped",
+			text:   `[input_value='p\'w"\xa0\u200b\n', input_type=str]`,
+			values: []string{"p'w\"\u00a0\u200b\n"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a value Python quotes with a backslash and a tab",
+			text:   `[input_value='a\'b"\\\t', input_type=str]`,
+			values: []string{"a'b\"\\\t"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a character it does not print past U+00FF",
+			text:   `[input_value='a\'"\u200b', input_type=str]`,
+			values: []string{"a'\"\u200b"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a newline",
+			text:   `[input_value='a\'"\n', input_type=str]`,
+			values: []string{"a'\"\n"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a tab",
+			text:   `[input_value='a\'"\t', input_type=str]`,
+			values: []string{"a'\"\t"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes with a backslash",
+			text:   `[input_value='a\'"\\', input_type=str]`,
+			values: []string{"a'\"\\"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a long value Python quotes with both kinds of quote in it",
+			text:   `[input_value='it\'s "x" k3Y', input_type=str]`,
+			values: []string{`it's "x" k3Y`},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes in double quotes, with a single quote and a control character in it",
+			text:   `[input_value="a'\x07", input_type=str]`,
+			values: []string{"a'\x07"},
+			want:   `[input_value="********", input_type=str]`,
+		},
+		{
+			name:   "a short value Python quotes in double quotes, with a single quote and a character it does not print in it",
+			text:   `[input_value="it's\xa0", input_type=str]`,
+			values: []string{"it's "},
+			want:   `[input_value="********", input_type=str]`,
+		},
+		{
+			name:   "a short value with a single quote in a text Python quotes in single quotes",
+			text:   `[input_value='pw="it\'s"', input_type=str]`,
+			values: []string{"it's"},
+			want:   `[input_value='pw="********"', input_type=str]`,
+		},
+		{
+			// U+1C89 is in Unicode 16, which Python 3.14 prints and Go 1.26's
+			// Unicode 15 tables don't assign.
+			name:   "a short value Python quotes with a character newer than Go's Unicode tables",
+			text:   `[input_value='\x07` + "Ᲊ" + `', input_type=str]`,
+			values: []string{"\x07Ᲊ"},
+			want:   `[input_value='********', input_type=str]`,
+		},
+		{
+			name:   "a long value Python quotes in double quotes, with a single quote and a control character in it",
+			text:   `[input_value="it's\x07 k3Y!x", input_type=str]`,
+			values: []string{"it's\x07 k3Y!x"},
+			want:   `[input_value="********", input_type=str]`,
+		},
+		{
 			name:   "a short value at the start of the text",
 			text:   "ab9 refused",
 			values: []string{"ab9"},
@@ -360,22 +557,46 @@ func TestValuesMaskEachLineOfAValueOfSeveralLines(t *testing.T) {
 
 // TestCutValues masks a value the end of a cut text runs through, from its
 // first byte, which Values leaves: in a text that is not cut, a value's first
-// bytes at its end are the text's own.
+// bytes at its end are the text's own. The text past the cut tells whether a
+// value runs through it.
 func TestCutValues(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		text string
-		want string
+		name   string
+		text   string
+		after  string
+		values []string
+		want   string
 	}{
-		{"a cut after the value's first byte", "refused: xk", "refused: x********"},
-		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "refused: ********"},
-		{"a value whole before the cut", "refused: k3Y-9xQz, then", "refused: ********, then"},
-		{"no value at the cut", "refused: xx", "refused: xx"},
-		{"a short head before the cut", "refused: k3 then xx", "refused: k3 then xx"},
+		{"a cut after the value's first byte", "refused: xk", "3Y-9xQz", nil, "refused: x********"},
+		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "Qz", nil, "refused: ********"},
+		{"a cut inside a head the error shortens", "input_value='k3Y", "-9xQ...'", nil, "input_value='********"},
+		{"a value whole before the cut", "refused: k3Y-9xQz, then", "", nil, "refused: ********, then"},
+		{"no value at the cut", "refused: xx", "x", nil, "refused: xx"},
+		{"a short head before the cut", "refused: k3 then xx", "x", nil, "refused: k3 then xx"},
+		{"the value's first byte, the text going on otherwise", "into int", "\n  line 5", nil, "into int"},
+		{"the value's first bytes, the text ending before a head of longRun", "refused: xk3", "Y", nil, "refused: xk3"},
+		{"a short value the cut runs through", "refused: t", "0k\n", []string{"t0k"}, "refused: ********"},
+		{"a short value the cut runs through inside a word", "into int", "0k\n", []string{"t0k"}, "into int"},
+		{"a short value the cut runs through, followed by a word", "refused: t", "0kx", []string{"t0k"}, "refused: t"},
+		{"a short value the cut runs through in the error's wording", "invalid: yaml: li", "ne 3: did not find expected key", []string{"line"}, "invalid: yaml: li"},
+		{"a short value the cut runs through where a type error quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int\n", []string{"line"}, "  line 4: cannot unmarshal !!str `********"},
+		{"a short value with new lines the cut runs through", "x a\nb", "\nc rest", []string{"a\nb\nc"}, "x ********"},
+		{"a short value whole at the cut that the text goes on with as a word", "refused: t0k", "t0k more", []string{"t0k"}, "refused: t0k"},
+		{"a short value that is a word of a type error quoting a value with a new line, cut after it", "  line 4: cannot unmarshal !!str `a\nb` into int", "\n  line 5: cannot unmarshal !!str `x` into int", []string{"int"}, "  line 4: cannot unmarshal !!str `a\nb` into int"},
+		{"a short value with a new line the cut runs through, no line ending near", "x a\nb", "c rest" + strings.Repeat("y", maxCutReach), []string{"a\nbc"}, "x ********"},
+		// Past maxCutReach, the line may go on as no type error does.
+		{"a short value the cut runs through where a line too long to tell quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int" + strings.Repeat("x", maxCutReach) + " and more", []string{"line"}, "  ******** 4: cannot unmarshal !!str `********"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := CutValues(tc.text, []string{"k3Y-9xQz"}); got != tc.want {
-				t.Errorf("CutValues(%q)\n got %q\nwant %q", tc.text, got, tc.want)
+			values := tc.values
+			if values == nil {
+				values = []string{"k3Y-9xQz"}
+			}
+			if got := CutValues(tc.text, tc.after, values); got != tc.want {
+				t.Errorf("CutValues(%q, %q)\n got %q\nwant %q", tc.text, tc.after, got, tc.want)
+			}
+			if got, want := CutValues(tc.text, "", values), Values(tc.text, values); got != want {
+				t.Errorf("CutValues(%q) with nothing after\n got %q\nwant %q, as Values", tc.text, got, want)
 			}
 		})
 	}
@@ -385,8 +606,12 @@ func TestCutValues(t *testing.T) {
 	// A line of a value of several lines the cut runs through, as a bound on
 	// a refusal that quotes the value whole cuts it.
 	multi := strings.Repeat("A", 20) + "\nZq9xW3rT7yU1iO5pL2kJ\nEND"
-	if got := CutValues("refused: "+strings.Repeat("A", 20)+" Zq9xW3rT7y", []string{multi}); got != "refused: ******** ********" {
+	if got := CutValues("refused: "+strings.Repeat("A", 20)+" Zq9xW3rT7y", "U1iO5pL2kJ END", []string{multi}); got != "refused: ******** ********" {
 		t.Errorf("CutValues leaves the first bytes of a line at the cut: %q", got)
+	}
+	// A line is masked only whole: past the cut, the text goes on otherwise.
+	if got := CutValues("refused: Zq9xW3rT7y", " and more", []string{multi}); got != "refused: Zq9xW3rT7y" {
+		t.Errorf("CutValues masks the first bytes of a line the text does not go on with: %q", got)
 	}
 }
 
@@ -439,7 +664,9 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 // whole values overlap and repeat.
 func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
-	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("aab\n")}
+	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4"), []rune("ab\n "), []rune("aab\n")}
+	// Pieces of the wording errorWording knows, so values meet it.
+	wording := []string{"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: "}
 	word := func(alphabet []rune, n int) string {
 		var b strings.Builder
 		for range n {
@@ -459,6 +686,10 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 				b.WriteString(word(alphabet, r.Intn(8)))
 				continue
 			}
+			if r.Intn(5) == 0 {
+				b.WriteString(wording[r.Intn(len(wording))])
+				continue
+			}
 			v := values[r.Intn(len(values))]
 			from, to := 0, len(v)
 			if r.Intn(2) == 0 {
@@ -471,18 +702,25 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 		}
 		s, m := b.String(), NewMasker(values)
 		forms, lines := formValues(m), lineValues(m)
-		for _, cut := range []bool{false, true} {
-			if got, want := m.runStarts(s, cut), runStartsByDefinition(s, forms, lines, cut); !slices.Equal(got, want) {
-				t.Fatalf("runStarts(%q, %q, %q, %v)\n got %v\nwant %v", s, forms, lines, cut, got, want)
-			}
+		// The text past a cut goes on with a value, or with anything.
+		after := word(alphabet, r.Intn(8))
+		if v := values[r.Intn(len(values))]; r.Intn(2) == 0 {
+			after = v[r.Intn(len(v)+1):] + after
+		}
+		if got, want := m.runStarts(s, false, ""), runStartsByDefinition(s, forms, lines, false, ""); !slices.Equal(got, want) {
+			t.Fatalf("runStarts(%q, %q, %q)\n got %v\nwant %v", s, forms, lines, got, want)
+		}
+		if got, want := m.runStarts(s, true, after), runStartsByDefinition(s, forms, lines, true, after); !slices.Equal(got, want) {
+			t.Fatalf("runStarts(%q, %q, %q) cut before %q\n got %v\nwant %v", s, forms, lines, after, got, want)
 		}
 	}
 }
 
 // runStartsByDefinition is runStarts by trying every run of s that ends at
 // each byte, from the longest. A line of a value of several lines is masked
-// only whole, or as a head at the end of a cut text.
-func runStartsByDefinition(s string, forms, lines []string, cut bool) []int {
+// only whole, or as a head at the end of a text cut before after that after
+// goes on with to the whole line.
+func runStartsByDefinition(s string, forms, lines []string, cut bool, after string) []int {
 	if len(forms) == 0 && len(lines) == 0 || s == "" {
 		return nil
 	}
@@ -491,13 +729,21 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool) []int {
 		start[i] = len(s)
 	}
 	found := false
+	// In a cut text, the error's wording, and whether a value is a word of
+	// its own, are told from the text it was cut from.
+	text := s
+	if cut {
+		text = s + after
+	}
+	wording := errorWording(text)
 	for _, v := range forms {
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				whole := run == v && (len(run) >= longRun || standsAlone(s, from, i, v))
+				whole := run == v && (len(run) >= longRun ||
+					standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
 				tail := len(run) >= longRun && strings.HasSuffix(v, run)
-				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1)
+				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {
 					start[i] = min(start[i], from)
 					found = true
@@ -509,7 +755,7 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool) []int {
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				if run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) {
+				if run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) && strings.HasPrefix(after, v[len(run):]) {
 					start[i] = min(start[i], from)
 					found = true
 				}
@@ -520,6 +766,94 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool) []int {
 		return nil
 	}
 	return start
+}
+
+// runsThrough reports whether the head of v at s[from:] runs through the cut
+// between s and after: in the text they make, v goes on past the cut to a
+// head of longRun bytes, or to the whole of a shorter v that is a word of its
+// own there, outside the error's wording.
+func runsThrough(s, after string, from int, v string) bool {
+	if len(s)-from >= len(v) {
+		return false // v ends before the cut
+	}
+	text := s + after
+	if !strings.HasPrefix(text[from:], v[:min(len(v), longRun)]) {
+		return false
+	}
+	return len(v) >= longRun || shortMasked(text, from, from+len(v)-1, v, errorWording(text))
+}
+
+// TestErrorWording marks the error's own wording, byte by byte, apart from
+// the value a YAML type error quotes.
+func TestErrorWording(t *testing.T) {
+	for _, tc := range []struct {
+		text, wording string // wording: '^' under each byte that is wording
+	}{
+		{
+			text:    "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `int` into int",
+			wording: "    ^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^",
+		},
+		{
+			text:    "yaml: line 3: did not find expected key",
+			wording: "^^^^^^^^^^^^^^                         ",
+		},
+		{
+			text:    "\n  line 7: cannot unmarshal !!map into []string",
+			wording: "   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+		},
+		{
+			// Only a line of its own: inside another message it is not
+			// the decoder's.
+			text:    "Invalid: line 1: cannot unmarshal !!str into abc",
+			wording: "                                                ",
+		},
+		{
+			text:    "line 4: cannot unmarshal !!str `a` into int; more",
+			wording: "                                                 ",
+		},
+		{
+			// yaml.v3 quotes a value of up to 10 bytes whole, new lines and
+			// all.
+			text:    "  line 4: cannot unmarshal !!str `a\nb` into int",
+			wording: "  " + strings.Repeat("^", 32) + "   " + strings.Repeat("^", 10),
+		},
+		{
+			// A longer value it cuts to its first 7 bytes and "...".
+			text:    "  line 4: cannot unmarshal !!str `a\nbcdef...` into int",
+			wording: "  " + strings.Repeat("^", 32) + strings.Repeat(" ", 10) + strings.Repeat("^", 10),
+		},
+		{
+			text:    "  line 4: cannot unmarshal !!str `012345678\na` into int",
+			wording: strings.Repeat(" ", len("  line 4: cannot unmarshal !!str `012345678\na` into int")),
+		},
+		{
+			text:    "  line 4: cannot unmarshal !!str `a` into int\n  line 5: cannot unmarshal !!str `b` into int",
+			wording: "  " + strings.Repeat("^", 32) + " " + strings.Repeat("^", 10) + "   " + strings.Repeat("^", 32) + " " + strings.Repeat("^", 10),
+		},
+	} {
+		var got strings.Builder
+		for _, w := range errorWording(tc.text) {
+			if w {
+				got.WriteByte('^')
+			} else {
+				got.WriteByte(' ')
+			}
+		}
+		if got.String() != tc.wording {
+			t.Errorf("errorWording(%q)\n got %q\nwant %q", tc.text, got.String(), tc.wording)
+		}
+	}
+}
+
+// The Python forms were checked character by character against the agent
+// image's Python 3.14 (Unicode 16) with Go's Unicode 15 tables. A form keeps a
+// character Go's tables don't assign as it is, as Python prints it. Nothing
+// covers the other way: a Go that knows a newer Unicode than Python prints a
+// character Python escapes. Check the forms again before changing this.
+func TestPythonFormsAssumeGoUnicode15(t *testing.T) {
+	if unicode.Version != "15.0.0" {
+		t.Errorf("Go's Unicode tables are %s: check pythonRepr against the agent image's Python", unicode.Version)
+	}
 }
 
 // formValues returns the texts of m's forms.
