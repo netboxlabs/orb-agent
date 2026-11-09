@@ -20,7 +20,7 @@ import (
 // a proxy that asks for basic auth in front of Vault. Every request still
 // carries them, but no log line or error quotes the password: the Vault
 // client quotes the address it was given in the text of every error it
-// returns (MON-880).
+// returns.
 func TestVaultManager_AddressPasswordIsSentButNeverQuoted(t *testing.T) {
 	var sawBasicAuth bool
 	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -377,10 +377,10 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 // credential the agent's config can hold for its secrets managers and config
 // sources a value of its own. The config is reported to Fleet in the agent's
 // capabilities, which Fleet stores and shows to anyone in the org who can read
-// the agent, and logged at DEBUG, so none of the values may be in it
-// (MON-880). Every value of a Vault login's auth_args is masked but those of
-// the fields that name no credential, whatever the login method: a method the
-// agent has no names for is masked whole.
+// the agent, and logged at DEBUG, so none of the values may be in it. Every
+// value of a Vault login's auth_args is masked but those of the fields that
+// name no credential, whatever the login method: a method the agent has no
+// names for is masked whole.
 func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	fleetManager := newFleetConfigManager(logger, &mockPolicyManagerForFleet{}, &mockBackendState{}, nil)

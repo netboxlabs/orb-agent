@@ -920,7 +920,7 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 // carry a secret reference. The agent resolves it before its managers start,
 // and the config manager starts with the value, but what it reports of the
 // config is the config as written, with the reference: a value read from a
-// secrets manager never leaves the agent in its reported config (MON-880).
+// secrets manager never leaves the agent in its reported config.
 func TestStart_FleetConfig_ReportsTheConfigAsWritten(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	repo, err := policies.NewMemRepo()
