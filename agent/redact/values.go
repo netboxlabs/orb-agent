@@ -129,6 +129,13 @@ func runStarts(s string, forms []string, cut bool, after string) []int {
 	}
 	found := false
 	wording := errorWording(s)
+	var line cutLine
+	if cut {
+		// The line the cut is in goes on past it, so its wording is told
+		// from as much of it as is within reach.
+		line = lineAcross(s, after)
+		copy(wording[line.from:], line.wording)
+	}
 	// Each scan takes time in proportion to s and v, so a long value in a
 	// long text costs no more than reading both; the scans of every form
 	// fill the same runs.
@@ -153,7 +160,7 @@ func runStarts(s string, forms []string, cut bool, after string) []int {
 			}
 		}
 		if cut {
-			if n := cutHead(s, after, v); n > 0 {
+			if n := cutHead(s, after, v, line); n > 0 {
 				start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 				found = true
 			}
@@ -214,24 +221,44 @@ func standsAlone(s string, from, to int, v string) bool {
 	return startsWord && endsWord
 }
 
+// maxCutReach bounds how much of the text past a cut is read to tell the
+// wording of the line the cut is in.
+const maxCutReach = 256
+
+// cutLine is the text from the start of the line that a head cutHead masks
+// can start in, longRun-1 bytes before the cut, to maxCutReach bytes past
+// the cut, where it starts in the cut text, and the error's wording in it.
+type cutLine struct {
+	text    string
+	from    int
+	wording []bool
+}
+
+// lineAcross returns the cutLine of s cut before after. When after goes on
+// past maxCutReach bytes, a byte no word or type holds ends the line, so a
+// YAML type error cut there is not taken whole.
+func lineAcross(s, after string) cutLine {
+	from := strings.LastIndexByte(s[:max(0, len(s)-longRun+1)], '\n') + 1
+	text := s[from:] + after
+	if len(after) > maxCutReach {
+		text = s[from:] + after[:maxCutReach] + "\x00"
+	}
+	return cutLine{text: text, from: from, wording: errorWording(text)}
+}
+
 // cutHead returns the length of the longest head of v shorter than longRun
 // that s ends with and that runs through the cut before after: after goes on
 // with it to a head of v longRun bytes long, or to the whole of a shorter v
-// that is a word of its own there. It returns 0 for none. A longer head is
-// masked wherever it ends.
-func cutHead(s, after, v string) int {
+// that is a word of its own there, outside the error's wording in line. It
+// returns 0 for none. A longer head is masked wherever it ends.
+func cutHead(s, after, v string, line cutLine) int {
 	need := min(len(v), longRun)
 	for n := min(need-1, len(s)); n > 0; n-- {
 		if !strings.HasSuffix(s, v[:n]) || !strings.HasPrefix(after, v[n:need]) {
 			continue
 		}
-		if len(v) < longRun {
-			// Only the bytes around the value tell whether it is a word.
-			from := max(0, len(s)-n-1)
-			near := s[from:] + after[:min(len(after), len(v)-n+1)]
-			if at := len(s) - n - from; !standsAlone(near, at, at+len(v)-1, v) {
-				continue
-			}
+		if at := len(s) - n - line.from; len(v) < longRun && !shortMasked(line.text, at, at+len(v)-1, v, line.wording) {
+			continue
 		}
 		return n
 	}

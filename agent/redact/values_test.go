@@ -470,6 +470,12 @@ func TestCutValues(t *testing.T) {
 		{"a short value the cut runs through", "refused: t", "0k\n", []string{"t0k"}, "refused: ********"},
 		{"a short value the cut runs through inside a word", "into int", "0k\n", []string{"t0k"}, "into int"},
 		{"a short value the cut runs through, followed by a word", "refused: t", "0kx", []string{"t0k"}, "refused: t"},
+		{"a short value the cut runs through in the error's wording", "invalid: yaml: li", "ne 3: did not find expected key", []string{"line"}, "invalid: yaml: li"},
+		{"a short value the cut runs through where a type error quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int\n", []string{"line"}, "  line 4: cannot unmarshal !!str `********"},
+		{"a short value with new lines the cut runs through", "x a\nb", "\nc rest", []string{"a\nb\nc"}, "x ********"},
+		{"a short value with a new line the cut runs through, no line ending near", "x a\nb", "c rest" + strings.Repeat("y", maxCutReach), []string{"a\nbc"}, "x ********"},
+		// Past maxCutReach, the line may go on as no type error does.
+		{"a short value the cut runs through where a line too long to tell quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int" + strings.Repeat("x", maxCutReach) + " and more", []string{"line"}, "  ******** 4: cannot unmarshal !!str `********"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			values := tc.values
@@ -538,7 +544,7 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 // whole values overlap and repeat.
 func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
-	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4")}
+	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4"), []rune("ab\n ")}
 	// Pieces of the wording errorWording knows, so values meet it.
 	wording := []string{"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: "}
 	word := func(alphabet []rune, n int) string {
@@ -600,12 +606,18 @@ func runStartsByDefinition(s string, forms []string, cut bool, after string) []i
 		start[i] = len(s)
 	}
 	found := false
+	// In a cut text, the error's wording is told from the text it was cut
+	// from.
+	wording := errorWording(s)
+	if cut {
+		wording = errorWording(s + after)[:len(s)]
+	}
 	for _, v := range forms {
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
 				whole := run == v && (len(run) >= longRun ||
-					standsAlone(s, from, i, v) && !slices.Contains(errorWording(s)[from:i+1], true))
+					standsAlone(s, from, i, v) && !slices.Contains(wording[from:i+1], true))
 				tail := len(run) >= longRun && strings.HasSuffix(v, run)
 				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {
@@ -624,7 +636,7 @@ func runStartsByDefinition(s string, forms []string, cut bool, after string) []i
 // runsThrough reports whether the head of v at s[from:] runs through the cut
 // between s and after: in the text they make, v goes on past the cut to a
 // head of longRun bytes, or to the whole of a shorter v that is a word of its
-// own there.
+// own there, outside the error's wording.
 func runsThrough(s, after string, from int, v string) bool {
 	if len(s)-from >= len(v) {
 		return false // v ends before the cut
@@ -633,7 +645,7 @@ func runsThrough(s, after string, from int, v string) bool {
 	if !strings.HasPrefix(text[from:], v[:min(len(v), longRun)]) {
 		return false
 	}
-	return len(v) >= longRun || standsAlone(text, from, from+len(v)-1, v)
+	return len(v) >= longRun || shortMasked(text, from, from+len(v)-1, v, errorWording(text))
 }
 
 // TestErrorWording marks the error's own wording, byte by byte, apart from

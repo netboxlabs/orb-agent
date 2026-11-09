@@ -203,6 +203,30 @@ func TestBackendRefusal(t *testing.T) {
 		assert.True(t, strings.HasSuffix(logged, " (the error quotes the values of the secret references at a.big, b.tok, masked as ********)"), "%q", logged[len(logged)-150:])
 	})
 
+	t.Run("names no field for a short value the end of what it masks cuts in the error's wording", func(t *testing.T) {
+		// No line ends near the end of what is masked, which falls inside
+		// "line" of the syntax error's own words.
+		values := []resolvedValue{{path: "c.word", value: "line"}}
+		at := maxMaskedErrLen + redact.LongestForm([]string{"line"}) - len("yaml: li")
+		text := strings.Repeat("x", at) + "yaml: line 3: did not find expected key" + strings.Repeat("z", 20000)
+		logged, reason := backendRefusal("", text, values)
+		assert.NotContains(t, logged, "c.word")
+		assert.NotContains(t, reason, "c.word")
+	})
+
+	t.Run("masks a short value with new lines a type error quotes where what it masks ends", func(t *testing.T) {
+		// yaml.v3 quotes a value of up to 10 bytes whole, new lines and all.
+		values := []resolvedValue{{path: "config.retries", value: "a\nb\nc"}}
+		typeLine := "\n  line 5: cannot unmarshal !!str `a\nb\nc` into int"
+		rest := strings.Repeat("\n  line 6: cannot unmarshal !!str `x` into int", 500)
+		for at := maxMaskedErrLen - len(typeLine); at <= maxMaskedErrLen+len(typeLine); at++ {
+			head := "yaml: unmarshal errors:\n  " + strings.Repeat("x", at-len("yaml: unmarshal errors:\n  "))
+			var logged string
+			assert.NotPanics(t, func() { logged, _ = backendRefusal("", head+typeLine+rest, values) }, "the line from byte %d", at)
+			assert.NotContains(t, logged, "`a\nb", "the line from byte %d", at)
+		}
+	})
+
 	t.Run("finishes the line a cut ends in when its end is near", func(t *testing.T) {
 		for _, tc := range []struct {
 			text string
