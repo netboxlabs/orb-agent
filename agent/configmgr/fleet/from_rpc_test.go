@@ -127,7 +127,7 @@ func (m *mockPolicyRepo) UpdateRuns(policyName string, runs []policies.RunData) 
 	return args.Error(0)
 }
 
-func (m *mockPolicyRepo) UpdateRunsWith(policyName string, runs []policies.RunData, _ func(string, []policies.RunData)) error {
+func (m *mockPolicyRepo) UpdateRunsWith(policyName string, runs []policies.RunData, _ func(string, []policies.RunData) []policies.RunData) error {
 	args := m.Called(policyName, runs)
 	return args.Error(0)
 }

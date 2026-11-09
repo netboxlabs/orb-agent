@@ -2,7 +2,9 @@ package policymgr
 
 import (
 	"cmp"
+	"net/netip"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +43,23 @@ type policySecrets struct {
 	// Only two are kept, since each value is held in memory and masks every
 	// line the backend prints.
 	values, previous []resolvedValue
+	// since is when the backend last could start a run of the policy with
+	// other values than those two: when it accepted the previous resolution,
+	// or, while one of the two is the policy's first on the backend, when the
+	// agent began to apply that one. Every discovery backend keeps a target's
+	// runs across the policy's re-applies, and keeps a policy's runs after it
+	// is removed, under its name. So a run the backend started before since
+	// can quote a value the agent no longer keeps, or one of another policy
+	// the backend ran under the name, and is not stored (see current).
+	since time.Time
+	// applied is when the backend accepted the policy's last resolution;
+	// zero until it does.
+	applied time.Time
+	// first is true while values are the policy's first resolution on the
+	// backend: the backend ran none of the policy before since, so since
+	// stays when the next resolution comes, and the runs it started while
+	// the agent applied the first are kept.
+	first bool
 	// masks masks the runs the backend reports for the policy, built from
 	// both when one is first stored after they changed.
 	masks *refusalMasks
@@ -76,26 +95,46 @@ func newResolvedSecrets() *resolvedSecrets {
 }
 
 // remember records the values a policy's references resolved to for an apply
-// to the named backend.
+// to the named backend, before the agent applies it. A policy without secret
+// references is recorded too, for since.
 func (s *resolvedSecrets) remember(policyID, backendName string, resolved []resolvedValue) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked()
 	ps, ok := s.byPolicy[policyID]
-	if !ok && len(resolved) == 0 {
-		return
-	}
 	if ok && ps.backend != backendName {
 		s.departLocked(ps)
-		ps = policySecrets{}
+		ps, ok = policySecrets{}, false
 	}
 	ps.backend = backendName
-	if !sameValues(ps.values, resolved) {
+	if !ok || !sameValues(ps.values, resolved) {
+		switch {
+		case !ok:
+			ps.since, ps.first = s.now(), true
+		case ps.first:
+			ps.first = false
+		default:
+			// A backend that reports runs removes the policy before it
+			// applies an update: unless that removal failed too, one that
+			// refused the last resolution has run none of the policy since.
+			ps.since = cmp.Or(ps.applied, s.now())
+		}
+		ps.applied = time.Time{}
 		ps.previous, ps.values = ps.values, slices.Clone(resolved)
 		ps.masks = nil
 		delete(s.maskers, backendName)
 	}
 	s.byPolicy[policyID] = ps
+}
+
+// applied records that the backend accepted the policy's last resolution.
+func (s *resolvedSecrets) applied(policyID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ps, ok := s.byPolicy[policyID]; ok && ps.applied.IsZero() {
+		ps.applied = s.now()
+		s.byPolicy[policyID] = ps
+	}
 }
 
 // sameValues reports whether a and b hold the same values, as many times
@@ -175,6 +214,21 @@ func (s *resolvedSecrets) masksOf(policyID string) *refusalMasks {
 	return ps.masks
 }
 
+// current returns, of runs a backend reported for a policy, those it started
+// at or after the policy's since, changing runs in place: an earlier one can
+// quote values the agent no longer keeps. A policy the agent never gave the
+// backend, or took back from it, ran nothing there: the runs under its name
+// are another's, and none is kept. A run without a start time is kept, since
+// nothing tells when it started; every discovery backend gives one.
+func (s *resolvedSecrets) current(policyID string, runs []policies.RunData) []policies.RunData {
+	s.mu.Lock()
+	ps, ok := s.byPolicy[policyID]
+	s.mu.Unlock()
+	return slices.DeleteFunc(runs, func(r policies.RunData) bool {
+		return !r.CreatedAt.IsZero() && (!ok || r.CreatedAt.Before(ps.since))
+	})
+}
+
 // maskOutput masks, in a line a backend's process printed, the values of
 // every policy the backend runs, or ran less than removedGrace ago: a line
 // names no policy.
@@ -194,7 +248,8 @@ func (s *resolvedSecrets) maskOutput(backendName, line string) string {
 				values = appendNew(values, d.values)
 			}
 		}
-		m = redact.NewMasker(values)
+		// A backend prints a host as it writes it into a run's target.
+		m = redact.NewMasker(append(values, newHostSet(values).forms()...))
 		s.maskers[backendName] = m
 	}
 	s.mu.Unlock()
@@ -223,9 +278,11 @@ type maskingRepo struct {
 // heartbeat to Fleet. A backend can put in a run's reason an exception's
 // text that quotes what it was given, so the reason is masked, and kept to
 // the bound a refusal is kept to, as a refusal is. It can also copy a target
-// or its driver from the policy's scope, so one that is a value is masked
-// whole; any other is kept as reported, since Fleet matches a target to a
-// device by its exact name.
+// or its driver from the policy's scope, so one that is a value, as it is or
+// as the backend writes a host (see hostSet), is masked whole; any other is
+// kept as reported, since Fleet matches a target to a device by its exact
+// name. A run the backend started before the policy's since is not stored:
+// it can quote a value the agent no longer keeps.
 //
 // The runs are masked with the values of the policy their name maps to when
 // they are stored: the manager stores a policy it just applied once the
@@ -244,38 +301,38 @@ func (r *maskingRepo) UpdateRuns(policyName string, runs []policies.RunData) err
 		maskedFor, maskedWith = pd.ID, r.secrets.masksOf(pd.ID)
 		maskedWith.maskRuns(runs)
 	}
-	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) {
-		masks := r.secrets.masksOf(policyID)
-		if policyID == maskedFor && masks == maskedWith {
-			return
-		}
-		copy(runs, reported)
-		if maskedWith != nil {
-			// The runs were reported for the policy looked up first, and can
-			// quote its values whatever the name maps to by now.
-			for i := range runs {
-				runs[i].Reason = maskedWith.all.Mask(runs[i].Reason)
+	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) []policies.RunData {
+		if masks := r.secrets.masksOf(policyID); policyID != maskedFor || masks != maskedWith {
+			copy(runs, reported)
+			if maskedWith != nil {
+				// The runs were reported for the policy looked up first, and can
+				// quote its values whatever the name maps to by now.
+				for i := range runs {
+					runs[i].Reason = maskedWith.all.Mask(runs[i].Reason)
+				}
 			}
+			masks.maskRuns(runs)
 		}
-		masks.maskRuns(runs)
+		return r.secrets.current(policyID, runs)
 	})
 }
 
 // UpdateRunsWith masks the runs as UpdateRuns does once prepare has rewritten
 // them, under the store's lock.
-func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData, prepare func(policyID string, runs []policies.RunData)) error {
-	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) {
+func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData, prepare func(policyID string, runs []policies.RunData) []policies.RunData) error {
+	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) []policies.RunData {
 		if prepare != nil {
-			prepare(policyID, runs)
+			runs = prepare(policyID, runs)
 		}
 		r.secrets.masksOf(policyID).maskRuns(runs)
+		return r.secrets.current(policyID, runs)
 	})
 }
 
 // maskRuns masks, in runs a backend reported for the policy m was built for,
 // the values its secret references resolved to.
 func (m *refusalMasks) maskRuns(runs []policies.RunData) {
-	isValue := func(v string) bool { return v != "" && slices.Contains(m.values, v) }
+	isValue := func(v string) bool { return v != "" && (slices.Contains(m.values, v) || m.hosts.has(v)) }
 	for i := range runs {
 		if runs[i].Reason != "" {
 			_, runs[i].Reason = m.refusal("", runs[i].Reason)
@@ -293,6 +350,126 @@ func (m *refusalMasks) maskRuns(runs []policies.RunData) {
 			runs[i].Driver = redact.MaskedSecret
 		}
 	}
+}
+
+// hostSet holds values as the discovery backends write a host they were
+// given into a run's target: device-discovery leaves out its line breaks,
+// snmp-discovery writes an address or a prefix in its canonical form, and
+// gnmi-discovery adds a port. A target is one of the values when the two are
+// the same without their line breaks and the spaces around them, the same
+// address or the same prefix, or the same once the target's port is left
+// out.
+type hostSet struct {
+	names    []string
+	addrs    []netip.Addr
+	prefixes []netip.Prefix
+}
+
+func newHostSet(values []string) hostSet {
+	var h hostSet
+	for _, v := range values {
+		name := hostName(v)
+		if name == "" || slices.Contains(h.names, name) {
+			continue
+		}
+		h.names = append(h.names, name)
+		if addr, err := netip.ParseAddr(name); err == nil {
+			h.addrs = append(h.addrs, addr)
+		} else if prefix, err := netip.ParsePrefix(name); err == nil {
+			h.prefixes = append(h.prefixes, prefix)
+		}
+	}
+	return h
+}
+
+// forms returns the values as a backend writes them as a host, for a reason
+// that quotes one so.
+func (h hostSet) forms() []string {
+	forms := slices.Clone(h.names)
+	for _, a := range h.addrs {
+		forms = append(forms, a.String())
+	}
+	for _, p := range h.prefixes {
+		forms = append(forms, p.String())
+	}
+	return forms
+}
+
+// has reports whether target is one of the values, as a backend writes it.
+// A target is parsed as an address only when the values hold one and it can
+// be one, since a failed parse allocates its error: a host name costs no
+// allocation.
+func (h hostSet) has(target string) bool {
+	if len(h.names) == 0 {
+		return false
+	}
+	name := hostName(target)
+	for _, c := range [...]string{name, withoutPort(name)} {
+		if c == "" {
+			continue
+		}
+		if slices.Contains(h.names, c) {
+			return true
+		}
+		if !mayBeAddr(c) {
+			continue
+		}
+		if strings.IndexByte(c, '/') < 0 {
+			if len(h.addrs) > 0 {
+				if addr, err := netip.ParseAddr(c); err == nil && slices.Contains(h.addrs, addr) {
+					return true
+				}
+			}
+		} else if len(h.prefixes) > 0 {
+			if prefix, err := netip.ParsePrefix(c); err == nil && slices.Contains(h.prefixes, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// mayBeAddr reports whether s can be an address or a prefix: hex digits,
+// dots, colons and a slash, then any zone.
+func mayBeAddr(s string) bool {
+	if i := strings.IndexByte(s, '%'); i >= 0 {
+		s = s[:i]
+	}
+	for i := range len(s) {
+		switch c := s[i]; {
+		case '0' <= c && c <= '9', 'a' <= c && c <= 'f', 'A' <= c && c <= 'F', c == '.', c == ':', c == '/':
+		default:
+			return false
+		}
+	}
+	return s != ""
+}
+
+// lineBreaks leaves out of a text the line breaks device-discovery leaves out
+// of a host.
+var lineBreaks = strings.NewReplacer("\r\n", "", "\n", "")
+
+// hostName returns s without its line breaks or the spaces around it.
+func hostName(s string) string {
+	if strings.Contains(s, "\n") {
+		s = lineBreaks.Replace(s)
+	}
+	return strings.TrimSpace(s)
+}
+
+// withoutPort returns the host of a target gnmi-discovery wrote with a port,
+// "host:port" or "[address]:port", and "" for a target without one.
+func withoutPort(target string) string {
+	if strings.HasPrefix(target, "[") {
+		if end := strings.Index(target, "]:"); end > 0 {
+			return target[1:end]
+		}
+		return ""
+	}
+	if i := strings.IndexByte(target, ':'); i > 0 && strings.IndexByte(target[i+1:], ':') < 0 {
+		return target[:i]
+	}
+	return ""
 }
 
 // Remove removes a policy; the values its secret references resolved to keep

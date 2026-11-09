@@ -91,20 +91,81 @@ func TestRunReasonLeavesOutTheResolvedSecret(t *testing.T) {
 	assert.Empty(t, logs.linesWith(0, resolvedSecret), "no log record carries the value")
 }
 
-// reportedRun is the run a backend stand-in reports for a policy in its
+// TestNoStoredRunCarriesAnEarlierHost points a policy's host at a secret
+// three times, as rotating the secret does, while the backend goes on
+// reporting the runs it ran with each host, as device-discovery keeps a
+// target's runs across the policy's re-applies. The heartbeat sends the
+// stored runs, so none may carry a host: the run of the first, started before
+// the backend took the policy's previous resolution, is not stored, since the
+// agent no longer keeps that host (MON-900), and the others are stored
+// masked. The last host ends in a new line, which device-discovery leaves out
+// of the target it reports (MON-901).
+func TestNoStoredRunCarriesAnEarlierHost(t *testing.T) {
+	logs := &renderedLogs{}
+	logger := logs.logger()
+	hosts := map[string]string{
+		"HOST_A": "4a1c-host-a.invalid",
+		"HOST_B": "4a1c-host-b.invalid",
+		"HOST_C": "4a1c-host-c.invalid\n",
+	}
+	mgr, err := policymgr.New(logger, startDopplerSecrets(t, logger, hosts), config.Config{})
+	require.NoError(t, err)
+
+	const policyID, policyName = "policy-worker", "rotated_host_policy"
+	reported := &reportedRun{}
+	startBackendServing(t, logger, mgr, "worker", "orb-worker", worker.Register, reported.answer(policyName))
+	poll := pollingStatus(t, logger, mgr, "worker")
+
+	var runs []backend.PolicyStatusRun
+	for i, name := range []string{"HOST_A", "HOST_B", "HOST_C"} {
+		mgr.ManagePolicy(config.PolicyPayload{
+			Action:    "manage",
+			ID:        policyID,
+			DatasetID: "dataset-1",
+			Name:      policyName,
+			Backend:   "worker",
+			Version:   int32(i + 1),
+			Data:      map[string]any{"scope": []any{map[string]any{"hostname": "${doppler://" + name + "}"}}},
+		})
+		require.Equal(t, policies.Running, storedPolicyByID(t, mgr, policyID).State, "the policy is applied with %s", name)
+
+		host := strings.TrimSuffix(hosts[name], "\n")
+		runs = append(runs, backend.PolicyStatusRun{
+			ID: "run-" + name, Status: "failed", Reason: "Cannot connect to " + host, Targets: []string{host},
+			CreatedAt: time.Now().UnixNano(),
+		})
+		reported.set(runs...)
+		poll()
+	}
+
+	var ids []string
+	for _, run := range storedPolicyByID(t, mgr, policyID).Runs {
+		ids = append(ids, run.ID)
+		assert.Equal(t, []string{"********"}, run.Targets, "the target of %s", run.ID)
+		for _, host := range hosts {
+			assert.NotContains(t, run.Reason, strings.TrimSuffix(host, "\n"), "the reason of %s", run.ID)
+		}
+	}
+	assert.ElementsMatch(t, []string{"run-HOST_B", "run-HOST_C"}, ids)
+	for name, host := range hosts {
+		assert.Empty(t, logs.linesWith(0, strings.TrimSuffix(host, "\n")), "no log record carries %s", name)
+	}
+}
+
+// reportedRun is the runs a backend stand-in reports for a policy in its
 // status.
 type reportedRun struct {
-	mu  sync.Mutex
-	run backend.PolicyStatusRun
+	mu   sync.Mutex
+	runs []backend.PolicyStatusRun
 }
 
-func (r *reportedRun) set(run backend.PolicyStatusRun) {
+func (r *reportedRun) set(runs ...backend.PolicyStatusRun) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.run = run
+	r.runs = runs
 }
 
-// answer answers a request for the backend's status with the run, reported
+// answer answers a request for the backend's status with the runs, reported
 // for the named policy.
 func (r *reportedRun) answer(policyName string) func(w http.ResponseWriter, req *http.Request, _ []byte) bool {
 	return func(w http.ResponseWriter, req *http.Request, _ []byte) bool {
@@ -112,12 +173,12 @@ func (r *reportedRun) answer(policyName string) func(w http.ResponseWriter, req 
 			return false
 		}
 		r.mu.Lock()
-		run := r.run
+		runs := r.runs
 		r.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(backend.StatusResponse{
 			Version:  "1.0.0",
-			Policies: []backend.PolicyStatus{{Name: policyName, Status: "running", Runs: []backend.PolicyStatusRun{run}}},
+			Policies: []backend.PolicyStatus{{Name: policyName, Status: "running", Runs: runs}},
 		})
 		return true
 	}

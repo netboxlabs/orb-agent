@@ -1,6 +1,7 @@
 package policies_test
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -557,11 +558,12 @@ func TestUpdateRunsWithPreparesThemForThePolicyTheNameMapsTo(t *testing.T) {
 	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy"}))
 
 	var preparedFor []string
-	prepare := func(policyID string, runs []policies.RunData) {
+	prepare := func(policyID string, runs []policies.RunData) []policies.RunData {
 		preparedFor = append(preparedFor, policyID)
 		for i := range runs {
 			runs[i].Reason = "prepared for " + policyID
 		}
+		return runs
 	}
 	err = repo.UpdateRunsWith("other-policy", []policies.RunData{{ID: "run-1", Status: "failed"}}, prepare)
 	require.ErrorIs(t, err, policies.ErrPolicyNotFound)
@@ -575,6 +577,26 @@ func TestUpdateRunsWithPreparesThemForThePolicyTheNameMapsTo(t *testing.T) {
 	assert.Equal(t, "prepared for test-id", stored.Runs[0].Reason)
 }
 
+// TestUpdateRunsWithStoresTheRunsPrepareReturns has prepare leave a run
+// out: only the runs it returns are stored, and a run stored before that it
+// leaves out is gone.
+func TestUpdateRunsWithStoresTheRunsPrepareReturns(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy"}))
+	require.NoError(t, repo.UpdateRuns("test-policy", []policies.RunData{{ID: "run-1", Status: "failed"}}))
+
+	withoutRun1 := func(_ string, runs []policies.RunData) []policies.RunData {
+		return slices.DeleteFunc(runs, func(r policies.RunData) bool { return r.ID == "run-1" })
+	}
+	require.NoError(t, repo.UpdateRunsWith("test-policy",
+		[]policies.RunData{{ID: "run-1", Status: "failed"}, {ID: "run-2", Status: "completed"}}, withoutRun1))
+	stored, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, stored.Runs, 1)
+	assert.Equal(t, "run-2", stored.Runs[0].ID)
+}
+
 // TestUpdateRunsWithKeepsTheNamesPolicyWhilePreparing stores another policy
 // under the name while prepare runs: the store waits until the runs are
 // stored, so they are stored on the policy they were prepared for.
@@ -585,7 +607,7 @@ func TestUpdateRunsWithKeepsTheNamesPolicyWhilePreparing(t *testing.T) {
 
 	stored := make(chan struct{})
 	var storedWhilePreparing bool
-	prepare := func(policyID string, runs []policies.RunData) {
+	prepare := func(policyID string, runs []policies.RunData) []policies.RunData {
 		go func() {
 			_ = repo.Update(policies.PolicyData{ID: "other-id", Name: "test-policy"})
 			close(stored)
@@ -598,6 +620,7 @@ func TestUpdateRunsWithKeepsTheNamesPolicyWhilePreparing(t *testing.T) {
 		for i := range runs {
 			runs[i].Reason = "prepared for " + policyID
 		}
+		return runs
 	}
 	require.NoError(t, repo.UpdateRunsWith("test-policy", []policies.RunData{{ID: "run-1", Status: "failed"}}, prepare))
 	<-stored
