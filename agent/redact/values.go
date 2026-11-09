@@ -128,14 +128,14 @@ func runStarts(s string, forms []string, cut bool, after string) []int {
 		start[i] = len(s)
 	}
 	found := false
-	wording := errorWording(s)
-	var line cutLine
+	// In a cut text, the error's wording is told from the text past the cut
+	// too, as far as is within reach (see pastCut).
+	text := s
 	if cut {
-		// The line the cut is in goes on past it, so its wording is told
-		// from as much of it as is within reach.
-		line = lineAcross(s, after)
-		copy(wording[line.from:], line.wording)
+		text = s + pastCut(after)
 	}
+	textWording := errorWording(text)
+	wording := textWording[:len(s)]
 	// Each scan takes time in proportion to s and v, so a long value in a
 	// long text costs no more than reading both; the scans of every form
 	// fill the same runs.
@@ -160,7 +160,7 @@ func runStarts(s string, forms []string, cut bool, after string) []int {
 			}
 		}
 		if cut {
-			if n := cutHead(s, after, v, line); n > 0 {
+			if n := cutHead(s, after, v, text, textWording); n > 0 {
 				start[len(s)-1] = min(start[len(s)-1], len(s)-n)
 				found = true
 			}
@@ -186,11 +186,13 @@ func shortMasked(s string, from, to int, v string, wording []bool) bool {
 // in backticks (submatch 2): the same words inside another message, or text
 // after the type on its line, as in a JSON body kept whole, are not the
 // decoder's, so the pattern does not match there and every short value in
-// them stays masked.
+// them stays masked. yaml.v3 quotes at most 10 bytes of the value, as they
+// are, so a new line in them runs the type error on to the next line, and
+// two type errors are never one.
 var errorWordingPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`yaml: unmarshal errors:`),
 	regexp.MustCompile(`yaml: line \d+: `),
-	regexp.MustCompile("(?m)^[ \\t]*(line \\d+: cannot unmarshal !!\\S+ (?:`(.*)` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+)$"),
+	regexp.MustCompile("(?m)^[ \\t]*(line \\d+: cannot unmarshal !!\\S+ (?:`((?s:.{0,10}))` )?into (?:[\\w.*\\[\\]]|interface \\{\\}|struct \\{\\})+)$"),
 }
 
 // errorWording returns, for each byte of s, whether it is part of the
@@ -222,42 +224,33 @@ func standsAlone(s string, from, to int, v string) bool {
 }
 
 // maxCutReach bounds how much of the text past a cut is read to tell the
-// wording of the line the cut is in.
+// error's wording the cut runs through.
 const maxCutReach = 256
 
-// cutLine is the text from the start of the line that a head cutHead masks
-// can start in, longRun-1 bytes before the cut, to maxCutReach bytes past
-// the cut, where it starts in the cut text, and the error's wording in it.
-type cutLine struct {
-	text    string
-	from    int
-	wording []bool
-}
-
-// lineAcross returns the cutLine of s cut before after. When after goes on
-// past maxCutReach bytes, a byte no word or type holds ends the line, so a
-// YAML type error cut there is not taken whole.
-func lineAcross(s, after string) cutLine {
-	from := strings.LastIndexByte(s[:max(0, len(s)-longRun+1)], '\n') + 1
-	text := s[from:] + after
+// pastCut returns as much of after, the text past a cut, as is read to tell
+// the error's wording the cut runs through: maxCutReach bytes, and when after
+// goes on past them, a byte no word or type holds, so a YAML type error cut
+// there is not taken whole.
+func pastCut(after string) string {
 	if len(after) > maxCutReach {
-		text = s[from:] + after[:maxCutReach] + "\x00"
+		return after[:maxCutReach] + "\x00"
 	}
-	return cutLine{text: text, from: from, wording: errorWording(text)}
+	return after
 }
 
 // cutHead returns the length of the longest head of v shorter than longRun
 // that s ends with and that runs through the cut before after: after goes on
 // with it to a head of v longRun bytes long, or to the whole of a shorter v
-// that is a word of its own there, outside the error's wording in line. It
+// that is a word of its own there, outside the error's wording. text is s and
+// what pastCut reads of after, and wording is the error's wording in it. It
 // returns 0 for none. A longer head is masked wherever it ends.
-func cutHead(s, after, v string, line cutLine) int {
+func cutHead(s, after, v, text string, wording []bool) int {
 	need := min(len(v), longRun)
 	for n := min(need-1, len(s)); n > 0; n-- {
 		if !strings.HasSuffix(s, v[:n]) || !strings.HasPrefix(after, v[n:need]) {
 			continue
 		}
-		if at := len(s) - n - line.from; len(v) < longRun && !shortMasked(line.text, at, at+len(v)-1, v, line.wording) {
+		if at := len(s) - n; len(v) < longRun && !shortMasked(text, at, at+len(v)-1, v, wording) {
 			continue
 		}
 		return n

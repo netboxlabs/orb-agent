@@ -148,6 +148,17 @@ func TestBackendRefusal(t *testing.T) {
 		assert.Equal(t, text, logged)
 	})
 
+	t.Run("names no field for a short value that is only a word of a YAML error quoting a value with a new line", func(t *testing.T) {
+		// yaml.v3's error for retries: "a\nb" and timeout: "x", decoded as int.
+		text := "yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `a\nb` into int\n  line 2: cannot unmarshal !!str `x` into int"
+		values := []resolvedValue{{path: "config.retries", value: "a\nb"}, {path: "scope.authentication.community", value: "int"}}
+		logged, reason := backendRefusal("400 ", text, values)
+		want := "400 yaml: unmarshal errors:\n  line 1: cannot unmarshal !!str `********` into int\n  line 2: cannot unmarshal !!str `x` into int" +
+			" (the error quotes the value of the secret reference at config.retries, masked as ********)"
+		assert.Equal(t, want, reason)
+		assert.Equal(t, want, logged)
+	})
+
 	t.Run("bounds what it logs and stores", func(t *testing.T) {
 		logged, reason := backendRefusal("", typeErr+"; "+strings.Repeat("x", 20000), retries)
 		assert.NotContains(t, logged, "k3Y-9xQz")

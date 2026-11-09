@@ -271,6 +271,13 @@ func TestValues(t *testing.T) {
 			want:   "400 core: invalid policy: policy-level: invalid security level ********",
 		},
 		{
+			// yaml.v3 quotes a value of up to 10 bytes whole, new lines and all.
+			name:   "a short value that is a word of a YAML type error quoting a value with a new line",
+			text:   "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `a\nb` into int",
+			values: []string{"a\nb", "int"},
+			want:   "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
 			name:   "a short value in single quotes",
 			text:   "Input should be a valid integer [type=int_parsing, input_value='lab', input_type=str]",
 			values: []string{"lab"},
@@ -473,6 +480,7 @@ func TestCutValues(t *testing.T) {
 		{"a short value the cut runs through in the error's wording", "invalid: yaml: li", "ne 3: did not find expected key", []string{"line"}, "invalid: yaml: li"},
 		{"a short value the cut runs through where a type error quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int\n", []string{"line"}, "  line 4: cannot unmarshal !!str `********"},
 		{"a short value with new lines the cut runs through", "x a\nb", "\nc rest", []string{"a\nb\nc"}, "x ********"},
+		{"a short value that is a word of a type error quoting a value with a new line, cut after it", "  line 4: cannot unmarshal !!str `a\nb` into int", "\n  line 5: cannot unmarshal !!str `x` into int", []string{"int"}, "  line 4: cannot unmarshal !!str `a\nb` into int"},
 		{"a short value with a new line the cut runs through, no line ending near", "x a\nb", "c rest" + strings.Repeat("y", maxCutReach), []string{"a\nbc"}, "x ********"},
 		// Past maxCutReach, the line may go on as no type error does.
 		{"a short value the cut runs through where a line too long to tell quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int" + strings.Repeat("x", maxCutReach) + " and more", []string{"line"}, "  ******** 4: cannot unmarshal !!str `********"},
@@ -675,6 +683,25 @@ func TestErrorWording(t *testing.T) {
 		{
 			text:    "line 4: cannot unmarshal !!str `a` into int; more",
 			wording: "                                                 ",
+		},
+		{
+			// yaml.v3 quotes a value of up to 10 bytes whole, new lines and
+			// all.
+			text:    "  line 4: cannot unmarshal !!str `a\nb` into int",
+			wording: "  " + strings.Repeat("^", 32) + "   " + strings.Repeat("^", 10),
+		},
+		{
+			// A longer value it cuts to its first 7 bytes and "...".
+			text:    "  line 4: cannot unmarshal !!str `a\nbcdef...` into int",
+			wording: "  " + strings.Repeat("^", 32) + strings.Repeat(" ", 10) + strings.Repeat("^", 10),
+		},
+		{
+			text:    "  line 4: cannot unmarshal !!str `012345678\na` into int",
+			wording: strings.Repeat(" ", len("  line 4: cannot unmarshal !!str `012345678\na` into int")),
+		},
+		{
+			text:    "  line 4: cannot unmarshal !!str `a` into int\n  line 5: cannot unmarshal !!str `b` into int",
+			wording: "  " + strings.Repeat("^", 32) + " " + strings.Repeat("^", 10) + "   " + strings.Repeat("^", 32) + " " + strings.Repeat("^", 10),
 		},
 	} {
 		var got strings.Builder
