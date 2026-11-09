@@ -232,6 +232,158 @@ func TestMaskingALineReusesWhatItMasksWith(t *testing.T) {
 	assert.LessOrEqual(t, allocs, 10.0, "allocations to mask one line")
 }
 
+// TestRunsAreMaskedForThePolicyTheyAreStoredOn has the store change after
+// the masking repo looked up the policy a poll reports runs for, before the
+// runs are stored. The manager stores a policy it just applied only once the
+// backend accepted it, it can store another policy under the name, and an
+// apply changes the values a policy's references resolved to. The runs ride
+// every heartbeat, so they are stored masked with the values of the policy
+// they are stored on, whatever changed since the lookup.
+func TestRunsAreMaskedForThePolicyTheyAreStoredOn(t *testing.T) {
+	const secret = "Pl41n-credential"
+	quoted := []resolvedValue{{path: "scope.community", value: secret}}
+	for _, tc := range []struct {
+		name string
+		// stored are the IDs of the policies stored under the name before the
+		// poll, values those the agent keeps for each.
+		stored []string
+		values map[string][]resolvedValue
+		// meanwhile changes the store or the values right before the runs
+		// are handed to the store.
+		meanwhile func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo)
+		storedOn  string
+	}{{
+		name:   "the record of the policy the backend was just given lands",
+		values: map[string][]resolvedValue{"policy-1": quoted},
+		meanwhile: func(t *testing.T, _ *resolvedSecrets, repo policies.PolicyRepo) {
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "worker"}))
+		},
+		storedOn: "policy-1",
+	}, {
+		name:   "another policy is stored under the name",
+		stored: []string{"policy-1"},
+		values: map[string][]resolvedValue{
+			// A target of the run stored on policy-2 is one of policy-1's values.
+			"policy-1": {{path: "scope.hosts[0]", value: "rtr1.example.net"}},
+			"policy-2": quoted,
+		},
+		meanwhile: func(t *testing.T, _ *resolvedSecrets, repo policies.PolicyRepo) {
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-2", Name: "shared", Backend: "worker"}))
+		},
+		storedOn: "policy-2",
+	}, {
+		name:   "the policy's values change",
+		stored: []string{"policy-1"},
+		meanwhile: func(_ *testing.T, resolved *resolvedSecrets, _ policies.PolicyRepo) {
+			resolved.remember("policy-1", "worker", quoted)
+		},
+		storedOn: "policy-1",
+	}, {
+		// A policy whose secrets fail to resolve, or whose backend is not
+		// ready, is stored again without an apply: the agent keeps no values
+		// for it, but the runs were reported for the policy as it was.
+		name:   "the policy is removed and stored again without values",
+		stored: []string{"policy-1"},
+		values: map[string][]resolvedValue{"policy-1": quoted},
+		meanwhile: func(t *testing.T, resolved *resolvedSecrets, repo policies.PolicyRepo) {
+			require.NoError(t, repo.Remove("policy-1"))
+			resolved.removed("policy-1")
+			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "worker"}))
+		},
+		storedOn: "policy-1",
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now()
+			resolved, repo := newTestMaskingRepo(t, &now)
+			for _, id := range tc.stored {
+				require.NoError(t, repo.Update(policies.PolicyData{ID: id, Name: "shared", Backend: "worker"}))
+			}
+			for id, values := range tc.values {
+				resolved.remember(id, "worker", values)
+			}
+			store := repo.PolicyRepo
+			repo.PolicyRepo = &changedBeforeStore{PolicyRepo: store, change: func() { tc.meanwhile(t, resolved, store) }}
+
+			reported := []policies.RunData{{
+				ID: "run-1", Status: "failed", Reason: "auth of 192.0.2.10 failed with " + secret, Targets: []string{"rtr1.example.net"},
+			}}
+			require.NoError(t, repo.UpdateRuns("shared", reported))
+			all, err := repo.GetAll()
+			require.NoError(t, err)
+			for _, pd := range all {
+				for _, r := range pd.Runs {
+					assert.NotContains(t, r.Reason, secret, "a run stored on %s", pd.ID)
+				}
+			}
+			stored, err := repo.Get(tc.storedOn)
+			require.NoError(t, err)
+			require.Len(t, stored.Runs, 1)
+			assert.Contains(t, stored.Runs[0].Reason, "auth of 192.0.2.10 failed with ********")
+			assert.Equal(t, []string{"rtr1.example.net"}, stored.Runs[0].Targets, "a target that is no value of the policy it is stored on")
+		})
+	}
+}
+
+// TestRunsAreMaskedBeforeTheStoreLocksForThem has the store see the runs a
+// poll reports as they are handed to it: they are masked already. The store
+// holds its lock while it saves them, and the heartbeat and each export read
+// the store, so masking a long reason with a large value under the lock
+// would hold them up.
+func TestRunsAreMaskedBeforeTheStoreLocksForThem(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope.community", value: "Pl41n-credential"}})
+	seen := &handedRuns{PolicyRepo: repo.PolicyRepo}
+	repo.PolicyRepo = seen
+
+	require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{{ID: "run-1", Status: "failed", Reason: "auth of 192.0.2.10 failed with Pl41n-credential"}}))
+	require.Len(t, seen.reasons, 1)
+	assert.Contains(t, seen.reasons[0], "auth of 192.0.2.10 failed with ********")
+}
+
+// TestRunsACallerPreparesAreMaskedToo stores runs through the masking repo's
+// UpdateRunsWith, as a caller that rewrites them before they are stored
+// would: what it writes is masked like what the backend reported.
+func TestRunsACallerPreparesAreMaskedToo(t *testing.T) {
+	now := time.Now()
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope.community", value: "Pl41n-credential"}})
+
+	quote := func(_ string, runs []policies.RunData) {
+		runs[0].Reason = "auth of 192.0.2.10 failed with Pl41n-credential"
+	}
+	require.NoError(t, repo.UpdateRunsWith("policy-1", []policies.RunData{{ID: "run-1", Status: "failed"}}, quote))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	require.Len(t, stored.Runs, 1)
+	assert.Contains(t, stored.Runs[0].Reason, "auth of 192.0.2.10 failed with ********")
+}
+
+// changedBeforeStore is a store that change changes right before runs are
+// handed to it: after whatever the masking repo looked up or masked before.
+type changedBeforeStore struct {
+	policies.PolicyRepo
+	change func()
+}
+
+func (s *changedBeforeStore) UpdateRunsWith(name string, runs []policies.RunData, prepare func(string, []policies.RunData)) error {
+	s.change()
+	return s.PolicyRepo.UpdateRunsWith(name, runs, prepare)
+}
+
+// handedRuns is a store that records the reasons of the runs handed to it.
+type handedRuns struct {
+	policies.PolicyRepo
+	reasons []string
+}
+
+func (s *handedRuns) UpdateRunsWith(name string, runs []policies.RunData, prepare func(string, []policies.RunData)) error {
+	for _, r := range runs {
+		s.reasons = append(s.reasons, r.Reason)
+	}
+	return s.PolicyRepo.UpdateRunsWith(name, runs, prepare)
+}
+
 // privateKey returns a PEM-armoured key of n random bytes, 64 base64
 // characters a line.
 func privateKey(t *testing.T, n int) string {

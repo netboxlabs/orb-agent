@@ -226,15 +226,59 @@ type maskingRepo struct {
 // or its driver from the policy's scope, so one that is a value is masked
 // whole; any other is kept as reported, since Fleet matches a target to a
 // device by its exact name.
+//
+// The runs are masked with the values of the policy their name maps to when
+// they are stored: the manager stores a policy it just applied once the
+// backend accepted it, so a poll can report its runs before its record lands,
+// or while it does. The store looks the name up and saves the runs under one
+// lock, which the heartbeat and each export wait on, and masking a long reason
+// with a large value takes long. So the runs are masked before, for the
+// policy the name maps to then, and again under the lock, from what was
+// reported, only when the name maps to another policy by then or that
+// policy's values changed; a reason is then masked with the values of both.
 func (r *maskingRepo) UpdateRuns(policyName string, runs []policies.RunData) error {
-	masks := noSecrets
+	reported := slices.Clone(runs)
+	var maskedFor string
+	var maskedWith *refusalMasks
 	if pd, err := r.GetByName(policyName); err == nil {
-		masks = r.secrets.masksOf(pd.ID)
+		maskedFor, maskedWith = pd.ID, r.secrets.masksOf(pd.ID)
+		maskedWith.maskRuns(runs)
 	}
-	isValue := func(s string) bool { return s != "" && slices.Contains(masks.values, s) }
+	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) {
+		masks := r.secrets.masksOf(policyID)
+		if policyID == maskedFor && masks == maskedWith {
+			return
+		}
+		copy(runs, reported)
+		if maskedWith != nil {
+			// The runs were reported for the policy looked up first, and can
+			// quote its values whatever the name maps to by now.
+			for i := range runs {
+				runs[i].Reason = maskedWith.all.Mask(runs[i].Reason)
+			}
+		}
+		masks.maskRuns(runs)
+	})
+}
+
+// UpdateRunsWith masks the runs as UpdateRuns does once prepare has rewritten
+// them, under the store's lock.
+func (r *maskingRepo) UpdateRunsWith(policyName string, runs []policies.RunData, prepare func(policyID string, runs []policies.RunData)) error {
+	return r.PolicyRepo.UpdateRunsWith(policyName, runs, func(policyID string, runs []policies.RunData) {
+		if prepare != nil {
+			prepare(policyID, runs)
+		}
+		r.secrets.masksOf(policyID).maskRuns(runs)
+	})
+}
+
+// maskRuns masks, in runs a backend reported for the policy m was built for,
+// the values its secret references resolved to.
+func (m *refusalMasks) maskRuns(runs []policies.RunData) {
+	isValue := func(v string) bool { return v != "" && slices.Contains(m.values, v) }
 	for i := range runs {
 		if runs[i].Reason != "" {
-			_, runs[i].Reason = masks.refusal(runs[i].Reason)
+			_, runs[i].Reason = m.refusal(runs[i].Reason)
 		}
 		if slices.ContainsFunc(runs[i].Targets, isValue) {
 			targets := slices.Clone(runs[i].Targets)
@@ -249,7 +293,6 @@ func (r *maskingRepo) UpdateRuns(policyName string, runs []policies.RunData) err
 			runs[i].Driver = redact.MaskedSecret
 		}
 	}
-	return r.PolicyRepo.UpdateRuns(policyName, runs)
 }
 
 // Remove removes a policy; the values its secret references resolved to keep
