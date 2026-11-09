@@ -146,8 +146,8 @@ func TestIPAddressEntityRecordsMACAddressInTheComments(t *testing.T) {
 	metadata = commentsOf(t, ip.Comments)
 	assert.Empty(t, metadata.MACAddress)
 	assert.Empty(t, metadata.MACVendor)
-	assert.NotContains(t, *ip.Comments, `"mac_address"`)
-	assert.NotContains(t, *ip.Comments, `"mac_vendor"`)
+	assert.NotContains(t, *ip.Comments, "mac_address")
+	assert.NotContains(t, *ip.Comments, "mac_vendor")
 
 	host = scannedHost("clean.example.net")
 	host.Addresses = []nmap.Address{
@@ -159,5 +159,5 @@ func TestIPAddressEntityRecordsMACAddressInTheComments(t *testing.T) {
 	metadata = commentsOf(t, ip.Comments)
 	assert.Equal(t, "02:00:00:00:00:01", metadata.MACAddress)
 	assert.Empty(t, metadata.MACVendor)
-	assert.NotContains(t, *ip.Comments, `"mac_vendor"`)
+	assert.NotContains(t, *ip.Comments, "mac_vendor")
 }
