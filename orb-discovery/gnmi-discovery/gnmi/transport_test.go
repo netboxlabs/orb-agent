@@ -75,13 +75,13 @@ func (s *testGNMIServer) Subscribe(stream gnmiproto.GNMI_SubscribeServer) error 
 // port, registers the given testGNMIServer on it, and returns the listener
 // address and a stop function. The stop function is registered with t.Cleanup
 // automatically, so callers only need to call it if they want to stop early.
-func startTestGNMIServer(t *testing.T, srv *testGNMIServer) string {
+func startTestGNMIServer(t *testing.T, srv *testGNMIServer, opts ...grpc.ServerOption) string {
 	t.Helper()
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	grpcSrv := grpc.NewServer()
+	grpcSrv := grpc.NewServer(opts...)
 	gnmiproto.RegisterGNMIServer(grpcSrv, srv)
 
 	go func() {
