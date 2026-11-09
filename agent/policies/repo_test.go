@@ -548,6 +548,69 @@ func TestUpdateRuns(t *testing.T) {
 	assert.Len(t, retrievedPDByName.Runs, 2)
 }
 
+// TestUpdateRunsWithPreparesThemForThePolicyTheNameMapsTo stores runs once
+// prepare has rewritten them for the ID of the policy their name maps to, and
+// leaves prepare uncalled when the name maps to none.
+func TestUpdateRunsWithPreparesThemForThePolicyTheNameMapsTo(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy"}))
+
+	var preparedFor []string
+	prepare := func(policyID string, runs []policies.RunData) {
+		preparedFor = append(preparedFor, policyID)
+		for i := range runs {
+			runs[i].Reason = "prepared for " + policyID
+		}
+	}
+	err = repo.UpdateRunsWith("other-policy", []policies.RunData{{ID: "run-1", Status: "failed"}}, prepare)
+	require.ErrorIs(t, err, policies.ErrPolicyNotFound)
+	assert.Empty(t, preparedFor, "nothing is prepared for a name no policy has")
+
+	require.NoError(t, repo.UpdateRunsWith("test-policy", []policies.RunData{{ID: "run-1", Status: "failed"}}, prepare))
+	assert.Equal(t, []string{"test-id"}, preparedFor)
+	stored, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, stored.Runs, 1)
+	assert.Equal(t, "prepared for test-id", stored.Runs[0].Reason)
+}
+
+// TestUpdateRunsWithKeepsTheNamesPolicyWhilePreparing stores another policy
+// under the name while prepare runs: the store waits until the runs are
+// stored, so they are stored on the policy they were prepared for.
+func TestUpdateRunsWithKeepsTheNamesPolicyWhilePreparing(t *testing.T) {
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	require.NoError(t, repo.Update(policies.PolicyData{ID: "test-id", Name: "test-policy"}))
+
+	stored := make(chan struct{})
+	var storedWhilePreparing bool
+	prepare := func(policyID string, runs []policies.RunData) {
+		go func() {
+			_ = repo.Update(policies.PolicyData{ID: "other-id", Name: "test-policy"})
+			close(stored)
+		}()
+		select {
+		case <-stored:
+			storedWhilePreparing = true
+		case <-time.After(100 * time.Millisecond):
+		}
+		for i := range runs {
+			runs[i].Reason = "prepared for " + policyID
+		}
+	}
+	require.NoError(t, repo.UpdateRunsWith("test-policy", []policies.RunData{{ID: "run-1", Status: "failed"}}, prepare))
+	<-stored
+	assert.False(t, storedWhilePreparing, "another policy was stored under the name while the runs were prepared")
+	pd, err := repo.Get("test-id")
+	require.NoError(t, err)
+	require.Len(t, pd.Runs, 1)
+	assert.Equal(t, "prepared for test-id", pd.Runs[0].Reason)
+	other, err := repo.Get("other-id")
+	require.NoError(t, err)
+	assert.Empty(t, other.Runs)
+}
+
 func TestUpdateRuns_InProgressRunAlwaysAdvancesUpdatedAt(t *testing.T) {
 	repo, err := policies.NewMemRepo()
 	require.NoError(t, err)

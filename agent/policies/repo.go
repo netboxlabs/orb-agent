@@ -27,6 +27,12 @@ type PolicyRepo interface {
 	RemoveDataset(policyID string, datasetID string) (bool, error)
 	EnsureGroupID(policyID string, agentGroupID string) error
 	UpdateRuns(policyName string, runs []RunData) error
+	// UpdateRunsWith stores runs as UpdateRuns does, once prepare has
+	// rewritten them for the ID of the policy policyName maps to, in the same
+	// locked operation: the name cannot come to map to another policy, or to
+	// one stored meanwhile, between the two. Nothing is prepared or stored for
+	// a name no policy has. prepare must not call the repo.
+	UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData)) error
 	FailNonTerminalRuns(reason string) error
 }
 
@@ -175,6 +181,10 @@ func (p *policyMemRepo) EnsureGroupID(policyID string, agentGroupID string) erro
 }
 
 func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
+	return p.UpdateRunsWith(policyName, runs, nil)
+}
+
+func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData)) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	policyID, ok := p.nameMap[policyName]
@@ -184,6 +194,9 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	policy, ok := p.db[policyID]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyID)
+	}
+	if prepare != nil {
+		prepare(policyID, runs)
 	}
 
 	// Index existing runs for change detection and timestamp preservation
