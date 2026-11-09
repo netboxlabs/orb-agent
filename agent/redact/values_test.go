@@ -479,6 +479,9 @@ func TestCutValues(t *testing.T) {
 			if got := CutValues(tc.text, tc.after, values); got != tc.want {
 				t.Errorf("CutValues(%q, %q)\n got %q\nwant %q", tc.text, tc.after, got, tc.want)
 			}
+			if got, want := CutValues(tc.text, "", values), Values(tc.text, values); got != want {
+				t.Errorf("CutValues(%q) with nothing after\n got %q\nwant %q, as Values", tc.text, got, want)
+			}
 		})
 	}
 	if got := Values("refused: xk", []string{"k3Y-9xQz"}); got != "refused: xk" {

@@ -1020,18 +1020,14 @@ func backendRefusal(status, text string, resolved []resolvedValue) (logged, reas
 	if cut {
 		window, cut = finishLine(text, len(window))
 	}
-	plain := redact.Values(window, values)
-	masked := plain
-	if cut {
-		// A value the window's end runs through, as the text past it shows,
-		// is masked from its first byte too, in case masking before it made
-		// the text short enough to keep it. It is not named: only its first
-		// bytes are in the window.
-		masked = redact.CutValues(window, text[len(window):], values)
-	}
+	// A value the window's end runs through, as the text past it shows, is
+	// masked from its first byte too, in case masking before it made the
+	// text short enough to keep it.
+	after := text[len(window):]
+	masked := redact.CutValues(window, after, values)
 	var note string
-	if plain != window {
-		note = quotedFieldsNote(window, values, resolved)
+	if masked != window {
+		note = quotedFieldsNote(window, after, values, resolved)
 	}
 	return status + kept(masked, maxMaskedErrLen-len(status), cut) + note,
 		status + kept(masked, maxBackendErrLen-len(status), cut) + note
@@ -1053,19 +1049,20 @@ func refusalStatus(err error) (status, text string) {
 	return "", text
 }
 
-// quotedFieldsNote names the fields of the policy whose values text quotes:
-// a backend's error locates a value by a line of the YAML the agent sent it,
-// which the user never sees. It says what the error quotes, so it holds even
-// when a bound cuts the masked value from what is kept. A value that one
-// secret reference fills names every field that reference is in. A value
-// that different references hold names none of them: only the value tells
-// what the error quotes, and naming them would claim it quotes each, and show
-// that their secrets are equal.
-func quotedFieldsNote(text string, values []string, resolved []resolvedValue) string {
+// quotedFieldsNote names the fields of the policy whose values text quotes,
+// text being cut from a longer one that goes on with after (empty when it is
+// not cut): a backend's error locates a value by a line of the YAML the agent
+// sent it, which the user never sees. It says what the error quotes, so it
+// holds even when a bound cuts the masked value from what is kept. A value
+// that one secret reference fills names every field that reference is in. A
+// value that different references hold names none of them: only the value
+// tells what the error quotes, and naming them would claim it quotes each,
+// and show that their secrets are equal.
+func quotedFieldsNote(text, after string, values []string, resolved []resolvedValue) string {
 	var fields []string
 	unnamed := 0
 	for _, v := range values {
-		if redact.Values(text, []string{v}) == text {
+		if redact.CutValues(text, after, []string{v}) == text {
 			continue
 		}
 		var holders, refs []string

@@ -42,7 +42,8 @@ func Values(s string, values []string) string {
 // ends with. It runs through the cut when after goes on with it to a head of
 // longRun bytes, or to the whole of a shorter value that is a word of its
 // own; first bytes of a value that after does not go on with are the text's
-// own, as the type that ends a YAML error's line.
+// own, as the type that ends a YAML error's line. With after empty, it masks
+// as Values does.
 func CutValues(s, after string, values []string) string {
 	return mask(s, values, true, after)
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 // TestResolvedValues finds the values the secrets manager put in for a
@@ -187,6 +188,19 @@ func TestBackendRefusal(t *testing.T) {
 			logged, _ := backendRefusal("400 ", text, values)
 			assert.NotContains(t, logged, "in********", "%d quotes", quoted)
 		}
+	})
+
+	t.Run("names a field whose value runs through the end of what it masks", func(t *testing.T) {
+		// Masking the long value shortens the text enough to log the end of
+		// what is masked, which the token runs through 2 bytes in; no line
+		// ends near it.
+		big := strings.Repeat("Q7", 100)
+		values := []resolvedValue{{path: "a.big", value: big}, {path: "b.tok", value: "k3Y-9xQz"}}
+		head := strings.Repeat("quoted "+big+" ", 30)
+		at := maxMaskedErrLen + redact.LongestForm([]string{big, "k3Y-9xQz"}) - 2
+		logged, _ := backendRefusal("", head+strings.Repeat("y", at-len(head))+"k3Y-9xQz"+strings.Repeat("z", 20000), values)
+		assert.Contains(t, logged, "y********... (truncated)")
+		assert.True(t, strings.HasSuffix(logged, " (the error quotes the values of the secret references at a.big, b.tok, masked as ********)"), "%q", logged[len(logged)-150:])
 	})
 
 	t.Run("finishes the line a cut ends in when its end is near", func(t *testing.T) {
