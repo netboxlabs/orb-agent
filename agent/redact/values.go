@@ -224,14 +224,14 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 		start[i] = len(s)
 	}
 	found := false
-	// In a cut text, the error's wording is told from the text past the cut
-	// too, as far as is within reach (see pastCut).
+	// In a cut text, the error's wording, and whether a value at the cut is
+	// a word of its own, are told from the text past the cut too, as far as
+	// is within reach (see pastCut).
 	text := s
 	if cut {
 		text = s + pastCut(after)
 	}
 	textWording := errorWording(text)
-	wording := textWording[:len(s)]
 	heads := make([]int, len(s))
 	if len(m.forms) > 0 {
 		// Each scan takes time in proportion to s, so a long value in a long
@@ -247,7 +247,7 @@ func (m *Masker) runStarts(s string, cut bool, after string) []int {
 				// tail ending at s[i] is the one to mask when any is: one that
 				// is shorter is shorter than longRun too.
 				longest := 0
-				if n := tails[i]; n >= longRun || n == len(f.v) && shortMasked(s, i-n+1, i, f.v, wording) {
+				if n := tails[i]; n >= longRun || n == len(f.v) && shortMasked(text, i-n+1, i, f.v, textWording) {
 					longest = n
 				}
 				if n := heads[i]; n >= longRun {

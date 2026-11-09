@@ -581,6 +581,7 @@ func TestCutValues(t *testing.T) {
 		{"a short value the cut runs through in the error's wording", "invalid: yaml: li", "ne 3: did not find expected key", []string{"line"}, "invalid: yaml: li"},
 		{"a short value the cut runs through where a type error quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int\n", []string{"line"}, "  line 4: cannot unmarshal !!str `********"},
 		{"a short value with new lines the cut runs through", "x a\nb", "\nc rest", []string{"a\nb\nc"}, "x ********"},
+		{"a short value whole at the cut that the text goes on with as a word", "refused: t0k", "t0k more", []string{"t0k"}, "refused: t0k"},
 		{"a short value that is a word of a type error quoting a value with a new line, cut after it", "  line 4: cannot unmarshal !!str `a\nb` into int", "\n  line 5: cannot unmarshal !!str `x` into int", []string{"int"}, "  line 4: cannot unmarshal !!str `a\nb` into int"},
 		{"a short value with a new line the cut runs through, no line ending near", "x a\nb", "c rest" + strings.Repeat("y", maxCutReach), []string{"a\nbc"}, "x ********"},
 		// Past maxCutReach, the line may go on as no type error does.
@@ -728,18 +729,19 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 		start[i] = len(s)
 	}
 	found := false
-	// In a cut text, the error's wording is told from the text it was cut
-	// from.
-	wording := errorWording(s)
+	// In a cut text, the error's wording, and whether a value is a word of
+	// its own, are told from the text it was cut from.
+	text := s
 	if cut {
-		wording = errorWording(s + after)[:len(s)]
+		text = s + after
 	}
+	wording := errorWording(text)
 	for _, v := range forms {
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
 				whole := run == v && (len(run) >= longRun ||
-					standsAlone(s, from, i, v) && !slices.Contains(wording[from:i+1], true))
+					standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
 				tail := len(run) >= longRun && strings.HasSuffix(v, run)
 				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {

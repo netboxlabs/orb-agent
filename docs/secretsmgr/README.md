@@ -87,10 +87,10 @@ as the agent sent it, not at a field you wrote:
 ```
 
 When one secret reference fills several fields, the note names them all. When
-different references hold the value the error quotes, it names none of them
-and says the error quotes the value of a secret reference: only the value
-shows what the error quotes, and naming the fields would also show that their
-secrets are equal.
+references in different fields hold the value the error quotes, it names none
+of them and says the error quotes the value of a secret reference: only the
+value shows what the error quotes, and naming the fields would also show that
+their secrets are equal.
 
 Only part of a refusal is kept: the agent logs at most 8 KiB of it and reports
 at most 1 KiB as the policy's error. A refusal that is cut ends with
