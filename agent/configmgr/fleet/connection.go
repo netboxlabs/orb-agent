@@ -2,6 +2,7 @@ package fleet
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -23,6 +24,17 @@ import (
 // try of a new ConnectionManager and must be 0, or JWT reconnects sleep 10s
 // before dialing. autopaho calls ReconnectBackoff before every attempt.
 var mqttReconnectBackoff = autopaho.NewConstantBackoff(10 * time.Second)
+
+// groupMembershipsRequestDelay is how long after sending its capabilities a
+// new connection asks for its group memberships, so Fleet has handled the
+// capabilities first. Tests shorten it before creating the connection, which
+// keeps it.
+var groupMembershipsRequestDelay = 10 * time.Second
+
+// errConnectionGone is a publish refused because the connection it was meant
+// for went down or the agent closed it: not a failure to report, since the
+// next connection sends its own.
+var errConnectionGone = errors.New("the MQTT connection is gone")
 
 // TopicMessageHandler handles messages for a specific topic
 type TopicMessageHandler func(topic string, payload []byte) error
@@ -53,14 +65,26 @@ type MQTTConnection struct {
 	dispatchMu               sync.Mutex // guards shuttingDown + dispatchQueue close
 	shuttingDown             bool
 	capabilitiesFailCount    int
-	groupMembershipFailCount int
-	heartbeatFailCount       int
+	groupMembershipFailCount atomic.Int32 // the group memberships request and Reconnect run on different goroutines
+	heartbeatFailCount       atomic.Int32 // the heartbeats and the offline one publish on different goroutines
 	mu                       sync.Mutex
 	// brokerMaxPacketSize is the broker's CONNACK maximum packet size. The
 	// client stores it too but never checks a publish against it, and an
 	// MQTT 5 server answers an oversized packet by closing the connection,
 	// so the OTLP bridge reads it to keep its messages under.
 	brokerMaxPacketSize atomic.Uint32
+	// managerCtx is connectionManager's context, which the agent cancels when
+	// it closes the manager. That ends the group memberships request that
+	// runs for it, and the manager is not said offline or disconnected again.
+	managerCtx    context.Context
+	managerCancel context.CancelFunc
+	// heartbeatsCancel ends the manager's heartbeats, before the offline one:
+	// a session that starts as the agent disconnects, which can be as soon
+	// as Connect returns, before OnConnectionUp runs, then never starts.
+	heartbeatsCancel context.CancelFunc
+	// groupsDelay is groupMembershipsRequestDelay when the connection was
+	// created.
+	groupsDelay time.Duration
 }
 
 // NewMQTTConnection creates a new MQTTConnection
@@ -77,6 +101,7 @@ func NewMQTTConnection(logger *slog.Logger, pMgr policymgr.PolicyManager, resetC
 		reconnectChan:      reconnectChan,
 		dispatchQueue:      make(chan dispatchJob, 100), // Buffered channel to prevent blocking MQTT acks
 		dispatchWorkerDone: make(chan struct{}),
+		groupsDelay:        groupMembershipsRequestDelay,
 	}
 }
 
@@ -156,8 +181,9 @@ type ConnectionDetails struct {
 // MQTTConnector defines the interface for MQTT connection operations.
 //
 // Connect and Reconnect take two distinct contexts:
-//   - ctx (lifecycle): passed to autopaho.NewConnection; must remain live until
-//     the connection is intentionally torn down (typically connCtx in fleet.go).
+//   - ctx (lifecycle): the parent of the context passed to
+//     autopaho.NewConnection; must remain live until the connection is
+//     intentionally torn down (typically connCtx in fleet.go).
 //   - waitCtx (wait): governs the AwaitConnection call and, for Reconnect, the
 //     disconnect-before-reconnect timeout; should be cancellable by shutdown
 //     (typically monitorCtx) so Stop() is not blocked by in-flight connect attempts.
@@ -325,12 +351,21 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 	// Tear down any prior state so repeated Connect calls don't leak goroutines.
 	// Only needed when a previous Connect left a running connection manager.
 	if connection.connectionManager != nil {
+		connection.managerCancel()
 		teardownCtx, teardownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = connection.connectionManager.Disconnect(teardownCtx)
 		teardownCancel()
 		connection.connectionManager = nil
 		connection.stopDispatchWorker()
 	}
+	managerCtx, managerCancel := context.WithCancel(ctx)
+	connection.managerCtx, connection.managerCancel = managerCtx, managerCancel
+	heartbeatsCtx, heartbeatsCancel := context.WithCancel(managerCtx)
+	connection.heartbeatsCancel = heartbeatsCancel
+	// connDown ends what runs for the connection that is up, when it goes
+	// down. autopaho runs OnConnectionUp and OnConnectionDown on one
+	// goroutine, so it needs no lock.
+	var connDown context.CancelFunc
 
 	// Reinitialize dispatch channels after validation and teardown.
 	connection.dispatchMu.Lock()
@@ -352,6 +387,8 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 		ConnectTimeout:                10 * time.Second,
 		ReconnectBackoff:              mqttReconnectBackoff,
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, connack *paho.Connack) {
+			connCtx, cancel := context.WithCancel(managerCtx)
+			connDown = cancel
 			connection.logger.Info("MQTT connection established", "server", serverURL.String())
 			connection.recordBrokerLimits(connack)
 
@@ -375,21 +412,21 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 
 			// Start heartbeat session without blocking OnConnectionUp: StartHeartbeats
 			// may wait for a prior session to drain on reconnect (OBS-2315 review).
-			go connection.heartbeater.StartHeartbeats(ctx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
+			go connection.heartbeater.StartHeartbeats(heartbeatsCtx, details.Topics.Heartbeat, details.ClientID, connection.publishToTopic, func() {
 				// Track heartbeat failures
-				connection.heartbeatFailCount++
+				failCount := connection.heartbeatFailCount.Add(1)
 				connection.logger.Error("heartbeat publish failed",
-					"fail_count", connection.heartbeatFailCount)
+					"fail_count", failCount)
 
 				// After 5 consecutive failures, trigger reconnect
-				if connection.heartbeatFailCount >= 5 {
+				if failCount >= 5 {
 					connection.logger.Warn("heartbeat publish failed 5 times, triggering JWT refresh and reconnect")
 					select {
 					case connection.reconnectChan <- struct{}{}:
 					default:
 						connection.logger.Debug("reconnect already in progress")
 					}
-					connection.heartbeatFailCount = 0
+					connection.heartbeatFailCount.Store(0)
 				}
 			})
 
@@ -428,40 +465,14 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 				return nil
 			})
 
-			// Wait for capabilities to be handled
-			time.Sleep(10 * time.Second)
-			go connection.messaging.sendGroupMembershipsRequest(ctx, func(ctx context.Context, payload []byte) error {
-				_, err := cm.Publish(ctx, &paho.Publish{
-					Topic:   details.Topics.Outbox,
-					Payload: payload,
-					QoS:     1,
-					Retain:  false,
-				})
-				if err != nil {
-					connection.groupMembershipFailCount++
-					connection.logger.Error("failed to publish group memberships request",
-						"error", err,
-						"fail_count", connection.groupMembershipFailCount)
-
-					// After 1 retry (2 failures), trigger reconnect
-					if connection.groupMembershipFailCount >= 2 {
-						connection.logger.Warn("group membership publish failed twice, triggering JWT refresh and reconnect")
-						select {
-						case connection.reconnectChan <- struct{}{}:
-						default:
-							connection.logger.Debug("reconnect already in progress")
-						}
-						connection.groupMembershipFailCount = 0
-					}
-					return err
-				}
-
-				// Reset counter on success
-				connection.groupMembershipFailCount = 0
-				return nil
-			})
+			go connection.requestGroupMemberships(connCtx, cm, details.Topics.Outbox)
 		},
-		OnConnectionDown: connection.onConnectionDown,
+		OnConnectionDown: func() bool {
+			if connDown != nil {
+				connDown()
+			}
+			return connection.onConnectionDown()
+		},
 		OnConnectError: func(err error) {
 			connection.logger.Error("MQTT connection error", "error", err)
 		},
@@ -483,10 +494,12 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 		cfg.ConnectPassword = []byte(details.Token)
 	}
 
-	// Create and start the connection manager using the long-lived context.
-	connection.connectionManager, err = autopaho.NewConnection(ctx, cfg)
+	// Create and start the connection manager under its own context, a child
+	// of the long-lived one.
+	connection.connectionManager, err = autopaho.NewConnection(managerCtx, cfg)
 	if err != nil {
 		connection.logger.Error("failed to create MQTT connection", "error", err)
+		managerCancel()
 		connection.stopDispatchWorker()
 		return err
 	}
@@ -511,11 +524,15 @@ func (connection *MQTTConnection) Connect(ctx context.Context, waitCtx context.C
 func (connection *MQTTConnection) Reconnect(ctx context.Context, waitCtx context.Context, details ConnectionDetails, backends map[string]backend.Backend, labels map[string]string, configFile string, timeout time.Duration) error {
 	connection.logger.Info("reconnecting to MQTT broker with refreshed credentials")
 
-	// Disconnect the existing connection
-	if connection.connectionManager != nil {
+	// Disconnect the existing connection, unless the agent has closed it
+	// already: after Fleet refused its credentials, or its attempts to
+	// refresh its token gave up.
+	if connection.managerOpen() {
 		// Use waitCtx for the disconnect timeout so shutdown can interrupt it.
 		disconnectCtx, cancel := context.WithTimeout(waitCtx, timeout)
+		connection.heartbeatsCancel()
 		connection.heartbeater.stop(details.Topics.Heartbeat, connection.publishToTopic)
+		connection.managerCancel()
 		err := connection.connectionManager.Disconnect(disconnectCtx)
 		cancel()
 		if err != nil {
@@ -527,8 +544,8 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, waitCtx context
 
 	// Reset failure counters
 	connection.capabilitiesFailCount = 0
-	connection.groupMembershipFailCount = 0
-	connection.heartbeatFailCount = 0
+	connection.groupMembershipFailCount.Store(0)
+	connection.heartbeatFailCount.Store(0)
 
 	// Connect with new details; thread both contexts through.
 	err := connection.Connect(ctx, waitCtx, details, backends, labels, configFile)
@@ -540,22 +557,82 @@ func (connection *MQTTConnection) Reconnect(ctx context.Context, waitCtx context
 	return nil
 }
 
-// Disconnect disconnects from the MQTT broker. It is nil-safe: calling
-// Disconnect when no connection manager exists is a no-op.
+// Disconnect disconnects from the MQTT broker. It is a no-op when no
+// connection manager exists, or the agent has disconnected it already: the
+// next attempts to refresh its token can give up too, and the agent can stop
+// after that.
 func (connection *MQTTConnection) Disconnect(ctx context.Context, heartbeatTopic string) error {
-	if connection.connectionManager == nil {
+	if !connection.managerOpen() {
+		if connection.connectionManager != nil {
+			connection.logger.Debug("MQTT connection already closed")
+		}
 		return nil
 	}
 
 	// Only attempt the offline heartbeat if we have a real topic; callers like
 	// the startup retry loop pass "" when no session was ever established.
+	connection.heartbeatsCancel()
 	if heartbeatTopic != "" {
 		connection.heartbeater.stop(heartbeatTopic, connection.publishToTopic)
 	}
 	// Disconnect first to stop receiving new messages, then stop the worker
+	connection.managerCancel()
 	err := connection.connectionManager.Disconnect(ctx)
 	connection.stopDispatchWorker()
 	return err
+}
+
+// managerOpen reports whether there is a connection manager the agent has not
+// closed.
+func (connection *MQTTConnection) managerOpen() bool {
+	return connection.connectionManager != nil && connection.managerCtx.Err() == nil
+}
+
+// requestGroupMemberships asks Fleet for the agent's group memberships on cm
+// once groupsDelay has passed, unless the connection goes down or the agent
+// closes it first (connCtx): the next connection asks on its own. It waits on
+// its own goroutine: OnConnectionUp runs on autopaho's, and a disconnect could
+// not complete, nor a lost connection be noticed, while it waited there.
+func (connection *MQTTConnection) requestGroupMemberships(connCtx context.Context, cm *autopaho.ConnectionManager, outbox string) {
+	select {
+	case <-connCtx.Done():
+		connection.logger.Debug("MQTT connection gone before asking for group memberships")
+		return
+	case <-time.After(connection.groupsDelay):
+	}
+	connection.messaging.sendGroupMembershipsRequest(connCtx, func(ctx context.Context, payload []byte) error {
+		_, err := cm.Publish(ctx, &paho.Publish{
+			Topic:   outbox,
+			Payload: payload,
+			QoS:     1,
+			Retain:  false,
+		})
+		if err != nil {
+			if connCtx.Err() != nil {
+				return fmt.Errorf("%w: %w", errConnectionGone, err)
+			}
+			failCount := connection.groupMembershipFailCount.Add(1)
+			connection.logger.Error("failed to publish group memberships request",
+				"error", err,
+				"fail_count", failCount)
+
+			// After 1 retry (2 failures), trigger reconnect
+			if failCount >= 2 {
+				connection.logger.Warn("group membership publish failed twice, triggering JWT refresh and reconnect")
+				select {
+				case connection.reconnectChan <- struct{}{}:
+				default:
+					connection.logger.Debug("reconnect already in progress")
+				}
+				connection.groupMembershipFailCount.Store(0)
+			}
+			return err
+		}
+
+		// Reset counter on success
+		connection.groupMembershipFailCount.Store(0)
+		return nil
+	})
 }
 
 func (connection *MQTTConnection) subscribeToTopic(topic string) error {
@@ -588,6 +665,6 @@ func (connection *MQTTConnection) publishToTopic(ctx context.Context, topic stri
 	}
 	// Reset heartbeat failure counter on successful publish
 	// (heartbeats use this function, so successful publish means connection is ok)
-	connection.heartbeatFailCount = 0
+	connection.heartbeatFailCount.Store(0)
 	return nil
 }

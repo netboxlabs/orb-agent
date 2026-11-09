@@ -100,6 +100,12 @@ func (hb *heartbeater) stop(heartbeatTopic string, publishFunc func(ctx context.
 }
 
 func (hb *heartbeater) runHeartbeatLoop(ctx context.Context, ticker *time.Ticker, heartbeatTopic string, agentID string, publishFunc func(ctx context.Context, topic string, payload []byte) error, onFailure func()) {
+	// The connection can be closed before its heartbeats start: the agent
+	// can disconnect it as soon as it is up, before OnConnectionUp runs.
+	if ctx.Err() != nil {
+		hb.logger.Debug("connection closed before its heartbeats started")
+		return
+	}
 	hb.logger.Debug("start heartbeats routine")
 	hb.sendSingleHeartbeat(ctx, heartbeatTopic, publishFunc, agentID, time.Now(), messages.Online, onFailure)
 

@@ -369,7 +369,7 @@ func (fleetManager *FleetConfigManager) Start(ctx context.Context, cfg config.Co
 	fleetManager.monitorCtx, fleetManager.monitorCancel = context.WithCancel(context.Background())
 
 	// connCtx is independent of monitorCtx: it controls the MQTT connection and
-	// is the parent for heartbeat goroutines. It is cancelled by Stop() only after
+	// is an ancestor of the heartbeat goroutines'. It is cancelled by Stop() only after
 	// Disconnect() returns, so the offline heartbeat is always sent on a live connection.
 	fleetManager.connCtx, fleetManager.connCancel = context.WithCancel(context.Background())
 
