@@ -57,9 +57,9 @@ auth_args:
 ```
 
 Wherever the agent reports or logs its configuration, it masks the `role_id`
-and the `secret_id` as `********`, as it masks a token or a password. The
-`role_id` is masked too because a role that binds no `secret_id` logs in with
-the `role_id` alone.
+and the `secret_id` as `********`, as it masks a token or a password, even when
+one is written as unquoted digits. The `role_id` is masked too because, for a
+role that binds no `secret_id`, Vault accepts a login with the `role_id` alone.
 
 ### UserPass Authentication
 

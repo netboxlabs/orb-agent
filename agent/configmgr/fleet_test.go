@@ -378,8 +378,8 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 // sources a value of its own. The config is reported to Fleet in the agent's
 // capabilities, which Fleet stores and shows to anyone in the org who can read
 // the agent, and logged at DEBUG, so none of the values may be in it
-// (MON-880). An AppRole's role_id is masked with its secret_id: a role that
-// binds no secret_id logs in with the role_id alone.
+// (MON-880). An AppRole's role_id is masked with its secret_id: Vault accepts
+// a login with the role_id alone for a role that binds no secret_id.
 func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	fleetManager := newFleetConfigManager(logger, &mockPolicyManagerForFleet{}, &mockBackendState{}, nil)
@@ -396,6 +396,23 @@ func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T
 			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{
 				"role_id": "approle-role-id-value", "secret_id": "approle-secret-id-value", "mount_path": "approle",
 			}
+		},
+	}, {
+		// A custom role_id or secret_id can be all digits; written unquoted,
+		// YAML decodes it into auth_args as a number, and the login still
+		// sends it as a string.
+		name:        "vault approle written as numbers",
+		credentials: []string{"4242424242", "8675309123"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "approle"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"role_id": 4242424242, "secret_id": uint64(8675309123), "wrapping_token": false}
+		},
+	}, {
+		name:        "vault userpass password written as a number",
+		credentials: []string{"135792468"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "userpass"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"username": "agent", "password": 135792468}
 		},
 	}, {
 		name:        "vault token",

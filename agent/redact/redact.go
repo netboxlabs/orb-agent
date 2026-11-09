@@ -25,7 +25,7 @@ var sensitiveFieldPatterns = []string{
 	"bearer",
 	"jwt",
 	"secret_id", // A Vault AppRole's credential
-	"role_id",   // Its role, which logs in alone when the role binds no secret_id
+	"role_id",   // Its role: Vault accepts it alone for a role that binds no secret_id
 	"secret",    // Exact match only
 	"token",     // Exact match only
 }
@@ -113,7 +113,15 @@ func redactValue(val reflect.Value, fieldName string) any {
 		if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
 			return redactSliceSensitive(val)
 		}
-		// For non-string sensitive fields, return as-is (e.g., port numbers)
+		// Redact numbers: YAML decodes a credential written as unquoted
+		// digits into an untyped map, such as a Vault auth_args, as one.
+		switch val.Kind() {
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+			reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+			reflect.Float32, reflect.Float64:
+			return MaskedSecret
+		}
+		// Keep a bool, such as wrapping_token: it holds no credential.
 	}
 
 	switch val.Kind() {

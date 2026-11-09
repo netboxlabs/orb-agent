@@ -294,6 +294,27 @@ func TestSensitiveData_CaseVariations(t *testing.T) {
 	}
 }
 
+// TestSensitiveData_NumbersUnderASensitiveName masks a number under a
+// sensitive name, as YAML decodes a credential written as unquoted digits into
+// an untyped map, and keeps a bool, which holds no credential.
+func TestSensitiveData_NumbersUnderASensitiveName(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"password":       135792468,
+		"secret_id":      uint64(8675309123),
+		"api_key":        1.5,
+		"wrapping_token": false,
+	}).(map[string]any)
+
+	for _, name := range []string{"password", "secret_id", "api_key"} {
+		if redacted[name] != MaskedSecret {
+			t.Errorf("Expected %s to be masked, got %v (type %T)", name, redacted[name], redacted[name])
+		}
+	}
+	if redacted["wrapping_token"] != false {
+		t.Errorf("Expected wrapping_token to be kept, got %v", redacted["wrapping_token"])
+	}
+}
+
 // TestSensitiveData_NonStringValues tests non-string sensitive fields
 func TestSensitiveData_NonStringValues(t *testing.T) {
 	original := map[string]any{
@@ -381,7 +402,7 @@ func TestIsSensitiveField(t *testing.T) {
 		{"bearer", true},
 		{"jwt", true},
 		{"secret_id", true}, // A Vault AppRole's credential
-		{"role_id", true},   // Its role, which logs in alone when the role binds no secret_id
+		{"role_id", true},   // Its role: Vault accepts it alone for a role that binds no secret_id
 		{"client_id", false},
 		{"username", false},
 		{"url", false},
