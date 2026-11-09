@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/netboxlabs/orb-agent/agent/backend"
@@ -23,6 +24,10 @@ func (messaging *Messaging) sendGroupMembershipsRequest(ctx context.Context, pub
 
 	messaging.logger.Debug("sending group memberships request", "value", string(body))
 	err = publishFunc(ctx, body)
+	if errors.Is(err, errConnectionGone) {
+		messaging.logger.Debug("group memberships request not sent", "error", err)
+		return
+	}
 	if err != nil {
 		messaging.logger.Error("error sending group memberships request", "error", err)
 	}
