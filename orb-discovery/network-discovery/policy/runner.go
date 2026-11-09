@@ -29,6 +29,15 @@ const (
 	defaultTimeout            = 5 * time.Minute
 )
 
+// errPolicyStopped is the reason on a run that its policy's stop cut short.
+// The run is marked failed: the agent counts only completed and failed runs as
+// finished.
+var errPolicyStopped = errors.New("run interrupted: policy stopped")
+
+// schedulerStopTimeout is how long Stop waits for a running job. It is
+// gocron's default; tests shorten it.
+var schedulerStopTimeout = 10 * time.Second
+
 // targetInfo stores information about each target
 type targetInfo struct {
 	original string
@@ -40,6 +49,7 @@ type targetInfo struct {
 type Runner struct {
 	scheduler gocron.Scheduler
 	ctx       context.Context
+	cancel    context.CancelFunc // cancels ctx, ending a running scan
 	task      gocron.Task
 	client    diode.Client
 	logger    *slog.Logger
@@ -48,6 +58,10 @@ type Runner struct {
 	config    config.PolicyConfig
 	targets   []targetInfo
 	runStore  *RunStore
+
+	// ingestCtx outlives ctx: Stop cancels it once it stops waiting for jobs.
+	ingestCtx    context.Context
+	cancelIngest context.CancelFunc
 }
 
 // parseTargets parses the target specifications and returns targetInfo slice
@@ -94,7 +108,7 @@ func (r *Runner) getIPWithMask(ipStr string, defaultMask string) string {
 
 // NewRunner returns a new policy runner
 func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy config.Policy, client diode.Client, runStore *RunStore) (*Runner, error) {
-	s, err := gocron.NewScheduler()
+	s, err := gocron.NewScheduler(gocron.WithStopTimeout(schedulerStopTimeout))
 	if err != nil {
 		return nil, err
 	}
@@ -114,13 +128,15 @@ func NewRunner(ctx context.Context, logger *slog.Logger, name string, policy con
 			gocron.OneTimeJobStartDateTime(time.Now().Add(1*time.Second))), runner.task, gocron.WithSingletonMode(gocron.LimitModeReschedule))
 	}
 	if err != nil {
-		return nil, err
+		// The scheduler runs a goroutine from creation; no runner owns it now.
+		return nil, errors.Join(err, s.Shutdown())
 	}
 	runner.timeout = time.Duration(policy.Config.Timeout) * time.Minute
 	if runner.timeout == 0 {
 		runner.timeout = defaultTimeout
 	}
-	runner.ctx = context.WithValue(ctx, policyKey, name)
+	runner.ctx, runner.cancel = context.WithCancel(context.WithValue(ctx, policyKey, name))
+	runner.ingestCtx, runner.cancelIngest = context.WithCancel(context.WithoutCancel(runner.ctx))
 	runner.scope = policy.Scope
 	runner.config = policy.Config
 
@@ -285,6 +301,17 @@ func (r *Runner) run() {
 	if len(*warnings) > 0 {
 		r.logger.Warn("run finished with warnings", "warnings", fmt.Sprintf("%v", *warnings))
 	}
+	// A scan whose policy stopped is neither a failed nor a successful
+	// discovery, however it ended.
+	if r.ctx.Err() != nil {
+		attrs := []any{"policy", policyName}
+		if err != nil {
+			attrs = append(attrs, "error", err)
+		}
+		r.logger.Info("nmap scan stopped with its policy", attrs...)
+		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, 0)
+		return
+	}
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 			r.logger.Warn("nmap scan timed out; consider increasing policy timeout",
@@ -377,11 +404,24 @@ func (r *Runner) run() {
 
 	annotateEntitiesWithRunID(entities, run.ID)
 
-	resp, err := r.client.Ingest(r.ctx, entities, diode.WithIngestMetadata(diode.Metadata{
+	// A policy stopped before its ingest starts sends nothing, so a replacement
+	// cannot be followed by results from the old configuration.
+	if r.ctx.Err() != nil {
+		r.logger.Info("ingest skipped: policy stopped", "policy", policyName, "reason", errPolicyStopped, "entity_count", len(entities))
+		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, 0)
+		return
+	}
+
+	// A stop ends the scan, not an ingest already underway: Stop waits for the
+	// ingest and cancels it only if that wait runs out.
+	resp, err := r.client.Ingest(r.ingestCtx, entities, diode.WithIngestMetadata(diode.Metadata{
 		"policy_name": policyName,
 		"run_id":      run.ID,
 	}))
-	if err != nil {
+	if err != nil && r.ingestCtx.Err() != nil {
+		r.logger.Info("ingest stopped with its policy", "policy", policyName, "entity_count", len(entities), "error", err)
+		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, errPolicyStopped, len(entities))
+	} else if err != nil {
 		r.logger.Error("error ingesting entities", "error", err, "policy", policyName, "entity_count", len(entities))
 		r.runStore.UpdateRun(policyName, run.ID, RunStatusFailed, err, len(entities))
 	} else if resp != nil && resp.Errors != nil {
@@ -402,15 +442,18 @@ func (r *Runner) Start() {
 	r.scheduler.Start()
 }
 
-// Stop stops the policy runner
+// Stop stops the policy runner. It cancels first, which kills a running nmap
+// scan; the scheduler can only wait for one. Once Stop returns the policy
+// sends nothing: an ingest the wait gave up on is cancelled. The policy leaves
+// the active count and the scheduler shuts down even when that wait overruns.
 func (r *Runner) Stop() error {
-	if err := r.scheduler.StopJobs(); err != nil {
-		return err
-	}
+	r.cancel()
 	if rMetric := metrics.GetActivePolicies(); rMetric != nil {
 		rMetric.Add(r.ctx, -1)
 	}
-	return r.scheduler.Shutdown()
+	err := r.scheduler.StopJobs()
+	r.cancelIngest()
+	return errors.Join(err, r.scheduler.Shutdown())
 }
 
 // ipAddressEntity builds the IP address entity for one scanned host.

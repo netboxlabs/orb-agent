@@ -101,8 +101,7 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 	assert.False(t, manager.HasPolicy("policy3"))
 
 	// Stop policy 1
-	err = manager.StopPolicy("policy1")
-	assert.NoError(t, err)
+	manager.StopPolicy("policy1")
 
 	// Check if the policy exists
 	assert.False(t, manager.HasPolicy("policy1"))
@@ -110,8 +109,7 @@ func TestManagerPolicyLifecycle(t *testing.T) {
 	assert.False(t, manager.HasPolicy("policy3"))
 
 	// Stop Manager
-	err = manager.Stop()
-	assert.NoError(t, err)
+	manager.Stop()
 
 	// Check if the policies exist
 	assert.False(t, manager.HasPolicy("policy1"))
@@ -156,8 +154,7 @@ func TestManagerGetPolicyStatuses(t *testing.T) {
 	assert.Empty(t, statuses[0].Runs)
 
 	// Stop policy
-	err = manager.StopPolicy("policy1")
-	assert.NoError(t, err)
+	manager.StopPolicy("policy1")
 
 	// Statuses should still include policy1 if it has runs
 	_ = manager.GetPolicyStatuses()

@@ -163,6 +163,6 @@ The Orb Agent will resolve the Vault reference and use the actual secret value f
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values.
+If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, token expired), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in Vault without restarting the Orb Agent or manually updating policies.

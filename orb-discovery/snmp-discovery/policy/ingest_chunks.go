@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -67,7 +68,15 @@ func (r *Runner) ingest(log *slog.Logger, entities []diode.Entity, opts ...diode
 	var errs []string
 	sent := 0
 	for i, chunk := range chunks {
-		resp, err := r.client.Ingest(r.ctx, chunk, opts...)
+		// Nothing more is sent once a stop has ended the ingest, and the
+		// error says why: the policy's stop, or the process shutting down.
+		var resp *diodepb.IngestResponse
+		var err error
+		if r.ingestCtx.Err() != nil {
+			err = context.Cause(r.ingestCtx)
+		} else {
+			resp, err = r.client.Ingest(r.ingestCtx, chunk, opts...)
+		}
 		if err != nil {
 			if len(chunks) > 1 {
 				err = fmt.Errorf("request %d of %d failed, %d of %d entities already sent: %w",

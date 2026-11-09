@@ -353,8 +353,8 @@ func TestDopplerPollSecrets_DetectsChange(t *testing.T) {
 
 	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
 
-	gotCalls := make(chan map[string]bool, 1)
-	d.RegisterUpdatePoliciesCallback(func(m map[string]bool) {
+	gotCalls := make(chan map[string]error, 1)
+	d.RegisterUpdatePoliciesCallback(func(m map[string]error) {
 		gotCalls <- m
 	})
 
@@ -367,7 +367,7 @@ func TestDopplerPollSecrets_DetectsChange(t *testing.T) {
 	d.pollSecrets()
 	select {
 	case m := <-gotCalls:
-		require.Equal(t, map[string]bool{"policy-1": true}, m)
+		require.Equal(t, map[string]error{"policy-1": nil}, m)
 	case <-time.After(time.Second):
 		t.Fatal("expected callback not invoked")
 	}
@@ -385,7 +385,7 @@ func TestDopplerPollSecrets_NoChangeNoCallback(t *testing.T) {
 	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
 
 	called := atomic.Bool{}
-	d.RegisterUpdatePoliciesCallback(func(map[string]bool) {
+	d.RegisterUpdatePoliciesCallback(func(map[string]error) {
 		called.Store(true)
 	})
 
@@ -396,15 +396,15 @@ func TestDopplerPollSecrets_NoChangeNoCallback(t *testing.T) {
 	require.False(t, called.Load(), "no change → no callback")
 }
 
-func TestDopplerPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
+func TestDopplerPollSecrets_FailureKeepsTheEntryAndReportsTheError(t *testing.T) {
 	fake := newFakeDopplerServer()
 	defer fake.Close()
 	fake.set("orb", "prd", "API_KEY", "v1")
 
 	d := newDopplerManagerForTest(t, fake, config.DopplerManager{Project: "orb", Config: "prd"})
 
-	gotCalls := make(chan map[string]bool, 1)
-	d.RegisterUpdatePoliciesCallback(func(m map[string]bool) {
+	gotCalls := make(chan map[string]error, 1)
+	d.RegisterUpdatePoliciesCallback(func(m map[string]error) {
 		gotCalls <- m
 	})
 
@@ -416,15 +416,17 @@ func TestDopplerPollSecrets_FailureEvictsAndReportsFalse(t *testing.T) {
 	d.pollSecrets()
 	select {
 	case m := <-gotCalls:
-		require.Equal(t, map[string]bool{"policy-1": false}, m)
+		require.Len(t, m, 1)
+		require.Error(t, m["policy-1"])
 	case <-time.After(time.Second):
 		t.Fatal("expected failure callback not invoked")
 	}
 
 	d.mu.Lock()
-	_, present := d.usedVars["API_KEY"]
+	entry, present := d.usedVars["API_KEY"]
 	d.mu.Unlock()
-	require.False(t, present, "failed entry must be evicted from cache")
+	require.True(t, present, "a failed entry stays, so the next poll reads it again")
+	require.True(t, entry.failed, "a failed entry is marked failed, so its value is not served")
 }
 
 func TestNewManager_ReturnsDopplerManagerWhenActive(t *testing.T) {

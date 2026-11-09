@@ -78,25 +78,24 @@ func (m *Manager) StartPolicy(name string, policy config.Policy) error {
 	return nil
 }
 
-// StopPolicy stops the policy
-func (m *Manager) StopPolicy(name string) error {
-	if m.HasPolicy(name) {
-		if err := m.policies[name].Stop(); err != nil {
-			return err
-		}
-		delete(m.policies, name)
+// StopPolicy stops the policy and drops it. A stop that reports an error is
+// logged and the policy dropped all the same, so its name can start again.
+func (m *Manager) StopPolicy(name string) {
+	r, ok := m.policies[name]
+	if !ok {
+		return
 	}
-	return nil
+	if err := r.Stop(); err != nil {
+		m.logger.Warn("policy removed, but its stop reported an error", "policy", name, "error", err)
+	}
+	delete(m.policies, name)
 }
 
-// Stop stops the policy manager
-func (m *Manager) Stop() error {
+// Stop stops every policy
+func (m *Manager) Stop() {
 	for name := range m.policies {
-		if err := m.StopPolicy(name); err != nil {
-			return err
-		}
+		m.StopPolicy(name)
 	}
-	return nil
 }
 
 // GetCapabilities returns the capabilities of network-discovery

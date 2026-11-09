@@ -167,7 +167,7 @@ func createTestVault(t *testing.T) (*docker.DockerCluster, *vault.Client) {
 
 // newTestVaultManager builds a vaultManager wired into pollingBase for tests
 // that bypass Start (which is the normal initializer for the base).
-func newTestVaultManager(ctx context.Context, logger *slog.Logger, client *vault.Client, callback func(map[string]bool)) *vaultManager {
+func newTestVaultManager(ctx context.Context, logger *slog.Logger, client *vault.Client, callback func(map[string]error)) *vaultManager {
 	vm := &vaultManager{
 		pollingBase: pollingBase{
 			logger:   logger,
@@ -601,7 +601,7 @@ func TestVaultManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 
 	// Test registering a callback
 	called := false
-	callback := func(_ map[string]bool) {
+	callback := func(_ map[string]error) {
 		called = true
 	}
 
@@ -609,7 +609,7 @@ func TestVaultManager_RegisterUpdatePoliciesCallback(t *testing.T) {
 	assert.NotNil(t, vm.callback)
 
 	// Manually call the callback to verify it works
-	vm.callback(map[string]bool{"policy1": true})
+	vm.callback(map[string]error{"policy1": nil})
 	assert.True(t, called)
 }
 
@@ -623,9 +623,9 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 	defer cancel()
 
 	var callbackCalled bool
-	var callbackPolicyIDs map[string]bool
+	var callbackPolicyIDs map[string]error
 
-	callback := func(policyIDs map[string]bool) {
+	callback := func(policyIDs map[string]error) {
 		callbackCalled = true
 		callbackPolicyIDs = policyIDs
 	}
@@ -661,26 +661,26 @@ func TestVaultManager_pollSecrets(t *testing.T) {
 	assert.NotNil(t, callbackPolicyIDs)
 	assert.Contains(t, callbackPolicyIDs, "policy1")
 	assert.Contains(t, callbackPolicyIDs, "policy2")
-	assert.True(t, callbackPolicyIDs["policy1"])
-	assert.True(t, callbackPolicyIDs["policy2"])
+	assert.NoError(t, callbackPolicyIDs["policy1"])
+	assert.NoError(t, callbackPolicyIDs["policy2"])
 
 	// Verify the cached value was updated
 	assert.Equal(t, "newsecretvalue", vm.usedVars["testsecret/app/credentials/password"].Value)
 }
 
-// TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse exercises the
-// behavior Vault inherited from pollingBase via the Phase 2 refactor: a
-// failed fetch during polling now evicts the cached entry and signals the
-// affected policies as failed. The test bypasses Start (no Docker) by
-// constructing a vaultManager directly and overriding the wired fetch with
-// a stub that returns an error for the cached path.
-func TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse(t *testing.T) {
+// TestVaultManager_PollSecretsFailureKeepsTheEntryAndReportsTheError exercises
+// the behavior Vault inherits from pollingBase: a failed fetch during polling
+// reports the error for the affected policies and keeps the entry, marked
+// failed, so the next poll reads it again. The test bypasses Start (no
+// Docker) by constructing a vaultManager directly and overriding the wired
+// fetch with a stub that returns an error for the cached path.
+func TestVaultManager_PollSecretsFailureKeepsTheEntryAndReportsTheError(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	gotCalls := make(chan map[string]bool, 1)
-	callback := func(m map[string]bool) { gotCalls <- m }
+	gotCalls := make(chan map[string]error, 1)
+	callback := func(m map[string]error) { gotCalls <- m }
 
 	const path = "testsecret/app/credentials/password"
 	vm := &vaultManager{
@@ -708,15 +708,18 @@ func TestVaultManager_PollSecretsFailureEvictsAndSignalsFalse(t *testing.T) {
 
 	select {
 	case m := <-gotCalls:
-		require.Equal(t, map[string]bool{"policy-1": false, "policy-2": false}, m)
+		require.Len(t, m, 2)
+		require.ErrorContains(t, m["policy-1"], "vault simulated read failure")
+		require.ErrorContains(t, m["policy-2"], "vault simulated read failure")
 	case <-time.After(time.Second):
 		t.Fatal("expected failure callback was not invoked")
 	}
 
 	vm.mu.Lock()
-	_, present := vm.usedVars[path]
+	entry, present := vm.usedVars[path]
 	vm.mu.Unlock()
-	require.False(t, present, "failed entry must be evicted from the cache")
+	require.True(t, present, "a failed entry stays, so the next poll reads it again")
+	require.True(t, entry.failed, "a failed entry is marked failed, so its value is not served")
 }
 
 func TestVaultManager_Start(t *testing.T) {

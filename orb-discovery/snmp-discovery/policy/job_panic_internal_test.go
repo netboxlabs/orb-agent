@@ -381,6 +381,7 @@ func TestProbePanicsCountedWhenTheScanFails(t *testing.T) {
 		timeout    time.Duration
 		stop       bool
 		wantReason *regexp.Regexp
+		wantLevel  string
 		wantLine   string
 	}{
 		{
@@ -388,6 +389,7 @@ func TestProbePanicsCountedWhenTheScanFails(t *testing.T) {
 			factory:    panicking,
 			timeout:    10 * time.Second,
 			wantReason: regexp.MustCompile(`^no hosts responded to SNMP probe; 3 probes panicked, the log has the first one's stack$`),
+			wantLevel:  "WARN",
 			wantLine:   "no hosts responded to SNMP probe",
 		},
 		{
@@ -396,13 +398,15 @@ func TestProbePanicsCountedWhenTheScanFails(t *testing.T) {
 			timeout:    10 * time.Second,
 			stop:       true,
 			wantReason: regexp.MustCompile(`^context canceled; 2 probes panicked, the log has the first one's stack$`),
-			wantLine:   "SNMP probe scan interrupted",
+			wantLevel:  "INFO",
+			wantLine:   "SNMP probe scan stopped with its policy",
 		},
 		{
 			name:       "the scan runs out of time",
 			factory:    silentLast,
 			timeout:    300 * time.Millisecond,
 			wantReason: regexp.MustCompile(`^context deadline exceeded \(.*\); 2 probes panicked, the log has the first one's stack$`),
+			wantLevel:  "WARN",
 			wantLine:   "SNMP probe scan interrupted",
 		},
 	} {
@@ -425,7 +429,7 @@ func TestProbePanicsCountedWhenTheScanFails(t *testing.T) {
 			assert.Regexp(t, tc.wantReason, runs[0].Reason)
 			assert.Len(t, errorRecords(t, logs), 1)
 			var lines []map[string]any
-			for _, record := range recordsAt(t, logs, "WARN") {
+			for _, record := range recordsAt(t, logs, tc.wantLevel) {
 				if record["msg"] == tc.wantLine {
 					lines = append(lines, record)
 				}
