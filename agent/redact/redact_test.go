@@ -380,6 +380,8 @@ func TestIsSensitiveField(t *testing.T) {
 		{"secret", true},
 		{"bearer", true},
 		{"jwt", true},
+		{"secret_id", true}, // A Vault AppRole's credential
+		{"role_id", true},   // Its role, which logs in alone when the role binds no secret_id
 		{"client_id", false},
 		{"username", false},
 		{"url", false},

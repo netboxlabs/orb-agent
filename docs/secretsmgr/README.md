@@ -46,7 +46,10 @@ without editing the YAML, which suits injecting them at deploy time. See
 The agent logs a policy it applies by its ID and name only, at every log level,
 so its own lines carry no resolved values. With debug logging on, the provider
 logs the references it resolves, never the values. See
-[Debug Logging](../config_samples.md#debug-logging).
+[Debug Logging](../config_samples.md#debug-logging). The provider's own
+credentials in the agent's configuration, such as a token, a password, a client
+secret or a Vault AppRole's `role_id` and `secret_id`, are masked as `********`
+wherever the agent reports or logs its configuration.
 
 A backend that refuses a policy can quote one of its values in the error, as a
 type error does for a reference in a field that takes a number. Before the

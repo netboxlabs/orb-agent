@@ -24,8 +24,10 @@ var sensitiveFieldPatterns = []string{
 	"authtoken",
 	"bearer",
 	"jwt",
-	"secret", // Exact match only
-	"token",  // Exact match only
+	"secret_id", // A Vault AppRole's credential
+	"role_id",   // Its role, which logs in alone when the role binds no secret_id
+	"secret",    // Exact match only
+	"token",     // Exact match only
 }
 
 // sensitiveFieldSuffixes contains lowercase suffixes that indicate sensitive fields
