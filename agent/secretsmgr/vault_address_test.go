@@ -70,6 +70,10 @@ func TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt(t *testing
 		"https://Pr0xy/pa55word@127.0.0.1:1",
 		"https://Pr0xy?pa55word@127.0.0.1:1",
 		"https://Pr0xy#pa55word@127.0.0.1:1",
+		// An address written without //, or without a scheme.
+		"https:Pr0xy:pa55word@127.0.0.1:1",
+		"Pr0xy:pa55word@127.0.0.1:1",
+		"Pr0xy-pa55word@127.0.0.1:1",
 	} {
 		logs := &bytes.Buffer{}
 		vm := &vaultManager{

@@ -408,6 +408,11 @@ func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 		"https://T0k/en@vault:8200": "https://********@vault:8200",
 		"https://T0k?en@vault:8200": "https://********@vault:8200",
 		"https://T0k#en@vault:8200": "https://********@vault:8200",
+		// A URL written without //, which a parser reads as a scheme and an
+		// opaque part: what is before its last @ is masked.
+		"https:u:s3cret@vault.example.com":   "https:********@vault.example.com",
+		"u:s3cret@vault.example.com:8200":    "u:********@vault.example.com:8200",
+		"https:u:s3cret@vault.example.com?x": "https:********@vault.example.com?x",
 		// So is an @ in a path, at the cost of the host it hides.
 		"https://registry.example.com/@scope/pkg": "https://********@scope/pkg",
 	} {

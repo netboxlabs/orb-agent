@@ -58,16 +58,18 @@ func withoutUserInfo(address string) (string, string, error) {
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
-	v.preLogger.Info("starting secrets manager", "active", "vault", "address", redact.URL(v.config.Address))
-
 	if v.config.Mount != "" && hasEmptySegment(v.config.Mount) {
 		return fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
 	}
 
+	// The address is checked before it is logged: one no URL parser reads as
+	// one is refused, and where its user info ends is a guess.
 	address, basicAuth, err := withoutUserInfo(v.config.Address)
 	if err != nil {
 		return err
 	}
+	v.preLogger.Info("starting secrets manager", "active", "vault", "address", redact.URL(v.config.Address))
+
 	vaultCfg := vault.DefaultConfig()
 	vaultCfg.Address = address
 	if v.config.Timeout == nil || *v.config.Timeout == 0 {

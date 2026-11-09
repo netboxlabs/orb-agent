@@ -200,7 +200,10 @@ func mapKey(key reflect.Value) string {
 // password, which can then be a token. Any other s is returned as it is.
 func URL(s string) string {
 	scheme := strings.Index(s, "://")
-	if scheme < 0 || !strings.Contains(s[scheme:], "@") {
+	if scheme < 0 {
+		return opaqueURL(s)
+	}
+	if !strings.Contains(s[scheme:], "@") {
 		return s
 	}
 	u, err := url.Parse(s)
@@ -220,6 +223,20 @@ func URL(s string) string {
 	masked := *u
 	masked.User = url.User("xxxxx")
 	return strings.Replace(masked.String(), "://xxxxx@", "://"+MaskedSecret+"@", 1)
+}
+
+// opaqueURL masks, in a URL written without //, which a parser reads as a
+// scheme and an opaque part, as in https:user:password@host or
+// user:password@host, everything between its scheme and its last @.
+func opaqueURL(s string) string {
+	if !strings.Contains(s, "@") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || !strings.Contains(u.Opaque, "@") {
+		return s
+	}
+	return s[:strings.Index(s, ":")+1] + MaskedSecret + s[strings.LastIndex(s, "@"):]
 }
 
 // isString reports whether val holds a string, through any pointer or
