@@ -107,10 +107,11 @@ masked when one is a value whole, as it is or as a backend writes a host it
 was given: without its line breaks, an address or a prefix in its canonical
 form (`2001:db8::1` for `2001:DB8::1`), or with a port added
 (`[2001:db8::1]:9339`). The agent compares the two without their line breaks
-or the spaces around them, and masks a reason or a printed line that quotes a
-value in those forms too. Any other target is kept as reported: a short
-value such as a port does not mask a part of a host name, and the addresses
-a backend expands a range or a prefix into are not masked either.
+or the spaces around them, and whatever the case of their letters, as host
+names are compared. It masks a reason or a printed line that quotes a value
+in those forms, or in lower case, too. Any other target is kept as reported:
+a short value such as a port does not mask a part of a host name, and the
+addresses a backend expands a range or a prefix into are not masked either.
 
 To mask them, the agent keeps the values of a policy's last two resolutions
 that differ, for as long as it runs the policy: after an edit or a rotation,
@@ -122,18 +123,18 @@ the policy's previous resolution, or, while one of the last two is the
 policy's first on that backend, after the agent began to apply that one: an
 earlier run can quote a value the agent no longer keeps, or one of another
 policy the backend ran under the name. After a resolution the backend
-refused, only the runs it started after the next one began are kept. A
-policy stored without being applied, because its secrets did not resolve or
-its backend was not ready, keeps none of the runs reported under its name.
-A run without a start time is kept whatever its policy, since nothing tells
-when it began; every discovery backend gives each run one. This relies on
-each backend removing a policy before it applies an update:
-one that fails to remove it, and then refuses the update too, can go on
-running a value the agent no longer keeps. When the policy is removed, its
-values keep masking the backend's output for a minute, for the lines it
-printed before the removal, and the agent then drops them. A line a backend
-prints about the policy after that, such as one from a backend that failed
-to remove it, is relayed as printed.
+refused, only the runs it started after the next one began are kept. A policy
+stored without being applied, because its secrets did not resolve or its
+backend was not ready, keeps none of the runs reported under its name. A run
+without a start time is kept whatever its policy, since nothing tells when it
+began; every discovery backend gives each run one. This relies on each
+backend removing a policy before it applies an update: one that fails to
+remove it, and then refuses the update too, can go on running a value the
+agent no longer keeps. When the policy is removed, its values keep masking
+the backend's output for a minute, for the lines it printed before the
+removal, and the agent then drops them. A line a backend prints about the
+policy after that, such as one from a backend that failed to remove it, is
+relayed as printed.
 
 ## Rotation
 

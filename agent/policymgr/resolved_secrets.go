@@ -356,9 +356,11 @@ func (m *refusalMasks) maskRuns(runs []policies.RunData) {
 // given into a run's target: device-discovery leaves out its line breaks,
 // snmp-discovery writes an address or a prefix in its canonical form, and
 // gnmi-discovery adds a port. A target is one of the values when the two are
-// the same without their line breaks and the spaces around them, the same
-// address or the same prefix, or the same once the target's port is left
-// out.
+// the same without their line breaks and the spaces around them, whatever
+// the case of their letters, as host names are; the same address or the
+// same prefix; or the same once the target's port is left out. A library
+// that quotes a host can write it in lower case, as Python's HTTP clients
+// do, so the forms masked in a text include that too.
 type hostSet struct {
 	names    []string
 	addrs    []netip.Addr
@@ -386,6 +388,11 @@ func newHostSet(values []string) hostSet {
 // that quotes one so.
 func (h hostSet) forms() []string {
 	forms := slices.Clone(h.names)
+	for _, n := range h.names {
+		if lower := strings.ToLower(n); lower != n {
+			forms = append(forms, lower)
+		}
+	}
 	for _, a := range h.addrs {
 		forms = append(forms, a.String())
 	}
@@ -408,7 +415,7 @@ func (h hostSet) has(target string) bool {
 		if c == "" {
 			continue
 		}
-		if slices.Contains(h.names, c) {
+		if slices.ContainsFunc(h.names, func(n string) bool { return strings.EqualFold(n, c) }) {
 			return true
 		}
 		if !mayBeAddr(c) {

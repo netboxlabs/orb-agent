@@ -97,9 +97,9 @@ func TestRunReasonLeavesOutTheResolvedSecret(t *testing.T) {
 // target's runs across the policy's re-applies. The heartbeat sends the
 // stored runs, so none may carry a host: the run of the first, started before
 // the backend took the policy's previous resolution, is not stored, since the
-// agent no longer keeps that host (MON-900), and the others are stored
-// masked. The last host ends in a new line, which device-discovery leaves out
-// of the target it reports (MON-901).
+// agent no longer keeps that host, and the others are stored masked. The
+// last host ends in a new line, which device-discovery leaves out of the
+// target it reports.
 func TestNoStoredRunCarriesAnEarlierHost(t *testing.T) {
 	logs := &renderedLogs{}
 	logger := logs.logger()

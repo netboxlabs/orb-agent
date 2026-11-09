@@ -219,7 +219,7 @@ func TestRunTargetIsMaskedOnlyWhenItIsAValue(t *testing.T) {
 // run's reason: device-discovery leaves out its line breaks, snmp-discovery
 // writes an address or a prefix in its canonical form, and gnmi-discovery
 // adds a port. The target, the driver and the reason are masked as the value
-// they are (MON-901). A target that is part of a value is kept as reported.
+// they are. A target that is part of a value is kept as reported.
 func TestRunTargetIsMaskedAsTheBackendWritesIt(t *testing.T) {
 	for _, tc := range []struct{ name, value, written string }{
 		{"a trailing new line", "4a1c-host-n.invalid\n", "4a1c-host-n.invalid"},
@@ -232,6 +232,7 @@ func TestRunTargetIsMaskedAsTheBackendWritesIt(t *testing.T) {
 		{"a prefix with a new line", "2001:DB8::/32\n", "2001:db8::/32"},
 		{"a host with a port", "4a1c-host-n.invalid", "4a1c-host-n.invalid:9339"},
 		{"an IPv6 address with a port", "2001:DB8::7", "[2001:db8::7]:9339"},
+		{"a host in other letters' case", "Host1.Example.NET", "host1.example.net"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			now := time.Now()
@@ -298,8 +299,8 @@ func TestRunTargetCostsNoAllocation(t *testing.T) {
 // policy's re-applies. The agent keeps the values of the last two
 // resolutions, so it does not store the runs the backend started before it
 // accepted B, which can quote A, in their target or in a reason they get
-// later: the heartbeat would carry A (MON-900). Those it started since, with
-// B or C, are stored masked.
+// later: the heartbeat would carry A. Those it started since, with B or C,
+// are stored masked.
 func TestRunsFromBeforeThePreviousResolutionAreNotStored(t *testing.T) {
 	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
@@ -378,11 +379,12 @@ func TestRunsOfTheFirstResolutionAreStored(t *testing.T) {
 
 // TestOutputIsMaskedAsTheBackendWritesAHost has a backend print a host as it
 // writes it into a run's target, without its line breaks or as an address in
-// its canonical form: the line is masked as the run is (MON-901).
+// its canonical form: the line is masked as the run is.
 func TestOutputIsMaskedAsTheBackendWritesAHost(t *testing.T) {
 	for _, tc := range []struct{ value, printed string }{
 		{"sw01\n", "Policy dd, Hostname sw01: Cannot connect"},
 		{"2001:DB8::A", "polling 2001:db8::a failed"},
+		{"Host1.Example.NET", "HTTPSConnectionPool(host='host1.example.net', port=443)"},
 	} {
 		resolved := newResolvedSecrets()
 		resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].hostname", value: tc.value}})
