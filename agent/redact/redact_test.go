@@ -402,6 +402,14 @@ func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 		"https://u:pa#ss@vault:8200":   "https://********@vault:8200",
 		"https://u:pa%zzss@vault:8200": "https://********@vault:8200",
 		"https://u:pa ss@vault:8200":   "https://********@vault:8200",
+		// A token given as the user with a / ? or # that is not escaped,
+		// which a parser reads as the host and a path, query or fragment:
+		// an @ after :// that is not the end of user info is masked as one.
+		"https://T0k/en@vault:8200": "https://********@vault:8200",
+		"https://T0k?en@vault:8200": "https://********@vault:8200",
+		"https://T0k#en@vault:8200": "https://********@vault:8200",
+		// So is an @ in a path, at the cost of the host it hides.
+		"https://registry.example.com/@scope/pkg": "https://********@scope/pkg",
 	} {
 		if got := URL(in); got != want {
 			t.Errorf("URL(%q) = %q, want %q", in, got, want)

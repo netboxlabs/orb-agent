@@ -43,6 +43,12 @@ func withoutUserInfo(address string) (string, string, error) {
 		return "", "", errAddressNotAURL
 	}
 	if u.User == nil {
+		if strings.Contains(address, "@") {
+			// A parser read the @ as part of a path, query or fragment, as
+			// when a user holds a / ? or # that is not escaped: the client
+			// would call the user as the host, and quote the address.
+			return "", "", errAddressNotAURL
+		}
 		return address, "", nil
 	}
 	password, _ := u.User.Password()

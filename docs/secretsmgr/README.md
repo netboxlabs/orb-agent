@@ -51,7 +51,9 @@ credentials in the agent's configuration, such as a token, a password, a client
 secret or any value of a Vault login's `auth_args` but its mount path, user
 name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as is the password of a URL in it,
-such as a Vault address's, or its user when it has no password. The configuration the agent reports is the one as
+such as a Vault address's, or its user when it has no password. A URL with an
+`@` that a parser does not read as the end of its user info, such as one in
+its path, is masked between `://` and that `@`. The configuration the agent reports is the one as
 written: a secret reference in it, such as one in `backends`, is reported as
 the reference, never as the value it resolves to.
 

@@ -56,14 +56,20 @@ func TestVaultManager_AddressPasswordIsSentButNeverQuoted(t *testing.T) {
 }
 
 // TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt starts
-// the Vault manager with an address whose password holds a / that is not
-// escaped. No URL parser reads it, and the parse error would quote the
-// address, password included: the agent refuses it without quoting it.
+// the Vault manager with an address whose user or password holds a / ? # or
+// space that is not escaped. No URL parser reads it as one, and the parse
+// error, or the Vault client's errors for the host it would then call, would
+// quote the address, credential included: the agent refuses it without
+// quoting it.
 func TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt(t *testing.T) {
 	for _, address := range []string{
 		"https://proxyuser:Pr0xy/pa55word@127.0.0.1:1",
 		"https://proxyuser:Pr0xy?pa55word@127.0.0.1:1",
 		"https://proxyuser:Pr0xy pa55word@127.0.0.1:1",
+		// A token given as the user, which a parser reads as the host.
+		"https://Pr0xy/pa55word@127.0.0.1:1",
+		"https://Pr0xy?pa55word@127.0.0.1:1",
+		"https://Pr0xy#pa55word@127.0.0.1:1",
 	} {
 		logs := &bytes.Buffer{}
 		vm := &vaultManager{

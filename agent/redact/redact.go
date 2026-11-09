@@ -204,14 +204,13 @@ func URL(s string) string {
 		return s
 	}
 	u, err := url.Parse(s)
-	if err != nil {
+	if err != nil || u.User == nil {
 		// No URL parser reads it, as when a password holds a / ? # % or a
-		// space that is not escaped, and where its user info ends is a guess:
-		// everything between :// and the last @ is masked.
+		// space that is not escaped, or a parser reads its @ as part of a
+		// path, query or fragment, as when a token given as the user holds a
+		// / ? or #. Where its user info ends is a guess: everything between
+		// :// and the last @ is masked, even when the @ is a path's.
 		return s[:scheme+len("://")] + MaskedSecret + s[strings.LastIndex(s, "@"):]
-	}
-	if u.User == nil {
-		return s
 	}
 	// A * would be escaped in a URL's user info: xxxxx is written in place
 	// of the credential, and replaced.
