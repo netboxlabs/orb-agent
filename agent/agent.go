@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"runtime"
 	"sync"
 	"time"
@@ -245,10 +246,10 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 
 	// A config manager that reports the config reports it as written: the
 	// secret references in it are resolved below, and a value read from a
-	// secrets manager must not leave the agent in it. Resolving builds new
-	// maps, so the config handed over keeps its references.
+	// secrets manager must not leave the agent in it. It is handed a copy,
+	// since the agent changes its own config as it starts.
 	if reporter, ok := a.configManager.(configmgr.ConfigReporter); ok {
-		reporter.ReportConfig(a.config)
+		reporter.ReportConfig(configAsWritten(a.config))
 	}
 
 	var err error
@@ -327,6 +328,42 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 	}
 
 	return nil
+}
+
+// configAsWritten returns a copy of cfg that shares no map or slice with it.
+func configAsWritten(cfg config.Config) config.Config {
+	cfg.OrbAgent.Backends, _ = copyValue(cfg.OrbAgent.Backends).(map[string]any)
+	cfg.OrbAgent.Policies, _ = copyValue(cfg.OrbAgent.Policies).(map[string]any)
+	cfg.OrbAgent.Labels = maps.Clone(cfg.OrbAgent.Labels)
+	vault := &cfg.OrbAgent.SecretsManager.Sources.Vault
+	vault.AuthArgs, _ = copyValue(vault.AuthArgs).(map[string]any)
+	return cfg
+}
+
+// copyValue returns a copy of v that shares no map or slice with it.
+func copyValue(v any) any {
+	switch v := v.(type) {
+	case map[string]any:
+		if v == nil {
+			return v
+		}
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = copyValue(e)
+		}
+		return out
+	case []any:
+		if v == nil {
+			return v
+		}
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = copyValue(e)
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func (a *orbAgent) Stop(ctx context.Context) {

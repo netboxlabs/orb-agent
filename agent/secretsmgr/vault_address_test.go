@@ -54,3 +54,27 @@ func TestVaultManager_AddressPasswordIsSentButNeverQuoted(t *testing.T) {
 	assert.NotContains(t, logs.String(), "Pr0xy-pa55word", "no log line quotes the password")
 	assert.Contains(t, logs.String(), "proxyuser:********@", "the address is logged with its password masked")
 }
+
+// TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt starts
+// the Vault manager with an address whose password holds a / that is not
+// escaped. No URL parser reads it, and the parse error would quote the
+// address, password included: the agent refuses it without quoting it.
+func TestVaultManager_AnAddressNoParserReadsIsRefusedWithoutQuotingIt(t *testing.T) {
+	for _, address := range []string{
+		"https://proxyuser:Pr0xy/pa55word@127.0.0.1:1",
+		"https://proxyuser:Pr0xy?pa55word@127.0.0.1:1",
+		"https://proxyuser:Pr0xy pa55word@127.0.0.1:1",
+	} {
+		logs := &bytes.Buffer{}
+		vm := &vaultManager{
+			preLogger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+			config:    config.VaultManager{Address: address, Auth: "token", AuthArgs: map[string]any{"token": "t"}},
+		}
+		err := vm.Start(context.Background())
+		require.Error(t, err)
+		for _, part := range []string{"Pr0xy", "pa55word"} {
+			assert.NotContains(t, err.Error(), part, "the error quotes no part of the password")
+			assert.NotContains(t, logs.String(), part, "no log line quotes a part of the password")
+		}
+	}
+}

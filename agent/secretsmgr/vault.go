@@ -3,6 +3,7 @@ package secretsmgr
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -27,20 +28,27 @@ type vaultManager struct {
 	token     *vault.Secret
 }
 
+// errAddressNotAURL refuses a Vault address no URL parser reads. The parse
+// error would quote the address, and a password it carries with it.
+var errAddressNotAURL = errors.New("sources.vault.address is not a URL: a / ? # % or space in the user or password it carries must be percent-encoded")
+
 // withoutUserInfo returns a Vault address without the user and password it
 // carries, as it does for a proxy that asks for basic auth in front of Vault,
 // and the Authorization header that sends them. The Vault client would send
 // them from the address, but it quotes its address in the text of every
 // error it returns, which the agent logs and reports.
-func withoutUserInfo(address string) (string, string) {
+func withoutUserInfo(address string) (string, string, error) {
 	u, err := url.Parse(address)
-	if err != nil || u.User == nil {
-		return address, ""
+	if err != nil {
+		return "", "", errAddressNotAURL
+	}
+	if u.User == nil {
+		return address, "", nil
 	}
 	password, _ := u.User.Password()
 	header := "Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+password))
 	u.User = nil
-	return u.String(), header
+	return u.String(), header, nil
 }
 
 func (v *vaultManager) Start(ctx context.Context) error {
@@ -50,8 +58,11 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		return fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
 	}
 
+	address, basicAuth, err := withoutUserInfo(v.config.Address)
+	if err != nil {
+		return err
+	}
 	vaultCfg := vault.DefaultConfig()
-	address, basicAuth := withoutUserInfo(v.config.Address)
 	vaultCfg.Address = address
 	if v.config.Timeout == nil || *v.config.Timeout == 0 {
 		vaultCfg.Timeout = 60 * time.Second
@@ -63,7 +74,6 @@ func (v *vaultManager) Start(ctx context.Context) error {
 		return fmt.Errorf("no auth method specified")
 	}
 
-	var err error
 	v.client, err = vault.NewClient(vaultCfg)
 	if err != nil {
 		return err

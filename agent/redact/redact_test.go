@@ -367,7 +367,8 @@ func TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential(t *testing
 
 // TestSensitiveData_MasksAURLsPassword masks the password of a URL under any
 // name, as a Vault address carries one for a proxy that asks for basic auth,
-// and keeps the rest of the URL and a URL without one.
+// or its user when it has no password, and keeps the rest of the URL and a
+// URL without either.
 func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 	redacted := SensitiveData(map[string]any{
 		"address": "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200/v1",
@@ -379,17 +380,32 @@ func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
 	if redacted["address"] != "https://proxyuser:********@vault.example.com:8200/v1" {
 		t.Errorf("Expected the address's password to be masked, got %v", redacted["address"])
 	}
+	if redacted["user"] != "https://********@vault.example.com" {
+		t.Errorf("Expected a user with no password, which can be a token, to be masked, got %v", redacted["user"])
+	}
 	for name, want := range map[string]string{
 		"url":  "https://git.example.com/repo.git",
-		"user": "https://proxyuser@vault.example.com",
 		"text": "not a URL: user:pass@host",
 	} {
 		if redacted[name] != want {
 			t.Errorf("Expected %s to be kept as %q, got %v", name, want, redacted[name])
 		}
 	}
-	if got := URL("https://u:p@h"); got != "https://u:********@h" {
-		t.Errorf("URL masks the password, got %q", got)
+	for in, want := range map[string]string{
+		"https://u:p@h": "https://u:********@h",
+		// A token given as the user, with no password.
+		"https://ghp_T0ken@github.com/org/repo.git": "https://********@github.com/org/repo.git",
+		// A password with a / ? # % or space that is not escaped, which no
+		// URL parser reads: everything between :// and the last @ is masked.
+		"https://u:pa/ss@vault:8200":   "https://********@vault:8200",
+		"https://u:pa?ss@vault:8200":   "https://********@vault:8200",
+		"https://u:pa#ss@vault:8200":   "https://********@vault:8200",
+		"https://u:pa%zzss@vault:8200": "https://********@vault:8200",
+		"https://u:pa ss@vault:8200":   "https://********@vault:8200",
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

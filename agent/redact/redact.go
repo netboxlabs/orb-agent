@@ -194,23 +194,33 @@ func mapKey(key reflect.Value) string {
 	return fmt.Sprintf("%v", key)
 }
 
-// URL returns s with the password of the URL it is masked as ********, when s
-// is a URL that carries one, as a Vault address does for a proxy that asks for
-// basic auth in front of Vault. Any other s is returned as it is.
+// URL returns s with the credential of the URL it is masked as ********, when
+// s is a URL that carries one, as a Vault address does for a proxy that asks
+// for basic auth in front of Vault: its password, or its user when it has no
+// password, which can then be a token. Any other s is returned as it is.
 func URL(s string) string {
-	if !strings.Contains(s, "://") || !strings.Contains(s, "@") {
+	scheme := strings.Index(s, "://")
+	if scheme < 0 || !strings.Contains(s[scheme:], "@") {
 		return s
 	}
 	u, err := url.Parse(s)
-	if err != nil || u.User == nil {
+	if err != nil {
+		// No URL parser reads it, as when a password holds a / ? # % or a
+		// space that is not escaped, and where its user info ends is a guess:
+		// everything between :// and the last @ is masked.
+		return s[:scheme+len("://")] + MaskedSecret + s[strings.LastIndex(s, "@"):]
+	}
+	if u.User == nil {
 		return s
 	}
-	if _, ok := u.User.Password(); !ok {
-		return s
+	// A * would be escaped in a URL's user info: xxxxx is written in place
+	// of the credential, and replaced.
+	if _, ok := u.User.Password(); ok {
+		return strings.Replace(u.Redacted(), ":xxxxx@", ":"+MaskedSecret+"@", 1)
 	}
-	// Redacted writes xxxxx in place of the password: a * would be escaped
-	// in a URL's user info.
-	return strings.Replace(u.Redacted(), ":xxxxx@", ":"+MaskedSecret+"@", 1)
+	masked := *u
+	masked.User = url.User("xxxxx")
+	return strings.Replace(masked.String(), "://xxxxx@", "://"+MaskedSecret+"@", 1)
 }
 
 // isString reports whether val holds a string, through any pointer or

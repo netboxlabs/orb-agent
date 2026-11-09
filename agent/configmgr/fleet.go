@@ -526,7 +526,7 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
 		Zone:     jwtClaims.Zone,
 	}
-	configYaml, err := fleetManager.configToSafeString(fleetManager.reportedConfig(cfg))
+	configYaml, err := fleetManager.configToSafeString(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to convert config to safe string: %w", err)
 	}
@@ -893,22 +893,20 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 	return nil
 }
 
+var _ ConfigReporter = (*FleetConfigManager)(nil)
+
 // ReportConfig keeps the agent's config as written, which the manager reports
 // in place of the one it starts with.
 func (fleetManager *FleetConfigManager) ReportConfig(cfg config.Config) {
 	fleetManager.written = &cfg
 }
 
-// reportedConfig returns the config the manager reports: the agent's config as
-// written, or cfg when the agent handed none.
-func (fleetManager *FleetConfigManager) reportedConfig(cfg config.Config) config.Config {
-	if fleetManager.written != nil {
-		return *fleetManager.written
-	}
-	return cfg
-}
-
+// configToSafeString returns the config the manager reports, masked: the
+// agent's config as written, or cfg when the agent handed none.
 func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (string, error) {
+	if fleetManager.written != nil {
+		cfg = *fleetManager.written
+	}
 	redacted := redact.SensitiveData(cfg)
 	configYaml, err := yaml.Marshal(redacted)
 	if err != nil {

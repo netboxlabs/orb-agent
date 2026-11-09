@@ -523,12 +523,12 @@ func TestFleetConfigManager_ReportsTheConfigAsWritten(t *testing.T) {
 	}
 	resolved := withTarget("grpcs://resolved.example.com")
 
-	reported, err := fleetManager.configToSafeString(fleetManager.reportedConfig(resolved))
+	reported, err := fleetManager.configToSafeString(resolved)
 	require.NoError(t, err)
 	assert.Contains(t, reported, "grpcs://resolved.example.com", "without a config as written, the one it starts with")
 
 	fleetManager.ReportConfig(withTarget("${vault://secret/diode/target}"))
-	reported, err = fleetManager.configToSafeString(fleetManager.reportedConfig(resolved))
+	reported, err = fleetManager.configToSafeString(resolved)
 	require.NoError(t, err)
 	assert.Contains(t, reported, "${vault://secret/diode/target}")
 	assert.NotContains(t, reported, "resolved.example.com")
