@@ -43,6 +43,8 @@ type FleetConfigManager struct {
 	backends         map[string]backend.Backend
 	labels           map[string]string
 	configYaml       string
+	// written is the agent's config as written, which the manager reports.
+	written *config.Config
 	// otlpBridgeGRPCPort and otlpBridgeHTTPPort are the ports the bridge
 	// bound on its first start; a later start binds them again, since the
 	// backends were handed them.
@@ -891,7 +893,20 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 	return nil
 }
 
+var _ ConfigReporter = (*FleetConfigManager)(nil)
+
+// ReportConfig keeps the agent's config as written, which the manager reports
+// in place of the one it starts with.
+func (fleetManager *FleetConfigManager) ReportConfig(cfg config.Config) {
+	fleetManager.written = &cfg
+}
+
+// configToSafeString returns the config the manager reports, masked: the
+// agent's config as written, or cfg when the agent handed none.
 func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (string, error) {
+	if fleetManager.written != nil {
+		cfg = *fleetManager.written
+	}
 	redacted := redact.SensitiveData(cfg)
 	configYaml, err := yaml.Marshal(redacted)
 	if err != nil {

@@ -294,6 +294,157 @@ func TestSensitiveData_CaseVariations(t *testing.T) {
 	}
 }
 
+// TestSensitiveData_NumbersUnderASensitiveName masks a number under a
+// sensitive name, as YAML decodes a credential written as unquoted digits into
+// an untyped map, and keeps a bool, which holds no credential.
+func TestSensitiveData_NumbersUnderASensitiveName(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"password":       135792468,
+		"secret_id":      uint64(8675309123),
+		"api_key":        1.5,
+		"wrapping_token": false,
+	}).(map[string]any)
+
+	for _, name := range []string{"password", "secret_id", "api_key"} {
+		if redacted[name] != MaskedSecret {
+			t.Errorf("Expected %s to be masked, got %v (type %T)", name, redacted[name], redacted[name])
+		}
+	}
+	if redacted["wrapping_token"] != false {
+		t.Errorf("Expected wrapping_token to be kept, got %v", redacted["wrapping_token"])
+	}
+}
+
+// TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential masks
+// every value of a Vault login's auth_args, whatever its name, nested or
+// listed, but those of the fields that name no credential, and keeps a bool.
+// A login method the list has no names for is masked whole.
+func TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"auth": "aws",
+		"auth_args": map[string]any{
+			"access_key":           "access",
+			"secret_key":           "secret",
+			"region":               "us-east-1",
+			"port":                 8200,
+			"options":              map[string]any{"header": "value"},
+			"values":               []any{"listed"},
+			"empty":                "",
+			"mount_path":           "aws",
+			"username":             "agent",
+			"role":                 "orb-agent",
+			"service_account_file": "/var/run/token",
+			"wrapping_token":       false,
+		},
+	}).(map[string]any)
+
+	if redacted["auth"] != "aws" {
+		t.Errorf("Expected auth, outside auth_args, to be kept, got %v", redacted["auth"])
+	}
+	args := redacted["auth_args"].(map[string]any)
+	for _, name := range []string{"access_key", "secret_key", "region", "port"} {
+		if args[name] != MaskedSecret {
+			t.Errorf("Expected %s to be masked, got %v", name, args[name])
+		}
+	}
+	if header := args["options"].(map[string]any)["header"]; header != MaskedSecret {
+		t.Errorf("Expected a nested value to be masked, got %v", header)
+	}
+	if listed := args["values"].([]any)[0]; listed != MaskedSecret {
+		t.Errorf("Expected a listed value to be masked, got %v", listed)
+	}
+	if args["empty"] != "" {
+		t.Errorf("Expected an empty value to stay empty, got %v", args["empty"])
+	}
+	for name, want := range map[string]any{
+		"mount_path": "aws", "username": "agent", "role": "orb-agent", "service_account_file": "/var/run/token", "wrapping_token": false,
+	} {
+		if args[name] != want {
+			t.Errorf("Expected %s to be kept as %v, got %v", name, want, args[name])
+		}
+	}
+}
+
+// TestSensitiveData_MasksAURLsPassword masks the password of a URL under any
+// name, as a Vault address carries one for a proxy that asks for basic auth,
+// or its user when it has no password, and keeps the rest of the URL and a
+// URL without either.
+func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"address": "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200/v1",
+		"url":     "https://git.example.com/repo.git",
+		"user":    "https://proxyuser@vault.example.com",
+		"text":    "not a URL: user:pass@host",
+	}).(map[string]any)
+
+	if redacted["address"] != "https://proxyuser:********@vault.example.com:8200/v1" {
+		t.Errorf("Expected the address's password to be masked, got %v", redacted["address"])
+	}
+	if redacted["user"] != "https://********@vault.example.com" {
+		t.Errorf("Expected a user with no password, which can be a token, to be masked, got %v", redacted["user"])
+	}
+	for name, want := range map[string]string{
+		"url":  "https://git.example.com/repo.git",
+		"text": "not a URL: user:pass@host",
+	} {
+		if redacted[name] != want {
+			t.Errorf("Expected %s to be kept as %q, got %v", name, want, redacted[name])
+		}
+	}
+	for in, want := range map[string]string{
+		"https://u:p@h": "https://u:********@h",
+		// A token given as the user, with no password.
+		"https://ghp_T0ken@github.com/org/repo.git": "https://********@github.com/org/repo.git",
+		// A password with a / ? # % or space that is not escaped, which no
+		// URL parser reads: everything between :// and the last @ is masked.
+		"https://u:pa/ss@vault:8200":   "https://********@vault:8200",
+		"https://u:pa?ss@vault:8200":   "https://********@vault:8200",
+		"https://u:pa#ss@vault:8200":   "https://********@vault:8200",
+		"https://u:pa%zzss@vault:8200": "https://********@vault:8200",
+		"https://u:pa ss@vault:8200":   "https://********@vault:8200",
+		// A token given as the user with a / ? or # that is not escaped,
+		// which a parser reads as the host and a path, query or fragment:
+		// an @ after :// that is not the end of user info is masked as one.
+		"https://T0k/en@vault:8200": "https://********@vault:8200",
+		"https://T0k?en@vault:8200": "https://********@vault:8200",
+		"https://T0k#en@vault:8200": "https://********@vault:8200",
+		// A URL written without //, which a parser reads as a scheme and an
+		// opaque part: what is before its last @ is masked.
+		"https:u:s3cret@vault.example.com":   "https:********@vault.example.com",
+		"u:s3cret@vault.example.com:8200":    "u:********@vault.example.com:8200",
+		"https:u:s3cret@vault.example.com?x": "https:********@vault.example.com?x",
+		// So is an @ in a path, at the cost of the host it hides.
+		"https://registry.example.com/@scope/pkg": "https://********@scope/pkg",
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName keeps a field of
+// a Vault login's auth_args only as its login reads it: under the exact name,
+// and a string. A Vault login matches the names exactly.
+func TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName(t *testing.T) {
+	args := SensitiveData(map[string]any{
+		"auth_args": map[string]any{
+			"Mount_Path": "s3cret",
+			"role":       map[string]any{"x": "s3cret"},
+			"username":   []any{"s3cret"},
+		},
+	}).(map[string]any)["auth_args"].(map[string]any)
+
+	if args["Mount_Path"] != MaskedSecret {
+		t.Errorf("Expected Mount_Path, not a kept name, to be masked, got %v", args["Mount_Path"])
+	}
+	if x := args["role"].(map[string]any)["x"]; x != MaskedSecret {
+		t.Errorf("Expected a map under role to be masked, got %v", x)
+	}
+	if u := args["username"].([]any)[0]; u != MaskedSecret {
+		t.Errorf("Expected a list under username to be masked, got %v", u)
+	}
+}
+
 // TestSensitiveData_NonStringValues tests non-string sensitive fields
 func TestSensitiveData_NonStringValues(t *testing.T) {
 	original := map[string]any{
@@ -380,6 +531,8 @@ func TestIsSensitiveField(t *testing.T) {
 		{"secret", true},
 		{"bearer", true},
 		{"jwt", true},
+		{"secret_id", true}, // A Vault AppRole's credential
+		{"role_id", true},   // Its role: Vault accepts it alone for a role that binds no secret_id
 		{"client_id", false},
 		{"username", false},
 		{"url", false},

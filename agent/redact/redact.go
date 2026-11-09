@@ -2,7 +2,9 @@ package redact
 
 import (
 	"fmt"
+	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 )
 
@@ -24,8 +26,10 @@ var sensitiveFieldPatterns = []string{
 	"authtoken",
 	"bearer",
 	"jwt",
-	"secret", // Exact match only
-	"token",  // Exact match only
+	"secret_id", // A Vault AppRole's credential
+	"role_id",   // Its role: Vault accepts it alone for a role that binds no secret_id
+	"secret",    // Exact match only
+	"token",     // Exact match only
 }
 
 // sensitiveFieldSuffixes contains lowercase suffixes that indicate sensitive fields
@@ -36,6 +40,14 @@ var sensitiveFieldSuffixes = []string{
 	"_private_key",
 	"_api_key",
 	"_auth_key",
+}
+
+// sensitiveContainers names the fields whose every value is a credential but
+// those of the fields listed, which name none. A Vault login's auth_args holds
+// the login method's arguments: a method the lists above have no names for is
+// still masked whole.
+var sensitiveContainers = map[string][]string{
+	"auth_args": {"mount_path", "username", "role", "service_account_file"},
 }
 
 // sensitiveFlagPatterns contains patterns for sensitive CLI flags
@@ -111,7 +123,16 @@ func redactValue(val reflect.Value, fieldName string) any {
 		if val.Kind() == reflect.Slice || val.Kind() == reflect.Array {
 			return redactSliceSensitive(val)
 		}
-		// For non-string sensitive fields, return as-is (e.g., port numbers)
+		// Redact numbers: YAML decodes a credential written as unquoted
+		// digits into an untyped map, such as a Vault auth_args, as one.
+		if isNumber(val.Kind()) {
+			return MaskedSecret
+		}
+		// Keep a bool, such as wrapping_token: it holds no credential.
+	}
+
+	if keep, ok := sensitiveContainers[strings.ToLower(fieldName)]; ok && val.Kind() == reflect.Map {
+		return redactContainer(val, keep)
 	}
 
 	switch val.Kind() {
@@ -122,7 +143,7 @@ func redactValue(val reflect.Value, fieldName string) any {
 	case reflect.Slice, reflect.Array:
 		return redactSlice(val)
 	case reflect.String:
-		return val.String()
+		return URL(val.String())
 	case reflect.Bool:
 		return val.Bool()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -149,30 +170,163 @@ func redactMap(val reflect.Value) any {
 	result := make(map[string]any, val.Len())
 	iter := val.MapRange()
 	for iter.Next() {
-		key := iter.Key()
-		value := iter.Value()
-
-		// Get the key as a string
-		var keyStr string
-		if key.Kind() == reflect.String {
-			keyStr = key.String()
-		} else if key.CanInterface() {
-			// Safely convert non-string keys using fmt.Sprintf
-			if str, ok := key.Interface().(string); ok {
-				keyStr = str
-			} else {
-				keyStr = fmt.Sprintf("%v", key.Interface())
-			}
-		} else {
-			// Fallback for unexported keys
-			keyStr = fmt.Sprintf("%v", key)
-		}
-
+		keyStr := mapKey(iter.Key())
 		// Redact the value, passing the field name for sensitive field detection
-		result[keyStr] = redactValue(value, keyStr)
+		result[keyStr] = redactValue(iter.Value(), keyStr)
 	}
 
 	return result
+}
+
+// mapKey returns a map key as a string.
+func mapKey(key reflect.Value) string {
+	if key.Kind() == reflect.String {
+		return key.String()
+	}
+	if key.CanInterface() {
+		// Safely convert non-string keys using fmt.Sprintf
+		if str, ok := key.Interface().(string); ok {
+			return str
+		}
+		return fmt.Sprintf("%v", key.Interface())
+	}
+	// Fallback for unexported keys
+	return fmt.Sprintf("%v", key)
+}
+
+// URL returns s with the credential of the URL it is masked as ********, when
+// s is a URL that carries one, as a Vault address does for a proxy that asks
+// for basic auth in front of Vault: its password, or its user when it has no
+// password, which can then be a token. Any other s is returned as it is.
+func URL(s string) string {
+	scheme := strings.Index(s, "://")
+	if scheme < 0 {
+		return opaqueURL(s)
+	}
+	if !strings.Contains(s[scheme:], "@") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		// No URL parser reads it, as when a password holds a / ? # % or a
+		// space that is not escaped, or a parser reads its @ as part of a
+		// path, query or fragment, as when a token given as the user holds a
+		// / ? or #. Where its user info ends is a guess: everything between
+		// :// and the last @ is masked, even when the @ is a path's.
+		return s[:scheme+len("://")] + MaskedSecret + s[strings.LastIndex(s, "@"):]
+	}
+	// A * would be escaped in a URL's user info: xxxxx is written in place
+	// of the credential, and replaced.
+	if _, ok := u.User.Password(); ok {
+		return strings.Replace(u.Redacted(), ":xxxxx@", ":"+MaskedSecret+"@", 1)
+	}
+	masked := *u
+	masked.User = url.User("xxxxx")
+	return strings.Replace(masked.String(), "://xxxxx@", "://"+MaskedSecret+"@", 1)
+}
+
+// opaqueURL masks, in a URL written without //, which a parser reads as a
+// scheme and an opaque part, as in https:user:password@host or
+// user:password@host, everything between its scheme and its last @.
+func opaqueURL(s string) string {
+	if !strings.Contains(s, "@") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme == "" || !strings.Contains(u.Opaque, "@") {
+		return s
+	}
+	return s[:strings.Index(s, ":")+1] + MaskedSecret + s[strings.LastIndex(s, "@"):]
+}
+
+// isString reports whether val holds a string, through any pointer or
+// interface.
+func isString(val reflect.Value) bool {
+	for val.IsValid() && (val.Kind() == reflect.Pointer || val.Kind() == reflect.Interface) {
+		if val.IsNil() {
+			return false
+		}
+		val = val.Elem()
+	}
+	return val.IsValid() && val.Kind() == reflect.String
+}
+
+// redactContainer masks every value of a sensitive container's map but those
+// of the fields named in keep, which are redacted as anywhere else.
+func redactContainer(val reflect.Value, keep []string) any {
+	if val.IsNil() {
+		return nil
+	}
+
+	result := make(map[string]any, val.Len())
+	iter := val.MapRange()
+	for iter.Next() {
+		keyStr := mapKey(iter.Key())
+		// A login reads a field under its exact name, and as a string.
+		if slices.Contains(keep, keyStr) && isString(iter.Value()) {
+			result[keyStr] = redactValue(iter.Value(), keyStr)
+		} else {
+			result[keyStr] = maskLeaves(iter.Value())
+		}
+	}
+
+	return result
+}
+
+// maskLeaves masks every string and number in val, nested or listed, and
+// keeps empty strings, bools and the shape of its maps and slices.
+func maskLeaves(val reflect.Value) any {
+	if !val.IsValid() {
+		return nil
+	}
+
+	switch val.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if val.IsNil() {
+			return nil
+		}
+		return maskLeaves(val.Elem())
+	case reflect.String:
+		if val.String() == "" {
+			return ""
+		}
+		return MaskedSecret
+	case reflect.Bool:
+		return val.Bool()
+	case reflect.Map:
+		if val.IsNil() {
+			return nil
+		}
+		result := make(map[string]any, val.Len())
+		iter := val.MapRange()
+		for iter.Next() {
+			result[mapKey(iter.Key())] = maskLeaves(iter.Value())
+		}
+		return result
+	case reflect.Slice, reflect.Array:
+		if val.Kind() == reflect.Slice && val.IsNil() {
+			return nil
+		}
+		result := make([]any, val.Len())
+		for i := range val.Len() {
+			result[i] = maskLeaves(val.Index(i))
+		}
+		return result
+	default:
+		// A number, or anything else a credential could be held in.
+		return MaskedSecret
+	}
+}
+
+// isNumber reports whether kind is an integer or a float.
+func isNumber(kind reflect.Kind) bool {
+	switch kind {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
 }
 
 // redactStruct handles redaction of struct types

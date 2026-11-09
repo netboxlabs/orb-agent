@@ -373,6 +373,167 @@ func TestFleetConfigManager_configToSafeString(t *testing.T) {
 	}
 }
 
+// TestFleetConfigManager_configToSafeString_MasksEveryCredential gives each
+// credential the agent's config can hold for its secrets managers and config
+// sources a value of its own. The config is reported to Fleet in the agent's
+// capabilities, which Fleet stores and shows to anyone in the org who can read
+// the agent, and logged at DEBUG, so none of the values may be in it. Every
+// value of a Vault login's auth_args is masked but those of the fields that
+// name no credential, whatever the login method: a method the agent has no
+// names for is masked whole.
+func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	fleetManager := newFleetConfigManager(logger, &mockPolicyManagerForFleet{}, &mockBackendState{}, nil)
+
+	for _, tc := range []struct {
+		name        string
+		credentials []string
+		// kept are lines of the reported config that stay as configured.
+		kept      []string
+		configure func(*config.OrbAgent)
+	}{{
+		name:        "vault approle",
+		credentials: []string{"approle-role-id-value", "approle-secret-id-value"},
+		kept:        []string{"mount_path: approle", "wrapping_token: true"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "approle"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{
+				"role_id": "approle-role-id-value", "secret_id": "approle-secret-id-value", "mount_path": "approle", "wrapping_token": true,
+			}
+		},
+	}, {
+		name:        "vault login method the agent has no names for",
+		credentials: []string{"aws-access-key-value", "aws-secret-key-value", "aws-session-value", "nested-credential-value", "listed-credential-value"},
+		kept:        []string{"mount_path: aws"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "aws"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{
+				"access_key": "aws-access-key-value", "secret_key": "aws-secret-key-value", "session": "aws-session-value",
+				"mount_path": "aws",
+				"options":    map[string]any{"header": "nested-credential-value"},
+				"values":     []any{"listed-credential-value"},
+			}
+		},
+	}, {
+		// A proxy that asks for basic auth in front of Vault.
+		name:        "vault address with a user and password",
+		credentials: []string{"Pr0xy-pa55word"},
+		kept:        []string{"address: https://proxyuser:********@vault.example.com:8200"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Address = "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200"
+			a.SecretsManager.Sources.Vault.Auth = "token"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"token": "vault-token-value"}
+		},
+	}, {
+		name: "vault kubernetes",
+		kept: []string{"role: orb-agent", "service_account_file: /var/run/secrets/kubernetes.io/serviceaccount/token", "mount_path: kubernetes"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "kubernetes"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{
+				"role": "orb-agent", "service_account_file": "/var/run/secrets/kubernetes.io/serviceaccount/token", "mount_path": "kubernetes",
+			}
+		},
+	}, {
+		// A custom role_id or secret_id can be all digits; written unquoted,
+		// YAML decodes it into auth_args as a number, and the login still
+		// sends it as a string.
+		name:        "vault approle written as numbers",
+		credentials: []string{"4242424242", "8675309123"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "approle"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"role_id": 4242424242, "secret_id": uint64(8675309123), "wrapping_token": false}
+		},
+	}, {
+		name:        "vault userpass password written as a number",
+		credentials: []string{"135792468"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "userpass"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"username": "agent", "password": 135792468}
+		},
+	}, {
+		name:        "vault token",
+		credentials: []string{"vault-token-value"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "token"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"token": "vault-token-value"}
+		},
+	}, {
+		name:        "vault userpass",
+		credentials: []string{"userpass-password-value"},
+		kept:        []string{"username: agent"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "userpass"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"username": "agent", "password": "userpass-password-value"}
+		},
+	}, {
+		name:        "vault ldap",
+		credentials: []string{"ldap-password-value"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Auth = "ldap"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"username": "agent", "password": "ldap-password-value"}
+		},
+	}, {
+		name:        "delinea, doppler and dsv",
+		credentials: []string{"delinea-password-value", "doppler-token-value", "dsv-client-secret-value"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Delinea.Password = "delinea-password-value"
+			a.SecretsManager.Sources.Doppler.Token = "doppler-token-value"
+			a.SecretsManager.Sources.DSV.ClientSecret = "dsv-client-secret-value"
+		},
+	}, {
+		name:        "git and fleet config sources",
+		credentials: []string{"git-password-value", "git-private-key-value", "github-app-private-key-value", "fleet-client-secret-value"},
+		configure: func(a *config.OrbAgent) {
+			a.ConfigManager.Sources.Git.Password = "git-password-value"
+			a.ConfigManager.Sources.Git.PrivateKey = "git-private-key-value"
+			a.ConfigManager.Sources.Git.GitHubApp.PrivateKey = "github-app-private-key-value"
+			a.ConfigManager.Sources.Fleet.ClientSecret = "fleet-client-secret-value"
+		},
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{Version: 1.0}
+			tc.configure(&cfg.OrbAgent)
+
+			result, err := fleetManager.configToSafeString(cfg)
+			require.NoError(t, err)
+			for _, credential := range tc.credentials {
+				assert.NotContains(t, result, credential)
+			}
+			if len(tc.credentials) > 0 {
+				assert.Contains(t, result, "'********'")
+			}
+			for _, line := range tc.kept {
+				assert.Contains(t, result, line)
+			}
+		})
+	}
+}
+
+// TestFleetConfigManager_ReportsTheConfigAsWritten reports the config the
+// agent handed it as written, with its secret references, not the one it
+// starts with, in which the agent resolved them; without one, the config it
+// starts with.
+func TestFleetConfigManager_ReportsTheConfigAsWritten(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	fleetManager := newFleetConfigManager(logger, &mockPolicyManagerForFleet{}, &mockBackendState{}, nil)
+	withTarget := func(target string) config.Config {
+		return config.Config{OrbAgent: config.OrbAgent{Backends: map[string]any{
+			"common": map[string]any{"diode": map[string]any{"target": target}},
+		}}}
+	}
+	resolved := withTarget("grpcs://resolved.example.com")
+
+	reported, err := fleetManager.configToSafeString(resolved)
+	require.NoError(t, err)
+	assert.Contains(t, reported, "grpcs://resolved.example.com", "without a config as written, the one it starts with")
+
+	fleetManager.ReportConfig(withTarget("${vault://secret/diode/target}"))
+	reported, err = fleetManager.configToSafeString(resolved)
+	require.NoError(t, err)
+	assert.Contains(t, reported, "${vault://secret/diode/target}")
+	assert.NotContains(t, reported, "resolved.example.com")
+}
+
 func TestFleetConfigManager_configToSafeString_DoesNotModifyOriginal(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 	mockPMgr := &mockPolicyManagerForFleet{}

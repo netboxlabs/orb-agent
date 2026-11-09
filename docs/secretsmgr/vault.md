@@ -33,9 +33,25 @@ orb:
 | `auth_args` | map | Yes | Authentication method arguments |
 | `schedule` | string | No | Cron expression for secret polling interval |
 
+The `address` can carry a user and password for a proxy that asks for basic
+auth in front of Vault, as in `https://user:password@vault.example.com:8200`.
+The agent sends them as basic auth on every request. Wherever it logs or
+reports the address, and in the errors of its requests to Vault, the password
+is masked as `********` or left out, as is the user when there is no password.
+A `/`, `?`, `#`, `%` or space in the user or password must be percent-encoded:
+the agent refuses an address no URL parser reads, without quoting it.
+
 ## Authentication Methods
 
-The Vault secrets manager supports several authentication methods:
+The Vault secrets manager supports several authentication methods.
+
+Wherever the agent reports or logs its configuration, it masks every value of
+`auth_args` as `********`, whatever the method, including a value written as
+unquoted digits, nested or in a list. It keeps `mount_path`, `username`, `role`
+and `service_account_file`, which name no credential, and a `true` or `false`
+such as `wrapping_token`. An AppRole's `role_id` is masked too because, for a
+role that binds no `secret_id`, Vault accepts a login with the `role_id` alone.
+The agent itself still asks for a `secret_id`.
 
 ### Token Authentication
 
