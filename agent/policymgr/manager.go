@@ -623,7 +623,6 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	} else {
 		a.logger.Info("policy applied successfully", "policy_id", payload.ID, "policy_name", payload.Name,
 			"backend", pd.Backend)
-		a.resolved.applied(pd.ID)
 		pd.State = policies.Running
 		pd.BackendErr = ""
 		// payload.Data holds the references unresolved: the secrets only an

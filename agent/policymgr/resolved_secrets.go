@@ -40,28 +40,27 @@ type policySecrets struct {
 	// values are those of the policy's last resolution, previous those of
 	// the one before it that differed: the backend goes on reporting a run
 	// it ran with them after the policy changed or its secret was rotated.
-	// Only two are kept, since each value is held in memory and masks every
-	// line the backend prints.
+	// Only two mask what the backend prints, since each value is held in
+	// memory and masks every line it prints.
 	values, previous []resolvedValue
-	// since is when the backend last could start a run of the policy with
-	// other values than those two: when it accepted the previous resolution,
-	// or, while one of the two is the policy's first on the backend, when the
-	// agent began to apply that one. Every discovery backend keeps a target's
-	// runs across the policy's re-applies, and keeps a policy's runs after it
-	// is removed, under its name. So a run the backend started before since
-	// can quote a value the agent no longer keeps, or one of another policy
-	// the backend ran under the name, and is not stored (see current).
+	// earlier are the values of the resolution before previous: until the
+	// backend removed the policy to take previous, which it does before it
+	// applies an update, it could start a run with them. They mask the
+	// policy's runs alone.
+	earlier []resolvedValue
+	// since is when the agent began to apply the previous resolution, or the
+	// policy's only one on the backend: a run the backend started since ran
+	// with the values of the last three resolutions. Every discovery backend
+	// keeps a target's runs across the policy's re-applies, and keeps a
+	// policy's runs after it is removed, under its name. So a run it started
+	// before since can quote a value the agent no longer keeps, or one of
+	// another policy the backend ran under the name, and is not stored (see
+	// current).
 	since time.Time
-	// applied is when the backend accepted the policy's last resolution;
-	// zero until it does.
-	applied time.Time
-	// first is true while values are the policy's first resolution on the
-	// backend: the backend ran none of the policy before since, so since
-	// stays when the next resolution comes, and the runs it started while
-	// the agent applied the first are kept.
-	first bool
+	// began is when the agent began to apply the last resolution.
+	began time.Time
 	// masks masks the runs the backend reports for the policy, built from
-	// both when one is first stored after they changed.
+	// forRuns when one is first stored after they changed.
 	masks *refusalMasks
 }
 
@@ -74,6 +73,18 @@ func (ps policySecrets) both() []resolvedValue {
 		}
 	}
 	return both
+}
+
+// forRuns returns the values a run the backend reports for the policy can
+// quote, each once: those of its last three resolutions.
+func (ps policySecrets) forRuns() []resolvedValue {
+	values := ps.both()
+	for _, r := range ps.earlier {
+		if !slices.Contains(values, r) {
+			values = append(values, r)
+		}
+	}
+	return values
 }
 
 // noSecrets masks the runs of a policy the agent keeps no values for: it
@@ -108,33 +119,17 @@ func (s *resolvedSecrets) remember(policyID, backendName string, resolved []reso
 	}
 	ps.backend = backendName
 	if !ok || !sameValues(ps.values, resolved) {
-		switch {
-		case !ok:
-			ps.since, ps.first = s.now(), true
-		case ps.first:
-			ps.first = false
-		default:
-			// A backend that reports runs removes the policy before it
-			// applies an update: unless that removal failed too, one that
-			// refused the last resolution has run none of the policy since.
-			ps.since = cmp.Or(ps.applied, s.now())
+		now := s.now()
+		ps.since = now
+		if ok {
+			ps.since = ps.began
 		}
-		ps.applied = time.Time{}
-		ps.previous, ps.values = ps.values, slices.Clone(resolved)
+		ps.began = now
+		ps.earlier, ps.previous, ps.values = ps.previous, ps.values, slices.Clone(resolved)
 		ps.masks = nil
 		delete(s.maskers, backendName)
 	}
 	s.byPolicy[policyID] = ps
-}
-
-// applied records that the backend accepted the policy's last resolution.
-func (s *resolvedSecrets) applied(policyID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if ps, ok := s.byPolicy[policyID]; ok && ps.applied.IsZero() {
-		ps.applied = s.now()
-		s.byPolicy[policyID] = ps
-	}
 }
 
 // sameValues reports whether a and b hold the same values, as many times
@@ -208,7 +203,7 @@ func (s *resolvedSecrets) masksOf(policyID string) *refusalMasks {
 		return noSecrets
 	}
 	if ps.masks == nil {
-		ps.masks = newRefusalMasks(ps.both())
+		ps.masks = newRefusalMasks(ps.forRuns())
 		s.byPolicy[policyID] = ps
 	}
 	return ps.masks

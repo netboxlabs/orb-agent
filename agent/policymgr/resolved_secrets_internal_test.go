@@ -296,10 +296,10 @@ func TestRunTargetCostsNoAllocation(t *testing.T) {
 // TestRunsFromBeforeThePreviousResolutionAreNotStored rotates a policy's
 // host twice, A to B to C, while its backend goes on reporting the runs it
 // ran with each, as every discovery backend keeps a target's runs across the
-// policy's re-applies. The agent keeps the values of the last two
-// resolutions, so it does not store the runs the backend started before it
-// accepted B, which can quote A, in their target or in a reason they get
-// later: the heartbeat would carry A. Those it started since, with B or C,
+// policy's re-applies. The agent does not store the runs the backend
+// started before the agent began to apply B, which can quote A, in their
+// target or in a reason they get later, once C makes A a value it no longer
+// keeps: the heartbeat would carry A. Those it started since, with B or C,
 // are stored masked.
 func TestRunsFromBeforeThePreviousResolutionAreNotStored(t *testing.T) {
 	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
@@ -307,8 +307,6 @@ func TestRunsFromBeforeThePreviousResolutionAreNotStored(t *testing.T) {
 	const a, b, c = "4a1c-host-a.invalid", "4a1c-host-b.invalid", "4a1c-host-c.invalid"
 	apply := func(host string) {
 		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: host}})
-		now = now.Add(time.Second)
-		resolved.applied("policy-1")
 		now = now.Add(time.Minute)
 	}
 	poll := func(runs ...policies.RunData) []policies.RunData {
@@ -318,8 +316,8 @@ func TestRunsFromBeforeThePreviousResolutionAreNotStored(t *testing.T) {
 		require.NoError(t, err)
 		return stored.Runs
 	}
-	// A run starts half a minute after the backend accepted the resolution
-	// it runs, half a minute before the next.
+	// A run starts half a minute after the agent began to apply the
+	// resolution it runs, half a minute before the next.
 	runOf := func(target string) policies.RunData {
 		return policies.RunData{ID: "run-" + target, Status: "running", CreatedAt: now.Add(-30 * time.Second), Targets: []string{target}}
 	}
@@ -354,7 +352,6 @@ func TestRunsOfTheFirstResolutionAreStored(t *testing.T) {
 	resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-a.invalid"}})
 	started := now.Add(time.Millisecond)
 	now = now.Add(time.Second)
-	resolved.applied("policy-1")
 
 	runs := []policies.RunData{
 		{ID: "run-1", Status: "running", CreatedAt: started},
@@ -367,7 +364,7 @@ func TestRunsOfTheFirstResolutionAreStored(t *testing.T) {
 
 	t.Run("after the next resolution", func(t *testing.T) {
 		// The first resolution's values are the previous ones now, and the
-		// backend ran nothing of the policy before them.
+		// agent began to apply them before the run started.
 		now = now.Add(time.Minute)
 		resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: "4a1c-host-b.invalid"}})
 		require.NoError(t, repo.UpdateRuns("policy-1", slices.Clone(runs)))
@@ -390,6 +387,42 @@ func TestOutputIsMaskedAsTheBackendWritesAHost(t *testing.T) {
 		resolved.remember("policy-1", "device_discovery", []resolvedValue{{path: "scope[0].hostname", value: tc.value}})
 		assert.NotContains(t, resolved.maskOutput("device_discovery", tc.printed), strings.TrimSpace(strings.ToLower(tc.value)))
 		assert.Contains(t, resolved.maskOutput("device_discovery", tc.printed), "********")
+	}
+}
+
+// TestRunsStartedWhileAResolutionIsAppliedAreStored has the backend start
+// runs while the agent applies the policy's second resolution, B, as
+// gnmi-discovery starts a sweep when it is given a policy: one with B, after
+// it took it, and one with A, before it removed the policy to take B. Both
+// are stored, masked, once the third resolution comes, and so is a run of
+// B started after the backend accepted it.
+func TestRunsStartedWhileAResolutionIsAppliedAreStored(t *testing.T) {
+	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
+	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
+	host := func(v string) []resolvedValue { return []resolvedValue{{path: "scope[0].hostname", value: v}} }
+	const a, b, c = "4a1c-host-a.invalid", "4a1c-host-b.invalid", "4a1c-host-c.invalid"
+	run := func(id, target string, started time.Time) policies.RunData {
+		return policies.RunData{ID: id, Status: "running", CreatedAt: started, Reason: "Cannot connect to " + target, Targets: []string{target}}
+	}
+
+	resolved.remember("policy-1", "worker", host(a))
+	now = now.Add(time.Minute)
+	resolved.remember("policy-1", "worker", host(b))
+	runs := []policies.RunData{
+		run("run-a", a, now.Add(time.Millisecond)),
+		run("run-b", b, now.Add(2*time.Millisecond)),
+		run("run-b-later", b, now.Add(time.Second)),
+	}
+	now = now.Add(time.Minute)
+	resolved.remember("policy-1", "worker", host(c))
+
+	require.NoError(t, repo.UpdateRuns("policy-1", slices.Clone(runs)))
+	stored, err := repo.Get("policy-1")
+	require.NoError(t, err)
+	require.Len(t, stored.Runs, 3)
+	for _, r := range stored.Runs {
+		assert.Equal(t, []string{"********"}, r.Targets, r.ID)
+		assert.NotContains(t, r.Reason, "4a1c-host", r.ID)
 	}
 }
 
@@ -438,7 +471,6 @@ func TestRunsOfAnEarlierPolicyUnderTheNameAreNotStored(t *testing.T) {
 			resolved, repo := newTestMaskingRepo(t, &now)
 			require.NoError(t, repo.Update(policies.PolicyData{ID: "policy-1", Name: "shared", Backend: "worker"}))
 			resolved.remember("policy-1", "worker", []resolvedValue{{path: "scope[0].hostname", value: host}})
-			resolved.applied("policy-1")
 			now = now.Add(time.Minute)
 			earlier := policies.RunData{ID: "run-1", Status: "failed", Reason: "Cannot connect to " + host, CreatedAt: now, Targets: []string{host}}
 			require.NoError(t, repo.UpdateRuns("shared", []policies.RunData{earlier}))
@@ -455,27 +487,36 @@ func TestRunsOfAnEarlierPolicyUnderTheNameAreNotStored(t *testing.T) {
 	}
 }
 
-// TestRunsFromBeforeARefusedResolutionAreNotStored has the backend refuse
-// the policy's second resolution: it removed the policy first, so it runs
-// none of it until it accepts a third one, and the runs it started before
-// that, with the first, are not stored once the third replaces the second.
-func TestRunsFromBeforeARefusedResolutionAreNotStored(t *testing.T) {
+// TestRunsOfAValueARefusalLeftRunningAreMasked has the backend refuse the
+// policy's second resolution, B, after it failed to remove the policy: it
+// goes on running the first, A. Once the third resolution comes, the run of
+// A it started while the agent applied B is stored masked, and the run of A
+// it started before is not stored.
+func TestRunsOfAValueARefusalLeftRunningAreMasked(t *testing.T) {
 	now := time.Date(2026, 11, 9, 17, 0, 0, 0, time.UTC)
 	resolved, repo := newTestMaskingRepo(t, &now, "policy-1")
 	host := func(v string) []resolvedValue { return []resolvedValue{{path: "scope[0].hostname", value: v}} }
-	resolved.remember("policy-1", "worker", host("4a1c-host-a.invalid"))
-	resolved.applied("policy-1")
+	const a = "4a1c-host-a.invalid"
+	runOfA := func(id string) policies.RunData {
+		return policies.RunData{ID: id, Status: "failed", CreatedAt: now, Reason: "Cannot connect to " + a, Targets: []string{a}}
+	}
+	resolved.remember("policy-1", "worker", host(a))
 	now = now.Add(time.Minute)
-	runA := policies.RunData{ID: "run-a", Status: "completed", CreatedAt: now, Targets: []string{"4a1c-host-a.invalid"}}
+	before := runOfA("run-before")
 	now = now.Add(time.Minute)
-	resolved.remember("policy-1", "worker", host("4a1c-host-b.invalid")) // refused: never applied
+	resolved.remember("policy-1", "worker", host("4a1c-host-b.invalid")) // refused
+	now = now.Add(time.Minute)
+	during := runOfA("run-during")
 	now = now.Add(time.Minute)
 	resolved.remember("policy-1", "worker", host("4a1c-host-c.invalid"))
 
-	require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{runA}))
+	require.NoError(t, repo.UpdateRuns("policy-1", []policies.RunData{before, during}))
 	stored, err := repo.Get("policy-1")
 	require.NoError(t, err)
-	assert.Empty(t, stored.Runs)
+	require.Len(t, stored.Runs, 1)
+	assert.Equal(t, during.ID, stored.Runs[0].ID)
+	assert.Equal(t, []string{"********"}, stored.Runs[0].Targets)
+	assert.NotContains(t, stored.Runs[0].Reason, a)
 }
 
 // TestMaskingALineReusesWhatItMasksWith masks lines a backend prints while

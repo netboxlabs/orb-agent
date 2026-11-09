@@ -118,23 +118,22 @@ that differ, for as long as it runs the policy: after an edit or a rotation,
 the backend goes on reporting a run it ran with the earlier values. A
 discovery backend keeps each target's runs across the policy's re-applies,
 and a policy's runs after it is removed, under the policy's name. So the
-agent stores and reports only the runs a backend started after it accepted
-the policy's previous resolution, or, while one of the last two is the
-policy's first on that backend, after the agent began to apply that one: an
-earlier run can quote a value the agent no longer keeps, or one of another
-policy the backend ran under the name. After a resolution the backend
-refused, only the runs it started after the next one began are kept. A policy
-stored without being applied, because its secrets did not resolve or its
-backend was not ready, keeps none of the runs reported under its name. A run
-without a start time is kept whatever its policy, since nothing tells when it
-began; every discovery backend gives each run one. This relies on each
-backend removing a policy before it applies an update: one that fails to
-remove it, and then refuses the update too, can go on running a value the
-agent no longer keeps. When the policy is removed, its values keep masking
-the backend's output for a minute, for the lines it printed before the
-removal, and the agent then drops them. A line a backend prints about the
-policy after that, such as one from a backend that failed to remove it, is
-relayed as printed.
+agent stores and reports only the runs a backend started after the agent
+began to apply the policy's previous resolution, or its only one on that
+backend, and masks them with the values of the last three resolutions: a
+backend removes the policy before it applies an update, and until then it can
+still start a run with the resolution before. An earlier run can quote a
+value the agent no longer keeps, or one of another policy the backend ran
+under the name, and is not stored. A policy stored without being applied,
+because its secrets did not resolve or its backend was not ready, keeps none
+of the runs reported under its name. A run without a start time is kept
+whatever its policy, since nothing tells when it began; every discovery
+backend gives each run one. A backend that fails to remove the policy for two
+updates in a row can go on running a value the agent no longer keeps. When
+the policy is removed, its values keep masking the backend's output for a
+minute, for the lines it printed before the removal, and the agent then drops
+them. A line a backend prints about the policy after that, such as one from a
+backend that failed to remove it, is relayed as printed.
 
 ## Rotation
 
