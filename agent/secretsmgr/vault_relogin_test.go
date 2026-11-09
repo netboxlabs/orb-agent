@@ -104,9 +104,8 @@ func TestVaultManager_LogsInAgainWhenItsTokenReachesItsMaxTTL(t *testing.T) {
 
 // TestVaultManager_AWatcherWhoseTokenALoginReplacedLogsInNoAgain has a read
 // log in again for a token Vault stopped accepting, while that token's watcher
-// still runs. The watcher then finds its token renewed no longer, but the
-// token it would log in again for was replaced already: the agent logs in no
-// more.
+// still runs. The watcher of the token replaced is stopped: it neither logs
+// in again past the lease it would have waited out nor says it would.
 func TestVaultManager_AWatcherWhoseTokenALoginReplacedLogsInNoAgain(t *testing.T) {
 	vault := newVaultStandIn(t)
 	vault.renewable(2, time.Hour)
@@ -116,10 +115,10 @@ func TestVaultManager_AWatcherWhoseTokenALoginReplacedLogsInNoAgain(t *testing.T
 	_, err := vm.fetch(communityRef)
 	require.NoError(t, err)
 	require.Equal(t, 2, vault.loginCount())
-	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "can be renewed no longer") },
-		15*time.Second, 50*time.Millisecond, "the first token's watcher ends")
-	time.Sleep(200 * time.Millisecond)
+
+	time.Sleep(3 * time.Second)
 	assert.Equal(t, 2, vault.loginCount(), "the watcher of the token replaced logs in no more")
+	assert.NotContains(t, logs.String(), "can be renewed no longer", "nor says it would")
 }
 
 // TestVaultManager_TokenAuthSaysOnceThatItsTokenEnded has the token the agent
@@ -143,28 +142,130 @@ func TestVaultManager_TokenAuthSaysOnceThatItsTokenEnded(t *testing.T) {
 	assert.Contains(t, logs.String(), "token auth cannot log in again")
 }
 
-// TestVaultManager_ALoginThatFailsIsSaidOnceAndTriedAgain has Vault refuse
-// the agent's login once its token ended, as it does for a secret_id that
-// expired: the reads fail, the agent says so once, at ERROR, and logs in at
-// the next read once Vault accepts the login again.
-func TestVaultManager_ALoginThatFailsIsSaidOnceAndTriedAgain(t *testing.T) {
+// TestVaultManager_ALoginThatFailsIsSaidOnceAndTriedAgainAMinuteLater has
+// Vault refuse the agent's login once its token ended, as it does for a
+// secret_id that expired or a password rotated: the reads fail, and the agent
+// says so once, at ERROR. It tries to log in again at most once a minute, not
+// at every read: a directory locks an account out after so many failed binds.
+func TestVaultManager_ALoginThatFailsIsSaidOnceAndTriedAgainAMinuteLater(t *testing.T) {
 	vault := newVaultStandIn(t)
-	vm, logs := startVaultManager(t, vault, appRole)
+	clock := &fakeClock{t: time.Now()}
+	vm, logs := startVaultManager(t, vault, appRole, withClock(clock))
 	vault.expire("tok-1")
 	vault.refuseLogins(true)
 
-	for range 3 {
+	for range 20 {
 		_, err := vm.fetch(communityRef)
 		require.Error(t, err)
 	}
+	assert.Equal(t, 2, vault.loginAttempts(), "one at start, one for the reads of the minute")
 	assert.Equal(t, 1, strings.Count(logs.String(), "level=ERROR"), logs.String())
 	assert.Contains(t, logs.String(), "failed to log in to Vault again")
 
 	vault.refuseLogins(false)
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err, "not tried again within the minute")
+	assert.Equal(t, 2, vault.loginAttempts())
+
+	clock.advance(time.Minute)
 	value, err := vm.fetch(communityRef)
 	require.NoError(t, err)
 	assert.Equal(t, "s3cret-community", value)
 	assert.Contains(t, logs.String(), "logged in to Vault again")
+}
+
+// TestVaultManager_ALoginRefusedAtTheMaxTTLIsTriedAgainAMinuteLater has
+// Vault refuse the login the agent tries when its token reaches its max TTL:
+// the reads that then find the token ended do not try again within the
+// minute.
+func TestVaultManager_ALoginRefusedAtTheMaxTTLIsTriedAgainAMinuteLater(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.renewable(2, 3*time.Second)
+	clock := &fakeClock{t: time.Now()}
+	started := time.Now()
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+	vault.refuseLogins(true)
+
+	require.Eventually(t, func() bool { return vault.loginAttempts() >= 2 }, 15*time.Second, 50*time.Millisecond,
+		"the agent tries to log in at the max TTL")
+	time.Sleep(time.Until(started.Add(3500 * time.Millisecond)))
+	for range 5 {
+		_, err := vm.fetch(communityRef)
+		require.Error(t, err)
+	}
+	assert.Equal(t, 2, vault.loginAttempts(), "the reads do not try again within the minute")
+
+	vault.refuseLogins(false)
+	clock.advance(time.Minute)
+	_, err := vm.fetch(communityRef)
+	require.NoError(t, err)
+}
+
+// TestVaultManager_ATokenThatMayNotLookItselfUpLogsInAtMostOnceAMinute has a
+// token whose policy does not let it look itself up, as a role with
+// token_no_default_policy gives, read a path it may not read. Vault refuses
+// the lookup as it does for a token that ended, so the agent cannot tell the
+// two apart: it logs in again at most once a minute for such reads, not at
+// every one, and the token it replaced is renewed no more.
+func TestVaultManager_ATokenThatMayNotLookItselfUpLogsInAtMostOnceAMinute(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vault.renewable(2, time.Hour)
+	vault.lookupAnswers(http.StatusForbidden)
+	vault.deny("snmp")
+	clock := &fakeClock{t: time.Now()}
+	vm, _ := startVaultManager(t, vault, appRole, withClock(clock))
+
+	for range 50 {
+		_, err := vm.fetch(communityRef)
+		require.Error(t, err)
+	}
+	assert.Equal(t, 2, vault.loginCount(), "one at start, one for the reads of the minute")
+	replacedAt := time.Now()
+
+	clock.advance(time.Minute)
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err)
+	assert.Equal(t, 3, vault.loginCount())
+
+	time.Sleep(3 * time.Second)
+	assert.False(t, vault.renewedSince("tok-1", replacedAt), "the token replaced is renewed no more")
+	assert.False(t, vault.renewedSince("tok-2", replacedAt.Add(500*time.Millisecond)), "nor the one replaced after it")
+}
+
+// TestVaultManager_ALookupThatFailsOtherwiseLogsInNoAgain has Vault fail the
+// lookup of the token with another error than a 403: whether the token ended
+// is unknown, so the read fails as it is, without a login.
+func TestVaultManager_ALookupThatFailsOtherwiseLogsInNoAgain(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vm, _ := startVaultManager(t, vault, appRole)
+	vault.expire("tok-1")
+	vault.lookupAnswers(http.StatusBadRequest)
+
+	_, err := vm.fetch(communityRef)
+	require.Error(t, err)
+	assert.Equal(t, 1, vault.loginAttempts())
+}
+
+// TestVaultManager_AWrappedSecretIDSaysOnceItCannotLogInAgain logs in with a
+// secret_id given wrapped, which Vault unwraps once: when the token ends, the
+// agent cannot log in again with it, and says so once, at ERROR, without
+// trying.
+func TestVaultManager_AWrappedSecretIDSaysOnceItCannotLogInAgain(t *testing.T) {
+	vault := newVaultStandIn(t)
+	vm, logs := startVaultManager(t, vault, func(*vaultStandIn) (string, map[string]any) {
+		return "approle", map[string]any{"role_id": "role", "secret_id": "wrapping-token", "wrapping_token": true}
+	})
+	require.Equal(t, 1, vault.loginCount())
+
+	vault.expire("tok-1")
+	for range 3 {
+		_, err := vm.fetch(communityRef)
+		require.Error(t, err)
+	}
+	assert.Equal(t, 1, vault.loginAttempts(), "no login is tried again")
+	assert.Equal(t, 1, vault.unwrapCount(), "the wrapping token is not unwrapped again")
+	assert.Equal(t, 1, strings.Count(logs.String(), "level=ERROR"), logs.String())
+	assert.Contains(t, logs.String(), "a wrapped secret_id cannot log in again")
 }
 
 // TestVaultManager_APollAfterTheTokenEndedStopsNoPolicy has a policy use a
@@ -191,6 +292,29 @@ func TestVaultManager_APollAfterTheTokenEndedStopsNoPolicy(t *testing.T) {
 	assert.Equal(t, 2, vault.loginCount())
 }
 
+// withClock has the manager read the time from clock.
+func withClock(clock *fakeClock) func(*vaultManager) {
+	return func(vm *vaultManager) { vm.now = clock.now }
+}
+
+// fakeClock is a clock a test moves forward.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
 // appRole configures an AppRole login.
 func appRole(*vaultStandIn) (string, map[string]any) {
 	return "approle", map[string]any{"role_id": "role", "secret_id": "secret"}
@@ -198,13 +322,16 @@ func appRole(*vaultStandIn) (string, map[string]any) {
 
 // startVaultManager starts a Vault manager against the stand-in, logging into
 // the returned buffer.
-func startVaultManager(t *testing.T, vault *vaultStandIn, login func(*vaultStandIn) (string, map[string]any)) (*vaultManager, *syncBuffer) {
+func startVaultManager(t *testing.T, vault *vaultStandIn, login func(*vaultStandIn) (string, map[string]any), opts ...func(*vaultManager)) (*vaultManager, *syncBuffer) {
 	t.Helper()
 	logs := &syncBuffer{}
 	auth, args := login(vault)
 	vm := &vaultManager{
 		preLogger: slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 		config:    config.VaultManager{Address: vault.url, Auth: auth, AuthArgs: args},
+	}
+	for _, opt := range opts {
+		opt(vm)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -219,11 +346,15 @@ type vaultStandIn struct {
 
 	mu        sync.Mutex
 	logins    int
+	attempts  int
+	unwraps   int
 	refuse    bool
 	lease     int
 	renew     bool
 	maxTTL    time.Duration
+	lookup    int
 	issued    map[string]time.Time
+	renewed   map[string]time.Time
 	ended     map[string]bool
 	denied    map[string]bool
 	refusedRd int
@@ -232,10 +363,11 @@ type vaultStandIn struct {
 func newVaultStandIn(t *testing.T) *vaultStandIn {
 	t.Helper()
 	s := &vaultStandIn{
-		lease:  3600,
-		issued: map[string]time.Time{"static-tok": time.Now()},
-		ended:  map[string]bool{},
-		denied: map[string]bool{},
+		lease:   3600,
+		issued:  map[string]time.Time{"static-tok": time.Now()},
+		renewed: map[string]time.Time{},
+		ended:   map[string]bool{},
+		denied:  map[string]bool{},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(srv.Close)
@@ -243,7 +375,23 @@ func newVaultStandIn(t *testing.T) *vaultStandIn {
 	return s
 }
 
-func (s *vaultStandIn) loginCount() int   { s.mu.Lock(); defer s.mu.Unlock(); return s.logins }
+func (s *vaultStandIn) loginCount() int    { s.mu.Lock(); defer s.mu.Unlock(); return s.logins }
+func (s *vaultStandIn) loginAttempts() int { s.mu.Lock(); defer s.mu.Unlock(); return s.attempts }
+func (s *vaultStandIn) unwrapCount() int   { s.mu.Lock(); defer s.mu.Unlock(); return s.unwraps }
+
+// renewedSince reports whether Vault renewed the token after at.
+func (s *vaultStandIn) renewedSince(token string, at time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.renewed[token].After(at)
+}
+
+// lookupAnswers has Vault answer every token lookup with status.
+func (s *vaultStandIn) lookupAnswers(status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lookup = status
+}
 func (s *vaultStandIn) refusedReads() int { s.mu.Lock(); defer s.mu.Unlock(); return s.refusedRd }
 func (s *vaultStandIn) expire(token string) {
 	s.mu.Lock()
@@ -291,7 +439,15 @@ func (s *vaultStandIn) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	denied := map[string]any{"errors": []string{"permission denied"}}
 	switch {
+	case r.URL.Path == "/v1/sys/wrapping/unwrap":
+		s.unwraps++
+		if s.unwraps > 1 {
+			write(http.StatusBadRequest, map[string]any{"errors": []string{"wrapping token is not valid or does not exist"}})
+			return
+		}
+		write(http.StatusOK, map[string]any{"data": map[string]any{"secret_id": "secret"}})
 	case r.URL.Path == "/v1/auth/approle/login":
+		s.attempts++
 		if s.refuse {
 			write(http.StatusBadRequest, map[string]any{"errors": []string{"invalid role or secret ID"}})
 			return
@@ -311,10 +467,15 @@ func (s *vaultStandIn) serve(w http.ResponseWriter, r *http.Request) {
 		if left := int((s.maxTTL - time.Since(s.issued[token])) / time.Second); s.maxTTL > 0 && left < lease {
 			lease = left
 		}
+		s.renewed[token] = time.Now()
 		write(http.StatusOK, map[string]any{"auth": map[string]any{
 			"client_token": token, "lease_duration": lease, "renewable": true, "policies": []string{"default"},
 		}})
 	case r.URL.Path == "/v1/auth/token/lookup-self":
+		if s.lookup != 0 {
+			write(s.lookup, denied)
+			return
+		}
 		if !s.validLocked(token) {
 			write(http.StatusForbidden, denied)
 			return

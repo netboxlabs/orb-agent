@@ -39,7 +39,21 @@ type vaultManager struct {
 	// tokenEndedSaid is set once the agent said the token it was given
 	// ended, which token auth cannot log in again for.
 	tokenEndedSaid bool
+	// stopWatch stops the watcher of the token the client holds.
+	stopWatch func()
+	// lastTry is when the agent last tried to log in again for a read, or
+	// failed to log in again: it tries at most once every loginInterval.
+	lastTry time.Time
+	// now reads the time, which tests set.
+	now func() time.Time
 }
+
+// loginInterval is the least time between two tries to log in again for a
+// read, and after a login that failed. A token whose policy does not let it
+// look itself up cannot tell Vault's refusal of a path it may not read from
+// the end of the token, and a login that fails, as for a password rotated in
+// a directory, counts against the account: neither is tried at every read.
+const loginInterval = time.Minute
 
 // errAddressNotAURL refuses a Vault address no URL parser reads. The parse
 // error would quote the address, and a password it carries with it.
@@ -80,6 +94,9 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	address, basicAuth, err := withoutUserInfo(v.config.Address)
 	if err != nil {
 		return err
+	}
+	if v.now == nil {
+		v.now = time.Now
 	}
 	v.preLogger.Info("starting secrets manager", "active", "vault", "address", redact.URL(v.config.Address))
 
@@ -135,8 +152,14 @@ func (v *vaultManager) Start(ctx context.Context) error {
 // watchToken renews the token the agent logged in with, while Vault renews
 // it, and logs in again once Vault renews it no longer: at its max TTL, or
 // when renewals keep failing. Without it the token ends, and every read with
-// it, until a restart.
+// it, until a restart. It stops the watcher of the token it replaces: one
+// left running would renew a token the agent no longer uses until its max
+// TTL. The caller holds v.loginMu, or is the manager's start.
 func (v *vaultManager) watchToken(secret *vault.Secret) error {
+	if v.stopWatch != nil {
+		v.stopWatch()
+		v.stopWatch = nil
+	}
 	if secret == nil || secret.Auth == nil ||
 		!secret.Auth.Renewable || secret.Auth.LeaseDuration == 0 {
 		return nil
@@ -150,6 +173,10 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 		return err
 	}
 
+	stop := make(chan struct{})
+	var once sync.Once
+	v.stopWatch = func() { once.Do(func() { close(stop) }) }
+
 	go lw.Start()
 
 	go func() {
@@ -159,7 +186,14 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 			case <-v.ctx.Done():
 				return
 
+			case <-stop:
+				return
+
 			case err := <-lw.DoneCh():
+				if v.client.Token() != secret.Auth.ClientToken {
+					// A login replaced the token as the watcher ended.
+					return
+				}
 				attrs := []any{}
 				if err != nil {
 					attrs = append(attrs, "error", err)
@@ -181,18 +215,23 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 // which Vault refused, if Vault no longer accepts it. Vault answers a 403
 // both for a token that ended and for a path the token may not read, so it
 // is asked about the token first: a valid token is not logged in again for,
-// at every read of such a path. It reports whether the read is worth trying
-// again.
+// at every read of such a path. A token whose policy does not let it look
+// itself up gets a 403 for that too, so the agent tries this at most once
+// every loginInterval. It reports whether the read is worth trying again.
 func (v *vaultManager) loginAgainIfEnded(stale string) bool {
 	v.loginMu.Lock()
 	defer v.loginMu.Unlock()
 	if v.client.Token() != stale {
 		return true
 	}
-	_, err := v.client.Auth().Token().LookupSelf()
+	if !v.lastTry.IsZero() && v.now().Sub(v.lastTry) < loginInterval {
+		return false
+	}
+	_, err := v.client.Auth().Token().LookupSelfWithContext(v.ctx)
 	if err == nil || !isForbidden(err) {
 		return false
 	}
+	v.lastTry = v.now()
 	return v.loginAgainLocked(stale)
 }
 
@@ -206,23 +245,28 @@ func (v *vaultManager) loginAgain(stale string) bool {
 
 // loginAgainLocked logs in again in place of the token stale, unless a login
 // already replaced it, and reports whether the client holds another token.
-// Token auth cannot log in again: the agent says so once. A login that fails
-// is said once, at ERROR, and tried again at the next read. The caller holds
-// v.loginMu.
+// An auth method that cannot log in again is said once. A login that fails
+// is said once, at ERROR, and tried again at a read loginInterval later. The
+// caller holds v.loginMu.
 func (v *vaultManager) loginAgainLocked(stale string) bool {
 	if v.client.Token() != stale {
 		return true
 	}
-	if _, static := v.auth.(*AuthToken); static {
+	if reason := cannotLoginAgain(v.auth); reason != "" {
 		if !v.tokenEndedSaid {
 			v.tokenEndedSaid = true
-			v.logger.Error("the Vault token the agent was given is no longer valid, and token auth cannot log in again: " +
-				"secrets from Vault fail to resolve until the agent is restarted with a valid token")
+			v.logger.Error("the Vault token is no longer valid, and " + reason +
+				": secrets from Vault fail to resolve until the agent is restarted with valid credentials")
 		}
 		return false
 	}
 	secret, err := v.auth.vaultAuthenticate(v.ctx, v.client)
 	if err != nil {
+		v.lastTry = v.now()
+		if v.ctx.Err() != nil {
+			// The agent is stopping: the login was cut short, not refused.
+			return false
+		}
 		if !v.loginFailing {
 			v.loginFailing = true
 			v.logger.Error("failed to log in to Vault again: secrets from Vault fail to resolve until a login works",
@@ -239,6 +283,20 @@ func (v *vaultManager) loginAgainLocked(stale string) bool {
 		v.logger.Warn("the Vault token from the new login is not renewed", "error", err)
 	}
 	return true
+}
+
+// cannotLoginAgain returns why the agent cannot log in again with auth, or
+// "" when it can.
+func cannotLoginAgain(auth authMethod) string {
+	switch a := auth.(type) {
+	case *AuthToken:
+		return "token auth cannot log in again"
+	case *AuthAppRole:
+		if a.WrappingToken {
+			return "a wrapped secret_id cannot log in again: Vault unwraps it once"
+		}
+	}
+	return ""
 }
 
 // isForbidden reports whether err is Vault's 403.

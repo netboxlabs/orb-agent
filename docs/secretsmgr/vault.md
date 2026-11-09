@@ -182,18 +182,31 @@ The Orb Agent will resolve the Vault reference and use the actual secret value f
 The agent logs in to Vault when it starts. It renews the token it gets while
 Vault renews it, and logs in again with the same method once Vault renews it
 no longer: at its max TTL, or when renewals keep failing. A read that Vault
-refuses because the token is no longer valid, revoked for example, also logs
-in again and reads again; reads that find it so together log in once. A read
-refused for a path the token may not read fails as it is, without a login.
+refuses because the token is no longer valid also logs in again and reads
+again: a token revoked, or one Vault does not renew (not renewable, or a batch
+token), when it ends. Reads that find it so together log in once.
 
-This holds for AppRole, userpass, LDAP and Kubernetes. A login that fails, as
-it does with a `secret_id` that expired, is logged once at ERROR, as `failed to
-log in to Vault again`, and tried again at the next read; `logged in to Vault
-again` is logged at INFO once a login works.
+Vault refuses a read with a 403 both for a token that is no longer valid and
+for a path the token may not read, so the agent asks Vault about its token
+first, and does not log in again for a valid one. Give the token's policy the
+`auth/token/lookup-self` capability, as Vault's `default` policy does: without
+it, Vault refuses that question too, and the agent can't tell the two apart.
 
-Token auth cannot log in again. The agent does not renew a token given with
-token auth, and when it ends, the reads fail until the agent is restarted with
-a valid token. The agent says so once, at ERROR.
+This holds for AppRole, userpass, LDAP and Kubernetes. AppRole logs in again
+with the same `secret_id`, so it needs one that can be used again: a wrapped
+`secret_id` (`wrapping_token: true`) is unwrapped once, and one with
+`secret_id_num_uses` set runs out.
+
+The agent tries to log in again for a read at most once a minute, and as
+often after a login that fails: a directory counts failed binds against the
+account. A login that fails, as with a `secret_id` that expired or a password
+rotated, is logged once at ERROR, as `failed to log in to Vault again`, and
+`logged in to Vault again` is logged at INFO once a login works.
+
+Token auth and a wrapped `secret_id` cannot log in again. The agent does not
+renew a token given with token auth. When the token ends, the reads fail until
+the agent is restarted with valid credentials, and the agent says so once, at
+ERROR.
 
 ## Secret Polling
 

@@ -162,6 +162,6 @@ so a policy whose secret didn't resolve is applied again when it is delivered
 again or the agent restarts.
 
 The agent keeps its own login to Vault going: it logs in again when its token
-ends, so a token's max TTL costs no read, unless it was given a token with
-token auth, which it cannot log in again for. See
-[Token lifetime](vault.md#token-lifetime).
+ends, so its policies keep running without a restart, unless it was given a
+token with token auth or a wrapped `secret_id`, which it cannot log in again
+with. See [Token lifetime](vault.md#token-lifetime).
