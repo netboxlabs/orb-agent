@@ -41,7 +41,7 @@ The Delinea SDK supports username/password authentication only. The Orb Agent us
 
 ## Usage
 
-To use a secret from Delinea in your policy configuration, use one of the two reference forms:
+To use a secret from Delinea in your policy configuration, use one of the two reference forms. In either form, `${secret://…}` may be used instead of `${delinea://…}` — see [Provider-agnostic secret references](./secret_references.md).
 
 ### By numeric secret ID
 

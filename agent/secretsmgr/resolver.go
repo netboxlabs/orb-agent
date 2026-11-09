@@ -26,6 +26,10 @@ type cachedSecret struct {
 	gen uint64
 }
 
+// genericScheme is the provider-agnostic reference scheme: ${secret://…} is
+// resolved by whichever secrets manager is active.
+const genericScheme = "secret"
+
 // resolverFunc returns the resolved value for a single placeholder body
 // (the substring between "<scheme>://" and the closing "}"). policyID is the
 // policy that triggered the lookup; the resolver is expected to record it for
@@ -68,7 +72,7 @@ func processString(s, scheme, policyID string, resolve resolverFunc) (string, er
 	// matches and is forwarded to the resolver, which can reject it with
 	// a clear grammar error. A "+" quantifier would pass it through to the
 	// backend literally.
-	re := regexp.MustCompile(`\${` + regexp.QuoteMeta(scheme) + `://([^}]*)}`)
+	re := regexp.MustCompile(`\${(?:` + regexp.QuoteMeta(scheme) + `|` + regexp.QuoteMeta(genericScheme) + `)://([^}]*)}`)
 	if !re.MatchString(s) {
 		return s, nil
 	}
