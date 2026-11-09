@@ -1,6 +1,7 @@
 package gnmi
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -12,8 +13,11 @@ import (
 	gnmiproto "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/tap"
 )
 
 const (
@@ -26,18 +30,37 @@ var probePaths = []string{probeHostname, probeMTU, probeSerial}
 
 // probeTarget answers Get per path through getErr, and records the paths of
 // every Subscribe; subErr refuses a subscription by its paths.
+//
+// It numbers the Subscribe streams as the server reads them, which on one
+// connection is the order the client opened them: their handlers run
+// concurrently, so one can record its paths after a later stream's. gnmic,
+// whose retry timer is 0, can send a refused subscription again at once, and
+// the session can retry without a path before that resend is recorded.
 type probeTarget struct {
 	srv    *testGNMIServer
+	addr   string
 	getErr func(path string) error
 	subErr func(paths []string) error
 	// failAfterData ends each stream with this error once its data is sent.
 	failAfterData error
-	gets          atomic.Int32
+	// beforeRecord, when set, runs before a subscription is recorded.
+	beforeRecord func(paths []string)
+	gets         atomic.Int32
+	opened       atomic.Int32 // Subscribe streams the server has read
 
 	mu         sync.Mutex
-	subReqs    [][]string
+	subReqs    []subscription
 	sampleReqs [][]string // the SAMPLE subscriptions among subReqs
 }
+
+// subscription is the paths of the Subscribe on stream n.
+type subscription struct {
+	n     int32
+	paths []string
+}
+
+// streamNumber keys a Subscribe stream's number in its context.
+type streamNumber struct{}
 
 func newProbeTarget(t *testing.T) (*probeTarget, Session) {
 	t.Helper()
@@ -58,12 +81,19 @@ func newProbeTarget(t *testing.T) (*probeTarget, Session) {
 		if err != nil {
 			return err
 		}
+		n, ok := stream.Context().Value(streamNumber{}).(int32)
+		if !ok {
+			return status.Error(codes.Internal, "probe target: a Subscribe stream without a number")
+		}
 		var paths []string
 		for _, s := range req.GetSubscribe().GetSubscription() {
 			paths = append(paths, pathToString(s.GetPath()))
 		}
+		if pt.beforeRecord != nil {
+			pt.beforeRecord(paths)
+		}
 		pt.mu.Lock()
-		pt.subReqs = append(pt.subReqs, paths)
+		pt.subReqs = append(pt.subReqs, subscription{n: n, paths: paths})
 		if subs := req.GetSubscribe().GetSubscription(); len(subs) > 0 && subs[0].GetMode() == gnmiproto.SubscriptionMode_SAMPLE {
 			pt.sampleReqs = append(pt.sampleReqs, paths)
 		}
@@ -91,13 +121,37 @@ func newProbeTarget(t *testing.T) (*probeTarget, Session) {
 		<-stream.Context().Done()
 		return nil
 	}
-	return pt, dialPlaintext(t, startTestGNMIServer(t, pt.srv))
+	// A tap runs as the server reads each new stream, in order.
+	number := grpc.InTapHandle(func(ctx context.Context, info *tap.Info) (context.Context, error) {
+		if info.FullMethodName != gnmiproto.GNMI_Subscribe_FullMethodName {
+			return ctx, nil
+		}
+		return context.WithValue(ctx, streamNumber{}, pt.opened.Add(1)), nil
+	})
+	pt.addr = startTestGNMIServer(t, pt.srv, number)
+	return pt, dialPlaintext(t, pt.addr)
 }
 
+// subscriptions is the paths of every Subscribe, in the order the client
+// opened them.
 func (pt *probeTarget) subscriptions() [][]string {
+	return pt.subscriptionsAfter(0)
+}
+
+// subscriptionsAfter is the paths of the Subscribes opened after the first n
+// streams, in the order the client opened them.
+func (pt *probeTarget) subscriptionsAfter(n int32) [][]string {
 	pt.mu.Lock()
-	defer pt.mu.Unlock()
-	return append([][]string(nil), pt.subReqs...)
+	subs := slices.Clone(pt.subReqs)
+	pt.mu.Unlock()
+	slices.SortFunc(subs, func(a, b subscription) int { return cmp.Compare(a.n, b.n) })
+	var out [][]string
+	for _, s := range subs {
+		if s.n > n {
+			out = append(out, s.paths)
+		}
+	}
+	return out
 }
 
 // lastSubscription is the paths of the latest Subscribe, sorted.
@@ -114,6 +168,52 @@ func sorted(paths ...string) []string {
 	out := slices.Clone(paths)
 	slices.Sort(out)
 	return out
+}
+
+// The probe target reads its subscriptions in the order the client opened
+// them, though a stream can be recorded after a later one.
+func TestProbeTargetReadsSubscriptionsInTheOrderTheyWereOpened(t *testing.T) {
+	pt, _ := newProbeTarget(t)
+	held, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	free := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(free)
+	var streams atomic.Int32
+	pt.beforeRecord = func([]string) {
+		if streams.Add(1) == 1 {
+			close(held)
+			<-release
+		}
+	}
+	conn, err := grpc.NewClient(pt.addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	subscribe := func(name string) gnmiproto.GNMI_SubscribeClient {
+		stream, err := gnmiproto.NewGNMIClient(conn).Subscribe(ctx)
+		require.NoError(t, err)
+		require.NoError(t, stream.Send(&gnmiproto.SubscribeRequest{Request: &gnmiproto.SubscribeRequest_Subscribe{
+			Subscribe: &gnmiproto.SubscriptionList{Subscription: []*gnmiproto.Subscription{
+				{Path: &gnmiproto.Path{Elem: []*gnmiproto.PathElem{{Name: name}}}},
+			}},
+		}}))
+		return stream
+	}
+
+	subscribe("first")
+	select {
+	case <-held:
+	case <-ctx.Done():
+		t.Fatal("the first stream never reached the target")
+	}
+	_, err = subscribe("second").Recv() // answered, so recorded
+	require.NoError(t, err)
+	free()
+	require.Eventually(t, func() bool { return len(pt.subscriptions()) == 2 }, 5*time.Second, 10*time.Millisecond)
+
+	assert.Equal(t, [][]string{{"/first"}, {"/second"}}, pt.subscriptions())
+	assert.Equal(t, []string{"/second"}, pt.lastSubscription(t))
 }
 
 // subscribeAndRead subscribes and returns the first notification, failing on
@@ -247,10 +347,10 @@ func TestKeptPathRefusedBySubscribeIsPrunedAndRetried(t *testing.T) {
 	assert.Equal(t, sorted(probeHostname, probeSerial), pt.lastSubscription(t), "the retry did not")
 
 	// Pruned for the session: the next subscription goes without it at once.
-	tried := len(pt.subscriptions())
+	opened := pt.opened.Load()
 	subscribeAndRead(t, sess)
 	assert.Equal(t, sorted(probeHostname, probeSerial), pt.lastSubscription(t))
-	for _, s := range pt.subscriptions()[tried:] {
+	for _, s := range pt.subscriptionsAfter(opened) {
 		assert.NotContains(t, s, probeMTU)
 	}
 }
