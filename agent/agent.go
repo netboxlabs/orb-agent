@@ -243,6 +243,14 @@ func (a *orbAgent) Start(ctx context.Context, cancelFunc context.CancelFunc) err
 		}
 	}
 
+	// A config manager that reports the config reports it as written: the
+	// secret references in it are resolved below, and a value read from a
+	// secrets manager must not leave the agent in it. Resolving builds new
+	// maps, so the config handed over keeps its references.
+	if reporter, ok := a.configManager.(configmgr.ConfigReporter); ok {
+		reporter.ReportConfig(a.config)
+	}
+
 	var err error
 	if a.config.OrbAgent.Backends,
 		a.config.OrbAgent.ConfigManager,

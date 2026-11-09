@@ -17,6 +17,14 @@ type Manager interface {
 	Stop(ctx context.Context) error
 }
 
+// ConfigReporter is a config manager that reports the agent's config. The
+// agent hands it the config as written, before it resolves the secret
+// references in it, and the manager reports that one: a value read from a
+// secrets manager never leaves the agent in its reported config.
+type ConfigReporter interface {
+	ReportConfig(cfg config.Config)
+}
+
 // New creates a new instance of ConfigManager that is bound to the
 // supplied context.
 func New(logger *slog.Logger, pMgr policymgr.PolicyManager, active string, backendState backend.StateRetriever, fm filesmgr.Manager) Manager {

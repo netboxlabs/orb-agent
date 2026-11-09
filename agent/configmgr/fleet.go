@@ -43,6 +43,8 @@ type FleetConfigManager struct {
 	backends         map[string]backend.Backend
 	labels           map[string]string
 	configYaml       string
+	// written is the agent's config as written, which the manager reports.
+	written *config.Config
 	// otlpBridgeGRPCPort and otlpBridgeHTTPPort are the ports the bridge
 	// bound on its first start; a later start binds them again, since the
 	// backends were handed them.
@@ -524,7 +526,7 @@ func (fleetManager *FleetConfigManager) startConnection(ctx context.Context, cfg
 		ClientID: cfg.OrbAgent.ConfigManager.Sources.Fleet.ClientID,
 		Zone:     jwtClaims.Zone,
 	}
-	configYaml, err := fleetManager.configToSafeString(cfg)
+	configYaml, err := fleetManager.configToSafeString(fleetManager.reportedConfig(cfg))
 	if err != nil {
 		return fmt.Errorf("failed to convert config to safe string: %w", err)
 	}
@@ -889,6 +891,21 @@ func (fleetManager *FleetConfigManager) refreshAndReconnect(ctx context.Context,
 
 	fleetManager.logger.Info("successfully refreshed JWT and reconnected")
 	return nil
+}
+
+// ReportConfig keeps the agent's config as written, which the manager reports
+// in place of the one it starts with.
+func (fleetManager *FleetConfigManager) ReportConfig(cfg config.Config) {
+	fleetManager.written = &cfg
+}
+
+// reportedConfig returns the config the manager reports: the agent's config as
+// written, or cfg when the agent handed none.
+func (fleetManager *FleetConfigManager) reportedConfig(cfg config.Config) config.Config {
+	if fleetManager.written != nil {
+		return *fleetManager.written
+	}
+	return cfg
 }
 
 func (fleetManager *FleetConfigManager) configToSafeString(cfg config.Config) (string, error) {

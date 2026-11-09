@@ -415,6 +415,16 @@ func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T
 			}
 		},
 	}, {
+		// A proxy that asks for basic auth in front of Vault.
+		name:        "vault address with a user and password",
+		credentials: []string{"Pr0xy-pa55word"},
+		kept:        []string{"address: https://proxyuser:********@vault.example.com:8200"},
+		configure: func(a *config.OrbAgent) {
+			a.SecretsManager.Sources.Vault.Address = "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200"
+			a.SecretsManager.Sources.Vault.Auth = "token"
+			a.SecretsManager.Sources.Vault.AuthArgs = map[string]any{"token": "vault-token-value"}
+		},
+	}, {
 		name: "vault kubernetes",
 		kept: []string{"role: orb-agent", "service_account_file: /var/run/secrets/kubernetes.io/serviceaccount/token", "mount_path: kubernetes"},
 		configure: func(a *config.OrbAgent) {
@@ -497,6 +507,31 @@ func TestFleetConfigManager_configToSafeString_MasksEveryCredential(t *testing.T
 			}
 		})
 	}
+}
+
+// TestFleetConfigManager_ReportsTheConfigAsWritten reports the config the
+// agent handed it as written, with its secret references, not the one it
+// starts with, in which the agent resolved them; without one, the config it
+// starts with.
+func TestFleetConfigManager_ReportsTheConfigAsWritten(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	fleetManager := newFleetConfigManager(logger, &mockPolicyManagerForFleet{}, &mockBackendState{}, nil)
+	withTarget := func(target string) config.Config {
+		return config.Config{OrbAgent: config.OrbAgent{Backends: map[string]any{
+			"common": map[string]any{"diode": map[string]any{"target": target}},
+		}}}
+	}
+	resolved := withTarget("grpcs://resolved.example.com")
+
+	reported, err := fleetManager.configToSafeString(fleetManager.reportedConfig(resolved))
+	require.NoError(t, err)
+	assert.Contains(t, reported, "grpcs://resolved.example.com", "without a config as written, the one it starts with")
+
+	fleetManager.ReportConfig(withTarget("${vault://secret/diode/target}"))
+	reported, err = fleetManager.configToSafeString(fleetManager.reportedConfig(resolved))
+	require.NoError(t, err)
+	assert.Contains(t, reported, "${vault://secret/diode/target}")
+	assert.NotContains(t, reported, "resolved.example.com")
 }
 
 func TestFleetConfigManager_configToSafeString_DoesNotModifyOriginal(t *testing.T) {

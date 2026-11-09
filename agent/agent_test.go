@@ -916,6 +916,83 @@ func TestStart_FleetConfig_OverridesExistingOTLPGrpcURL(t *testing.T) {
 	assert.Equal(t, "http://localhost:4318", orbAgent.backendsCommon.Otlp.HTTP)
 }
 
+// TestStart_FleetConfig_ReportsTheConfigAsWritten has the agent's config
+// carry a secret reference. The agent resolves it before its managers start,
+// and the config manager starts with the value, but what it reports of the
+// config is the config as written, with the reference: a value read from a
+// secrets manager never leaves the agent in its reported config (MON-880).
+func TestStart_FleetConfig_ReportsTheConfigAsWritten(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	repo, err := policies.NewMemRepo()
+	require.NoError(t, err)
+	cfg := config.Config{OrbAgent: config.OrbAgent{
+		Backends: map[string]any{
+			"common": map[string]any{"diode": map[string]any{"target": "${vault://secret/diode/target}"}},
+		},
+		ConfigManager: config.ManagerConfig{Active: "fleet"},
+	}}
+	agent, err := New(logger, cfg, false)
+	require.NoError(t, err)
+	orbAgent := agent.(*orbAgent)
+	orbAgent.secretsManager = &resolvingSecretsManager{reference: "${vault://secret/diode/target}", value: "grpcs://resolved.example.com"}
+	orbAgent.policyManager = &mockPolicyManager{repo: repo}
+	reporter := &reportingConfigManager{}
+	orbAgent.configManager = reporter
+	orbAgent.filesManager = &mockFilesManager{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	require.NoError(t, orbAgent.Start(ctx, cancel))
+	t.Cleanup(orbAgent.shutdownOTLP)
+
+	require.NotNil(t, reporter.reported, "the agent hands its config as written to the manager that reports it")
+	assert.Equal(t, "${vault://secret/diode/target}",
+		reporter.reported.OrbAgent.Backends["common"].(map[string]any)["diode"].(map[string]any)["target"])
+	require.NotNil(t, reporter.started, "the manager starts")
+	assert.Equal(t, "grpcs://resolved.example.com", orbAgent.backendsCommon.Diode.Target, "the agent runs with the value")
+}
+
+// reportingConfigManager is a config manager that reports the config, and
+// records what it is handed to report and to start with.
+type reportingConfigManager struct {
+	mockConfigManager
+	reported, started *config.Config
+}
+
+func (m *reportingConfigManager) ReportConfig(cfg config.Config) { m.reported = &cfg }
+
+func (m *reportingConfigManager) Start(_ context.Context, cfg config.Config, _ map[string]backend.Backend) error {
+	m.started = &cfg
+	return nil
+}
+
+// resolvingSecretsManager resolves one reference in the agent's config.
+type resolvingSecretsManager struct {
+	mockSecretsManager
+	reference, value string
+}
+
+func (m *resolvingSecretsManager) SolveConfigSecrets(backends map[string]any, cm config.ManagerConfig) (map[string]any, config.ManagerConfig, error) {
+	var resolve func(v any) any
+	resolve = func(v any) any {
+		switch v := v.(type) {
+		case string:
+			if v == m.reference {
+				return m.value
+			}
+			return v
+		case map[string]any:
+			out := make(map[string]any, len(v))
+			for k, e := range v {
+				out[k] = resolve(e)
+			}
+			return out
+		default:
+			return v
+		}
+	}
+	return resolve(backends).(map[string]any), cm, nil
+}
+
 // lockedBuffer is a buffer the agent's goroutines can log into.
 type lockedBuffer struct {
 	mu  sync.Mutex

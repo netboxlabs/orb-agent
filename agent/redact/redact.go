@@ -2,6 +2,7 @@ package redact
 
 import (
 	"fmt"
+	"net/url"
 	"reflect"
 	"slices"
 	"strings"
@@ -142,7 +143,7 @@ func redactValue(val reflect.Value, fieldName string) any {
 	case reflect.Slice, reflect.Array:
 		return redactSlice(val)
 	case reflect.String:
-		return val.String()
+		return URL(val.String())
 	case reflect.Bool:
 		return val.Bool()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -193,6 +194,37 @@ func mapKey(key reflect.Value) string {
 	return fmt.Sprintf("%v", key)
 }
 
+// URL returns s with the password of the URL it is masked as ********, when s
+// is a URL that carries one, as a Vault address does for a proxy that asks for
+// basic auth in front of Vault. Any other s is returned as it is.
+func URL(s string) string {
+	if !strings.Contains(s, "://") || !strings.Contains(s, "@") {
+		return s
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.User == nil {
+		return s
+	}
+	if _, ok := u.User.Password(); !ok {
+		return s
+	}
+	// Redacted writes xxxxx in place of the password: a * would be escaped
+	// in a URL's user info.
+	return strings.Replace(u.Redacted(), ":xxxxx@", ":"+MaskedSecret+"@", 1)
+}
+
+// isString reports whether val holds a string, through any pointer or
+// interface.
+func isString(val reflect.Value) bool {
+	for val.IsValid() && (val.Kind() == reflect.Pointer || val.Kind() == reflect.Interface) {
+		if val.IsNil() {
+			return false
+		}
+		val = val.Elem()
+	}
+	return val.IsValid() && val.Kind() == reflect.String
+}
+
 // redactContainer masks every value of a sensitive container's map but those
 // of the fields named in keep, which are redacted as anywhere else.
 func redactContainer(val reflect.Value, keep []string) any {
@@ -204,7 +236,8 @@ func redactContainer(val reflect.Value, keep []string) any {
 	iter := val.MapRange()
 	for iter.Next() {
 		keyStr := mapKey(iter.Key())
-		if slices.Contains(keep, strings.ToLower(keyStr)) {
+		// A login reads a field under its exact name, and as a string.
+		if slices.Contains(keep, keyStr) && isString(iter.Value()) {
 			result[keyStr] = redactValue(iter.Value(), keyStr)
 		} else {
 			result[keyStr] = maskLeaves(iter.Value())

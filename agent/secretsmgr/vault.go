@@ -2,14 +2,17 @@ package secretsmgr
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 	"time"
 
 	vault "github.com/hashicorp/vault/api"
 
 	"github.com/netboxlabs/orb-agent/agent/config"
+	"github.com/netboxlabs/orb-agent/agent/redact"
 )
 
 var _ Manager = (*vaultManager)(nil)
@@ -24,15 +27,32 @@ type vaultManager struct {
 	token     *vault.Secret
 }
 
+// withoutUserInfo returns a Vault address without the user and password it
+// carries, as it does for a proxy that asks for basic auth in front of Vault,
+// and the Authorization header that sends them. The Vault client would send
+// them from the address, but it quotes its address in the text of every
+// error it returns, which the agent logs and reports.
+func withoutUserInfo(address string) (string, string) {
+	u, err := url.Parse(address)
+	if err != nil || u.User == nil {
+		return address, ""
+	}
+	password, _ := u.User.Password()
+	header := "Basic " + base64.StdEncoding.EncodeToString([]byte(u.User.Username()+":"+password))
+	u.User = nil
+	return u.String(), header
+}
+
 func (v *vaultManager) Start(ctx context.Context) error {
-	v.preLogger.Info("starting secrets manager", "active", "vault", "address", v.config.Address)
+	v.preLogger.Info("starting secrets manager", "active", "vault", "address", redact.URL(v.config.Address))
 
 	if v.config.Mount != "" && hasEmptySegment(v.config.Mount) {
 		return fmt.Errorf("invalid sources.vault.mount %q: contains an empty path segment", v.config.Mount)
 	}
 
 	vaultCfg := vault.DefaultConfig()
-	vaultCfg.Address = v.config.Address
+	address, basicAuth := withoutUserInfo(v.config.Address)
+	vaultCfg.Address = address
 	if v.config.Timeout == nil || *v.config.Timeout == 0 {
 		vaultCfg.Timeout = 60 * time.Second
 	} else {
@@ -47,6 +67,9 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	v.client, err = vault.NewClient(vaultCfg)
 	if err != nil {
 		return err
+	}
+	if basicAuth != "" {
+		v.client.AddHeader("Authorization", basicAuth)
 	}
 
 	if v.config.Namespace != "" {

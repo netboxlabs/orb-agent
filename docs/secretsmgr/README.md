@@ -50,7 +50,10 @@ logs the references it resolves, never the values. See
 credentials in the agent's configuration, such as a token, a password, a client
 secret or any value of a Vault login's `auth_args` but its mount path, user
 name, role and service account file, are masked as `********` wherever the
-agent reports or logs its configuration.
+agent reports or logs its configuration, as is the password of a URL in it,
+such as a Vault address's. The configuration the agent reports is the one as
+written: a secret reference in it, such as one in `backends`, is reported as
+the reference, never as the value it resolves to.
 
 A backend that refuses a policy can quote one of its values in the error, as a
 type error does for a reference in a field that takes a number. Before the

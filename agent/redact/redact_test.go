@@ -365,6 +365,57 @@ func TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential(t *testing
 	}
 }
 
+// TestSensitiveData_MasksAURLsPassword masks the password of a URL under any
+// name, as a Vault address carries one for a proxy that asks for basic auth,
+// and keeps the rest of the URL and a URL without one.
+func TestSensitiveData_MasksAURLsPassword(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"address": "https://proxyuser:Pr0xy-pa55word@vault.example.com:8200/v1",
+		"url":     "https://git.example.com/repo.git",
+		"user":    "https://proxyuser@vault.example.com",
+		"text":    "not a URL: user:pass@host",
+	}).(map[string]any)
+
+	if redacted["address"] != "https://proxyuser:********@vault.example.com:8200/v1" {
+		t.Errorf("Expected the address's password to be masked, got %v", redacted["address"])
+	}
+	for name, want := range map[string]string{
+		"url":  "https://git.example.com/repo.git",
+		"user": "https://proxyuser@vault.example.com",
+		"text": "not a URL: user:pass@host",
+	} {
+		if redacted[name] != want {
+			t.Errorf("Expected %s to be kept as %q, got %v", name, want, redacted[name])
+		}
+	}
+	if got := URL("https://u:p@h"); got != "https://u:********@h" {
+		t.Errorf("URL masks the password, got %q", got)
+	}
+}
+
+// TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName keeps a field of
+// a Vault login's auth_args only as its login reads it: under the exact name,
+// and a string. A Vault login matches the names exactly.
+func TestSensitiveData_AuthArgsKeepsOnlyAStringUnderAKeptName(t *testing.T) {
+	args := SensitiveData(map[string]any{
+		"auth_args": map[string]any{
+			"Mount_Path": "s3cret",
+			"role":       map[string]any{"x": "s3cret"},
+			"username":   []any{"s3cret"},
+		},
+	}).(map[string]any)["auth_args"].(map[string]any)
+
+	if args["Mount_Path"] != MaskedSecret {
+		t.Errorf("Expected Mount_Path, not a kept name, to be masked, got %v", args["Mount_Path"])
+	}
+	if x := args["role"].(map[string]any)["x"]; x != MaskedSecret {
+		t.Errorf("Expected a map under role to be masked, got %v", x)
+	}
+	if u := args["username"].([]any)[0]; u != MaskedSecret {
+		t.Errorf("Expected a list under username to be masked, got %v", u)
+	}
+}
+
 // TestSensitiveData_NonStringValues tests non-string sensitive fields
 func TestSensitiveData_NonStringValues(t *testing.T) {
 	original := map[string]any{
