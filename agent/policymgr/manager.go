@@ -1031,8 +1031,11 @@ func backendRefusal(status, text string, resolved []resolvedValue) (logged, reas
 type refusalMasks struct {
 	resolved []resolvedValue
 	values   []string
-	all      *redact.Masker
-	// each masks values[i] alone, to tell which a text quotes.
+	// hosts holds the values as a backend writes a host (see hostSet).
+	hosts hostSet
+	// all masks the values, and each of them as a backend writes a host.
+	all *redact.Masker
+	// each masks values[i] alone, so, to tell which a text quotes.
 	eachOnce sync.Once
 	each     []*redact.Masker
 }
@@ -1044,7 +1047,11 @@ func newRefusalMasks(resolved []resolvedValue) *refusalMasks {
 			values = append(values, r.value)
 		}
 	}
-	return &refusalMasks{resolved: resolved, values: values, all: redact.NewMasker(values)}
+	hosts := newHostSet(values)
+	return &refusalMasks{
+		resolved: resolved, values: values, hosts: hosts,
+		all: redact.NewMasker(append(slices.Clone(values), hosts.forms()...)),
+	}
 }
 
 // refusal returns text masked, with status in front of it, as backendRefusal
@@ -1097,7 +1104,7 @@ func refusalStatus(err error) (status, text string) {
 func (m *refusalMasks) quotedFieldsNote(text, after string) string {
 	m.eachOnce.Do(func() {
 		for _, v := range m.values {
-			m.each = append(m.each, redact.NewMasker([]string{v}))
+			m.each = append(m.each, redact.NewMasker(append([]string{v}, newHostSet([]string{v}).forms()...)))
 		}
 	})
 	var fields []string

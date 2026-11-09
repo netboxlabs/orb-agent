@@ -30,9 +30,10 @@ type PolicyRepo interface {
 	// UpdateRunsWith stores runs as UpdateRuns does, once prepare has
 	// rewritten them for the ID of the policy policyName maps to, in the same
 	// locked operation: the name cannot come to map to another policy, or to
-	// one stored meanwhile, between the two. Nothing is prepared or stored for
-	// a name no policy has. prepare must not call the repo.
-	UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData)) error
+	// one stored meanwhile, between the two. prepare returns the runs to
+	// store, which can leave some out. Nothing is prepared or stored for a
+	// name no policy has. prepare must not call the repo.
+	UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData) []RunData) error
 	FailNonTerminalRuns(reason string) error
 }
 
@@ -184,7 +185,7 @@ func (p *policyMemRepo) UpdateRuns(policyName string, runs []RunData) error {
 	return p.UpdateRunsWith(policyName, runs, nil)
 }
 
-func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData)) error {
+func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepare func(policyID string, runs []RunData) []RunData) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	policyID, ok := p.nameMap[policyName]
@@ -196,7 +197,7 @@ func (p *policyMemRepo) UpdateRunsWith(policyName string, runs []RunData, prepar
 		return fmt.Errorf("%w: %s", ErrPolicyNotFound, policyID)
 	}
 	if prepare != nil {
-		prepare(policyID, runs)
+		runs = prepare(policyID, runs)
 	}
 
 	// Index existing runs for change detection and timestamp preservation

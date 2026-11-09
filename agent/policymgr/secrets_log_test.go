@@ -126,10 +126,19 @@ func TestManagedPolicySecretsNeverReachTheLog(t *testing.T) {
 // and config.
 func startDoppler(t *testing.T, logger *slog.Logger, name, value string) secretsmgr.Manager {
 	t.Helper()
+	return startDopplerSecrets(t, logger, map[string]string{name: value})
+}
+
+// startDopplerSecrets is startDoppler holding several secrets: values, by
+// name.
+func startDopplerSecrets(t *testing.T, logger *slog.Logger, values map[string]string) secretsmgr.Manager {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		name := q.Get("name")
+		value, ok := values[name]
 		if r.URL.Path != "/v3/configs/config/secret" || r.Header.Get("Authorization") != "Bearer dp.st.test" ||
-			q.Get("project") != "orb" || q.Get("config") != "prd" || q.Get("name") != name {
+			q.Get("project") != "orb" || q.Get("config") != "prd" || !ok {
 			http.NotFound(w, r)
 			return
 		}
