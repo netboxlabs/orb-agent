@@ -160,3 +160,8 @@ the secret resolving again logs `Secret resolves again` at INFO.
 Without a `schedule`, the agent reads a secret only when it applies a policy,
 so a policy whose secret didn't resolve is applied again when it is delivered
 again or the agent restarts.
+
+The agent keeps its own login to Vault going: it logs in again when its token
+ends, so a token's max TTL costs no read, unless it was given a token with
+token auth, which it cannot log in again for. See
+[Token lifetime](vault.md#token-lifetime).

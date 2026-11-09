@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	vault "github.com/hashicorp/vault/api"
@@ -26,6 +28,17 @@ type vaultManager struct {
 	client    *vault.Client
 	auth      authMethod
 	token     *vault.Secret
+
+	// loginMu serializes logging in again, which the token's watcher and the
+	// reads Vault refuses for the token can each start: the client's token
+	// changes only under it once the manager started.
+	loginMu sync.Mutex
+	// loginFailing is set while logging in again fails, so that the agent
+	// says it once, at ERROR, until a login works again.
+	loginFailing bool
+	// tokenEndedSaid is set once the agent said the token it was given
+	// ended, which token auth cannot log in again for.
+	tokenEndedSaid bool
 }
 
 // errAddressNotAURL refuses a Vault address no URL parser reads. The parse
@@ -109,7 +122,7 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	if err := v.startScheduler(v.config.Schedule); err != nil {
 		return err
 	}
-	if err := v.addTokenLifecycleWatcher(); err != nil {
+	if err := v.watchToken(v.token); err != nil {
 		return err
 	}
 	// Authentication above round-tripped to the server, so the connection is
@@ -119,14 +132,18 @@ func (v *vaultManager) Start(ctx context.Context) error {
 	return nil
 }
 
-func (v *vaultManager) addTokenLifecycleWatcher() error {
-	if v.token == nil || v.token.Auth == nil ||
-		!v.token.Auth.Renewable || v.token.Auth.LeaseDuration == 0 {
+// watchToken renews the token the agent logged in with, while Vault renews
+// it, and logs in again once Vault renews it no longer: at its max TTL, or
+// when renewals keep failing. Without it the token ends, and every read with
+// it, until a restart.
+func (v *vaultManager) watchToken(secret *vault.Secret) error {
+	if secret == nil || secret.Auth == nil ||
+		!secret.Auth.Renewable || secret.Auth.LeaseDuration == 0 {
 		return nil
 	}
 
 	lw, err := v.client.NewLifetimeWatcher(&vault.LifetimeWatcherInput{
-		Secret:        v.token,
+		Secret:        secret,
 		RenewBehavior: vault.RenewBehaviorIgnoreErrors,
 	})
 	if err != nil {
@@ -136,16 +153,21 @@ func (v *vaultManager) addTokenLifecycleWatcher() error {
 	go lw.Start()
 
 	go func() {
+		defer lw.Stop()
 		for {
 			select {
 			case <-v.ctx.Done():
-				lw.Stop()
 				return
 
 			case err := <-lw.DoneCh():
+				attrs := []any{}
 				if err != nil {
-					v.logger.Error("Token renewal failed", "error", err)
+					attrs = append(attrs, "error", err)
 				}
+				v.logger.Info("the Vault token can be renewed no longer; logging in again", attrs...)
+				v.loginAgain(secret.Auth.ClientToken)
+				return
+
 			case output := <-lw.RenewCh():
 				v.logger.Info("Token renewed", "renewedAt", output.RenewedAt)
 			}
@@ -153,6 +175,76 @@ func (v *vaultManager) addTokenLifecycleWatcher() error {
 	}()
 
 	return nil
+}
+
+// loginAgainIfEnded logs in again in place of the token stale, a read with
+// which Vault refused, if Vault no longer accepts it. Vault answers a 403
+// both for a token that ended and for a path the token may not read, so it
+// is asked about the token first: a valid token is not logged in again for,
+// at every read of such a path. It reports whether the read is worth trying
+// again.
+func (v *vaultManager) loginAgainIfEnded(stale string) bool {
+	v.loginMu.Lock()
+	defer v.loginMu.Unlock()
+	if v.client.Token() != stale {
+		return true
+	}
+	_, err := v.client.Auth().Token().LookupSelf()
+	if err == nil || !isForbidden(err) {
+		return false
+	}
+	return v.loginAgainLocked(stale)
+}
+
+// loginAgain logs in again in place of the token stale, which Vault renews no
+// longer.
+func (v *vaultManager) loginAgain(stale string) bool {
+	v.loginMu.Lock()
+	defer v.loginMu.Unlock()
+	return v.loginAgainLocked(stale)
+}
+
+// loginAgainLocked logs in again in place of the token stale, unless a login
+// already replaced it, and reports whether the client holds another token.
+// Token auth cannot log in again: the agent says so once. A login that fails
+// is said once, at ERROR, and tried again at the next read. The caller holds
+// v.loginMu.
+func (v *vaultManager) loginAgainLocked(stale string) bool {
+	if v.client.Token() != stale {
+		return true
+	}
+	if _, static := v.auth.(*AuthToken); static {
+		if !v.tokenEndedSaid {
+			v.tokenEndedSaid = true
+			v.logger.Error("the Vault token the agent was given is no longer valid, and token auth cannot log in again: " +
+				"secrets from Vault fail to resolve until the agent is restarted with a valid token")
+		}
+		return false
+	}
+	secret, err := v.auth.vaultAuthenticate(v.ctx, v.client)
+	if err != nil {
+		if !v.loginFailing {
+			v.loginFailing = true
+			v.logger.Error("failed to log in to Vault again: secrets from Vault fail to resolve until a login works",
+				"auth", v.config.Auth, "error", err)
+		} else {
+			v.logger.Debug("failed to log in to Vault again", "auth", v.config.Auth, "error", err)
+		}
+		return false
+	}
+	v.loginFailing = false
+	v.token = secret
+	v.logger.Info("logged in to Vault again", "auth", v.config.Auth)
+	if err := v.watchToken(secret); err != nil {
+		v.logger.Warn("the Vault token from the new login is not renewed", "error", err)
+	}
+	return true
+}
+
+// isForbidden reports whether err is Vault's 403.
+func isForbidden(err error) bool {
+	var respErr *vault.ResponseError
+	return errors.As(err, &respErr) && respErr.StatusCode == http.StatusForbidden
 }
 
 // vaultRef captures a parsed ${vault://...} reference.
@@ -261,7 +353,13 @@ func (v *vaultManager) fetch(body string) (string, error) {
 		return "", err
 	}
 	resolved := fmt.Sprintf("mount=%q path=%q field=%q", ref.mount, ref.path, ref.field)
+	token := v.client.Token()
 	secret, err := v.client.KVv2(ref.mount).Get(v.ctx, ref.path)
+	if err != nil && isForbidden(err) && v.loginAgainIfEnded(token) {
+		// The token the read was made with ended: read again with the one
+		// from the new login.
+		secret, err = v.client.KVv2(ref.mount).Get(v.ctx, ref.path)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get secret path %s (%s): %w", body, resolved, err)
 	}

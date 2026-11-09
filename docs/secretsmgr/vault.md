@@ -177,8 +177,26 @@ orb:
 
 The Orb Agent will resolve the Vault reference and use the actual secret value from Vault when the policy is applied.
 
+## Token lifetime
+
+The agent logs in to Vault when it starts. It renews the token it gets while
+Vault renews it, and logs in again with the same method once Vault renews it
+no longer: at its max TTL, or when renewals keep failing. A read that Vault
+refuses because the token is no longer valid, revoked for example, also logs
+in again and reads again; reads that find it so together log in once. A read
+refused for a path the token may not read fails as it is, without a login.
+
+This holds for AppRole, userpass, LDAP and Kubernetes. A login that fails, as
+it does with a `secret_id` that expired, is logged once at ERROR, as `failed to
+log in to Vault again`, and tried again at the next read; `logged in to Vault
+again` is logged at INFO once a login works.
+
+Token auth cannot log in again. The agent does not renew a token given with
+token auth, and when it ends, the reads fail until the agent is restarted with
+a valid token. The agent says so once, at ERROR.
+
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, token expired), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
+If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, a login that fails, a token given with token auth that expired), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in Vault without restarting the Orb Agent or manually updating policies.
