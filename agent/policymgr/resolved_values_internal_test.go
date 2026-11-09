@@ -176,6 +176,24 @@ func TestBackendRefusal(t *testing.T) {
 		assert.True(t, cut)
 	})
 
+	t.Run("finishes the line a cut ends in when its end is near", func(t *testing.T) {
+		for _, tc := range []struct {
+			text string
+			n    int
+			want string
+			cut  bool
+		}{
+			{"ab\ncd\nef", 4, "ab\ncd", true},
+			{"ab\ncd", 2, "ab", true},
+			{"ab\ncd", 4, "ab\ncd", false},
+			{"a" + strings.Repeat("b", maxLineRest+1) + "\n", 1, "a", true},
+		} {
+			got, cut := finishLine(tc.text, tc.n)
+			assert.Equal(t, tc.want, got, "%q from byte %d", tc.text, tc.n)
+			assert.Equal(t, tc.cut, cut, "%q from byte %d", tc.text, tc.n)
+		}
+	})
+
 	t.Run("a value a kept bound runs through is masked", func(t *testing.T) {
 		for _, limit := range []int{maxMaskedErrLen, maxBackendErrLen} {
 			// Wherever near limit the bound falls, one of these puts it after
@@ -228,6 +246,25 @@ func TestBackendRefusal(t *testing.T) {
 		logged, reason := backendRefusal("", strings.Repeat("x ", 600)+"k3Y-9xQz into int", retries)
 		assert.True(t, strings.HasSuffix(reason, note), "the reason still says what the error quotes: %q", reason)
 		assert.Contains(t, logged, "******** into int"+note)
+	})
+
+	t.Run("leaves the words of a YAML type error the end of what it masks cuts", func(t *testing.T) {
+		// An aggregate yaml.v3 error can run past what is masked. Wherever its
+		// end falls in the last type error, that line is still the decoder's
+		// wording, and "line" in front of it is not the secret's.
+		values := []resolvedValue{{path: "config.retries", value: "line"}}
+		typeLine := "\n  line 999: cannot unmarshal !!str `line` into int"
+		rest := strings.Repeat("\n  line 1000: cannot unmarshal !!str `x` into int", 500)
+		shown := 0
+		for at := maxMaskedErrLen - len(truncationMarker) - len(typeLine); at <= maxMaskedErrLen+len(typeLine); at++ {
+			head := "yaml: unmarshal errors:\n  " + strings.Repeat("x", at-len("yaml: unmarshal errors:\n  "))
+			logged, _ := backendRefusal("", head+typeLine+rest, values)
+			assert.NotContains(t, logged, "******** 999", "the line from byte %d", at)
+			if strings.Contains(logged, "line 999") {
+				shown++
+			}
+		}
+		assert.Positive(t, shown, "the line is logged for some of these")
 	})
 
 	t.Run("names no field for the error's own bytes at the end of what it masks", func(t *testing.T) {

@@ -1005,7 +1005,7 @@ const quotedFieldsNamed = 3
 // apply mutex, so only the text kept is masked, and the longest form of a
 // value past it: a value, or a truncated one's tail, that a bound runs
 // through is then whole in what is masked, and masked whole before the bound
-// cuts the masked text.
+// cuts the masked text. The line that ends is finished too (see finishLine).
 //
 // status, kept in front of what is masked, is the status code an HTTP error
 // starts with (see refusalStatus).
@@ -1017,6 +1017,9 @@ func backendRefusal(status, text string, resolved []resolvedValue) (logged, reas
 		}
 	}
 	window, cut := cutAt(text, maxMaskedErrLen+redact.LongestForm(values))
+	if cut {
+		window, cut = finishLine(text, len(window))
+	}
 	plain := redact.Values(window, values)
 	masked := plain
 	if cut {
@@ -1154,6 +1157,25 @@ func leadingDigits(s string) int {
 		n++
 	}
 	return n
+}
+
+// maxLineRest bounds how far finishLine reaches past a cut.
+const maxLineRest = 256
+
+// finishLine returns text cut at byte n, a character's start, or at the end
+// of the line n is in when that end is at most maxLineRest bytes on, and
+// whether it was cut. A YAML type error is the decoder's wording only on a
+// line of its own, whole, so an aggregate error cut inside one would have the
+// words of its last line masked as a short value's.
+func finishLine(text string, n int) (string, bool) {
+	rest, cut := cutAt(text[n:], maxLineRest)
+	if i := strings.IndexByte(rest, '\n'); i >= 0 {
+		return text[:n+i], true
+	}
+	if !cut {
+		return text, false
+	}
+	return text[:n], true
 }
 
 // cutAt returns s cut to at most n bytes at the start of a character, and
