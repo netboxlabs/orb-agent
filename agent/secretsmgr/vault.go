@@ -53,7 +53,8 @@ type vaultManager struct {
 // look itself up cannot tell Vault's refusal of a path it may not read from
 // the end of the token, and a login that fails, as for a password rotated in
 // a directory, counts against the account: neither is tried at every read.
-const loginInterval = time.Minute
+// It is under a minute so that each poll of a schedule of one minute can try.
+const loginInterval = 50 * time.Second
 
 // errAddressNotAURL refuses a Vault address no URL parser reads. The parse
 // error would quote the address, and a password it carries with it.
@@ -190,15 +191,11 @@ func (v *vaultManager) watchToken(secret *vault.Secret) error {
 				return
 
 			case err := <-lw.DoneCh():
-				if v.client.Token() != secret.Auth.ClientToken {
-					// A login replaced the token as the watcher ended.
-					return
-				}
 				attrs := []any{}
 				if err != nil {
 					attrs = append(attrs, "error", err)
 				}
-				v.logger.Info("the Vault token can be renewed no longer; logging in again", attrs...)
+				v.logger.Info("the Vault token can be renewed no longer", attrs...)
 				v.loginAgain(secret.Auth.ClientToken)
 				return
 
@@ -224,7 +221,7 @@ func (v *vaultManager) loginAgainIfEnded(stale string) bool {
 	if v.client.Token() != stale {
 		return true
 	}
-	if !v.lastTry.IsZero() && v.now().Sub(v.lastTry) < loginInterval {
+	if v.triedLately() {
 		return false
 	}
 	_, err := v.client.Auth().Token().LookupSelfWithContext(v.ctx)
@@ -236,11 +233,24 @@ func (v *vaultManager) loginAgainIfEnded(stale string) bool {
 }
 
 // loginAgain logs in again in place of the token stale, which Vault renews no
-// longer.
+// longer, unless a login failed less than loginInterval ago.
 func (v *vaultManager) loginAgain(stale string) bool {
 	v.loginMu.Lock()
 	defer v.loginMu.Unlock()
+	if v.client.Token() != stale {
+		return true
+	}
+	if v.triedLately() {
+		return false
+	}
 	return v.loginAgainLocked(stale)
+}
+
+// triedLately reports whether the agent tried to log in again for a read, or
+// failed to log in again, less than loginInterval ago. The caller holds
+// v.loginMu.
+func (v *vaultManager) triedLately() bool {
+	return !v.lastTry.IsZero() && v.now().Sub(v.lastTry) < loginInterval
 }
 
 // loginAgainLocked logs in again in place of the token stale, unless a login
@@ -255,8 +265,8 @@ func (v *vaultManager) loginAgainLocked(stale string) bool {
 	if reason := cannotLoginAgain(v.auth); reason != "" {
 		if !v.tokenEndedSaid {
 			v.tokenEndedSaid = true
-			v.logger.Error("the Vault token is no longer valid, and " + reason +
-				": secrets from Vault fail to resolve until the agent is restarted with valid credentials")
+			v.logger.Error("the agent's Vault token ends, and " + reason +
+				": secrets from Vault fail to resolve once it ended, until the agent is restarted with valid credentials")
 		}
 		return false
 	}

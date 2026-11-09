@@ -197,9 +197,9 @@ with the same `secret_id`, so it needs one that can be used again: a wrapped
 `secret_id` (`wrapping_token: true`) is unwrapped once, and one with
 `secret_id_num_uses` set runs out.
 
-The agent tries to log in again for a read at most once a minute, and as
-often after a login that fails: a directory counts failed binds against the
-account. A login that fails, as with a `secret_id` that expired or a password
+The agent tries to log in again for a read at most once in 50 seconds, so once
+per poll of a one-minute schedule, and as often after a login that fails: a
+directory counts failed binds against the account. A login that fails, as with a `secret_id` that expired or a password
 rotated, is logged once at ERROR, as `failed to log in to Vault again`, and
 `logged in to Vault again` is logged at INFO once a login works.
 
@@ -210,6 +210,6 @@ ERROR.
 
 ## Secret Polling
 
-If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, a login that fails, a token given with token auth that expired), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
+If you configure the `schedule` parameter, the Orb Agent will periodically check for changes to referenced secrets. If a secret value changes, the related policies are automatically updated with the new values. If a secret can no longer be read (path deleted, Vault unreachable, a login that fails, a token given with token auth or from a wrapped `secret_id` that ended, a token that ends within 50 seconds of a try to log in again), the agent stops the policies that use it, reports them failed, and re-applies them once a re-fetch succeeds; see [Rotation](README.md#rotation).
 
 This is useful for credential rotation scenarios, where you want to update credentials in Vault without restarting the Orb Agent or manually updating policies.
