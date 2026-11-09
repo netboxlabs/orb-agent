@@ -315,6 +315,56 @@ func TestSensitiveData_NumbersUnderASensitiveName(t *testing.T) {
 	}
 }
 
+// TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential masks
+// every value of a Vault login's auth_args, whatever its name, nested or
+// listed, but those of the fields that name no credential, and keeps a bool.
+// A login method the list has no names for is masked whole.
+func TestSensitiveData_AuthArgsMasksAllButTheFieldsNamingNoCredential(t *testing.T) {
+	redacted := SensitiveData(map[string]any{
+		"auth": "aws",
+		"auth_args": map[string]any{
+			"access_key":           "access",
+			"secret_key":           "secret",
+			"region":               "us-east-1",
+			"port":                 8200,
+			"options":              map[string]any{"header": "value"},
+			"values":               []any{"listed"},
+			"empty":                "",
+			"mount_path":           "aws",
+			"username":             "agent",
+			"role":                 "orb-agent",
+			"service_account_file": "/var/run/token",
+			"wrapping_token":       false,
+		},
+	}).(map[string]any)
+
+	if redacted["auth"] != "aws" {
+		t.Errorf("Expected auth, outside auth_args, to be kept, got %v", redacted["auth"])
+	}
+	args := redacted["auth_args"].(map[string]any)
+	for _, name := range []string{"access_key", "secret_key", "region", "port"} {
+		if args[name] != MaskedSecret {
+			t.Errorf("Expected %s to be masked, got %v", name, args[name])
+		}
+	}
+	if header := args["options"].(map[string]any)["header"]; header != MaskedSecret {
+		t.Errorf("Expected a nested value to be masked, got %v", header)
+	}
+	if listed := args["values"].([]any)[0]; listed != MaskedSecret {
+		t.Errorf("Expected a listed value to be masked, got %v", listed)
+	}
+	if args["empty"] != "" {
+		t.Errorf("Expected an empty value to stay empty, got %v", args["empty"])
+	}
+	for name, want := range map[string]any{
+		"mount_path": "aws", "username": "agent", "role": "orb-agent", "service_account_file": "/var/run/token", "wrapping_token": false,
+	} {
+		if args[name] != want {
+			t.Errorf("Expected %s to be kept as %v, got %v", name, want, args[name])
+		}
+	}
+}
+
 // TestSensitiveData_NonStringValues tests non-string sensitive fields
 func TestSensitiveData_NonStringValues(t *testing.T) {
 	original := map[string]any{

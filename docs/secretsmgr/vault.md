@@ -35,7 +35,14 @@ orb:
 
 ## Authentication Methods
 
-The Vault secrets manager supports several authentication methods:
+The Vault secrets manager supports several authentication methods.
+
+Wherever the agent reports or logs its configuration, it masks every value of
+`auth_args` as `********`, whatever the method, including a value written as
+unquoted digits, nested or in a list. It keeps `mount_path`, `username`, `role`
+and `service_account_file`, which name no credential, and a `true` or `false`
+such as `wrapping_token`. An AppRole's `role_id` is masked too because, for a
+role that binds no `secret_id`, Vault accepts a login with the `role_id` alone.
 
 ### Token Authentication
 
@@ -55,11 +62,6 @@ auth_args:
   wrapping_token: false  # Optional
   mount_path: "approle"  # Optional
 ```
-
-Wherever the agent reports or logs its configuration, it masks the `role_id`
-and the `secret_id` as `********`, as it masks a token or a password, even when
-one is written as unquoted digits. The `role_id` is masked too because, for a
-role that binds no `secret_id`, Vault accepts a login with the `role_id` alone.
 
 ### UserPass Authentication
 
