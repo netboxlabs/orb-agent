@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -183,10 +184,10 @@ func redactMap(val reflect.Value) any {
 type mapEntry struct{ key, value reflect.Value }
 
 // sortedEntries returns the entries of the map val, in the order of their
-// keys' strings, then of their keys' types, then of their values' types and
-// Go syntax, nested types included, for keys written the same. It takes each
-// value as it ranges the map: a key not equal to itself, as a NaN, finds no
-// value when looked up again.
+// keys' strings, then of their keys' types, then of their values as
+// valueRepr writes them, for keys written the same. It takes each value as it
+// ranges the map: a key not equal to itself, as a NaN, finds no value when
+// looked up again.
 func sortedEntries(val reflect.Value) []mapEntry {
 	entries := make([]mapEntry, 0, val.Len())
 	iter := val.MapRange()
@@ -200,14 +201,77 @@ func sortedEntries(val reflect.Value) []mapEntry {
 		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.key)), fmt.Sprintf("%T", keyValue(b.key))); c != 0 {
 			return c
 		}
-		if c := strings.Compare(fmt.Sprintf("%T", keyValue(a.value)), fmt.Sprintf("%T", keyValue(b.value))); c != 0 {
-			return c
-		}
-		// Go's syntax writes the types inside a value too, as []interface {}{1}.
-		return strings.Compare(fmt.Sprintf("%#v", keyValue(a.value)), fmt.Sprintf("%#v", keyValue(b.value)))
+		return strings.Compare(valueRepr(a.value), valueRepr(b.value))
 	})
 	return entries
 }
+
+// valueRepr returns v written with its types, nested ones included, by
+// reflection alone: no method of v's types, as a String or a GoString that
+// writes two values the same, is called.
+func valueRepr(v reflect.Value) string {
+	var b strings.Builder
+	writeRepr(&b, v, 0)
+	return b.String()
+}
+
+// writeRepr writes v to b as valueRepr does, as deep as maxReprDepth.
+func writeRepr(b *strings.Builder, v reflect.Value, depth int) {
+	if !v.IsValid() || depth > maxReprDepth {
+		b.WriteString("<>")
+		return
+	}
+	b.WriteString(v.Type().String())
+	b.WriteByte('{')
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Interface:
+		if !v.IsNil() {
+			writeRepr(b, v.Elem(), depth+1)
+		}
+	case reflect.Struct:
+		for i := range v.NumField() {
+			writeRepr(b, v.Field(i), depth+1)
+			b.WriteByte(',')
+		}
+	case reflect.Slice, reflect.Array:
+		for i := range v.Len() {
+			writeRepr(b, v.Index(i), depth+1)
+			b.WriteByte(',')
+		}
+	case reflect.Map:
+		entries := make([]string, 0, v.Len())
+		iter := v.MapRange()
+		for iter.Next() {
+			entries = append(entries, valueReprAt(iter.Key(), depth+1)+":"+valueReprAt(iter.Value(), depth+1))
+		}
+		slices.Sort(entries)
+		b.WriteString(strings.Join(entries, ","))
+	case reflect.String:
+		b.WriteString(strconv.Quote(v.String()))
+	case reflect.Bool:
+		b.WriteString(strconv.FormatBool(v.Bool()))
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		b.WriteString(strconv.FormatInt(v.Int(), 10))
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		b.WriteString(strconv.FormatUint(v.Uint(), 10))
+	case reflect.Float32, reflect.Float64:
+		b.WriteString(strconv.FormatFloat(v.Float(), 'g', -1, 64))
+	case reflect.Complex64, reflect.Complex128:
+		b.WriteString(strconv.FormatComplex(v.Complex(), 'g', -1, 128))
+	}
+	b.WriteByte('}')
+}
+
+// valueReprAt returns v written as writeRepr writes it at depth.
+func valueReprAt(v reflect.Value, depth int) string {
+	var b strings.Builder
+	writeRepr(&b, v, depth)
+	return b.String()
+}
+
+// maxReprDepth bounds how deep valueRepr follows a value, as through a
+// pointer that leads back to it.
+const maxReprDepth = 16
 
 // keyValue returns what key, a map's key or value, holds behind its
 // interface.
@@ -284,10 +348,10 @@ func URL(s string) string {
 	if !strings.Contains(s, "@") {
 		return s
 	}
-	spans := userInfoSpans(s, 0, false)
+	spans := spansOf(s)
 	// s is read again with what looks like a reference as a run of x, so that
-	// its :// and braces read as nothing a URL holds.
-	t := s
+	// its :// and braces read as nothing a URL holds; what either reading
+	// masks is masked.
 	if looks := referencePattern.FindAllStringIndex(s, -1); len(looks) > 0 {
 		b := []byte(s)
 		for _, ref := range looks {
@@ -295,9 +359,8 @@ func URL(s string) string {
 				b[i] = 'x'
 			}
 		}
-		t = string(b)
+		spans = append(spans, spansOf(string(b))...)
 	}
-	spans = append(spans, spansOf(t)...)
 	return maskSpans(s, withoutReferences(references(s), spans))
 }
 

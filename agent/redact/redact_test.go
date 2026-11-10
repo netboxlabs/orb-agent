@@ -594,6 +594,8 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 		"${vault://kv/a,https://S3cret'x@host}",
 		"${vault://kv/a,https://S3cret(x@host}",
 		"${vault://kv/a,https://S3cret!x@host}",
+		// The same after a URL whose user info a parser reads.
+		"https://u:p@h/${vault://kv/a/https://u2:S3cret@h2}",
 		"S3cret@" + testDigest,
 	} {
 		if got := URL(in); strings.Contains(got, "S3cret") {
@@ -734,9 +736,36 @@ func TestSensitiveData_KeepsTheValueOfAKeyNotEqualToItself(t *testing.T) {
 	nested[math.NaN()] = []any{"1"}
 	for range 50 {
 		got := SensitiveData(nested)
-		if want := map[string]any{"NaN": []any{"1"}, "NaN (2)": []any{int64(1)}}; !reflect.DeepEqual(got, want) {
+		if want := map[string]any{"NaN": []any{int64(1)}, "NaN (2)": []any{"1"}}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("Expected the NaN keys in the order of their values' nested types, got %#v", got)
 		}
+	}
+}
+
+// sameGoString writes itself the same in Go syntax, whatever it holds.
+type sameGoString struct{ X string }
+
+func (sameGoString) GoString() string { return "same" }
+
+// TestSensitiveData_OrdersValuesThatWriteThemselvesTheSame orders two NaN
+// keys whose values write themselves the same, by what they hold, the same
+// way at every run.
+func TestSensitiveData_OrdersValuesThatWriteThemselvesTheSame(t *testing.T) {
+	twoNaNs := map[float64]sameGoString{}
+	twoNaNs[math.NaN()] = sameGoString{"a"}
+	twoNaNs[math.NaN()] = sameGoString{"b"}
+	var first any
+	for i := range 50 {
+		got := SensitiveData(twoNaNs)
+		if i == 0 {
+			first = got
+		}
+		if !reflect.DeepEqual(got, first) {
+			t.Fatalf("Expected the same order at every run, got %v, then %v", first, got)
+		}
+	}
+	if got := fmt.Sprint(first.(map[string]any)["NaN"]); !strings.Contains(got, "a") {
+		t.Errorf("Expected the value holding a first, got %v", first)
 	}
 }
 
