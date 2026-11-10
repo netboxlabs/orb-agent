@@ -65,6 +65,10 @@ func jsonRoundTrip(t *testing.T, s string) string {
 	return decoded
 }
 
+// ddIntParsing is device-discovery's refusal of a string in a field that
+// takes an integer, as the agent writes the JSON body it answers with.
+const ddIntParsing = "[map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing]]"
+
 // TestValues masks a policy's resolved values in a backend's error text,
 // whole, truncated and escaped as backends quote them, and leaves the error's
 // own words readable, including those a value happens to contain.
@@ -226,6 +230,56 @@ func TestValues(t *testing.T) {
 			text:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
 			values: []string{"map", "string", "7"},
 			want:   "400 yaml: unmarshal errors:\n  line 7: cannot unmarshal !!map into []string",
+		},
+		{
+			// The value is masked where the error quotes it; inside the
+			// error's words, masking it would show which run of them it is.
+			name:   "a value of longRun bytes that is a run of the YAML error's words is masked only where it is quoted",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `marshal` into int",
+			values: []string{"marshal"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int",
+		},
+		{
+			name:   "a long value's head that is a run of the YAML error's words is left there",
+			text:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+			values: []string{"unmarshal errors: and more"},
+			want:   "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `three` into int",
+		},
+		{
+			name:   "a long value that runs on past the YAML error's words is masked",
+			text:   "400 yaml: unmarshal errors:x9Qz-tail",
+			values: []string{"errors:x9Qz-tail"},
+			want:   "400 yaml: unmarshal ********",
+		},
+		{
+			// device-discovery refuses a field of the wrong type with
+			// pydantic's message, which quotes nothing of the input.
+			name:   "a short value that is a word of device-discovery's type error is left",
+			text:   "403 " + ddIntParsing,
+			values: []string{"a", "valid", "type", "integer"},
+			want:   "403 " + ddIntParsing,
+		},
+		{
+			// A message of a validator of device-discovery's own can quote
+			// the value: it is not wording the agent knows.
+			name:   "a short value in device-discovery's message of its own is masked",
+			text:   "403 [map[error:Value error, sw1: position and face go together; set both field:policies.p1.scope.0 type:value_error]]",
+			values: []string{"sw1"},
+			want:   "403 [map[error:Value error, ********: position and face go together; set both field:policies.p1.scope.0 type:value_error]]",
+		},
+		{
+			name:   "a short value is masked in device-discovery's message of its own, and left in its type error",
+			text:   "403 [" + ddIntParsing[1:len(ddIntParsing)-1] + " map[error:Value error, a: position and face go together; set both field:policies.p1.scope.1 type:value_error]]",
+			values: []string{"a"},
+			want:   "403 [" + ddIntParsing[1:len(ddIntParsing)-1] + " map[error:Value error, ********: position and face go together; set both field:policies.p1.scope.1 type:value_error]]",
+		},
+		{
+			// The field is a path of names, indices and keys, with no space
+			// in it but in a name the agent can't tell from the message.
+			name:   "a short value in device-discovery's type error for a policy whose name has a space is masked",
+			text:   "403 [map[error:Input should be a valid integer, unable to parse string as an integer field:policies.my policy.scope.0.timeout type:int_parsing]]",
+			values: []string{"a"},
+			want:   "403 [map[error:Input should be ******** valid integer, unable to parse string as an integer field:policies.my policy.scope.0.timeout type:int_parsing]]",
 		},
 		{
 			name:   "a YAML syntax error's prefix is left",
@@ -571,6 +625,8 @@ func TestCutValues(t *testing.T) {
 		{"a cut after the value's first 6 bytes", "refused: k3Y-9x", "Qz", nil, "refused: ********"},
 		{"a cut inside a head the error shortens", "input_value='k3Y", "-9xQ...'", nil, "input_value='********"},
 		{"a value whole before the cut", "refused: k3Y-9xQz, then", "", nil, "refused: ********, then"},
+		{"a truncated value's tail the cut runs through", "input_value='Pl41n-r3sol...ential", "-7f3a'", []string{"Pl41n-r3solved-credential-7f3a"}, "input_value='********...********"},
+		{"a run from the middle of a value at the cut, the text going on otherwise", "unknown option r3solved-cred", "ential and more", []string{"Pl41n-r3solved-credential-7f3a"}, "unknown option r3solved-cred"},
 		{"no value at the cut", "refused: xx", "x", nil, "refused: xx"},
 		{"a short head before the cut", "refused: k3 then xx", "x", nil, "refused: k3 then xx"},
 		{"the value's first byte, the text going on otherwise", "into int", "\n  line 5", nil, "into int"},
@@ -579,6 +635,10 @@ func TestCutValues(t *testing.T) {
 		{"a short value the cut runs through inside a word", "into int", "0k\n", []string{"t0k"}, "into int"},
 		{"a short value the cut runs through, followed by a word", "refused: t", "0kx", []string{"t0k"}, "refused: t"},
 		{"a short value the cut runs through in the error's wording", "invalid: yaml: li", "ne 3: did not find expected key", []string{"line"}, "invalid: yaml: li"},
+		{"a long value the cut runs through in the error's wording", "400 yaml: unmar", "shal errors:\n  line 4: cannot unmarshal !!str `three` into int", []string{"marshal"}, "400 yaml: unmar"},
+		// Before the cut, the head is all the error's wording; the text past
+		// the cut goes on with the value, as the whole text masks it.
+		{"a long value's head of the error's wording that runs on past the cut", "400 yaml: unmarshal errors:", "x9Qz-tail", []string{"errors:x9Qz-tail"}, "400 yaml: unmarshal ********"},
 		{"a short value the cut runs through where a type error quotes it", "  line 4: cannot unmarshal !!str `li", "ne` into int\n", []string{"line"}, "  line 4: cannot unmarshal !!str `********"},
 		{"a short value with new lines the cut runs through", "x a\nb", "\nc rest", []string{"a\nb\nc"}, "x ********"},
 		{"a short value whole at the cut that the text goes on with as a word", "refused: t0k", "t0k more", []string{"t0k"}, "refused: t0k"},
@@ -612,6 +672,12 @@ func TestCutValues(t *testing.T) {
 	// A line is masked only whole: past the cut, the text goes on otherwise.
 	if got := CutValues("refused: Zq9xW3rT7y", " and more", []string{multi}); got != "refused: Zq9xW3rT7y" {
 		t.Errorf("CutValues masks the first bytes of a line the text does not go on with: %q", got)
+	}
+	// A line the cut runs through that is the error's own wording is not a
+	// value there.
+	wordingLine := "x9Qz\nyaml: unmarshal errors:\nend"
+	if got := CutValues("400 yaml: unmar", "shal errors:\n  line 4: cannot unmarshal !!str `three` into int", []string{wordingLine}); got != "400 yaml: unmar" {
+		t.Errorf("CutValues masks a line of the error's wording the cut runs through: %q", got)
 	}
 }
 
@@ -658,6 +724,26 @@ func TestValuesWorkGrowsWithTheTextAndTheValue(t *testing.T) {
 	}
 }
 
+// TestValuesWorkGrowsWithTheTextInTheErrorWording masks a long value made of
+// the error's wording in a long text of it within the same bound: whether a
+// run is all wording is told in constant time, not by reading the run, which
+// at every byte of the text would take time in proportion to the text times
+// the value.
+func TestValuesWorkGrowsWithTheTextInTheErrorWording(t *testing.T) {
+	const w = "yaml: unmarshal errors:"
+	text, v := strings.Repeat(w, 20000), strings.Repeat(w, 4000)
+	done := make(chan string, 1)
+	go func() { done <- Values(text, []string{v}) }()
+	select {
+	case got := <-done:
+		if got != text {
+			t.Errorf("the error's own wording is masked: %.80q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("masking a 92 KiB value of the error's wording in 460 KiB of it took more than 5 s")
+	}
+}
+
 // TestRunStartsFollowTheirDefinition checks runStarts, which finds the runs to
 // mask in one pass per form, against trying every run of the text. Texts are
 // built from the values' own pieces over small alphabets, so heads, tails and
@@ -666,7 +752,10 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 	r := rand.New(rand.NewSource(825))
 	alphabets := [][]rune{[]rune("ab"), []rune("ab_ "), []rune("aab-"), []rune("a1_.€é"), []rune("ab密"), []rune("ab`'\" "), []rune("int 4"), []rune("ab\n "), []rune("aab\n")}
 	// Pieces of the wording errorWording knows, so values meet it.
-	wording := []string{"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: "}
+	wording := []string{
+		"400 ", "yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int", "yaml: line 4: ",
+		"map[error:Input should be a valid boolean field:p.a type:bool_type]",
+	}
 	word := func(alphabet []rune, n int) string {
 		var b strings.Builder
 		for range n {
@@ -678,6 +767,13 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 		alphabet := alphabets[r.Intn(len(alphabets))]
 		var values []string
 		for range 1 + r.Intn(3) {
+			if r.Intn(4) == 0 {
+				// A run of the wording, so a long value meets it too.
+				w := wording[r.Intn(len(wording))]
+				from := r.Intn(len(w))
+				values = append(values, w[from:from+r.Intn(len(w)-from+1)])
+				continue
+			}
 			values = append(values, word(alphabet, r.Intn(14)))
 		}
 		var b strings.Builder
@@ -700,13 +796,19 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 			}
 			b.WriteString(v[from:to])
 		}
-		s, m := b.String(), NewMasker(values)
-		forms, lines := formValues(m), lineValues(m)
-		// The text past a cut goes on with a value, or with anything.
+		// The text past a cut goes on with a value, or with anything; when
+		// with a value, the text before can end inside it, so the cut runs
+		// through a head of it, a run from its middle or the whole of it.
 		after := word(alphabet, r.Intn(8))
 		if v := values[r.Intn(len(values))]; r.Intn(2) == 0 {
-			after = v[r.Intn(len(v)+1):] + after
+			k := r.Intn(len(v) + 1)
+			if r.Intn(2) == 0 {
+				b.WriteString(v[r.Intn(k+1):k])
+			}
+			after = v[k:] + after
 		}
+		s, m := b.String(), NewMasker(values)
+		forms, lines := formValues(m), lineValues(m)
 		if got, want := m.runStarts(s, false, ""), runStartsByDefinition(s, forms, lines, false, ""); !slices.Equal(got, want) {
 			t.Fatalf("runStarts(%q, %q, %q)\n got %v\nwant %v", s, forms, lines, got, want)
 		}
@@ -719,7 +821,8 @@ func TestRunStartsFollowTheirDefinition(t *testing.T) {
 // runStartsByDefinition is runStarts by trying every run of s that ends at
 // each byte, from the longest. A line of a value of several lines is masked
 // only whole, or as a head at the end of a text cut before after that after
-// goes on with to the whole line.
+// goes on with to the whole line. No run that is all the error's wording is
+// masked, nor a line.
 func runStartsByDefinition(s string, forms, lines []string, cut bool, after string) []int {
 	if len(forms) == 0 && len(lines) == 0 || s == "" {
 		return nil
@@ -740,10 +843,11 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				whole := run == v && (len(run) >= longRun ||
-					standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
-				tail := len(run) >= longRun && strings.HasSuffix(v, run)
-				head := strings.HasPrefix(v, run) && (len(run) >= longRun || cut && i == len(s)-1 && runsThrough(s, after, from, v))
+				long := len(run) >= longRun && !allWording(wording, from, i)
+				whole := run == v && (long ||
+					len(run) < longRun && standsAlone(text, from, i, v) && !slices.Contains(wording[from:i+1], true))
+				tail := long && strings.HasSuffix(v, run) || cut && i == len(s)-1 && tailRunsThrough(s, after, from, v)
+				head := strings.HasPrefix(v, run) && (long || cut && i == len(s)-1 && runsThrough(s, after, from, v))
 				if whole || tail || head {
 					start[i] = min(start[i], from)
 					found = true
@@ -755,7 +859,8 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 		for i := range len(s) {
 			for from := max(0, i-len(v)+1); from <= i; from++ {
 				run := s[from : i+1]
-				if run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) && strings.HasPrefix(after, v[len(run):]) {
+				line := run == v || cut && i == len(s)-1 && strings.HasPrefix(v, run) && strings.HasPrefix(after, v[len(run):])
+				if line && !allWording(wording, from, from+len(v)-1) {
 					start[i] = min(start[i], from)
 					found = true
 				}
@@ -768,19 +873,46 @@ func runStartsByDefinition(s string, forms, lines []string, cut bool, after stri
 	return start
 }
 
+// tailRunsThrough reports whether s[from:] is the first bytes of a tail of v,
+// longRun bytes or more and not all the error's wording, that runs through
+// the cut between s and after: in the text they make, it ends past the cut.
+func tailRunsThrough(s, after string, from int, v string) bool {
+	text := s + after
+	wording := errorWording(text)
+	for n := len(s) - from + 1; n <= len(v) && from+n <= len(text); n++ {
+		if n >= longRun && text[from:from+n] == v[len(v)-n:] && !allWording(wording, from, from+n-1) {
+			return true
+		}
+	}
+	return false
+}
+
 // runsThrough reports whether the head of v at s[from:] runs through the cut
 // between s and after: in the text they make, v goes on past the cut to a
-// head of longRun bytes, or to the whole of a shorter v that is a word of its
-// own there, outside the error's wording.
+// head of longRun bytes or more that is not all the error's wording, or to
+// the whole of a shorter v that is a word of its own there, outside the
+// error's wording.
 func runsThrough(s, after string, from int, v string) bool {
-	if len(s)-from >= len(v) {
-		return false // v ends before the cut
-	}
 	text := s + after
-	if !strings.HasPrefix(text[from:], v[:min(len(v), longRun)]) {
-		return false
+	wording := errorWording(text)
+	// n is how far the text goes on with v from there.
+	n := 0
+	for from+n < len(text) && n < len(v) && text[from+n] == v[n] {
+		n++
 	}
-	return len(v) >= longRun || shortMasked(text, from, from+len(v)-1, v, errorWording(text))
+	if from+n <= len(s) {
+		return false // the head ends before the cut
+	}
+	if len(v) < longRun {
+		return n == len(v) && standsAlone(text, from, from+n-1, v) && !slices.Contains(wording[from:from+n], true)
+	}
+	return n >= longRun && !allWording(wording, from, from+n-1)
+}
+
+// allWording reports whether every byte from from to to is the error's
+// wording, read byte by byte; past the text, none is.
+func allWording(wording []bool, from, to int) bool {
+	return to < len(wording) && !slices.Contains(wording[from:to+1], false)
 }
 
 // TestErrorWording marks the error's own wording, byte by byte, apart from
@@ -825,6 +957,12 @@ func TestErrorWording(t *testing.T) {
 		{
 			text:    "  line 4: cannot unmarshal !!str `012345678\na` into int",
 			wording: strings.Repeat(" ", len("  line 4: cannot unmarshal !!str `012345678\na` into int")),
+		},
+		{
+			// device-discovery's type errors, as the agent writes them: each
+			// element whose message pydantic gives for a type, and no other.
+			text:    "[map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing] map[error:Value error, sw1: bad face field:policies.p1.scope.1 type:value_error] map[error:Field required field:policies.p1.scope.2.hostname type:missing]]",
+			wording: " " + strings.Repeat("^", len("map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing]")) + strings.Repeat(" ", len(" map[error:Value error, sw1: bad face field:policies.p1.scope.1 type:value_error] ")) + strings.Repeat("^", len("map[error:Field required field:policies.p1.scope.2.hostname type:missing]")) + " ",
 		},
 		{
 			text:    "  line 4: cannot unmarshal !!str `a` into int\n  line 5: cannot unmarshal !!str `b` into int",
@@ -872,4 +1010,119 @@ func lineValues(m *Masker) []string {
 		vs = append(vs, f.v)
 	}
 	return vs
+}
+
+// TestCutMasksWhatTheWholeTextMasks cuts texts that quote values whole,
+// truncated as pydantic and yaml.v3 quote them, by a tail alone, run into
+// another value or into the error's wording, at every kind of place: every
+// byte before the cut that masking the whole text masks, MaskCut masks too.
+// Values are also drawn from the wording, so a run of it meets the cut.
+func TestCutMasksWhatTheWholeTextMasks(t *testing.T) {
+	r := rand.New(rand.NewSource(909))
+	wording := []string{
+		"yaml: unmarshal errors:\n  ", "line 4: cannot unmarshal !!str `", "` into int\n", "yaml: line 4: ",
+		"map[error:Input should be a valid boolean field:p.a type:bool_type]",
+		"[map[error:Field required field:policies.p1.scope.0.hostname type:missing] ",
+	}
+	alphabets := []string{"abcdefghijklmnopqrstuvwxyz0123456789-", "ab", "aab-", "ab密é", "aab\n ", "int marshal"}
+	lengths := []int{3, 6, 7, 8, 24, 25, 49, 50, 300}
+	value := func(alphabet string, n int) string {
+		var b strings.Builder
+		rs := []rune(alphabet)
+		for b.Len() < n {
+			b.WriteRune(rs[r.Intn(len(rs))])
+		}
+		return b.String()
+	}
+	for range 4000 {
+		alphabet := alphabets[r.Intn(len(alphabets))]
+		var values []string
+		for range 1 + r.Intn(3) {
+			if r.Intn(3) == 0 {
+				w := wording[r.Intn(len(wording))]
+				from := r.Intn(len(w))
+				if v := w[from:from+r.Intn(len(w)-from+1)] + value(alphabet, r.Intn(2)*r.Intn(10)); v != "" {
+					values = append(values, v)
+				}
+				continue
+			}
+			values = append(values, value(alphabet, lengths[r.Intn(len(lengths))]))
+		}
+		if len(values) == 0 {
+			continue
+		}
+		var b strings.Builder
+		for range 1 + r.Intn(5) {
+			if r.Intn(2) == 0 {
+				b.WriteString(wording[r.Intn(len(wording))])
+			} else {
+				b.WriteString(value("xyz _.'\n", r.Intn(10)))
+			}
+			v := values[r.Intn(len(values))]
+			switch r.Intn(5) {
+			case 0:
+				if len(v) > 50 {
+					b.WriteString("input_value='" + v[:25] + "..." + v[len(v)-24:] + "'")
+				} else {
+					b.WriteString("`" + v + "`")
+				}
+			case 1:
+				b.WriteString(v)
+			case 2:
+				b.WriteString(v[r.Intn(len(v)):])
+			case 3:
+				b.WriteString(v[:r.Intn(len(v)+1)])
+			case 4:
+				w := values[r.Intn(len(values))]
+				b.WriteString(v[r.Intn(len(v)):] + w[:1+r.Intn(len(w))])
+			}
+		}
+		text, m := b.String(), NewMasker(values)
+		if text == "" {
+			continue
+		}
+		whole := maskedBytes(m, text, false, "")
+		for range 10 {
+			c := 1 + r.Intn(len(text))
+			for c < len(text) && !utf8.RuneStart(text[c]) {
+				c--
+			}
+			if c <= 0 || c >= len(text) {
+				continue
+			}
+			cut := maskedBytes(m, text[:c], true, text[c:])
+			for i := range c {
+				if whole[i] && !cut[i] {
+					t.Fatalf("byte %d is masked in the whole text, not cut at %d: %q, values %q\nwhole: %q\n  cut: %q",
+						i, c, text, values, m.Mask(text), m.MaskCut(text[:c], text[c:]))
+				}
+			}
+		}
+	}
+}
+
+// maskedBytes returns which bytes of s, cut before after when cut is set,
+// m masks.
+func maskedBytes(m *Masker, s string, cut bool, after string) []bool {
+	masked := make([]bool, len(s))
+	start := m.runStarts(s, cut, after)
+	if start == nil {
+		return masked
+	}
+	earliest := len(s)
+	for i := len(s) - 1; i >= 0; i-- {
+		earliest = min(earliest, start[i])
+		masked[i] = earliest <= i
+	}
+	for i := 1; i < len(s); i++ {
+		if masked[i-1] && !utf8.RuneStart(s[i]) {
+			masked[i] = true
+		}
+	}
+	for i := len(s) - 2; i >= 0; i-- {
+		if masked[i+1] && !utf8.RuneStart(s[i+1]) {
+			masked[i] = true
+		}
+	}
+	return masked
 }

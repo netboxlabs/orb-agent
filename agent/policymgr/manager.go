@@ -607,7 +607,7 @@ func (a *policyManager) applyPolicy(payload config.PolicyPayload, be backend.Bac
 	// From here on, what the backend reports or prints about the policy can
 	// quote its secrets, resolved in pd.Data; they are kept to mask it.
 	resolved := resolvedValues(payload.Data, pd.Data)
-	a.resolved.remember(pd.ID, pd.Backend, resolved)
+	a.resolved.remember(pd.ID, pd.Backend, resolved, knownNames(*pd)...)
 	err = be.ApplyPolicy(*pd, updatePolicy)
 	if err != nil {
 		// The backend's error can quote the policy's data, which carries its

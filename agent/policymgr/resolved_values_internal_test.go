@@ -3,6 +3,7 @@ package policymgr
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 
@@ -147,6 +148,45 @@ func TestBackendRefusal(t *testing.T) {
 		logged, reason := backendRefusal("", text, []resolvedValue{{path: "scope.authentication.community", value: "int"}})
 		assert.Equal(t, text, reason)
 		assert.Equal(t, text, logged)
+	})
+
+	t.Run("names no field for a short value that is only a word of device-discovery's type error", func(t *testing.T) {
+		// device-discovery's answer to a timeout of "a", "valid" or "type":
+		// pydantic's message quotes nothing of the input.
+		text := "[map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.0.timeout type:int_parsing]]"
+		for _, v := range []string{"a", "valid", "type"} {
+			logged, reason := backendRefusal("403 ", text, []resolvedValue{{path: "scope[0].timeout", value: v}})
+			assert.Equal(t, "403 "+text, reason, v)
+			assert.Equal(t, "403 "+text, logged, v)
+		}
+	})
+
+	t.Run("masks nothing in device-discovery's type errors the end of what it masks cuts", func(t *testing.T) {
+		// A long refusal of the same field in many targets: wherever the end of
+		// what is masked falls in an element, that element is still wording.
+		values := []resolvedValue{{path: "scope[0].timeout", value: "a"}, {path: "scope[1].timeout", value: "valid"}, {path: "scope[2].timeout", value: "type"}, {path: "scope[3].timeout", value: "integer"}}
+		var elements []string
+		for i := range 120 {
+			elements = append(elements, fmt.Sprintf("map[error:Input should be a valid integer, unable to parse string as an integer field:policies.p1.scope.%d.timeout type:int_parsing]", i))
+		}
+		list := "[" + strings.Join(elements, " ") + "]"
+		require.Greater(t, len(list), maxMaskedErrLen+300)
+		for pad := range 140 {
+			text := strings.Repeat("y", pad) + " " + list
+			logged, reason := backendRefusal("403 ", text, values)
+			require.Contains(t, logged, "... (truncated)", "the bound cuts the refusal")
+			assert.NotContains(t, logged, redact.MaskedSecret, "the list from byte %d", pad)
+			assert.NotContains(t, reason, redact.MaskedSecret, "the list from byte %d", pad)
+		}
+	})
+
+	t.Run("masks a long value that is a run of the YAML error's words only where the error quotes it", func(t *testing.T) {
+		// snmp-discovery's error for retries: "marshal", decoded as int.
+		logged, reason := backendRefusal("400 ", "yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `marshal` into int", []resolvedValue{{path: "config.retries", value: "marshal"}})
+		want := "400 yaml: unmarshal errors:\n  line 4: cannot unmarshal !!str `********` into int" +
+			" (the error quotes the value of the secret reference at config.retries, masked as ********)"
+		assert.Equal(t, want, reason)
+		assert.Equal(t, want, logged)
 	})
 
 	t.Run("names no field for a short value that is only a word of a YAML error quoting a value with a new line", func(t *testing.T) {
@@ -308,6 +348,29 @@ func TestBackendRefusal(t *testing.T) {
 		}
 	})
 
+	t.Run("a truncated value's tail the end of what it masks runs through is masked when kept", func(t *testing.T) {
+		// Three long values masked whole shorten the text by far more than
+		// the longest form, so the end of what is masked falls inside what
+		// is logged; a truncated value's tail runs on past it, on a line
+		// too long for the end of what is masked to move to its end.
+		long := strings.Repeat("Lq7vT2xW9kR4mZ8pN3cB6hJ1fY5gD0sA", 63)[:2000]
+		value := ("Pl41n-r3solved-credential-7f3a-and-more-" + "Ge5mE8rT1yU6iO4aXsRyu2vUXuQe8nM1wK4tZ6bH9dF")[:80]
+		values := []resolvedValue{{path: "config.blob", value: long}, {path: "config.token", value: value}}
+		tail := value[len(value)-24:]
+		head := strings.Repeat(long+" ", 3)
+		repr := "input_value='" + value[:25] + "..." + tail + "'"
+		longest := newRefusalMasks(values).all.LongestForm()
+		for _, into := range []int{7, 10, 23} {
+			// The end of what is masked falls that many bytes into the tail.
+			pad := maxMaskedErrLen + longest - into - len(head) - len(repr) + len(tail) + 1
+			text := head + strings.Repeat("x", pad) + repr + strings.Repeat("y", 400)
+			logged, reason := backendRefusal("", text, values)
+			require.Contains(t, logged, "... (truncated)", "the bound cuts the refusal")
+			assert.NotContains(t, logged, tail[:into], "the tail's first %d bytes", into)
+			assert.NotContains(t, reason, tail[:into])
+		}
+	})
+
 	t.Run("names a field whose value is quoted past the reason's bound", func(t *testing.T) {
 		logged, reason := backendRefusal("", strings.Repeat("x ", 600)+"k3Y-9xQz into int", retries)
 		assert.True(t, strings.HasSuffix(reason, note), "the reason still says what the error quotes: %q", reason)
@@ -367,4 +430,73 @@ func TestBackendRefusalMasksALineTheBoundCutsThrough(t *testing.T) {
 	require.Contains(t, logged, "... (truncated)", "the bound cut the refusal")
 	assert.NotContains(t, logged, line[:16])
 	assert.NotContains(t, reason, line[:16])
+}
+
+// TestBackendRefusalKeepsNothingMaskingTheWholeTextHides builds refusals that
+// quote values whole, truncated as pydantic and yaml.v3 quote them, or by a
+// tail alone, after long values that shorten the text when masked and
+// padding that moves the end of what is masked through them: what is logged
+// and the reason hold no run of 7 bytes of a value that masking the
+// whole refusal leaves nowhere.
+func TestBackendRefusalKeepsNothingMaskingTheWholeTextHides(t *testing.T) {
+	r := rand.New(rand.NewSource(895))
+	random := func(n int, alphabet string) string {
+		var b strings.Builder
+		rs := []rune(alphabet)
+		for b.Len() < n {
+			b.WriteRune(rs[r.Intn(len(rs))])
+		}
+		return b.String()
+	}
+	lengths := []int{7, 8, 24, 25, 49, 50, 80, 300}
+	for range 1000 {
+		alphabet := []string{"abcdefghijklmnopqrstuvwxyz0123456789", "ab", "ab密é", "abc\n"}[r.Intn(4)]
+		var values []resolvedValue
+		longs := r.Intn(4)
+		long := random(2000, "QWERTYUIOPASDFGHJKL")
+		if longs > 0 {
+			values = append(values, resolvedValue{path: "config.blob", value: long})
+		}
+		quoted := 1 + r.Intn(3)
+		for j := range quoted {
+			values = append(values, resolvedValue{path: fmt.Sprintf("config.v%d", j), value: random(lengths[r.Intn(len(lengths))], alphabet)})
+		}
+		var b strings.Builder
+		for range longs {
+			b.WriteString(long + " ")
+		}
+		b.WriteString(strings.Repeat("x", r.Intn(9000)))
+		for range 1 + r.Intn(4) {
+			v := values[len(values)-1-r.Intn(quoted)].value
+			switch r.Intn(3) {
+			case 0:
+				if len(v) > 50 {
+					b.WriteString(" input_value='" + v[:25] + "..." + v[len(v)-24:] + "'")
+				} else {
+					b.WriteString(" input_value='" + v + "'")
+				}
+			case 1:
+				b.WriteString(" " + v[len(v)/2:])
+			case 2:
+				b.WriteString(" `" + v[:min(len(v), 7)] + "...`")
+			}
+			b.WriteString(random(r.Intn(40), "yz "))
+		}
+		b.WriteString(strings.Repeat("y", r.Intn(600)))
+		text := b.String()
+		m := newRefusalMasks(values)
+		whole := m.all.Mask(text)
+		logged, reason := m.refusal("403 ", text)
+		// The long values are quoted whole only, to shorten the text.
+		for _, rv := range values[len(values)-quoted:] {
+			for i := 0; i+7 <= len(rv.value); i++ {
+				run := rv.value[i : i+7]
+				if strings.Contains(whole, run) {
+					continue
+				}
+				require.NotContains(t, logged, run, "a run of a %d-byte value, the refusal %d bytes long", len(rv.value), len(text))
+				require.NotContains(t, reason, run, "a run of a %d-byte value, the refusal %d bytes long", len(rv.value), len(text))
+			}
+		}
+	}
 }

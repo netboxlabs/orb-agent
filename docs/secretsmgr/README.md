@@ -70,23 +70,36 @@ resolved value as `********`:
   bytes or more wherever it occurs whole, trimmed of the spaces around it, as
   a backend that prints the value line by line quotes it.
 
-A value shorter than 7 bytes is masked only where it is a word of its own, and
-not in the error wording the agent recognises:
+Nothing is masked in the error wording the agent recognises, whatever the
+length of the value:
 
 - the status code in front of an HTTP refusal;
 - the wording of a YAML decoding error: the `yaml: unmarshal errors:` heading,
   the `yaml: line N: ` in front of a syntax error, and each `cannot unmarshal`
   type error on a line of its own (`line 4: cannot unmarshal !!str ... into
-  int`), apart from the value it quotes.
+  int`), apart from the value it quotes;
+- device-discovery's refusal of a field of the wrong type, a field missing or
+  one not allowed: each of pydantic's messages for those, such as
+  `Input should be a valid integer, unable to parse string as an integer`,
+  with the field and the error type that come with it. These quote nothing of
+  the value, so such a refusal has nothing masked and no note. A message of
+  one of device-discovery's own checks, such as one about a device's rack
+  position, can quote a value, so its words are not left alone. The field is
+  read as the path to it, of field names, list positions and keys, so for a
+  policy whose name has a space in it, the agent can't tell where the field
+  ends, and masks a short value in the message as anywhere else.
 
-A short value such as `int` or `line` is masked where such an error quotes it
-and left where it is one of those words, so the error stays readable and
-doesn't show which word the value is. Anywhere else the agent can't tell a
-value from the error's own words, so a short value that is one of them is
-masked there too, which shows which word it is. That includes the rest of a
-YAML syntax error, such as `key` in `yaml: line 3: did not find expected key`.
-Any other run from the middle of a value is left alone, since it is more
-likely the error's own words. The agent then names the fields whose values
+A value such as `int`, `line` or `marshal` is masked where such an error
+quotes it and left where it is one of those words or a run of them, so the
+error stays readable and doesn't show which words the value is. A value
+shorter than 7 bytes is also masked only where it is a word of its own, and
+not where it runs into that wording. Anywhere else the agent can't tell a
+value from the error's own words, so a value that is one of them, or a run of
+them 7 bytes or longer, is masked there too, which shows which words it is.
+That includes the rest of a YAML syntax error, such as `key` in
+`yaml: line 3: did not find expected key`. Any other run from the middle of a
+value is left alone, since it is more likely the error's own words. The agent
+then names the fields whose values
 the error quotes, because the backend's error points at a line of the policy
 as the agent sent it, not at a field you wrote:
 
@@ -139,10 +152,21 @@ of the runs reported under its name. A run without a start time is kept
 whatever its policy, since nothing tells when it began; every discovery
 backend gives each run one. A backend that fails to remove the policy for two
 updates in a row can go on running a value the agent no longer keeps. When
-the policy is removed, its values keep masking the backend's output for a
-minute, for the lines it printed before the removal, and the agent then drops
-them. A line a backend prints about the policy after that, such as one from a
-backend that failed to remove it, is relayed as printed.
+the policy is removed, or moved to another backend, its values keep masking
+the output of the backend it ran on for a minute, for the lines it printed
+before. A backend can also go on with a run of the policy it started before:
+device-discovery stops a removed policy without waiting for its runs. For as
+long as the backend reports a run still running under a name the agent
+applied the policy with, its values keep masking the backend's output, and
+for a minute after the last such report, up to an hour after the policy left
+it. The agent then drops them. A backend reports the runs of every policy it
+knew by a name under that name, so the agent can't tell the removed policy's
+run from that of a policy that took its name since: a run of the new policy
+keeps the removed policy's values masking the backend's output too, up to
+the hour. A line a backend prints about the policy after that is relayed as
+printed: one from a run that goes on for more than an hour, or one from a
+backend that failed to remove the policy and starts another run of it on its
+schedule more than a minute after the last one it reported running.
 
 ## Rotation
 
