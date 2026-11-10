@@ -579,10 +579,33 @@ func TestURL_ShowsNoCredentialNearWhatLooksLikeAReferenceOrADigest(t *testing.T)
 	}
 }
 
+// TestURL_MasksAURLInsideAnotherOnesQuery masks a URL that follows another's
+// path, query or fragment with no separator before it.
+func TestURL_MasksAURLInsideAnotherOnesQuery(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://u1:p1@a/x&https://u2:p2@b/y":     "https://********@a/x&https://********@b/y",
+		"https://u1:p1@a/x?https://u2:p2@b":       "https://********@a/x?https://********@b",
+		"https://u1:p1@a/x#https://u2:p2@b":       "https://********@a/x#https://********@b",
+		"https://u1:p1@a/x?n=1&r=https://u2:p2@b": "https://********@a/x?n=1&r=https://********@b",
+		"https://a/x/ssh://u2:p2@b/r.git":         "https://********@b/r.git",
+	} {
+		if got := URL(in); got != want {
+			t.Errorf("URL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestURL_KeepsAReferenceWithAnAtSignAsWritten keeps a secret reference whose
 // path or field holds an @, which a Vault path can.
 func TestURL_KeepsAReferenceWithAnAtSignAsWritten(t *testing.T) {
 	for in, want := range map[string]string{
+		// A field can hold anything but a }, as the resolver reads it.
+		"${vault://secret/path/field,@name}": "${vault://secret/path/field,@name}",
+		"${vault://secret/path/a b@c}":       "${vault://secret/path/a b@c}",
+		// Read as one URL, as before, from the reference's :// to the last @:
+		// what follows the reference is masked up to that @.
+		"${vault://kv/f;x@y} https://u:p@h": "${vault://kv/f;x@y}********@h",
+		`${vault://kv/"q"@y}`:               `${vault://kv/"q"@y}`,
 		"${vault://secret/path/field@name}": "${vault://secret/path/field@name}",
 		"${vault://kv/path@v2/key}":         "${vault://kv/path@v2/key}",
 		// Read as one URL, as before, its user info runs to the reference's

@@ -52,8 +52,9 @@ secret or any value of a Vault login's `auth_args` but its mount path, user
 name, role and service account file, are masked as `********` wherever the
 agent reports or logs its configuration, as are the user and the password of
 a URL in it, such as a Vault address's, together. So are those of each URL of
-a list, as `https://u:p@a.example,https://u:p@b.example`, and of a URL used
-as a key. Two keys masked into the same one are both kept: in the order of
+a list, as `https://u:p@a.example,https://u:p@b.example`, of a URL in another
+one's query or fragment, as after its `?`, `&` or `#`, and of a URL used as a
+key. Two keys masked into the same one are both kept: in the order of
 the keys as written, each one after the first gets ` (2)`, ` (3)` and so on
 after it. A URL written without `//` whose part before its last `@` holds a
 `:` and no space, as `user:password@host` or git's
@@ -64,9 +65,11 @@ URL's path, a password holding a space, a `,` or a `//`, or URLs that a space
 or a line break separates, it masks from the `//`, the first `:` or the start
 of the text to the last `@`, hiding what lies between, hosts included. Before
 a password with a space, the user is kept. Kept as written are an e-mail
-address written alone, as `ops@example.com`, a secret reference, even one
-whose path holds an `@`, and a URL with a `/` before the `:` of its user and
-password, which git reads as a local path. An image with a digest, as
+address written alone, as `ops@example.com`, a secret reference, whatever
+its path or field holds but a `}`, and a URL with a `/` before the `:` of its
+user and password, which git reads as a local path. A `${vault://...}` whose
+body holds another `://` or a user and a password, as one that no `}` closes
+before a URL, is no reference, and is masked as the rest of the text is. An image with a digest, as
 `img:tag@sha256:...`, is masked before its `@` as a user would be, since
 nothing tells it from git's `user@host:path`, unless a `/` comes before its
 first `:`, as in `ghcr.io/org/img:tag@sha256:...`. The configuration the agent reports is the one as

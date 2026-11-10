@@ -251,11 +251,13 @@ func mapKey(key reflect.Value) string {
 // as a Vault address carries one for a proxy that asks for basic auth in
 // front of Vault, or each URL of a list does. The user and the password are
 // masked together: the user is half of the login, the whole of it when the
-// password is empty, and can be a token. s is read as one URL, and each of
-// its words, between the separators a list puts between URLs, as one too:
-// what either reading masks is masked, so a password that holds a separator
-// is still masked whole. A secret reference, as ${vault://mount/path/key}, is
-// kept as written. Any other s is returned as it is.
+// password is empty, and can be a token. s is read as one URL; each of its
+// words, between the separators a list puts between URLs, as one too; and so
+// is each URL in a word, as one after another's query, from its scheme to
+// the next URL or separator. What any reading masks is masked, so a password
+// that holds a separator is still masked whole. A secret reference, as
+// ${vault://mount/path/key}, is kept as written. Any other s is returned as
+// it is.
 func URL(s string) string {
 	if !strings.Contains(s, "@") {
 		return s
@@ -273,8 +275,15 @@ func URL(s string) string {
 			}
 		}
 		t = string(b)
-		spans = append(spans, userInfoSpans(t, 0, false)...)
 	}
+	spans = append(spans, spansOf(t)...)
+	return maskSpans(s, withoutReferences(refs, spans))
+}
+
+// spansOf returns where the user infos of t are: t read as one URL, each of
+// its words read as one, and each URL in a word read as one.
+func spansOf(t string) []span {
+	spans := userInfoSpans(t, 0, false)
 	word := 0
 	for i := 0; i <= len(t); i++ {
 		if i < len(t) && strings.IndexByte(urlSeparators, t[i]) < 0 {
@@ -285,11 +294,43 @@ func URL(s string) string {
 		}
 		word = i + 1
 	}
-	return maskSpans(s, withoutReferences(refs, spans))
+	for i := strings.Index(t, "://"); i >= 0; {
+		start := i
+		for start > 0 && isSchemeByte(t[start-1]) {
+			start--
+		}
+		end := i + len("://")
+		for end < len(t) && strings.IndexByte(urlSeparators, t[end]) < 0 && !strings.HasPrefix(t[end:], "://") {
+			end++
+		}
+		next := -1
+		if strings.HasPrefix(t[end:], "://") {
+			next = end
+			for end > i+len("://") && isSchemeByte(t[end-1]) {
+				end--
+			}
+		}
+		if start > 0 {
+			spans = append(spans, userInfoSpans(t[start:end], start, true)...)
+		}
+		i = next
+		if next < 0 {
+			if j := strings.Index(t[end:], "://"); j >= 0 {
+				i = end + j
+			}
+		}
+	}
+	return spans
 }
 
-// urlSeparators are the bytes that can come between the URLs of a list.
-const urlSeparators = " \t\r\n,;|=\"'`<>()[]{}"
+// isSchemeByte reports whether c can be part of a URL's scheme.
+func isSchemeByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '+' || c == '-' || c == '.'
+}
+
+// urlSeparators are the bytes that can come between the URLs of a list, or
+// of a query, after its &.
+const urlSeparators = " \t\r\n,;|=&\"'`<>()[]{}"
 
 // span is the bytes [from, to) of a text.
 type span struct{ from, to int }
@@ -371,21 +412,22 @@ func userInfoAt(t string) int {
 }
 
 // referencePattern matches a secret reference, as ${vault://mount/path/key},
-// as the agent's secrets managers match one, for the schemes they resolve.
-// Anything else in ${...}, as ${https://user:password@host}, is no reference,
-// nor is one whose body holds what a reference doesn't but a list can: a
-// space, a quote, a , or a ;. Such a ${, which a } further on would close,
-// would otherwise keep a URL after it as written. A body can hold an @, as a
-// Vault path or field can.
-var referencePattern = regexp.MustCompile("\\$\\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://[^}\\s\"'`,;]*\\}")
+// as the agent's secrets managers match one: for the schemes they resolve,
+// with a body of anything but a }, as a Vault path or field can hold.
+// Anything else in ${...}, as ${https://user:password@host}, is no reference.
+var referencePattern = regexp.MustCompile(`\$\{(?:vault|fleet|doppler|delinea|cyberark|dsv)://([^}]*)\}`)
 
 // references returns where the secret references of s are, in order: those
-// referencePattern matches with no other :// in their body.
+// referencePattern matches but those whose body holds another :// or a user
+// info. Such a body is what a ${ that no } closed before a URL takes in, up
+// to a } further on, as in ${vault://kv/a/b,https://user:password@host}, and
+// is masked as the rest of s is.
 func references(s string) [][]int {
 	var refs [][]int
-	for _, ref := range referencePattern.FindAllStringIndex(s, -1) {
-		if strings.Count(s[ref[0]:ref[1]], "://") == 1 {
-			refs = append(refs, ref)
+	for _, ref := range referencePattern.FindAllStringSubmatchIndex(s, -1) {
+		body := s[ref[2]:ref[3]]
+		if !strings.Contains(body, "://") && len(spansOf(body)) == 0 {
+			refs = append(refs, ref[:2])
 		}
 	}
 	return refs
