@@ -194,10 +194,11 @@ func mapKey(key reflect.Value) string {
 	return fmt.Sprintf("%v", key)
 }
 
-// URL returns s with the credential of the URL it is masked as ********, when
+// URL returns s with the user info of the URL it is masked as ********, when
 // s is a URL that carries one, as a Vault address does for a proxy that asks
-// for basic auth in front of Vault: its password, or its user when it has no
-// password, which can then be a token. Any other s is returned as it is.
+// for basic auth in front of Vault. The user and the password are masked
+// together: the user is half of the login, the whole of it when the password
+// is empty, and can be a token. Any other s is returned as it is.
 func URL(s string) string {
 	scheme := strings.Index(s, "://")
 	if scheme < 0 {
@@ -216,10 +217,7 @@ func URL(s string) string {
 		return s[:scheme+len("://")] + MaskedSecret + s[strings.LastIndex(s, "@"):]
 	}
 	// A * would be escaped in a URL's user info: xxxxx is written in place
-	// of the credential, and replaced.
-	if _, ok := u.User.Password(); ok {
-		return strings.Replace(u.Redacted(), ":xxxxx@", ":"+MaskedSecret+"@", 1)
-	}
+	// of it, and replaced.
 	masked := *u
 	masked.User = url.User("xxxxx")
 	return strings.Replace(masked.String(), "://xxxxx@", "://"+MaskedSecret+"@", 1)
